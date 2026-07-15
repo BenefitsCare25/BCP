@@ -11,15 +11,26 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.roster_attributes import (
+    DEPENDANT_ID_KEYS,
+    EMAIL_KEYS,
+    EMPLOYEE_ID_KEYS,
+)
+
 # Cap distinct values surfaced per column. Enough variety for the model to
 # generalise a rule without blowing the prompt (and the AI spend) up.
 MAX_DISTINCT_PER_COLUMN = 40
 # Columns with more distinct values than this are almost certainly free-text /
 # identifiers (names, emails, IDs), not derivable enums — skip them.
 HIGH_CARDINALITY_SKIP = 200
-# Keys that are never derivation sources (identity / contact / raw PII).
+# Keys that are never derivation sources (identity / contact / raw PII). Covers
+# every NRIC/FIN alias so a roster that lands its ID under a non-``id_no`` column
+# can't surface raw NRICs into the AI-proposer prompt.
 _NON_SOURCE_KEYS: frozenset[str] = frozenset(
-    {"staff_id", "employee_name", "id_no", "email", "mobile"}
+    {"staff_id", "employee_name", "mobile"}
+    | set(EMPLOYEE_ID_KEYS)
+    | set(DEPENDANT_ID_KEYS)
+    | set(EMAIL_KEYS)
 )
 
 
@@ -76,7 +87,14 @@ def profile_roster(
         total = sum(counter.values())
         distinct_count = len(counter)
         high_card = distinct_count > HIGH_CARDINALITY_SKIP
-        samples = tuple(v for v, _ in counter.most_common(max_distinct))
+        # High-cardinality columns are free-text / identifiers, not enum sources.
+        # Don't surface their raw values — the model skips them anyway, and they
+        # may hold PII the alias filter above didn't anticipate.
+        samples = (
+            ()
+            if high_card
+            else tuple(v for v, _ in counter.most_common(max_distinct))
+        )
         columns.append(
             ColumnProfile(
                 key=key,

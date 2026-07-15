@@ -27,13 +27,15 @@ DEP_NAME_KEYS = ("dependant_name", "name", "full_name")
 
 def _dep_signature(attrs: dict[str, Any] | None) -> str | None:
     """Stable name+DOB+relationship signature for a dependant, or None when the
-    row carries none of those (genuinely unidentifiable). Used as the composite
-    fallback when there's no NRIC — including relationship/DOB means a row with,
-    say, only 'Child / 2015-03-01' still keys instead of silently doubling."""
+    row can't be distinguished. Used as the composite fallback when there's no
+    NRIC. Requires at least a name OR a DOB — relationship alone is too coarse
+    (two 'Child' rows with no name/DOB would collapse into one, silently dropping
+    a real dependant), so such rows are treated as unidentifiable and never
+    deduped."""
     name = (first_value(attrs or {}, DEP_NAME_KEYS) or "").strip().lower()
     dob = iso_date(first_value(attrs or {}, ("date_of_birth", "dob"))) or ""
     rel = (first_value(attrs or {}, REL_KEYS) or "").strip().lower()
-    if not (name or dob or rel):
+    if not (name or dob):
         return None
     return f"{name}|{dob}|{rel}"
 

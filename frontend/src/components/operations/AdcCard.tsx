@@ -128,6 +128,7 @@ export function AdcCard({ policyYearId }: Props) {
               ref={fileInput}
               type="file"
               accept=".xls,.xlsx,.xlsm"
+              aria-label="Upload ADC movement file"
               className="hidden"
               onChange={(e) => onPick(e.target.files?.[0] ?? null)}
             />

@@ -166,17 +166,21 @@ export function EmployeesPage() {
           variant="outline"
           disabled={!employeesTotal || bulkInvite.isPending}
           onClick={async () => {
-            const r = await bulkInvite.mutateAsync(policyYearId);
-            toast.success(
-              r.invited > 0
-                ? `Invited ${r.invited} employee${r.invited === 1 ? "" : "s"} to the portal` +
-                    (r.skipped_no_email ? ` (${r.skipped_no_email} without an email skipped)` : "")
-                : `No new invites — ${r.skipped_existing} already have accounts, ${r.skipped_no_email} have no roster email`,
-            );
-            if ((r.mail_failed ?? 0) > 0) {
-              toast.warning(
-                `${r.mail_failed} invite email${r.mail_failed === 1 ? "" : "s"} failed to send — check mail settings`,
+            try {
+              const r = await bulkInvite.mutateAsync(policyYearId);
+              toast.success(
+                r.invited > 0
+                  ? `Invited ${r.invited} employee${r.invited === 1 ? "" : "s"} to the portal` +
+                      (r.skipped_no_email ? ` (${r.skipped_no_email} without an email skipped)` : "")
+                  : `No new invites — ${r.skipped_existing} already have accounts, ${r.skipped_no_email} have no roster email`,
               );
+              if ((r.mail_failed ?? 0) > 0) {
+                toast.warning(
+                  `${r.mail_failed} invite email${r.mail_failed === 1 ? "" : "s"} failed to send — check mail settings`,
+                );
+              }
+            } catch {
+              /* global mutation toast surfaces the error */
             }
           }}
         >
@@ -355,7 +359,9 @@ export function EmployeesPage() {
                         {(e.attribute_values.category as string) ?? "—"}
                       </TableCell>
                       <TableCell>
-                        {e.attribute_values.salary
+                        {e.attribute_values.salary != null &&
+                        e.attribute_values.salary !== "" &&
+                        !Number.isNaN(Number(e.attribute_values.salary))
                           ? `S$ ${Number(e.attribute_values.salary).toLocaleString()}`
                           : "—"}
                       </TableCell>

@@ -220,6 +220,18 @@ function PendingRow({
                 No proof document attached
               </span>
             )}
+            {docs.isError && (
+              <span className="text-xs text-error">
+                Couldn't load proof documents —{" "}
+                <button
+                  type="button"
+                  onClick={() => void docs.refetch()}
+                  className="underline hover:no-underline"
+                >
+                  retry
+                </button>
+              </span>
+            )}
           </div>
         </div>
         <div className="flex gap-2">

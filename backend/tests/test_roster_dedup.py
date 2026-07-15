@@ -22,6 +22,8 @@ from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Dependant, Employee  # noqa: E402
+from app.models.dependant import DEPENDANT_STATUS_PENDING  # noqa: E402
+from app.services.roster_attributes import EMPLOYEE_ID_KEYS  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -131,7 +133,7 @@ def test_employee_reupload_same_nric_is_existing_duplicate(client: TestClient) -
     assert out["skipped"] == 1
     dup = out["duplicates"][0]
     assert dup["reason"] == "existing"
-    assert dup["nric_masked"] == "S*****67D"
+    assert dup["nric_masked"] == "S******7D"
     assert dup["existing_id"]
 
 
@@ -226,3 +228,209 @@ def test_dependant_unlinked_then_linked_dedups(client: TestClient) -> None:
     )
     second = _upload_dependants(client, py, rows)
     assert second["inserted"] == 0, "unlinked→linked dependant must not double"
+
+
+def _employee_by_staff(staff_id: str) -> Employee:
+    db = SessionLocal()
+    try:
+        return db.execute(
+            select(Employee).where(Employee.staff_id == staff_id)
+        ).scalar_one()
+    finally:
+        db.close()
+
+
+def _normalized_nric(staff_id: str) -> str | None:
+    return _employee_by_staff(staff_id).national_id_normalized
+
+
+def test_employee_patch_recomputes_normalized_nric(client: TestClient) -> None:
+    """Editing an NRIC via PATCH must refresh national_id_normalized so the next
+    upload dedups on the corrected value (regression: stale key duplicated)."""
+    py = _policy_year_id(client)
+    # NRICs here use a distinctive S94*/S95* range: this module shares a physical
+    # test DB with the others (global engine), so reusing another module's NRIC
+    # would dedup its rows away.
+    _upload_employees(
+        client, py, [["PATCH-1", "Pat One", "S9411111A", "1990-01-01", "Exec"]]
+    )
+    emp = _employee_by_staff("PATCH-1")
+    assert emp.national_id_normalized == "S9411111A"
+
+    # Correct the NRIC through the edit endpoint (attribute_values is replaced
+    # wholesale, exactly as the UI sends it).
+    attrs = dict(emp.attribute_values)
+    id_key = next((k for k in EMPLOYEE_ID_KEYS if k in attrs), "id_no")
+    attrs[id_key] = "S9422222A"
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}", json={"attribute_values": attrs}
+    )
+    assert res.status_code == 200, res.text
+    assert _normalized_nric("PATCH-1") == "S9422222A"
+
+    # The corrected NRIC now collides on re-upload...
+    dup = _upload_employees(
+        client, py, [["PATCH-1b", "Pat One", "S9422222A", "1990-01-01", "Exec"]]
+    )
+    assert dup["inserted"] == 0 and dup["skipped"] == 1
+    # ...and the OLD NRIC no longer matches anything (stale key is gone).
+    fresh = _upload_employees(
+        client, py, [["PATCH-1c", "Ghost", "S9411111A", "1990-01-01", "Exec"]]
+    )
+    assert fresh["inserted"] == 1
+
+
+def test_dependant_patch_recomputes_normalized_nric(client: TestClient) -> None:
+    py = _policy_year_id(client)
+    _upload_employees(
+        client, py, [["DPATCH-O", "Dep Owner", "S1212121A", "1980-01-01", "Exec"]]
+    )
+    _upload_dependants(
+        client,
+        py,
+        [["DPATCH-O", "Dep Owner", "Dep Kid", "T0611111Z", "Child", "2011-01-01"]],
+    )
+    db = SessionLocal()
+    try:
+        dep = db.execute(
+            select(Dependant).where(Dependant.national_id_normalized == "T0611111Z")
+        ).scalar_one()
+        dep_id = dep.id
+        attrs = dict(dep.attribute_values)
+    finally:
+        db.close()
+    id_key = next(
+        (k for k in ("dependant_id_no", "id_no", "nric", "fin") if k in attrs),
+        "id_no",
+    )
+    attrs[id_key] = "T0622222Z"
+    res = client.patch(
+        f"/api/v1/dependants/{dep_id}", json={"attribute_values": attrs}
+    )
+    assert res.status_code == 200, res.text
+    db = SessionLocal()
+    try:
+        assert db.get(Dependant, dep_id).national_id_normalized == "T0622222Z"
+    finally:
+        db.close()
+
+
+def test_ambiguous_employee_name_leaves_dependant_unlinked(client: TestClient) -> None:
+    """Two employees share a name → a name-only dependant must NOT be silently
+    linked to whichever won a dict race; it stays unlinked and is reported."""
+    py = _policy_year_id(client)
+    _upload_employees(
+        client,
+        py,
+        [
+            ["AMB-1", "Sam Lee", "S7010101A", "1985-01-01", "Exec"],
+            ["AMB-2", "Sam Lee", "S7020202B", "1986-02-02", "Exec"],
+        ],
+    )
+    # Dependant identifies its sponsor only by the ambiguous name (no staff id).
+    out = _upload_dependants(
+        client, py, [["", "Sam Lee", "Amb Kid", "T0633333Z", "Child", "2015-01-01"]]
+    )
+    assert out["inserted"] == 1
+    assert any("more than one" in e.lower() for e in out["errors"])
+    db = SessionLocal()
+    try:
+        dep = db.execute(
+            select(Dependant).where(Dependant.national_id_normalized == "T0633333Z")
+        ).scalar_one()
+        assert dep.employee_id is None, "ambiguous name must not link"
+    finally:
+        db.close()
+
+
+def test_relationship_only_dependants_do_not_collapse(client: TestClient) -> None:
+    """Two dependants with only a relationship (no name, no DOB) are
+    unidentifiable and must both be kept — not deduped into one."""
+    py = _policy_year_id(client)
+    _upload_employees(
+        client, py, [["RELO", "Rel Owner", "S7030303C", "1987-01-01", "Exec"]]
+    )
+    out = _upload_dependants(
+        client,
+        py,
+        [
+            ["RELO", "Rel Owner", "", "", "Child", ""],
+            ["RELO", "Rel Owner", "", "", "Child", ""],
+        ],
+    )
+    assert out["inserted"] == 2, "rel-only dependants must not collapse"
+
+
+def _dependant_id_by_nric(nric: str) -> str:
+    db = SessionLocal()
+    try:
+        return db.execute(
+            select(Dependant).where(Dependant.national_id_normalized == nric)
+        ).scalar_one().id
+    finally:
+        db.close()
+
+
+def test_dependant_search_by_name_and_status_default(client: TestClient) -> None:
+    py = _policy_year_id(client)
+    _upload_employees(
+        client, py, [["SRCH-O", "Search Owner", "S7040404D", "1988-01-01", "Exec"]]
+    )
+    _upload_dependants(
+        client,
+        py,
+        [["SRCH-O", "Search Owner", "Zephyr Kid", "T0644444Z", "Child", "2014-01-01"]],
+    )
+    dep_id = _dependant_id_by_nric("T0644444Z")
+    hit = client.get(f"/api/v1/dependants?policy_year_id={py}&q=zephyr").json()
+    assert hit["total"] >= 1
+    assert any(d["id"] == dep_id for d in hit["items"])
+    miss = client.get(
+        f"/api/v1/dependants?policy_year_id={py}&q=nobodymatchesthis"
+    ).json()
+    assert miss["total"] == 0
+
+
+def test_dependant_list_default_excludes_pending(client: TestClient) -> None:
+    """A pending (portal self-added) dependant is hidden from the default roster
+    list but visible via the explicit status filter."""
+    py = _policy_year_id(client)
+    _upload_employees(
+        client, py, [["PEND-O", "Pend Owner", "S7050505E", "1989-01-01", "Exec"]]
+    )
+    _upload_dependants(
+        client,
+        py,
+        [["PEND-O", "Pend Owner", "Pend Kid", "T0655555Z", "Child", "2013-01-01"]],
+    )
+    db = SessionLocal()
+    try:
+        dep = db.execute(
+            select(Dependant).where(Dependant.national_id_normalized == "T0655555Z")
+        ).scalar_one()
+        dep.status = DEPENDANT_STATUS_PENDING
+        dep_id = dep.id
+        db.add(dep)
+        db.commit()
+    finally:
+        db.close()
+
+    default_ids = {
+        d["id"]
+        for d in client.get(f"/api/v1/dependants?policy_year_id={py}").json()["items"]
+    }
+    assert dep_id not in default_ids
+
+    pending_ids = {
+        d["id"]
+        for d in client.get(
+            f"/api/v1/dependants?policy_year_id={py}&status=pending_approval"
+        ).json()["items"]
+    }
+    assert dep_id in pending_ids
+
+    # Bad status value is rejected (pattern-validated).
+    assert (
+        client.get(f"/api/v1/dependants?policy_year_id={py}&status=bogus").status_code
+        == 422
+    )

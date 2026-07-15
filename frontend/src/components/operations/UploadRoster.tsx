@@ -41,7 +41,8 @@ export function UploadRoster({ title, description, policyYearId, upload }: Props
             toast.success(`${r.inserted} rows added`);
           }
         },
-        onError: (e) => toast.error(e.message),
+        // Errors surface through the global MutationCache.onError toast (which
+        // uses formatError) — no local handler, so it isn't toasted twice.
       },
     );
     // Allow re-picking the same file after a fix.
@@ -49,6 +50,7 @@ export function UploadRoster({ title, description, policyYearId, upload }: Props
   };
 
   const duplicates = result?.duplicates ?? [];
+  const errors = result?.errors ?? [];
 
   return (
     <Card>
@@ -68,6 +70,7 @@ export function UploadRoster({ title, description, policyYearId, upload }: Props
               ref={fileInput}
               type="file"
               accept=".xls,.xlsx,.xlsm"
+              aria-label={title}
               className="hidden"
               onChange={(e) => onPick(e.target.files?.[0] ?? null)}
             />
@@ -121,6 +124,20 @@ export function UploadRoster({ title, description, policyYearId, upload }: Props
             <div className="mt-2 text-xs text-muted-foreground">
               To change an existing person, use “Bulk update roster (ADC)”.
             </div>
+          </div>
+        )}
+
+        {errors.length > 0 && (
+          <div className="mt-4 rounded-lg border border-warn/40 bg-warn-soft/40 p-3">
+            <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-warn-foreground">
+              <AlertTriangle className="size-4" />
+              {errors.length} warning{errors.length === 1 ? "" : "s"}
+            </div>
+            <ul className="list-disc pl-5 text-xs text-muted-foreground space-y-0.5">
+              {errors.map((msg, i) => (
+                <li key={i}>{msg}</li>
+              ))}
+            </ul>
           </div>
         )}
       </CardContent>

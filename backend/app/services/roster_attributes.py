@@ -65,14 +65,16 @@ def nric_from_attrs(
 
 def mask_nric(raw: object | None) -> str:
     """PII-safe display form of an NRIC/FIN: keep the first + last two chars,
-    mask the middle (``S1234567A`` → ``S****567A``). Short/blank values are
-    returned fully masked so nothing sensitive leaks into a report."""
+    mask everything in between (``S1234567A`` → ``S******7A``). Values shorter
+    than 6 chars — where masking would reveal too large a fraction — are returned
+    fully masked, as are blank values, so nothing sensitive leaks into a report
+    (duplicate manifests, roster reports)."""
     canon = normalize_nric(raw)
     if not canon:
         return ""
-    if len(canon) <= 4:
+    if len(canon) < 6:
         return "*" * len(canon)
-    return f"{canon[0]}{'*' * (len(canon) - 4)}{canon[-3:]}"
+    return f"{canon[0]}{'*' * (len(canon) - 3)}{canon[-2:]}"
 
 
 # Trailing-checksum letter tables by prefix (Singapore NRIC/FIN algorithm).

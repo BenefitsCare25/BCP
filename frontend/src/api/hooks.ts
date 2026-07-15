@@ -188,10 +188,11 @@ export function useDependants(
   offset = 0,
   limit = 50,
   unlinkedOnly = false,
+  q = "",
 ) {
   const cid = useActiveClientId();
   return useQuery({
-    queryKey: ["dependants", policyYearId, offset, limit, unlinkedOnly, cid],
+    queryKey: ["dependants", policyYearId, offset, limit, unlinkedOnly, q, cid],
     queryFn: () => {
       const params = new URLSearchParams({
         policy_year_id: policyYearId ?? "",
@@ -199,6 +200,7 @@ export function useDependants(
         limit: String(limit),
       });
       if (unlinkedOnly) params.set("unlinked_only", "true");
+      if (q.trim()) params.set("q", q.trim());
       return api.get<DependantList>(`/dependants?${params}`);
     },
     enabled: Boolean(policyYearId),
@@ -472,16 +474,26 @@ export function useBulkDeleteEmployees() {
 export function useBulkDeleteDependants() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (policyYearId: string) =>
-      api.delete<{ deleted: number }>(
-        `/dependants?policy_year_id=${policyYearId}`,
+    mutationFn: ({
+      policyYearId,
+      confirm = false,
+    }: {
+      policyYearId: string;
+      confirm?: boolean;
+    }) =>
+      api.delete<{ deleted: number; flex_errors?: string[] }>(
+        `/dependants?policy_year_id=${policyYearId}&confirm=${confirm}`,
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dependants"] });
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
+      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    // The caller handles the member_data_at_risk 409 itself (a confirm-and-retry
+    // dialog), so it also owns every other error toast for this action.
+    meta: { localErrorHandling: true },
   });
 }
 

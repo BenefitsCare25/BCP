@@ -228,10 +228,14 @@ def _parse_sheet(sheet, spec: dict[str, str], is_dependant: bool) -> list[_Parse
             attrs[attr_id] = value
 
         staff_id = attrs.pop("staff_id", None)
-        employee_name = _normalize_name(attrs.get("employee_name"))
+        # Pop for BOTH types: for an employee row the name is the person's own
+        # name and belongs on the column (not in attribute_values) — leaving it
+        # in attrs makes _merge_and_diff double-record it against the explicit
+        # name diff and store an un-normalized copy. For a dependant row it's the
+        # SPONSOR's name, re-added below for link resolution.
+        employee_name = _normalize_name(attrs.pop("employee_name", None))
         if is_dependant:
             employee_id_no = attrs.pop("employee_id_no", None)
-            attrs.pop("employee_name", None)
             if staff_id:
                 attrs["employee_staff_id"] = str(staff_id).strip()
             if employee_name:
@@ -386,6 +390,10 @@ def evaluate_adc(
             emp_existing_keys.setdefault(f"staff:{e.staff_id.strip().lower()}", e.id)
 
     seen_emp: set[str] = set()
+    # NRICs assigned by Changes within THIS run → target id. Guards the case
+    # (no persisted owner yet) where two Change rows set the same NRIC on two
+    # different employees, which the DB has no unique constraint to reject.
+    emp_run_nric: dict[str, str] = {}
     for r in emp_rows:
         if not r.action:
             continue
@@ -449,6 +457,20 @@ def evaluate_adc(
                         )
                     )
                     continue
+                if nric:
+                    prev = emp_run_nric.get(nric)
+                    if prev is not None and prev != target.id:
+                        plan.issues.append(
+                            AdcIssue(
+                                row=r.row_no, record_type="employee",
+                                message=(
+                                    "NRIC assigned to two different employees in "
+                                    "this file — change skipped"
+                                ),
+                            )
+                        )
+                        continue
+                    emp_run_nric[nric] = target.id
                 merged, diffs = _merge_and_diff(target.attribute_values or {}, r.attrs)
                 name = r.employee_name or target.employee_name
                 if name != target.employee_name:
@@ -460,11 +482,20 @@ def evaluate_adc(
                     _EmpChange(r.row_no, target, merged, name, nric, diffs)
                 )
 
-    # Dependants — resolve the employee link first for composite keys.
-    by_staff = {e.staff_id.lower(): e for e in employees if e.staff_id}
-    by_name = {
-        (e.employee_name or "").lower().strip(): e for e in employees if e.employee_name
+    # Dependants — resolve the employee link first for composite keys. Keys are
+    # stripped+lowercased consistently; names shared by 2+ employees are dropped
+    # from by_name so an ambiguous name can't silently link to the wrong sponsor.
+    by_staff = {
+        e.staff_id.strip().lower(): e
+        for e in employees
+        if e.staff_id and e.staff_id.strip()
     }
+    _name_groups: dict[str, list[Employee]] = {}
+    for e in employees:
+        nm = (e.employee_name or "").strip().lower()
+        if nm:
+            _name_groups.setdefault(nm, []).append(e)
+    by_name = {nm: emps[0] for nm, emps in _name_groups.items() if len(emps) == 1}
     existing_deps = list(
         db.execute(
             select(Dependant).where(
@@ -488,6 +519,7 @@ def evaluate_adc(
                 dep_by_comp.setdefault(k, d)
 
     seen_dep: set[str] = set()
+    dep_run_nric: dict[str, str] = {}
     for r in dep_rows:
         if not r.action:
             continue
@@ -500,11 +532,12 @@ def evaluate_adc(
         # Resolve the sponsoring employee.
         emp = None
         method = "unlinked"
-        staff_key = (r.staff_id or "").lower()
+        staff_key = (r.staff_id or "").strip().lower()
+        name_key = (r.employee_name or "").strip().lower()
         if staff_key and staff_key in by_staff:
             emp, method = by_staff[staff_key], "staff_id"
-        elif r.employee_name and r.employee_name.lower().strip() in by_name:
-            emp, method = by_name[r.employee_name.lower().strip()], "name"
+        elif name_key and name_key in by_name:
+            emp, method = by_name[name_key], "name"
         emp_id = emp.id if emp else None
         nric = dependant_nric(r.attrs)
 
@@ -527,10 +560,14 @@ def evaluate_adc(
             seen_dep.update(keys)
             plan.dep_add.append(_DepAdd(r.row_no, r.attrs, emp_id, method, nric))
         else:
+            # Only fall back to the employee-agnostic (dep:) key when THIS row is
+            # itself unlinked — otherwise a linked mutation could match an
+            # unrelated unlinked dependant that merely shares name+DOB.
             target = (
                 (dep_by_nric.get(nric) if nric else None)
                 or next(
-                    (dep_by_comp[k] for k in dependant_candidate_keys(r.attrs, emp_id)
+                    (dep_by_comp[k] for k in dependant_candidate_keys(
+                        r.attrs, emp_id, include_agnostic=emp_id is None)
                      if k in dep_by_comp),
                     None,
                 )
@@ -558,6 +595,20 @@ def evaluate_adc(
                         )
                     )
                     continue
+                if nric:
+                    prev = dep_run_nric.get(nric)
+                    if prev is not None and prev != target.id:
+                        plan.issues.append(
+                            AdcIssue(
+                                row=r.row_no, record_type="dependant",
+                                message=(
+                                    "NRIC assigned to two different dependants in "
+                                    "this file — change skipped"
+                                ),
+                            )
+                        )
+                        continue
+                    dep_run_nric[nric] = target.id
                 merged, diffs = _merge_and_diff(target.attribute_values or {}, r.attrs)
                 plan.dep_change.append(
                     _DepChange(r.row_no, target, merged, emp_id, nric, diffs)
@@ -753,7 +804,7 @@ def apply_adc(
         added=added,
         changed=changed,
         deleted=deleted,
-        skipped=sum(1 for i in plan.issues if "already exists" in i.message),
+        skipped=len(plan.issues),
         rematched=rematched,
         issues=plan.issues,
         flex_errors=flex_errors,

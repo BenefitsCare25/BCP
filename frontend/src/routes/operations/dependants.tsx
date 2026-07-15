@@ -8,6 +8,7 @@ import {
   useUploadDependants,
 } from "@/api/hooks";
 import { api } from "@/api/client";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -43,7 +44,7 @@ import { DependantApprovals } from "@/components/operations/DependantApprovals";
 import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
 import { coerceAttrs } from "@/lib/attrs";
-import { formatError } from "@/lib/errors";
+import { ConflictDetailError, formatError } from "@/lib/errors";
 import { fmtDate } from "@/lib/format";
 import type { EmployeeList } from "@/types";
 import { toast } from "sonner";
@@ -62,7 +63,10 @@ export function DependantsPage() {
   const autoMatch = useAutoMatchDependants();
   const [page, setPage] = useState(0);
   const [unlinkedOnly, setUnlinkedOnly] = useState(false);
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
+  const [deleteRisk, setDeleteRisk] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
   const [linkStaffId, setLinkStaffId] = useState("");
@@ -71,6 +75,7 @@ export function DependantsPage() {
     page * PAGE_SIZE,
     PAGE_SIZE,
     unlinkedOnly,
+    debouncedSearch,
   );
   const selected = useMemo(
     () => data?.items.find((d) => d.id === selectedId) ?? null,
@@ -79,7 +84,7 @@ export function DependantsPage() {
 
   useEffect(() => {
     setPage(0);
-  }, [unlinkedOnly]);
+  }, [unlinkedOnly, debouncedSearch]);
 
   useEffect(() => {
     if (!selected) return;
@@ -119,6 +124,13 @@ export function DependantsPage() {
               </CardDescription>
             </div>
             <div className="flex items-center gap-2 flex-wrap justify-end">
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name, NRIC, staff ID…"
+                aria-label="Search dependants"
+                className="h-8 w-52"
+              />
               <ReportDownloadButton
                 path={`/dependants/coverage-report/export?policy_year_id=${policyYearId}`}
                 filename="dependant-coverage.xlsx"
@@ -175,7 +187,9 @@ export function DependantsPage() {
             <SkeletonTable rows={6} columns={5} />
           ) : total === 0 ? (
             <div className="text-sm text-muted-foreground p-8 text-center border border-dashed border-border rounded-md">
-              No dependants uploaded yet.
+              {debouncedSearch.trim() || unlinkedOnly
+                ? "No dependants match the current search or filter."
+                : "No dependants uploaded yet."}
             </div>
           ) : (
             <>
@@ -244,10 +258,54 @@ export function DependantsPage() {
         confirmLabel={`Delete ${total.toLocaleString()} dependants`}
         loading={bulkDelete.isPending}
         onConfirm={async () => {
-          const r = await bulkDelete.mutateAsync(policyYearId);
-          toast.success(`Deleted ${r.deleted} dependants`);
-          setShowDeleteAll(false);
-          setPage(0);
+          try {
+            const r = await bulkDelete.mutateAsync({
+              policyYearId,
+              confirm: false,
+            });
+            toast.success(`Deleted ${r.deleted} dependants`);
+            setShowDeleteAll(false);
+            setPage(0);
+          } catch (e) {
+            if (
+              e instanceof ConflictDetailError &&
+              e.detail.code === "member_data_at_risk"
+            ) {
+              setShowDeleteAll(false);
+              setDeleteRisk(Number(e.detail.member_added_at_risk ?? 0));
+              return;
+            }
+            toast.error(formatError(e));
+          }
+        }}
+      />
+
+      <AlertDialog
+        open={deleteRisk !== null}
+        onOpenChange={(o) => !o && setDeleteRisk(null)}
+        title="Member-submitted dependants will be lost"
+        description={
+          <>
+            <strong>{(deleteRisk ?? 0).toLocaleString()}</strong> of these
+            dependants were self-added by members through the portal (pending or
+            approved). Deleting them is permanent and the member will have to
+            re-submit. This cannot be undone.
+          </>
+        }
+        confirmLabel={`Delete anyway (${total.toLocaleString()} dependants)`}
+        loading={bulkDelete.isPending}
+        onConfirm={async () => {
+          try {
+            const r = await bulkDelete.mutateAsync({
+              policyYearId,
+              confirm: true,
+            });
+            toast.success(`Deleted ${r.deleted} dependants`);
+            setDeleteRisk(null);
+            setPage(0);
+          } catch (e) {
+            toast.error(formatError(e));
+          }
         }}
       />
 

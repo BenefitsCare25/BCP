@@ -1,6 +1,7 @@
 """Dependant upload + list endpoints with multi-key linking."""
 from __future__ import annotations
 
+import logging
 from io import BytesIO
 from typing import Annotated
 
@@ -16,7 +17,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -53,7 +54,34 @@ from app.services.roster_dedup import dependant_candidate_keys, dependant_nric
 from app.services.roster_parser import parse_dependant_workbook
 from app.services.roster_reports import build_dependant_report_workbook
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/dependants", tags=["dependants"])
+
+
+def _employee_link_indexes(
+    employees: list[Employee],
+) -> tuple[dict[str, Employee], dict[str, Employee], set[str]]:
+    """Staff-id and name lookup maps for dependant linking.
+
+    Names that resolve to more than one employee are AMBIGUOUS and excluded from
+    ``by_name`` — linking a dependant by a shared name would silently attach it
+    to whichever employee won a dict race. The ambiguous names are returned so
+    the caller can leave those dependants unlinked and report them. Staff-id and
+    name keys are ``.strip().lower()``d consistently so a stray-whitespace
+    staff_id still links.
+    """
+    by_staff: dict[str, Employee] = {}
+    name_groups: dict[str, list[Employee]] = {}
+    for e in employees:
+        if e.staff_id and str(e.staff_id).strip():
+            by_staff[str(e.staff_id).strip().lower()] = e
+        nm = (e.employee_name or "").strip().lower()
+        if nm:
+            name_groups.setdefault(nm, []).append(e)
+    by_name = {nm: emps[0] for nm, emps in name_groups.items() if len(emps) == 1}
+    ambiguous = {nm for nm, emps in name_groups.items() if len(emps) > 1}
+    return by_staff, by_name, ambiguous
 
 
 @router.get("", response_model=DependantList)
@@ -62,7 +90,12 @@ def list_dependants(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     unlinked_only: bool = Query(False),
-    status_filter: str | None = Query(default=None, alias="status"),
+    q: str | None = None,
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        pattern="^(active|pending_approval|rejected|terminated|all)$",
+    ),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DependantList:
@@ -70,8 +103,28 @@ def list_dependants(
     conditions = [Dependant.policy_year_id == policy_year_id]
     if unlinked_only:
         conditions.append(Dependant.employee_id == None)  # noqa: E711
-    if status_filter:
+    if q and q.strip():
+        # Dependant name lives in the JSON attribute blob (not a column), so
+        # search the known name keys plus the normalized NRIC and the linked
+        # employee's staff id/name. Portable JSON element access → JSON_EXTRACT
+        # on SQLite, ->> on Postgres JSONB.
+        like = f"%{q.strip().replace('%', '').replace('_', '')}%"
+        searchable = [
+            Dependant.national_id_normalized,
+            Dependant.attribute_values["dependant_name"].as_string(),
+            Dependant.attribute_values["name"].as_string(),
+            Dependant.attribute_values["employee_staff_id"].as_string(),
+            Dependant.attribute_values["employee_name"].as_string(),
+        ]
+        conditions.append(or_(*[col.ilike(like) for col in searchable]))
+    # Default view shows only active dependants — pending self-adds live in the
+    # approvals card, and rejected/terminated are historical. Opt in explicitly.
+    if status_filter == "all":
+        pass
+    elif status_filter:
         conditions.append(Dependant.status == status_filter)
+    else:
+        conditions.append(Dependant.status == DEPENDANT_STATUS_ACTIVE)
     base = select(Dependant).where(*conditions).order_by(Dependant.id)
     total = db.scalar(select(func.count(Dependant.id)).where(*conditions)) or 0
     rows = list(db.execute(base.offset(offset).limit(limit)).scalars().all())
@@ -138,12 +191,7 @@ def auto_match_dependants(
             )
         ).scalars().all()
     )
-    by_staff = {e.staff_id.lower(): e for e in employees if e.staff_id}
-    by_name = {
-        (e.employee_name or "").lower().strip(): e
-        for e in employees
-        if e.employee_name
-    }
+    by_staff, by_name, _ambiguous = _employee_link_indexes(employees)
 
     unlinked = list(
         db.execute(
@@ -163,11 +211,13 @@ def auto_match_dependants(
 
         emp = None
         method = None
-        if staff_id and str(staff_id).lower() in by_staff:
-            emp = by_staff[str(staff_id).lower()]
+        if staff_id and str(staff_id).strip().lower() in by_staff:
+            emp = by_staff[str(staff_id).strip().lower()]
             method = "staff_id"
         elif emp_name:
-            key = str(emp_name).lower().strip()
+            key = str(emp_name).strip().lower()
+            # Ambiguous names (shared by 2+ employees) are absent from by_name,
+            # so this leaves the dependant unlinked rather than mis-linking it.
             if key in by_name:
                 emp = by_name[key]
                 method = "name"
@@ -206,6 +256,9 @@ def update_dependant(
     }
     if payload.attribute_values is not None:
         d.attribute_values = payload.attribute_values
+        # Keep the durable dedup key in sync with an edited NRIC (see the
+        # employee PATCH for the same invariant).
+        d.national_id_normalized = dependant_nric(d.attribute_values or {})
     if payload.relink:
         if payload.employee_id is not None:
             emp = db.get(Employee, payload.employee_id)
@@ -230,8 +283,23 @@ def update_dependant(
                "link_method": d.link_method},
     )
     db.commit()
+
+    # Editing attributes (e.g. relationship) or relinking can change a
+    # sponsoring employee's family status, which sizes the flex wallet — refresh
+    # assignments like the upload/approval paths. Best-effort; must not fail the
+    # edit.
+    flex_errors: list[str] = []
+    if d.status == DEPENDANT_STATUS_ACTIVE and (
+        payload.attribute_values is not None or payload.relink
+    ):
+        assign_flex_safe(
+            db, user, d.policy_year_id, d.client_id,
+            trigger="auto_on_dependant_edit", errors=flex_errors,
+        )
     db.refresh(d)
-    return DependantOut.model_validate(d)
+    out = DependantOut.model_validate(d)
+    out.flex_errors = flex_errors
+    return out
 
 
 @router.post("/{dependant_id}/approval", response_model=DependantOut)
@@ -316,6 +384,13 @@ def download_dependant_document(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Document bytes are no longer available"
         ) from None
+    except Exception:
+        # Transient/permission errors from the storage backend (e.g. Azure Blob
+        # in prod) must not leak a stack trace or storage path to the caller.
+        logger.exception("Failed to read dependant document %s", doc.id)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Document storage is temporarily unavailable"
+        ) from None
     safe_name = doc.file_name.replace('"', "")
     return Response(
         content=content,
@@ -329,9 +404,18 @@ def download_dependant_document(
 def bulk_delete_dependants(
     request: Request,
     policy_year_id: str,
+    confirm: bool = False,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    """Delete every dependant for a policy year.
+
+    409s with code ``member_data_at_risk`` (unless ``confirm=true``) when the
+    roster carries member-portal self-added dependants — pending ones awaiting
+    review or approved ones a member is relying on for cover — so a broker can't
+    silently discard member-submitted records. Family status is dependant-derived
+    and sizes the flex wallet, so assignments are refreshed after the wipe.
+    """
     client_id = require_client_id(user)
     assert_policy_year_for_user(policy_year_id, user, db)
     rows = list(
@@ -344,6 +428,22 @@ def bulk_delete_dependants(
         .scalars()
         .all()
     )
+    if rows and not confirm:
+        portal_added = sum(1 for r in rows if r.link_method == "member_portal")
+        if portal_added:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "member_data_at_risk",
+                    "message": (
+                        f"Deleting these dependants will permanently destroy "
+                        f"{portal_added} member self-added dependant"
+                        f"{'' if portal_added == 1 else 's'}"
+                        " (pending or approved). Pass confirm=true to proceed anyway."
+                    ),
+                    "member_added_at_risk": portal_added,
+                },
+            )
     deleted = len(rows)
     for r in rows:
         db.delete(r)
@@ -356,7 +456,16 @@ def bulk_delete_dependants(
         after={"deleted": deleted, "policy_year_id": policy_year_id},
     )
     db.commit()
-    return {"deleted": deleted}
+
+    # Dependants size the flex wallet via family status — refresh assignments so
+    # a wipe can't leave employees over-funded for cover that no longer exists.
+    # Best-effort: a failure here must not fail the delete.
+    flex_errors: list[str] = []
+    assign_flex_safe(
+        db, user, policy_year_id, client_id,
+        trigger="auto_on_dependant_bulk_delete", errors=flex_errors,
+    )
+    return {"deleted": deleted, "flex_errors": flex_errors}
 
 
 @router.post("/upload", response_model=UploadResult)
@@ -392,12 +501,8 @@ async def upload_dependants(
         .scalars()
         .all()
     )
-    by_staff = {e.staff_id.lower(): e for e in employees if e.staff_id}
-    by_name = {
-        (e.employee_name or "").lower().strip(): e
-        for e in employees
-        if e.employee_name
-    }
+    by_staff, by_name, ambiguous_names = _employee_link_indexes(employees)
+    ambiguous_hits: set[str] = set()
 
     # Existing dependant identity keys — dedup fixes the historical bug where a
     # re-uploaded dependant file blindly doubled every row.
@@ -430,14 +535,21 @@ async def upload_dependants(
     for rec in records:
         emp = None
         method = None
-        if rec.employee_staff_id and rec.employee_staff_id.lower() in by_staff:
-            emp = by_staff[rec.employee_staff_id.lower()]
+        if (
+            rec.employee_staff_id
+            and rec.employee_staff_id.strip().lower() in by_staff
+        ):
+            emp = by_staff[rec.employee_staff_id.strip().lower()]
             method = "staff_id"
         elif rec.employee_name:
-            key = rec.employee_name.lower().strip()
+            key = rec.employee_name.strip().lower()
             if key in by_name:
                 emp = by_name[key]
                 method = "name"
+            elif key in ambiguous_names:
+                # Two+ employees share this name — don't guess. Leave unlinked
+                # and report so the broker can link it manually.
+                ambiguous_hits.add(rec.employee_name.strip())
         if emp is None:
             method = "unlinked"
 
@@ -469,6 +581,13 @@ async def upload_dependants(
             )
         )
         inserted += 1
+
+    if ambiguous_hits:
+        names = ", ".join(sorted(ambiguous_hits))
+        errors.append(
+            "Left unlinked — the employee name matches more than one person; "
+            f"link manually: {names}"
+        )
 
     write_audit(
         db,

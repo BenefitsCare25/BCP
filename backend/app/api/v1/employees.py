@@ -292,6 +292,10 @@ def update_employee(
         e.employee_name = payload.employee_name
     if payload.attribute_values is not None:
         e.attribute_values = payload.attribute_values
+        # The NRIC is the durable dedup key on the next upload — recompute it
+        # so a corrected NRIC here can't leave a stale key that duplicates or
+        # false-matches the person on re-import.
+        e.national_id_normalized = employee_nric(e.attribute_values or {})
         schemas = list(
             db.execute(
                 select(EmployeeAttributeSchema).where(

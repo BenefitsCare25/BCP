@@ -126,7 +126,7 @@ def test_employee_report_headers_and_masking(client: TestClient) -> None:
     assert "R-1" in staff_ids and "R-2" in staff_ids
     assert "R-3" not in staff_ids, "terminated employee must be excluded"
     rita = next(r for r in body if r[0] == "R-1")
-    assert rita[2] == "S*****23A", "NRIC must be masked"
+    assert rita[2] == "S******3A", "NRIC must be masked"
 
 
 def test_dependant_report_headers_and_masking(client: TestClient) -> None:
@@ -141,4 +141,4 @@ def test_dependant_report_headers_and_masking(client: TestClient) -> None:
     body = rows[1:]
     kid = next(r for r in body if r[2] == "Rita Kid")
     assert kid[0] == "R-1"
-    assert kid[5] == "T*****45Z", "dependant NRIC must be masked"
+    assert kid[5] == "T******5Z", "dependant NRIC must be masked"

@@ -286,6 +286,28 @@ def test_change_to_colliding_nric_is_rejected(client: TestClient) -> None:
     assert any("another employee" in i["message"] for i in body["issues"])
 
 
+def test_same_file_nric_assigned_to_two_employees_is_rejected(
+    client: TestClient,
+) -> None:
+    """Two Change rows setting the SAME fresh NRIC on different employees must
+    not both apply — there's no DB unique to catch it, so the run-scoped guard
+    skips the second (regression)."""
+    py = _py(client)
+    content = _movement(
+        emp_rows=[
+            ["Change", "A-1", "Anna", "S9090909Z", "1990-01-01", "Manager", ""],
+            ["Change", "A-2", "Ben", "S9090909Z", "1985-02-02", "Manager", ""],
+        ],
+        dep_rows=[],
+    )
+    body = _preview(client, py, content).json()
+    assert body["counts"]["changes"] == 1
+    assert any(
+        "two different employees in this file" in i["message"]
+        for i in body["issues"]
+    )
+
+
 def test_terminated_excluded_from_default_list(client: TestClient) -> None:
     py = _py(client)
     listing = client.get(f"/api/v1/employees?policy_year_id={py}&limit=200").json()

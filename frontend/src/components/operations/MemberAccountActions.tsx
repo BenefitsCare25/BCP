@@ -12,6 +12,7 @@ import {
   useSetMemberAccountStatus,
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,8 +37,25 @@ export function MemberAccountActions({
   const setStatus = useSetMemberAccountStatus();
   const [emailOverride, setEmailOverride] = useState("");
   const [needsEmail, setNeedsEmail] = useState(false);
+  const [confirmDisable, setConfirmDisable] = useState(false);
 
   const account = data?.items.find((a) => a.staff_id === staffId);
+
+  const setAccountStatus = async (
+    accountId: string,
+    next: "active" | "disabled",
+  ) => {
+    try {
+      await setStatus.mutateAsync({ accountId, status: next });
+      toast.success(
+        next === "disabled"
+          ? "Portal access disabled"
+          : "Portal access re-enabled",
+      );
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
 
   const invite = async () => {
     try {
@@ -121,10 +139,14 @@ export function MemberAccountActions({
                 variant="outline"
                 disabled={setStatus.isPending}
                 className={account.status === "disabled" ? "" : "text-error hover:text-error"}
-                onClick={async () => {
-                  const next = account.status === "disabled" ? "active" : "disabled";
-                  await setStatus.mutateAsync({ accountId: account.id, status: next });
-                  toast.success(next === "disabled" ? "Portal access disabled" : "Portal access re-enabled");
+                onClick={() => {
+                  // Disabling revokes a member's login — confirm first.
+                  // Re-enabling is safe, so it stays one click.
+                  if (account.status === "disabled") {
+                    void setAccountStatus(account.id, "active");
+                  } else {
+                    setConfirmDisable(true);
+                  }
                 }}
               >
                 {account.status === "disabled" ? (
@@ -138,6 +160,26 @@ export function MemberAccountActions({
                 )}
               </Button>
             </div>
+            <AlertDialog
+              open={confirmDisable}
+              onOpenChange={setConfirmDisable}
+              title="Disable portal access?"
+              description={
+                <>
+                  <strong>{account.email}</strong> will no longer be able to sign
+                  in to the member portal to view benefits or submit claims. You
+                  can re-enable access at any time.
+                </>
+              }
+              confirmLabel="Disable access"
+              confirmVariant="destructive"
+              loading={setStatus.isPending}
+              onConfirm={() => {
+                void setAccountStatus(account.id, "disabled").then(() =>
+                  setConfirmDisable(false),
+                );
+              }}
+            />
           </>
         ) : (
           <>
