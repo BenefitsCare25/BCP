@@ -1,0 +1,81 @@
+[project]
+name = "inspro-backend"
+version = "0.1.0"
+description = "Inspro Group Benefits Configuration Platform backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "gunicorn>=22.0.0",
+    "pydantic>=2.9.0",
+    "python-multipart>=0.0.12",
+    "openpyxl>=3.1.5",
+    "xlrd==2.0.1",
+    # Flex-document intake — normalize PDF/PNG/JPG/MSG into text + images for
+    # vision extraction. PyMuPDF is a self-contained wheel (no Poppler binary).
+    "pypdf>=5.1.0",
+    "pymupdf>=1.24.0",
+    "pillow>=11.0.0",
+    "extract-msg>=0.52.0",
+    # Fact-find form fill — load the bundled .docx template and write the known
+    # values into its table cells, leaving the rest blank for handwriting.
+    "python-docx>=1.1.2",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14.0",
+    "anthropic>=0.39.0",
+    "psycopg[binary]>=3.2.0",
+    "redis>=5.2.0",
+    "cachetools>=5.5.0",
+    "slowapi>=0.1.9",
+    "pyjwt[crypto]>=2.10.0",
+    "cryptography>=43.0.0",
+    "httpx>=0.27.0",
+    # Observability — Azure Monitor OpenTelemetry distro auto-instruments
+    # FastAPI/SQLAlchemy/httpx and ships traces+logs+metrics to App Insights
+    # when APPLICATIONINSIGHTS_CONNECTION_STRING is set.
+    "azure-monitor-opentelemetry>=1.6.0",
+    # Retained document storage (claim receipts) - Azure Blob in prod,
+    # managed identity via azure-identity. Lazily imported (dev uses local disk).
+    "azure-storage-blob>=12.19.0",
+    "azure-identity>=1.17.0",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+# B008: FastAPI's Depends() / File() / Form() are idiomatic in default args.
+ignore = ["B008", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+# System prompts are inherently long strings — line length doesn't help.
+"app/services/ai_extractor.py" = ["E501"]
+# main.py must call load_dotenv() before importing settings/crypto, so its
+# module-level imports intentionally follow that call.
+"app/main.py" = ["E402"]
+# The fact-find modules intentionally embed Word-document glyphs (en dash in the
+# age-band labels, × in docstrings) that must match the template byte-for-byte.
+"app/services/fact_find_form.py" = ["RUF001", "RUF002"]
+"app/services/fact_find_render.py" = ["RUF002"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+# Gitleaks config for Inspro — extends the default ruleset, then allowlists a
+# small set of values that are provably NOT secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Public Azure built-in RBAC role-definition GUIDs (identical in every tenant, documented by Microsoft — not credentials). Referenced by infra/bicep to grant managed-identity roles."
+regexes = [
+  # "Key Vault Secrets User" — https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
+  '''4633458b-17de-408a-b874-0445c86b69e6''',
+]

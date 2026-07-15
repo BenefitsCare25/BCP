@@ -1,0 +1,44 @@
+{
+  "code": "GPA",
+  "version": 1,
+  "display_name": "Group Personal Accident",
+  "has_dependants": false,
+  "is_outpatient": false,
+  "form_profile": "accident",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "1", "name": "Accidental Death", "kind": "text" },
+    {
+      "number": "2",
+      "name": "Permanent Disablement — Scale of Compensation",
+      "kind": "scale",
+      "sub_items": [
+        { "key": "1", "name": "Permanent Total Disablement — 100% of Sum Insured" },
+        { "key": "2", "name": "Loss of two limbs — 100%" },
+        { "key": "3", "name": "Loss of one limb — 50%" },
+        { "key": "4", "name": "Loss of sight of one eye — 50%" },
+        { "key": "5", "name": "Loss of thumb and index finger — 30%" }
+      ]
+    },
+    { "number": "3", "name": "Temporary Total Disablement (weekly benefit)", "kind": "text" },
+    { "number": "4", "name": "Medical Expenses (due to accident)", "kind": "amount" }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
+    { "id": "24hr_worldwide", "label": "24-hour worldwide cover", "default_enabled": true }
+  ]
+}

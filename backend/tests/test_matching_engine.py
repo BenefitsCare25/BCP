@@ -1,0 +1,405 @@
+"""Unit tests for the three-tier matching engine (brief §8.7)."""
+from __future__ import annotations
+
+from typing import Any
+
+from app.models.category import Category
+from app.models.employee import Employee
+from app.services.matching_engine import (
+    CONTAINMENT_CONFIDENCE,
+    FUZZY_THRESHOLD,
+    canonicalize_category_name,
+    jaccard,
+    match_one,
+    rule_specificity,
+    tokenize,
+)
+
+
+def _emp(
+    category: str | None = None,
+    derived: dict[str, Any] | None = None,
+    entity: str | None = None,
+) -> Employee:
+    attrs: dict[str, Any] = {}
+    if category:
+        attrs["category"] = category
+    if entity:
+        attrs["entity"] = entity
+    return Employee(
+        id="emp-1",
+        client_id="c",
+        policy_year_id="py",
+        staff_id="S1",
+        employee_name="Test User",
+        attribute_values=attrs,
+        derived_attribute_values=derived or {},
+    )
+
+
+def _cat(
+    cid: str,
+    display_name: str,
+    *,
+    priority: int = 0,
+    rule: dict[str, Any] | None = None,
+    confidence: float | None = None,
+    insured: str | None = None,
+) -> Category:
+    return Category(
+        id=cid,
+        policy_year_id="py",
+        product_id=None,
+        priority=priority,
+        display_name=display_name,
+        raw_description=display_name,
+        matching_rule=rule,
+        confidence=confidence,
+        source="system_generated",
+        status="needs_review",
+        plan_assignments={"insured": insured} if insured else None,
+    )
+
+
+def _match(emp: Employee, cats: list[Category]):
+    """Build the pre-computed indexes match_policy_year would build, then call match_one."""
+    by_priority = sorted(cats, key=lambda c: c.priority)
+    exact = {c.display_name.strip().lower(): c for c in cats if c.display_name}
+    tokens = {c.id: tokenize(c.display_name) for c in cats}
+    return match_one(emp, by_priority, exact, tokens)
+
+
+def test_tokenize_keeps_numbers() -> None:
+    assert tokenize("18 and above") == {"18", "and", "above"}
+
+
+def test_tokenize_handles_punctuation_and_case() -> None:
+    assert tokenize("Grade 15 (Married, 2-Child)") == {"grade", "15", "married", "2", "child"}
+
+
+def test_jaccard_basic() -> None:
+    assert jaccard({"a", "b"}, {"a", "b"}) == 1.0
+    assert jaccard({"a", "b"}, {"a", "c"}) == 1 / 3
+    assert jaccard(set(), {"a"}) == 0.0
+
+
+def test_exact_name_wins_over_fuzzy() -> None:
+    cats = [
+        _cat("c1", "Grade 18 Married plus 1 child"),
+        _cat("c2", "Grade 18 Married plus 2 child"),  # would beat fuzzily
+    ]
+    out = _match(_emp("Grade 18 Married plus 1 child"), cats)
+    assert out.category_id == "c1"
+    assert out.method == "exact_name"
+    assert out.confidence == 1.0
+
+
+def test_exact_name_is_case_insensitive() -> None:
+    cats = [_cat("c1", "Grade 18 MARRIED plus 1 child")]
+    out = _match(_emp("grade 18 married plus 1 child"), cats)
+    assert out.category_id == "c1"
+    assert out.method == "exact_name"
+
+
+def test_fuzzy_matches_above_threshold() -> None:
+    cats = [_cat("c1", "Grade 18 Married 2 child"), _cat("c2", "Single Grade 5")]
+    # "Grade 18 Married 1 child" vs "Grade 18 Married 2 child"
+    # Tokens: {grade,18,married,1,child} vs {grade,18,married,2,child}
+    # Intersection: {grade,18,married,child} (4); union: 6 → 0.667 > 0.6
+    out = _match(_emp("Grade 18 Married 1 child"), cats)
+    assert out.method == "fuzzy_name"
+    assert out.category_id == "c1"
+    assert out.confidence is not None and out.confidence >= FUZZY_THRESHOLD
+
+
+def test_fuzzy_below_threshold_falls_through_to_rule() -> None:
+    rule = {"=": ["grade", "20"]}
+    cats = [
+        _cat("c1", "Completely Different Text", rule=rule, confidence=0.9),
+    ]
+    emp = _emp("Grade 20 Single", derived={"grade": 20})
+    out = _match(emp, cats)
+    assert out.method == "rule"
+    assert out.category_id == "c1"
+    assert out.confidence == 0.9
+
+
+def test_fuzzy_tiebreak_prefers_lower_priority() -> None:
+    # Two categories tie on Jaccard but differ on priority.
+    cats = [
+        _cat("c1", "Grade 18 Married 1 child", priority=10),
+        _cat("c2", "Grade 18 Married 1 child", priority=5),
+    ]
+    # Use an inexact employee phrase so we fall to fuzzy (not exact).
+    out = _match(_emp("Grade 18 Married 1 child plus"), cats)
+    assert out.method == "fuzzy_name"
+    assert out.category_id == "c2"
+
+
+def test_rule_iterates_in_priority_order() -> None:
+    rule_a = {"=": ["pass", "EP"]}
+    rule_b = {"=": ["pass", "EP"]}
+    cats = [
+        _cat("low", "Cat Low", priority=10, rule=rule_a, confidence=0.5),
+        _cat("hi", "Cat High", priority=1, rule=rule_b, confidence=0.9),
+    ]
+    emp = _emp(category=None, derived={"pass": "EP"})
+    out = _match(emp, cats)
+    # priority=1 is evaluated first → "hi" wins.
+    assert out.category_id == "hi"
+    assert out.method == "rule"
+    assert out.confidence == 0.9
+
+
+def test_rule_skips_categories_with_no_rule() -> None:
+    cats = [
+        _cat("c1", "No Rule Cat", priority=1),
+        _cat("c2", "Has Rule", priority=2, rule={"=": ["pass", "WP"]}, confidence=0.7),
+    ]
+    out = _match(_emp(category=None, derived={"pass": "WP"}), cats)
+    assert out.category_id == "c2"
+
+
+def test_rule_uses_derived_over_raw() -> None:
+    rule = {"=": ["family_status", "M2C"]}
+    cats = [_cat("c1", "Married Two Kids", rule=rule, confidence=0.8)]
+    # raw category is the unparseable concat; derived is the structured field.
+    emp = _emp(
+        "17 Married plus 2 child",
+        derived={"family_status": "M2C", "grade": 17},
+    )
+    out = _match(emp, cats)
+    assert out.method == "rule"
+    assert out.category_id == "c1"
+
+
+def test_no_category_field_no_exact_no_fuzzy() -> None:
+    cats = [_cat("c1", "Anything", rule={"=": ["pass", "EP"]}, confidence=0.5)]
+    emp = _emp(category=None, derived={"pass": "EP"})
+    out = _match(emp, cats)
+    assert out.method == "rule"
+
+
+def _match_canon(emp: Employee, cats: list[Category]):
+    """Like `_match`, but tokens come from the canonicalized display_name —
+    mirrors what `_build_product_indices` feeds in production."""
+    by_priority = sorted(cats, key=lambda c: c.priority)
+    exact = {c.display_name.strip().lower(): c for c in cats if c.display_name}
+    tokens = {c.id: tokenize(canonicalize_category_name(c.display_name)) for c in cats}
+    return match_one(emp, by_priority, exact, tokens)
+
+
+def test_canonicalize_strips_job_category_and_dependant_tail() -> None:
+    assert (
+        canonicalize_category_name(
+            "Manager (Job category: E5 to E6, EE to EF) / All Eligible Dependants"
+        )
+        == "Manager"
+    )
+    assert (
+        canonicalize_category_name("EVP and Above (Job category: A7 to A9)")
+        == "EVP and Above"
+    )
+    # No qualifier → unchanged.
+    assert canonicalize_category_name("Manager") == "Manager"
+
+
+def test_fuzzy_matches_once_job_category_suffix_is_stripped() -> None:
+    # Raw label drowns the tier name in code-map tokens (Jaccard ~0.29 < 0.6);
+    # after canonicalization the tier name matches the roster value exactly.
+    cats = [
+        _cat("c1", "Executive to AM & Secretary (Job category: E1 to E4, EA to ED)"),
+    ]
+    out = _match_canon(_emp("Executive to AM & Secretary"), cats)
+    assert out.category_id == "c1"
+    assert out.method == "fuzzy_name"
+    assert out.confidence is not None and out.confidence >= FUZZY_THRESHOLD
+
+
+def test_containment_matches_grouped_label() -> None:
+    # "Manager" is a strict subset of a grouped tier — Jaccard misses it, the
+    # containment fallback catches it at the dedicated confidence.
+    cats = [_cat("c1", "Manager, Executive to AM and Secretary (Job category: E1)")]
+    out = _match_canon(_emp("Manager"), cats)
+    assert out.category_id == "c1"
+    assert out.method == "fuzzy_name"
+    assert out.confidence == CONTAINMENT_CONFIDENCE
+
+
+def test_rule_beats_containment_when_both_match() -> None:
+    # Containment is the LAST tier: a real rule match must win over a loose
+    # name-subset match, even though "Manager" is contained in the grouped label.
+    cats = [
+        _cat("grouped", "Manager, Executive to AM and Secretary"),
+        _cat("ruled", "Senior Band", rule={"=": ["pass", "EP"]}, confidence=0.9),
+    ]
+    out = _match_canon(_emp("Manager", derived={"pass": "EP"}), cats)
+    assert out.category_id == "ruled"
+    assert out.method == "rule"
+
+
+def test_employee_label_is_canonicalized_for_matching() -> None:
+    # A parenthetical-laden employee category matches the clean tier name (both
+    # sides are canonicalized before tokenizing).
+    cats = [_cat("c1", "Manager")]
+    out = _match_canon(_emp("Manager (Grade E5)"), cats)
+    assert out.category_id == "c1"
+    assert out.method == "fuzzy_name"
+
+
+def test_containment_prefers_most_specific_then_falls_to_rule() -> None:
+    # A bare connective label can't be "contained" in everything: "and" alone
+    # has no meaningful token, so it must fall through to rule evaluation.
+    cats = [
+        _cat("grouped", "Senior Team and Leadership"),
+        _cat("ruled", "Whatever", rule={"=": ["pass", "EP"]}, confidence=0.6),
+    ]
+    out = _match_canon(_emp("and", derived={"pass": "EP"}), cats)
+    assert out.method == "rule"
+    assert out.category_id == "ruled"
+
+
+def test_no_matches_at_all_returns_none() -> None:
+    cats = [_cat("c1", "Foo Bar Baz", rule={"=": ["pass", "EP"]}, confidence=0.5)]
+    out = _match(_emp("Hello World", derived={"pass": "WP"}), cats)
+    assert out.category_id is None
+    assert out.method is None
+    assert out.confidence is None
+
+
+def test_rule_specificity_counts_leaf_conditions() -> None:
+    assert rule_specificity({">=": ["grade", 18]}) == 1
+    assert rule_specificity(
+        {"and": [{">=": ["grade", 18]}, {"in": ["pass", ["WP", "SP"]]}]}
+    ) == 2
+    assert rule_specificity({"and": []}) == 0  # "All Employees" catch-all
+    assert rule_specificity(
+        {"or": [{"=": ["a", 1]}, {"=": ["b", 2]}, {"not": {"=": ["c", 3]}}]}
+    ) == 3
+    assert rule_specificity(None) == 0
+
+
+def test_most_specific_rule_wins_over_looser_lower_priority() -> None:
+    # The local rule (grade only) has the LOWER priority number so it's
+    # evaluated first, but the foreign-worker rule (grade + pass) is more
+    # specific and must win — otherwise FWs get shadowed onto local plans.
+    local = _cat("local", "Grade 18+", priority=1,
+                 rule={">=": ["grade", 18]}, confidence=0.85)
+    fw = _cat("fw", "FW WP/SP Grade 18+", priority=4,
+              rule={"and": [{">=": ["grade", 18]}, {"in": ["pass", ["WP", "SP"]]}]},
+              confidence=0.75)
+    out = _match(_emp(derived={"grade": 20, "pass": "WP"}), [local, fw])
+    assert out.category_id == "fw"
+
+
+def test_local_employee_still_matches_looser_rule() -> None:
+    # A non-FW employee matches only the local rule (the specific one fails).
+    local = _cat("local", "Grade 18+", priority=1,
+                 rule={">=": ["grade", 18]}, confidence=0.85)
+    fw = _cat("fw", "FW WP/SP Grade 18+", priority=4,
+              rule={"and": [{">=": ["grade", 18]}, {"in": ["pass", ["WP", "SP"]]}]},
+              confidence=0.75)
+    out = _match(_emp(derived={"grade": 20, "pass": "CITIZEN"}), [local, fw])
+    assert out.category_id == "local"
+
+
+def test_confirmed_status_beats_more_specific_needs_review() -> None:
+    # status_rank is primary: a confirmed (looser) rule still beats a more
+    # specific needs_review one, preserving the confirmed-precedence invariant.
+    confirmed_loose = _cat("conf", "Grade 18+", priority=5,
+                           rule={">=": ["grade", 18]}, confidence=0.85)
+    confirmed_loose.status = "confirmed"
+    specific_review = _cat("rev", "FW WP/SP 18+", priority=1,
+                           rule={"and": [{">=": ["grade", 18]},
+                                         {"in": ["pass", ["WP", "SP"]]}]},
+                           confidence=0.75)
+    out = _match(_emp(derived={"grade": 20, "pass": "WP"}),
+                 [confirmed_loose, specific_review])
+    assert out.category_id == "conf"
+
+
+def test_empty_category_list_returns_none() -> None:
+    out = _match(_emp("anything"), [])
+    assert out.category_id is None
+
+
+# ── Insured-entity gate (multi-subsidiary schemes, e.g. WICA) ────────────────
+
+
+def test_entity_gate_routes_same_named_categories_per_subsidiary() -> None:
+    """WICA-style: one 'Non-Manual Staffs' category per insured entity — each
+    employee lands in their OWN entity's category, in both directions."""
+    cats = [
+        _cat("cdl", "Non-Manual Staffs", priority=0,
+             insured="City Developments Limited"),
+        _cat("legrove", "Non-Manual Staffs", priority=1,
+             insured="Le Grove Management Pte Ltd"),
+    ]
+    out = _match(
+        _emp("Non-Manual Staffs", entity="Le Grove Management Pte Ltd"), cats
+    )
+    assert out.category_id == "legrove"
+    out = _match(
+        _emp("Non-Manual Staffs", entity="City Developments Limited"), cats
+    )
+    assert out.category_id == "cdl"
+
+
+def test_entity_gate_blank_sides_are_wildcards() -> None:
+    # Employee without an Entity column still matches a restricted category.
+    cats = [_cat("c1", "Managers", insured="City Developments Limited")]
+    assert _match(_emp("Managers"), cats).category_id == "c1"
+    # Category without insured matches any entity.
+    cats = [_cat("c1", "Managers")]
+    out = _match(_emp("Managers", entity="Le Grove Management Pte Ltd"), cats)
+    assert out.category_id == "c1"
+
+
+def test_entity_gate_normalizes_punctuation_and_suffixes() -> None:
+    """Roster 'CityNexus Pte. Ltd.' must equal slip 'CityNexus Pte Ltd', and
+    'Limited' must equal 'Ltd' — comma-separated insured lists split."""
+    cats = [
+        _cat(
+            "c1",
+            "All Employees",
+            insured=(
+                "City Developments Ltd, City Serviced Offices Pte Ltd, "
+                "CityNexus Pte Ltd"
+            ),
+        )
+    ]
+    out = _match(_emp("All Employees", entity="CityNexus Pte. Ltd."), cats)
+    assert out.category_id == "c1"
+    out = _match(_emp("All Employees", entity="City Developments Limited"), cats)
+    assert out.category_id == "c1"
+
+
+def test_entity_outside_every_insured_list_matches_nothing() -> None:
+    """CDL's WICA slip omits Krungthep Rimnam (Thai entity) — its employees
+    must not match ANY WICA category, in any tier (exact/fuzzy/rule/containment)."""
+    rule = {"and": []}  # vacuously-true catch-all
+    cats = [
+        _cat("cdl", "Non-Manual Staffs", rule=rule,
+             insured="City Developments Limited"),
+        _cat("legrove", "Non-Manual Staffs", rule=rule,
+             insured="Le Grove Management Pte Ltd"),
+    ]
+    out = _match(
+        _emp("Non-Manual Staffs", entity="Krungthep Rimnam Limited"), cats
+    )
+    assert out.category_id is None
+
+
+def test_entity_gate_applies_to_rule_tier() -> None:
+    rule = {">=": ["grade", 10]}
+    cats = [
+        _cat("cdl", "Alpha", rule=rule, confidence=0.85,
+             insured="City Developments Limited"),
+        _cat("legrove", "Beta", rule=rule, confidence=0.85,
+             insured="Le Grove Management Pte Ltd"),
+    ]
+    out = _match(
+        _emp(derived={"grade": 12}, entity="Le Grove Management Pte Ltd"), cats
+    )
+    assert out.category_id == "legrove"
+    assert out.method == "rule"

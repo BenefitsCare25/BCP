@@ -1,0 +1,213 @@
+import { useState } from "react";
+import { RotateCcw } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { InfoHint } from "@/components/ui/tooltip";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useResetProductTerm, useSetProductTerm } from "@/api/hooks";
+import { formatPolicyRange } from "@/lib/policy-year";
+import { formatError } from "@/lib/errors";
+import type { ProductTerm } from "@/types";
+import { toast } from "sonner";
+
+// Tri-state GST opinion: inherit (null) / include (true) / exclude (false).
+type GstOpinion = "inherit" | "include" | "exclude";
+
+function toOpinion(v: boolean | null): GstOpinion {
+  if (v === null) return "inherit";
+  return v ? "include" : "exclude";
+}
+function fromOpinion(o: GstOpinion): boolean | null {
+  if (o === "inherit") return null;
+  return o === "include";
+}
+
+/**
+ * Compact per-product terms editor: coverage period + GST. Inputs are a pure
+ * function of server state — remount (via a key on the server values) after a
+ * save/reset to discard local edits. Coverage dates and GST are independent
+ * dimensions; each saves only the fields it changed (partial update).
+ */
+export function CoveragePeriodEditor({
+  policyYearId,
+  term,
+}: {
+  policyYearId: string;
+  term: ProductTerm;
+}) {
+  const [start, setStart] = useState(term.coverage_start);
+  const [end, setEnd] = useState(term.coverage_end);
+  const [gstOpinion, setGstOpinion] = useState<GstOpinion>(
+    toOpinion(term.gst_included),
+  );
+  const [gstRate, setGstRate] = useState<string>(
+    term.gst_rate != null ? String(term.gst_rate) : "",
+  );
+  const setTerm = useSetProductTerm(policyYearId);
+  const resetTerm = useResetProductTerm(policyYearId);
+
+  const datesDirty = start !== term.coverage_start || end !== term.coverage_end;
+  const parsedRate = gstRate.trim() === "" ? null : Number(gstRate);
+  const initialOpinion = toOpinion(term.gst_included);
+  const gstDirty =
+    gstOpinion !== initialOpinion ||
+    (gstOpinion === "include" && parsedRate !== term.gst_rate);
+  const dirty = datesDirty || gstDirty;
+
+  const datesValid = Boolean(start) && Boolean(end) && end >= start;
+  const rateValid =
+    gstOpinion !== "include" ||
+    parsedRate === null ||
+    (Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate <= 100);
+  const valid = datesValid && rateValid;
+  const busy = setTerm.isPending || resetTerm.isPending;
+  // The server row exists in some non-default form (dates or a GST opinion).
+  const hasOverride =
+    !term.is_default || term.gst_included !== null || term.gst_rate != null;
+
+  const save = async () => {
+    try {
+      // Partial update — send only the dimension(s) actually changed so one
+      // never resets the other. Dates ride along only when edited.
+      await setTerm.mutateAsync({
+        productId: term.product_id,
+        ...(datesDirty ? { coverageStart: start, coverageEnd: end } : {}),
+        ...(gstDirty
+          ? {
+              gstIncluded: fromOpinion(gstOpinion),
+              gstRate: gstOpinion === "include" ? parsedRate : null,
+            }
+          : {}),
+      });
+      toast.success(`Updated ${term.code} terms`);
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
+
+  const reset = async () => {
+    try {
+      await resetTerm.mutateAsync(term.product_id);
+      toast.success(`${term.code} now inherits the policy year's dates`);
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/20 p-4">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-foreground">
+                Coverage period
+              </span>
+              {term.is_default && <Badge variant="outline">Inherits year</Badge>}
+              {term.gst_included === true && (
+                <Badge variant="outline">Incl. GST</Badge>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {formatPolicyRange(term.coverage_start, term.coverage_end)}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">GST</Label>
+            <InfoHint>
+              Slip amounts are GST-exclusive. “Include” grosses premiums and flex
+              price tags by this rate (default 9%). “Inherit” follows the flex
+              scheme’s GST setting.
+            </InfoHint>
+            <Select
+              value={gstOpinion}
+              onValueChange={(v) => setGstOpinion(v as GstOpinion)}
+            >
+              <SelectTrigger className="w-[180px]" aria-label={`${term.code} GST`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">Inherit (scheme default)</SelectItem>
+                <SelectItem value="include">Include GST</SelectItem>
+                <SelectItem value="exclude">Exclude GST</SelectItem>
+              </SelectContent>
+            </Select>
+            {gstOpinion === "include" && (
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  className="w-[90px]"
+                  value={gstRate}
+                  onChange={(e) => setGstRate(e.target.value)}
+                  placeholder="9"
+                  aria-label={`${term.code} GST rate (%)`}
+                />
+                <span className="text-sm text-muted-foreground">%</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs text-muted-foreground">Starts</Label>
+            <Input
+              type="date"
+              aria-label={`${term.code} coverage start`}
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              className="w-[150px]"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs text-muted-foreground">Ends</Label>
+            <Input
+              type="date"
+              aria-label={`${term.code} coverage end`}
+              value={end}
+              min={start || undefined}
+              onChange={(e) => setEnd(e.target.value)}
+              className="w-[150px]"
+            />
+          </div>
+          <Button size="sm" disabled={!dirty || !valid || busy} onClick={save}>
+            Save
+          </Button>
+          {hasOverride && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={reset}
+              title="Reset to the policy year's dates (clears GST too)"
+            >
+              <RotateCcw className="size-3.5" /> Reset
+            </Button>
+          )}
+        </div>
+        {!datesValid && dirty && (
+          <p className="w-full text-xs text-error">
+            End date must be on or after the start date.
+          </p>
+        )}
+        {!rateValid && (
+          <p className="w-full text-xs text-error">
+            GST rate must be between 0 and 100.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}

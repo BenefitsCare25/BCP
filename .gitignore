@@ -1,0 +1,64 @@
+# ── Local databases (contain ingested PII) ─────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backend/inspro.db*
+backend/tests/_test_*.db*
+
+# ── Real client PII (placement slips, roster uploads) ──────────────────────
+# The repo's test fixtures must use synthetic data (see decision #2 in plan).
+# Real-client files remain on disk locally for ad-hoc parser checks but must
+# NEVER reach the remote.
+reference/
+backend/tests/fixtures/placement_slips/*.xls
+backend/tests/fixtures/placement_slips/*.xlsx
+backend/tests/fixtures/rosters/*.xlsx
+!backend/tests/fixtures/placement_slips/.gitkeep
+!backend/tests/fixtures/rosters/.gitkeep
+
+# ── Secrets ────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.pfx
+backend/.env
+frontend/.env
+frontend/.env.local
+infra/bicep/parameters.*.local.json
+
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ── Node / frontend ────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# ── Editor / OS ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ── Build / deploy artefacts ───────────────────────────────────────────────
+*.zip
+backend.zip
+frontend.zip
+
+# Retained document storage (claim receipts, dependant proofs) — PII
+backend/var/

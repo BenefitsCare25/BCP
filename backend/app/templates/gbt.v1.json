@@ -1,0 +1,64 @@
+{
+  "code": "GBT",
+  "version": 1,
+  "display_name": "Group Business Travel",
+  "has_dependants": false,
+  "is_outpatient": false,
+  "form_profile": "travel",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1 / International", "default_selected": true }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "1", "name": "Credit Card Indemnity", "kind": "amount", "value": "5,000" },
+    { "number": "2", "name": "Home Renovation Benefit", "kind": "amount", "value": "5,000" },
+    { "number": "3", "name": "Additional Accidental Death due to Common Carrier", "kind": "amount", "value": "50,000" },
+    { "number": "4", "name": "Comatose State Lump Sum Benefit", "kind": "amount", "value": "50,000" },
+    { "number": "5", "name": "Emergency Mobile Phone Charges", "kind": "amount", "value": "200" },
+    {
+      "number": "6",
+      "name": "Loss of Personal Property and Baggage (Excess: nil)",
+      "kind": "amount",
+      "value": "5,000",
+      "sub_items": [
+        { "key": "a", "name": "Sub-limit for any one article / pair / set of article", "kind": "amount", "value": "1,000" }
+      ]
+    },
+    { "number": "7", "name": "Travel Delay ($200 for each 6 hours of delay)", "kind": "amount", "value": "1,000" },
+    { "number": "8", "name": "Baggage Delay ($200 for each 6 hours of delay)", "kind": "amount", "value": "1,000" },
+    { "number": "9", "name": "Personal Liability (Any one occurrence and in the aggregate)", "kind": "amount", "value": "1,000,000" },
+    { "number": "10", "name": "Hijacking ($600 for each 24-hour period)", "kind": "amount", "value": "6,000" },
+    { "number": "11", "name": "Hospital Confinement ($200 per day)", "kind": "amount", "value": "10,000" },
+    {
+      "number": "12",
+      "name": "Emergency Travel Expenses",
+      "kind": "amount",
+      "value": "5,000",
+      "note": "Compassionate Visit by Relative or Friend; Death of Close Relative"
+    },
+    { "number": "13", "name": "Travel Misconnection ($200 for each 6 hours of delay)", "kind": "amount", "value": "1,000" },
+    { "number": "14", "name": "Legal Fees", "kind": "amount", "value": "15,000" },
+    { "number": "15", "name": "Bail Bond", "kind": "amount", "value": "15,000" },
+    { "number": "16", "name": "Family Security", "kind": "amount", "value": "25,000" },
+    { "number": "17", "name": "Get Well Benefit ($200 per day up to maximum of 30 days)", "kind": "amount", "value": "6,000" },
+    { "number": "18", "name": "Overbooked Flight", "kind": "amount", "value": "200" },
+    { "number": "19", "name": "Rental Vehicle Excess Waiver", "kind": "amount", "value": "500" },
+    { "number": "20", "name": "Political and Natural Disaster Evacuation", "kind": "amount", "value": "10,000" },
+    { "number": "21", "name": "Flight Diversion ($200 for each 6 hours of delay)", "kind": "amount", "value": "1,000" }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
+    { "id": "24hr_worldwide", "label": "24-hour worldwide cover", "default_enabled": true }
+  ]
+}

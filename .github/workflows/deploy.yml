@@ -1,0 +1,260 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REGISTRY: insproacr.azurecr.io
+  IMAGE_NAME: inspro-api
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  PNPM_VERSION: "9"
+
+jobs:
+  # ── CI gate: runs on every PR + push to main ────────────────────────────────
+  test:
+    name: Lint + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install --no-cache-dir uv
+
+      - name: Backend — install (frozen)
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Backend — ruff
+        working-directory: backend
+        run: uv run ruff check app tests scripts
+
+      - name: Backend — mypy (strict)
+        working-directory: backend
+        run: uv run mypy app
+        # mypy strict surfaces a lot on a half-typed codebase. Don't gate
+        # merges on it yet — TODO: flip to required once the type debt is
+        # paid down.
+        continue-on-error: true
+
+      - name: Backend — pytest
+        working-directory: backend
+        run: PYTHONPATH=. uv run pytest
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Frontend — install (frozen)
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend — typecheck + build
+        working-directory: frontend
+        run: pnpm build
+
+      - name: Validate Bicep
+        run: az bicep build --file infra/bicep/main.bicep
+
+  # ── Build + push container — only on main push or manual ───────────────────
+  build:
+    name: Build container
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: az acr login --name $(echo "${{ env.REGISTRY }}" | cut -d. -f1)
+
+      - name: Resolve image tag
+        id: image
+        run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push
+        run: |
+          docker build -t "${{ steps.image.outputs.image }}" backend
+          docker push "${{ steps.image.outputs.image }}"
+
+  # ── Staging — Bicep apply + migrate + container deploy ─────────────────────
+  deploy-staging:
+    name: Deploy to staging
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if deployment (informational)
+        run: |
+          az deployment group what-if \
+            --resource-group rg-inspro-staging \
+            --template-file infra/bicep/main.bicep \
+            --parameters @infra/bicep/parameters.staging.json \
+            --parameters \
+              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
+              entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
+              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
+              azureFoundryApiKey="${{ secrets.AZURE_FOUNDRY_API_KEY }}" \
+              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
+              acrLoginServer="${{ env.REGISTRY }}" \
+              containerImage="${{ needs.build.outputs.image }}" \
+              alertEmail="${{ secrets.ALERT_EMAIL }}"
+
+      - name: Apply Bicep
+        run: |
+          az deployment group create \
+            --resource-group rg-inspro-staging \
+            --template-file infra/bicep/main.bicep \
+            --parameters @infra/bicep/parameters.staging.json \
+            --parameters \
+              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
+              entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
+              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
+              azureFoundryApiKey="${{ secrets.AZURE_FOUNDRY_API_KEY }}" \
+              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
+              acrLoginServer="${{ env.REGISTRY }}" \
+              containerImage="${{ needs.build.outputs.image }}" \
+              alertEmail="${{ secrets.ALERT_EMAIL }}"
+
+      - name: Setup Python (for migrate)
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install --no-cache-dir uv
+
+      - name: Run database migrations + provision tenant schemas
+        working-directory: backend
+        env:
+          INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}@inspro-staging-pg.postgres.database.azure.com:5432/inspro?sslmode=require
+        run: |
+          uv sync --frozen
+          uv run alembic upgrade head
+          # alembic only touches `public`; sync each firm schema so additive
+          # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
+          uv run python -m scripts.provision_tenants
+
+      - name: Smoke test
+        run: |
+          APP_URL=$(az webapp show --name inspro-staging-api --resource-group rg-inspro-staging --query defaultHostName -o tsv)
+          # /health is unauthenticated — confirms the container booted, DB
+          # config is correct, and gunicorn is responding.
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors "https://${APP_URL}/health"
+
+  # ── Production — manual dispatch only ───────────────────────────────────────
+  deploy-prod:
+    name: Deploy to prod (slot swap)
+    needs: deploy-staging
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Apply Bicep to prod (idempotent)
+        run: |
+          az deployment group create \
+            --resource-group rg-inspro-prod \
+            --template-file infra/bicep/main.bicep \
+            --parameters @infra/bicep/parameters.prod.json \
+            --parameters \
+              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
+              entraClientId="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
+              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}" \
+              azureFoundryApiKey="${{ secrets.AZURE_FOUNDRY_API_KEY }}" \
+              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
+              acrLoginServer="${{ env.REGISTRY }}" \
+              containerImage="${{ needs.build.outputs.image }}" \
+              alertEmail="${{ secrets.ALERT_EMAIL }}"
+
+      - name: Setup Python (for migrate)
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install --no-cache-dir uv
+
+      - name: Run database migrations + provision tenant schemas
+        working-directory: backend
+        env:
+          INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@inspro-prod-pg.postgres.database.azure.com:5432/inspro?sslmode=require
+        run: |
+          uv sync --frozen
+          uv run alembic upgrade head
+          # alembic only touches `public`; sync each firm schema so additive
+          # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
+          uv run python -m scripts.provision_tenants
+
+      - name: Deploy image to staging slot
+        run: |
+          az webapp config container set \
+            --name inspro-prod-api \
+            --resource-group rg-inspro-prod \
+            --slot staging \
+            --docker-custom-image-name "${{ needs.build.outputs.image }}"
+
+      - name: Smoke-test staging slot
+        run: |
+          SLOT_URL=$(az webapp show --name inspro-prod-api --resource-group rg-inspro-prod --slot staging --query defaultHostName -o tsv)
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors "https://${SLOT_URL}/health"
+
+      - name: Slot swap staging → prod
+        run: |
+          az webapp deployment slot swap \
+            --resource-group rg-inspro-prod \
+            --name inspro-prod-api \
+            --slot staging \
+            --target-slot production
+
+      - name: Smoke-test prod after swap
+        run: |
+          PROD_URL=$(az webapp show --name inspro-prod-api --resource-group rg-inspro-prod --query defaultHostName -o tsv)
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors "https://${PROD_URL}/health"

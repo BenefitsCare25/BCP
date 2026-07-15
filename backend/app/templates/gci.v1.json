@@ -1,0 +1,50 @@
+{
+  "code": "GCI",
+  "version": 1,
+  "display_name": "Group Critical Illness",
+  "has_dependants": true,
+  "is_outpatient": false,
+  "form_profile": "sum_assured",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": false }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "1", "name": "Critical Illness benefit (additional to Group Term Life)", "kind": "text" },
+    {
+      "number": "2",
+      "name": "Covered Critical Illnesses",
+      "kind": "list",
+      "sub_items": [
+        { "name": "Major Cancers" },
+        { "name": "Heart Attack of Specified Severity" },
+        { "name": "Stroke with Permanent Neurological Deficit" },
+        { "name": "Coronary Artery By-Pass Surgery" },
+        { "name": "Kidney Failure" },
+        { "name": "End Stage Liver Failure" },
+        { "name": "End Stage Lung Disease" },
+        { "name": "Coma" },
+        { "name": "Major Organ / Bone Marrow Transplantation" },
+        { "name": "Multiple Sclerosis" },
+        { "name": "Paralysis (Loss of Use of Limbs)" },
+        { "name": "Blindness (Loss of Sight)" }
+      ]
+    }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
+    { "id": "free_cover_limit", "label": "Non-Evidence Limit applies up to scheme limit", "default_enabled": true }
+  ]
+}

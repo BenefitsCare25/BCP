@@ -1,0 +1,35 @@
+{
+  "code": "GTL",
+  "version": 1,
+  "display_name": "Group Term Life",
+  "has_dependants": false,
+  "is_outpatient": false,
+  "form_profile": "sum_assured",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": true },
+    { "code": "3", "label": "Plan 3", "default_selected": false }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "1", "name": "Sum Assured payable on Death", "kind": "text" },
+    { "number": "2", "name": "Terminal Illness (acceleration of Sum Assured)", "kind": "text" }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
+    { "id": "not_actively_at_work", "label": "Cover for employees not actively at work (takeover only), subject to proof of insurability", "default_enabled": true },
+    { "id": "free_cover_limit", "label": "Free Cover / Non-Evidence Limit applies up to scheme limit", "default_enabled": true },
+    { "id": "addition_deletion", "label": "Addition & deletion clause (name basis) — backdating up to 90 days", "default_enabled": true }
+  ]
+}

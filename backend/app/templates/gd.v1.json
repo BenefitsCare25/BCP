@@ -1,0 +1,37 @@
+{
+  "code": "GD",
+  "version": 1,
+  "display_name": "Group Dental",
+  "has_dependants": true,
+  "is_outpatient": true,
+  "form_profile": "dental",
+  "column_axis": ["Panel", "Non-Panel"],
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": false }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "1", "name": "Examination / Dental Checkup", "kind": "amount" },
+    { "number": "2", "name": "Medicine & Miscellaneous Treatment", "kind": "amount" },
+    { "number": "3", "name": "X-Ray (Intraoral / Bitewing / Panorex)", "kind": "amount" },
+    { "number": "4", "name": "Test & Laboratory (Biopsy & examination of tissue)", "kind": "amount" },
+    { "number": "5", "name": "Prophylaxis (Scaling & Polishing)", "kind": "amount" },
+    { "number": "6", "name": "Fillings (Amalgam / Tooth-coloured)", "kind": "amount" },
+    { "number": "7", "name": "Extractions", "kind": "amount" }
+  ],
+  "additional_arrangements": [
+    { "id": "overall_annual_limit", "label": "Overall annual limit applies to Non-Panel claims", "default_enabled": true }
+  ]
+}

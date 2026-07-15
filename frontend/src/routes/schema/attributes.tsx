@@ -1,0 +1,338 @@
+import { useState } from "react";
+import { Plus } from "lucide-react";
+import { toast } from "sonner";
+import { AttributeSchemaEditor } from "@/components/primitives/AttributeSchemaEditor";
+import { AlertDialog } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { SkeletonTable } from "@/components/ui/skeleton";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Field, InfoHint } from "@/components/ui/tooltip";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetBody,
+  SheetClose,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
+import {
+  useCreateAttribute,
+  useDeleteAttribute,
+  useEmployeeAttributes,
+  useUpdateAttribute,
+} from "@/api/hooks";
+import { formatError } from "@/lib/errors";
+import { PageGuide } from "@/components/ui/page-guide";
+import type { AttributeSchema } from "@/types";
+
+const TYPES = ["string", "integer", "decimal", "boolean", "date", "enum"];
+
+interface Draft {
+  attribute_id: string;
+  display_name: string;
+  data_type: string;
+  enum_values: string;
+  is_required: boolean;
+  is_pii: boolean;
+  description: string;
+}
+
+const EMPTY_DRAFT: Draft = {
+  attribute_id: "",
+  display_name: "",
+  data_type: "string",
+  enum_values: "",
+  is_required: false,
+  is_pii: false,
+  description: "",
+};
+
+function toDraft(attr: AttributeSchema): Draft {
+  return {
+    attribute_id: attr.attribute_id,
+    display_name: attr.display_name,
+    data_type: attr.data_type,
+    enum_values: attr.enum_values?.join(", ") ?? "",
+    is_required: attr.is_required,
+    is_pii: attr.is_pii,
+    description: attr.description ?? "",
+  };
+}
+
+export function SchemaAttributesPage() {
+  const { data: attrs = [], isLoading } = useEmployeeAttributes();
+  const create = useCreateAttribute();
+  const update = useUpdateAttribute();
+  const remove = useDeleteAttribute();
+  const [editing, setEditing] = useState<AttributeSchema | null>(null);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [deleting, setDeleting] = useState<AttributeSchema | null>(null);
+
+  const onSheetOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      setDraft(EMPTY_DRAFT);
+      setEditing(null);
+    }
+  };
+
+  const beginEdit = (attr: AttributeSchema) => {
+    setEditing(attr);
+    setDraft(toDraft(attr));
+    setOpen(true);
+  };
+
+  const submit = async () => {
+    const enumValues =
+      draft.data_type === "enum"
+        ? draft.enum_values
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : null;
+    try {
+      if (editing) {
+        await update.mutateAsync({
+          id: editing.id,
+          patch: {
+            display_name: draft.display_name,
+            data_type: draft.data_type,
+            enum_values: enumValues,
+            is_required: draft.is_required,
+            is_pii: draft.is_pii,
+            description: draft.description || null,
+          },
+        });
+        toast.success(`Updated ${draft.display_name}`);
+      } else {
+        await create.mutateAsync({
+          attribute_id: draft.attribute_id,
+          display_name: draft.display_name,
+          data_type: draft.data_type,
+          enum_values: enumValues,
+          is_required: draft.is_required,
+          is_pii: draft.is_pii,
+          description: draft.description || null,
+        });
+        toast.success(`Added ${draft.display_name}`);
+      }
+      setOpen(false);
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
+
+  return (
+    <div className="space-y-4 max-w-7xl">
+      <div className="flex justify-end gap-3">
+        <Button onClick={() => setOpen(true)}>
+          <Plus className="size-4" /> Add attribute
+        </Button>
+        <Sheet open={open} onOpenChange={onSheetOpenChange}>
+          <SheetContent side="right">
+            <SheetHeader>
+              <div className="flex items-center gap-1.5">
+                <SheetTitle>
+                  {editing ? "Edit attribute" : "Add client attribute"}
+                </SheetTitle>
+                <InfoHint>
+                  {editing
+                    ? editing.client_id === null
+                      ? "Editing a global default — changes apply to all clients."
+                      : "Updates this attribute for the current client only."
+                    : "Adds an attribute scoped to the current client."}
+                </InfoHint>
+              </div>
+            </SheetHeader>
+            <SheetBody className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <Field
+                  label="Attribute ID"
+                  hint="Stable machine key referenced by matching rules and roster columns — lowercase, no spaces. Can't change after creation."
+                >
+                  <Input
+                    value={draft.attribute_id}
+                    onChange={(e) =>
+                      setDraft({ ...draft, attribute_id: e.target.value })
+                    }
+                    placeholder="site_location"
+                    disabled={Boolean(editing)}
+                  />
+                </Field>
+                <Field label="Display name">
+                  <Input
+                    value={draft.display_name}
+                    onChange={(e) =>
+                      setDraft({ ...draft, display_name: e.target.value })
+                    }
+                    placeholder="Site Location"
+                  />
+                </Field>
+              </div>
+              <Field
+                label="Data type"
+                hint="How the value is stored and validated. Enum shows a fixed dropdown of allowed values."
+              >
+                <Select
+                  value={draft.data_type}
+                  onValueChange={(v) => setDraft({ ...draft, data_type: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              {draft.data_type === "enum" && (
+                <Field
+                  label="Enum values"
+                  hint="Comma-separated list of the allowed values."
+                >
+                  <Input
+                    value={draft.enum_values}
+                    onChange={(e) =>
+                      setDraft({ ...draft, enum_values: e.target.value })
+                    }
+                    placeholder="SG, MY, ID"
+                  />
+                </Field>
+              )}
+              <Field label="Description">
+                <Input
+                  value={draft.description}
+                  onChange={(e) =>
+                    setDraft({ ...draft, description: e.target.value })
+                  }
+                />
+              </Field>
+              <div className="flex items-center justify-between rounded-md border border-border p-3">
+                <div className="flex items-center gap-1">
+                  <div className="text-sm font-medium">Required</div>
+                  <InfoHint>Block uploads with missing values.</InfoHint>
+                </div>
+                <Switch
+                  checked={draft.is_required}
+                  onCheckedChange={(v) =>
+                    setDraft({ ...draft, is_required: v })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-md border border-border p-3">
+                <div className="flex items-center gap-1">
+                  <div className="text-sm font-medium">PII</div>
+                  <InfoHint>
+                    Redact for non-PII-cleared roles (PDPA).
+                  </InfoHint>
+                </div>
+                <Switch
+                  checked={draft.is_pii}
+                  onCheckedChange={(v) => setDraft({ ...draft, is_pii: v })}
+                />
+              </div>
+            </SheetBody>
+            <SheetFooter>
+              <SheetClose asChild>
+                <Button variant="outline">Cancel</Button>
+              </SheetClose>
+              <Button
+                onClick={submit}
+                disabled={
+                  !draft.attribute_id ||
+                  !draft.display_name ||
+                  create.isPending ||
+                  update.isPending
+                }
+              >
+                {editing ? "Save changes" : "Save attribute"}
+              </Button>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Attributes</CardTitle>
+              <CardDescription>
+                {attrs.length} attribute{attrs.length === 1 ? "" : "s"} defined
+              </CardDescription>
+            </div>
+            <Badge variant="outline">Singapore defaults</Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <SkeletonTable rows={6} columns={5} />
+          ) : (
+            <AttributeSchemaEditor
+              attributes={attrs}
+              onEdit={beginEdit}
+              onDelete={setDeleting}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <PageGuide
+        purpose="Define the shape of an employee record — each attribute becomes a column in the roster. Global defaults cover standard Singapore fields; add client-specific attributes for custom data."
+        connections={[
+          { label: "→ Roster profiling", description: "AI derives attribute values from uploaded roster columns" },
+          { label: "→ Categories", description: "Matching rules reference these attributes to assign employees to benefit categories" },
+          { label: "→ Products catalog", description: "Products define what insurance lines exist; attributes define who qualifies" },
+        ]}
+      />
+
+      <AlertDialog
+        open={Boolean(deleting)}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title={`Delete attribute ${deleting?.display_name ?? ""}?`}
+        description={
+          <>
+            The attribute <code>{deleting?.attribute_id}</code> will be removed
+            from this client. Any employee data already uploaded retains the
+            raw value but the attribute disappears from the schema. This cannot
+            be undone.
+          </>
+        }
+        confirmLabel="Delete attribute"
+        loading={remove.isPending}
+        onConfirm={async () => {
+          if (!deleting) return;
+          try {
+            await remove.mutateAsync(deleting.id);
+            toast.success(`Deleted ${deleting.display_name}`);
+            setDeleting(null);
+          } catch (err) {
+            toast.error(formatError(err));
+          }
+        }}
+      />
+    </div>
+  );
+}

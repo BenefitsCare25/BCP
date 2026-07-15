@@ -1,0 +1,435 @@
+"""Utilization: bucket math, grouping, flex chain, zero baseline, the
+limit-exceeded approve guard (+ acknowledge), and member isolation.
+
+`build_member_statement` is monkeypatched to a canned statement (GHS with a
+S$1,000 annual limit + a per-year Dental item + a per-day item, and a flex
+wallet with price tags) so the sums are exercised on a known coverage shape.
+"""
+from __future__ import annotations
+
+import os
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+TEST_DB = Path(__file__).parent / "_test_utilization.db"
+os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app.core.auth import (  # noqa: E402
+    DEMO_BROKER_FIRM_ID,
+    DEMO_CLIENT_ID,
+    CurrentUser,
+    get_current_user,
+)
+from app.core.portal_auth import issue_member_token  # noqa: E402
+from app.db.base import Base  # noqa: E402
+from app.db.session import SessionLocal, engine  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import Claim, Employee, MemberAccount, PolicyYear  # noqa: E402
+from app.models.policy_year import PolicyYearStatus  # noqa: E402
+from app.schemas.api import (  # noqa: E402
+    BenefitStatementOut,
+    CoverageLine,
+    FlexBenefitCategoryLine,
+    FlexCoverageLine,
+    StatementEmployee,
+)
+from app.services import utilization as utilization_service  # noqa: E402
+from app.services.utilization import (  # noqa: E402
+    build_utilization,
+    parse_limit_amount,
+    remaining_for_claim,
+)
+from scripts.seed_demo import seed  # noqa: E402
+
+PY = "00000000-0000-0000-0000-00000000ut01"
+EMP_A = "00000000-0000-0000-0000-00000000ut02"
+EMP_B = "00000000-0000-0000-0000-00000000ut03"
+ACC_A = "00000000-0000-0000-0000-00000000ut04"
+ACC_B = "00000000-0000-0000-0000-00000000ut05"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _setup_db():
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+    Base.metadata.create_all(bind=engine)
+    seed()
+    with SessionLocal() as session:
+        session.add(
+            PolicyYear(
+                id=PY,
+                client_id=DEMO_CLIENT_ID,
+                year=2029,  # NOT 2026 — seed() one_or_none's the demo 2026 year
+                start_date=date(2029, 4, 1),
+                end_date=date(2030, 3, 31),
+                status=PolicyYearStatus.active,
+            )
+        )
+        session.flush()
+        for emp_id, staff, name, acc in (
+            (EMP_A, "UT-1", "Uma", ACC_A),
+            (EMP_B, "UT-2", "Ben", ACC_B),
+        ):
+            session.add(
+                MemberAccount(
+                    id=acc, client_id=DEMO_CLIENT_ID, email=f"{name.lower()}@ut.test",
+                    staff_id=staff, status="active",
+                )
+            )
+            session.flush()
+            session.add(
+                Employee(
+                    id=emp_id, client_id=DEMO_CLIENT_ID, policy_year_id=PY,
+                    staff_id=staff, employee_name=name, member_account_id=acc,
+                    attribute_values={}, derived_attribute_values={},
+                    source="csv_import", status="active",
+                )
+            )
+        session.commit()
+    yield
+    with SessionLocal() as session:
+        session.query(Claim).delete()
+        session.query(MemberAccount).filter(
+            MemberAccount.client_id == DEMO_CLIENT_ID
+        ).delete()
+        py = session.get(PolicyYear, PY)
+        if py is not None:
+            session.delete(py)
+        session.commit()
+    engine.dispose()
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+
+
+def _statement(employee) -> BenefitStatementOut:
+    return BenefitStatementOut(
+        employee=StatementEmployee(
+            id=employee.id, staff_id=employee.staff_id,
+            employee_name=employee.employee_name,
+        ),
+        policy_year_id=employee.policy_year_id,
+        is_matched=True,
+        coverage=[
+            CoverageLine(
+                product_code="GHS",
+                product_name="Group Hospital & Surgical",
+                plan_code="P1",
+                annual_policy_limit="S$1,000",
+                benefit_schedule={
+                    "items": [
+                        {"number": "1", "name": "Dental", "value": "S$500 per year"},
+                        {"number": "2", "name": "Room & Board", "value": "S$650/day"},
+                        {"number": "3", "name": "Outpatient GP", "value": "As charged"},
+                    ]
+                },
+            ),
+            CoverageLine(
+                product_code="GTL",
+                product_name="Group Term Life",
+                plan_code="A",
+                annual_policy_limit=None,  # no numeric limit → no guard
+            ),
+        ],
+        dependants=[],
+        flex=FlexCoverageLine(
+            tier_name="Tier 1",
+            wallet_amount=1000.0,
+            currency="SGD",
+            price_tags_total=200.0,
+            flex_balance=800.0,
+            benefit_categories=[
+                FlexBenefitCategoryLine(name="Dental", claimable=True, sub_limit=300.0),
+                FlexBenefitCategoryLine(name="Optical", claimable=True),
+                FlexBenefitCategoryLine(name="Gym", claimable=False),
+            ],
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _canned_statement(monkeypatch):
+    monkeypatch.setattr(
+        utilization_service, "build_member_statement", lambda db, emp: _statement(emp)
+    )
+
+
+@pytest.fixture(autouse=True)
+def _clean_claims():
+    yield
+    with SessionLocal() as session:
+        session.query(Claim).delete()
+        session.commit()
+
+
+def _mk_claim(
+    *,
+    employee_id: str = EMP_A,
+    kind: str = "insured",
+    product: str | None = "GHS",
+    benefit_key: str | None = None,
+    flex_category: str | None = None,
+    amount: float = 100.0,
+    approved: float | None = None,
+    status: str = "submitted",
+) -> str:
+    with SessionLocal() as s:
+        claim = Claim(
+            client_id=DEMO_CLIENT_ID,
+            policy_year_id=PY,
+            employee_id=employee_id,
+            claim_kind=kind,
+            product_code=product if kind == "insured" else None,
+            benefit_key=benefit_key,
+            flex_category_name=flex_category,
+            claim_type="outpatient",
+            incurred_date=date(2029, 6, 1),
+            amount_claimed=amount,
+            amount_approved=approved,
+            currency="SGD",
+            status=status,
+        )
+        s.add(claim)
+        s.commit()
+        return claim.id
+
+
+def _util(employee_id: str = EMP_A):
+    with SessionLocal() as s:
+        return build_utilization(s, s.get(Employee, employee_id))
+
+
+def _bucket(util, product: str, benefit_key: str | None = None):
+    return next(
+        b for b in util.insured
+        if b.product_code == product and b.benefit_key == benefit_key
+    )
+
+
+# ── Parsing ───────────────────────────────────────────────────────────────────
+
+
+def test_parse_limit_amount():
+    assert parse_limit_amount("S$1,000,000") == 1_000_000.0
+    assert parse_limit_amount("As charged") is None
+    assert parse_limit_amount(None) is None
+
+
+# ── Bucket math ───────────────────────────────────────────────────────────────
+
+
+def test_zero_baseline():
+    util = _util()
+    ghs = _bucket(util, "GHS")
+    assert (ghs.approved, ghs.pending, ghs.claim_count) == (0.0, 0.0, 0)
+    assert ghs.limit == 1000.0 and ghs.remaining == 1000.0
+    gtl = _bucket(util, "GTL")
+    assert gtl.limit is None and gtl.remaining is None
+    assert util.flex.available == 800.0  # flex_balance untouched
+    assert util.flex.approved == 0.0
+    dental = next(c for c in util.flex.categories if c.name == "Dental")
+    assert dental.remaining == 300.0
+    assert all(c.name != "Gym" for c in util.flex.categories)  # non-claimable hidden
+
+
+def test_bucket_math_and_grouping():
+    _mk_claim(benefit_key="Dental", amount=100.0, approved=100.0, status="approved")
+    _mk_claim(benefit_key="Dental", amount=50.0, status="ai_flagged")  # pending
+    _mk_claim(benefit_key="Room & Board", amount=75.0, status="submitted")
+    _mk_claim(amount=30.0, status="rejected")  # excluded
+    _mk_claim(amount=20.0, status="draft")  # excluded
+
+    util = _util()
+    ghs = _bucket(util, "GHS")
+    assert ghs.approved == 100.0
+    assert ghs.pending == 125.0  # 50 + 75; never subtracted
+    assert ghs.remaining == 900.0  # 1000 - approved only
+    assert ghs.claim_count == 3
+
+    dental = _bucket(util, "GHS", "Dental")
+    assert dental.approved == 100.0 and dental.pending == 50.0
+    assert dental.limit == 500.0 and dental.remaining == 400.0
+
+    rnb = _bucket(util, "GHS", "Room & Board")
+    assert rnb.limit is None  # "S$650/day" is per-unit, not an annual limit
+    assert rnb.pending == 75.0 and rnb.remaining is None
+
+
+def test_orphaned_product_bucket():
+    _mk_claim(product="GPA", amount=40.0, status="submitted")  # not on statement
+    util = _util()
+    orphan = _bucket(util, "GPA")
+    assert orphan.orphaned is True
+    assert orphan.pending == 40.0 and orphan.limit is None
+
+
+def test_flex_chain():
+    _mk_claim(kind="flex", flex_category="Dental", amount=100.0,
+              approved=100.0, status="approved")
+    _mk_claim(kind="flex", flex_category="Optical", amount=60.0, status="submitted")
+
+    flex = _util().flex
+    assert flex.wallet_amount == 1000.0
+    assert flex.flex_balance == 800.0  # wallet - price tags
+    assert flex.approved == 100.0
+    assert flex.pending == 60.0
+    assert flex.available == 700.0  # flex_balance - approved claims only
+
+    dental = next(c for c in flex.categories if c.name == "Dental")
+    assert dental.approved == 100.0 and dental.remaining == 200.0
+    optical = next(c for c in flex.categories if c.name == "Optical")
+    assert optical.pending == 60.0 and optical.remaining is None  # no sub-limit
+
+
+# ── remaining_for_claim (the guard input) ─────────────────────────────────────
+
+
+def test_remaining_for_claim_uses_tightest_bucket():
+    _mk_claim(benefit_key="Dental", amount=450.0, approved=450.0, status="approved")
+    claim_id = _mk_claim(benefit_key="Dental", amount=100.0, status="submitted")
+    with SessionLocal() as s:
+        remaining = remaining_for_claim(s, s.get(Claim, claim_id), s.get(Employee, EMP_A))
+    # Product remaining 550, Dental item remaining 50 → tightest wins.
+    assert remaining == 50.0
+
+
+def test_remaining_none_when_no_limit():
+    claim_id = _mk_claim(product="GTL", amount=100.0, status="submitted")
+    with SessionLocal() as s:
+        assert remaining_for_claim(
+            s, s.get(Claim, claim_id), s.get(Employee, EMP_A)
+        ) is None
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def broker() -> TestClient:
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-000000000001",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=DEMO_CLIENT_ID,
+        role="broker_admin",
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+def _member_headers(account_id: str) -> dict[str, str]:
+    token, _ = issue_member_token(account_id, DEMO_CLIENT_ID)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_broker_utilization_endpoint(broker: TestClient):
+    _mk_claim(amount=100.0, approved=100.0, status="approved")
+    res = broker.get(f"/api/v1/employees/{EMP_A}/utilization")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    ghs = next(
+        b for b in body["insured"]
+        if b["product_code"] == "GHS" and b["benefit_key"] is None
+    )
+    assert ghs["approved"] == 100.0 and ghs["remaining"] == 900.0
+
+
+def test_portal_utilization_is_member_scoped():
+    _mk_claim(employee_id=EMP_A, amount=100.0, approved=100.0, status="approved")
+    anon = TestClient(app)
+
+    res_a = anon.get("/api/v1/portal/utilization", headers=_member_headers(ACC_A))
+    assert res_a.status_code == 200, res_a.text
+    ghs_a = next(
+        b for b in res_a.json()["insured"]
+        if b["product_code"] == "GHS" and b["benefit_key"] is None
+    )
+    assert ghs_a["approved"] == 100.0
+
+    # Ben sees his own (empty) usage — Uma's claims never leak.
+    res_b = anon.get("/api/v1/portal/utilization", headers=_member_headers(ACC_B))
+    assert res_b.status_code == 200
+    ghs_b = next(
+        b for b in res_b.json()["insured"]
+        if b["product_code"] == "GHS" and b["benefit_key"] is None
+    )
+    assert ghs_b["approved"] == 0.0 and ghs_b["claim_count"] == 0
+
+
+# ── Approve guard ─────────────────────────────────────────────────────────────
+
+
+def test_approve_beyond_limit_409_then_acknowledge(broker: TestClient):
+    _mk_claim(amount=950.0, approved=950.0, status="approved")
+    claim_id = _mk_claim(amount=200.0, status="submitted")  # remaining is 50
+
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"}
+    )
+    assert res.status_code == 409, res.text
+    detail = res.json()["detail"]
+    assert detail["code"] == "limit_exceeded"
+    assert detail["remaining"] == 50.0 and detail["approving"] == 200.0
+    with SessionLocal() as s:
+        assert s.get(Claim, claim_id).status == "submitted"  # unchanged
+
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve", "acknowledge": True},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+    assert res.json()["amount_approved"] == 200.0
+
+
+def test_approve_within_limit_no_guard(broker: TestClient):
+    claim_id = _mk_claim(amount=200.0, status="submitted")
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve", "approved_amount": 150.0},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_approved"] == 150.0
+
+
+def test_approve_partial_amount_bypasses_guard(broker: TestClient):
+    _mk_claim(amount=950.0, approved=950.0, status="approved")
+    claim_id = _mk_claim(amount=200.0, status="submitted")
+    # Approving only the remaining 50 needs no acknowledgement.
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve", "approved_amount": 50.0},
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_flex_approve_guard_uses_category_sub_limit(broker: TestClient):
+    claim_id = _mk_claim(
+        kind="flex", flex_category="Dental", amount=350.0, status="submitted"
+    )
+    # Wallet available is 800 but the Dental sub-limit remaining is 300.
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"}
+    )
+    assert res.status_code == 409
+    assert res.json()["detail"]["remaining"] == 300.0
+
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve", "acknowledge": True},
+    )
+    assert res.status_code == 200
+
+
+def test_reject_never_guarded(broker: TestClient):
+    _mk_claim(amount=950.0, approved=950.0, status="approved")
+    claim_id = _mk_claim(amount=5000.0, status="submitted")
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision", json={"action": "reject"}
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "rejected"

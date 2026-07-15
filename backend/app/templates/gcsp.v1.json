@@ -1,0 +1,49 @@
+{
+  "code": "GCSP",
+  "version": 1,
+  "display_name": "Group Clinical Specialist",
+  "has_dependants": true,
+  "is_outpatient": true,
+  "form_profile": "outpatient",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": false }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    {
+      "number": "1",
+      "name": "Specialist Care (with referral)",
+      "kind": "amount",
+      "sub_items": [
+        { "key": "a", "name": "Panel Specialists (cashless basis)" },
+        { "key": "b", "name": "Non-Panel Specialists" }
+      ]
+    },
+    {
+      "number": "2",
+      "name": "Diagnostic X-ray & Lab Test (with referral)",
+      "kind": "amount",
+      "sub_items": [
+        { "key": "a", "name": "Panel" },
+        { "key": "b", "name": "Non-Panel" }
+      ]
+    },
+    { "number": "3", "name": "Other Diagnostic Test / Scan (CT, MRI, PET, etc.)", "kind": "amount" },
+    { "number": "4", "name": "Outpatient Physiotherapy / Chiropractor (with referral)", "kind": "amount" }
+  ],
+  "additional_arrangements": [
+    { "id": "referral_required", "label": "Referral letter required from panel GP / specialist", "default_enabled": true }
+  ]
+}

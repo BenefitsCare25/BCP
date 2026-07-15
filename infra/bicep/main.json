@@ -1,0 +1,703 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "16619555214309148778"
+    }
+  },
+  "parameters": {
+    "env": {
+      "type": "string",
+      "allowedValues": [
+        "staging",
+        "prod"
+      ],
+      "metadata": {
+        "description": "Environment short name (staging | prod)."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "southeastasia",
+      "metadata": {
+        "description": "Azure region. Singapore for PDPA."
+      }
+    },
+    "appServicePlanSku": {
+      "type": "string",
+      "metadata": {
+        "description": "App Service Plan SKU."
+      }
+    },
+    "postgresSku": {
+      "type": "string",
+      "metadata": {
+        "description": "Postgres SKU."
+      }
+    },
+    "postgresTier": {
+      "type": "string",
+      "metadata": {
+        "description": "Postgres tier."
+      }
+    },
+    "postgresAdminUser": {
+      "type": "string",
+      "metadata": {
+        "description": "Postgres admin username."
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Postgres admin password (typically from KV secret, passed via CI --parameters override)."
+      }
+    },
+    "postgresBackupRetentionDays": {
+      "type": "int",
+      "defaultValue": 14,
+      "metadata": {
+        "description": "Postgres backup retention days. Prod overrides to 35."
+      }
+    },
+    "postgresGeoRedundantBackup": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable geo-redundant Postgres backups. Recommend true for prod."
+      }
+    },
+    "redisSku": {
+      "type": "string",
+      "metadata": {
+        "description": "Redis SKU."
+      }
+    },
+    "redisCapacity": {
+      "type": "int",
+      "metadata": {
+        "description": "Redis size."
+      }
+    },
+    "entraTenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "Entra tenant ID."
+      }
+    },
+    "entraClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Entra client ID for the API app registration."
+      }
+    },
+    "corsOrigins": {
+      "type": "string",
+      "metadata": {
+        "description": "CORS origins (comma-separated)."
+      }
+    },
+    "azureFoundryEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure AI Foundry endpoint URL."
+      }
+    },
+    "azureFoundryApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure AI Foundry API key (from KV secret)."
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Fully-qualified container image, e.g. insproacr.azurecr.io/inspro-api:<sha>. The CI must build+push the image before passing this in."
+      }
+    },
+    "portalJwtSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Signing secret for employee-portal member JWTs (min 32 chars). The app refuses to boot in prod without one — generate with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+      }
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "metadata": {
+        "description": "ACR registry hostname for the webapp to pull from, e.g. insproacr.azurecr.io."
+      }
+    },
+    "alertEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Notification email for HTTP 5xx alerts (optional)."
+      }
+    },
+    "mailMode": {
+      "type": "string",
+      "defaultValue": "smtp",
+      "allowedValues": [
+        "log",
+        "smtp",
+        "acs"
+      ],
+      "metadata": {
+        "description": "Portal OTP mail delivery mode. The app refuses to boot in prod with \"log\" (OTP codes would land in application logs in cleartext)."
+      }
+    },
+    "smtpHost": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "SMTP host for portal OTP mail (mailMode=smtp). Sends fail visibly (mail_sent=false) until configured."
+      }
+    },
+    "smtpPort": {
+      "type": "string",
+      "defaultValue": "587",
+      "metadata": {
+        "description": "SMTP port."
+      }
+    },
+    "smtpUser": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "SMTP username (also the default From address)."
+      }
+    },
+    "smtpFrom": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "From address for portal OTP mail (defaults to smtpUser)."
+      }
+    },
+    "smtpPassword": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "SMTP password (passed via CI --parameters override)."
+      }
+    }
+  },
+  "variables": {
+    "prefix": "[format('inspro-{0}', parameters('env'))]",
+    "isProd": "[equals(parameters('env'), 'prod')]",
+    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
+    "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d",
+    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-law', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[format('{0}-appi', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}-kv', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "tenantId": "[parameters('entraTenantId')]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": "[if(variables('isProd'), 90, 30)]",
+        "enablePurgeProtection": "[variables('isProd')]"
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}-pg', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('postgresSku')]",
+        "tier": "[parameters('postgresTier')]"
+      },
+      "properties": {
+        "version": "16",
+        "administratorLogin": "[parameters('postgresAdminUser')]",
+        "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+        "storage": {
+          "storageSizeGB": 32,
+          "autoGrow": "Enabled"
+        },
+        "backup": {
+          "backupRetentionDays": "[parameters('postgresBackupRetentionDays')]",
+          "geoRedundantBackup": "[if(parameters('postgresGeoRedundantBackup'), 'Enabled', 'Disabled')]"
+        },
+        "highAvailability": {
+          "mode": "[if(variables('isProd'), 'ZoneRedundant', 'Disabled')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', format('{0}-pg', variables('prefix')), 'inspro')]",
+      "properties": {
+        "charset": "UTF8",
+        "collation": "en_US.UTF8"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', format('{0}-pg', variables('prefix')), 'AllowAzureServices')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Cache/redis",
+      "apiVersion": "2024-11-01",
+      "name": "[format('{0}-redis', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "[parameters('redisSku')]",
+          "family": "[if(equals(parameters('redisSku'), 'Premium'), 'P', 'C')]",
+          "capacity": "[parameters('redisCapacity')]"
+        },
+        "enableNonSslPort": false,
+        "minimumTlsVersion": "1.2",
+        "redisConfiguration": {
+          "aof-backup-enabled": "[if(and(variables('isProd'), equals(parameters('redisSku'), 'Premium')), 'true', 'false')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'postgres-admin-password')]",
+      "properties": {
+        "value": "[parameters('postgresAdminPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'database-url')]",
+      "properties": {
+        "value": "[format('postgresql+psycopg://{0}:{1}@{2}:5432/inspro?sslmode=require', parameters('postgresAdminUser'), parameters('postgresAdminPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix'))), '2024-08-01').fullyQualifiedDomainName)]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'redis-url')]",
+      "properties": {
+        "value": "[format('rediss://:{0}@{1}:6380/0', listKeys(resourceId('Microsoft.Cache/redis', format('{0}-redis', variables('prefix'))), '2024-11-01').primaryKey, reference(resourceId('Microsoft.Cache/redis', format('{0}-redis', variables('prefix'))), '2024-11-01').hostName)]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.Cache/redis', format('{0}-redis', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'azure-foundry-api-key')]",
+      "properties": {
+        "value": "[parameters('azureFoundryApiKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2024-04-01-preview",
+      "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')]",
+      "properties": {
+        "value": "[parameters('portalJwtSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[replace(format('{0}docs', variables('prefix')), '-', '')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[if(variables('isProd'), 'Standard_GRS', 'Standard_LRS')]"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": false,
+        "accessTier": "Hot"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', replace(format('{0}docs', variables('prefix')), '-', ''), 'default')]",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": true,
+          "days": 30
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": true,
+          "days": 30
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', replace(format('{0}docs', variables('prefix')), '-', ''), 'default', 'documents')]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', replace(format('{0}docs', variables('prefix')), '-', ''), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-plan', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('appServicePlanSku')]"
+      },
+      "kind": "linux",
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-api', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux,container",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
+        "httpsOnly": true,
+        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', format('api://{0}', parameters('entraClientId'))), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('https://login.microsoftonline.com/{0}/v2.0', parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('https://login.microsoftonline.com/{0}/discovery/v2.0/keys', parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'redis-url')), createObject('name', 'AZURE_FOUNDRY_ENDPOINT', 'value', parameters('azureFoundryEndpoint')), createObject('name', 'AZURE_FOUNDRY_API_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'azure-foundry-api-key')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', parameters('smtpPassword')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix'))))), createObject('alwaysOn', variables('isProd')))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', replace(format('{0}docs', variables('prefix')), '-', ''), 'default', 'documents')]",
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'database-url')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'azure-foundry-api-key')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'redis-url')]",
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
+      ]
+    },
+    {
+      "condition": "[variables('isProd')]",
+      "type": "Microsoft.Web/sites/slots",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}/{1}', format('{0}-api', variables('prefix')), 'staging')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux,container",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
+        "httpsOnly": true,
+        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', format('api://{0}', parameters('entraClientId'))), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('https://login.microsoftonline.com/{0}/v2.0', parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('https://login.microsoftonline.com/{0}/discovery/v2.0/keys', parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'redis-url')), createObject('name', 'AZURE_FOUNDRY_ENDPOINT', 'value', parameters('azureFoundryEndpoint')), createObject('name', 'AZURE_FOUNDRY_API_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'azure-foundry-api-key')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', parameters('smtpPassword')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix'))))), createObject('alwaysOn', true()))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', replace(format('{0}docs', variables('prefix')), '-', ''), 'default', 'documents')]",
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'database-url')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'azure-foundry-api-key')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'redis-url')]",
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix'))), resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), 'kv-secrets-user')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('isProd')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix'))), resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), 'kv-secrets-user-slot')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), 'blob-contributor')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('isProd')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), 'blob-contributor-slot')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), 'acr-pull')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]",
+      "name": "to-law",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]",
+      "name": "to-law",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+      "name": "to-law",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2024-10-01-preview",
+      "name": "[format('{0}-ag', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "groupShortName": "[take(format('{0}alerts', parameters('env')), 12)]",
+        "enabled": true,
+        "emailReceivers": [
+          {
+            "name": "ops",
+            "emailAddress": "[parameters('alertEmail')]",
+            "useCommonAlertSchema": true
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-http5xx-alert', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "severity": 2,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "Http5xx",
+              "metricName": "Http5xx",
+              "metricNamespace": "Microsoft.Web/sites",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "timeAggregation": "Total",
+              "criterionType": "StaticThresholdCriterion"
+            }
+          ]
+        },
+        "actions": "[if(not(empty(parameters('alertEmail'))), createArray(createObject('actionGroupId', resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix'))))), createArray())]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "appServiceUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01').defaultHostName)]"
+    },
+    "postgresFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix'))), '2024-08-01').fullyQualifiedDomainName]"
+    },
+    "redisHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Cache/redis', format('{0}-redis', variables('prefix'))), '2024-11-01').hostName]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[format('{0}-kv', variables('prefix'))]"
+    },
+    "appInsightsConnectionString": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString]"
+    }
+  }
+}

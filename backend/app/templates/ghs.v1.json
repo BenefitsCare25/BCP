@@ -1,0 +1,89 @@
+{
+  "code": "GHS",
+  "version": 1,
+  "display_name": "Group Hospital & Surgical",
+  "has_dependants": true,
+  "is_outpatient": false,
+  "participation_model": "standard",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "pool", "label": "Pool", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": true },
+    { "code": "3", "label": "Plan 3", "default_selected": false },
+    { "code": "4", "label": "Plan 4", "default_selected": false }
+  ],
+  "tiers": [
+    { "code": "EO", "label": "Employee Only" },
+    { "code": "ES", "label": "Employee + Spouse" },
+    { "code": "EC", "label": "Employee + Children" },
+    { "code": "EF", "label": "Employee + Family" }
+  ],
+  "benefit_items": [
+    { "number": "A", "name": "Definition of per disability (days after discharge)", "kind": "text" },
+    { "number": "1", "name": "Daily Room & Board", "kind": "text" },
+    { "number": "2", "name": "Intensive Care Unit (ICU) including High Dependency Ward (HDW)", "kind": "amount" },
+    {
+      "number": "3",
+      "name": "In-patient Expenses",
+      "kind": "amount",
+      "sub_items": [
+        { "key": "a", "name": "Hospital Miscellaneous Services (incl. Surgical Implants)" },
+        { "key": "b", "name": "Surgical Fees" },
+        { "key": "c", "name": "Daily in-hospital doctor's visit" }
+      ]
+    },
+    {
+      "number": "4",
+      "name": "Out-patient Expenses",
+      "kind": "amount",
+      "sub_items": [
+        { "key": "a", "name": "Pre-hospitalisation" },
+        { "key": "b", "name": "Specialist Consultation (includes medication)" },
+        { "key": "c", "name": "Diagnostic X-ray & Lab Tests including specialized diagnostic test" },
+        { "key": "d", "name": "Post-hospitalisation" }
+      ]
+    },
+    { "number": "5", "name": "Emergency accidental outpatient treatment (including accidental Dental Treatment)", "kind": "amount" },
+    {
+      "number": "6",
+      "name": "Outpatient Treatment",
+      "kind": "amount",
+      "sub_items": [
+        { "key": "a", "name": "Kidney Dialysis" },
+        { "key": "b", "name": "Erythropoietin, Cyclosporin" },
+        { "key": "c", "name": "Chemotherapy for Cancer Treatment (including Immunotherapy)" },
+        { "key": "d", "name": "Radiotherapy for Cancer Treatment" }
+      ]
+    },
+    { "number": "7", "name": "Miscarriage Benefit", "kind": "text" },
+    { "number": "8", "name": "Death / Funeral Expense Benefit", "kind": "amount" },
+    { "number": "9", "name": "Ambulance Fees", "kind": "amount" },
+    { "number": "10", "name": "Overseas Hospitalisation due to accidental causes", "kind": "text" },
+    { "number": "11", "name": "Community / Rehabilitation Confinement Benefit", "kind": "amount" },
+    { "number": "12", "name": "Claim Medical Report Fees", "kind": "amount" },
+    { "number": "13", "name": "Home Nursing Care", "kind": "amount" },
+    { "number": "14", "name": "Inpatient Psychiatric Treatment", "kind": "amount" },
+    { "number": "15", "name": "Extension to cover GST", "kind": "text" },
+    { "number": "16", "name": "Hospital Cash Allowance Benefit (Singaporeans & PRs only)", "kind": "text" }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's Endorsements and Practices", "default_enabled": true },
+    { "id": "not_actively_at_work", "label": "Include cover for employees who are not actively at work (takeover only), subject to proof of insurability", "default_enabled": true },
+    { "id": "addition_deletion", "label": "Addition & deletion clause (name basis) - allow backdating of employee movement up to 90 days", "default_enabled": true },
+    { "id": "intl_transferees", "label": "International Transferees / expatriates & eligible dependants in Singapore subject to 12 months pre-existing exclusion (unless continuously insured)", "default_enabled": true },
+    { "id": "log_applicable", "label": "Letter of Guarantee (LOG) Applicable (on case by case basis)", "default_enabled": true },
+    { "id": "pre_existing", "label": "Pre-existing conditions: 12 months waiting period, creditable against prior continuous coverage", "default_enabled": true },
+    { "id": "hospital_cash", "label": "Hospital Cash Allowance Benefit (Singaporeans & PRs only) per schedule of benefits", "default_enabled": false }
+  ]
+}

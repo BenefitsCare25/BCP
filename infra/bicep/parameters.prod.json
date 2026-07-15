@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "Secrets (postgresAdminPassword, azureFoundryApiKey, containerImage, entraTenantId, entraClientId, acrLoginServer) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml.",
+  "parameters": {
+    "env": { "value": "prod" },
+    "location": { "value": "southeastasia" },
+    "appServicePlanSku": { "value": "P1v3" },
+    "postgresSku": { "value": "Standard_D2ds_v5" },
+    "postgresTier": { "value": "GeneralPurpose" },
+    "postgresAdminUser": { "value": "insproadmin" },
+    "postgresBackupRetentionDays": { "value": 35 },
+    "postgresGeoRedundantBackup": { "value": true },
+    "redisSku": { "value": "Standard" },
+    "redisCapacity": { "value": 1 },
+    "corsOrigins": { "value": "https://app.inspro.example" },
+    "azureFoundryEndpoint": { "value": "https://inspro-foundry.services.ai.azure.com/anthropic/" }
+  }
+}

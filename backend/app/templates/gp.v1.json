@@ -1,0 +1,39 @@
+{
+  "code": "GP",
+  "version": 1,
+  "display_name": "Group Clinical General Practitioner",
+  "has_dependants": true,
+  "is_outpatient": true,
+  "form_profile": "outpatient",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": false }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "A", "name": "Insurer's panel clinic remuneration model", "kind": "text" },
+    { "number": "B", "name": "Consultation and / or medication", "kind": "boolean" },
+    { "number": "C", "name": "Medication without consultation", "kind": "boolean" },
+    { "number": "D", "name": "Medication requiring prescription / non-retail medication", "kind": "boolean" },
+    { "number": "E", "name": "Diagnostic", "kind": "boolean" },
+    { "number": "F", "name": "Surcharge", "kind": "boolean" },
+    { "number": "1", "name": "Panel — per visit / co-payment / per policy year", "kind": "copay" },
+    { "number": "2", "name": "Polyclinic — per visit / co-payment / per policy year", "kind": "copay" },
+    { "number": "3", "name": "Non-Panel — per visit / co-payment / per policy year", "kind": "copay" }
+  ],
+  "additional_arrangements": [
+    { "id": "teleconsultation", "label": "Extension to cover teleconsultation", "default_enabled": false },
+    { "id": "panel_tcm", "label": "Extension to cover panel TCM clinics (consultation only)", "default_enabled": false }
+  ]
+}

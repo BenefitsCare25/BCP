@@ -1,0 +1,257 @@
+"""AI gateway — cache + breaker + budget integration tests."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+TEST_DB = Path(__file__).parent / "_test_ai_gateway.db"
+os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
+# Force the gateway to think AI is configured during tests.
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-fake-key")
+
+from sqlalchemy import select  # noqa: E402
+
+from app.core.auth import DEMO_CLIENT_ID  # noqa: E402
+from app.db.base import Base  # noqa: E402
+from app.db.session import SessionLocal, engine  # noqa: E402
+from app.models import AISpendLog, Client  # noqa: E402
+from app.schemas.api import AttributeSchemaOut  # noqa: E402
+from app.schemas.rule import RuleEnvelope  # noqa: E402
+from app.services import ai_breaker, ai_cache  # noqa: E402
+from app.services.ai_gateway import (  # noqa: E402
+    AIBudgetExceededError,
+    generate_rule_for_category,
+    month_to_date_tokens,
+)
+from scripts.seed_demo import seed  # noqa: E402
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _setup_db():
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+    Base.metadata.create_all(bind=engine)
+    seed()
+    yield
+    engine.dispose()
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+
+
+@pytest.fixture(autouse=True)
+def _reset_singletons():
+    ai_cache.reset_cache_for_tests()
+    ai_breaker.reset_breaker_for_tests()
+
+
+def _schema() -> list[AttributeSchemaOut]:
+    return [
+        AttributeSchemaOut(
+            id="x",
+            client_id=None,
+            attribute_id="grade",
+            display_name="Grade",
+            data_type="integer",
+            is_required=False,
+            is_pii=False,
+        )
+    ]
+
+
+def _fake_envelope_meta(input_tokens: int = 100, output_tokens: int = 50):
+    env = RuleEnvelope(
+        rule={">=": ["grade", "15"]},
+        human_readable="Grade 15+",
+        confidence=0.8,
+        needs_review=True,
+    )
+    meta = {
+        "provider": "anthropic",
+        "model": "claude-test",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "reasoning": "test",
+    }
+    return env, meta
+
+
+def test_first_call_invokes_provider_logs_spend() -> None:
+    db = SessionLocal()
+    try:
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as m:
+            result = generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Grade 15 and above",
+                schema=_schema(),
+            )
+        db.commit()
+        assert m.call_count == 1
+        assert result.cache_hit is False
+        q = select(AISpendLog).where(AISpendLog.client_id == DEMO_CLIENT_ID)
+        rows = db.execute(q).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].input_tokens == 100 and rows[0].output_tokens == 50
+        assert rows[0].cache_hit is False
+    finally:
+        db.close()
+
+
+def test_second_identical_call_hits_cache_no_provider_call() -> None:
+    db = SessionLocal()
+    try:
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as m:
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Grade 15 and above",
+                schema=_schema(),
+            )
+            result2 = generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Grade 15 and above",
+                schema=_schema(),
+            )
+        db.commit()
+        assert m.call_count == 1
+        assert result2.cache_hit is True
+        rows = list(
+            db.execute(
+                select(AISpendLog).where(AISpendLog.client_id == DEMO_CLIENT_ID)
+            ).scalars()
+        )
+        cache_hits = [r for r in rows if r.cache_hit]
+        assert len(cache_hits) >= 1
+    finally:
+        db.close()
+
+
+def test_budget_exceeded_blocks_call() -> None:
+    db = SessionLocal()
+    try:
+        client = db.get(Client, DEMO_CLIENT_ID)
+        client.ai_monthly_token_budget = 50
+        db.add(
+            AISpendLog(
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                operation="ai_suggest_rule",
+                model="claude-test",
+                input_tokens=100,
+                output_tokens=0,
+                cost_estimate_usd=0.0,
+                cache_hit=False,
+            )
+        )
+        db.commit()
+        with pytest.raises(AIBudgetExceededError):
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Different description not in cache",
+                schema=_schema(),
+            )
+        client.ai_monthly_token_budget = 100_000
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_provider_failure_increments_breaker() -> None:
+    db = SessionLocal()
+    try:
+        breaker = ai_breaker.get_breaker()
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            side_effect=RuntimeError("simulated provider down"),
+        ):
+            for _ in range(breaker.threshold):
+                with pytest.raises(RuntimeError):
+                    generate_rule_for_category(
+                        db,
+                        client_id=DEMO_CLIENT_ID,
+                        policy_year_id=None,
+                        description="Some unique description to bypass cache",
+                        schema=_schema(),
+                    )
+        assert breaker.state == "open"
+    finally:
+        db.close()
+
+
+def test_credential_error_does_not_trip_breaker() -> None:
+    """A tenant pasting a bad BYOK key would otherwise burn 5 attempts and
+    open the breaker for every other tenant.
+
+    We construct a real `AuthenticationError` instance using its public
+    constructor; the SDK's `__init__` is `(message, *, response, body)`.
+    """
+    import httpx
+    from anthropic import AuthenticationError
+
+    db = SessionLocal()
+    try:
+        breaker = ai_breaker.get_breaker()
+        fake_response = httpx.Response(
+            status_code=401,
+            request=httpx.Request("POST", "http://x/"),
+        )
+        creds_err = AuthenticationError(
+            message="invalid x-api-key",
+            response=fake_response,
+            body=None,
+        )
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            side_effect=creds_err,
+        ):
+            for i in range(breaker.threshold + 2):
+                with pytest.raises(AuthenticationError):
+                    generate_rule_for_category(
+                        db,
+                        client_id=DEMO_CLIENT_ID,
+                        policy_year_id=None,
+                        description=f"unique-cred-test-{i}",
+                        schema=_schema(),
+                    )
+        assert breaker.state == "closed"
+    finally:
+        db.close()
+
+
+def test_month_to_date_excludes_cache_hits() -> None:
+    db = SessionLocal()
+    try:
+        db.add(
+            AISpendLog(
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                operation="ai_suggest_rule",
+                model="claude-test",
+                input_tokens=999,
+                output_tokens=0,
+                cost_estimate_usd=0.0,
+                cache_hit=True,  # cache hit should NOT count toward budget
+            )
+        )
+        db.commit()
+        mtd = month_to_date_tokens(db, DEMO_CLIENT_ID)
+        # The cache-hit row contributes 0; other prior tests in this module
+        # may have added rows. Just assert the cache-hit didn't add 999.
+        assert mtd < 999
+    finally:
+        db.close()

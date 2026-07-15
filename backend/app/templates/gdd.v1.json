@@ -1,0 +1,50 @@
+{
+  "code": "GDD",
+  "version": 1,
+  "display_name": "Group Dread Disease",
+  "has_dependants": false,
+  "is_outpatient": false,
+  "form_profile": "sum_assured",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true }
+  ],
+  "tiers": [],
+  "benefit_items": [
+    { "number": "1", "name": "Dread Disease benefit (acceleration from Group Term Life)", "kind": "text" },
+    { "number": "2", "name": "Total & Permanent Disablement (TPD)", "kind": "text" },
+    {
+      "number": "3",
+      "name": "Covered Dread Diseases",
+      "kind": "list",
+      "sub_items": [
+        { "name": "Major Cancers" },
+        { "name": "Heart Attack of Specified Severity" },
+        { "name": "Stroke" },
+        { "name": "Coronary Artery By-Pass Surgery" },
+        { "name": "Kidney Failure" },
+        { "name": "Aplastic Anaemia" },
+        { "name": "End Stage Lung Disease" },
+        { "name": "End Stage Liver Failure" },
+        { "name": "Coma" },
+        { "name": "Deafness (Loss of Hearing)" },
+        { "name": "Heart Valve Surgery" },
+        { "name": "Major Organ / Bone Marrow Transplantation" }
+      ]
+    }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
+    { "id": "free_cover_limit", "label": "Non-Evidence Limit applies up to scheme limit", "default_enabled": true }
+  ]
+}

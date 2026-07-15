@@ -1,0 +1,53 @@
+{
+  "code": "OSI",
+  "version": 1,
+  "display_name": "Group Secondment Insurance",
+  "has_dependants": true,
+  "is_outpatient": false,
+  "form_profile": "tiered_medical",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true }
+  ],
+  "tiers": [
+    { "code": "EO", "label": "Employee Only" },
+    { "code": "ES", "label": "Employee + Spouse" },
+    { "code": "EC", "label": "Employee + Children" },
+    { "code": "EF", "label": "Employee + Family" }
+  ],
+  "benefit_items": [
+    { "number": "1", "name": "Accidental Death", "kind": "amount" },
+    { "number": "2", "name": "Burial Expenses", "kind": "amount" },
+    {
+      "number": "3",
+      "name": "Permanent Disablement — Enhanced Scale",
+      "kind": "scale",
+      "sub_items": [
+        { "key": "1", "name": "Permanent Total Disablement — 100% of Sum Insured" },
+        { "key": "2", "name": "Loss of two limbs — 100%" },
+        { "key": "3", "name": "Loss of one limb — 50%" }
+      ]
+    },
+    { "number": "4", "name": "Medical Expenses", "kind": "amount" },
+    { "number": "5", "name": "Emergency Medical Evacuation", "kind": "text" },
+    { "number": "6", "name": "Repatriation Expenses", "kind": "text" },
+    { "number": "7", "name": "Hospital Confinement (per day)", "kind": "amount" },
+    { "number": "8", "name": "Personal Liability", "kind": "amount" },
+    { "number": "9", "name": "Trip Cancellation / Curtailment", "kind": "amount" },
+    { "number": "10", "name": "Loss of Money & Travel Documents", "kind": "amount" },
+    { "number": "11", "name": "Personal Property & Baggage", "kind": "amount" }
+  ],
+  "additional_arrangements": [
+    { "id": "worldwide", "label": "24-hour worldwide cover during secondment", "default_enabled": true }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "code": "GMM",
+  "version": 1,
+  "display_name": "Group Major Medical",
+  "has_dependants": true,
+  "is_outpatient": false,
+  "form_profile": "tiered_medical",
+  "header_fields": [
+    { "id": "group", "label": "Group", "type": "text" },
+    { "id": "policyholder", "label": "Policyholder", "type": "text" },
+    { "id": "insured", "label": "Insured", "type": "text" },
+    { "id": "address", "label": "Office Address", "type": "textarea" },
+    { "id": "business", "label": "Business", "type": "text" },
+    { "id": "period_of_insurance", "label": "Period of Insurance", "type": "text" },
+    { "id": "insurer", "label": "Insurer", "type": "text" },
+    { "id": "policy_no", "label": "Policy No.", "type": "text" }
+  ],
+  "eligibility_fields": [],
+  "plans": [
+    { "code": "1", "label": "Plan 1", "default_selected": true },
+    { "code": "2", "label": "Plan 2", "default_selected": true },
+    { "code": "3", "label": "Plan 3", "default_selected": false },
+    { "code": "4", "label": "Plan 4", "default_selected": false }
+  ],
+  "tiers": [
+    { "code": "EO", "label": "Employee Only" },
+    { "code": "ES", "label": "Employee + Spouse" },
+    { "code": "EC", "label": "Employee + Children" },
+    { "code": "EF", "label": "Employee + Family" }
+  ],
+  "benefit_items": [
+    { "number": "1", "name": "Overall Annual Limit", "kind": "amount" },
+    { "number": "2", "name": "Reimbursement of eligible inpatient expenses in excess of Group Hospital & Surgical benefits", "kind": "text" },
+    { "number": "3", "name": "Co-insurance / Co-payment", "kind": "text" },
+    { "number": "4", "name": "Daily Room & Board (top-up)", "kind": "amount" },
+    {
+      "number": "5",
+      "name": "In-patient Expenses (top-up)",
+      "kind": "amount",
+      "sub_items": [
+        { "key": "a", "name": "Hospital Miscellaneous Services" },
+        { "key": "b", "name": "Surgical Fees" }
+      ]
+    },
+    { "number": "6", "name": "Extension to cover GST", "kind": "text" }
+  ],
+  "additional_arrangements": [
+    { "id": "takeover", "label": "Take Over Basis from previous insurer's Endorsements and Practices", "default_enabled": true },
+    { "id": "addition_deletion", "label": "Addition & deletion clause (name basis) — backdating up to 90 days", "default_enabled": true },
+    { "id": "pre_existing", "label": "Pre-existing conditions: 12 months waiting period, creditable against prior continuous coverage", "default_enabled": true }
+  ]
+}
