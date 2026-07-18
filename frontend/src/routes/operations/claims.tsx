@@ -349,13 +349,28 @@ export function ClaimsQueuePage() {
                     {selected.employee_name ?? "—"}{" "}
                     <span className="text-muted-foreground">({selected.staff_id})</span>
                   </div>
+                  {selected.dependant_name && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Claimant
+                      </div>
+                      {selected.dependant_name}{" "}
+                      <span className="text-muted-foreground">(dependant)</span>
+                    </div>
+                  )}
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                       Coverage
                     </div>
                     {selected.claim_kind === "flex"
                       ? `Flex · ${selected.flex_category_name}`
-                      : `${selected.product_code}${selected.benefit_key ? ` · ${selected.benefit_key}` : ""}`}
+                      : `${selected.product_code}${
+                          selected.sub_type
+                            ? ` · ${selected.sub_type}`
+                            : selected.benefit_key
+                              ? ` · ${selected.benefit_key}`
+                              : ""
+                        }`}
                   </div>
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -377,6 +392,35 @@ export function ClaimsQueuePage() {
                       {selected.diagnosis}
                     </div>
                   )}
+                  {selected.claim_kind === "insured" &&
+                    (selected.referral_document ||
+                      selected.referral_not_applicable) && (
+                      <div className="col-span-2">
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                          Referral letter
+                        </div>
+                        {selected.referral_document ? (
+                          <button
+                            type="button"
+                            className="text-left underline-offset-2 hover:underline"
+                            onClick={async () => {
+                              try {
+                                await downloadClaimDocument(
+                                  selected.id,
+                                  selected.referral_document!,
+                                );
+                              } catch (err) {
+                                toast.error(formatError(err));
+                              }
+                            }}
+                          >
+                            {selected.referral_document.file_name}
+                          </button>
+                        ) : (
+                          "Declared not applicable by the member"
+                        )}
+                      </div>
+                    )}
                   {selected.decision_notes && (
                     <div className="col-span-2">
                       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">

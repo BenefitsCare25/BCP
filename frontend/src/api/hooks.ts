@@ -738,6 +738,7 @@ export interface ProductPayload {
   line?: InsuranceLine;
   form_profile?: string;
   layout_family?: string;
+  report_code?: string | null;
 }
 
 export function useCreateProduct() {
@@ -1183,6 +1184,7 @@ interface ProductTermArgs {
   coverageEnd?: string | null;
   gstIncluded?: boolean | null;
   gstRate?: number | null;
+  freeCoverLimit?: number | null;
 }
 
 export function useSetProductTerm(policyYearId: string) {
@@ -1194,6 +1196,7 @@ export function useSetProductTerm(policyYearId: string) {
       coverageEnd,
       gstIncluded,
       gstRate,
+      freeCoverLimit,
     }: ProductTermArgs) => {
       // Only include keys the caller actually set — the backend applies exactly
       // the fields present (model_fields_set), so omitted dimensions are kept.
@@ -1202,6 +1205,7 @@ export function useSetProductTerm(policyYearId: string) {
       if (coverageEnd !== undefined) body.coverage_end = coverageEnd;
       if (gstIncluded !== undefined) body.gst_included = gstIncluded;
       if (gstRate !== undefined) body.gst_rate = gstRate;
+      if (freeCoverLimit !== undefined) body.free_cover_limit = freeCoverLimit;
       return api.put<ProductTerm>(
         `/policy-years/${policyYearId}/product-terms/${productId}`,
         body,

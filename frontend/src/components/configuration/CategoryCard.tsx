@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, CheckCheck, Pencil, Sparkles, X } from "lucide-react";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -199,6 +199,30 @@ export function CategoryCard({
   // The persisted plan behind the selected code — only it can be renamed (a
   // pre-materialization slip plan has no Plan record yet).
   const currentPlan = planOptions.find((p) => String(p.code) === planCode);
+
+  // Insurer-facing report label for the selected plan ("4 Bed Restr Hosp /
+  // Inpatient Expenses - S$10,000"). Editable even on active years — it's
+  // report metadata, not coverage config.
+  const [reportLabel, setReportLabel] = useState(
+    currentPlan?.report_label ?? "",
+  );
+  const currentPlanId = currentPlan?.id;
+  useEffect(() => {
+    setReportLabel(currentPlan?.report_label ?? "");
+    // Re-seed only when the selected plan itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPlanId]);
+  const saveReportLabel = () => {
+    const next = reportLabel.trim();
+    if (!currentPlan || next === (currentPlan.report_label ?? "")) return;
+    updatePlan.mutate(
+      { id: currentPlan.id, patch: { report_label: next || null } },
+      {
+        onSuccess: () => toast.success("Report label saved"),
+        onError: (e) => toast.error(`Report label: ${formatError(e)}`),
+      },
+    );
+  };
 
   const savePatch = (p: Partial<Category>, label: string) =>
     patch.mutate(
@@ -636,6 +660,19 @@ export function CategoryCard({
                 </Button>
               )}
             </div>
+          )}
+          {currentPlan && (
+            <Input
+              value={reportLabel}
+              onChange={(e) => setReportLabel(e.target.value)}
+              onBlur={saveReportLabel}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveReportLabel();
+              }}
+              placeholder="Insurer report label (e.g. 4 Bed Restr Hosp / S$60,000)"
+              title="Shown as this plan's Plan/Basis of Cover on insurer report columns"
+              className="mt-1 h-7 text-xs"
+            />
           )}
         </Field>
         <Field label="Participation">

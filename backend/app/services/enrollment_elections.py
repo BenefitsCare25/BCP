@@ -26,7 +26,7 @@ from app.models import (
 )
 from app.models.enrollment import ElectionAction, EnrollmentStatus
 from app.models.enrollment_window import WindowStatus
-from app.models.leave_election import LeaveElectionStatus
+from app.models.leave_election import LeaveAction, LeaveElectionStatus
 from app.models.product import Product as ProductModel
 from app.schemas.enrollment import (
     CohortTierOut,
@@ -92,6 +92,7 @@ from app.services.flex_pricing_resolver import (
 from app.services.leave_pricing_resolver import (
     leave_flex_amount,
     leave_rate_for,
+    leave_sell_eligible,
 )
 from app.services.plan_hydration import apply_gst_to_financials
 
@@ -553,6 +554,18 @@ def apply_leave(db: Session, enr: Enrollment, body: LeaveElectionIn) -> LeaveEle
         select(LeavePolicy).where(LeavePolicy.policy_year_id == enr.policy_year_id)
     ).scalar_one_or_none()
     validate_leave(policy, body.action, body.days)
+    employee = db.get(Employee, enr.employee_id)
+    # Per-member sell eligibility from the roster flag ("Eligible to Sell
+    # Leave"); absent = eligible. Shared with the insurer reports.
+    if (
+        body.action == LeaveAction.sell
+        and employee is not None
+        and not leave_sell_eligible(employee)
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "This member is not eligible to sell leave.",
+        )
 
     leave = db.execute(
         select(LeaveElection).where(LeaveElection.enrollment_id == enr.id)
@@ -573,7 +586,6 @@ def apply_leave(db: Session, enr: Enrollment, body: LeaveElectionIn) -> LeaveEle
     # Snapshot the signed flex-wallet impact (buy spends, sell credits) from the
     # member's leave rate so the available-balance recompute stays stable if the
     # policy's rates change later.
-    employee = db.get(Employee, enr.employee_id)
     rate = leave_rate_for(policy, employee) if employee else None
     leave.flex_amount = leave_flex_amount(body.action, body.days, rate)
     if enr.status == EnrollmentStatus.not_started:

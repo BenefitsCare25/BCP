@@ -286,3 +286,32 @@ def test_close_window_deemed_decline_clears_leave(client: TestClient) -> None:
         el = s.query(LeaveElection).filter_by(enrollment_id=ENROLL_ID).one()
         assert el.action == "none" and el.flex_amount is None
         assert el.status == LeaveElectionStatus.confirmed
+
+
+def test_sell_blocked_for_ineligible_member(client: TestClient) -> None:
+    # Roster flag "Eligible to Sell Leave" = false → sell elections 422; buy
+    # stays allowed (the flag only governs selling).
+    with SessionLocal() as s:
+        emp = s.get(Employee, EMP1)
+        emp.attribute_values = {**(emp.attribute_values or {}),
+                                "leave_sell_eligible": False}
+        s.commit()
+    try:
+        res = client.put(
+            f"/api/v1/enrollments/{ENROLL_ID}/leave",
+            json={"action": "sell", "days": 2},
+        )
+        assert res.status_code == 422
+        assert "not eligible to sell" in res.json()["detail"]
+        res = client.put(
+            f"/api/v1/enrollments/{ENROLL_ID}/leave",
+            json={"action": "buy", "days": 2},
+        )
+        assert res.status_code == 200, res.text
+    finally:
+        with SessionLocal() as s:
+            emp = s.get(Employee, EMP1)
+            attrs = dict(emp.attribute_values or {})
+            attrs.pop("leave_sell_eligible", None)
+            emp.attribute_values = attrs
+            s.commit()

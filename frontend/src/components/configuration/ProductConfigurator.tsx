@@ -44,7 +44,7 @@ export function ProductConfigurator({
         <CoveragePeriodEditor
           // The editor's inputs are a pure function of server state — remount
           // on the server values so save/reset discards local edits.
-          key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}`}
+          key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}:${term.free_cover_limit ?? ""}`}
           policyYearId={policyYearId}
           term={term}
         />

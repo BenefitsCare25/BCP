@@ -203,9 +203,11 @@ export function EmployeesPage() {
 
       <UploadRoster
         title="Upload employee roster"
-        description="STM template — Staff ID, Employee Name, NRIC/FIN, DOB, Salary, Pass, Category, etc."
+        description="Member-listing template — Staff ID, Name, NRIC/FIN, DOB, Category, bank details, insurer member IDs, etc."
         policyYearId={policyYearId}
         upload={upload}
+        templatePath={`/policy-years/${policyYearId}/reports/member-listing-template`}
+        templateFilename="member-listing-template.xlsx"
       />
 
       <AdcCard policyYearId={policyYearId} />

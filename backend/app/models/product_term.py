@@ -56,3 +56,6 @@ class ProductTerm(Base, TimestampMixin):
     gst_included: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # GST percentage (0-100); None falls back to DEFAULT_GST_RATE when included.
     gst_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Free cover limit: sum insured auto-accepted without medical underwriting.
+    # None = no FCL (everything auto-accepted). Drives underwriting-case sync.
+    free_cover_limit: Mapped[float | None] = mapped_column(Float, nullable=True)

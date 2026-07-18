@@ -268,6 +268,86 @@ SINGAPORE_ATTRIBUTES: list[dict] = [
             "entities on multi-subsidiary schemes (e.g. WICA per-entity blocks)."
         ),
     },
+    # ── Insurer-report fields (member-listing template, 2026-07) ─────────────
+    {
+        "attribute_id": "employment_status",
+        "display_name": "Employment Status",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Employment basis (Permanent / Contract) for insurer listings.",
+    },
+    {
+        "attribute_id": "designation",
+        "display_name": "Designation",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Job title as reported to the insurer.",
+    },
+    {
+        "attribute_id": "country_of_work",
+        "display_name": "Country of Work",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Work location country for insurer listings.",
+    },
+    {
+        "attribute_id": "bank_code",
+        "display_name": "Bank Code",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": True,
+        "description": "Payroll bank code (insurer reimbursement listings).",
+    },
+    {
+        "attribute_id": "branch_code",
+        "display_name": "Branch Code",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": True,
+        "description": "Payroll bank branch code.",
+    },
+    {
+        "attribute_id": "bank_account_no",
+        "display_name": "Bank Account No.",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": True,
+        "description": "Payroll bank account number.",
+    },
+    {
+        "attribute_id": "prior_year_cover",
+        "display_name": "Has Insurance Cover Last Year",
+        "data_type": "boolean",
+        "is_required": False,
+        "is_pii": False,
+        "description": (
+            "Whether the member held cover in the previous policy year. Roster "
+            "flag wins; when absent, insurer reports derive it from the prior "
+            "policy year's roster."
+        ),
+    },
+    {
+        "attribute_id": "leave_sell_eligible",
+        "display_name": "Eligible to Sell Leave",
+        "data_type": "boolean",
+        "is_required": False,
+        "is_pii": False,
+        "description": (
+            "Whether the member may sell annual leave during enrollment. "
+            "Absent means eligible; an explicit false blocks sell elections."
+        ),
+    },
+    {
+        "attribute_id": "remarks",
+        "display_name": "Remarks",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Free-text remarks carried onto insurer listings.",
+    },
 ]
 
 PRODUCT_CATALOG: list[dict] = [

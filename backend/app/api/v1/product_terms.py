@@ -60,6 +60,7 @@ def list_product_terms(
             line=products[r.product_id].line if r.product_id in products else "medical",
             gst_included=r.gst_included,
             gst_rate=r.gst_rate,
+            free_cover_limit=r.free_cover_limit,
         )
         for r in resolved
     ]
@@ -102,6 +103,7 @@ def list_product_terms(
                     line=cp.line,
                     gst_included=t.gst_included if t else None,
                     gst_rate=t.gst_rate if t else None,
+                    free_cover_limit=t.free_cover_limit if t else None,
                 )
             )
     items.sort(key=lambda x: (x.code, x.display_name))
@@ -120,7 +122,11 @@ def set_product_term(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProductTermOut:
-    assert_policy_year_editable(py)
+    # The free cover limit is OPERATIONAL underwriting config (report-facing,
+    # doesn't change coverage) — an FCL-only body stays editable after
+    # activation. Coverage dates / GST keep the lock.
+    if body.model_fields_set != {"free_cover_limit"}:
+        assert_policy_year_editable(py)
     product = _require_product_in_year(db, py, product_id)
     term = db.execute(
         select(ProductTerm).where(
@@ -146,6 +152,8 @@ def set_product_term(
         term.gst_included = body.gst_included
     if "gst_rate" in sent:
         term.gst_rate = body.gst_rate
+    if "free_cover_limit" in sent:
+        term.free_cover_limit = body.free_cover_limit
     db.flush()
 
     has_dates = term.coverage_start is not None
@@ -160,6 +168,7 @@ def set_product_term(
             ),
             "gst_included": term.gst_included,
             "gst_rate": term.gst_rate,
+            "free_cover_limit": term.free_cover_limit,
         },
     )
     db.commit()
@@ -173,6 +182,7 @@ def set_product_term(
         line=product.line,
         gst_included=term.gst_included,
         gst_rate=term.gst_rate,
+        free_cover_limit=term.free_cover_limit,
     )
 
 

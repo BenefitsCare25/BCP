@@ -269,6 +269,49 @@ def test_policy_year_snapshot_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_reports_benefit_selection_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/benefit-selection")
+    assert res.status_code == 404
+
+
+def test_reports_employee_listing_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(
+        f"/api/v1/policy-years/{PY_B}/reports/employee-listing?insurer=AIA"
+    )
+    assert res.status_code == 404
+
+
+def test_reports_dependant_listing_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(
+        f"/api/v1/policy-years/{PY_B}/reports/dependant-listing?insurer=AIA"
+    )
+    assert res.status_code == 404
+
+
+def test_reports_readiness_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/readiness")
+    assert res.status_code == 404
+
+
+def test_reports_member_listing_template_cross_tenant_404(
+    client_as_a: TestClient,
+) -> None:
+    res = client_as_a.get(
+        f"/api/v1/policy-years/{PY_B}/reports/member-listing-template"
+    )
+    assert res.status_code == 404
+
+
+def test_underwriting_cases_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/underwriting/cases")
+    assert res.status_code == 404
+
+
+def test_underwriting_refresh_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(f"/api/v1/policy-years/{PY_B}/underwriting/refresh")
+    assert res.status_code == 404
+
+
 def test_fact_find_form_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/fact-find-form")
     assert res.status_code == 404

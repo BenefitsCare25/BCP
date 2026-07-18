@@ -23,9 +23,9 @@ from app.services.form_profiles import infer_profile
 
 router = APIRouter(tags=["schemas"])
 
-# ProductPatch fields that live in product_metadata (classification overrides),
-# not as Product columns.
-_METADATA_PATCH_KEYS = ("line", "form_profile", "layout_family")
+# ProductPatch fields that live in product_metadata (classification overrides
+# + insurer-report display code), not as Product columns.
+_METADATA_PATCH_KEYS = ("line", "form_profile", "layout_family", "report_code")
 
 
 def _product_out(p: Product) -> ProductOut:
@@ -44,6 +44,7 @@ def _product_out(p: Product) -> ProductOut:
         line=p.line,
         form_profile=infer_profile(p.code, meta.get("form_profile")),
         layout_family=entry.layout_family,
+        report_code=meta.get("report_code"),
     )
 
 
@@ -238,6 +239,8 @@ def create_product(
         metadata["form_profile"] = payload.form_profile
     if payload.layout_family:
         metadata["layout_family"] = payload.layout_family
+    if payload.report_code:
+        metadata["report_code"] = payload.report_code
     row = Product(
         client_id=client_id,
         code=payload.code,

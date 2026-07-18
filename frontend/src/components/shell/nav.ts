@@ -62,6 +62,16 @@ export const NAV_GROUPS: NavGroup[] = [
         title: "Operations — Claims Review",
       },
       {
+        label: "Reports",
+        to: "/operations/reports",
+        title: "Operations — Insurer Reports",
+      },
+      {
+        label: "Underwriting",
+        to: "/operations/underwriting",
+        title: "Operations — Underwriting Queue",
+      },
+      {
         label: "Policy year",
         to: "/operations/activations",
         title: "Policy Year",

@@ -102,6 +102,25 @@ def build_leave_rate_options(employees: list[Employee]) -> dict:
     return {"attributes": attributes, "values": values}
 
 
+_FALSE_FLAGS = {"false", "no", "n", "0", "0.0"}
+
+
+def leave_sell_eligible(employee: Employee) -> bool:
+    """Whether the member may SELL leave, from the roster flag
+    ``leave_sell_eligible`` ("Eligible to Sell Leave" upload column).
+
+    Absent = eligible (the LeavePolicy bounds still apply); only an explicit
+    false-ish value blocks the sell election. Shared by the enrollment
+    validation and the insurer reports so the two can't disagree.
+    """
+    raw = (employee.attribute_values or {}).get("leave_sell_eligible")
+    if raw is None or raw == "":
+        return True
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in _FALSE_FLAGS
+
+
 def leave_flex_amount(action: str, days: float, rate: float | None) -> float | None:
     """Signed flex-wallet impact of a leave trade: buy spends (-), sell credits (+).
 

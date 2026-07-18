@@ -32,6 +32,8 @@ class ResolvedTerm:
     # gst_rate, False = explicit "no GST". Slip amounts are always GST-exclusive.
     gst_included: bool | None = None
     gst_rate: float | None = None
+    # Free cover limit (underwriting) — None = no FCL.
+    free_cover_limit: float | None = None
 
 
 def gst_multiplier(included: bool | None, rate: float | None) -> float:
@@ -121,6 +123,7 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
                 is_default=not has_dates,
                 gst_included=term.gst_included if term else None,
                 gst_rate=term.gst_rate if term else None,
+                free_cover_limit=term.free_cover_limit if term else None,
             )
         )
     out.sort(key=lambda r: (r.code, r.display_name))

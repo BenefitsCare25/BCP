@@ -21,15 +21,23 @@ EMPLOYEE_COLUMN_MAP: dict[str, str] = {
     "staff id": "staff_id",
     "employee name": "employee_name",
     "identification no. (nric/fin)": "id_no",
+    "identification no.": "id_no",
     "date of birth": "date_of_birth",
     "gender": "gender",
     "marital status": "marital_status",
+    "employment status": "employment_status",
+    "designation": "designation",
+    "job title": "designation",
+    "position": "designation",
+    "country of work": "country_of_work",
     "foreigner employment pass": "pass",
     "nationality": "nationality",
     "monthly salary": "salary",
+    "currency": "currency",
     "date of hire": "date_of_hire",
     "confirmation date": "confirmation_date",
     "effective date": "effective_date",
+    "last day of service": "last_day_of_service",
     "category": "category",
     "job grade": "job_grade",
     "division": "division",
@@ -37,7 +45,32 @@ EMPLOYEE_COLUMN_MAP: dict[str, str] = {
     "cost centre": "cost_centre",
     "email": "email",
     "mobile": "mobile",
+    "bank code": "bank_code",
+    "branch code": "branch_code",
+    "bank account no.": "bank_account_no",
+    "bank account number": "bank_account_no",
+    "has insurance cover last year": "prior_year_cover",
+    "eligible to sell leave": "leave_sell_eligible",
+    "remarks": "remarks",
 }
+
+# Attribute keys whose values are identifiers, not numbers — Excel often types
+# them numeric ("081" arrives as int 81), so coerce to a clean string rather
+# than persist a float. (Lost leading zeros can't be recovered here; the fix is
+# a text-formatted column, which the download template provides.)
+_CODE_KEYS = frozenset({
+    "bank_code", "branch_code", "bank_account_no", "mobile", "id_no",
+    "dependant_id_no", "employee_id_no",
+})
+
+# Attribute keys holding yes/no flags — normalized to real booleans on ingest.
+_FLAG_KEYS = frozenset({"prior_year_cover", "leave_sell_eligible"})
+
+# Insurer-issued member IDs ride dedicated per-insurer columns, e.g.
+# "AIA Member ID" / "Zurich Member ID". Matched dynamically (any insurer name)
+# and folded into an ``insurer_member_ids`` dict: {"AIA": "2427617201", ...}.
+INSURER_MEMBER_ID_KEY = "insurer_member_ids"
+_MEMBER_ID_RE = re.compile(r"^(?P<insurer>.+?)\s+member\s+id$", re.IGNORECASE)
 
 
 DEPENDANT_COLUMN_MAP: dict[str, str] = {
@@ -45,6 +78,7 @@ DEPENDANT_COLUMN_MAP: dict[str, str] = {
     "staff id": "staff_id",
     "employee name": "employee_name",
     "employee's identification no. (nric/fin)": "employee_id_no",
+    "employee's identification no.": "employee_id_no",
     "dependant name": "dependant_name",
     "dependant's identification no.": "dependant_id_no",
     "relationship": "relationship",
@@ -96,6 +130,64 @@ def _normalize_name(s: Any) -> str | None:
     return re.sub(r"[,\s]+", " ", str(s)).strip()
 
 
+def _normalize_code(raw: Any) -> str:
+    """Identifier-shaped value → clean string ('081' text stays '081'; a numeric
+    cell 81 / 81.0 becomes '81' rather than '81.0')."""
+    if isinstance(raw, float) and raw.is_integer():
+        return str(int(raw))
+    return str(raw).strip()
+
+
+_TRUE_WORDS = {"true", "yes", "y", "1", "1.0"}
+_FALSE_WORDS = {"false", "no", "n", "0", "0.0"}
+
+
+def _normalize_flag(raw: Any) -> Any:
+    """Yes/no-ish cell → real bool; unrecognized text is kept raw (visible in
+    the roster rather than silently coerced)."""
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw).strip().lower()
+    if s in _TRUE_WORDS:
+        return True
+    if s in _FALSE_WORDS:
+        return False
+    return raw
+
+
+def _coerce_attr(attr_id: str, value: Any) -> Any:
+    if attr_id in _CODE_KEYS:
+        return _normalize_code(value)
+    if attr_id in _FLAG_KEYS:
+        return _normalize_flag(value)
+    return value
+
+
+def _member_id_columns(header_row: list[Cell]) -> dict[int, str]:
+    """Column index → insurer name for '<Insurer> Member ID' headers, keeping
+    the sheet's own casing for the insurer ('AIA Member ID' → 'AIA')."""
+    out: dict[int, str] = {}
+    for idx, cell in enumerate(header_row):
+        if cell is None:
+            continue
+        m = _MEMBER_ID_RE.match(re.sub(r"\s+", " ", str(cell)).strip())
+        if m:
+            out[idx] = m.group("insurer").strip()
+    return out
+
+
+def _collect_member_ids(
+    row: list[Cell], member_id_cols: dict[int, str], attrs: dict[str, Any]
+) -> None:
+    ids = {
+        insurer: _normalize_code(row[idx])
+        for idx, insurer in member_id_cols.items()
+        if idx < len(row) and row[idx] not in (None, "")
+    }
+    if ids:
+        attrs[INSURER_MEMBER_ID_KEY] = ids
+
+
 def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
     with open_workbook(path) as wb:
         sheet = wb.sheet(wb.sheet_names[0])
@@ -103,6 +195,7 @@ def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
         return []
     header_row = sheet.rows[0]
     col_map = _build_column_map(header_row, EMPLOYEE_COLUMN_MAP)
+    member_id_cols = _member_id_columns(header_row)
 
     records: list[EmployeeRecord] = []
     for offset, row in enumerate(sheet.rows[1:]):
@@ -118,7 +211,8 @@ def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
                     value = _normalize_pass(value)
                 if value in (None, ""):
                     continue
-                attrs[attr_id] = value
+                attrs[attr_id] = _coerce_attr(attr_id, value)
+        _collect_member_ids(row, member_id_cols, attrs)
         staff_id = attrs.pop("staff_id", None)
         if not staff_id:
             continue
@@ -140,6 +234,7 @@ def parse_dependant_workbook(path: Path | str) -> list[DependantRecord]:
         return []
     header_row = sheet.rows[0]
     col_map = _build_column_map(header_row, DEPENDANT_COLUMN_MAP)
+    member_id_cols = _member_id_columns(header_row)
 
     records: list[DependantRecord] = []
     for offset, row in enumerate(sheet.rows[1:]):
@@ -151,7 +246,8 @@ def parse_dependant_workbook(path: Path | str) -> list[DependantRecord]:
                 value = row[idx]
                 if value in (None, ""):
                     continue
-                attrs[attr_id] = value
+                attrs[attr_id] = _coerce_attr(attr_id, value)
+        _collect_member_ids(row, member_id_cols, attrs)
         staff_id = attrs.pop("staff_id", None)
         employee_name = _normalize_name(attrs.pop("employee_name", None))
         employee_id_no = attrs.pop("employee_id_no", None)

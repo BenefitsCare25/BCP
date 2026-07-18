@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Upload, FileSpreadsheet, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { toast } from "sonner";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type { UploadResult } from "@/types";
@@ -15,6 +16,9 @@ interface Props {
     Error,
     { file: File; policyYearId: string }
   >;
+  /** Optional API path for a downloadable blank/pre-filled upload template. */
+  templatePath?: string;
+  templateFilename?: string;
 }
 
 const REASON_LABEL: Record<string, string> = {
@@ -22,7 +26,14 @@ const REASON_LABEL: Record<string, string> = {
   in_file: "Repeated in this file",
 };
 
-export function UploadRoster({ title, description, policyYearId, upload }: Props) {
+export function UploadRoster({
+  title,
+  description,
+  policyYearId,
+  upload,
+  templatePath,
+  templateFilename,
+}: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [result, setResult] = useState<UploadResult | null>(null);
 
@@ -66,6 +77,13 @@ export function UploadRoster({ title, description, policyYearId, upload }: Props
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {templatePath && (
+              <ReportDownloadButton
+                path={templatePath}
+                filename={templateFilename ?? "member-listing-template.xlsx"}
+                label="Download template"
+              />
+            )}
             <input
               ref={fileInput}
               type="file"

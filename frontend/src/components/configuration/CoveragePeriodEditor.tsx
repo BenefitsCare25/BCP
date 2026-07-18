@@ -51,6 +51,9 @@ export function CoveragePeriodEditor({
   const [gstRate, setGstRate] = useState<string>(
     term.gst_rate != null ? String(term.gst_rate) : "",
   );
+  const [fcl, setFcl] = useState<string>(
+    term.free_cover_limit != null ? String(term.free_cover_limit) : "",
+  );
   const setTerm = useSetProductTerm(policyYearId);
   const resetTerm = useResetProductTerm(policyYearId);
 
@@ -60,18 +63,25 @@ export function CoveragePeriodEditor({
   const gstDirty =
     gstOpinion !== initialOpinion ||
     (gstOpinion === "include" && parsedRate !== term.gst_rate);
-  const dirty = datesDirty || gstDirty;
+  const parsedFcl = fcl.trim() === "" ? null : Number(fcl.replace(/,/g, ""));
+  const fclDirty = parsedFcl !== term.free_cover_limit;
+  const dirty = datesDirty || gstDirty || fclDirty;
 
   const datesValid = Boolean(start) && Boolean(end) && end >= start;
   const rateValid =
     gstOpinion !== "include" ||
     parsedRate === null ||
     (Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate <= 100);
-  const valid = datesValid && rateValid;
+  const fclValid =
+    parsedFcl === null || (Number.isFinite(parsedFcl) && parsedFcl >= 0);
+  const valid = datesValid && rateValid && fclValid;
   const busy = setTerm.isPending || resetTerm.isPending;
   // The server row exists in some non-default form (dates or a GST opinion).
   const hasOverride =
-    !term.is_default || term.gst_included !== null || term.gst_rate != null;
+    !term.is_default ||
+    term.gst_included !== null ||
+    term.gst_rate != null ||
+    term.free_cover_limit != null;
 
   const save = async () => {
     try {
@@ -86,6 +96,7 @@ export function CoveragePeriodEditor({
               gstRate: gstOpinion === "include" ? parsedRate : null,
             }
           : {}),
+        ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
       });
       toast.success(`Updated ${term.code} terms`);
     } catch (err) {
@@ -157,6 +168,28 @@ export function CoveragePeriodEditor({
                 <span className="text-sm text-muted-foreground">%</span>
               </div>
             )}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">
+              Free cover limit
+            </Label>
+            <InfoHint>
+              Sum insured auto-accepted without medical underwriting. Members
+              (or covered dependants) whose eligible SI exceeds it appear in
+              the Underwriting queue; insurer listings show the excess as
+              “Pending U/W” until a decision is recorded. Blank = no limit.
+            </InfoHint>
+            <Input
+              type="number"
+              min={0}
+              step={1000}
+              className="w-[130px]"
+              value={fcl}
+              onChange={(e) => setFcl(e.target.value)}
+              placeholder="No limit"
+              aria-label={`${term.code} free cover limit`}
+            />
           </div>
         </div>
 

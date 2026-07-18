@@ -31,6 +31,9 @@ export interface Product {
   // Structural classification (registry + product_metadata override).
   form_profile?: string | null;
   layout_family?: string | null;
+  // Insurer-report display code when it differs from the internal code
+  // (e.g. GCGP → "GOGP"). Rides product_metadata.
+  report_code?: string | null;
 }
 
 // ── Product registry (static classification catalog from the backend) ────────
@@ -165,6 +168,8 @@ export interface ProductTerm {
   // false = explicit "no GST". Raw slip premiums are always GST-exclusive.
   gst_included: boolean | null;
   gst_rate: number | null;
+  // Free cover limit (underwriting): SI auto-accepted without medicals.
+  free_cover_limit: number | null;
 }
 
 export type SourceKind =
@@ -441,6 +446,8 @@ export interface PlanDetail {
   benefit_schedule: BenefitSchedule | null;
   cover_description: string | null;
   annual_policy_limit: string | null;
+  // Insurer-facing label for report columns ("4 Bed Restr Hosp / …").
+  report_label: string | null;
   financials: PlanFinancials | null;
   source: string;
   confidence: number | null;

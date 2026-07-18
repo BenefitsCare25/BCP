@@ -35,6 +35,7 @@ class PlanOut(BaseModel):
     benefit_schedule: dict[str, Any] | None = None
     cover_description: str | None = None
     annual_policy_limit: str | None = None
+    report_label: str | None = None
     # Premium / covered-amount figures sourced from the category that assigns
     # this plan code. None when no category assigns the plan or it has no
     # financial data. Used by the enrollment election UI.
@@ -83,6 +84,7 @@ class PlanUpdate(BaseModel):
     benefit_schedule: BenefitScheduleIn | None = None
     cover_description: str | None = None
     annual_policy_limit: str | None = None
+    report_label: str | None = None
     status: str | None = None
 
 
@@ -96,6 +98,7 @@ def _plan_out(p: Plan, financials: PlanFinancials | None = None) -> PlanOut:
         benefit_schedule=p.benefit_schedule,
         cover_description=p.cover_description,
         annual_policy_limit=p.annual_policy_limit,
+        report_label=p.report_label,
         financials=financials,
         source=p.source,
         confidence=p.confidence,
@@ -191,11 +194,14 @@ def update_plan(
     user: CurrentUser = Depends(require_broker_admin),
     db: Session = Depends(get_db),
 ) -> PlanOut:
+    updates = body.model_dump(exclude_unset=True)
     py = db.get(PolicyYear, plan.policy_year_id)
-    if py is not None:
+    # report_label is OPERATIONAL metadata (insurer report display text) — it
+    # doesn't alter coverage, so a label-only patch stays editable after
+    # activation. Anything touching real plan config keeps the lock.
+    if py is not None and not set(updates) <= {"report_label"}:
         assert_policy_year_editable(py)
     before = {"benefit_schedule": plan.benefit_schedule, "status": plan.status}
-    updates = body.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(plan, field, value)
     # benefit_schedule is validated as BenefitScheduleIn then stored as raw dict

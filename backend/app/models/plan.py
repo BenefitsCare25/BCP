@@ -30,6 +30,10 @@ class Plan(Base, TimestampMixin):
     benefit_schedule: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
     cover_description: Mapped[str | None] = mapped_column(String(512), nullable=True)
     annual_policy_limit: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Insurer-facing label for report columns ("4 Bed Restr Hosp / Inpatient
+    # Expenses - S$10,000", "Panel Only") — internal names stay "Plan 1".
+    # Operational metadata: editable on active years (not activation-locked).
+    report_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="system_generated")
     source_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)

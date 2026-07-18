@@ -64,6 +64,7 @@ const EMPTY_DRAFT: ProductPayload = {
   participation_model: "standard",
   has_dependants: false,
   is_outpatient: false,
+  report_code: "",
 };
 
 function toDraft(p: Product): ProductPayload {
@@ -76,6 +77,7 @@ function toDraft(p: Product): ProductPayload {
       "standard",
     has_dependants: p.has_dependants,
     is_outpatient: p.is_outpatient,
+    report_code: p.report_code ?? "",
   };
 }
 
@@ -107,6 +109,7 @@ export function SchemaProductsPage() {
     const payload: ProductPayload = {
       ...draft,
       insurer: draft.insurer?.trim() ? draft.insurer.trim() : null,
+      report_code: draft.report_code?.trim() ? draft.report_code.trim() : null,
     };
     try {
       if (editing) {
@@ -169,15 +172,35 @@ export function SchemaProductsPage() {
                   />
                 </Field>
               </div>
-              <Field label="Insurer (optional)">
-                <Input
-                  value={draft.insurer ?? ""}
-                  onChange={(e) =>
-                    setDraft({ ...draft, insurer: e.target.value })
-                  }
-                  placeholder="AIA"
-                />
-              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field
+                  label="Insurer (optional)"
+                  hint="Underwriting insurer. Groups this product's columns into that insurer's membership/billing reports on the Reports page."
+                >
+                  <Input
+                    value={draft.insurer ?? ""}
+                    onChange={(e) =>
+                      setDraft({ ...draft, insurer: e.target.value })
+                    }
+                    placeholder="AIA"
+                  />
+                </Field>
+                <Field
+                  label="Report code (optional)"
+                  hint="Column code used on insurer reports when it differs from the internal code (e.g. GCGP reports as GOGP)."
+                >
+                  <Input
+                    value={draft.report_code ?? ""}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        report_code: e.target.value.toUpperCase(),
+                      })
+                    }
+                    placeholder="GOGP"
+                  />
+                </Field>
+              </div>
               <Field
                 label="Participation model"
                 hint="Who can enrol: standard, extended (adds dependants), or eo_only (employee-only, no voluntary tiers)."

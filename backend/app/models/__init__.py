@@ -28,6 +28,7 @@ from app.models.product_term import ProductTerm
 from app.models.schema_def import EmployeeAttributeSchema
 from app.models.slip_template_profile import SlipTemplateProfile
 from app.models.stored_document import StoredDocument
+from app.models.underwriting_case import UnderwritingCase
 from app.models.user import User, UserClientAccess
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "ProductTerm",
     "SlipTemplateProfile",
     "StoredDocument",
+    "UnderwritingCase",
     "User",
     "UserClientAccess",
 ]

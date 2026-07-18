@@ -49,6 +49,14 @@ const ClaimsQueuePage = lazyRouteComponent(
   () => import("@/routes/operations/claims"),
   "ClaimsQueuePage",
 );
+const ReportsPage = lazyRouteComponent(
+  () => import("@/routes/operations/reports"),
+  "ReportsPage",
+);
+const UnderwritingPage = lazyRouteComponent(
+  () => import("@/routes/operations/underwriting"),
+  "UnderwritingPage",
+);
 const EnrollmentPage = lazyRouteComponent(
   () => import("@/routes/enrollment/index"),
   "EnrollmentPage",
@@ -393,6 +401,18 @@ const opsClaimsRoute = createRoute({
   component: ClaimsQueuePage,
 });
 
+const opsReportsRoute = createRoute({
+  getParentRoute: () => opsLayoutRoute,
+  path: "/reports",
+  component: ReportsPage,
+});
+
+const opsUnderwritingRoute = createRoute({
+  getParentRoute: () => opsLayoutRoute,
+  path: "/underwriting",
+  component: UnderwritingPage,
+});
+
 const enrollmentLayoutRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/enrollment",
@@ -471,6 +491,8 @@ const routeTree = rootRoute.addChildren([
       opsBenefitStatementRedirect,
       opsEmployeeViewRedirect,
       opsClaimsRoute,
+      opsReportsRoute,
+      opsUnderwritingRoute,
       opsActivationsRoute,
     ]),
     enrollmentLayoutRoute.addChildren([

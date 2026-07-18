@@ -160,6 +160,9 @@ class ProductOut(_Base):
     # override) — drives the setup-form shape and slip extraction.
     form_profile: str | None = None
     layout_family: str | None = None
+    # Display code used on insurer report columns when it differs from the
+    # internal code (e.g. GCGP → "GOGP"). Rides product_metadata.
+    report_code: str | None = None
 
 
 class ProductCreate(BaseModel):
@@ -173,6 +176,7 @@ class ProductCreate(BaseModel):
     line: InsuranceLineStr | None = None
     form_profile: str | None = None
     layout_family: LayoutFamilyStr | None = None
+    report_code: str | None = None
 
 
 class ProductPatch(BaseModel):
@@ -187,6 +191,7 @@ class ProductPatch(BaseModel):
     line: InsuranceLineStr | None = None
     form_profile: str | None = None
     layout_family: LayoutFamilyStr | None = None
+    report_code: str | None = None
 
 
 class PolicyYearOut(_Base):
@@ -232,6 +237,8 @@ class ProductTermOut(BaseModel):
     # False = explicit "no GST". Slip amounts are always GST-exclusive.
     gst_included: bool | None = None
     gst_rate: float | None = None
+    # Free cover limit (underwriting): SI auto-accepted without medicals.
+    free_cover_limit: float | None = None
 
 
 class ProductTermUpdate(BaseModel):
@@ -243,6 +250,7 @@ class ProductTermUpdate(BaseModel):
     coverage_end: date | None = None
     gst_included: bool | None = None
     gst_rate: float | None = Field(default=None, ge=0, le=100)
+    free_cover_limit: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _check_range(self) -> ProductTermUpdate:

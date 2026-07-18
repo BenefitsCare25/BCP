@@ -45,9 +45,11 @@ from app.api.v1 import (
     product_setups,
     product_terms,
     recommendations,
+    reports,
     schemas_api,
     session,
     system,
+    underwriting,
     voluntary_rates,
 )
 from app.core import drift_checks
@@ -136,6 +138,8 @@ def create_app() -> FastAPI:
         panel_listings.router,
         panel_listings.year_router,
         portal_preview.router,
+        reports.router,
+        underwriting.router,
         claims.router,
         matches.router,
         audit_log.router,
