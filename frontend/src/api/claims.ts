@@ -71,9 +71,14 @@ export interface BrokerClaim {
   employee_name: string | null;
   claim_kind: "insured" | "flex";
   product_code: string | null;
+  /** Legacy claims only — the Benefit picker was removed from the form. */
   benefit_key: string | null;
   flex_category_name: string | null;
   claim_type: string;
+  sub_type: string | null;
+  referral_document_id: string | null;
+  referral_document: StoredDocumentMeta | null;
+  referral_not_applicable: boolean;
   incurred_date: string;
   provider_name: string | null;
   invoice_number: string | null;
@@ -86,6 +91,7 @@ export interface BrokerClaim {
   amount_approved: number | null;
   status: string;
   dependant_id: string | null;
+  dependant_name: string | null;
   submitted_at: string | null;
   decided_at: string | null;
   decision_notes: string | null;

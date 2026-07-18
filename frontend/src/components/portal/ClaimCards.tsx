@@ -15,11 +15,13 @@ function CardBody({ claim }: { claim: PortalClaim }) {
           <span className="text-sm font-medium text-foreground">
             {claim.claim_kind === "flex"
               ? claim.flex_category_name
-              : claim.benefit_key || claim.product_code}
+              : claim.claim_type || claim.product_code}
           </span>
           <ClaimStatusBadge status={claim.status} />
         </div>
         <div className="mt-0.5 text-xs text-muted-foreground">
+          {claim.dependant_name ? `for ${claim.dependant_name} · ` : ""}
+          {claim.sub_type ? `${claim.sub_type} · ` : ""}
           {claim.provider_name ? `${claim.provider_name} · ` : ""}
           incurred {claim.incurred_date}
           {claim.documents.length > 0 &&

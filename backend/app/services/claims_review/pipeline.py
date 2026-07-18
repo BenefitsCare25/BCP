@@ -17,7 +17,7 @@ from typing import Any
 
 from app.db.session import SessionLocal
 from app.db.tenancy import set_search_path
-from app.models import Claim, ClaimAIReview, Employee
+from app.models import Claim, ClaimAIReview, Employee, StoredDocument
 from app.models.claim import (
     CLAIM_STATUS_AI_FLAGGED,
     CLAIM_STATUS_AI_REVIEW_PENDING,
@@ -163,6 +163,13 @@ def _run_stages(db, claim: Claim, review: ClaimAIReview) -> None:
         return
 
     docs = claim_documents(db, claim)
+    # The referral letter is a member-level document (entity_type="referral"),
+    # not a claim attachment — include it so extraction sees it and the
+    # specialist required-documents check can pass.
+    if claim.referral_document_id:
+        referral = db.get(StoredDocument, claim.referral_document_id)
+        if referral is not None:
+            docs.append(referral)
     all_calls: list[dict[str, Any]] = []
 
     # Stage 2 — extraction (cached per document hash).

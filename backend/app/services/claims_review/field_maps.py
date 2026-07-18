@@ -48,13 +48,34 @@ FIELD_MAPS: list[dict[str, Any]] = [
         "mode": "fuzzy",
         "verify_with_vision": False,
     },
+    {
+        # Receipts don't always state one — absence should read as UNCERTAIN,
+        # not MISMATCH; a medical report naming a different condition is the
+        # signal this exists to catch.
+        "portal_field": "diagnosis",
+        "document_field": "Diagnosis / Condition / Treatment Description",
+        "mode": "fuzzy",
+        "verify_with_vision": False,
+    },
 ]
 
-# Claim-type keyword → required document families. Matched against the
-# member-entered free-text claim_type (lowercased substring match); first
-# matching entry wins, ``_DEFAULT_REQUIRED_DOCS`` otherwise. Family names are
-# checked by the AI review with generous semantic matching.
+# Claim-type keyword → required document families. The GHS sub-claim type is
+# consulted FIRST (it states the treatment setting precisely — "Pre and Post
+# Hospitalisation" must not demand a discharge summary just because the
+# product name contains "Surgical"); the claim_type keyword match is the
+# fallback. Family names are checked by the AI review with generous semantic
+# matching.
 _DEFAULT_REQUIRED_DOCS = ["receipt or tax invoice"]
+
+_SUB_TYPE_REQUIRED_DOCS: dict[str, list[str]] = {
+    "hospitalisation or day surgery": [
+        "hospital bill or tax invoice",
+        "discharge summary or medical report",
+    ],
+    "pre and post hospitalisation": ["receipt or tax invoice"],
+    "emergency accidental outpatient treatment": ["receipt or tax invoice"],
+    "outpatient kidney dialysis and cancer treatment": ["receipt or tax invoice"],
+}
 
 REQUIRED_DOCUMENTS: list[tuple[tuple[str, ...], list[str]]] = [
     (
@@ -68,12 +89,30 @@ REQUIRED_DOCUMENTS: list[tuple[tuple[str, ...], list[str]]] = [
 ]
 
 
-def required_documents_for(claim_type: str) -> list[str]:
-    wanted = (claim_type or "").strip().lower()
-    for keywords, docs in REQUIRED_DOCUMENTS:
-        if any(k in wanted for k in keywords):
-            return list(docs)
-    return list(_DEFAULT_REQUIRED_DOCS)
+def required_documents_for(
+    claim_type: str, sub_type: str | None = None, *, requires_referral: bool = False
+) -> list[str]:
+    """Required document families for a claim. The GHS sub-type is consulted
+    first, then the claim_type keyword fallback. ``requires_referral`` is the
+    authoritative per-product signal from the intake profile (never the
+    free-text claim_type / display name): when set, the referral-letter family
+    is guaranteed present so the AI doc-check verifies it regardless of how the
+    product happens to be named."""
+    sub = (sub_type or "").strip().lower()
+    if sub in _SUB_TYPE_REQUIRED_DOCS:
+        docs = list(_SUB_TYPE_REQUIRED_DOCS[sub])
+    else:
+        docs = None
+        wanted = (claim_type or "").strip().lower()
+        for keywords, mapped in REQUIRED_DOCUMENTS:
+            if any(k in wanted for k in keywords):
+                docs = list(mapped)
+                break
+        if docs is None:
+            docs = list(_DEFAULT_REQUIRED_DOCS)
+    if requires_referral and not any("referral" in d.lower() for d in docs):
+        docs.append("referral letter or memo")
+    return docs
 
 
 # Business rules the AI judges against all available data (claim form +
@@ -89,4 +128,12 @@ AI_RULES: list[str] = [
     "'insurance portion').",
     "The document date(s) must be consistent with the stated incurred date — "
     "a bill issued long before the claimed treatment date is a concern.",
+    "The treatment setting evidenced by the documents must match the claim "
+    "type and sub-type: a GP claim should show a general-practice clinic "
+    "visit (an inpatient hospital bill means the wrong claim type was "
+    "chosen); a specialist claim should show a specialist consultation; a "
+    "'Hospitalisation or Day Surgery' claim should show an inpatient or day "
+    "surgery bill.",
+    "If a diagnosis is stated on the documents, it should be consistent with "
+    "the declared diagnosis and plausible for the claim type.",
 ]

@@ -42,9 +42,12 @@ from app.schemas.claims import (
     ClaimAIReviewOut,
     ClaimAIReviewSummary,
     ClaimDecisionIn,
-    StoredDocumentOut,
 )
-from app.services.claims import assert_transition, claim_documents
+from app.services.claims import (
+    assert_transition,
+    populate_claim_out,
+    prefetch_claim_relations,
+)
 from app.services.claims_review.pipeline import run_review
 from app.services.utilization import remaining_for_claim
 
@@ -69,11 +72,20 @@ def _latest_review(db: Session, claim_id: str) -> ClaimAIReview | None:
     ).scalar_one_or_none()
 
 
-def _broker_out(db: Session, claim: Claim, employee: Employee | None) -> BrokerClaimOut:
+def _broker_out(
+    db: Session,
+    claim: Claim,
+    employee: Employee | None,
+    *,
+    referral_docs: dict[str, StoredDocument] | None = None,
+    dep_names: dict[str, str | None] | None = None,
+) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
-    out.documents = [
-        StoredDocumentOut.model_validate(d) for d in claim_documents(db, claim)
-    ]
+    # Shared filler (documents, referral letter, claimant name) — keeps the
+    # broker payload in lockstep with the member's claim_to_out.
+    populate_claim_out(
+        db, claim, out, referral_docs=referral_docs, dep_names=dep_names
+    )
     if employee is not None:
         out.staff_id = employee.staff_id
         out.employee_name = employee.employee_name
@@ -108,11 +120,15 @@ def list_claims(
         .offset(offset)
         .limit(limit)
     ).all()
+    referral_docs, dep_names = prefetch_claim_relations(db, [c for c, _ in rows])
     return BrokerClaimList(
         total=total,
         offset=offset,
         limit=limit,
-        items=[_broker_out(db, claim, employee) for claim, employee in rows],
+        items=[
+            _broker_out(db, claim, employee, referral_docs=referral_docs, dep_names=dep_names)
+            for claim, employee in rows
+        ],
     )
 
 
@@ -250,11 +266,15 @@ def download_claim_document(
     db: Session = Depends(get_db),
 ) -> Response:
     doc = db.get(StoredDocument, doc_id)
-    if (
-        doc is None
-        or doc.entity_type != DOC_ENTITY_CLAIM
-        or doc.entity_id != claim.id
-    ):
+    # A claim's own attachments, plus the member-level referral letter the
+    # claim rides on (entity_type="referral") — nothing else.
+    is_claim_doc = (
+        doc is not None
+        and doc.entity_type == DOC_ENTITY_CLAIM
+        and doc.entity_id == claim.id
+    )
+    is_referral = doc is not None and doc.id == claim.referral_document_id
+    if doc is None or not (is_claim_doc or is_referral):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
         content = get_storage().read(doc.storage_path)

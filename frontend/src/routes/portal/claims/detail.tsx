@@ -78,8 +78,13 @@ export function PortalClaimDetailPage() {
             <h2 className="text-sm font-semibold text-foreground">
               {data.claim_kind === "flex"
                 ? data.flex_category_name
-                : data.benefit_key || data.product_code}
+                : data.claim_type || data.product_code}
             </h2>
+            {data.sub_type && (
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {data.sub_type}
+              </p>
+            )}
             <p className="mt-0.5 text-xs text-muted-foreground">
               {data.provider_name ? `${data.provider_name} · ` : ""}
               incurred {data.incurred_date}
@@ -108,6 +113,30 @@ export function PortalClaimDetailPage() {
               <div className="text-xs text-muted-foreground">Invoice number</div>
               <div className="font-medium text-foreground">
                 {data.invoice_number}
+              </div>
+            </div>
+          )}
+          {data.dependant_name && (
+            <div>
+              <div className="text-xs text-muted-foreground">Claimant</div>
+              <div className="font-medium text-foreground">
+                {data.dependant_name}
+              </div>
+            </div>
+          )}
+          {data.diagnosis && (
+            <div className="col-span-2">
+              <div className="text-xs text-muted-foreground">Diagnosis</div>
+              <div className="font-medium text-foreground">{data.diagnosis}</div>
+            </div>
+          )}
+          {(data.referral_document || data.referral_not_applicable) && (
+            <div className="col-span-2">
+              <div className="text-xs text-muted-foreground">Referral letter</div>
+              <div className="font-medium text-foreground">
+                {data.referral_document
+                  ? data.referral_document.file_name
+                  : "Not applicable"}
               </div>
             </div>
           )}

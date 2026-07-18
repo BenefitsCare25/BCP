@@ -153,6 +153,12 @@ class Claim(Base, TimestampMixin):
     # Flex claims: which claimable scheme category.
     flex_category_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    # GHS-family claims name a sub-claim type (see claim_intake.GHS_SUB_TYPES).
+    sub_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Specialist claims: the member-level referral letter this claim rides on
+    # (stored_documents row with entity_type="referral"). Plain string, not an
+    # FK — referral letters are member-owned and never cascade with the claim.
+    referral_document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     incurred_date: Mapped[date] = mapped_column(Date, nullable=False)
     provider_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Receipt / tax-invoice number the member transcribes — cross-checked against

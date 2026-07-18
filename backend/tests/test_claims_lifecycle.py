@@ -54,12 +54,17 @@ EMP_C = "00000000-0000-0000-0000-00000000cl03"
 DEP_A = "00000000-0000-0000-0000-00000000cl04"
 ACC_A = "00000000-0000-0000-0000-00000000cl05"
 ACC_C = "00000000-0000-0000-0000-00000000cl06"
+# Active, but NOT in the GHS covered subset (elected spouse-only style).
+DEP_B = "00000000-0000-0000-0000-00000000cl07"
+# Portal self-added, pending broker approval.
+DEP_P = "00000000-0000-0000-0000-00000000cl08"
 
 PDF = b"%PDF-1.4 test receipt bytes"
 
 
 def _statement_for(employee: Employee) -> BenefitStatementOut:
     dep = DependantSummary(id=DEP_A, name="Alice Jr", relationship="child")
+    dep_b = DependantSummary(id=DEP_B, name="Ben", relationship="child")
     return BenefitStatementOut(
         employee=StatementEmployee(
             id=employee.id, staff_id=employee.staff_id, employee_name=employee.employee_name
@@ -79,10 +84,12 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                     ]
                 },
                 covers_dependants=employee.id == EMP_A,
+                # Elected subset: DEP_A only — DEP_B is active on the record
+                # but NOT covered under this plan.
                 covered_dependants=[dep] if employee.id == EMP_A else [],
             )
         ],
-        dependants=[dep] if employee.id == EMP_A else [],
+        dependants=[dep, dep_b] if employee.id == EMP_A else [],
         flex=FlexCoverageLine(
             tier_name="Tier 1",
             wallet_amount=1000.0,
@@ -137,14 +144,19 @@ def _setup_db(tmp_path_factory):
                 )
             )
         session.flush()
-        session.add(
-            Dependant(
-                id=DEP_A, client_id=DEMO_CLIENT_ID, policy_year_id=PY,
-                employee_id=EMP_A,
-                attribute_values={"name": "Alice Jr", "relationship": "child"},
-                link_method="staff_id", status="active",
+        for dep_id, dep_name, dep_status in (
+            (DEP_A, "Alice Jr", "active"),
+            (DEP_B, "Ben", "active"),
+            (DEP_P, "Pending Kid", "pending_approval"),
+        ):
+            session.add(
+                Dependant(
+                    id=dep_id, client_id=DEMO_CLIENT_ID, policy_year_id=PY,
+                    employee_id=EMP_A,
+                    attribute_values={"name": dep_name, "relationship": "child"},
+                    link_method="staff_id", status=dep_status,
+                )
             )
-        )
         session.commit()
     yield
     with SessionLocal() as session:
@@ -222,10 +234,12 @@ def _draft(
     body = {
         "claim_kind": "insured",
         "product_code": "GHS",
-        "benefit_key": "Outpatient GP",
-        "claim_type": "outpatient",
+        "claim_type": "Group Hospital & Surgical",
+        "sub_type": "Hospitalisation or Day Surgery",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
+        "invoice_number": "INV-00123",
+        "diagnosis": "Dengue fever",
         "amount_claimed": 85.0,
         "currency": "SGD",
     }
@@ -276,8 +290,18 @@ def test_coverage_options(anon: TestClient):
     res = anon.get("/api/v1/portal/coverage-options", headers=_auth(ACC_A))
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["insured"][0]["product_code"] == "GHS"
-    assert "Outpatient GP" in body["insured"][0]["benefit_items"]
+    ghs = body["insured"][0]
+    assert ghs["product_code"] == "GHS"
+    # Claim-intake profile drives the conditional form fields.
+    assert ghs["sub_types"] == [
+        "Hospitalisation or Day Surgery",
+        "Pre and Post Hospitalisation",
+        "Emergency Accidental Outpatient Treatment",
+        "Outpatient Kidney Dialysis and Cancer Treatment",
+    ]
+    assert ghs["diagnosis_required"] is True
+    assert ghs["requires_referral"] is False
+    assert "SGD" in body["currencies"]
     assert body["flex"]["categories"] == [
         {"name": "Dental", "sub_limit": 500.0, "note": None}
     ]  # non-claimable Gym excluded
@@ -289,7 +313,7 @@ def test_flex_claim_flow(anon: TestClient):
         anon,
         claim_kind="flex",
         product_code=None,
-        benefit_key=None,
+        sub_type=None,
         flex_category_name="Dental",
         claim_type="dental",
         amount_claimed=120.0,
@@ -317,18 +341,11 @@ def test_incurred_date_outside_policy_year_422(anon: TestClient):
 
 
 def test_unknown_product_422(anon: TestClient):
-    claim = _draft(anon, product_code="GTL", benefit_key=None)
+    claim = _draft(anon, product_code="GTL", sub_type=None)
     assert _upload(anon, claim["id"], PDF + b" gtl-1").status_code == 200
     res = _submit(anon, claim["id"])
     assert res.status_code == 422
     assert "no GTL coverage" in res.text
-
-
-def test_unknown_benefit_item_422(anon: TestClient):
-    claim = _draft(anon, benefit_key="Acupuncture")
-    assert _upload(anon, claim["id"], PDF + b" acu-1").status_code == 200
-    res = _submit(anon, claim["id"])
-    assert res.status_code == 422
 
 
 def test_non_claimable_flex_category_422(anon: TestClient):
@@ -336,13 +353,275 @@ def test_non_claimable_flex_category_422(anon: TestClient):
         anon,
         claim_kind="flex",
         product_code=None,
-        benefit_key=None,
+        sub_type=None,
         flex_category_name="Gym",
         claim_type="wellness",
     )
     assert _upload(anon, claim["id"], PDF + b" gym-1").status_code == 200
     res = _submit(anon, claim["id"])
     assert res.status_code == 422
+
+
+# ── Smart intake validations (claim_intake.py) ───────────────────────────────
+
+
+def _draft_res(anon: TestClient, account: str = ACC_A, **overrides):
+    body = {
+        "claim_kind": "insured",
+        "product_code": "GHS",
+        "claim_type": "Group Hospital & Surgical",
+        "sub_type": "Hospitalisation or Day Surgery",
+        "incurred_date": "2027-06-15",
+        "provider_name": "Raffles Medical",
+        "invoice_number": "INV-00123",
+        "diagnosis": "Dengue fever",
+        "amount_claimed": 85.0,
+        "currency": "SGD",
+    }
+    body.update(overrides)
+    return anon.post("/api/v1/portal/claims", json=body, headers=_auth(account))
+
+
+def test_ghs_missing_sub_type_422(anon: TestClient):
+    res = _draft_res(anon, sub_type=None)
+    assert res.status_code == 422
+    assert "sub-type" in res.text.lower()
+
+
+def test_ghs_invalid_sub_type_422(anon: TestClient):
+    res = _draft_res(anon, sub_type="Cosmetic Surgery")
+    assert res.status_code == 422
+
+
+def test_sub_type_on_non_ghs_product_422(anon: TestClient):
+    res = _draft_res(anon, product_code="GTL", sub_type="Hospitalisation or Day Surgery")
+    assert res.status_code == 422
+
+
+def test_missing_diagnosis_422(anon: TestClient):
+    res = _draft_res(anon, diagnosis=None)
+    assert res.status_code == 422
+    assert "diagnosis" in res.text.lower()
+
+
+def test_bare_other_diagnosis_sentinel_422(anon: TestClient):
+    # The "Other:" sentinel with no condition after it isn't a diagnosis — the
+    # backend must reject it even though the frontend also blocks it.
+    for bare in ("Other:", "Other: ", "other:", "Other"):
+        res = _draft_res(anon, diagnosis=bare)
+        assert res.status_code == 422, f"{bare!r} should be rejected"
+
+
+def test_other_diagnosis_with_text_ok(anon: TestClient):
+    res = _draft_res(anon, diagnosis="Other: rare tropical fever")
+    assert res.status_code == 201, res.text
+
+
+def test_unsupported_currency_422(anon: TestClient):
+    res = _draft_res(anon, currency="BTC")
+    assert res.status_code == 422
+    assert "currency" in res.text.lower()
+
+
+def test_specialist_requires_referral_422(anon: TestClient):
+    res = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None,
+    )
+    assert res.status_code == 422
+    assert "referral" in res.text.lower()
+
+
+def test_specialist_referral_not_applicable_ok(anon: TestClient):
+    res = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None, referral_not_applicable=True,
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["referral_not_applicable"] is True
+
+
+def test_referral_on_non_specialist_product_422(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-gp")
+    res = _draft_res(anon, referral_document_id=letter["id"])
+    assert res.status_code == 422
+
+
+def _upload_referral(anon: TestClient, marker: bytes, account: str = ACC_A) -> dict:
+    res = anon.post(
+        "/api/v1/portal/referral-letters",
+        files={"file": ("referral.pdf", PDF + marker, "application/pdf")},
+        headers=_auth(account),
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_referral_letter_upload_and_reuse(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-1")
+
+    listing = anon.get("/api/v1/portal/referral-letters", headers=_auth(ACC_A))
+    assert letter["id"] in {d["id"] for d in listing.json()}
+
+    res = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None, referral_document_id=letter["id"],
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["referral_document"]["id"] == letter["id"]
+
+    # The same letter is reusable on a second specialist claim (referral
+    # letters are member-level and never trip the duplicate-receipt check).
+    res2 = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None, referral_document_id=letter["id"], invoice_number="INV-2",
+    )
+    assert res2.status_code == 201, res2.text
+
+
+def test_referral_letter_delete_unused(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-del")
+    res = anon.delete(
+        f"/api/v1/portal/referral-letters/{letter['id']}", headers=_auth(ACC_A)
+    )
+    assert res.status_code == 204, res.text
+    listing = anon.get("/api/v1/portal/referral-letters", headers=_auth(ACC_A))
+    assert letter["id"] not in {d["id"] for d in listing.json()}
+
+
+def test_referral_letter_delete_in_use_409(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-inuse")
+    claim = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None, referral_document_id=letter["id"],
+    )
+    assert claim.status_code == 201, claim.text
+    res = anon.delete(
+        f"/api/v1/portal/referral-letters/{letter['id']}", headers=_auth(ACC_A)
+    )
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "referral_in_use"
+
+
+def test_referral_letter_delete_other_member_404(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-del-iso", account=ACC_A)
+    res = anon.delete(
+        f"/api/v1/portal/referral-letters/{letter['id']}", headers=_auth(ACC_C)
+    )
+    assert res.status_code == 404
+
+
+def test_referral_letter_member_isolation(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-iso", account=ACC_A)
+
+    # Carol can't see Alice's letters …
+    listing = anon.get("/api/v1/portal/referral-letters", headers=_auth(ACC_C))
+    assert letter["id"] not in {d["id"] for d in listing.json()}
+
+    # … and can't ride a claim on one (404, not 403 — existence not leaked).
+    res = _draft_res(
+        anon, account=ACC_C, product_code="GCSP",
+        claim_type="Group Clinical Specialist", sub_type=None,
+        referral_document_id=letter["id"],
+    )
+    assert res.status_code == 404
+
+
+# ── Dependant eligibility ────────────────────────────────────────────────────
+
+
+def test_pending_dependant_not_claimable_422(anon: TestClient):
+    res = _draft_res(anon, dependant_id=DEP_P)
+    assert res.status_code == 422
+    assert "approval" in res.text.lower()
+
+
+def test_dependant_outside_covered_subset_422(anon: TestClient):
+    # DEP_B is active but the GHS covered list (elected subset) is DEP_A only.
+    claim = _draft(anon, dependant_id=DEP_B)
+    assert _upload(anon, claim["id"], PDF + b" subset-1").status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 422
+    assert "not covered under your GHS plan" in res.text
+
+
+def test_covered_dependant_claim_ok(anon: TestClient):
+    claim = _draft(anon, dependant_id=DEP_A)
+    assert claim["dependant_name"] == "Alice Jr"
+    assert _upload(anon, claim["id"], PDF + b" cov-dep-1").status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+
+
+def test_flex_claim_for_dependant_flow(anon: TestClient):
+    # Any ACTIVE dependant may draw down the member's flex wallet — DEP_B is
+    # outside the GHS insured subset but still claimable under flex.
+    claim = _draft(
+        anon,
+        claim_kind="flex",
+        product_code=None,
+        sub_type=None,
+        flex_category_name="Dental",
+        claim_type="dental",
+        dependant_id=DEP_B,
+        amount_claimed=80.0,
+    )
+    assert claim["dependant_name"] == "Ben"
+    assert _upload(anon, claim["id"], PDF + b" flex-dep-1").status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+
+
+def test_flex_claim_for_pending_dependant_422(anon: TestClient):
+    res = _draft_res(
+        anon,
+        claim_kind="flex",
+        product_code=None,
+        sub_type=None,
+        flex_category_name="Dental",
+        claim_type="dental",
+        dependant_id=DEP_P,
+    )
+    assert res.status_code == 422
+
+
+def test_broker_sees_referral_and_claimant(anon: TestClient, broker: TestClient):
+    letter = _upload_referral(anon, b" ref-broker")
+    res = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None, referral_document_id=letter["id"],
+    )
+    assert res.status_code == 201, res.text
+    claim_id = res.json()["id"]
+
+    detail = broker.get(f"/api/v1/claims/{claim_id}")
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["referral_document"]["id"] == letter["id"]
+
+    # The referral letter itself is downloadable through the broker route.
+    dl = broker.get(
+        f"/api/v1/claims/{claim_id}/documents/{letter['id']}/download"
+    )
+    assert dl.status_code == 200
+    assert dl.content == PDF + b" ref-broker"
+
+
+def test_claim_diagnoses_search(anon: TestClient):
+    res = anon.get(
+        "/api/v1/portal/claim-diagnoses?product_code=GCGP&q=chickenpox",
+        headers=_auth(ACC_A),
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["group"] == "gp"
+    assert any("Chickenpox" in d["label"] for d in body["items"])
+
+    # Group scoping: dental catalog doesn't surface GP conditions.
+    res = anon.get(
+        "/api/v1/portal/claim-diagnoses?product_code=GD&q=chickenpox",
+        headers=_auth(ACC_A),
+    )
+    assert res.json()["items"] == []
 
 
 def test_duplicate_receipt_409(anon: TestClient):
@@ -378,8 +657,12 @@ def test_claim_for_someone_elses_dependant_404(anon: TestClient):
         json={
             "claim_kind": "insured",
             "product_code": "GHS",
-            "claim_type": "outpatient",
+            "claim_type": "Group Hospital & Surgical",
+            "sub_type": "Hospitalisation or Day Surgery",
             "incurred_date": "2027-06-15",
+            "provider_name": "Raffles Medical",
+            "invoice_number": "INV-00123",
+            "diagnosis": "Dengue fever",
             "amount_claimed": 50.0,
             "dependant_id": DEP_A,  # Alice's dependant, Carol claiming
         },

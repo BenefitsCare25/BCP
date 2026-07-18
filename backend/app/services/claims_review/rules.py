@@ -11,7 +11,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Claim, PolicyYear, StoredDocument
+from app.models import Claim, Dependant, PolicyYear, StoredDocument
 from app.models.claim import CLAIM_KIND_FLEX, LIVE_STATUSES
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
@@ -113,6 +113,79 @@ def _check_amount_vs_limit(claim: Claim, statement: BenefitStatementOut) -> dict
     )
 
 
+def _check_dependant_age(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """Any claim for a dependant (insured OR flex): warn when the dependant
+    sits outside the scheme's eligibility age window (ANB convention, scheme
+    meta overridable — the same window that sizes flex membership + coverage).
+    Warning, not fail — insurer edge cases (student extensions, disabled
+    dependants) are the broker's call."""
+    if not claim.dependant_id:
+        return None
+    from app.services.flex_pricing_resolver import (
+        _dependant_role_age,
+        dependant_age_limits,
+        get_pricing,
+        role_age_eligible,
+    )
+
+    dep = db.get(Dependant, claim.dependant_id)
+    year = db.get(PolicyYear, claim.policy_year_id)
+    if dep is None or year is None:
+        return None
+    # Empty product id → scheme-level window (defaults overlaid with the flex
+    # scheme's meta.dependant_age_limits) — same window that sizes coverage.
+    limits = dependant_age_limits(get_pricing(db, claim.policy_year_id), "")
+    prof = _dependant_role_age(dep, year.start_date)
+    if prof is None:
+        return None
+    role, age = prof
+    rule = "Claimed dependant is within the eligibility age window."
+    if role_age_eligible(role, age, limits):
+        return _result(
+            rule, "pass",
+            f"{role.capitalize()} dependant is within the {role} age window.",
+        )
+    win = limits.get(role) or {}
+    return _result(
+        rule, "warning",
+        f"The claimed {role} is age {age} (ANB {age + 1 if age is not None else '?'}) "
+        f"as of the policy year start — outside the eligibility window "
+        f"({win.get('min', '—')} to {win.get('max', '—')} ANB). Confirm they "
+        "are still covered before approving.",
+    )
+
+
+def _check_referral(claim: Claim) -> dict[str, Any] | None:
+    """Specialist claims: surface a declared-N/A referral for broker attention
+    (missing entirely is blocked at submit)."""
+    from app.services.claim_intake import claim_profile_for
+
+    if not claim_profile_for(claim.product_code).requires_referral:
+        return None
+    rule = "Specialist claim carries a referral letter."
+    if claim.referral_document_id:
+        return _result(rule, "pass", "A referral letter is attached to the claim.")
+    return _result(
+        rule, "warning",
+        "The member declared the referral letter not applicable — confirm "
+        "the specialist visit did not need one (e.g. A&E follow-up or "
+        "direct-access specialty).",
+    )
+
+
+def _check_future_date(claim: Claim) -> dict[str, Any] | None:
+    from datetime import date as _date
+
+    if claim.incurred_date <= _date.today():
+        return None
+    return _result(
+        "Incurred date is not in the future.",
+        "warning",
+        f"Incurred date {claim.incurred_date.isoformat()} is after today — "
+        "verify the treatment actually took place.",
+    )
+
+
 def _check_currency(claim: Claim) -> dict[str, Any]:
     rule = "Claim is in the policy currency (SGD)."
     if (claim.currency or "SGD").upper() == "SGD":
@@ -127,12 +200,20 @@ def _check_currency(claim: Claim) -> dict[str, Any]:
 def deterministic_rule_results(
     db: Session, claim: Claim, statement: BenefitStatementOut
 ) -> list[dict[str, Any]]:
-    return [
+    results = [
         _check_period(db, claim),
         _check_duplicate_receipts(db, claim),
         _check_amount_vs_limit(claim, statement),
         _check_currency(claim),
     ]
+    for extra in (
+        _check_referral(claim),
+        _check_future_date(claim),
+        _check_dependant_age(db, claim),
+    ):
+        if extra is not None:
+            results.append(extra)
+    return results
 
 
 def has_failures(rule_results: list[dict[str, Any]]) -> bool:

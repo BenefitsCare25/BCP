@@ -11,13 +11,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models import Claim
+from app.models import Claim, Dependant, Employee
 from app.services import ai_gateway
+from app.services.claim_intake import claim_profile_for
 from app.services.claims_review.field_maps import (
     AI_RULES,
     FIELD_MAPS,
     required_documents_for,
 )
+from app.services.roster_attributes import NAME_KEYS, REL_KEYS, first_value
 
 
 def compare_claim(
@@ -33,12 +35,35 @@ def compare_claim(
     claim_fields.setdefault("claim_kind", claim.claim_kind)
     if claim.product_code:
         claim_fields.setdefault("product_code", claim.product_code)
-    if claim.benefit_key:
+    if claim.sub_type:
+        claim_fields.setdefault("sub_type", claim.sub_type)
+    if claim.benefit_key:  # legacy claims created before the Benefit field was removed
         claim_fields.setdefault("benefit_key", claim.benefit_key)
     if claim.flex_category_name:
         claim_fields.setdefault("flex_category_name", claim.flex_category_name)
 
-    required_docs = required_documents_for(claim.claim_type)
+    # Who the patient should be — without this the "patient named on the
+    # documents must be the claimant or declared dependant" rule has nothing
+    # to compare against.
+    employee = db.get(Employee, claim.employee_id)
+    if employee is not None and employee.employee_name:
+        claim_fields["policyholder_name"] = employee.employee_name
+    if claim.dependant_id:
+        dep = db.get(Dependant, claim.dependant_id)
+        av = (dep.attribute_values or {}) if dep is not None else {}
+        claim_fields["claimant_name"] = first_value(av, NAME_KEYS)
+        claim_fields["claimant_relationship"] = first_value(av, REL_KEYS)
+        claim_fields["claimant_is_dependant"] = True
+    elif employee is not None and employee.employee_name:
+        claim_fields["claimant_name"] = employee.employee_name
+
+    # The referral requirement is a per-product profile fact, not something to
+    # infer from the free-text claim_type / display name.
+    required_docs = required_documents_for(
+        claim.claim_type,
+        claim.sub_type,
+        requires_referral=claim_profile_for(claim.product_code).requires_referral,
+    )
     result = ai_gateway.review_claim(
         db,
         client_id=claim.client_id,

@@ -184,6 +184,10 @@ export interface PortalClaim {
   benefit_key: string | null;
   flex_category_name: string | null;
   claim_type: string;
+  sub_type: string | null;
+  referral_document_id: string | null;
+  referral_document: PortalClaimDocument | null;
+  referral_not_applicable: boolean;
   incurred_date: string;
   provider_name: string | null;
   invoice_number: string | null;
@@ -195,6 +199,7 @@ export interface PortalClaim {
   amount_approved: number | null;
   status: string;
   dependant_id: string | null;
+  dependant_name: string | null;
   submitted_at: string | null;
   decided_at: string | null;
   decision_notes: string | null;
@@ -212,17 +217,19 @@ export interface PortalClaimList {
 export interface ClaimCreateInput {
   claim_kind: "insured" | "flex";
   product_code?: string | null;
-  benefit_key?: string | null;
   flex_category_name?: string | null;
   claim_type: string;
+  sub_type?: string | null;
   incurred_date: string;
-  provider_name?: string | null;
-  invoice_number?: string | null;
+  provider_name: string;
+  invoice_number: string;
   diagnosis?: string | null;
   remarks?: string | null;
   amount_claimed: number;
   currency?: string;
   dependant_id?: string | null;
+  referral_document_id?: string | null;
+  referral_not_applicable?: boolean;
 }
 
 export interface InsuredClaimOption {
@@ -230,9 +237,13 @@ export interface InsuredClaimOption {
   product_name: string | null;
   plan_code: string | null;
   annual_policy_limit: string | null;
-  benefit_items: string[];
   covers_dependants: boolean;
   covered_dependant_ids: string[];
+  /** Claim-intake profile — drives the conditional form fields. */
+  sub_types: string[];
+  requires_referral: boolean;
+  diagnosis_group: string | null;
+  diagnosis_required: boolean;
 }
 
 export interface CoverageOptions {
@@ -246,6 +257,17 @@ export interface CoverageOptions {
     categories: { name: string; sub_limit: number | null; note: string | null }[];
   } | null;
   dependants: { id: string; name: string | null; relationship: string | null }[];
+  currencies: string[];
+}
+
+export interface DiagnosisOption {
+  label: string;
+  icd10: string | null;
+}
+
+export interface DiagnosisSearch {
+  group: string | null;
+  items: DiagnosisOption[];
 }
 
 export function useCoverageOptions() {
@@ -304,6 +326,65 @@ export function useSubmitClaim() {
     mutationFn: (claimId: string) =>
       portalApi.post<PortalClaim>(`/portal/claims/${claimId}/submit`, {}),
     onSuccess: qc,
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useClaimDiagnoses(productCode: string | null, q: string) {
+  return useQuery({
+    queryKey: ["portal", "claim-diagnoses", productCode, q],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (productCode) params.set("product_code", productCode);
+      if (q) params.set("q", q);
+      return portalApi.get<DiagnosisSearch>(
+        `/portal/claim-diagnoses?${params.toString()}`,
+      );
+    },
+    enabled: productCode !== null,
+    meta: { localErrorHandling: true },
+    retry: false,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useReferralLetters(enabled: boolean) {
+  return useQuery({
+    queryKey: ["portal", "referral-letters"],
+    queryFn: () =>
+      portalApi.get<PortalClaimDocument[]>("/portal/referral-letters"),
+    enabled,
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+export function useUploadReferralLetter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return portalApi.upload<PortalClaimDocument>(
+        "/portal/referral-letters",
+        fd,
+      );
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["portal", "referral-letters"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDeleteReferralLetter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (docId: string) =>
+      portalApi.delete<void>(`/portal/referral-letters/${docId}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["portal", "referral-letters"] });
+    },
     meta: { localErrorHandling: true },
   });
 }

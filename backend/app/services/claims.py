@@ -31,8 +31,10 @@ from app.models.policy_year import PolicyYearStatus
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, StoredDocumentOut
+from app.services.claim_intake import assert_intake_valid
 from app.services.flex_membership import flex_effective_window
 from app.services.member_statement import build_member_statement
+from app.services.roster_attributes import NAME_KEYS, first_value
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +74,84 @@ def claim_documents(db: Session, claim: Claim) -> list[StoredDocument]:
     )
 
 
-def claim_to_out(db: Session, claim: Claim) -> ClaimOut:
-    docs = claim_documents(db, claim)
-    out = ClaimOut.model_validate(claim)
-    out.documents = [StoredDocumentOut.model_validate(d) for d in docs]
+def dependant_display_name(dep: Dependant | None) -> str | None:
+    if dep is None:
+        return None
+    return first_value(dep.attribute_values or {}, NAME_KEYS)
+
+
+def populate_claim_out(
+    db: Session,
+    claim: Claim,
+    out: ClaimOut,
+    *,
+    referral_docs: dict[str, StoredDocument] | None = None,
+    dep_names: dict[str, str | None] | None = None,
+) -> ClaimOut:
+    """Fill the derived fields every claim payload carries (documents, referral
+    letter, claimant name). Shared by the member `claim_to_out` and the broker
+    `_broker_out` so the two surfaces can't drift.
+
+    ``referral_docs`` / ``dep_names`` are optional per-page lookups the list
+    endpoints prefetch in one query each, so rendering N claims doesn't fan out
+    into N referral + N dependant point-loads."""
+    out.documents = [
+        StoredDocumentOut.model_validate(d) for d in claim_documents(db, claim)
+    ]
+    if claim.referral_document_id:
+        ref = (
+            referral_docs.get(claim.referral_document_id)
+            if referral_docs is not None
+            else db.get(StoredDocument, claim.referral_document_id)
+        )
+        if ref is not None:
+            out.referral_document = StoredDocumentOut.model_validate(ref)
+    out.referral_not_applicable = bool(
+        (claim.form_fields or {}).get("referral_not_applicable")
+    )
+    if claim.dependant_id:
+        out.dependant_name = (
+            dep_names.get(claim.dependant_id)
+            if dep_names is not None
+            else dependant_display_name(db.get(Dependant, claim.dependant_id))
+        )
     return out
+
+
+def prefetch_claim_relations(
+    db: Session, claims: list[Claim]
+) -> tuple[dict[str, StoredDocument], dict[str, str | None]]:
+    """One query each for the referral letters + dependant names a page of
+    claims references — pass the results to `populate_claim_out` to avoid the
+    per-claim point-loads."""
+    referral_ids = {c.referral_document_id for c in claims if c.referral_document_id}
+    dep_ids = {c.dependant_id for c in claims if c.dependant_id}
+    referral_docs: dict[str, StoredDocument] = {}
+    if referral_ids:
+        for d in db.execute(
+            select(StoredDocument).where(StoredDocument.id.in_(referral_ids))
+        ).scalars():
+            referral_docs[d.id] = d
+    dep_names: dict[str, str | None] = {}
+    if dep_ids:
+        for dep in db.execute(
+            select(Dependant).where(Dependant.id.in_(dep_ids))
+        ).scalars():
+            dep_names[dep.id] = dependant_display_name(dep)
+    return referral_docs, dep_names
+
+
+def delete_stored_document(db: Session, doc: StoredDocument) -> None:
+    """Remove a single stored document (bytes + row). Caller commits."""
+    try:
+        get_storage().delete(doc.storage_path)
+    except Exception:
+        logger.warning("Failed to delete blob %s", doc.storage_path)
+    db.delete(doc)
+
+
+def claim_to_out(db: Session, claim: Claim) -> ClaimOut:
+    return populate_claim_out(db, claim, ClaimOut.model_validate(claim))
 
 
 def create_claim(
@@ -100,6 +175,28 @@ def create_claim(
         dep = db.get(Dependant, body.dependant_id)
         if dep is None or dep.employee_id != employee.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Dependant not found")
+        # Portal self-added dependants stay pending until broker approval —
+        # they aren't covered, so they can't be claimed for (mirrors the
+        # benefit statement's active-only filter).
+        if dep.status != "active":
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "This dependant is pending your broker's approval and can't "
+                "be claimed for yet.",
+            )
+
+    # Profile-driven intake rules (sub-type / diagnosis / referral / currency).
+    assert_intake_valid(
+        db,
+        employee,
+        claim_kind=body.claim_kind,
+        product_code=body.product_code,
+        sub_type=body.sub_type,
+        diagnosis=body.diagnosis,
+        referral_document_id=body.referral_document_id,
+        referral_not_applicable=body.referral_not_applicable,
+        currency=body.currency,
+    )
 
     claim = Claim(
         client_id=employee.client_id,
@@ -108,9 +205,9 @@ def create_claim(
         dependant_id=body.dependant_id,
         claim_kind=body.claim_kind,
         product_code=body.product_code,
-        benefit_key=body.benefit_key,
         flex_category_name=body.flex_category_name,
         claim_type=body.claim_type,
+        sub_type=body.sub_type,
         incurred_date=body.incurred_date,
         provider_name=body.provider_name,
         invoice_number=body.invoice_number,
@@ -118,18 +215,21 @@ def create_claim(
         remarks=body.remarks,
         amount_claimed=body.amount_claimed,
         currency=body.currency.upper(),
+        referral_document_id=body.referral_document_id,
         submitted_by_member_id=submitted_by_member_id,
         # Snapshot of the member-entered form — the AI review compares the
         # uploaded documents against exactly what was claimed at the time.
         # `remarks` is a free-text note, not a document-matched field.
         form_fields={
             "claim_type": body.claim_type,
+            "sub_type": body.sub_type,
             "incurred_date": body.incurred_date.isoformat(),
             "provider_name": body.provider_name,
             "invoice_number": body.invoice_number,
             "diagnosis": body.diagnosis,
             "amount_claimed": body.amount_claimed,
             "currency": body.currency.upper(),
+            "referral_not_applicable": body.referral_not_applicable,
         },
     )
     db.add(claim)
@@ -220,11 +320,22 @@ def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> 
                     f"'{claim.benefit_key}' is not a benefit item on your "
                     f"{claim.product_code} schedule.",
                 )
-        if claim.dependant_id and not line.covers_dependants:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"Your {claim.product_code} coverage does not extend to dependants.",
-            )
+        if claim.dependant_id:
+            if not line.covers_dependants:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"Your {claim.product_code} coverage does not extend to "
+                    "dependants.",
+                )
+            # The statement's covered list is authoritative — an enrollment
+            # override electing a subset (e.g. spouse only) must bind here
+            # too, not just in the form's picker.
+            if claim.dependant_id not in {d.id for d in line.covered_dependants}:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"This dependant is not covered under your "
+                    f"{claim.product_code} plan.",
+                )
         return
 
     flex = statement.flex
@@ -232,6 +343,17 @@ def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> 
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "You have no flex wallet to claim against.",
+        )
+    # Flex claims may draw down the member's wallet for a dependant's expense,
+    # but only for an active (broker-approved) dependant on the statement;
+    # scheme-specific family rules stay the broker's call at review.
+    if claim.dependant_id and claim.dependant_id not in {
+        d.id for d in statement.dependants
+    }:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This dependant is not active on your record, so their expenses "
+            "can't be claimed from your flex wallet.",
         )
     wanted = (claim.flex_category_name or "").strip().lower()
     category = next(
@@ -313,6 +435,21 @@ def submit_claim(
             f"({window_start.isoformat()} to {window_end.isoformat()}).",
         )
 
+    # Re-run the intake rules at submit so a draft created before a rule (or
+    # profile) change can't slip through with missing sub-type/referral.
+    assert_intake_valid(
+        db,
+        employee,
+        claim_kind=claim.claim_kind,
+        product_code=claim.product_code,
+        sub_type=claim.sub_type,
+        diagnosis=claim.diagnosis,
+        referral_document_id=claim.referral_document_id,
+        referral_not_applicable=bool(
+            (claim.form_fields or {}).get("referral_not_applicable")
+        ),
+        currency=claim.currency,
+    )
     _assert_coverage_claimable(build_member_statement(db, employee), claim)
     _assert_no_duplicate_receipt(db, claim)
 

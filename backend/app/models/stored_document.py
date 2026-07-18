@@ -13,6 +13,9 @@ from app.db.base import Base, TimestampMixin, new_uuid
 
 DOC_ENTITY_CLAIM = "claim"
 DOC_ENTITY_DEPENDANT = "dependant"
+# Member-level referral letters (entity_id = the member's Employee row id) —
+# reusable across specialist claims via Claim.referral_document_id.
+DOC_ENTITY_REFERRAL = "referral"
 
 
 class StoredDocument(Base, TimestampMixin):

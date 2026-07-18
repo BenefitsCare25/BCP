@@ -1,21 +1,40 @@
-/** Submit-a-claim form. Every picker is populated from the member's OWN
- * resolved coverage (`/portal/coverage-options`):
- *   Claim Category (Insurance / Flexible Benefits — only the ones the member has)
- *     → Claim Type (their covered products, or claimable flex categories)
- *       → Benefit (optional SOB refinement) + Claimant (self / covered dependants)
- * The claim is created as a draft, receipts attach to it, and submit runs the
- * backend validations (in-period, coverage exists, duplicate receipts). */
+/** Submit-a-claim form.
+ *
+ * There is no separate "claim category" step — a claim TYPE already implies
+ * its category (GHS/GMM/… are Insurance, Dental/Optical/… are Flexible
+ * Benefits), so the two were merged into one grouped dropdown. `claim_kind`
+ * is DERIVED from the chosen type, which makes a category/type mismatch
+ * structurally impossible.
+ *
+ * Flow:
+ *   Who is this claim for?  (Myself / a dependant — only when they have one)
+ *     → Claim type          (one dropdown, grouped Insurance / Flexible
+ *                            Benefits; filtered to what the claimant can claim)
+ *       → conditional intake fields from the product's claim profile:
+ *         GHS-family → Claim Sub-Type; specialist → referral letter
+ *         (upload / reuse / not applicable); medical types → searchable
+ *         diagnosis (curated ICD-10 catalog, "Other" free text).
+ *
+ * A dependant sees the flex categories PLUS the insured products that cover
+ * them (GHS/GMM/GD); products that don't extend to dependants are hidden. The
+ * claim is created as a draft, receipts attach, and submit runs the backend
+ * validations (intake profile, coverage/eligibility, in-period, duplicates). */
 import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Loader2, Paperclip, Send, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2, Paperclip, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCoverageOptions,
   useCreateClaim,
   useDeleteDraftClaim,
+  useDeleteReferralLetter,
+  useReferralLetters,
   useSubmitClaim,
   useUploadClaimDocument,
+  useUploadReferralLetter,
+  type InsuredClaimOption,
 } from "@/api/portal";
+import { DiagnosisPicker } from "@/components/portal/DiagnosisPicker";
 import { formatError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,58 +44,100 @@ import { Skeleton } from "@/components/ui/skeleton";
 const ACCEPT = ".pdf,.png,.jpg,.jpeg";
 const MAX_BYTES = 15 * 1024 * 1024;
 
-// Currencies a member may incur a bill in. Insured claims default to SGD;
-// flex claims lock to the wallet's own currency (often POINTS/units).
-const CURRENCIES = [
-  "SGD", "USD", "MYR", "EUR", "GBP", "AUD",
-  "HKD", "CNY", "JPY", "INR", "IDR", "THB", "PHP",
-];
+// Fallback only — the live list rides on /portal/coverage-options so the
+// backend's ALLOWED_CURRENCIES stays the single source of truth.
+const FALLBACK_CURRENCIES = ["SGD", "USD", "MYR", "EUR", "GBP", "AUD"];
+
+// The unified claim-type dropdown encodes both the kind and the identifier in
+// one value so `claim_kind` is derived, never separately chosen.
+const INSURED_PREFIX = "insured:";
+const FLEX_PREFIX = "flex:";
+
+type ReferralMode = "" | "upload" | "existing" | "na";
+
+const selectClass =
+  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring disabled:cursor-not-allowed disabled:opacity-60";
+
+function FieldError({ msg }: { msg?: string }) {
+  if (!msg) return null;
+  return <p className="text-xs text-error">{msg}</p>;
+}
 
 export function PortalNewClaimPage() {
   const navigate = useNavigate();
   const options = useCoverageOptions();
   const createClaim = useCreateClaim();
   const uploadDoc = useUploadClaimDocument();
+  const uploadReferral = useUploadReferralLetter();
+  const deleteReferral = useDeleteReferralLetter();
   const submitClaim = useSubmitClaim();
   const deleteDraft = useDeleteDraftClaim();
 
   const insured = options.data?.insured ?? [];
   const flex = options.data?.flex ?? null;
+  const dependants = options.data?.dependants ?? [];
   const hasInsured = insured.length > 0;
   const hasFlex = (flex?.categories.length ?? 0) > 0;
+  const hasDependants = dependants.length > 0;
   const walletCurrency = flex?.currency ?? "SGD";
+  const currencies = options.data?.currencies?.length
+    ? options.data.currencies
+    : FALLBACK_CURRENCIES;
 
-  const [kind, setKind] = useState<"insured" | "flex">("insured");
-  const [productCode, setProductCode] = useState("");
-  const [benefitKey, setBenefitKey] = useState("");
-  const [flexCategory, setFlexCategory] = useState("");
+  // Claimant ("" = the member themself) and the merged claim-type selection.
   const [dependantId, setDependantId] = useState("");
+  const [selection, setSelection] = useState("");
+  const [subType, setSubType] = useState("");
   const [incurredDate, setIncurredDate] = useState("");
   const [provider, setProvider] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("SGD");
+  const [diagnosis, setDiagnosis] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [referralMode, setReferralMode] = useState<ReferralMode>("");
+  const [referralFile, setReferralFile] = useState<File | null>(null);
+  const [referralExistingId, setReferralExistingId] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const referralInput = useRef<HTMLInputElement>(null);
 
-  // The effective category: force to whichever the member actually has when
-  // only one exists (so a member with no flex never sits on an empty "flex").
-  const effectiveKind: "insured" | "flex" =
-    kind === "flex" && hasFlex ? "flex" : hasInsured ? "insured" : "flex";
+  // Kind + identifiers are DERIVED from the single selection.
+  const effectiveKind: "insured" | "flex" | null = selection.startsWith(
+    INSURED_PREFIX,
+  )
+    ? "insured"
+    : selection.startsWith(FLEX_PREFIX)
+      ? "flex"
+      : null;
+  const productCode =
+    effectiveKind === "insured" ? selection.slice(INSURED_PREFIX.length) : "";
+  const flexCategory =
+    effectiveKind === "flex" ? selection.slice(FLEX_PREFIX.length) : "";
   const effectiveCurrency = effectiveKind === "flex" ? walletCurrency : currency;
 
-  const selectedProduct = useMemo(
+  const selectedProduct: InsuredClaimOption | null = useMemo(
     () => insured.find((p) => p.product_code === productCode) ?? null,
     [insured, productCode],
   );
-  const eligibleDependants = useMemo(() => {
-    if (!selectedProduct?.covers_dependants) return [];
-    const covered = new Set(selectedProduct.covered_dependant_ids);
-    return (options.data?.dependants ?? []).filter((d) => covered.has(d.id));
-  }, [selectedProduct, options.data]);
+
+  // Insured products offered for the current claimant: everything for the
+  // member; for a dependant, only products that actually cover them.
+  const claimantInsured = useMemo(() => {
+    if (!dependantId) return insured;
+    return insured.filter(
+      (p) => p.covers_dependants && p.covered_dependant_ids.includes(dependantId),
+    );
+  }, [insured, dependantId]);
+
+  const noTypesForClaimant = claimantInsured.length === 0 && !hasFlex;
+  const needsReferral = selectedProduct?.requires_referral ?? false;
+  const referralLetters = useReferralLetters(needsReferral);
+  const showDiagnosisPicker =
+    effectiveKind === "insured" && (selectedProduct?.diagnosis_group ?? null) !== null;
 
   if (options.isLoading) return <Skeleton className="h-64 w-full" />;
   if (options.isError || !options.data || (!hasInsured && !hasFlex)) {
@@ -87,14 +148,38 @@ export function PortalNewClaimPage() {
     );
   }
 
-  const changeKind = (next: "insured" | "flex") => {
-    setKind(next);
-    // Reset the cascaded selections + currency when the category changes.
-    setProductCode("");
-    setBenefitKey("");
-    setFlexCategory("");
-    setDependantId("");
-    setCurrency(next === "flex" ? walletCurrency : "SGD");
+  const yearStart = options.data.policy_year_start;
+  const yearEnd = options.data.policy_year_end;
+  // Claims can't be incurred in the future — clamp to today when today falls
+  // inside the policy window (a seeded future-dated year keeps its own span).
+  const today = new Date().toISOString().slice(0, 10);
+  const maxIncurred = today >= yearStart && today <= yearEnd ? today : yearEnd;
+
+  // Fields that depend on the chosen claim type — reset when the type changes.
+  const resetTypeFields = () => {
+    setSubType("");
+    setDiagnosis("");
+    setReferralMode("");
+    setReferralFile(null);
+    setReferralExistingId("");
+    setFieldErrors({});
+  };
+
+  const changeSelection = (next: string) => {
+    setSelection(next);
+    resetTypeFields();
+    // Insured currency is member-selectable (default SGD); flex locks to the
+    // wallet currency, handled by effectiveCurrency.
+    if (!next.startsWith(INSURED_PREFIX)) setCurrency("SGD");
+  };
+
+  // Changing the claimant can invalidate the chosen insured product (it may
+  // not cover the new claimant), so reset the type selection too.
+  const changeClaimant = (next: string) => {
+    setDependantId(next);
+    setSelection("");
+    resetTypeFields();
+    setCurrency("SGD");
   };
 
   const pickFiles = (picked: FileList | null) => {
@@ -111,35 +196,96 @@ export function PortalNewClaimPage() {
     if (fileInput.current) fileInput.current.value = "";
   };
 
-  const canSubmit =
-    (effectiveKind === "insured" ? Boolean(productCode) : Boolean(flexCategory)) &&
-    incurredDate !== "" &&
-    provider.trim() !== "" &&
-    invoiceNumber.trim() !== "" &&
-    Number(amount) > 0 &&
-    files.length > 0;
+  const validate = (): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    if (!effectiveKind) {
+      errs.claim_type = "Select what you're claiming for.";
+    } else if (effectiveKind === "insured") {
+      if (selectedProduct && selectedProduct.sub_types.length > 0 && !subType) {
+        errs.sub_type = "Select the claim sub-type.";
+      }
+      if (
+        selectedProduct?.diagnosis_required &&
+        !diagnosis.trim().replace(/^Other:\s*$/, "")
+      ) {
+        errs.diagnosis =
+          "Select the diagnosis (choose 'Other' if it isn't listed).";
+      }
+      if (needsReferral) {
+        if (!referralMode) errs.referral = "Choose how to provide the referral letter.";
+        if (referralMode === "upload" && !referralFile) {
+          errs.referral = "Attach the referral letter.";
+        }
+        if (referralMode === "existing" && !referralExistingId) {
+          errs.referral = "Pick one of your previous referral letters.";
+        }
+      }
+    }
+    if (!incurredDate) {
+      errs.incurred_date = "Enter the date on the bill.";
+    } else if (incurredDate < yearStart || incurredDate > yearEnd) {
+      errs.incurred_date = `Must fall within your policy year (${yearStart} to ${yearEnd}).`;
+    } else if (incurredDate > today) {
+      errs.incurred_date = "The incurred date can't be in the future.";
+    }
+    if (provider.trim().length < 2) errs.provider = "Enter the clinic or provider name.";
+    if (!invoiceNumber.trim()) errs.invoice = "Enter the invoice or receipt number.";
+    const amt = Number(amount);
+    if (!(amt > 0)) {
+      errs.amount = "Enter the amount on the receipt.";
+    } else if (amt > 1_000_000) {
+      errs.amount = "Amount looks too large — check the receipt.";
+    }
+    if (files.length === 0) errs.files = "Attach at least one receipt.";
+    return errs;
+  };
 
   const submit = async () => {
+    const errs = validate();
+    setFieldErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      setError("Fix the highlighted fields before submitting.");
+      return;
+    }
+    if (!effectiveKind) return; // guarded by validate; satisfies the type
     setError(null);
     setBusy(true);
     let claimId: string | null = null;
+    // A referral letter we uploaded THIS attempt — deleted on rollback so a
+    // failed submission doesn't leave an orphaned letter in storage. A reused
+    // existing letter is never touched.
+    let uploadedReferralId: string | null = null;
     try {
+      // Specialist flow: the referral letter is a member-level document —
+      // upload it first, then reference it from the claim.
+      let referralDocumentId: string | null = null;
+      if (needsReferral && referralMode === "upload" && referralFile) {
+        const letter = await uploadReferral.mutateAsync(referralFile);
+        referralDocumentId = letter.id;
+        uploadedReferralId = letter.id;
+      } else if (needsReferral && referralMode === "existing") {
+        referralDocumentId = referralExistingId;
+      }
+
       const claim = await createClaim.mutateAsync({
         claim_kind: effectiveKind,
         product_code: effectiveKind === "insured" ? productCode : null,
-        benefit_key: effectiveKind === "insured" && benefitKey ? benefitKey : null,
         flex_category_name: effectiveKind === "flex" ? flexCategory : null,
         claim_type:
           effectiveKind === "flex"
             ? flexCategory
-            : benefitKey || selectedProduct?.product_name || productCode,
+            : selectedProduct?.product_name || productCode,
+        sub_type: effectiveKind === "insured" && subType ? subType : null,
         incurred_date: incurredDate,
         provider_name: provider.trim(),
         invoice_number: invoiceNumber.trim(),
+        diagnosis: diagnosis.trim() || null,
         remarks: remarks.trim() || null,
         amount_claimed: Number(amount),
         currency: effectiveCurrency,
         dependant_id: dependantId || null,
+        referral_document_id: referralDocumentId,
+        referral_not_applicable: needsReferral && referralMode === "na",
       });
       claimId = claim.id;
       for (const file of files) {
@@ -150,7 +296,8 @@ export function PortalNewClaimPage() {
       void navigate({ to: "/portal/claims" });
     } catch (err) {
       setError(formatError(err));
-      // Roll the draft back so a failed validation doesn't strand it.
+      // Roll the draft back so a failed validation doesn't strand it — before
+      // the referral, so the letter is no longer referenced when we delete it.
       if (claimId) {
         try {
           await deleteDraft.mutateAsync(claimId);
@@ -158,13 +305,17 @@ export function PortalNewClaimPage() {
           /* already submitted or gone — leave it for the list view */
         }
       }
+      if (uploadedReferralId) {
+        try {
+          await deleteReferral.mutateAsync(uploadedReferralId);
+        } catch {
+          /* still referenced or already gone — reusable, so harmless */
+        }
+      }
     } finally {
       setBusy(false);
     }
   };
-
-  const selectClass =
-    "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring disabled:cursor-not-allowed disabled:opacity-60";
 
   return (
     <div className="mx-auto max-w-lg space-y-4">
@@ -181,111 +332,102 @@ export function PortalNewClaimPage() {
           <h2 className="text-sm font-semibold text-foreground">Submit a claim</h2>
           <p className="mt-1 text-xs text-muted-foreground">
             Attach at least one receipt. Claims must be incurred within your
-            policy year ({options.data.policy_year_start} to{" "}
-            {options.data.policy_year_end}); your broker reviews every claim
-            before it's approved.
+            policy year ({yearStart} to {yearEnd}); your broker reviews every
+            claim before it's approved.
           </p>
         </div>
 
-        {/* Claim Category — only the surfaces the member actually has. */}
-        <div className="space-y-1.5">
-          <Label>
-            Claim category <span className="text-error">*</span>
-          </Label>
-          <select
-            className={selectClass}
-            value={effectiveKind}
-            disabled={!(hasInsured && hasFlex)}
-            onChange={(e) => changeKind(e.target.value as "insured" | "flex")}
-          >
-            {hasInsured && <option value="insured">Insurance</option>}
-            {hasFlex && <option value="flex">Flexible Benefits</option>}
-          </select>
-        </div>
-
-        {/* Claim Type — cascades from the category. */}
-        {effectiveKind === "insured" ? (
-          <>
-            <div className="space-y-1.5">
-              <Label>
-                Claim type <span className="text-error">*</span>
-              </Label>
-              <select
-                className={selectClass}
-                value={productCode}
-                onChange={(e) => {
-                  setProductCode(e.target.value);
-                  setBenefitKey("");
-                  setDependantId("");
-                }}
-              >
-                <option value="">Select an option</option>
-                {insured.map((p) => (
-                  <option key={p.product_code} value={p.product_code}>
-                    {p.product_name || p.product_code}
-                    {p.product_name && p.product_code
-                      ? ` (${p.product_code})`
-                      : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {selectedProduct && selectedProduct.benefit_items.length > 0 && (
-              <div className="space-y-1.5">
-                <Label>Benefit</Label>
-                <select
-                  className={selectClass}
-                  value={benefitKey}
-                  onChange={(e) => setBenefitKey(e.target.value)}
-                >
-                  <option value="">General / not sure</option>
-                  {selectedProduct.benefit_items.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {eligibleDependants.length > 0 && (
-              <div className="space-y-1.5">
-                <Label>Claimant</Label>
-                <select
-                  className={selectClass}
-                  value={dependantId}
-                  onChange={(e) => setDependantId(e.target.value)}
-                >
-                  <option value="">Myself</option>
-                  {eligibleDependants.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name ?? "Dependant"}
-                      {d.relationship ? ` (${d.relationship})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </>
-        ) : (
+        {/* Who is this claim for? — a covered dependant filters the claim-type
+            list to what applies to them (flex + the products that cover them). */}
+        {hasDependants && (
           <div className="space-y-1.5">
-            <Label>
-              Claim type <span className="text-error">*</span>
-            </Label>
+            <Label>Who is this claim for?</Label>
             <select
               className={selectClass}
-              value={flexCategory}
-              onChange={(e) => setFlexCategory(e.target.value)}
+              value={dependantId}
+              onChange={(e) => changeClaimant(e.target.value)}
             >
-              <option value="">Select an option</option>
-              {flex?.categories.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name}
-                  {c.sub_limit != null ? ` (up to ${c.sub_limit})` : ""}
+              <option value="">Myself</option>
+              {dependants.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name ?? "Dependant"}
+                  {d.relationship ? ` (${d.relationship})` : ""}
                 </option>
               ))}
             </select>
           </div>
         )}
+
+        {/* Claim type — one grouped dropdown; category is derived, not chosen. */}
+        <div className="space-y-1.5">
+          <Label>
+            Claim type <span className="text-error">*</span>
+          </Label>
+          {noTypesForClaimant ? (
+            <p className="text-xs text-muted-foreground">
+              This dependant has no claimable benefits — pick a different
+              claimant.
+            </p>
+          ) : (
+            <select
+              className={selectClass}
+              value={selection}
+              onChange={(e) => changeSelection(e.target.value)}
+            >
+              <option value="">Select an option</option>
+              {claimantInsured.length > 0 && (
+                <optgroup label="Insurance">
+                  {claimantInsured.map((p) => (
+                    <option
+                      key={p.product_code}
+                      value={`${INSURED_PREFIX}${p.product_code}`}
+                    >
+                      {p.product_name || p.product_code}
+                      {p.product_name && p.product_code
+                        ? ` (${p.product_code})`
+                        : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {hasFlex && (
+                <optgroup label="Flexible Benefits">
+                  {flex?.categories.map((c) => (
+                    <option key={c.name} value={`${FLEX_PREFIX}${c.name}`}>
+                      {c.name}
+                      {c.sub_limit != null ? ` (up to ${c.sub_limit})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          )}
+          <FieldError msg={fieldErrors.claim_type} />
+        </div>
+
+        {/* GHS-family: the sub-claim type states the treatment setting. */}
+        {effectiveKind === "insured" &&
+          selectedProduct &&
+          selectedProduct.sub_types.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>
+                Claim sub-type <span className="text-error">*</span>
+              </Label>
+              <select
+                className={selectClass}
+                value={subType}
+                onChange={(e) => setSubType(e.target.value)}
+              >
+                <option value="">Select an option</option>
+                {selectedProduct.sub_types.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <FieldError msg={fieldErrors.sub_type} />
+            </div>
+          )}
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
@@ -295,11 +437,12 @@ export function PortalNewClaimPage() {
             <Input
               id="claim-date"
               type="date"
-              min={options.data.policy_year_start}
-              max={options.data.policy_year_end}
+              min={yearStart}
+              max={maxIncurred}
               value={incurredDate}
               onChange={(e) => setIncurredDate(e.target.value)}
             />
+            <FieldError msg={fieldErrors.incurred_date} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="claim-provider">
@@ -311,6 +454,7 @@ export function PortalNewClaimPage() {
               value={provider}
               onChange={(e) => setProvider(e.target.value)}
             />
+            <FieldError msg={fieldErrors.provider} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="claim-invoice">
@@ -323,6 +467,7 @@ export function PortalNewClaimPage() {
               maxLength={128}
               onChange={(e) => setInvoiceNumber(e.target.value)}
             />
+            <FieldError msg={fieldErrors.invoice} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="claim-currency">
@@ -338,7 +483,7 @@ export function PortalNewClaimPage() {
               {effectiveKind === "flex" ? (
                 <option value={walletCurrency}>{walletCurrency}</option>
               ) : (
-                CURRENCIES.map((c) => (
+                currencies.map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
@@ -359,8 +504,108 @@ export function PortalNewClaimPage() {
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
             />
+            <FieldError msg={fieldErrors.amount} />
           </div>
         </div>
+
+        {/* Wrong-currency guard: bills incurred in Singapore are almost always
+            SGD — nudge before the AI review flags a mismatch. */}
+        {effectiveKind === "insured" && effectiveCurrency !== "SGD" && (
+          <p className="flex items-start gap-1.5 text-xs text-warn">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            Double-check the receipt — most Singapore bills are in SGD. Claims
+            in {effectiveCurrency} need broker confirmation of the conversion.
+          </p>
+        )}
+
+        {/* Diagnosis — searchable catalog scoped to the claim type. */}
+        {showDiagnosisPicker && selectedProduct && (
+          <div className="space-y-1.5">
+            <Label>
+              Diagnosis{" "}
+              {selectedProduct.diagnosis_required && (
+                <span className="text-error">*</span>
+              )}
+            </Label>
+            <DiagnosisPicker
+              // Remount on product change so the internal search text/open
+              // state can't carry over to a different diagnosis group.
+              key={selectedProduct.product_code}
+              productCode={selectedProduct.product_code}
+              value={diagnosis}
+              onChange={setDiagnosis}
+            />
+            <FieldError msg={fieldErrors.diagnosis} />
+          </div>
+        )}
+
+        {/* Specialist claims: referral letter (upload / reuse / N/A). */}
+        {needsReferral && (
+          <div className="space-y-1.5">
+            <Label>
+              Upload or select referral letter <span className="text-error">*</span>
+            </Label>
+            <select
+              className={selectClass}
+              value={referralMode}
+              onChange={(e) => {
+                setReferralMode(e.target.value as ReferralMode);
+                setReferralFile(null);
+                setReferralExistingId("");
+              }}
+            >
+              <option value="">Select an option</option>
+              <option value="upload">Upload referral letter</option>
+              <option
+                value="existing"
+                disabled={(referralLetters.data?.length ?? 0) === 0}
+              >
+                Select existing referral letter
+              </option>
+              <option value="na">Not applicable</option>
+            </select>
+            {referralMode === "upload" && (
+              <div>
+                <input
+                  ref={referralInput}
+                  type="file"
+                  accept={ACCEPT}
+                  className="hidden"
+                  onChange={(e) => setReferralFile(e.target.files?.[0] ?? null)}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => referralInput.current?.click()}
+                >
+                  <Paperclip className="size-4" />
+                  {referralFile ? referralFile.name : "Attach referral letter"}
+                </Button>
+              </div>
+            )}
+            {referralMode === "existing" && (
+              <select
+                className={selectClass}
+                value={referralExistingId}
+                onChange={(e) => setReferralExistingId(e.target.value)}
+              >
+                <option value="">Select a letter</option>
+                {(referralLetters.data ?? []).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.file_name} ({new Date(d.created_at).toLocaleDateString()})
+                  </option>
+                ))}
+              </select>
+            )}
+            {referralMode === "na" && (
+              <p className="text-xs text-muted-foreground">
+                Your broker will confirm the visit didn't need a referral.
+              </p>
+            )}
+            <FieldError msg={fieldErrors.referral} />
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <Label>
@@ -402,6 +647,7 @@ export function PortalNewClaimPage() {
               ))}
             </ul>
           )}
+          <FieldError msg={fieldErrors.files} />
         </div>
 
         <div className="space-y-1.5">
@@ -419,7 +665,7 @@ export function PortalNewClaimPage() {
 
         {error && <p className="text-xs text-error">{error}</p>}
 
-        <Button className="w-full" disabled={!canSubmit || busy} onClick={submit}>
+        <Button className="w-full" disabled={busy} onClick={submit}>
           {busy ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (

@@ -27,28 +27,33 @@ from app.core.portal_auth import (
 )
 from app.core.rate_limit import limiter
 from app.db.session import get_db
-from app.models import Claim, ClaimAIReview
+from app.models import Claim, ClaimAIReview, StoredDocument
 from app.models.claim import CLAIM_STATUS_AI_REVIEW_PENDING, MEMBER_EDITABLE_STATUSES
-from app.models.stored_document import DOC_ENTITY_CLAIM
+from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import (
     ClaimCreateIn,
     ClaimList,
     ClaimOut,
     CoverageOptionsOut,
+    DiagnosisOut,
+    DiagnosisSearchOut,
     FlexClaimCategoryOption,
     FlexClaimOptions,
     InsuredClaimOption,
     StoredDocumentOut,
 )
+from app.services.claim_intake import ALLOWED_CURRENCIES, claim_profile_for
 from app.services.claims import (
     attach_document,
     claim_to_out,
     create_claim,
     delete_documents,
+    delete_stored_document,
     submit_claim,
 )
 from app.services.claims_review.pipeline import run_review
 from app.services.member_statement import build_member_statement
+from app.services.sg_diagnoses import search_diagnoses
 
 router = APIRouter(
     prefix="/portal/claims",
@@ -89,19 +94,19 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
     preview (`portal_preview.py`) so the two can never drift."""
     insured = []
     for line in statement.coverage:
-        items = (line.benefit_schedule or {}).get("items") or []
+        profile = claim_profile_for(line.product_code)
         insured.append(
             InsuredClaimOption(
                 product_code=line.product_code,
                 product_name=line.product_name,
                 plan_code=line.plan_code,
                 annual_policy_limit=line.annual_policy_limit,
-                benefit_items=[
-                    str(i.get("name")) for i in items
-                    if isinstance(i, dict) and i.get("name")
-                ],
                 covers_dependants=line.covers_dependants,
                 covered_dependant_ids=[d.id for d in line.covered_dependants],
+                sub_types=list(profile.sub_types),
+                requires_referral=profile.requires_referral,
+                diagnosis_group=profile.diagnosis_group,
+                diagnosis_required=profile.diagnosis_required,
             )
         )
 
@@ -129,7 +134,114 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
             {"id": d.id, "name": d.name, "relationship": d.relationship}
             for d in statement.dependants
         ],
+        currencies=list(ALLOWED_CURRENCIES),
     )
+
+
+@options_router.get("/claim-diagnoses", response_model=DiagnosisSearchOut)
+def claim_diagnoses(
+    product_code: str | None = Query(default=None),
+    q: str = Query(default="", max_length=128),
+    limit: int = Query(50, ge=1, le=MAX_LIMIT),
+    db: Session = Depends(get_db),
+) -> DiagnosisSearchOut:
+    """Searchable diagnosis catalog scoped to the claim type's setting
+    (GP / specialist / hospital / dental). No public SG diagnosis API exists,
+    so this serves the bundled ICD-10-based catalog."""
+    group = claim_profile_for(product_code).diagnosis_group if product_code else None
+    hits = search_diagnoses(group, q, limit=limit)
+    return DiagnosisSearchOut(
+        group=group,
+        items=[DiagnosisOut(label=d.label, icd10=d.icd10) for d in hits],
+    )
+
+
+@options_router.get("/referral-letters", response_model=list[StoredDocumentOut])
+def list_my_referral_letters(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> list[StoredDocumentOut]:
+    """The member's own referral letters (reusable across specialist claims)."""
+    employee = resolve_member_employee(db, member)
+    docs = db.execute(
+        select(StoredDocument)
+        .where(
+            StoredDocument.entity_type == DOC_ENTITY_REFERRAL,
+            StoredDocument.entity_id == employee.id,
+        )
+        .order_by(StoredDocument.created_at.desc())
+    ).scalars().all()
+    return [StoredDocumentOut.model_validate(d) for d in docs]
+
+
+@options_router.post(
+    "/referral-letters",
+    response_model=StoredDocumentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("20/minute")
+async def upload_my_referral_letter(
+    request: Request,
+    file: UploadFile = File(...),
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> StoredDocumentOut:
+    employee = resolve_member_employee(db, member)
+    doc = await attach_document(
+        db,
+        client_id=employee.client_id,
+        broker_firm_id=member.broker_firm_id,
+        entity_type=DOC_ENTITY_REFERRAL,
+        entity_id=employee.id,
+        file=file,
+        uploaded_by_member_id=member.member_account_id,
+    )
+    write_member_audit(
+        db, member, "referral_letter.uploaded", "stored_document", doc.id,
+        after={"file_name": doc.file_name, "sha256": doc.sha256},
+        employee_id=employee.id,
+    )
+    db.commit()
+    return StoredDocumentOut.model_validate(doc)
+
+
+@options_router.delete(
+    "/referral-letters/{doc_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_my_referral_letter(
+    doc_id: str,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove one of the member's own referral letters. Refuses (409) while a
+    claim still rides on it, so deleting can't strand a claim's
+    `referral_document_id`."""
+    employee = resolve_member_employee(db, member)
+    doc = db.get(StoredDocument, doc_id)
+    if (
+        doc is None
+        or doc.entity_type != DOC_ENTITY_REFERRAL
+        or doc.entity_id != employee.id
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Referral letter not found")
+    in_use = db.scalar(
+        select(func.count(Claim.id)).where(Claim.referral_document_id == doc_id)
+    )
+    if in_use:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "referral_in_use",
+                "message": "This referral letter is attached to a claim and "
+                "can't be deleted.",
+            },
+        )
+    delete_stored_document(db, doc)
+    write_member_audit(
+        db, member, "referral_letter.deleted", "stored_document", doc_id,
+        employee_id=employee.id,
+    )
+    db.commit()
 
 
 @router.get("", response_model=ClaimList)

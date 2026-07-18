@@ -497,10 +497,12 @@ def test_submit_dispatches_pipeline_and_broker_sees_verdict(broker: TestClient):
         json={
             "claim_kind": "insured",
             "product_code": "GHS",
-            "benefit_key": "Outpatient GP",
-            "claim_type": "outpatient",
+            "claim_type": "Group Hospital & Surgical",
+            "sub_type": "Hospitalisation or Day Surgery",
             "incurred_date": "2028-06-15",
             "provider_name": "Raffles Medical",
+            "invoice_number": "INV-00123",
+            "diagnosis": "Dengue fever",
             "amount_claimed": 85.0,
             "currency": "SGD",
         },
@@ -517,9 +519,14 @@ def test_submit_dispatches_pipeline_and_broker_sees_verdict(broker: TestClient):
     with patch("app.services.ai_gateway.extract_claim_document",
                return_value=_extract_result()), \
          patch("app.services.ai_gateway.review_claim",
-               return_value=_review_result([_match("amount_claimed")])):
+               return_value=_review_result([_match("amount_claimed")])) as review_mock:
         res = anon.post(f"/api/v1/portal/claims/{claim_id}/submit", headers=headers)
     assert res.status_code == 200, res.text
+    # The review receives the claimant identity — without it the patient-name
+    # rule has nothing to compare the documents against.
+    review_fields = review_mock.call_args.kwargs["claim_fields"]
+    assert review_fields["claimant_name"] == "Pat"
+    assert review_fields["policyholder_name"] == "Pat"
     # The response is serialized before the background task runs.
     assert res.json()["status"] == CLAIM_STATUS_AI_REVIEW_PENDING
 
@@ -534,3 +541,66 @@ def test_submit_dispatches_pipeline_and_broker_sees_verdict(broker: TestClient):
     # The member payload never exposes the AI review.
     member_view = anon.get(f"/api/v1/portal/claims/{claim_id}", headers=headers)
     assert "ai_review" not in member_view.json()
+
+
+def test_dependant_age_rule_warns_on_aged_out_child():
+    """Scheme-level ANB eligibility window (child max 25 by default) surfaces
+    a deterministic warning on claims for an aged-out dependant."""
+    from app.models import Dependant
+    from app.services.claims_review.rules import _check_dependant_age
+
+    with SessionLocal() as s:
+        dep_ok = Dependant(
+            id=new_uuid(), client_id=DEMO_CLIENT_ID, policy_year_id=PY,
+            employee_id=EMP,
+            attribute_values={"name": "Kid", "relationship": "child",
+                              "dob": "2020-06-01"},
+            link_method="staff_id", status="active",
+        )
+        dep_old = Dependant(
+            id=new_uuid(), client_id=DEMO_CLIENT_ID, policy_year_id=PY,
+            employee_id=EMP,
+            # Age 29 at the 2028-04-01 year start → ANB 30 > 25.
+            attribute_values={"name": "Grown Kid", "relationship": "child",
+                              "dob": "1998-06-01"},
+            link_method="staff_id", status="active",
+        )
+        s.add_all([dep_ok, dep_old])
+        s.flush()
+
+        def _claim(dep_id: str) -> Claim:
+            c = Claim(
+                client_id=DEMO_CLIENT_ID, policy_year_id=PY, employee_id=EMP,
+                dependant_id=dep_id, claim_kind="insured", product_code="GHS",
+                claim_type="Group Hospital & Surgical",
+                incurred_date=date(2028, 6, 15), amount_claimed=100.0,
+                currency="SGD", status="submitted",
+            )
+            s.add(c)
+            s.flush()
+            return c
+
+        assert _check_dependant_age(s, _claim(dep_ok.id))["status"] == "pass"
+        warn = _check_dependant_age(s, _claim(dep_old.id))
+        assert warn["status"] == "warning"
+        assert "outside the eligibility window" in warn["evidence"]
+        s.rollback()
+
+
+def test_required_documents_referral_from_profile_not_name():
+    """The specialist referral-letter requirement rides on the intake profile's
+    requires_referral flag, not a 'specialist' substring in the display name."""
+    from app.services.claims_review.field_maps import required_documents_for
+
+    # Product name lacks the word 'specialist' → keyword scan would miss it,
+    # but requires_referral=True still guarantees the referral family.
+    docs = required_documents_for("GCSP", None, requires_referral=True)
+    assert any("referral" in d.lower() for d in docs)
+
+    # Not a specialist product → no referral family injected.
+    docs = required_documents_for("Group Clinical GP", None, requires_referral=False)
+    assert not any("referral" in d.lower() for d in docs)
+
+    # Referral family isn't duplicated when the keyword branch already has it.
+    docs = required_documents_for("Group Clinical Specialist", None, requires_referral=True)
+    assert sum("referral" in d.lower() for d in docs) == 1
