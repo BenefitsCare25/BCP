@@ -27,6 +27,7 @@ from app.services.insurer_listings import (
 )
 from app.services.insurer_reports import build_benefit_selection_workbook
 from app.services.member_listing_template import build_member_listing_template
+from app.services.placement_slip_export import build_placement_slip_workbook
 
 
 def _slug(insurer: str) -> str:
@@ -127,6 +128,31 @@ def download_member_listing_template(
     )
     db.commit()
     return _xlsx_response(wb, "member-listing-template.xlsx")
+
+
+@router.get("/placement-slip")
+@limiter.limit("20/minute")
+def download_placement_slip_export(
+    request: Request,
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Placement-slip style export of the configured products (.xlsx).
+
+    Config-only (categories, rates, plans, SOB) — no member PII, so no masking
+    gate; still audited like every export.
+    """
+    py = assert_policy_year_for_user(policy_year_id, user, db)
+    wb = build_placement_slip_workbook(db, py)
+    write_audit(
+        db, user, action="export", entity_type="placement_slip",
+        entity_id=policy_year_id, after={"report": "placement-slip"},
+    )
+    db.commit()
+    return _xlsx_response(
+        wb, f"placement-slip-{py.year}-{date.today():%Y%m%d}.xlsx"
+    )
 
 
 @router.get("/readiness")

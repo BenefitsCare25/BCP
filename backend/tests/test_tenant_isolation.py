@@ -288,6 +288,11 @@ def test_reports_dependant_listing_cross_tenant_404(client_as_a: TestClient) -> 
     assert res.status_code == 404
 
 
+def test_reports_placement_slip_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/placement-slip")
+    assert res.status_code == 404
+
+
 def test_reports_readiness_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/readiness")
     assert res.status_code == 404

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Lock } from "lucide-react";
+import { FileDown, Lock } from "lucide-react";
 import {
   useAIStatus,
   useAuditLog,
@@ -7,7 +7,10 @@ import {
   useEmployeeAttributes,
   usePolicyYears,
 } from "@/api/hooks";
+import { api } from "@/api/client";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -25,6 +28,8 @@ import { RecommendationPanel } from "@/components/configuration/RecommendationPa
 import { SlipPeriodBanner } from "@/components/configuration/SlipPeriodBanner";
 import { UploadCard } from "@/components/configuration/UploadCard";
 import { PageGuide } from "@/components/ui/page-guide";
+import { downloadResponseAsFile } from "@/lib/download";
+import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type { Category, InsuranceLine } from "@/types";
 import { INSURANCE_LINES, LINE_LABELS } from "@/lib/insuranceLines";
@@ -40,6 +45,25 @@ export function ConfigurationPage() {
   const { data: policyYears = [] } = usePolicyYears();
   const [tab, setTab] = useState<InsuranceLine>("medical");
   const [selected, setSelected] = useState<Category | null>(null);
+  const [downloadingSlip, setDownloadingSlip] = useState(false);
+
+  const handleDownloadSlip = async () => {
+    if (!policyYearId) return;
+    setDownloadingSlip(true);
+    try {
+      // The server names the file via Content-Disposition; the arg is a fallback.
+      await downloadResponseAsFile(
+        await api.downloadResponse(
+          `/policy-years/${policyYearId}/reports/placement-slip`,
+        ),
+        "placement-slip.xlsx",
+      );
+    } catch (error) {
+      toast.error(formatError(error));
+    } finally {
+      setDownloadingSlip(false);
+    }
+  };
 
   const activeYear = policyYears.find((y) => y.id === policyYearId);
   // Non-draft years reject config writes server-side (409 policy_year_locked);
@@ -103,16 +127,29 @@ export function ConfigurationPage() {
         <SkeletonTable rows={8} columns={4} />
       ) : (
         <Tabs value={tab} onValueChange={(v) => setTab(v as InsuranceLine)}>
-          <TabsList>
-            {INSURANCE_LINES.map((line) => (
-              <TabsTrigger key={line} value={line} className="gap-2">
-                {LINE_LABELS[line]}
-                {countByLine[line] > 0 && (
-                  <Badge variant="outline">{countByLine[line]}</Badge>
-                )}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <div className="flex items-center justify-between gap-3">
+            <TabsList>
+              {INSURANCE_LINES.map((line) => (
+                <TabsTrigger key={line} value={line} className="gap-2">
+                  {LINE_LABELS[line]}
+                  {countByLine[line] > 0 && (
+                    <Badge variant="outline">{countByLine[line]}</Badge>
+                  )}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {groups.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={downloadingSlip}
+                onClick={handleDownloadSlip}
+              >
+                <FileDown className="size-3.5" />
+                {downloadingSlip ? "Preparing…" : "Download slip (.xlsx)"}
+              </Button>
+            )}
+          </div>
           {INSURANCE_LINES.map((line) => (
             <TabsContent key={line} value={line}>
               {line === "flex" ? (
