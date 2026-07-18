@@ -32,6 +32,7 @@ export function ReportDownloadButton({
     try {
       const blob = await api.download(path);
       triggerDownload(blob, filename);
+      toast.success("Report downloaded");
     } catch (e) {
       toast.error(formatError(e));
     } finally {

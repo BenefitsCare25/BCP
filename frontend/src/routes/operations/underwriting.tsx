@@ -57,12 +57,18 @@ function DecisionRow({
   const [accepted, setAccepted] = useState(String(item.accepted_si));
   const [remarks, setRemarks] = useState(item.remarks ?? "");
 
-  const parsedAccepted = Number(accepted);
+  // A blank field must NOT parse to 0 (Number("") === 0) and silently record a
+  // zero acceptance — treat empty/whitespace as invalid so Save stays disabled.
+  const acceptedTrimmed = accepted.trim();
+  const parsedAccepted = Number(acceptedTrimmed);
   const dirty =
     status !== item.status ||
     parsedAccepted !== item.accepted_si ||
     remarks !== (item.remarks ?? "");
-  const valid = Number.isFinite(parsedAccepted) && parsedAccepted >= 0;
+  const valid =
+    acceptedTrimmed !== "" &&
+    Number.isFinite(parsedAccepted) &&
+    parsedAccepted >= 0;
 
   const save = () => {
     decide.mutate(

@@ -21,6 +21,7 @@ from app.models import Dependant, Employee, PolicyYear
 from app.models.dependant import DEPENDANT_STATUS_ACTIVE
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.services.insurer_listings import configured_insurers_for_year
+from app.services.insurer_reports import safe_cell
 from app.services.roster_parser import INSURER_MEMBER_ID_KEY
 
 # (header, attribute key) pairs, in insurer-listing column order. ``staff_id``
@@ -91,7 +92,7 @@ def _write_sheet(
 ) -> None:
     """``rows`` = (attribute_values, {"@field": value}) per person."""
     headers = [h for h, _ in columns] + [f"{ins} Member ID" for ins in insurers]
-    ws.append(headers)
+    ws.append([safe_cell(h) for h in headers])
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
@@ -111,7 +112,7 @@ def _write_sheet(
                 v = attrs.get(key)
                 values.append("" if v is None else v)
         values.extend(member_ids.get(ins, "") for ins in insurers)
-        ws.append(values)
+        ws.append([safe_cell(v) for v in values])
 
     for col_idx in text_cols:
         for row_idx in range(1, max(ws.max_row, 2) + 1):

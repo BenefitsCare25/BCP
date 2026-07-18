@@ -18,10 +18,12 @@ from app.core.auth import ROLE_BROKER_VIEWER, CurrentUser, get_current_user
 from app.core.deps import assert_policy_year_for_user
 from app.core.rate_limit import limiter
 from app.db.session import get_db
+from app.models import PolicyYear
 from app.services.insurer_listings import (
     build_dependant_listing,
     build_employee_listing,
     build_readiness,
+    configured_insurers_for_year,
 )
 from app.services.insurer_reports import build_benefit_selection_workbook
 from app.services.member_listing_template import build_member_listing_template
@@ -42,6 +44,19 @@ def _assert_masking_allowed(user: CurrentUser, masked: bool) -> None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Unmasked NRIC/FIN downloads require write access.",
+        )
+
+
+def _require_configured_insurer(db: Session, py: PolicyYear, insurer: str) -> None:
+    """Reject a blank/unknown insurer so a typo can't produce a real-looking
+    listing with every coverage column silently missing (misleading-empty
+    report to the insurer). Match case-insensitively against configured names."""
+    wanted = (insurer or "").strip().lower()
+    known = {i.lower() for i in configured_insurers_for_year(db, py)}
+    if not wanted or wanted not in known:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"No products are assigned to insurer {insurer!r} for this policy year.",
         )
 
 
@@ -138,6 +153,7 @@ def download_employee_listing(
     """Per-insurer employee membership listing (.xlsx, insurer template)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
     _assert_masking_allowed(user, masked)
+    _require_configured_insurer(db, py, insurer)
     wb = build_employee_listing(db, py, insurer, masked=masked)
     write_audit(
         db, user, action="export", entity_type="insurer_report",
@@ -165,6 +181,7 @@ def download_dependant_listing(
     """Per-insurer dependant listing (.xlsx, insurer template)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
     _assert_masking_allowed(user, masked)
+    _require_configured_insurer(db, py, insurer)
     wb = build_dependant_listing(db, py, insurer, masked=masked)
     write_audit(
         db, user, action="export", entity_type="insurer_report",

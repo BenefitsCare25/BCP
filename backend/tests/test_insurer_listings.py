@@ -203,6 +203,19 @@ def client() -> TestClient:
         app.dependency_overrides.pop(get_current_user, None)
 
 
+@pytest.fixture
+def viewer_client() -> TestClient:
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-0000000i10fe",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=CLIENT_ID, role="broker_viewer",
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
 @pytest.fixture(autouse=True)
 def _reset_uw():
     yield
@@ -232,9 +245,10 @@ def test_employee_listing_columns_and_values(client: TestClient) -> None:
     # Lump-sum block (internal code TLIF, no report_code → as-is).
     assert fam["TLIF EE Basis of Cover"] == "S$ 100,000"
     assert fam["TLIF EE Eligible Sum Insured"] == 100000
-    # No underwriting case yet → fully accepted.
-    assert fam["TLIF EE Sum Insured Pending U/W"] == 0
-    assert fam["TLIF EE Last Accepted Sum Insured"] == 100000
+    # TLIF has FCL 50k: eligible 100k exceeds it, so 50k is auto-accepted and
+    # 50k is pending U/W — reflected from the LIVE FCL without any refresh run.
+    assert fam["TLIF EE Sum Insured Pending U/W"] == 50000
+    assert fam["TLIF EE Last Accepted Sum Insured"] == 50000
     # Schedule block uses the report_code (TMD2 → TMED) + the plan report label.
     assert fam["TMED Plan/Basis of Cover"] == "1 Bed Restr Hosp / S$80,000"
     assert fam["TMED Family Grouping"] == "EF"
@@ -247,14 +261,28 @@ def test_employee_listing_columns_and_values(client: TestClient) -> None:
     assert fam["Policy Period"] == "1 Jan 2034 to 31 Dec 2034"
 
 
-def test_employee_listing_excludes_other_insurers_products(client: TestClient) -> None:
-    res = client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=Nobody"
+def test_unknown_insurer_404s(client: TestClient) -> None:
+    # An unknown/mistyped insurer must 404, not silently return a real-looking
+    # file with every coverage column missing (misleading-empty report).
+    assert (
+        client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=Nobody"
+        ).status_code
+        == 404
     )
-    header = next(
-        load_workbook(BytesIO(res.content)).active.iter_rows(values_only=True)
+    assert (
+        client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/dependant-listing?insurer=Nobody"
+        ).status_code
+        == 404
     )
-    assert not any("TLIF" in str(h) or "TMED" in str(h) for h in header)
+    # Configured insurer matches case-insensitively.
+    assert (
+        client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=testsure"
+        ).status_code
+        == 200
+    )
 
 
 # ── Dependant listing ────────────────────────────────────────────────────────
@@ -621,3 +649,222 @@ def test_leave_sell_eligible_resolver() -> None:
     assert leave_sell_eligible(
         Employee(attribute_values={"leave_sell_eligible": "true"})
     ) is True
+
+
+# ── Audit hardening (2026-07-18) ─────────────────────────────────────────────
+
+
+def test_formula_injection_neutralized(client: TestClient) -> None:
+    # A roster value starting with a formula leader (= + - @) must be stored as
+    # literal text (apostrophe-prefixed), never a live formula, in the workbook
+    # the broker emails to the insurer.
+    with SessionLocal() as s:
+        emp = s.get(Employee, EMP_SOLO)
+        emp.employee_name = '=HYPERLINK("http://evil")'
+        emp.attribute_values = {**(emp.attribute_values or {}), "remarks": "@SUM(A1)"}
+        s.commit()
+    try:
+        res = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure"
+        )
+        row = next(r for r in _sheet_rows(res.content) if r["Staff ID"] == "IL-2")
+        assert row["Employee Name"].startswith("'=")
+        assert row["Remarks"].startswith("'@")
+    finally:
+        with SessionLocal() as s:
+            emp = s.get(Employee, EMP_SOLO)
+            emp.employee_name = "So Lo"
+            attrs = dict(emp.attribute_values or {})
+            attrs.pop("remarks", None)
+            emp.attribute_values = attrs
+            s.commit()
+
+
+def test_lump_sum_classification_by_salary_multiple_basis() -> None:
+    # A life product whose basis is a salary multiple (non-numeric) is still a
+    # lump-sum product and must get the SI columns, not schedule-plan columns.
+    from app.services.insurer_listings import product_blocks
+
+    salary_prod = "00000000-0000-0000-0000-0000000i1013"
+    salary_cat = "00000000-0000-0000-0000-0000000i1024"
+    with SessionLocal() as s:
+        s.add(Product(
+            id=salary_prod, client_id=CLIENT_ID, code="TSAL",
+            display_name="Salary Life", insurer="TestSure", has_dependants=False,
+        ))
+        s.flush()
+        s.add(Category(
+            id=salary_cat, policy_year_id=PY_ID, product_id=salary_prod,
+            display_name="All", raw_description="All",
+            plan_assignments={"plan_code": "1",
+                              "basis": "36 times basic monthly salary"},
+            source="manual", status="confirmed",
+        ))
+        s.commit()
+    try:
+        with SessionLocal() as s:
+            py = s.get(PolicyYear, PY_ID)
+            block = next(
+                b for b in product_blocks(s, py) if b.product.code == "TSAL"
+            )
+            assert block.lump_sum is True
+    finally:
+        with SessionLocal() as s:
+            for oid, model in ((salary_cat, Category), (salary_prod, Product)):
+                obj = s.get(model, oid)
+                if obj is not None:
+                    s.delete(obj)
+            s.commit()
+
+
+def test_report_uw_amounts_refresh_independent() -> None:
+    from app.models.underwriting_case import UnderwritingCase, UnderwritingStatus
+    from app.services.underwriting import report_uw_amounts
+
+    # No decision + no FCL → fully accepted.
+    assert report_uw_amounts(100000, None, None) == (0.0, 100000)
+    # No decision, over FCL → excess pending, FCL accepted (no refresh needed).
+    assert report_uw_amounts(100000, 50000, None) == (50000, 50000)
+    # No decision, within FCL → fully accepted.
+    assert report_uw_amounts(40000, 50000, None) == (0.0, 40000)
+    # A decision wins: accepted figure stands, capped at eligible, nothing pending.
+    accepted = UnderwritingCase(
+        accepted_si=80000, eligible_si=100000, status=UnderwritingStatus.accepted,
+    )
+    assert report_uw_amounts(100000, 50000, accepted) == (0.0, 80000)
+    declined = UnderwritingCase(
+        accepted_si=50000, eligible_si=100000, status=UnderwritingStatus.declined,
+    )
+    assert report_uw_amounts(100000, 50000, declined) == (0.0, 50000)
+
+
+def test_decide_case_validation_and_capping(client: TestClient) -> None:
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    case_id = client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()["items"][0]["id"]
+
+    # Bad status → 422.
+    assert client.patch(
+        f"/api/v1/underwriting/cases/{case_id}", json={"status": "maybe"}
+    ).status_code == 422
+    # Non-existent case → 404.
+    assert client.patch(
+        "/api/v1/underwriting/cases/does-not-exist", json={"status": "accepted"}
+    ).status_code == 404
+    # accepted_si is capped at eligible_si.
+    res = client.patch(
+        f"/api/v1/underwriting/cases/{case_id}",
+        json={"status": "accepted", "accepted_si": 9_999_999},
+    )
+    body = res.json()
+    assert body["accepted_si"] == body["eligible_si"]
+    assert body["decided_on"] is not None  # auto-stamped on a decision
+    # Declined → pending 0, decided_on stamped.
+    res = client.patch(
+        f"/api/v1/underwriting/cases/{case_id}",
+        json={"status": "declined", "remarks": "excess refused"},
+    )
+    assert res.json()["pending_si"] == 0
+    assert res.json()["status"] == "declined"
+
+
+def test_refresh_removes_stale_pending_case(client: TestClient) -> None:
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    before = client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()["total"]
+    assert before >= 1
+    try:
+        # Raise FCL above every eligible SI → all pending cases become moot.
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"free_cover_limit": 1_000_000},
+        )
+        res = client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+        assert res.json()["removed"] == before
+        assert client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()["total"] == 0
+    finally:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"free_cover_limit": 50000},
+        )
+
+
+def test_viewer_unmasked_403_on_all_pii_downloads(viewer_client: TestClient) -> None:
+    for path in (
+        f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure&masked=false",
+        f"/api/v1/policy-years/{PY_ID}/reports/dependant-listing?insurer=TestSure&masked=false",
+        f"/api/v1/policy-years/{PY_ID}/reports/member-listing-template",
+    ):
+        assert viewer_client.get(path).status_code == 403, path
+    # Masked listing is fine for a viewer.
+    assert viewer_client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure"
+    ).status_code == 200
+
+
+def test_dependant_listing_masked_vs_unmasked(client: TestClient) -> None:
+    masked = client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/dependant-listing?insurer=TestSure"
+    )
+    # The fixture dependants carry no NRIC, so assert on the employee's NRIC
+    # column which the dependant listing echoes.
+    row = next(r for r in _sheet_rows(masked.content) if r["Dependant Name"] == "Spo Use")
+    assert row["Employee's Identification No."] == "S******7D"
+    unmasked = client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/dependant-listing?insurer=TestSure&masked=false"
+    )
+    row = next(
+        r for r in _sheet_rows(unmasked.content) if r["Dependant Name"] == "Spo Use"
+    )
+    assert row["Employee's Identification No."] == "S1234567D"
+
+
+def test_roster_parser_coercion_and_member_ids() -> None:
+    from app.services.roster_parser import (
+        INSURER_MEMBER_ID_KEY,
+        _coerce_attr,
+        _collect_member_ids,
+        _member_id_columns,
+    )
+
+    # Flags → real bools; codes → clean strings (float 81.0 not "81.0").
+    assert _coerce_attr("leave_sell_eligible", "No") is False
+    assert _coerce_attr("prior_year_cover", "Yes") is True
+    assert _coerce_attr("leave_sell_eligible", "Unknown") == "Unknown"  # kept raw
+    assert _coerce_attr("branch_code", 81.0) == "81"
+    assert _coerce_attr("bank_account_no", 123456789.0) == "123456789"
+
+    header = ["Staff ID", "AIA Member ID", "Zurich Member ID", "Name"]
+    cols = _member_id_columns(header)
+    assert cols == {1: "AIA", 2: "Zurich"}
+    attrs: dict = {}
+    _collect_member_ids(["E1", 2427617201, "ZU-9", "Bob"], cols, attrs)
+    assert attrs[INSURER_MEMBER_ID_KEY] == {"AIA": "2427617201", "Zurich": "ZU-9"}
+
+
+def test_decide_case_cross_tenant_404(client: TestClient) -> None:
+    # A case created for this client must not be decidable by a user from
+    # another client (user_owns → _deny_cross_tenant → 404).
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    case_id = client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()["items"][0]["id"]
+
+    def other() -> CurrentUser:
+        return CurrentUser(
+            user_id="00000000-0000-0000-0000-0000000i10fd",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id="00000000-0000-0000-0000-0000000i9999", role="broker_admin",
+        )
+    app.dependency_overrides[get_current_user] = other
+    try:
+        res = TestClient(app).patch(
+            f"/api/v1/underwriting/cases/{case_id}", json={"status": "accepted"}
+        )
+        assert res.status_code == 404
+    finally:
+        app.dependency_overrides[get_current_user] = _user

@@ -31,7 +31,11 @@ def load_cases(db: Session, policy_year_id: str) -> CaseMap:
         )
     ).scalars().all()
     return {
-        ((c.employee_id or c.dependant_id or ""), c.product_id): c for c in rows
+        ((c.employee_id or c.dependant_id or ""), c.product_id): c
+        for c in rows
+        # Defensive: a case must name exactly one life; a subject-less row
+        # would collapse onto the ("", product) key and clobber another.
+        if c.employee_id or c.dependant_id
     }
 
 
@@ -49,6 +53,27 @@ def uw_amounts(case: UnderwritingCase | None, eligible: float) -> tuple[float, f
     if case.status == UnderwritingStatus.pending:
         return max(eligible - accepted, 0.0), accepted
     return 0.0, accepted
+
+
+def report_uw_amounts(
+    eligible: float, fcl: float | None, case: UnderwritingCase | None
+) -> tuple[float, float]:
+    """(pending U/W, last accepted) for insurer listings — refresh-INDEPENDENT.
+
+    A recorded insurer DECISION (accepted/declined) always wins: the accepted
+    figure stands (capped at eligible), nothing pending. Otherwise the auto
+    position is computed from the LIVE free cover limit + LIVE eligible, so the
+    report is correct the moment an FCL or salary changes, without requiring a
+    prior ``refresh_underwriting_cases`` run (which only maintains the queue).
+    """
+    if case is not None and case.status in (
+        UnderwritingStatus.accepted,
+        UnderwritingStatus.declined,
+    ):
+        return 0.0, min(case.accepted_si, eligible)
+    if fcl is None or eligible <= fcl:
+        return 0.0, eligible
+    return eligible - fcl, fcl
 
 
 def free_cover_limits(db: Session, policy_year_id: str) -> dict[str, float]:

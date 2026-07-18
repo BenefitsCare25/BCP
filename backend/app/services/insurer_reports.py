@@ -11,7 +11,7 @@ the endpoint gates that behind a write-capable role and audits every download.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -100,20 +100,33 @@ def latest_window(db: Session, policy_year_id: str) -> EnrollmentWindow | None:
     ).scalars().first()
 
 
+_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d")
+
+
 def _as_date(value: object) -> date | str | None:
     """Coerce a roster date-ish value to a real ``date`` cell (Excel formats
-    it) — fall back to the raw string when unparseable."""
+    it) — fall back to the raw string when unparseable. Roster dates are stored
+    ISO on ingest, but tolerate the common alternates + Excel serial numbers so
+    a stray format lands as a real date rather than literal text."""
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
+    # Excel serial date (days since 1899-12-30), if a numeric cell slipped through.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return (date(1899, 12, 30) + timedelta(days=int(value)))
+        except (ValueError, OverflowError):
+            return str(value)
     raw = str(value).strip().split(" ")[0]
-    try:
-        return date.fromisoformat(raw)
-    except ValueError:
-        return str(value)
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return str(value)
 
 
 def _last_day_of_service(emp: Employee) -> date | str | None:
@@ -158,6 +171,26 @@ def _bold_header(ws: Worksheet) -> None:
         cell.font = Font(bold=True)
 
 
+# Spreadsheet formula-injection guard. openpyxl stores any string starting with
+# = + - @ (or a leading control char) as a live formula, so a roster value like
+# ``=HYPERLINK(...)`` or ``=cmd|...`` would execute in the insurer's Excel when
+# they open our deliverable. Prefix such strings with an apostrophe so Excel
+# treats them as literal text. Applied to every cell in the insurer workbooks.
+_FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def safe_cell(value: object) -> object:
+    if isinstance(value, str) and value and value[0] in _FORMULA_LEADERS:
+        return "'" + value
+    return value
+
+
+def append_safe(ws: Worksheet, row: list[object]) -> None:
+    """Append a row with every string cell neutralized against formula
+    injection (see ``safe_cell``)."""
+    ws.append([safe_cell(v) for v in row])
+
+
 BENEFIT_SELECTION_HEADER = [
     "Entity",
     "Staff ID",
@@ -199,6 +232,11 @@ def build_benefit_selection_workbook(
     window = None
     if window_id is not None:
         window = db.get(EnrollmentWindow, window_id)
+        # Only honor a window that belongs to THIS policy year — a stray/foreign
+        # window_id must not silently drive the report (it would yield an
+        # all-"Not Started" listing rather than the intended window's data).
+        if window is not None and window.policy_year_id != policy_year.id:
+            window = None
     if window is None:
         window = latest_window(db, policy_year.id)
 
@@ -261,7 +299,7 @@ def build_benefit_selection_workbook(
             # the action column — flex_amount's sign stays internal.
             price_tag = abs(leave.flex_amount) if leave.flex_amount else 0
 
-        ws.append([
+        append_safe(ws, [
             first_value(attrs, ("entity", "company", "subsidiary")) or "",
             emp.staff_id,
             emp.employee_name or "",

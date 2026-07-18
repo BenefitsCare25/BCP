@@ -8,14 +8,15 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_for_user, user_owns
+from app.core.deps import _deny_cross_tenant, assert_policy_year_for_user, user_owns
+from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import Dependant, Employee, Product, UnderwritingCase
 from app.models.underwriting_case import VALID_UW_STATUSES, UnderwritingStatus
@@ -161,12 +162,18 @@ def list_underwriting_cases(
     "/policy-years/{policy_year_id}/underwriting/refresh",
     response_model=RefreshOut,
 )
+@limiter.limit("10/minute")
 def refresh_cases(
+    request: Request,
     policy_year_id: str,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RefreshOut:
-    """Sync cases with resolved coverage vs each product's free cover limit."""
+    """Sync cases with resolved coverage vs each product's free cover limit.
+
+    Recomputes the whole roster's coverage and writes/deletes case rows, so it
+    carries the repo's bulk-write rate limit (10/min) rather than the default.
+    """
     py = assert_policy_year_for_user(policy_year_id, user, db)
     result = refresh_underwriting_cases(db, py)
     write_audit(
@@ -195,8 +202,12 @@ def decide_case(
     db: Session = Depends(get_db),
 ) -> UnderwritingCaseOut:
     case = db.get(UnderwritingCase, case_id)
-    if case is None or not user_owns(user, case.client_id):
+    if case is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Case not found")
+    if not user_owns(user, case.client_id):
+        # Security-log the cross-tenant probe (like every loader in deps.py),
+        # then return the same 404 so existence isn't leaked.
+        raise _deny_cross_tenant(user, "Underwriting case", case_id)
     if body.status not in VALID_UW_STATUSES:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -229,4 +240,10 @@ def decide_case(
     )
     db.commit()
     queue = _queue(db, case.policy_year_id)
-    return next(i for i in queue.items if i.id == case.id)
+    out = next((i for i in queue.items if i.id == case.id), None)
+    if out is None:  # defensive: a decided case is never dropped from the queue
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "Decision saved but the case could not be re-read.",
+        )
+    return out

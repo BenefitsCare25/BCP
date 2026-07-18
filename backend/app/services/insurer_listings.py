@@ -45,6 +45,7 @@ from app.services.insurer_reports import (
     _autosize,
     _bold_header,
     _last_day_of_service,
+    append_safe,
     report_employees,
 )
 from app.services.leave_pricing_resolver import leave_sell_eligible
@@ -58,7 +59,11 @@ from app.services.roster_attributes import (
     nric_from_attrs,
 )
 from app.services.roster_parser import INSURER_MEMBER_ID_KEY
-from app.services.underwriting import load_cases, uw_amounts
+from app.services.underwriting import (
+    free_cover_limits,
+    load_cases,
+    report_uw_amounts,
+)
 
 _OPTION_MARKER = re.compile(r"\(\s*option\s*(\d+)\s*\)", re.IGNORECASE)
 
@@ -164,7 +169,14 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
                     basis=basis_amount(pa),
                     marker=m.group(1) if m else None,
                 ))
-        elif basis_amount(pa) is not None:
+        elif pa.get("basis") not in (None, ""):
+            # A per-member ``basis`` (sum-assured) marks a lump-sum product —
+            # GTL/GCI/GPA. Classify on the presence of the basis, NOT on
+            # basis_amount() being numeric: a salary-multiple basis ("36 times
+            # basic monthly salary") is non-numeric yet still a life/lump-sum
+            # product and must get the SI/Pending-U/W columns, not the
+            # schedule-plan columns. (Its per-member SI shows as the basis
+            # expression with blank numeric SI until salary-resolved.)
             block.lump_sum = True
 
     return sorted(
@@ -301,7 +313,9 @@ def _policy_period(py: PolicyYear) -> str:
     def fmt(d: date | None) -> str:
         return f"{d.day} {d:%b %Y}" if d else ""
 
-    return f"{fmt(py.start_date)} to {fmt(py.end_date)}".strip(" to")
+    # Join the present bounds with " to "; never `.strip(" to")`, which strips
+    # the character SET {space, t, o} and could truncate a formatted date.
+    return " to ".join(p for p in (fmt(py.start_date), fmt(py.end_date)) if p)
 
 
 def _flag(value: object) -> str:
@@ -337,7 +351,10 @@ def _prior_cover_flag(
     emp: Employee, prior_people: set[str] | None
 ) -> str:
     explicit = (emp.attribute_values or {}).get("prior_year_cover")
-    if explicit is not None and explicit != "":
+    # Only a real boolean (yes/no normalized on ingest) is an authoritative
+    # answer. Unrecognized free-text ("Unknown"/"TBD" kept raw by the parser)
+    # must NOT short-circuit the prior-year computation — fall through to it.
+    if isinstance(explicit, bool):
         return _flag(explicit)
     if prior_people is None:
         return ""
@@ -390,6 +407,7 @@ def build_employee_listing(
     employees = report_employees(db, py)
     coverage, _ = _employee_coverage(db, py, employees, blocks)
     cases = load_cases(db, py.id)
+    fcl_by_product = free_cover_limits(db, py.id)
     prior_people = _prior_year_people(db, py)
     period = _policy_period(py)
 
@@ -422,7 +440,7 @@ def build_employee_listing(
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
-    ws.append(header)
+    append_safe(ws, header)
     _bold_header(ws)
 
     for emp in employees:
@@ -472,8 +490,10 @@ def build_employee_listing(
                         "", "", "",
                     ]
                 else:
-                    pending, accepted = uw_amounts(
-                        cases.get((emp.id, b.product.id)), cov.eligible
+                    pending, accepted = report_uw_amounts(
+                        cov.eligible,
+                        fcl_by_product.get(b.product.id),
+                        cases.get((emp.id, b.product.id)),
                     )
                     row += [cov.basis_display, cov.eligible, pending, accepted]
             else:
@@ -481,7 +501,7 @@ def build_employee_listing(
                     row += ["No Coverage", "EO"]
                 else:
                     row += [cov.plan_label or "", cov.grouping]
-        ws.append(row)
+        append_safe(ws, row)
 
     _autosize(ws)
     return wb
@@ -495,6 +515,7 @@ def build_dependant_listing(
     emp_by_id = {e.id: e for e in employees}
     coverage, deps_by_emp = _employee_coverage(db, py, employees, blocks)
     cases = load_cases(db, py.id)
+    fcl_by_product = free_cover_limits(db, py.id)
     period = _policy_period(py)
 
     role_blocks: list[tuple[ProductBlock, str]] = [
@@ -530,7 +551,7 @@ def build_dependant_listing(
     wb = Workbook()
     ws = wb.active
     ws.title = "Sheet1"
-    ws.append(header)
+    append_safe(ws, header)
     _bold_header(ws)
 
     for emp in employees:
@@ -558,8 +579,10 @@ def build_dependant_listing(
                 if amount is None:
                     cells += ["", "", "", ""]
                 else:
-                    pending, accepted = uw_amounts(
-                        cases.get((dep.id, b.product.id)), amount
+                    pending, accepted = report_uw_amounts(
+                        amount,
+                        fcl_by_product.get(b.product.id),
+                        cases.get((dep.id, b.product.id)),
                     )
                     cells += [_money(amount), amount, pending, accepted]
             for b in schedule_blocks:
@@ -571,7 +594,7 @@ def build_dependant_listing(
                     cells += ["", ""]
             if not covered_any:
                 continue
-            ws.append([
+            append_safe(ws, [
                 first_value(dattrs, ("entity",)) or "",
                 emp.staff_id,
                 emp.employee_name or "",
