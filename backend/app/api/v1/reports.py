@@ -27,7 +27,10 @@ from app.services.insurer_listings import (
 )
 from app.services.insurer_reports import build_benefit_selection_workbook
 from app.services.member_listing_template import build_member_listing_template
-from app.services.placement_slip_export import build_placement_slip_workbook
+from app.services.placement_slip_export import (
+    build_placement_slip_workbook,
+    build_quotation_slip_workbook,
+)
 
 
 def _slug(insurer: str) -> str:
@@ -152,6 +155,31 @@ def download_placement_slip_export(
     db.commit()
     return _xlsx_response(
         wb, f"placement-slip-{py.year}-{date.today():%Y%m%d}.xlsx"
+    )
+
+
+@router.get("/quotation-slip")
+@limiter.limit("20/minute")
+def download_quotation_slip_export(
+    request: Request,
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Quotation-slip export (.xlsx) — the shopping document that accompanies
+    the Fact-Find form. Same structure as the placement slip, but the insurer
+    and every rate/premium cell are left blank for the quoting insurer.
+    Config-only (no member PII), audited like every export.
+    """
+    py = assert_policy_year_for_user(policy_year_id, user, db)
+    wb = build_quotation_slip_workbook(db, py)
+    write_audit(
+        db, user, action="export", entity_type="placement_slip",
+        entity_id=policy_year_id, after={"report": "quotation-slip"},
+    )
+    db.commit()
+    return _xlsx_response(
+        wb, f"quotation-slip-{py.year}-{date.today():%Y%m%d}.xlsx"
     )
 
 

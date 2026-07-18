@@ -1,8 +1,9 @@
-"""Placement-slip export — configured products rendered back to .xlsx.
+"""Placement + quotation slip exports — configured products rendered to .xlsx.
 
-Covers the workbook shape (Overview + one sheet per product + Unassigned),
-the category/rate table incl. per-tier sub-rows, the SOB plan fold, the
-ProductTerm coverage override, and the export audit trail.
+Covers the slip-shaped sheet layout (header label block, Basis of Cover,
+tiered/flat rate tables, voluntary age-banded rates, annual-premium total,
+SOB plan fold), the ProductTerm coverage override, quotation-mode blanking
+(insurer + every rate/premium cell), and the export audit trail.
 """
 from __future__ import annotations
 
@@ -133,7 +134,7 @@ def _setup_db():
             ),
         ])
         # Two GHS plans with differing R&B values → two SOB columns; the GTL
-        # plan carries cover data but no schedule → Basis of Cover table only.
+        # plan carries cover data but no schedule → Plan Details table only.
         s.add_all([
             Plan(
                 product_id=GHS_ID, policy_year_id=PY_ID, code="1",
@@ -166,8 +167,8 @@ def client() -> TestClient:
         app.dependency_overrides.pop(get_current_user, None)
 
 
-def _download(client: TestClient):
-    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/placement-slip")
+def _download(client: TestClient, kind: str = "placement"):
+    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/{kind}-slip")
     assert res.status_code == 200, res.text
     assert res.content[:2] == b"PK"
     return load_workbook(BytesIO(res.content))
@@ -177,11 +178,20 @@ def _cells(ws) -> list[list]:
     return [list(r) for r in ws.iter_rows(values_only=True)]
 
 
+def _row_index(rows: list[list], label: str, col: int = 0) -> int:
+    return next(i for i, r in enumerate(rows) if r[col] == label)
+
+
+def _blankish(v) -> bool:
+    return v in (None, "")
+
+
 def test_workbook_shape_and_overview(client: TestClient) -> None:
     wb = _download(client)
     assert wb.sheetnames == ["Overview", "GHS", "GTL", "Unassigned"]
 
     rows = _cells(wb["Overview"])
+    assert rows[0][0] == "Placement Slip — Configured Products"
     by_code = {r[0]: r for r in rows if r and r[0] in ("GHS", "GTL")}
     assert by_code["GHS"][1:] == [
         "Group Hospital & Surgical", "AIA",
@@ -191,24 +201,54 @@ def test_workbook_shape_and_overview(client: TestClient) -> None:
     assert by_code["GTL"][3] == "01 Apr 2034 to 31 Mar 2035"
 
 
-def test_category_table_with_tier_rows(client: TestClient) -> None:
-    ws = _download(client)["GHS"]
-    rows = _cells(ws)
-    header_i = next(i for i, r in enumerate(rows) if r[0] == "Insured")
-    cat = rows[header_i + 1]
-    assert cat[:2] == ["Slip Co Pte Ltd", "All Executives"]
-    assert (cat[2], cat[3], cat[4]) == ("Compulsory", "1", 40)
-    assert (cat[6], cat[8]) == (100000.0, 12000.0)
-    # Tier sub-rows: canonical label for EO; the slip's own label for SO.
-    tiers = {str(r[1]).strip(): (r[7], r[8]) for r in rows[header_i + 2 : header_i + 4]}
-    assert tiers["EO — Employee Only"] == (250.0, 10000.0)
-    assert tiers["SO — Spouse"] == (300.0, 2000.0)
+def test_header_label_block(client: TestClient) -> None:
+    rows = _cells(_download(client)["GHS"])
+    assert rows[0][0] == "Group Hospital & Surgical"
+
+    def value_of(label: str):
+        return rows[_row_index(rows, label)][2]
+
+    assert value_of("Policyholder :") == "Slip Co"
+    assert value_of("Insured :") == "Slip Co Pte Ltd"
+    assert value_of("Period of Insurance :") == "01 Jan 2034 to 31 Dec 2034"
+    assert value_of("Insurer :") == "AIA"
+    # Unknown slip fields are emitted as labelled blanks for the broker.
+    for label in ("Group :", "Pool :", "Policy No. :", "Eligibility :",
+                  "Type of Administration :"):
+        assert _blankish(value_of(label))
+    # The unstored terms appear as labelled blank rows too.
+    assert any(r[0] == "Non Evidence Limit :" for r in rows)
 
 
-def test_sob_fold_and_voluntary_rates(client: TestClient) -> None:
+def test_basis_of_cover_and_tiered_rates(client: TestClient) -> None:
+    rows = _cells(_download(client)["GHS"])
+    basis_i = _row_index(rows, "Basis of Cover :")
+    assert rows[basis_i + 1][1:8] == [
+        "Insured", "Category", "Participation",
+        "Plan", "* No. of employees", "* Sum Insured (S$)", None,
+    ]
+    assert rows[basis_i + 2][1:7] == [
+        "Slip Co Pte Ltd", "All Executives", "Compulsory", "1", 40, 100000,
+    ]
+
+    rate_i = _row_index(rows, "Rate :")
+    # Tier codes sit above their Rate/Premium column pairs.
+    assert (rows[rate_i][3], rows[rate_i][5]) == ("EO", "SO")
+    assert rows[rate_i + 1][1:8] == [
+        "Insured", "Category", "Plan", "Rate", "Premium", "Rate", "Premium",
+    ]
+    assert rows[rate_i + 2][1:8] == [
+        "Slip Co Pte Ltd", "All Executives", "1", 250, 10000, 300, 2000,
+    ]
+
+    total_i = _row_index(rows, "Annual Premium (GST-exclusive) :")
+    assert rows[total_i][2] == 12000
+
+
+def test_sob_fold_and_plan_details(client: TestClient) -> None:
     wb = _download(client)
     ghs = _cells(wb["GHS"])
-    sob_i = next(i for i, r in enumerate(ghs) if r[0] == "Schedule of Benefits")
+    sob_i = _row_index(ghs, "SCHEDULE OF BENEFITS / INSURER / PLAN")
     # Two plans with differing values stay two columns.
     assert ghs[sob_i + 1][:4] == ["No.", "Benefit", "Plan 1", "Plan 2"]
     assert ghs[sob_i + 2][:4] == [
@@ -217,30 +257,62 @@ def test_sob_fold_and_voluntary_rates(client: TestClient) -> None:
     assert ghs[sob_i + 3][1] == "    · Maximum no. of days: 120 days"
 
     gtl = _cells(wb["GTL"])
-    vol_i = next(
-        i for i, r in enumerate(gtl)
-        if str(r[0] or "").startswith("Voluntary rates")
-    )
-    bands = {r[0]: r[1] for r in gtl[vol_i + 3 : vol_i + 5]}
+    details_i = _row_index(gtl, "Plan Details")
+    assert gtl[details_i + 2][:3] == ["1", "24x basic monthly salary", "S$500,000"]
+
+
+def test_voluntary_rates_block(client: TestClient) -> None:
+    gtl = _cells(_download(client)["GTL"])
+    # Off-cycle term drives the sheet's period.
+    assert gtl[_row_index(gtl, "Period of Insurance :")][2] == "01 Apr 2034 to 31 Mar 2035"
+    vol_i = _row_index(gtl, "Voluntary Rates", col=1)
+    assert gtl[vol_i + 1][1:3] == [
+        "Based on Age Last Birthday", "Rate per 1,000 Sum assured (S$)",
+    ]
+    bands = {r[1]: r[2] for r in gtl[vol_i + 2 : vol_i + 4]}
     assert bands == {"16 - 30": 0.55, "31 - 35": 0.72}
-    # Basis of Cover table for the plan without a schedule.
-    boc_i = next(i for i, r in enumerate(gtl) if r[0] == "Basis of Cover")
-    assert gtl[boc_i + 2][:3] == ["1", "24x basic monthly salary", "S$500,000"]
+
+
+def test_quotation_mode_blanks_insurer_and_rates(client: TestClient) -> None:
+    wb = _download(client, kind="quotation")
+    overview = _cells(wb["Overview"])
+    assert overview[0][0] == "Quotation Slip — Configured Products"
+    ghs_row = next(r for r in overview if r[0] == "GHS")
+    assert _blankish(ghs_row[2])  # insurer left for the quoting insurer
+
+    ghs = _cells(wb["GHS"])
+    assert _blankish(ghs[_row_index(ghs, "Insurer :")][2])
+    rate_i = _row_index(ghs, "Rate :")
+    data = ghs[rate_i + 2]
+    # Structure kept (insured/category/plan), every rate/premium cell blank.
+    assert data[1:4] == ["Slip Co Pte Ltd", "All Executives", "1"]
+    assert all(_blankish(v) for v in data[4:8])
+    assert _blankish(ghs[_row_index(ghs, "Annual Premium (GST-exclusive) :")][2])
+
+    gtl = _cells(wb["GTL"])
+    vol_i = _row_index(gtl, "Voluntary Rates", col=1)
+    assert all(_blankish(r[2]) for r in gtl[vol_i + 2 : vol_i + 4])
+    # Basis of Cover figures stay — the insurer quotes off them.
+    basis_i = _row_index(ghs, "Basis of Cover :")
+    assert ghs[basis_i + 2][6] == 100000
 
 
 def test_unassigned_sheet_and_audit(client: TestClient) -> None:
     wb = _download(client)
+    _download(client, kind="quotation")
     unassigned = _cells(wb["Unassigned"])
-    assert any(r[1] == "Mystery cohort" for r in unassigned if len(r) > 1)
+    assert unassigned[0][0] == "Unassigned categories"
+    assert any(r[2] == "Mystery cohort" for r in unassigned if len(r) > 2)
 
     with SessionLocal() as s:
-        entry = (
-            s.query(AuditLog)
+        reports = {
+            (e.after or {}).get("report")
+            for e in s.query(AuditLog)
             .filter(
                 AuditLog.entity_type == "placement_slip",
                 AuditLog.action == "export",
                 AuditLog.entity_id == PY_ID,
             )
-            .first()
-        )
-        assert entry is not None
+            .all()
+        }
+        assert {"placement-slip", "quotation-slip"} <= reports

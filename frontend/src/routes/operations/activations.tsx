@@ -180,6 +180,44 @@ function FactFindDownload({
   );
 }
 
+/** Download the quotation slip (.xlsx) that accompanies the fact-find when
+ * shopping the risk — rates left blank for the quoting insurer. */
+function QuotationSlipDownload({
+  policyYearId,
+  year,
+}: {
+  policyYearId: string;
+  year: number;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function handleDownload() {
+    setBusy(true);
+    try {
+      const res = await api.downloadResponse(
+        `/policy-years/${policyYearId}/reports/quotation-slip`,
+      );
+      triggerDownload(await res.blob(), `quotation-slip-${year}.xlsx`);
+    } catch (e) {
+      toast.error(formatError(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={busy}
+      onClick={handleDownload}
+      title="Download the quotation slip (.xlsx) — rates blank for insurers to quote"
+    >
+      <FileText className="size-3.5" /> Quotation slip
+    </Button>
+  );
+}
+
 export function ActivationsPage() {
   const { data: years = [], isLoading } = usePolicyYears();
   const currentPolicyYearId = useSession((s) => s.currentPolicyYearId);
@@ -455,7 +493,13 @@ export function ActivationsPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <FactFindDownload policyYearId={y.id} year={y.year} />
+                        <div className="flex items-center gap-1.5">
+                          <FactFindDownload policyYearId={y.id} year={y.year} />
+                          <QuotationSlipDownload
+                            policyYearId={y.id}
+                            year={y.year}
+                          />
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         {isDraft && isCurrent ? (

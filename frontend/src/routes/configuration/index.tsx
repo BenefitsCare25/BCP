@@ -45,23 +45,25 @@ export function ConfigurationPage() {
   const { data: policyYears = [] } = usePolicyYears();
   const [tab, setTab] = useState<InsuranceLine>("medical");
   const [selected, setSelected] = useState<Category | null>(null);
-  const [downloadingSlip, setDownloadingSlip] = useState(false);
+  const [downloadingSlip, setDownloadingSlip] = useState<
+    "placement" | "quotation" | null
+  >(null);
 
-  const handleDownloadSlip = async () => {
+  const handleDownloadSlip = async (kind: "placement" | "quotation") => {
     if (!policyYearId) return;
-    setDownloadingSlip(true);
+    setDownloadingSlip(kind);
     try {
       // The server names the file via Content-Disposition; the arg is a fallback.
       await downloadResponseAsFile(
         await api.downloadResponse(
-          `/policy-years/${policyYearId}/reports/placement-slip`,
+          `/policy-years/${policyYearId}/reports/${kind}-slip`,
         ),
-        "placement-slip.xlsx",
+        `${kind}-slip.xlsx`,
       );
     } catch (error) {
       toast.error(formatError(error));
     } finally {
-      setDownloadingSlip(false);
+      setDownloadingSlip(null);
     }
   };
 
@@ -139,15 +141,30 @@ export function ConfigurationPage() {
               ))}
             </TabsList>
             {groups.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={downloadingSlip}
-                onClick={handleDownloadSlip}
-              >
-                <FileDown className="size-3.5" />
-                {downloadingSlip ? "Preparing…" : "Download slip (.xlsx)"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={downloadingSlip !== null}
+                  onClick={() => handleDownloadSlip("quotation")}
+                >
+                  <FileDown className="size-3.5" />
+                  {downloadingSlip === "quotation"
+                    ? "Preparing…"
+                    : "Quotation slip (.xlsx)"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={downloadingSlip !== null}
+                  onClick={() => handleDownloadSlip("placement")}
+                >
+                  <FileDown className="size-3.5" />
+                  {downloadingSlip === "placement"
+                    ? "Preparing…"
+                    : "Placement slip (.xlsx)"}
+                </Button>
+              </div>
             )}
           </div>
           {INSURANCE_LINES.map((line) => (
