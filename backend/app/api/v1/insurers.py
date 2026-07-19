@@ -20,9 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_client_id, tenant_or_global, user_owns
+from app.core.deps import (
+    load_editable_global,
+    require_client_id,
+    tenant_or_global,
+)
 from app.db.session import get_db
-from app.models import Insurer, Product
+from app.models import Insurer, PanelCard, PanelListing, Product
 from app.schemas.insurer import InsurerIn, InsurerOut, InsurerPatch
 
 router = APIRouter(tags=["insurers"])
@@ -42,16 +46,27 @@ def _visible(user: CurrentUser, db: Session) -> list[Insurer]:
 
 
 def _names_in_use(user: CurrentUser, db: Session) -> set[str]:
-    """Lowercased insurer strings currently stored on a visible product. This
-    mirrors how the reports module groups (case-insensitive string equality),
-    so what the UI flags as in-use is what actually feeds a report."""
-    rows = db.execute(
-        select(Product.insurer).where(
-            tenant_or_global(Product.client_id, user.client_id),
-            Product.insurer.is_not(None),
-        )
-    ).scalars()
-    return {(v or "").strip().lower() for v in rows if (v or "").strip()}
+    """Lowercased insurer strings currently stored anywhere the name is a join
+    key. Comparison is case-insensitive because that is how the reports module
+    groups, so what the UI flags as in-use is what actually feeds a report.
+
+    All three consumers must be covered: a name used only by a panel listing or
+    an e-card is still load-bearing (the card renderer and clinic locator key
+    off it), so reporting it as unused would make the delete dialog lie."""
+    names: set[str] = set()
+    for column, client_column in (
+        (Product.insurer, Product.client_id),
+        (PanelListing.insurer, PanelListing.client_id),
+        (PanelCard.insurer, PanelCard.client_id),
+    ):
+        rows = db.execute(
+            select(column).where(
+                tenant_or_global(client_column, user.client_id),
+                column.is_not(None),
+            )
+        ).scalars()
+        names.update((v or "").strip().lower() for v in rows if (v or "").strip())
+    return names
 
 
 def _out(row: Insurer, in_use: set[str]) -> InsurerOut:
@@ -92,17 +107,7 @@ def _assert_name_free(
 
 
 def _load_editable(insurer_id: str, user: CurrentUser, db: Session) -> Insurer:
-    row = db.get(Insurer, insurer_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Insurer not found")
-    if row.client_id is None:
-        if user.role not in ("system_admin", "broker_admin"):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults"
-            )
-    elif not user_owns(user, row.client_id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Insurer not found")
-    return row
+    return load_editable_global(Insurer, insurer_id, user, db, "Insurer")
 
 
 @router.get("/schemas/insurers", response_model=list[InsurerOut])

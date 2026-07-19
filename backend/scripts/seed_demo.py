@@ -524,6 +524,10 @@ def seed() -> None:
     provision_firm_schema(engine, DEMO_BROKER_FIRM_ID)
     with SessionLocal() as db:
         set_search_path(db, DEMO_BROKER_FIRM_ID)
+        # `insurers` is a tenant table, so on Postgres the firm schema has its
+        # own (empty) copy — the public seeding above is not visible to
+        # requests. Seed it here too; a no-op re-run on SQLite.
+        seed_insurers(db)
         existing_py = (
             db.query(PolicyYear)
             .filter(PolicyYear.client_id == DEMO_CLIENT_ID, PolicyYear.year == 2026)

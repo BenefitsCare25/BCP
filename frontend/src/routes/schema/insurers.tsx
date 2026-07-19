@@ -281,14 +281,14 @@ export function SchemaInsurersPage({
           deleting?.in_use ? (
             <>
               <code>{deleting.name}</code> is currently set on at least one
-              product. Those products keep the name and keep reporting under it
-              — removing this entry only takes it out of the dropdown, so it
-              can't be picked again without re-adding it.
+              product, panel listing, or e-card. Those keep the name and keep
+              reporting under it — removing this entry only takes it out of the
+              dropdown, so it can't be picked again without re-adding it.
             </>
           ) : (
             <>
               <code>{deleting?.name}</code> will no longer be offered when
-              choosing an insurer for a product. No existing data changes.
+              choosing an insurer. No existing data changes.
             </>
           )
         }

@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_client_id, tenant_or_global, user_owns
+from app.core.deps import (
+    load_editable_global,
+    require_client_id,
+    tenant_or_global,
+)
 from app.db.session import get_db
 from app.models import EmployeeAttributeSchema, Product
 from app.schemas.api import (
@@ -51,27 +55,13 @@ def _product_out(p: Product) -> ProductOut:
 def _load_editable_attribute(
     schema_id: str, user: CurrentUser, db: Session
 ) -> EmployeeAttributeSchema:
-    row = db.get(EmployeeAttributeSchema, schema_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Attribute not found")
-    if row.client_id is None:
-        if user.role not in ("system_admin", "broker_admin"):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults")
-    elif not user_owns(user, row.client_id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Attribute not found")
-    return row
+    return load_editable_global(
+        EmployeeAttributeSchema, schema_id, user, db, "Attribute"
+    )
 
 
 def _load_editable_product(product_id: str, user: CurrentUser, db: Session) -> Product:
-    row = db.get(Product, product_id)
-    if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
-    if row.client_id is None:
-        if user.role not in ("system_admin", "broker_admin"):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults")
-    elif not user_owns(user, row.client_id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
-    return row
+    return load_editable_global(Product, product_id, user, db, "Product")
 
 
 @router.get("/schemas/employee-attributes", response_model=list[AttributeSchemaOut])

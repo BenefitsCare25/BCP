@@ -128,6 +128,31 @@ def tenant_or_global(column, client_id: str | None):
     return or_(column.is_(None), column == client_id)
 
 
+def load_editable_global(
+    model, row_id: str, user: CurrentUser, db: Session, label: str
+):
+    """Load a row from a tenant-or-global catalog table for WRITING.
+
+    Encodes the policy shared by every `tenant_or_global` table (Product,
+    EmployeeAttributeSchema, Insurer): a global row (client_id NULL) is a
+    platform default only admins may edit, and another tenant's row is a 404
+    rather than a 403 so its existence isn't leaked.
+
+    `label` is the human name used in the error ("Product", "Insurer").
+    """
+    row = db.get(model, row_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found")
+    if row.client_id is None:
+        if user.role not in (ROLE_SYSTEM_ADMIN, "broker_admin"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults"
+            )
+    elif not user_owns(user, row.client_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found")
+    return row
+
+
 def assert_policy_year_for_user(
     policy_year_id: str, user: CurrentUser, db: Session
 ) -> PolicyYear:
