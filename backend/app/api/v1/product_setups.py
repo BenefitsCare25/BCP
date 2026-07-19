@@ -1239,7 +1239,12 @@ def _upsert_product(
     answers: dict[str, Any],
 ) -> Product:
     """Reuse the client's catalog product for this code, or create one."""
-    insurer = (answers.get("header") or {}).get("insurer") or None
+    header = answers.get("header") or {}
+    insurer = header.get("insurer") or None
+    # The roster-anchored Entities multi-select — the matching gate for every
+    # category of this product. Stored as tokens; absent/empty means no
+    # restriction (categories then fall back to their own slip `insured`).
+    entities = insured_names(header.get("entities"))
     product = db.execute(
         select(Product).where(
             Product.client_id == client_id, Product.code == tpl.code
@@ -1254,7 +1259,10 @@ def _upsert_product(
             participation_model=tpl.participation_model,
             has_dependants=tpl.has_dependants,
             is_outpatient=tpl.is_outpatient,
-            product_metadata={"line": infer_line(tpl.code)},
+            product_metadata={
+                "line": infer_line(tpl.code),
+                **({"entities": entities} if entities else {}),
+            },
         )
         db.add(product)
         db.flush()
@@ -1262,8 +1270,20 @@ def _upsert_product(
             db, user, action="create", entity_type="product", entity_id=product.id,
             after={"code": tpl.code, "display_name": tpl.display_name, "source": "manual_setup"},
         )
-    elif insurer and product.insurer != insurer:
+        return product
+
+    if insurer and product.insurer != insurer:
         product.insurer = insurer
+    # Written on every confirm (not just when non-empty) so CLEARING the field
+    # actually lifts the restriction rather than silently keeping the old one.
+    meta = dict(product.product_metadata or {})
+    if entities:
+        meta["entities"] = entities
+    else:
+        meta.pop("entities", None)
+    if meta != (product.product_metadata or {}):
+        product.product_metadata = meta
+        flag_modified(product, "product_metadata")
     return product
 
 

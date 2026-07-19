@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import tenant_or_global
-from app.models import Dependant, Employee, EmployeeAttributeSchema
+from app.models import Dependant, Employee, EmployeeAttributeSchema, Product
 from app.models.category import Category, CategoryStatus
 from app.services.derivation_engine import derive
 from app.services.matching_engine import (
@@ -28,9 +28,11 @@ from app.services.matching_engine import (
     _normalize,
     _status_rank,
     canonicalize_category_name,
+    category_insured_entities,
     entity_alias_map,
     insured_names,
     match_one,
+    product_entities,
     tokenize,
 )
 from app.services.rule_generator import description_to_rule
@@ -224,6 +226,15 @@ def compute_member_counts(
     # broker sees a headcount the run won't reproduce — so aliases too, loaded
     # once outside the loop.
     aliases = entity_alias_map(db, client_id)
+    # ...and the same precedence: the product's Entities field wins over each
+    # row's own `insured`, exactly as `_build_product_indices` resolves it.
+    prod_entities = product_entities(
+        db.get(Product, product_id) if product_id else None, aliases
+    )
+    insured_by_category = {
+        c.id: prod_entities or category_insured_entities(c, aliases)
+        for c in cats_by_priority
+    }
 
     emp_counts: dict[str, int] = defaultdict(int)
     dep_counts: dict[str, int] = defaultdict(int)
@@ -238,6 +249,7 @@ def compute_member_counts(
             cats_by_priority,
             exact_lookup,
             category_tokens,
+            insured_by_category,
             entity_aliases=aliases,
         )
         if outcome.category_id is None:

@@ -978,7 +978,10 @@ export interface MemberCounts {
 }
 
 export interface SetupAnswers {
-  header: Record<string, string>;
+  // Mostly free-text slip fields, plus `entities` — a token list of the legal
+  // entities this product covers, which IS the employee-matching gate (the
+  // free-text `insured` beside it is slip wording only).
+  header: Record<string, string | string[]>;
   eligibility: Record<string, string>;
   profile: Record<string, string>;
   participation: string;

@@ -500,3 +500,27 @@ def test_entity_vocab_reconciliation_and_suggestions() -> None:
     assert _closest("totally unrelated zzz", roster) is None
     # Corporate suffixes carry no identity and are dropped from initials.
     assert _acronym("city serviced offices pte ltd") == "cso"
+
+
+def test_product_entities_take_precedence_over_category_insured() -> None:
+    """The product's Entities field (set once on the setup header) gates every
+    category. Only when it is EMPTY does each category's own slip `insured`
+    still gate — that fallback is what keeps multi-entity slips and every
+    pre-existing configuration matching unchanged."""
+    from app.models.product import Product
+    from app.services.matching_engine import product_entities
+
+    cat = _cat("c1", "All Employees", insured=["Le Grove Management Pte Ltd"])
+
+    prod = Product(id="p1", code="GTL", display_name="GTL", product_metadata=None)
+    assert product_entities(prod) == frozenset()
+    # Empty product field → category's own insured is the gate.
+    gate = product_entities(prod) or category_insured_entities(cat)
+    assert gate == frozenset({"le grove management pte ltd"})
+
+    prod.product_metadata = {"entities": ["City Developments Limited"]}
+    gate = product_entities(prod) or category_insured_entities(cat)
+    assert gate == frozenset({"city developments ltd"})
+
+    # Absent product (unlinked categories) must not raise.
+    assert product_entities(None) == frozenset()

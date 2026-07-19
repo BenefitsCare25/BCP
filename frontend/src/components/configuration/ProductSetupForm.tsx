@@ -26,6 +26,7 @@ import type {
 } from "@/types";
 import { formatError } from "@/lib/errors";
 import { insuredNames } from "@/lib/insured";
+import { InsuredPicker } from "./InsuredPicker";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
 import { CategoryCards } from "./CategoryCards";
@@ -341,8 +342,10 @@ export function ProductSetupForm({
     });
   }, [memberCounts, countsByKey, tieredBasis]);
 
-  const setHeader = (id: string, v: string) =>
+  const setHeader = (id: string, v: string | string[]) =>
     setAnswers((a) => ({ ...a, header: { ...a.header, [id]: v } }));
+  // `entities` is the one header value that is a token list, not free text.
+  const headerEntities = insuredNames(answers.header.entities);
   const setElig = (id: string, v: string) =>
     setAnswers((a) => ({ ...a, eligibility: { ...a.eligibility, [id]: v } }));
   const setProfileField = (id: string, v: string) =>
@@ -415,17 +418,32 @@ export function ProductSetupForm({
   // travel, life, accident, statutory); the tabs follow that list, not hardcoded.
   const sectionInner: Record<string, React.ReactNode> = {
     header: (
-      <div className="grid grid-cols-3 gap-3">
-        {template.header_fields.map((f) => (
-          <div key={f.id} className={f.type === "textarea" ? "col-span-3" : undefined}>
-            <FieldControl
-              field={f}
-              value={answers.header[f.id] ?? ""}
-              onChange={(v) => setHeader(f.id, v)}
-              suggestions={suggestions?.header[f.id] ?? []}
-            />
-          </div>
-        ))}
+      <div className="flex flex-col gap-3">
+        <div className="grid grid-cols-3 gap-3">
+          {template.header_fields.map((f) => (
+            <div key={f.id} className={f.type === "textarea" ? "col-span-3" : undefined}>
+              <FieldControl
+                field={f}
+                value={String(answers.header[f.id] ?? "")}
+                onChange={(v) => setHeader(f.id, v)}
+                suggestions={suggestions?.header[f.id] ?? []}
+              />
+            </div>
+          ))}
+        </div>
+        {/* The functional counterpart to the free-text Insured field above:
+            Insured records the slip's legal wording (and is what the exported
+            slip reproduces), while these picked entities are what employee
+            matching actually gates on — for every category of this product. */}
+        <div className="border-t border-border pt-3">
+          <InsuredPicker
+            policyYearId={policyYearId}
+            label="Entities covered"
+            hint="Which legal entities this product covers, picked from the roster. Only employees whose roster Entity matches will match this product's categories. Leave empty to cover everyone. The Insured field above stays as the slip's wording — it is not used for matching."
+            value={headerEntities}
+            onChange={(next) => setHeader("entities", next)}
+          />
+        </div>
       </div>
     ),
     eligibility: (

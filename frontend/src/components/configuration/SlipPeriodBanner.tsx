@@ -12,8 +12,12 @@ function slipPeriodFor(
 ): { start: string; end: string } | null {
   for (const s of setups) {
     if (s.origin !== "placement_slip") continue;
+    // Header values are free text except `entities` (a token list); the period
+    // fields are always strings, so coerce rather than widen the parser.
     const raw = s.answers?.header?.period_of_insurance ?? s.answers?.header?.period;
-    const parsed = parsePeriodOfInsurance(raw);
+    const parsed = parsePeriodOfInsurance(
+      typeof raw === "string" ? raw : undefined,
+    );
     if (parsed) return parsed;
   }
   return null;

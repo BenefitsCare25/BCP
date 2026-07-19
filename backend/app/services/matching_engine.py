@@ -142,6 +142,22 @@ def category_insured_entities(
     return insured_entities(pa.get("insured"), aliases)
 
 
+def product_entities(
+    product: Product | None, aliases: EntityAliases | None = None
+) -> frozenset[str]:
+    """The entities a PRODUCT is written on (`product_metadata["entities"]`).
+
+    This is the broker-chosen, roster-anchored gate: one multi-select on the
+    setup header that applies to every category of the product. Empty set = no
+    product-level restriction, in which case the caller falls back to each
+    category's own `insured` (see `_build_product_indices`).
+    """
+    if product is None:
+        return frozenset()
+    meta = product.product_metadata if isinstance(product.product_metadata, dict) else {}
+    return insured_entities(meta.get("entities"), aliases)
+
+
 def employee_entity(
     attribute_values: dict | None, aliases: EntityAliases | None = None
 ) -> str:
@@ -446,6 +462,12 @@ def _build_product_indices(
     for pid, cats in by_product.items():
         sorted_cats = sorted(cats, key=lambda c: (_status_rank(c.status), c.priority))
         product = product_lookup.get(pid)
+        # The product-level Entities field (set on the setup header from the
+        # roster vocabulary) is the gate when present: it applies to EVERY
+        # category of the product. Only when it's unset does each category's own
+        # slip-parsed `insured` still gate — that keeps multi-entity slips and
+        # every pre-existing configuration matching exactly as before.
+        prod_entities = product_entities(product, aliases)
         indices.append(_ProductIndex(
             product_id=pid,
             product_code=product.code if product else "?",
@@ -456,7 +478,8 @@ def _build_product_indices(
                 for c in sorted_cats
             },
             insured_by_category={
-                c.id: category_insured_entities(c, aliases) for c in sorted_cats
+                c.id: prod_entities or category_insured_entities(c, aliases)
+                for c in sorted_cats
             },
         ))
     return indices
@@ -639,6 +662,7 @@ __all__ = [
     "match_one",
     "match_policy_year",
     "normalize_entity",
+    "product_entities",
     "resolve_entity",
     "tokenize",
 ]

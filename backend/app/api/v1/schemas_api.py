@@ -24,6 +24,7 @@ from app.schemas.api import (
 )
 from app.services import product_registry
 from app.services.form_profiles import infer_profile
+from app.services.matching_engine import insured_names
 
 router = APIRouter(tags=["schemas"])
 
@@ -49,6 +50,7 @@ def _product_out(p: Product) -> ProductOut:
         form_profile=infer_profile(p.code, meta.get("form_profile")),
         layout_family=entry.layout_family,
         report_code=meta.get("report_code"),
+        entities=insured_names(meta.get("entities")),
     )
 
 

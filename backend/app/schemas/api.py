@@ -163,6 +163,10 @@ class ProductOut(_Base):
     # Display code used on insurer report columns when it differs from the
     # internal code (e.g. GCGP → "GOGP"). Rides product_metadata.
     report_code: str | None = None
+    # Legal entities this product is written on — the matching gate for ALL its
+    # categories. Empty = no restriction. Rides product_metadata; set from the
+    # setup header's roster-anchored Entities picker.
+    entities: list[str] = Field(default_factory=list)
 
 
 class ProductCreate(BaseModel):
