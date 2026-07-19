@@ -32,7 +32,6 @@ export function ProductConfigurator({
   const { data: terms = [] } = useProductTerms(policyYearId);
 
   const draft = setups.find((s) => s.product_code === code) ?? null;
-  const fromSlip = draft?.origin === "placement_slip";
   const term = useMemo(
     () => terms.find((t) => t.code === code) ?? null,
     [terms, code],
@@ -48,14 +47,6 @@ export function ProductConfigurator({
           policyYearId={policyYearId}
           term={term}
         />
-      )}
-
-      {fromSlip && draft?.status !== "confirmed" && (
-        <p className="text-xs text-muted-foreground">
-          Fields below are pre-filled from the uploaded placement slip. Review
-          and edit what differs, then confirm to create the product and plans.
-          Category edits in the cards save on their own.
-        </p>
       )}
 
       {loadingTpl ? (

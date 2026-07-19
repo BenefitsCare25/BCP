@@ -359,9 +359,10 @@ def test_flat_premium_rows_reconcile_with_total() -> None:
 
 
 def test_policy_number_operational_and_exported(client: TestClient) -> None:
-    """Policy numbers are insurer-issued AFTER placement: settable on an ACTIVE
-    (config-locked) year, while coverage dates stay locked; the placement slip
-    shows it, the quotation leaves it blank (goes to prospective insurers)."""
+    """Policy numbers are insurer-issued AFTER placement: settable on the
+    current (active) year — as is all configuration now (the lock was removed);
+    the placement slip shows it, the quotation leaves it blank (goes to
+    prospective insurers)."""
     with SessionLocal() as s:
         s.get(PolicyYear, PY_ID).status = PolicyYearStatus.active
         s.commit()
@@ -372,11 +373,11 @@ def test_policy_number_operational_and_exported(client: TestClient) -> None:
         )
         assert res.status_code == 200, res.text
         assert res.json()["policy_number"] == "POL-2034-001"
-        # Config dimensions keep the activation lock.
+        # Coverage dates are editable on an active year too (no lock).
         assert client.put(
             f"/api/v1/policy-years/{PY_ID}/product-terms/{GHS_ID}",
             json={"coverage_start": "2034-02-01", "coverage_end": "2034-12-31"},
-        ).status_code == 409
+        ).status_code == 200
 
         ghs = _cells(_download(client)["GHS"])
         assert ghs[_row_index(ghs, "Policy No. :")][2] == "POL-2034-001"
@@ -385,7 +386,11 @@ def test_policy_number_operational_and_exported(client: TestClient) -> None:
     finally:
         client.put(
             f"/api/v1/policy-years/{PY_ID}/product-terms/{GHS_ID}",
-            json={"policy_number": None},
+            json={
+                "policy_number": None,
+                "coverage_start": None,
+                "coverage_end": None,
+            },
         )
         with SessionLocal() as s:
             s.get(PolicyYear, PY_ID).status = PolicyYearStatus.draft

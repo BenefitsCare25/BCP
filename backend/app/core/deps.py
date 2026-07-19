@@ -141,28 +141,15 @@ def assert_policy_year_for_user(
 
 
 def assert_policy_year_editable(py: PolicyYear) -> PolicyYear:
-    """409 unless the policy year is still a draft.
+    """No-op guard — configuration is editable on every policy year.
 
-    Activation snapshots the configuration — CONFIGURATION writes (slips,
-    categories, plans/SOB, product setups, flex scheme, rates) after that
-    would silently diverge from the snapshot with no rollback path, so they
-    are locked. OPERATIONAL writes (roster, matching, enrollment, overrides,
-    claims, member accounts, wallet re-assignment) intentionally do NOT use
-    this guard — they are the live year's day-to-day workload.
+    Historically a policy year locked its configuration once activated (a
+    frozen snapshot with no rollback path). That lock was removed in favour of
+    a lightweight "current year" flag (the ``active`` status is what the member
+    portal reads); every year stays editable regardless of status. The guard is
+    kept as a seam so config endpoints keep a single, documented place to
+    reintroduce a lock if one is ever needed again.
     """
-    from app.models.policy_year import PolicyYearStatus
-
-    if py.status != PolicyYearStatus.draft:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "code": "policy_year_locked",
-                "message": (
-                    "This policy year is activated — configuration is locked. "
-                    "Create a new draft year to make configuration changes."
-                ),
-            },
-        )
     return py
 
 

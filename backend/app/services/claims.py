@@ -5,7 +5,7 @@ rules live in one place.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
@@ -434,6 +434,18 @@ def submit_claim(
             f"The incurred date must fall within the {period_label} "
             f"({window_start.isoformat()} to {window_end.isoformat()}).",
         )
+
+    # Submission grace period: once configured, claims for a year can only be
+    # submitted up to N days after the coverage period ends. None = no deadline.
+    if year.claim_grace_period_days is not None:
+        deadline = year.end_date + timedelta(days=year.claim_grace_period_days)
+        if datetime.now(tz=UTC).date() > deadline:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "The claim submission window for this policy year closed on "
+                f"{deadline.isoformat()} (period end + "
+                f"{year.claim_grace_period_days} days grace).",
+            )
 
     # Re-run the intake rules at submit so a draft created before a rule (or
     # profile) change can't slip through with missing sub-type/referral.

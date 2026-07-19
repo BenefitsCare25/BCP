@@ -573,42 +573,11 @@ export function useUploadEmployees() {
   });
 }
 
-export interface ActivationReadiness {
-  total_categories: number;
-  confirmed_categories: number;
-  unconfirmed_categories: number;
-  ready: boolean;
-  status: string;
-}
-
-export function useActivationReadiness(policyYearId: string | undefined) {
-  const cid = useActiveClientId();
-  return useQuery({
-    queryKey: ["policy-years", policyYearId, "activation-readiness", cid],
-    queryFn: () =>
-      api.get<ActivationReadiness>(
-        `/policy-years/${policyYearId}/activation-readiness`,
-      ),
-    enabled: Boolean(policyYearId),
-    staleTime: 30_000,
-  });
-}
-
-export interface ActivationResult {
-  policy_year_id: string;
-  status: string;
-  activated_at: string;
-  snapshot_counts: Record<string, number>;
-}
-
-export function useActivatePolicyYear() {
+export function useSetCurrentPolicyYear() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (policyYearId: string) =>
-      api.post<ActivationResult>(
-        `/policy-years/${policyYearId}/activate`,
-        {},
-      ),
+      api.post<PolicyYear>(`/policy-years/${policyYearId}/set-current`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
@@ -810,8 +779,74 @@ export function useDeleteProduct() {
 export function useCreatePolicyYear() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { start_date: string; end_date: string }) =>
-      api.post<PolicyYear>("/policy-years", payload),
+    mutationFn: (payload: {
+      start_date: string;
+      end_date: string;
+      claim_grace_period_days?: number | null;
+    }) => api.post<PolicyYear>("/policy-years", payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy-years"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
+export function useUpdatePolicyYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      policyYearId,
+      payload,
+    }: {
+      policyYearId: string;
+      payload: {
+        start_date?: string;
+        end_date?: string;
+        claim_grace_period_days?: number | null;
+      };
+    }) => api.patch<PolicyYear>(`/policy-years/${policyYearId}`, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy-years"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
+export function useDeletePolicyYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (policyYearId: string) =>
+      api.delete<void>(`/policy-years/${policyYearId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy-years"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
+export interface PolicyYearCopyResult {
+  policy_year: PolicyYear;
+  copied: Record<string, number>;
+}
+
+export function useCopyPolicyYear() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      sourceId,
+      payload,
+    }: {
+      sourceId: string;
+      payload: {
+        start_date: string;
+        end_date: string;
+        claim_grace_period_days?: number | null;
+      };
+    }) =>
+      api.post<PolicyYearCopyResult>(
+        `/policy-years/${sourceId}/copy`,
+        payload,
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });

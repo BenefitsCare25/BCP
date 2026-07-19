@@ -41,10 +41,6 @@ const EmployeeCoveragePage = lazyRouteComponent(
   () => import("@/routes/operations/coverage"),
   "EmployeeCoveragePage",
 );
-const ActivationsPage = lazyRouteComponent(
-  () => import("@/routes/operations/activations"),
-  "ActivationsPage",
-);
 const ClaimsQueuePage = lazyRouteComponent(
   () => import("@/routes/operations/claims"),
   "ClaimsQueuePage",
@@ -389,10 +385,15 @@ const opsEmployeeViewRedirect = createRoute({
   component: () => null,
 });
 
+// Policy-year management moved into the Configuration page. Keep the old path
+// as a redirect so bookmarks/links don't 404.
 const opsActivationsRoute = createRoute({
   getParentRoute: () => opsLayoutRoute,
   path: "/activations",
-  component: ActivationsPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/configuration" });
+  },
+  component: () => null,
 });
 
 const opsClaimsRoute = createRoute({

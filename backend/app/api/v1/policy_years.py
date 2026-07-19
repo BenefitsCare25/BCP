@@ -1,24 +1,36 @@
-"""Policy years — list, read, activate, snapshot."""
+"""Policy (benefit) years — list, create, update, delete, set-current, copy.
+
+A policy year is the config-version container for one client. There is no
+activation lock: configuration is editable on every year. Exactly one year is
+flagged "current" (``status == active``) — that is the year the member portal
+reads and the one claims are submitted against. Setting a year current demotes
+the previously-current one to ``archived``.
+"""
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import load_policy_year, require_client_id
 from app.db.session import get_db
-from app.models import Category, PolicyYear
-from app.models.category import CategoryStatus
+from app.models import PolicyYear
 from app.models.policy_year import PolicyYearStatus
-from app.schemas.api import ActivationResult, PolicyYearCreate, PolicyYearOut, SnapshotOut
+from app.schemas.api import (
+    PolicyYearCopyIn,
+    PolicyYearCopyResult,
+    PolicyYearCreate,
+    PolicyYearOut,
+    PolicyYearUpdate,
+    SnapshotOut,
+)
+from app.services.policy_year_clone import clone_policy_year_config
 from app.services.product_terms import envelope_for, envelopes_for
-from app.services.snapshot import build_snapshot
 
 router = APIRouter(prefix="/policy-years", tags=["policy-years"])
 
@@ -36,8 +48,32 @@ def _policy_year_out(py: PolicyYear, envelope: tuple) -> PolicyYearOut:
         coverage_start=start,
         coverage_end=end,
         status=py.status.value if isinstance(py.status, PolicyYearStatus) else py.status,
+        claim_grace_period_days=py.claim_grace_period_days,
         activated_at=py.activated_at,
     )
+
+
+def _assert_no_overlap(
+    db: Session, client_id: str, start, end, *, exclude_id: str | None = None
+) -> None:
+    """409 if [start, end] overlaps another year for the client.
+
+    Two policies overlap iff start_a <= end_b AND start_b <= end_a.
+    """
+    stmt = select(PolicyYear).where(
+        PolicyYear.client_id == client_id,
+        and_(PolicyYear.start_date <= end, PolicyYear.end_date >= start),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(PolicyYear.id != exclude_id)
+    overlapping = db.execute(stmt).scalars().first()
+    if overlapping is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Overlaps with existing benefit year "
+            f"{overlapping.start_date.isoformat()} to "
+            f"{overlapping.end_date.isoformat()}.",
+        )
 
 
 @router.get("", response_model=list[PolicyYearOut])
@@ -56,9 +92,7 @@ def list_policy_years(
         .all()
     )
     envelopes = envelopes_for(db, rows)
-    return [
-        _policy_year_out(py, envelopes[py.id]) for py in rows
-    ]
+    return [_policy_year_out(py, envelopes[py.id]) for py in rows]
 
 
 @router.post("", response_model=PolicyYearOut, status_code=status.HTTP_201_CREATED)
@@ -68,29 +102,14 @@ def create_policy_year(
     db: Session = Depends(get_db),
 ) -> PolicyYearOut:
     client_id = require_client_id(user)
-    # Two policies overlap iff start_a <= end_b AND start_b <= end_a.
-    overlapping = db.execute(
-        select(PolicyYear).where(
-            PolicyYear.client_id == client_id,
-            and_(
-                PolicyYear.start_date <= payload.end_date,
-                PolicyYear.end_date >= payload.start_date,
-            ),
-        )
-    ).scalar_one_or_none()
-    if overlapping is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"Overlaps with existing policy year "
-            f"{overlapping.start_date.isoformat()} to "
-            f"{overlapping.end_date.isoformat()}.",
-        )
+    _assert_no_overlap(db, client_id, payload.start_date, payload.end_date)
     py = PolicyYear(
         client_id=client_id,
         year=payload.start_date.year,
         start_date=payload.start_date,
         end_date=payload.end_date,
         status=PolicyYearStatus.draft,
+        claim_grace_period_days=payload.claim_grace_period_days,
     )
     db.add(py)
     db.flush()
@@ -127,71 +146,114 @@ def get_policy_year(
     return _policy_year_out(py, envelope_for(db, py))
 
 
-@router.get("/{policy_year_id}/activation-readiness", response_model=dict)
-def activation_readiness(
-    py: PolicyYear = Depends(load_policy_year),
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """How close is this policy year to being activatable?
-
-    Returns counts the UI uses to enable/disable the Activate button.
-    """
-    confirmed_case = case(
-        (Category.status == CategoryStatus.confirmed.value, 1),
-        else_=0,
-    )
-    row = db.execute(
-        select(func.count(Category.id), func.coalesce(func.sum(confirmed_case), 0))
-        .where(Category.policy_year_id == py.id)
-    ).one()
-    total, confirmed = int(row[0] or 0), int(row[1] or 0)
-    return {
-        "total_categories": total,
-        "confirmed_categories": confirmed,
-        "unconfirmed_categories": total - confirmed,
-        "ready": total > 0 and confirmed == total and py.status == PolicyYearStatus.draft,
-        "status": py.status.value if isinstance(py.status, PolicyYearStatus) else py.status,
-    }
-
-
-@router.post("/{policy_year_id}/activate", response_model=ActivationResult)
-def activate_policy_year(
+@router.patch("/{policy_year_id}", response_model=PolicyYearOut)
+def update_policy_year(
+    payload: PolicyYearUpdate,
     py: PolicyYear = Depends(load_policy_year),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> ActivationResult:
-    if py.status != PolicyYearStatus.draft:
-        current = py.status.value if isinstance(py.status, PolicyYearStatus) else py.status
+) -> PolicyYearOut:
+    """Partial update: dates and/or claim grace period.
+
+    Only fields present in the request body are written, so a grace-period-only
+    edit can't wipe the coverage dates and a dates-only edit can't reset grace.
+    """
+    fields = payload.model_fields_set
+    new_start = payload.start_date if "start_date" in fields else py.start_date
+    new_end = payload.end_date if "end_date" in fields else py.end_date
+    if new_end < new_start:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "end_date must be on or after start_date",
+        )
+    if "start_date" in fields or "end_date" in fields:
+        _assert_no_overlap(db, py.client_id, new_start, new_end, exclude_id=py.id)
+        py.start_date = new_start
+        py.end_date = new_end
+        py.year = new_start.year
+    if "claim_grace_period_days" in fields:
+        py.claim_grace_period_days = payload.claim_grace_period_days
+
+    write_audit(
+        db,
+        user,
+        action="update_policy_year",
+        entity_type="policy_year",
+        entity_id=py.id,
+        after={
+            "start_date": py.start_date.isoformat(),
+            "end_date": py.end_date.isoformat(),
+            "claim_grace_period_days": py.claim_grace_period_days,
+        },
+    )
+    db.commit()
+    db.refresh(py)
+    return _policy_year_out(py, envelope_for(db, py))
+
+
+@router.delete("/{policy_year_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_policy_year(
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete a benefit year and its configuration (cascade).
+
+    The current year (``active``) can't be deleted — set another year current
+    first, so the member portal never loses its year out from under it.
+    """
+    if py.status == PolicyYearStatus.active:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Policy year is already {current}",
+            "This is the current benefit year. Set another year as current "
+            "before deleting it.",
         )
+    write_audit(
+        db,
+        user,
+        action="delete_policy_year",
+        entity_type="policy_year",
+        entity_id=py.id,
+        before={
+            "year": py.year,
+            "start_date": py.start_date.isoformat(),
+            "end_date": py.end_date.isoformat(),
+            "status": py.status.value
+            if isinstance(py.status, PolicyYearStatus)
+            else py.status,
+        },
+    )
+    db.delete(py)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    total_categories = db.scalar(
-        select(func.count(Category.id)).where(Category.policy_year_id == py.id)
-    ) or 0
-    if total_categories == 0:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Policy year has no categories. Configure at least one category before activating.",
-        )
 
-    unconfirmed = db.scalar(
-        select(func.count(Category.id)).where(
-            Category.policy_year_id == py.id,
-            Category.status != CategoryStatus.confirmed.value,
-        )
-    ) or 0
-    if unconfirmed:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"{unconfirmed} categories are not yet confirmed. "
-            "Confirm all categories before activating.",
-        )
+@router.post("/{policy_year_id}/set-current", response_model=PolicyYearOut)
+def set_current_policy_year(
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PolicyYearOut:
+    """Flag this year as the current one the member portal reads.
 
-    snapshot = build_snapshot(db, py.id, generated_by=user.user_id)
+    Exactly one year per client is current: any previously-current year is
+    demoted to ``archived``. No snapshot, no readiness gate — configuration
+    stays editable on every year.
+    """
     now = datetime.now(tz=UTC)
-    py.snapshot_json = snapshot
+    others = (
+        db.execute(
+            select(PolicyYear).where(
+                PolicyYear.client_id == py.client_id,
+                PolicyYear.status == PolicyYearStatus.active,
+                PolicyYear.id != py.id,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for other in others:
+        other.status = PolicyYearStatus.archived
     py.status = PolicyYearStatus.active
     py.activated_at = now
     py.activated_by = user.user_id
@@ -199,22 +261,74 @@ def activate_policy_year(
     write_audit(
         db,
         user,
-        action="activate_policy_year",
+        action="set_current_policy_year",
         entity_type="policy_year",
         entity_id=py.id,
         after={
             "year": py.year,
-            "snapshot_counts": snapshot["counts"],
-            "snapshot_version": snapshot["version"],
+            "demoted": [o.id for o in others],
         },
     )
     db.commit()
     db.refresh(py)
-    return ActivationResult(
-        policy_year_id=py.id,
-        status=py.status.value if isinstance(py.status, PolicyYearStatus) else py.status,
-        activated_at=now,
-        snapshot_counts=snapshot["counts"],
+    return _policy_year_out(py, envelope_for(db, py))
+
+
+@router.post(
+    "/{policy_year_id}/copy",
+    response_model=PolicyYearCopyResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def copy_policy_year(
+    payload: PolicyYearCopyIn,
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PolicyYearCopyResult:
+    """Create a new benefit year and clone this year's configuration into it."""
+    client_id = require_client_id(user)
+    _assert_no_overlap(db, client_id, payload.start_date, payload.end_date)
+
+    target = PolicyYear(
+        client_id=client_id,
+        year=payload.start_date.year,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        status=PolicyYearStatus.draft,
+        claim_grace_period_days=(
+            payload.claim_grace_period_days
+            if payload.claim_grace_period_days is not None
+            else py.claim_grace_period_days
+        ),
+    )
+    db.add(target)
+    db.flush()
+
+    from app.services.panel_clinics import carry_over_panel_tags
+
+    carry_over_panel_tags(db, target)
+    counts = clone_policy_year_config(
+        db, source_id=py.id, target_id=target.id, client_id=client_id
+    )
+
+    write_audit(
+        db,
+        user,
+        action="copy_policy_year",
+        entity_type="policy_year",
+        entity_id=target.id,
+        after={
+            "source_policy_year_id": py.id,
+            "start_date": target.start_date.isoformat(),
+            "end_date": target.end_date.isoformat(),
+            "copied": counts,
+        },
+    )
+    db.commit()
+    db.refresh(target)
+    return PolicyYearCopyResult(
+        policy_year=_policy_year_out(target, (target.start_date, target.end_date)),
+        copied=counts,
     )
 
 
@@ -223,7 +337,7 @@ def get_snapshot(py: PolicyYear = Depends(load_policy_year)) -> SnapshotOut:
     if not py.snapshot_json:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            "No snapshot — policy year has not been activated.",
+            "No snapshot for this policy year.",
         )
     return SnapshotOut(
         policy_year_id=py.id,

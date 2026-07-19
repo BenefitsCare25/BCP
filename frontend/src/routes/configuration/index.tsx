@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { FileDown, Lock } from "lucide-react";
 import {
   useAIStatus,
   useAuditLog,
@@ -7,10 +6,7 @@ import {
   useEmployeeAttributes,
   usePolicyYears,
 } from "@/api/hooks";
-import { api } from "@/api/client";
-import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -20,16 +16,19 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SkeletonTable } from "@/components/ui/skeleton";
+import { BenefitYearPanel } from "@/components/configuration/BenefitYearPanel";
 import { CategoryEditPanel } from "@/components/configuration/CategoryEditPanel";
 import { LineTab } from "@/components/configuration/LineTab";
 import { FlexPanel } from "@/components/configuration/flex/FlexPanel";
 import { FlexUploadCard } from "@/components/configuration/flex/FlexUploadCard";
 import { RecommendationPanel } from "@/components/configuration/RecommendationPanel";
 import { SlipPeriodBanner } from "@/components/configuration/SlipPeriodBanner";
-import { UploadCard } from "@/components/configuration/UploadCard";
+import {
+  SlipUploadButton,
+  SlipUploadPanel,
+  useSlipUpload,
+} from "@/components/configuration/UploadCard";
 import { PageGuide } from "@/components/ui/page-guide";
-import { downloadResponseAsFile } from "@/lib/download";
-import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type { Category, InsuranceLine } from "@/types";
 import { INSURANCE_LINES, LINE_LABELS } from "@/lib/insuranceLines";
@@ -45,32 +44,9 @@ export function ConfigurationPage() {
   const { data: policyYears = [] } = usePolicyYears();
   const [tab, setTab] = useState<InsuranceLine>("medical");
   const [selected, setSelected] = useState<Category | null>(null);
-  const [downloadingSlip, setDownloadingSlip] = useState<
-    "placement" | "quotation" | null
-  >(null);
-
-  const handleDownloadSlip = async (kind: "placement" | "quotation") => {
-    if (!policyYearId) return;
-    setDownloadingSlip(kind);
-    try {
-      // The server names the file via Content-Disposition; the arg is a fallback.
-      await downloadResponseAsFile(
-        await api.downloadResponse(
-          `/policy-years/${policyYearId}/reports/${kind}-slip`,
-        ),
-        `${kind}-slip.xlsx`,
-      );
-    } catch (error) {
-      toast.error(formatError(error));
-    } finally {
-      setDownloadingSlip(null);
-    }
-  };
-
-  const activeYear = policyYears.find((y) => y.id === policyYearId);
-  // Non-draft years reject config writes server-side (409 policy_year_locked);
-  // the banner makes the lock visible up-front instead of via error toasts.
-  const locked = activeYear !== undefined && activeYear.status !== "draft";
+  // Placement-slip upload state, lifted so the trigger button sits on the tab
+  // row while the extraction-result panel renders below the tabs.
+  const slip = useSlipUpload(policyYearId ?? "");
 
   const groupsByLine = useMemo(() => {
     const by: Record<InsuranceLine, typeof groups> = {
@@ -103,27 +79,9 @@ export function ConfigurationPage() {
 
   return (
     <div className="space-y-5 max-w-7xl">
-      {locked && (
-        <div className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/40 p-3 text-sm text-foreground">
-          <Lock className="size-4 text-warn mt-0.5 shrink-0" />
-          <span>
-            This policy year is {activeYear?.status === "archived" ? "archived" : "activated"} —
-            configuration is locked. Create a new policy year to make changes;
-            edits here will be rejected by the server.
-          </span>
-        </div>
-      )}
-
-      {/* The placement-slip upload + slip-period guard are for insured products
-          (medical/life); the Flex tab gets its own document upload instead. */}
-      {tab === "flex" ? (
-        <FlexUploadCard policyYearId={policyYearId} />
-      ) : (
-        <>
-          <UploadCard policyYearId={policyYearId} />
-          <SlipPeriodBanner policyYearId={policyYearId} />
-        </>
-      )}
+      {/* Benefit-year management applies to the insured configuration; Flex is a
+          separate module, so it doesn't carry the benefit-years section. */}
+      {tab !== "flex" && <BenefitYearPanel years={policyYears} />}
 
       {isLoading ? (
         <SkeletonTable rows={8} columns={4} />
@@ -140,33 +98,23 @@ export function ConfigurationPage() {
                 </TabsTrigger>
               ))}
             </TabsList>
-            {groups.length > 0 && (
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={downloadingSlip !== null}
-                  onClick={() => handleDownloadSlip("quotation")}
-                >
-                  <FileDown className="size-3.5" />
-                  {downloadingSlip === "quotation"
-                    ? "Preparing…"
-                    : "Quotation slip (.xlsx)"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={downloadingSlip !== null}
-                  onClick={() => handleDownloadSlip("placement")}
-                >
-                  <FileDown className="size-3.5" />
-                  {downloadingSlip === "placement"
-                    ? "Preparing…"
-                    : "Placement slip (.xlsx)"}
-                </Button>
-              </div>
+            {/* Insured products upload an .xls placement slip; the Flex tab
+                uploads its own (AI-extracted) benefit documents. */}
+            {tab === "flex" ? (
+              <FlexUploadCard policyYearId={policyYearId} compact />
+            ) : (
+              <SlipUploadButton slip={slip} />
             )}
           </div>
+
+          {/* Slip upload results + period guard — insured products only. */}
+          {tab !== "flex" && (
+            <>
+              <SlipUploadPanel slip={slip} />
+              <SlipPeriodBanner policyYearId={policyYearId} />
+            </>
+          )}
+
           {INSURANCE_LINES.map((line) => (
             <TabsContent key={line} value={line}>
               {line === "flex" ? (

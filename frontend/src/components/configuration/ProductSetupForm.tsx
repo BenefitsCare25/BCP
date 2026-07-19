@@ -557,11 +557,7 @@ export function ProductSetupForm({
             <span className="inline-flex items-center gap-1 text-good">
               <CircleCheck className="size-3.5" /> Previously confirmed
             </span>
-          ) : draft ? (
-            "Draft in progress — save before switching product tabs"
-          ) : (
-            "New setup"
-          )}
+          ) : null}
         </span>
         <Button variant="outline" size="sm" onClick={onSave} disabled={save.isPending}>
           {save.isPending ? (
@@ -586,11 +582,7 @@ export function ProductSetupForm({
             <span className="inline-flex items-center gap-1 text-good">
               <CircleCheck className="size-3.5" /> Previously confirmed
             </span>
-          ) : draft ? (
-            "Draft in progress"
-          ) : (
-            "New setup"
-          )}
+          ) : null}
         </span>
         <div className="flex gap-2">
           <Button

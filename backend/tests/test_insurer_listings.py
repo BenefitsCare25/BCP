@@ -594,18 +594,19 @@ def test_product_report_code_patch(client: TestClient) -> None:
 
 
 def test_plan_report_label_editable_on_active_year(client: TestClient) -> None:
-    # Label-only patch is OPERATIONAL — allowed although the year is active.
+    # Configuration is editable on every year (the activation lock was removed).
     res = client.patch(
         f"/api/v1/plans/{MED_PLAN}", json={"report_label": "4 Bed / S$60,000"}
     )
     assert res.status_code == 200, res.text
     assert res.json()["report_label"] == "4 Bed / S$60,000"
-    # Anything touching real config keeps the activation lock.
+    # A config field (display_name) is also editable on an active year now.
     res = client.patch(
         f"/api/v1/plans/{MED_PLAN}",
         json={"report_label": "x", "display_name": "New name"},
     )
-    assert res.status_code == 409
+    assert res.status_code == 200, res.text
+    assert res.json()["display_name"] == "New name"
     # Restore.
     client.patch(
         f"/api/v1/plans/{MED_PLAN}",
@@ -620,16 +621,16 @@ def test_fcl_only_term_update_allowed_on_active_year(client: TestClient) -> None
     )
     assert res.status_code == 200, res.text
     assert res.json()["free_cover_limit"] == 55000
-    # A dates body on an active year still 409s.
+    # Coverage dates are also editable on an active year now (no lock).
     res = client.put(
         f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
         json={"coverage_start": "2034-01-01", "coverage_end": "2034-12-31"},
     )
-    assert res.status_code == 409
+    assert res.status_code == 200, res.text
     # Restore.
     client.put(
         f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
-        json={"free_cover_limit": 50000},
+        json={"free_cover_limit": 50000, "coverage_start": None, "coverage_end": None},
     )
 
 

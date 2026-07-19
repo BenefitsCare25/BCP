@@ -254,13 +254,28 @@ def test_policy_year_get_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
-def test_policy_year_activation_readiness_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/activation-readiness")
+def test_policy_year_set_current_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(f"/api/v1/policy-years/{PY_B}/set-current")
     assert res.status_code == 404
 
 
-def test_policy_year_activate_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.post(f"/api/v1/policy-years/{PY_B}/activate")
+def test_policy_year_update_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.patch(
+        f"/api/v1/policy-years/{PY_B}", json={"claim_grace_period_days": 30}
+    )
+    assert res.status_code == 404
+
+
+def test_policy_year_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/policy-years/{PY_B}")
+    assert res.status_code == 404
+
+
+def test_policy_year_copy_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/copy",
+        json={"start_date": "2029-01-01", "end_date": "2029-12-31"},
+    )
     assert res.status_code == 404
 
 

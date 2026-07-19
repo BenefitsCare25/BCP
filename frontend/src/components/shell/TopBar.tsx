@@ -51,8 +51,8 @@ export function TopBar({ title }: { title: string }) {
               <SelectContent>
                 {years.map((y) => (
                   <SelectItem key={y.id} value={y.id}>
-                    {formatPolicyRange(y.coverage_start, y.coverage_end)} ·{" "}
-                    {y.status}
+                    {formatPolicyRange(y.coverage_start, y.coverage_end)}
+                    {y.status === "active" ? " · current" : ""}
                   </SelectItem>
                 ))}
               </SelectContent>

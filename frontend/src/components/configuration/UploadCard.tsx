@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import {
   Upload,
-  FileSpreadsheet,
   CheckCircle2,
   AlertTriangle,
   CalendarClock,
@@ -9,7 +8,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { InfoHint } from "@/components/ui/tooltip";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import {
   useCreateProduct,
@@ -34,10 +32,6 @@ import { formatError } from "@/lib/errors";
 import { formatPolicyRange } from "@/lib/policy-year";
 import { LINE_LABELS, lineForCode } from "@/lib/insuranceLines";
 import { toast } from "sonner";
-
-interface Props {
-  policyYearId: string;
-}
 
 const ALLOWED_EXT = [".xls", ".xlsx", ".xlsm"];
 const MAX_BYTES = 50 * 1024 * 1024; // mirrors backend DEFAULT_MAX_BYTES
@@ -381,7 +375,10 @@ function ColumnMappingFixer({ product }: { product: ProductDiagnostic }) {
   );
 }
 
-export function UploadCard({ policyYearId }: Props) {
+/** All placement-slip upload state + logic, so the trigger button and the
+ *  result/diagnostics panel can render in separate places (the button sits on
+ *  the tab row; the results render below the tabs). */
+export function useSlipUpload(policyYearId: string) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [filename, setFilename] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -532,64 +529,103 @@ export function UploadCard({ policyYearId }: Props) {
     setDuplicateOf(null);
   };
 
+  return {
+    fileInput,
+    filename,
+    validationError,
+    result,
+    periodMismatch,
+    duplicateOf,
+    reuploadNeeded,
+    registry,
+    upload,
+    onPick,
+    confirmReplace,
+    switchYearAndUpload,
+    uploadAnyway,
+    dismissMismatch,
+    setClassifiedCodes,
+    setPendingFile,
+    setDuplicateOf,
+  };
+}
+
+export type SlipUpload = ReturnType<typeof useSlipUpload>;
+
+/** Compact "Choose file" trigger (+ status badge) for the tab row. */
+export function SlipUploadButton({ slip }: { slip: SlipUpload }) {
   return (
-    <Card>
-      <CardContent className="p-5 space-y-3">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <div className="size-10 rounded-lg bg-accent text-accent-foreground grid place-items-center shrink-0">
-              <FileSpreadsheet className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="font-medium text-foreground flex items-center gap-1">
-                Upload placement slip
-                <InfoHint>
-                  Re-uploading replaces this year's unreviewed auto-generated
-                  categories. Confirmed and manually-edited categories are kept.
-                </InfoHint>
-              </div>
-              <div className="text-sm text-muted-foreground">
-                .xls, .xlsx or .xlsm — max 50 MB.
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {filename && (
-              <div className="flex items-center gap-2 text-sm">
-                {upload.isPending ? (
-                  <Badge variant="warn">Parsing…</Badge>
-                ) : validationError ? (
-                  <Badge variant="error" className="gap-1">
-                    <AlertTriangle className="size-3" /> Invalid
-                  </Badge>
-                ) : upload.isSuccess ? (
-                  <Badge variant="good" className="gap-1">
-                    <CheckCircle2 className="size-3" /> Done
-                  </Badge>
-                ) : null}
-                <span className="text-muted-foreground">{filename}</span>
-              </div>
-            )}
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".xls,.xlsx,.xlsm"
-              className="hidden"
-              onChange={(e) => {
-                onPick(e.target.files?.[0] ?? null);
-                e.target.value = ""; // allow re-picking the same file
-              }}
-            />
-            <Button
-              onClick={() => fileInput.current?.click()}
-              disabled={upload.isPending}
-            >
-              <Upload className="size-4" /> Choose file
-            </Button>
-          </div>
+    <div className="flex items-center gap-3">
+      {slip.filename && (
+        <div className="flex items-center gap-2 text-sm">
+          {slip.upload.isPending ? (
+            <Badge variant="warn">Parsing…</Badge>
+          ) : slip.validationError ? (
+            <Badge variant="error" className="gap-1">
+              <AlertTriangle className="size-3" /> Invalid
+            </Badge>
+          ) : slip.upload.isSuccess ? (
+            <Badge variant="good" className="gap-1">
+              <CheckCircle2 className="size-3" /> Done
+            </Badge>
+          ) : null}
+          <span className="text-muted-foreground max-w-[180px] truncate">
+            {slip.filename}
+          </span>
         </div>
+      )}
+      <input
+        ref={slip.fileInput}
+        type="file"
+        accept=".xls,.xlsx,.xlsm"
+        className="hidden"
+        onChange={(e) => {
+          slip.onPick(e.target.files?.[0] ?? null);
+          e.target.value = ""; // allow re-picking the same file
+        }}
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => slip.fileInput.current?.click()}
+        disabled={slip.upload.isPending}
+        title="Upload a placement slip (.xls, .xlsx, .xlsm — max 50 MB). Re-uploading replaces this year's unreviewed auto-generated categories."
+      >
+        <Upload className="size-3.5" /> Upload slip
+      </Button>
+    </div>
+  );
+}
 
+/** Validation / period-mismatch / extraction-result panel + duplicate dialog.
+ *  Renders nothing (no empty card) until there is something to show. */
+export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
+  const {
+    validationError,
+    periodMismatch,
+    result,
+    reuploadNeeded,
+    upload,
+    duplicateOf,
+    switchYearAndUpload,
+    uploadAnyway,
+    dismissMismatch,
+    confirmReplace,
+    setClassifiedCodes,
+    setPendingFile,
+    setDuplicateOf,
+  } = slip;
+  const hasContent =
+    validationError ||
+    periodMismatch ||
+    (result && !upload.isPending) ||
+    reuploadNeeded.length > 0;
+
+  return (
+    <>
+      {hasContent && (
+        <Card>
+          <CardContent className="p-4 space-y-3">
         {validationError && (
           <div className="flex items-start gap-2 rounded-lg border border-border bg-error-soft/40 p-3 text-sm text-foreground">
             <AlertTriangle className="size-4 text-error mt-0.5 shrink-0" />
@@ -685,8 +721,9 @@ export function UploadCard({ policyYearId }: Props) {
             </span>
           </div>
         )}
-
-      </CardContent>
+          </CardContent>
+        </Card>
+      )}
 
       <AlertDialog
         open={duplicateOf !== null}
@@ -715,6 +752,6 @@ export function UploadCard({ policyYearId }: Props) {
         onConfirm={confirmReplace}
         loading={upload.isPending}
       />
-    </Card>
+    </>
   );
 }

@@ -71,11 +71,6 @@ export const NAV_GROUPS: NavGroup[] = [
         to: "/operations/underwriting",
         title: "Operations — Underwriting Queue",
       },
-      {
-        label: "Policy year",
-        to: "/operations/activations",
-        title: "Policy Year",
-      },
     ],
   },
   {

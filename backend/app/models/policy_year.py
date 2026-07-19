@@ -42,9 +42,19 @@ class PolicyYear(Base, TimestampMixin):
     status: Mapped[PolicyYearStatus] = mapped_column(
         Enum(PolicyYearStatus), nullable=False, default=PolicyYearStatus.draft
     )
+    # Days after the coverage period ends during which members may still submit
+    # claims for this year. None = no submission deadline (system default).
+    claim_grace_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     activated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
 
     client: Mapped[Client] = relationship(back_populates="policy_years")
-    categories: Mapped[list[Category]] = relationship(back_populates="policy_year")
+    # passive_deletes defers child removal to the DB's ON DELETE CASCADE — without
+    # it, deleting a policy year makes the ORM try to NULL categories.policy_year_id
+    # (NOT NULL → IntegrityError) instead of cascade-deleting the categories.
+    categories: Mapped[list[Category]] = relationship(
+        back_populates="policy_year",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )

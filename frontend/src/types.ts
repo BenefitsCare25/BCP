@@ -151,6 +151,9 @@ export interface PolicyYear {
   coverage_start: string;
   coverage_end: string;
   status: "draft" | "active" | "archived";
+  // Days after the coverage period ends during which claims may still be
+  // submitted. null = no submission deadline (system default).
+  claim_grace_period_days: number | null;
   activated_at: string | null;
 }
 

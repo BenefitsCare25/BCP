@@ -88,9 +88,10 @@ export function FlexUploadCard({ policyYearId, compact = false }: Props) {
           size="sm"
           onClick={() => fileInput.current?.click()}
           disabled={upload.isPending}
+          title="Upload Flexible Benefits documents (PDF, image or .msg — max 50 MB each). AI extracts the scheme; select multiple files to merge."
         >
-          <Upload className="size-4" />
-          {upload.isPending ? "Extracting…" : "Add more documents"}
+          <Upload className="size-3.5" />
+          {upload.isPending ? "Extracting…" : "Upload documents"}
         </Button>
       </>
     );

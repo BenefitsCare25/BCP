@@ -206,18 +206,67 @@ class PolicyYearOut(_Base):
     coverage_start: date
     coverage_end: date
     status: str
+    # Days after the coverage period ends during which claims may still be
+    # submitted. None = no submission deadline (system default).
+    claim_grace_period_days: int | None = None
     activated_at: datetime | None = None
 
 
 class PolicyYearCreate(BaseModel):
     start_date: date
     end_date: date
+    claim_grace_period_days: int | None = None
 
     @model_validator(mode="after")
     def _check_range(self) -> PolicyYearCreate:
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
+        if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
+            raise ValueError("claim_grace_period_days must be zero or positive")
         return self
+
+
+class PolicyYearUpdate(BaseModel):
+    """Partial update of a benefit year (dates + claim grace period).
+
+    Only fields present in the request body are written (``model_fields_set``),
+    so a grace-period-only update can't wipe the dates and vice versa.
+    """
+
+    start_date: date | None = None
+    end_date: date | None = None
+    claim_grace_period_days: int | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> PolicyYearUpdate:
+        if (
+            self.start_date is not None
+            and self.end_date is not None
+            and self.end_date < self.start_date
+        ):
+            raise ValueError("end_date must be on or after start_date")
+        if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
+            raise ValueError("claim_grace_period_days must be zero or positive")
+        return self
+
+
+class PolicyYearCopyIn(BaseModel):
+    """Create a new benefit year and clone a source year's configuration into it."""
+
+    start_date: date
+    end_date: date
+    claim_grace_period_days: int | None = None
+
+    @model_validator(mode="after")
+    def _check_range(self) -> PolicyYearCopyIn:
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
+
+
+class PolicyYearCopyResult(BaseModel):
+    policy_year: PolicyYearOut
+    copied: dict[str, int]
 
 
 class ProductTermOut(BaseModel):
