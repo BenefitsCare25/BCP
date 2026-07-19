@@ -12,6 +12,7 @@ from app.models.employee import Employee
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment import Enrollment, EnrollmentElection
 from app.models.enrollment_window import EnrollmentWindow
+from app.models.entity_alias import EntityAlias
 from app.models.flex_pricing import FlexPricing
 from app.models.flex_scheme import FlexScheme
 from app.models.insurer import Insurer
@@ -50,6 +51,7 @@ __all__ = [
     "Enrollment",
     "EnrollmentElection",
     "EnrollmentWindow",
+    "EntityAlias",
     "FlexPricing",
     "FlexScheme",
     "Insurer",

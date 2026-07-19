@@ -22,8 +22,11 @@ from app.db.base import Base, TimestampMixin, new_uuid
 
 class EntityAlias(Base, TimestampMixin):
     __tablename__ = "entity_aliases"
-    # One mapping per alias spelling per client, compared in normalized form so
-    # "C.S.O." and "CSO" can't both claim a mapping.
+    # One mapping per alias spelling per client, compared in NORMALIZED form so
+    # "Acme Pte. Ltd." can't claim a second mapping alongside "Acme Pte Ltd".
+    # Note the normalizer tokenizes on punctuation rather than deleting it, so
+    # "C.S.O." ("c s o") and "CSO" ("cso") are genuinely distinct and each needs
+    # its own row — they may point at the same canonical name.
     __table_args__ = (
         UniqueConstraint(
             "client_id", "alias_normalized", name="uq_entity_alias_client_alias"

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser
 from app.core.deps import tenant_or_global
-from app.models import Category, Employee, EmployeeAttributeSchema
+from app.models import Category, Employee, EmployeeAttributeSchema, EntityAlias
 from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
@@ -104,25 +104,69 @@ def insured_names(raw: object) -> list[str]:
     return [name for part in parts if (name := str(part).strip())]
 
 
-def insured_entities(raw: object) -> frozenset[str]:
-    """The set of NORMALIZED entity names in an Insured cell. Empty set = no
+EntityAliases = dict[str, str]
+"""{normalized alias -> normalized canonical}, per client. See `resolve_entity`."""
+
+
+def resolve_entity(name: str | None, aliases: EntityAliases | None = None) -> str:
+    """`normalize_entity` plus a SINGLE-HOP alias lookup.
+
+    Normalization folds punctuation and corporate suffixes, but it can't bridge
+    an abbreviation or rebrand ("CSO" vs "City Serviced Offices Pte Ltd") — that
+    needs the explicit map. Applied to BOTH sides of the gate, so either the
+    category or the roster may carry the alias spelling.
+
+    Deliberately single-hop: an alias never resolves through another alias, so a
+    map containing A→B and B→C can't loop or depend on iteration order.
+    """
+    norm = normalize_entity(name)
+    if not norm or not aliases:
+        return norm
+    return aliases.get(norm, norm)
+
+
+def insured_entities(
+    raw: object, aliases: EntityAliases | None = None
+) -> frozenset[str]:
+    """The set of RESOLVED entity names in an Insured cell. Empty set = no
     entity restriction."""
     return frozenset(
-        norm for part in insured_names(raw) if (norm := normalize_entity(part))
+        norm for part in insured_names(raw) if (norm := resolve_entity(part, aliases))
     )
 
 
-def category_insured_entities(cat: Category) -> frozenset[str]:
+def category_insured_entities(
+    cat: Category, aliases: EntityAliases | None = None
+) -> frozenset[str]:
     pa = cat.plan_assignments if isinstance(cat.plan_assignments, dict) else {}
-    return insured_entities(pa.get("insured"))
+    return insured_entities(pa.get("insured"), aliases)
 
 
-def employee_entity(attribute_values: dict | None) -> str:
-    """Normalized legal entity employing this member, from the roster's Entity
+def employee_entity(
+    attribute_values: dict | None, aliases: EntityAliases | None = None
+) -> str:
+    """Resolved legal entity employing this member, from the roster's Entity
     column (attribute id "entity"). "" when the roster doesn't carry one."""
     if not attribute_values:
         return ""
-    return normalize_entity(attribute_values.get("entity"))
+    return resolve_entity(attribute_values.get("entity"), aliases)
+
+
+def entity_alias_map(db: Session, client_id: str | None) -> EntityAliases:
+    """Load a client's alias map. Built ONCE per matching run — never per
+    employee — and passed down through the match indices."""
+    if not client_id:
+        return {}
+    rows = db.execute(
+        select(EntityAlias.alias_normalized, EntityAlias.canonical).where(
+            EntityAlias.client_id == client_id
+        )
+    ).all()
+    return {
+        alias: canon
+        for alias, raw in rows
+        if alias and (canon := normalize_entity(raw))
+    }
 
 
 def _entity_allows(cat_entities: frozenset[str], emp_entity: str) -> bool:
@@ -215,6 +259,7 @@ def match_one(
     exact_lookup: dict[str, Category],
     category_tokens: dict[str, set[str]],
     insured_by_category: dict[str, frozenset[str]] | None = None,
+    entity_aliases: EntityAliases | None = None,
 ) -> MatchOutcome:
     """Match a single employee against pre-indexed category data.
 
@@ -232,9 +277,10 @@ def match_one(
     """
     if insured_by_category is None:
         insured_by_category = {
-            c.id: category_insured_entities(c) for c in categories_by_priority
+            c.id: category_insured_entities(c, entity_aliases)
+            for c in categories_by_priority
         }
-    emp_entity = employee_entity(employee.attribute_values)
+    emp_entity = employee_entity(employee.attribute_values, entity_aliases)
 
     def _allowed(cat: Category) -> bool:
         return _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entity)
@@ -388,6 +434,7 @@ class _ProductIndex:
 def _build_product_indices(
     categories: list[Category],
     product_lookup: dict[str, Product],
+    aliases: EntityAliases | None = None,
 ) -> list[_ProductIndex]:
     """Group categories by product and build match indices per product."""
     by_product: dict[str, list[Category]] = defaultdict(list)
@@ -409,7 +456,7 @@ def _build_product_indices(
                 for c in sorted_cats
             },
             insured_by_category={
-                c.id: category_insured_entities(c) for c in sorted_cats
+                c.id: category_insured_entities(c, aliases) for c in sorted_cats
             },
         ))
     return indices
@@ -449,7 +496,10 @@ def match_policy_year(
     )
     product_lookup: dict[str, Product] = {p.id: p for p in products}
 
-    product_indices = _build_product_indices(categories, product_lookup)
+    # Loaded once per run and threaded into the indices + every match_one call:
+    # resolving aliases per employee would re-query for each of them.
+    aliases = entity_alias_map(db, user.client_id)
+    product_indices = _build_product_indices(categories, product_lookup, aliases)
 
     schemas = list(
         db.execute(
@@ -522,6 +572,7 @@ def match_policy_year(
                     idx.exact_lookup,
                     idx.category_tokens,
                     idx.insured_by_category,
+                    entity_aliases=aliases,
                 )
                 if outcome.category_id is None:
                     continue
@@ -576,14 +627,18 @@ def match_policy_year(
 
 __all__ = [
     "FUZZY_THRESHOLD",
+    "EntityAliases",
     "MatchMethod",
     "MatchOutcome",
     "MatchSummary",
     "employee_entity",
+    "entity_alias_map",
     "insured_entities",
+    "insured_names",
     "jaccard",
     "match_one",
     "match_policy_year",
     "normalize_entity",
+    "resolve_entity",
     "tokenize",
 ]

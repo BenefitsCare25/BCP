@@ -28,6 +28,7 @@ from app.services.matching_engine import (
     _normalize,
     _status_rank,
     canonicalize_category_name,
+    entity_alias_map,
     insured_names,
     match_one,
     tokenize,
@@ -219,6 +220,11 @@ def compute_member_counts(
         for c in cats_by_priority
     }
 
+    # The preview must apply the SAME entity gate as a real matching run, or a
+    # broker sees a headcount the run won't reproduce — so aliases too, loaded
+    # once outside the loop.
+    aliases = entity_alias_map(db, client_id)
+
     emp_counts: dict[str, int] = defaultdict(int)
     dep_counts: dict[str, int] = defaultdict(int)
     matched = 0
@@ -227,7 +233,13 @@ def compute_member_counts(
             attribute_values=emp.attribute_values or {},
             derived_attribute_values=derive(emp.attribute_values or {}, schemas),
         )
-        outcome = match_one(view, cats_by_priority, exact_lookup, category_tokens)
+        outcome = match_one(
+            view,
+            cats_by_priority,
+            exact_lookup,
+            category_tokens,
+            entity_aliases=aliases,
+        )
         if outcome.category_id is None:
             continue
         matched += 1

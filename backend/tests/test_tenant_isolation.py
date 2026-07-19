@@ -38,6 +38,7 @@ from app.models import (  # noqa: E402
     Employee,
     Enrollment,
     EnrollmentWindow,
+    EntityAlias,
     Insurer,
     PanelCard,
     PanelListing,
@@ -223,6 +224,17 @@ def _setup_db():
             )
         )
 
+        # An entity alias owned by client B (alias-map isolation).
+        session.add(
+            EntityAlias(
+                id=ALIAS_B,
+                client_id=CLIENT_B_ID,
+                alias="BSUB",
+                canonical="Client B Subsidiary Pte Ltd",
+                alias_normalized="bsub",
+            )
+        )
+
         session.commit()
 
     yield
@@ -271,6 +283,7 @@ WINDOW_B = "00000000-0000-0000-0000-0000000000b8"
 ENROLL_B = "00000000-0000-0000-0000-0000000000b9"
 PANEL_B = "00000000-0000-0000-0000-0000000000ba"
 INSURER_B = "00000000-0000-0000-0000-0000000000bc"
+ALIAS_B = "00000000-0000-0000-0000-0000000000bd"
 CARD_B = "00000000-0000-0000-0000-0000000000bb"
 # Any assignment id — the guard rejects at the policy year first.
 CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
@@ -1314,4 +1327,23 @@ def test_entity_vocab_cross_tenant_404(client_as_a: TestClient) -> None:
     """The Insured picker's vocabulary exposes roster entity names — it must
     not leak another tenant's."""
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/entity-vocab")
+    assert res.status_code == 404
+
+
+def test_entity_alias_list_excludes_other_tenant(client_as_a: TestClient) -> None:
+    """Aliases are per-client — they name a client's own subsidiaries, so there
+    is no shared library tier and another tenant's rows must be invisible."""
+    rows = client_as_a.get("/api/v1/entity-aliases").json()
+    assert all(r["id"] != ALIAS_B for r in rows)
+
+
+def test_entity_alias_update_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.patch(
+        f"/api/v1/entity-aliases/{ALIAS_B}", json={"canonical": "Hijacked"}
+    )
+    assert res.status_code == 404
+
+
+def test_entity_alias_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/entity-aliases/{ALIAS_B}")
     assert res.status_code == 404

@@ -8,7 +8,9 @@ from app.models.employee import Employee
 from app.services.matching_engine import (
     CONTAINMENT_CONFIDENCE,
     FUZZY_THRESHOLD,
+    _build_exact_lookup,
     canonicalize_category_name,
+    category_insured_entities,
     jaccard,
     match_one,
     rule_specificity,
@@ -439,3 +441,42 @@ def test_insured_names_shapes() -> None:
     assert insured_names("A, B") == ["A", "B"]
     assert insured_names(None) == []
     assert insured_names("") == []
+
+
+def test_alias_bridges_either_side() -> None:
+    """`resolve_entity` applies the alias map to BOTH sides, so the abbreviation
+    may sit on the roster or on the category."""
+    from app.services.matching_engine import resolve_entity
+
+    aliases = {"cso": "city serviced offices pte ltd"}
+
+    # Roster carries the abbreviation, category the legal name.
+    cats = [_cat("c1", "All Employees", insured=["City Serviced Offices Pte Ltd"])]
+    assert _match(_emp("All Employees", entity="CSO"), cats).category_id is None
+    idx = {c.id: category_insured_entities(c, aliases) for c in cats}
+    out = match_one(
+        _emp("All Employees", entity="CSO"),
+        cats,
+        _build_exact_lookup(cats),
+        {c.id: tokenize(canonicalize_category_name(c.display_name)) for c in cats},
+        idx,
+        entity_aliases=aliases,
+    )
+    assert out.category_id == "c1"
+
+    # And the mirror: category carries the abbreviation, roster the legal name.
+    cats2 = [_cat("c2", "All Employees", insured=["CSO"])]
+    idx2 = {c.id: category_insured_entities(c, aliases) for c in cats2}
+    out2 = match_one(
+        _emp("All Employees", entity="City Serviced Offices Pte Ltd"),
+        cats2,
+        _build_exact_lookup(cats2),
+        {c.id: tokenize(canonicalize_category_name(c.display_name)) for c in cats2},
+        idx2,
+        entity_aliases=aliases,
+    )
+    assert out2.category_id == "c2"
+
+    # Single-hop: A->B, B->C must not chain A->C.
+    chain = {"a": "b", "b": "c"}
+    assert resolve_entity("A", chain) == "b"
