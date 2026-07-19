@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { InsurerSelect } from "@/components/configuration/InsurerSelect";
 import {
   Select,
   SelectContent,
@@ -153,11 +154,11 @@ function ListingFormSheet({
         <SheetBody className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="panel-insurer">Insurer</Label>
-            <Input
+            <InsurerSelect
               id="panel-insurer"
               value={form.insurer}
-              placeholder="e.g. AIA-SG"
-              onChange={(e) => setForm({ ...form, insurer: e.target.value })}
+              placeholder="e.g. AIA"
+              onChange={(v) => setForm({ ...form, insurer: v })}
             />
           </div>
           <div className="space-y-1.5">

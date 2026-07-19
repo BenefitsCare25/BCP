@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { InsurerSelect } from "@/components/configuration/InsurerSelect";
 import type { TemplateField } from "@/types";
 
 /** Comma-joined string ↔ list, used by multichoice + taglist fields. Trims and
@@ -191,6 +192,16 @@ export function FieldControl({
           onChange={(e) => onChange(e.target.value)}
           rows={2}
           className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+        />
+      ) : field.id === "insurer" ? (
+        // Every product template carries an `insurer` header field, so routing
+        // it here turns all of them into the catalog dropdown at once. Prior
+        // values for this client ride along as extra options rather than the
+        // separate "Suggestions…" select the other text fields get.
+        <InsurerSelect
+          value={value}
+          onChange={onChange}
+          extraOptions={suggestions}
         />
       ) : (
         <div className="flex items-center gap-2">
