@@ -240,6 +240,7 @@ function usePanelInvalidator() {
     void queryClient.invalidateQueries({ queryKey: ["panel-listings"] });
     void queryClient.invalidateQueries({ queryKey: ["policy-year-panels"] });
     void queryClient.invalidateQueries({ queryKey: ["panel-listing-companies"] });
+    void queryClient.invalidateQueries({ queryKey: ["panel-setup-history"] });
     // Locator caches (portal preview) key off the same data.
     void queryClient.invalidateQueries({ queryKey: ["portal-preview", "clinics"] });
   };

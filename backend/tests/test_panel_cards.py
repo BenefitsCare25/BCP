@@ -736,6 +736,36 @@ def test_portal_card_artwork_requires_assignment(
     )
 
 
+def test_setup_history_lists_years_with_their_selections(
+    client_as_a: TestClient,
+) -> None:
+    _clear_assignments(client_as_a)
+    assignment = _assign(client_as_a, card_name="History Card")
+
+    res = client_as_a.get("/api/v1/panel-setup/history")
+    assert res.status_code == 200, res.text
+    years = res.json()["years"]
+    entry = next(y for y in years if y["policy_year_id"] == PY_A)
+    assert entry["year"] == 2031
+    assert entry["is_current"] is True
+    cards = entry["cards"]
+    assert [c["id"] for c in cards] == [assignment["id"]]
+    assert cards[0]["product_code"] == "GCGP"
+    assert cards[0]["service_labels"] == ["GP"]
+    assert cards[0]["remark_keys"] == ["gp"]
+    assert cards[0]["special_conditions"] == "Co-pay $5 per visit"
+
+    # Another company's years must never appear in this company's history.
+    assert all(y["policy_year_id"] != PY_B for y in years)
+
+
+def test_setup_history_reflects_withdrawn_cards(client_as_a: TestClient) -> None:
+    _clear_assignments(client_as_a)
+    res = client_as_a.get("/api/v1/panel-setup/history")
+    entry = next(y for y in res.json()["years"] if y["policy_year_id"] == PY_A)
+    assert entry["cards"] == []
+
+
 def test_portal_cards_requires_member_token() -> None:
     with TestClient(app) as anon:
         assert anon.get("/api/v1/portal/cards").status_code == 401

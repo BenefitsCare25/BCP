@@ -175,6 +175,48 @@ class ClinicFilters(BaseModel):
     areas: list[str]
 
 
+class SetupHistoryListing(BaseModel):
+    """One clinic network enabled for a benefit year."""
+
+    id: str
+    display_label: str
+    type_label: str
+    country: str
+    clinic_count: int
+
+
+class SetupHistoryCard(BaseModel):
+    """One e-card issued for a benefit year."""
+
+    id: str
+    card_name: str
+    product_code: str
+    product_name: str
+    employee_member_id_source: str
+    dependant_member_id_source: str
+    service_labels: list[str] = Field(default_factory=list)
+    remark_keys: list[str] = Field(default_factory=list)
+    special_conditions: str | None = None
+
+
+class SetupHistoryYear(BaseModel):
+    """A benefit year's panel setup — what members saw (or will see) that year."""
+
+    policy_year_id: str
+    year: int
+    status: str
+    start_date: str
+    end_date: str
+    # The year the member portal currently reads (status == active).
+    is_current: bool
+    listings: list[SetupHistoryListing] = Field(default_factory=list)
+    cards: list[SetupHistoryCard] = Field(default_factory=list)
+
+
+class PanelSetupHistoryOut(BaseModel):
+    years: list[SetupHistoryYear] = Field(default_factory=list)
+
+
 class ClinicSearchOut(BaseModel):
     total: int
     offset: int

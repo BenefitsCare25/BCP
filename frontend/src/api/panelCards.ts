@@ -128,6 +128,48 @@ export interface MemberCards {
   items: MemberCard[];
 }
 
+// ── Setup history (Locations + Cards, per benefit year) ──────────────────────
+
+export interface SetupHistoryListing {
+  id: string;
+  display_label: string;
+  type_label: string;
+  country: string;
+  clinic_count: number;
+}
+
+export interface SetupHistoryCard {
+  id: string;
+  card_name: string;
+  product_code: string;
+  product_name: string;
+  employee_member_id_source: string;
+  dependant_member_id_source: string;
+  service_labels: string[];
+  remark_keys: string[];
+  special_conditions: string | null;
+}
+
+export interface SetupHistoryYear {
+  policy_year_id: string;
+  year: number;
+  status: string;
+  start_date: string;
+  end_date: string;
+  is_current: boolean;
+  listings: SetupHistoryListing[];
+  cards: SetupHistoryCard[];
+}
+
+export function usePanelSetupHistory() {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["panel-setup-history", cid],
+    queryFn: () =>
+      api.get<{ years: SetupHistoryYear[] }>("/panel-setup/history"),
+  });
+}
+
 // ── Broker hooks ─────────────────────────────────────────────────────────────
 
 export function useCardOptions() {
@@ -269,6 +311,7 @@ function useCardInvalidator() {
   return () => {
     void queryClient.invalidateQueries({ queryKey: ["panel-cards"] });
     void queryClient.invalidateQueries({ queryKey: ["policy-year-cards"] });
+    void queryClient.invalidateQueries({ queryKey: ["panel-setup-history"] });
     void queryClient.invalidateQueries({ queryKey: ["portal-preview", "cards"] });
   };
 }

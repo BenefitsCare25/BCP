@@ -317,10 +317,10 @@ def copy_policy_year(
     from app.services.panel_cards import carry_over_card_assignments
     from app.services.panel_clinics import carry_over_panel_tags
 
-    carry_over_panel_tags(db, target)
-    # Cards come from the year being COPIED, not the most recent one — the rest
-    # of this handler clones py.id, and mixing another year's cards in would
-    # pair this year's products with a different year's card configuration.
+    # Both come from the year being COPIED, not the most recent one — the rest
+    # of this handler clones py.id, and mixing another year's panel setup in
+    # would pair this year's products with a different year's configuration.
+    carry_over_panel_tags(db, target, source_policy_year_id=py.id)
     carry_over_card_assignments(db, target, source_policy_year_id=py.id)
     counts = clone_policy_year_config(
         db, source_id=py.id, target_id=target.id, client_id=client_id

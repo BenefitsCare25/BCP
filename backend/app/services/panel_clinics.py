@@ -320,26 +320,36 @@ def export_listing_workbook(clinics: list[PanelClinic]) -> bytes:
 # ── Policy-year tagging helpers ──────────────────────────────────────────────
 
 
-def carry_over_panel_tags(db: Session, new_year) -> int:
-    """Copy panel-listing tags from the client's most recent prior policy year
-    onto a freshly created one, so 'which panel networks does this company
-    use' behaves like a per-company setting that survives renewals.
+def carry_over_panel_tags(
+    db: Session, new_year, source_policy_year_id: str | None = None
+) -> int:
+    """Copy panel-listing tags onto a freshly created policy year, so 'which
+    panel networks does this company use' behaves like a per-company setting
+    that survives renewals.
+
+    `source_policy_year_id` names the year to copy FROM — callers that clone a
+    specific year (copy-from-year) must pass it, otherwise the tags would come
+    from whichever year is most recent rather than the one being cloned.
+    Omit it for a plain new year, where 'most recent prior year' is right.
+    Mirrors `panel_cards.carry_over_card_assignments`.
 
     Flush only — the caller (policy-year create) owns the commit. Returns the
     number of tags copied.
     """
     from app.models import PolicyYear  # local: avoid widening module imports
 
-    prior_year_id = db.execute(
-        select(PolicyYear.id)
-        .where(
-            PolicyYear.client_id == new_year.client_id,
-            PolicyYear.id != new_year.id,
-            PolicyYear.start_date < new_year.start_date,
-        )
-        .order_by(PolicyYear.start_date.desc())
-        .limit(1)
-    ).scalar_one_or_none()
+    prior_year_id = source_policy_year_id
+    if prior_year_id is None:
+        prior_year_id = db.execute(
+            select(PolicyYear.id)
+            .where(
+                PolicyYear.client_id == new_year.client_id,
+                PolicyYear.id != new_year.id,
+                PolicyYear.start_date < new_year.start_date,
+            )
+            .order_by(PolicyYear.start_date.desc())
+            .limit(1)
+        ).scalar_one_or_none()
     if prior_year_id is None:
         return 0
     listing_ids = list(

@@ -42,6 +42,7 @@ import {
 } from "@/api/panelListings";
 import { usePolicyYears } from "@/api/hooks";
 import { PanelCardsPanel } from "@/components/configuration/cards/PanelCardsPanel";
+import { PanelSetupHistory } from "@/components/configuration/PanelSetupHistory";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -82,6 +83,8 @@ import {
 import { formatError } from "@/lib/errors";
 import { downloadResponseAsFile } from "@/lib/download";
 import { useSession } from "@/stores/session";
+
+type TabKey = "locations" | "cards" | "history";
 
 const EMPTY_FORM: PanelListingInput = {
   insurer: "",
@@ -551,7 +554,7 @@ function LibraryTable({
 
 export function PanelClinicsPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const [tab, setTab] = useState<"locations" | "cards">("locations");
+  const [tab, setTab] = useState<TabKey>("locations");
   const { data: policyYears = [] } = usePolicyYears();
   const { data: listings = [], isLoading } = usePanelListings();
   // Only query with a year id CONFIRMED in the active client's list — the
@@ -604,13 +607,18 @@ export function PanelClinicsPage() {
   return (
     <Tabs
       value={tab}
-      onValueChange={(v) => setTab(v as "locations" | "cards")}
+      onValueChange={(v) => setTab(v as TabKey)}
       className="space-y-4"
     >
       <TabsList>
         <TabsTrigger value="locations">Locations</TabsTrigger>
         <TabsTrigger value="cards">Cards</TabsTrigger>
+        <TabsTrigger value="history">History</TabsTrigger>
       </TabsList>
+
+      <TabsContent value="history">
+        <PanelSetupHistory />
+      </TabsContent>
 
       <TabsContent value="cards">
         <PanelCardsPanel

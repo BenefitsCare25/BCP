@@ -713,6 +713,51 @@ def test_enable_for_company_without_policy_year_422() -> None:
                 session.commit()
 
 
+def test_copy_year_takes_panel_tags_from_the_copied_year(
+    broker_a: TestClient,
+) -> None:
+    """Copy-from-year must take tags from the year being COPIED, not from
+    whichever year is most recent — otherwise the new year pairs the source's
+    products with a different year's clinic selections."""
+    source_tags = set(
+        broker_a.get(f"/api/v1/policy-years/{PY_A}/panels").json()[
+            "panel_listing_ids"
+        ]
+    )
+    assert source_tags, "precondition: the source year has panel tags"
+
+    # A LATER year with deliberately different (empty) selections. Without the
+    # source-year argument the copy would inherit from this one.
+    later = broker_a.post(
+        "/api/v1/policy-years",
+        json={"start_date": "2029-03-01", "end_date": "2030-02-28"},
+    ).json()
+    broker_a.put(
+        f"/api/v1/policy-years/{later['id']}/panels",
+        json={"panel_listing_ids": []},
+    )
+
+    copied = broker_a.post(
+        f"/api/v1/policy-years/{PY_A}/copy",
+        json={"start_date": "2031-03-01", "end_date": "2032-02-28"},
+    )
+    assert copied.status_code == 201, copied.text
+    new_id = copied.json()["policy_year"]["id"]
+    inherited = set(
+        broker_a.get(f"/api/v1/policy-years/{new_id}/panels").json()[
+            "panel_listing_ids"
+        ]
+    )
+    assert inherited == source_tags
+
+    with SessionLocal() as session:
+        for year_id in (later["id"], new_id):
+            row = session.get(PolicyYear, year_id)
+            if row is not None:
+                session.delete(row)
+        session.commit()
+
+
 def test_new_policy_year_inherits_panel_tags(broker_a: TestClient) -> None:
     """Creating a new policy year copies the previous year's panel selections,
     so the company's clinic locator survives renewals without re-ticking."""
