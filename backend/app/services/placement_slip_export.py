@@ -23,6 +23,7 @@ stored (GST-exclusive — grossing is a display concern, never re-applied here).
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Literal
 
 from openpyxl import Workbook
@@ -587,7 +588,38 @@ def _sob_value(entry: dict[str, Any], col_id: str, first: bool) -> Any:
     return overrides.get(col_id, entry.get("base_value"))
 
 
-def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
+def _shared_cover(plans: list[Plan]) -> str | None:
+    """The product-level "Cover :" sentence, when the plans agree on one.
+
+    Slip-parsed GHS-style products stamp the SAME cover sentence on every plan
+    ("Cover: Reimbursement of eligible inpatient expenses…") — that belongs on
+    the Cover line above the SOB, not repeated per plan. A single plan whose
+    description is a basis expression ("24x basic monthly salary") stays in
+    Plan Details."""
+    descs = {
+        (p.cover_description or "").strip()
+        for p in plans
+        if (p.cover_description or "").strip()
+    }
+    if len(descs) != 1:
+        return None
+    text = next(iter(descs))
+    n = sum(1 for p in plans if (p.cover_description or "").strip())
+    if n > 1 or text.lower().startswith("cover"):
+        return text
+    return None
+
+
+def _sob_col_label(col: dict[str, Any]) -> str:
+    """Reference-style column header: the base plan plus every plan sharing its
+    schedule ("Plan 1/U01/U04/U06"), not the fold's "+N" shorthand."""
+    codes = [str(c) for c in (col.get("plan_codes") or []) if str(c)]
+    if len(codes) > 1:
+        return "Plan " + "/".join(codes)
+    return str(col.get("label") or (f"Plan {codes[0]}" if codes else ""))
+
+
+def _write_sob(ws: Worksheet, plans: list[Plan], cover: str | None) -> None:
     """Schedule of Benefits, plans folded to columns (matching value vectors
     collapse — the same model the SOB editor uses)."""
     with_items = [
@@ -610,11 +642,15 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
         return
 
     ws.append([])
-    ws.append(["Cover :"])
-    _style_row(ws, font=_HEADER)
+    # The stored sentence usually carries its own "Cover:" prefix — strip it,
+    # the label cell already says it.
+    cover_text = re.sub(r"(?i)^cover\s*:\s*", "", cover).strip() if cover else ""
+    ws.append(["Cover :", cover_text])
+    _style_row(ws, font=_HEADER, wrap_cols=(2,))
+    ws.cell(row=ws.max_row, column=2).font = Font(bold=False)
     ws.append(["SCHEDULE OF BENEFITS / INSURER / PLAN"])
     _style_row(ws, font=_SECTION)
-    ws.append(["No.", "Benefit"] + [str(col.get("label") or "") for col in columns])
+    ws.append(["No.", "Benefit"] + [_sob_col_label(col) for col in columns])
     _style_row(ws, font=_HEADER)
     sob_last_col = 2 + len(columns)
     _border_row(ws, 1, sob_last_col)
@@ -663,10 +699,8 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
                 ]
                 ws.append(["", f"    · {key}", *values])
                 _border_row(ws, 1, sob_last_col)
-        elif isinstance(it.get("properties"), dict):
-            for k, v in it["properties"].items():
-                ws.append(["", f"    · {k}: {v}"])
-                _border_row(ws, 1, sob_last_col)
+        # Non-copay `properties` are machine-derived duplicates of the limits
+        # (maximum_days ↔ "Maximum no. of days") — never rendered.
         _limit_rows(it.get("limits"), "    ")
         for sub in it.get("sub_items") or []:
             sub_name = str(sub.get("name") or "")
@@ -676,11 +710,20 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
             _limit_rows(sub.get("limits"), "        ")
 
 
-def _write_plan_details(ws: Worksheet, plans: list[Plan]) -> None:
-    """Cover-basis metadata (GCI-style plan tiers) — only when a plan carries it."""
+def _write_plan_details(
+    ws: Worksheet, plans: list[Plan], shared_cover: str | None
+) -> None:
+    """Cover-basis metadata (GCI-style plan tiers) — only when a plan carries
+    something the Cover line doesn't already say. A cover sentence shared by
+    every plan is hoisted onto the Cover line, so rows whose only content is
+    that repeated sentence are dropped entirely."""
+    def _own_cover(p: Plan) -> str:
+        desc = (p.cover_description or "").strip()
+        return "" if shared_cover is not None and desc == shared_cover else desc
+
     rows = [
         p for p in plans
-        if p.cover_description or p.annual_policy_limit or p.report_label
+        if _own_cover(p) or p.annual_policy_limit or p.report_label
     ]
     if not rows:
         return
@@ -692,7 +735,7 @@ def _write_plan_details(ws: Worksheet, plans: list[Plan]) -> None:
     _border_row(ws, 1, 4)
     for p in rows:
         ws.append([
-            p.code, p.cover_description or "",
+            p.code, _own_cover(p),
             p.annual_policy_limit or "", p.report_label or "",
         ])
         _style_row(ws, wrap_cols=(2,))
@@ -751,8 +794,9 @@ def _write_product_sheet(
         for label in _TERM_LABELS:
             ws.append([label])
             _style_row(ws, font=_HEADER)
-        _write_plan_details(ws, plans)
-        _write_sob(ws, plans)
+        shared_cover = _shared_cover(plans)
+        _write_plan_details(ws, plans, shared_cover)
+        _write_sob(ws, plans, shared_cover)
 
 
 def _build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
