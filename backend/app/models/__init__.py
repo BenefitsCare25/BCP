@@ -14,6 +14,7 @@ from app.models.enrollment import Enrollment, EnrollmentElection
 from app.models.enrollment_window import EnrollmentWindow
 from app.models.flex_pricing import FlexPricing
 from app.models.flex_scheme import FlexScheme
+from app.models.insurer import Insurer
 from app.models.invitation import Invitation
 from app.models.leave_election import LeaveElection
 from app.models.leave_policy import LeavePolicy
@@ -51,6 +52,7 @@ __all__ = [
     "EnrollmentWindow",
     "FlexPricing",
     "FlexScheme",
+    "Insurer",
     "Invitation",
     "LeaveElection",
     "LeavePolicy",

@@ -32,6 +32,7 @@ import {
   useSetupProducts,
 } from "@/api/hooks";
 import { useRegistry } from "@/api/registry";
+import { InsurerSelect } from "@/components/configuration/InsurerSelect";
 import { LINE_LABELS, isProductAdded, lineForCode } from "@/lib/insuranceLines";
 import { formatError } from "@/lib/errors";
 import type { InsuranceLine } from "@/types";
@@ -317,13 +318,11 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
 
                 <div className="space-y-1.5">
                   <Label htmlFor="ap-insurer">Insurer (optional)</Label>
-                  <Input
+                  <InsurerSelect
                     id="ap-insurer"
                     placeholder="e.g. Great Eastern"
                     value={custom.insurer}
-                    onChange={(e) =>
-                      setCustom((c) => ({ ...c, insurer: e.target.value }))
-                    }
+                    onChange={(v) => setCustom((c) => ({ ...c, insurer: v }))}
                   />
                 </div>
 

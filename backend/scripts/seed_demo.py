@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.models.policy_year import PolicyYearStatus
 from app.services.rule_generator import _ROLE_PATTERNS
+from scripts.seed_insurers import seed_insurers
 
 # A second client under the same demo firm so the in-app client switcher has
 # somewhere to switch to in local dev.
@@ -508,6 +509,10 @@ def seed() -> None:
             else:
                 for field_name, value in spec.items():
                     setattr(existing, field_name, value)
+
+        # Insurer name library (global — client_id null). Same idempotent
+        # upsert; see scripts/seed_insurers.py.
+        seed_insurers(db)
 
         db.commit()
     finally:

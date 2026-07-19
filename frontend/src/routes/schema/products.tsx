@@ -42,6 +42,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
+import { InsurerSelect } from "@/components/configuration/InsurerSelect";
 import { PageGuide } from "@/components/ui/page-guide";
 import type { Product } from "@/types";
 
@@ -170,14 +171,11 @@ export function SchemaProductsPage({
               <div className="grid grid-cols-2 gap-3">
                 <Field
                   label="Insurer (optional)"
-                  hint="Underwriting insurer. Groups this product's columns into that insurer's membership/billing reports on the Reports page."
+                  hint="Underwriting insurer, picked from the Insurers tab. Groups this product's columns into that insurer's membership/billing reports on the Reports page. A name not in the list still saves."
                 >
-                  <Input
+                  <InsurerSelect
                     value={draft.insurer ?? ""}
-                    onChange={(e) =>
-                      setDraft({ ...draft, insurer: e.target.value })
-                    }
-                    placeholder="AIA"
+                    onChange={(v) => setDraft({ ...draft, insurer: v })}
                   />
                 </Field>
                 <Field

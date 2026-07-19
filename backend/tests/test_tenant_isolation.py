@@ -38,6 +38,7 @@ from app.models import (  # noqa: E402
     Employee,
     Enrollment,
     EnrollmentWindow,
+    Insurer,
     PanelCard,
     PanelListing,
     Plan,
@@ -212,6 +213,16 @@ def _setup_db():
             )
         )
 
+        # An insurer catalog entry owned by client B (name-catalog isolation).
+        session.add(
+            Insurer(
+                id=INSURER_B,
+                client_id=CLIENT_B_ID,
+                name="Client B Only Insurer",
+                legal_name="Client B Only Insurer Pte Ltd",
+            )
+        )
+
         session.commit()
 
     yield
@@ -259,6 +270,7 @@ PRODUCT_B = "00000000-0000-0000-0000-0000000000b7"
 WINDOW_B = "00000000-0000-0000-0000-0000000000b8"
 ENROLL_B = "00000000-0000-0000-0000-0000000000b9"
 PANEL_B = "00000000-0000-0000-0000-0000000000ba"
+INSURER_B = "00000000-0000-0000-0000-0000000000bc"
 CARD_B = "00000000-0000-0000-0000-0000000000bb"
 # Any assignment id — the guard rejects at the policy year first.
 CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
@@ -1273,4 +1285,26 @@ def test_panel_listing_companies_cross_tenant_404(client_as_a: TestClient) -> No
     res = client_as_a.put(
         f"/api/v1/panel-listings/{PANEL_B}/companies", json={"client_ids": []}
     )
+    assert res.status_code == 404
+
+
+def test_insurers_list_excludes_other_tenant(client_as_a: TestClient) -> None:
+    """The catalog is tenant-or-global: client A sees the shared library but
+    never client B's own entries."""
+    rows = client_as_a.get("/api/v1/schemas/insurers").json()
+    ids = {r["id"] for r in rows}
+    assert INSURER_B not in ids
+    # The seeded Singapore library IS visible (client_id NULL).
+    assert any(r["client_id"] is None for r in rows)
+
+
+def test_insurer_update_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.patch(
+        f"/api/v1/schemas/insurers/{INSURER_B}", json={"legal_name": "Hijacked"}
+    )
+    assert res.status_code == 404
+
+
+def test_insurer_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/schemas/insurers/{INSURER_B}")
     assert res.status_code == 404

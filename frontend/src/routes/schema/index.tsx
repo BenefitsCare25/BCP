@@ -4,11 +4,13 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SchemaAttributesPage } from "./attributes";
+import { SchemaInsurersPage } from "./insurers";
 import { SchemaProductsPage } from "./products";
 
 const TABS = [
   { key: "attributes", label: "Employee attributes" },
   { key: "products", label: "Products catalog" },
+  { key: "insurers", label: "Insurers" },
 ] as const;
 
 type SchemaTab = (typeof TABS)[number]["key"];
@@ -22,9 +24,13 @@ type SchemaTab = (typeof TABS)[number]["key"];
 export function SchemaPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string };
-  const tab: SchemaTab = search.tab === "products" ? "products" : "attributes";
+  const tab: SchemaTab =
+    search.tab === "products" || search.tab === "insurers"
+      ? search.tab
+      : "attributes";
   const [addAttrOpen, setAddAttrOpen] = useState(false);
   const [addProductOpen, setAddProductOpen] = useState(false);
+  const [addInsurerOpen, setAddInsurerOpen] = useState(false);
 
   return (
     <Tabs
@@ -41,13 +47,19 @@ export function SchemaPage() {
             </TabsTrigger>
           ))}
         </TabsList>
-        {tab === "attributes" ? (
+        {tab === "attributes" && (
           <Button onClick={() => setAddAttrOpen(true)}>
             <Plus className="size-4" /> Add attribute
           </Button>
-        ) : (
+        )}
+        {tab === "products" && (
           <Button onClick={() => setAddProductOpen(true)}>
             <Plus className="size-4" /> Add product
+          </Button>
+        )}
+        {tab === "insurers" && (
+          <Button onClick={() => setAddInsurerOpen(true)}>
+            <Plus className="size-4" /> Add insurer
           </Button>
         )}
       </div>
@@ -56,6 +68,9 @@ export function SchemaPage() {
       </TabsContent>
       <TabsContent value="products">
         <SchemaProductsPage open={addProductOpen} onOpenChange={setAddProductOpen} />
+      </TabsContent>
+      <TabsContent value="insurers">
+        <SchemaInsurersPage open={addInsurerOpen} onOpenChange={setAddInsurerOpen} />
       </TabsContent>
     </Tabs>
   );
