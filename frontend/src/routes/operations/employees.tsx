@@ -55,6 +55,7 @@ import { useCoverageHistory } from "@/api/enrollment";
 import { FlexPriceTagSummary } from "@/components/benefits/FlexPriceTagSummary";
 import { CoverageHistory } from "@/components/enrollment/CoverageHistory";
 import { CoverageRevertControls } from "@/components/enrollment/CoverageRevertControls";
+import { EntityBreakdownCard } from "@/components/configuration/EntityBreakdownCard";
 import { EntityReconciliationPanel } from "@/components/configuration/EntityReconciliationPanel";
 import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
 import { PageGuide } from "@/components/ui/page-guide";
@@ -236,6 +237,10 @@ export function EmployeesPage() {
         </div>
       )}
 
+      {/* How the roster splits across legal entities — hidden when it carries
+          no Entity column. */}
+      <EntityBreakdownCard policyYearId={policyYearId} />
+
       {/* Entity-gate mismatches — the usual silent cause of "unmatched".
           Hidden when everything reconciles. */}
       <EntityReconciliationPanel policyYearId={policyYearId} />
@@ -319,14 +324,24 @@ export function EmployeesPage() {
                     <TableHead>Plan</TableHead>
                     <TableHead>Family status</TableHead>
                     <TableHead>Category (raw)</TableHead>
-                    <TableHead>Salary</TableHead>
+                    <TableHead>
+                      <span className="inline-flex items-center gap-1">
+                        Entity
+                        <InfoHint>
+                          The legal entity employing this member, from the
+                          roster's Entity column. A category restricted to
+                          specific entities only matches employees of those
+                          entities.
+                        </InfoHint>
+                      </span>
+                    </TableHead>
                     <TableHead>
                       <span className="inline-flex items-center gap-1">
                         Match
                         <InfoHint>
-                          Matched = resolved to a category (confidence % shown).
-                          Unmatched = no rule applied — map manually or refine
-                          categories, then re-run matching.
+                          Matched = resolved to a category. Unmatched = no rule
+                          applied — map manually or refine categories, then
+                          re-run matching.
                         </InfoHint>
                       </span>
                     </TableHead>
@@ -366,23 +381,12 @@ export function EmployeesPage() {
                       <TableCell className="max-w-[200px] truncate text-muted-foreground">
                         {(e.attribute_values.category as string) ?? "—"}
                       </TableCell>
-                      <TableCell>
-                        {e.attribute_values.salary != null &&
-                        e.attribute_values.salary !== "" &&
-                        !Number.isNaN(Number(e.attribute_values.salary))
-                          ? `S$ ${Number(e.attribute_values.salary).toLocaleString()}`
-                          : "—"}
+                      <TableCell className="max-w-[220px] truncate text-muted-foreground">
+                        {(e.attribute_values.entity as string) || "—"}
                       </TableCell>
                       <TableCell>
                         {e.matched_category_id ? (
-                          <div className="flex items-center gap-1.5">
-                            <Badge variant="good">Matched</Badge>
-                            {e.match_confidence !== null && (
-                              <span className="text-xs text-muted-foreground">
-                                {Math.round(e.match_confidence * 100)}%
-                              </span>
-                            )}
-                          </div>
+                          <Badge variant="good">Matched</Badge>
                         ) : (
                           <Badge variant="warn">Unmatched</Badge>
                         )}
