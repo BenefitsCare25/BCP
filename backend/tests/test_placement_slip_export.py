@@ -297,6 +297,41 @@ def test_quotation_mode_blanks_insurer_and_rates(client: TestClient) -> None:
     assert ghs[basis_i + 2][6] == 100000
 
 
+def test_premium_total_semantics() -> None:
+    """Carried-down block premiums count once; distinct premiums sum; a
+    per-1000-SI rate with no stored premium derives one (GPA-style)."""
+    from app.services.placement_slip_export import (
+        _annual_premium_total,
+        _derived_premium,
+    )
+
+    def cat(pa: dict) -> Category:
+        return Category(
+            policy_year_id=PY_ID, display_name="x", raw_description="x",
+            plan_assignments=pa,
+        )
+
+    # GCGP-style: 4 cohorts all carry the plan's 186,732 → one premium.
+    dup = [cat({"insured": "A", "annual_premium": 186732.0}) for _ in range(4)]
+    assert _annual_premium_total(dup) == 186732.0
+    # GTL-style distinct per-category premiums still sum.
+    distinct = [
+        cat({"insured": "A", "annual_premium": 100.0}),
+        cat({"insured": "A", "annual_premium": 200.0}),
+    ]
+    assert _annual_premium_total(distinct) == 300.0
+    assert _derived_premium(
+        {"rate_basis": "per_1000_si", "premium_rate": 0.072, "sum_insured": 4_000_000.0}
+    ) == 288.0
+    # Derived premiums are genuine per-row figures — never deduped.
+    derived = [
+        cat({"insured": "A", "rate_basis": "per_1000_si",
+             "premium_rate": 0.072, "sum_insured": 1_000_000.0})
+        for _ in range(2)
+    ]
+    assert _annual_premium_total(derived) == 144.0
+
+
 def test_unassigned_sheet_and_audit(client: TestClient) -> None:
     wb = _download(client)
     _download(client, kind="quotation")
