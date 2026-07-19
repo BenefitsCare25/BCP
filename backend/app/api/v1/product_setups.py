@@ -702,6 +702,43 @@ def remove_product_from_year(
     return None
 
 
+def _sync_term_policy_number(
+    db: Session, product: Product, policy_year_id: str, answers: dict
+) -> None:
+    """Route the Header & Policy "Policy No." into this product's term.
+
+    The policy number is entered once, under Header & Policy (``header.policy_no``);
+    the placement-slip export reads it from ``ProductTerm.policy_number``. Mirror a
+    NON-EMPTY header value into the (sparse) term row on confirm — creating the row
+    when needed. A blank header is a no-op: it must never clear a number set
+    out-of-band (e.g. before this field became the single input), so an unrelated
+    re-confirm can't silently wipe the exported policy number. The value is capped
+    to the column width (String(64)) so an over-long paste can't fail the confirm
+    on Postgres.
+    """
+    header = answers.get("header") or {}
+    raw = header.get("policy_no")
+    policy_no = str(raw).strip()[:64] if raw is not None else ""
+    if not policy_no:
+        return
+    term = db.execute(
+        select(ProductTerm).where(
+            ProductTerm.policy_year_id == policy_year_id,
+            ProductTerm.product_id == product.id,
+        )
+    ).scalar_one_or_none()
+    if term is not None:
+        term.policy_number = policy_no
+    else:
+        db.add(
+            ProductTerm(
+                policy_year_id=policy_year_id,
+                product_id=product.id,
+                policy_number=policy_no,
+            )
+        )
+
+
 @router.post(
     "/policy-years/{policy_year_id}/product-setups/{product_code}/confirm",
     response_model=ConfirmResult,
@@ -754,6 +791,7 @@ def confirm_setup(
     )
     try:
         product = _upsert_product(db, user, client_id, tpl, setup.answers)
+        _sync_term_policy_number(db, product, policy_year_id, setup.answers)
         if setup.origin == ProductSetupOrigin.placement_slip:
             _supersede_slip_provisional(db, user, product, policy_year_id)
         created, updated, removed = _materialize_plans(

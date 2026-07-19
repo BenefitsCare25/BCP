@@ -43,9 +43,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -598,35 +596,7 @@ export function PanelClinicsPage() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="flex-row items-start justify-between space-y-0">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <MapPin className="size-4 text-primary" />
-              Panel clinic library
-              <InfoHint>
-                Upload each insurer's clinic list once, then use the Enable for
-                companies (<Building2 className="inline size-3" />) action to
-                tick every company that uses that network — no company switching
-                needed. The Enabled switch does the same for just the company
-                you're viewing. Selections carry over automatically when a new
-                policy year is created; members only see clinics from lists
-                enabled for their policy year.
-              </InfoHint>
-            </CardTitle>
-            <CardDescription>
-              A shared library of insurer panel clinic lists
-              {currentYear ? (
-                <>
-                  {" "}
-                  — viewing{" "}
-                  <span className="font-medium text-foreground">
-                    policy year {currentYear.year}
-                  </span>
-                </>
-              ) : null}
-              .
-            </CardDescription>
-          </div>
+        <CardHeader className="flex-row items-start justify-end space-y-0">
           <Button
             size="sm"
             onClick={() => {

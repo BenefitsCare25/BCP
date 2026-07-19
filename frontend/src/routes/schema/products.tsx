@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCreateProduct,
@@ -11,13 +11,7 @@ import {
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Globe } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Field, InfoHint } from "@/components/ui/tooltip";
@@ -81,18 +75,23 @@ function toDraft(p: Product): ProductPayload {
   };
 }
 
-export function SchemaProductsPage() {
+export function SchemaProductsPage({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const { data: products = [], isLoading } = useProducts();
   const create = useCreateProduct();
   const update = useUpdateProduct();
   const remove = useDeleteProduct();
-  const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [draft, setDraft] = useState<ProductPayload>(EMPTY_DRAFT);
   const [deleting, setDeleting] = useState<Product | null>(null);
 
   const onSheetOpenChange = (next: boolean) => {
-    setOpen(next);
+    onOpenChange(next);
     if (!next) {
       setEditing(null);
       setDraft(EMPTY_DRAFT);
@@ -102,7 +101,7 @@ export function SchemaProductsPage() {
   const beginEdit = (p: Product) => {
     setEditing(p);
     setDraft(toDraft(p));
-    setOpen(true);
+    onOpenChange(true);
   };
 
   const submit = async () => {
@@ -119,7 +118,7 @@ export function SchemaProductsPage() {
         await create.mutateAsync(payload);
         toast.success(`Added ${payload.display_name}`);
       }
-      setOpen(false);
+      onOpenChange(false);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -127,11 +126,7 @@ export function SchemaProductsPage() {
 
   return (
     <div className="space-y-4 max-w-7xl">
-      <div className="flex justify-end gap-3">
-        <Button onClick={() => setOpen(true)}>
-          <Plus className="size-4" /> Add product
-        </Button>
-        <Sheet open={open} onOpenChange={onSheetOpenChange}>
+      <Sheet open={open} onOpenChange={onSheetOpenChange}>
           <SheetContent side="right">
             <SheetHeader>
               <div className="flex items-center gap-1.5">
@@ -272,16 +267,9 @@ export function SchemaProductsPage() {
             </SheetFooter>
           </SheetContent>
         </Sheet>
-      </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Catalog</CardTitle>
-          <CardDescription>
-            {products.length} product{products.length === 1 ? "" : "s"} available
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           {isLoading ? (
             <SkeletonTable rows={5} columns={6} />
           ) : (

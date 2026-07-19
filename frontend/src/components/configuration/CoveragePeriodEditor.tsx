@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { RotateCcw } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +16,6 @@ import {
   useResetProductTerm,
   useSetProductTerm,
 } from "@/api/hooks";
-import { formatPolicyRange } from "@/lib/policy-year";
 import { formatError } from "@/lib/errors";
 import type { ProductTerm } from "@/types";
 import { toast } from "sonner";
@@ -58,7 +56,6 @@ export function CoveragePeriodEditor({
   const [fcl, setFcl] = useState<string>(
     term.free_cover_limit != null ? String(term.free_cover_limit) : "",
   );
-  const [policyNo, setPolicyNo] = useState<string>(term.policy_number ?? "");
   const setTerm = useSetProductTerm(policyYearId);
   const resetTerm = useResetProductTerm(policyYearId);
   // Reset (DELETE) clears the whole row incl. the activation-locked coverage
@@ -77,9 +74,7 @@ export function CoveragePeriodEditor({
     (gstOpinion === "include" && parsedRate !== term.gst_rate);
   const parsedFcl = fcl.trim() === "" ? null : Number(fcl.replace(/,/g, ""));
   const fclDirty = parsedFcl !== term.free_cover_limit;
-  const trimmedPolicyNo = policyNo.trim() === "" ? null : policyNo.trim();
-  const policyNoDirty = trimmedPolicyNo !== (term.policy_number ?? null);
-  const dirty = datesDirty || gstDirty || fclDirty || policyNoDirty;
+  const dirty = datesDirty || gstDirty || fclDirty;
 
   const datesValid = Boolean(start) && Boolean(end) && end >= start;
   const rateValid =
@@ -95,8 +90,7 @@ export function CoveragePeriodEditor({
     !term.is_default ||
     term.gst_included !== null ||
     term.gst_rate != null ||
-    term.free_cover_limit != null ||
-    term.policy_number != null;
+    term.free_cover_limit != null;
 
   const save = async () => {
     try {
@@ -112,7 +106,6 @@ export function CoveragePeriodEditor({
             }
           : {}),
         ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
-        ...(policyNoDirty ? { policyNumber: trimmedPolicyNo } : {}),
       });
       toast.success(`Updated ${term.code} terms`);
     } catch (err) {
@@ -133,21 +126,6 @@ export function CoveragePeriodEditor({
     <div className="rounded-lg border border-border bg-muted/20 p-4">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-foreground">
-                Coverage period
-              </span>
-              {term.is_default && <Badge variant="outline">Inherits year</Badge>}
-              {term.gst_included === true && (
-                <Badge variant="outline">Incl. GST</Badge>
-              )}
-            </div>
-            <div className="text-xs text-muted-foreground mt-0.5">
-              {formatPolicyRange(term.coverage_start, term.coverage_end)}
-            </div>
-          </div>
-
           <div className="flex items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">GST</Label>
             <InfoHint>
@@ -159,7 +137,10 @@ export function CoveragePeriodEditor({
               value={gstOpinion}
               onValueChange={(v) => setGstOpinion(v as GstOpinion)}
             >
-              <SelectTrigger className="w-[180px]" aria-label={`${term.code} GST`}>
+              <SelectTrigger
+                className="w-[224px] whitespace-nowrap"
+                aria-label={`${term.code} GST`}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -187,22 +168,6 @@ export function CoveragePeriodEditor({
           </div>
 
           <div className="flex items-center gap-1.5">
-            <Label className="text-xs text-muted-foreground">Policy no.</Label>
-            <InfoHint>
-              Insurer-issued policy number for this product&apos;s placement.
-              Appears on the placement slip export; editable after activation.
-            </InfoHint>
-            <Input
-              className="w-[150px]"
-              maxLength={64}
-              value={policyNo}
-              onChange={(e) => setPolicyNo(e.target.value)}
-              placeholder="Not issued"
-              aria-label={`${term.code} policy number`}
-            />
-          </div>
-
-          <div className="flex items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">
               Free cover limit
             </Label>
@@ -225,8 +190,8 @@ export function CoveragePeriodEditor({
           </div>
         </div>
 
-        <div className="flex items-end gap-3">
-          <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">Starts</Label>
             <Input
               type="date"
@@ -236,7 +201,7 @@ export function CoveragePeriodEditor({
               className="w-[150px]"
             />
           </div>
-          <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">Ends</Label>
             <Input
               type="date"

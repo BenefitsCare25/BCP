@@ -47,6 +47,7 @@ import {
 import { UploadRoster } from "@/components/operations/UploadRoster";
 import { AdcCard } from "@/components/operations/AdcCard";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
+import { RosterTabActions } from "./rosterTabActions";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
 import { useBulkInviteMembers } from "@/api/memberAccounts";
 import { BenefitScheduleView } from "@/components/configuration/BenefitScheduleView";
@@ -155,7 +156,7 @@ export function EmployeesPage() {
 
   return (
     <div className="space-y-5 max-w-7xl">
-      <div className="flex justify-end gap-2">
+      <RosterTabActions>
         <ReportDownloadButton
           path={`/employees/coverage-report/export?policy_year_id=${policyYearId}`}
           filename="employee-coverage.xlsx"
@@ -199,7 +200,7 @@ export function EmployeesPage() {
           {pending ? <Play className="size-4" /> : <RefreshCw className="size-4" />}
           {pending ? "Run matching" : "Re-run matching"}
         </Button>
-      </div>
+      </RosterTabActions>
 
       <UploadRoster
         title="Upload employee roster"

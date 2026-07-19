@@ -59,6 +59,23 @@ export function toIsoDate(year: number, month: number, day: number): string {
   return `${year}-${pad(month)}-${pad(day)}`;
 }
 
+/** Local today as ISO yyyy-mm-dd (local, not UTC — no midnight day skew). */
+export function todayIso(): string {
+  const n = new Date();
+  return toIsoDate(n.getFullYear(), n.getMonth() + 1, n.getDate());
+}
+
+/** A benefit year whose period has ended — view-only on the config page. */
+export function isPastPolicyPeriod(endIso: string): boolean {
+  return endIso < todayIso();
+}
+
+/** Today falls within the period — required before a year can be "current". */
+export function isWithinPolicyPeriod(startIso: string, endIso: string): boolean {
+  const t = todayIso();
+  return startIso <= t && t <= endIso;
+}
+
 const MONTH_LOOKUP = new Map<string, number>();
 for (const m of MONTHS) {
   MONTH_LOOKUP.set(m.label.toLowerCase(), m.value);

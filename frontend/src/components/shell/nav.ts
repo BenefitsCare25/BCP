@@ -24,14 +24,14 @@ export const NAV_GROUPS: NavGroup[] = [
     base: "/configuration",
     items: [
       {
-        label: "Product categories",
+        label: "Product Setting",
         to: "/configuration",
-        title: "Product Categories",
+        title: "Product Setting",
       },
       {
-        label: "Attributes & products",
+        label: "Attributes Setting",
         to: "/schema",
-        title: "Schema — Attributes & Products",
+        title: "Attributes Setting",
       },
       {
         label: "Panel clinics",
@@ -39,9 +39,9 @@ export const NAV_GROUPS: NavGroup[] = [
         title: "Panel Clinic Locations",
       },
       {
-        label: "AI provider",
+        label: "AI Setting",
         to: "/configuration/ai-provider",
-        title: "AI Provider",
+        title: "AI Setting",
       },
     ],
   },
@@ -50,11 +50,15 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Users,
     base: "/operations",
     items: [
-      { label: "Roster", to: "/operations/roster", title: "Operations — Roster" },
       {
-        label: "Employee coverage",
+        label: "Listing Upload",
+        to: "/operations/roster",
+        title: "Listing Upload",
+      },
+      {
+        label: "Employee Coverage",
         to: "/operations/coverage",
-        title: "Operations — Employee Coverage",
+        title: "Employee Coverage",
       },
       {
         label: "Claims",
@@ -78,7 +82,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: CalendarCheck,
     base: "/enrollment",
     items: [
-      { label: "Windows & elections", to: "/enrollment", title: "Enrollment" },
+      { label: "Benefits Selection", to: "/enrollment", title: "Benefits Selection" },
     ],
   },
 ];
@@ -88,7 +92,7 @@ export const ADMIN_GROUP: NavGroup = {
   icon: ShieldCheck,
   base: "/admin",
   items: [
-    { label: "Clients & users", to: "/admin", title: "Administration — Clients & Users" },
+    { label: "Company & Users", to: "/admin", title: "Company & Users" },
   ],
 };
 

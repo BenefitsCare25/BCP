@@ -7,6 +7,7 @@ import {
   useRerunReview,
   type BrokerClaim,
 } from "@/api/claims";
+import { usePolicyYears, useUpdatePolicyYear } from "@/api/hooks";
 import { ConflictDetailError } from "@/api/client";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -21,6 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Segmented } from "@/components/ui/segmented";
 import {
   Sheet,
@@ -62,10 +64,10 @@ const STATUS_FILTERS = [
 // components/portal/ClaimStatusBadge).
 const BROKER_STATUS: Record<
   string,
-  { label: string; variant: "good" | "warn" | "error" | "outline" | "primary" | "default" }
+  { label: string; variant: "good" | "warn" | "error" | "outline" | "info" | "default" }
 > = {
   draft: { label: "Draft", variant: "outline" },
-  submitted: { label: "Manual review", variant: "primary" },
+  submitted: { label: "Manual review", variant: "info" },
   ai_review_pending: { label: "AI running", variant: "default" },
   ai_verified: { label: "AI verified", variant: "good" },
   ai_flagged: { label: "AI flagged", variant: "error" },
@@ -112,6 +114,72 @@ const RERUNNABLE = new Set([
 ]);
 
 type DecisionAction = "approve" | "reject" | "needs_info";
+
+// Claim-submission grace period, bound to the current benefit year — the year
+// claims submit against. Edit buffer is committed on blur; blank clears the
+// deadline. (Lives here rather than on the Configuration page since it governs
+// claims behaviour.)
+function ClaimGracePeriodField() {
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const { data: years = [] } = usePolicyYears();
+  const update = useUpdatePolicyYear();
+  const year = years.find((y) => y.id === policyYearId) ?? null;
+  const [draft, setDraft] = useState<string | null>(null);
+
+  if (!year) return null;
+
+  const commit = async () => {
+    if (draft === null) return;
+    const trimmed = draft.trim();
+    // Number() (not parseInt) so "30.5"/"30x" are rejected rather than silently
+    // truncated to 30. Keep the draft on a validation error so the typed value
+    // isn't lost — the broker can correct it.
+    const next = trimmed === "" ? null : Number(trimmed);
+    if (next !== null && (!Number.isInteger(next) || next < 0)) {
+      toast.error("Grace period must be a whole number of days (or blank).");
+      return;
+    }
+    if (next === year.claim_grace_period_days) {
+      setDraft(null);
+      return;
+    }
+    try {
+      await update.mutateAsync({
+        policyYearId: year.id,
+        payload: { claim_grace_period_days: next },
+      });
+      toast.success("Claim grace period updated");
+      // Only drop the buffer on success (reflects the server value); on failure
+      // keep it so the broker can retry without retyping.
+      setDraft(null);
+    } catch (e) {
+      toast.error(formatError(e));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 sm:max-w-md">
+      <div className="flex items-center gap-1">
+        <Label htmlFor="claim-grace">Claim submission grace period (days)</Label>
+        <InfoHint>
+          Days after the current benefit year's coverage period ends during
+          which members may still submit claims. Leave blank for no submission
+          deadline.
+        </InfoHint>
+      </div>
+      <Input
+        id="claim-grace"
+        type="number"
+        min={0}
+        placeholder="No deadline"
+        className="h-9 w-40"
+        value={draft ?? (year.claim_grace_period_days?.toString() ?? "")}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+      />
+    </div>
+  );
+}
 
 export function ClaimsQueuePage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
@@ -194,7 +262,7 @@ export function ClaimsQueuePage() {
   return (
     <div className="space-y-4 max-w-7xl">
       <Card>
-        <CardHeader>
+        <CardHeader className="space-y-4">
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div>
               <CardTitle>Claims review queue</CardTitle>
@@ -208,6 +276,9 @@ export function ClaimsQueuePage() {
               onChange={setStatus}
               options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
             />
+          </div>
+          <div className="border-t border-border pt-4">
+            <ClaimGracePeriodField />
           </div>
         </CardHeader>
         <CardContent>

@@ -16,6 +16,7 @@ import { SkeletonTable } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
+import { RosterTabActions } from "./rosterTabActions";
 import {
   Card,
   CardContent,
@@ -114,6 +115,39 @@ export function DependantsPage() {
         upload={upload}
       />
 
+      <RosterTabActions>
+        <ReportDownloadButton
+          path={`/dependants/coverage-report/export?policy_year_id=${policyYearId}`}
+          filename="dependant-coverage.xlsx"
+          label="Dependant report"
+          disabled={!total}
+        />
+        <Button
+          variant="outline"
+          disabled={autoMatch.isPending || !total}
+          onClick={async () => {
+            if (!policyYearId) return;
+            try {
+              const r = await autoMatch.mutateAsync(policyYearId);
+              if (r.matched === 0) {
+                toast.info(`No new matches found (${r.unmatched} unlinked remain)`);
+              } else {
+                toast.success(`Auto-matched ${r.matched} dependant${r.matched === 1 ? "" : "s"}${r.unmatched ? ` · ${r.unmatched} still unlinked` : ""}`);
+              }
+            } catch (err) {
+              toast.error(formatError(err));
+            }
+          }}
+        >
+          {autoMatch.isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Sparkles className="size-4" />
+          )}
+          Auto-match
+        </Button>
+      </RosterTabActions>
+
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
@@ -131,44 +165,12 @@ export function DependantsPage() {
                 aria-label="Search dependants"
                 className="h-8 w-52"
               />
-              <ReportDownloadButton
-                path={`/dependants/coverage-report/export?policy_year_id=${policyYearId}`}
-                filename="dependant-coverage.xlsx"
-                label="Dependant report"
-                size="sm"
-                disabled={!total}
-              />
               <Button
                 variant={unlinkedOnly ? "default" : "outline"}
                 size="sm"
                 onClick={() => setUnlinkedOnly((v) => !v)}
               >
                 Unlinked only
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={autoMatch.isPending || !total}
-                onClick={async () => {
-                  if (!policyYearId) return;
-                  try {
-                    const r = await autoMatch.mutateAsync(policyYearId);
-                    if (r.matched === 0) {
-                      toast.info(`No new matches found (${r.unmatched} unlinked remain)`);
-                    } else {
-                      toast.success(`Auto-matched ${r.matched} dependant${r.matched === 1 ? "" : "s"}${r.unmatched ? ` · ${r.unmatched} still unlinked` : ""}`);
-                    }
-                  } catch (err) {
-                    toast.error(formatError(err));
-                  }
-                }}
-              >
-                {autoMatch.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Sparkles className="size-4" />
-                )}
-                Auto-match
               </Button>
               <Button
                 variant="outline"

@@ -15,7 +15,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -26,7 +26,8 @@ from app.core.auth import VALID_ROLES, CurrentUser
 from app.core.deps import require_firm_admin, require_system_admin
 from app.db.session import engine, get_db
 from app.db.tenancy import provision_firm_schema
-from app.models import BrokerFirm, Client, User, UserClientAccess
+from app.models import BrokerFirm, Client, PolicyYear, User, UserClientAccess
+from app.models.policy_year import PolicyYear
 from app.models.invitation import (
     INVITE_STATUS_PENDING,
     INVITE_STATUS_REVOKED,
@@ -223,6 +224,36 @@ def patch_client(
                 before=before, after={"name": client.name})
     db.commit()
     return ClientOut(id=client.id, name=client.name, broker_firm_id=client.broker_firm_id)
+
+
+@router.delete("/clients/{client_id}", status_code=204)
+def delete_client(
+    client_id: str,
+    user: CurrentUser = Depends(require_firm_admin),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete an empty client company. Refused while it still holds benefit
+    years — those (and everything under them: employees, claims, enrollment)
+    would be orphaned, so require them to be removed first. Per-client user
+    grants (``user_client_access``) cascade via the FK on delete."""
+    client = _load_firm_client(db, user, client_id)
+    year_count = db.execute(
+        select(func.count())
+        .select_from(PolicyYear)
+        .where(PolicyYear.client_id == client_id)
+    ).scalar_one()
+    if year_count:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Delete this company's {year_count} benefit year"
+            f"{'s' if year_count != 1 else ''} first before removing the company.",
+        )
+    before = {"name": client.name, "broker_firm_id": client.broker_firm_id}
+    write_audit(db, user, action="delete", entity_type="client",
+                entity_id=client_id, before=before)
+    db.delete(client)
+    db.commit()
+    return Response(status_code=204)
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────

@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePendingDependants } from "@/components/operations/DependantApprovals";
 import { useSession } from "@/stores/session";
+import { RosterActionsSlot } from "./rosterTabActions";
 import { EmployeesPage } from "./employees";
 import { DependantsPage } from "./dependants";
 
@@ -25,6 +27,8 @@ export function RosterPage() {
   // the tab so pending self-added dependants are visible from anywhere.
   const pending = usePendingDependants(policyYearId ?? "");
   const pendingCount = policyYearId ? (pending.data?.total ?? 0) : 0;
+  // Slot on the tab row that each active tab portals its action buttons into.
+  const [actionSlot, setActionSlot] = useState<HTMLDivElement | null>(null);
 
   return (
     <Tabs
@@ -33,28 +37,33 @@ export function RosterPage() {
         navigate({ to: "/operations/roster", search: { tab: value } })
       }
     >
-      <TabsList>
-        {TABS.map((t) => (
-          <TabsTrigger key={t.key} value={t.key}>
-            {t.label}
-            {t.key === "dependants" && pendingCount > 0 && (
-              <Badge
-                variant="warn"
-                className="ml-1.5"
-                title={`${pendingCount} dependant${pendingCount === 1 ? "" : "s"} awaiting approval`}
-              >
-                {pendingCount}
-              </Badge>
-            )}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-      <TabsContent value="employees">
-        <EmployeesPage />
-      </TabsContent>
-      <TabsContent value="dependants">
-        <DependantsPage />
-      </TabsContent>
+      <div className="flex items-center justify-between gap-3">
+        <TabsList>
+          {TABS.map((t) => (
+            <TabsTrigger key={t.key} value={t.key}>
+              {t.label}
+              {t.key === "dependants" && pendingCount > 0 && (
+                <Badge
+                  variant="warn"
+                  className="ml-1.5"
+                  title={`${pendingCount} dependant${pendingCount === 1 ? "" : "s"} awaiting approval`}
+                >
+                  {pendingCount}
+                </Badge>
+              )}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <div ref={setActionSlot} className="flex items-center gap-2" />
+      </div>
+      <RosterActionsSlot.Provider value={actionSlot}>
+        <TabsContent value="employees">
+          <EmployeesPage />
+        </TabsContent>
+        <TabsContent value="dependants">
+          <DependantsPage />
+        </TabsContent>
+      </RosterActionsSlot.Provider>
     </Tabs>
   );
 }

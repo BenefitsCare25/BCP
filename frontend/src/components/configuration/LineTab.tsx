@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Trash2, Upload } from "lucide-react";
 import {
   Card,
@@ -29,9 +29,18 @@ interface Props {
   // Category groups already scoped to this line.
   groups: CategoryGroup[];
   onSelectCategory: (c: Category) => void;
+  // Benefit-year picker rendered beside the product title (single node — only
+  // the active product card mounts, so it appears in one place at a time).
+  yearSelector?: ReactNode;
 }
 
-export function LineTab({ policyYearId, line, groups, onSelectCategory }: Props) {
+export function LineTab({
+  policyYearId,
+  line,
+  groups,
+  onSelectCategory,
+  yearSelector,
+}: Props) {
   const [activeCode, setActiveCode] = useState("");
   // Codes created this session — shown optimistically until the refetch confirms
   // them, so a just-added product's tab appears immediately.
@@ -116,9 +125,8 @@ export function LineTab({ policyYearId, line, groups, onSelectCategory }: Props)
           <div className="flex items-start justify-between gap-3">
             <TabsList className="flex-wrap h-auto">
               {products.map((p) => (
-                <TabsTrigger key={p.code} value={p.code} className="gap-2">
-                  <code className="text-[11px] font-mono">{p.code}</code>
-                  <span>{p.display_name}</span>
+                <TabsTrigger key={p.code} value={p.code} title={p.display_name}>
+                  <code className="font-mono text-xs font-semibold">{p.code}</code>
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -132,8 +140,11 @@ export function LineTab({ policyYearId, line, groups, onSelectCategory }: Props)
             <TabsContent key={p.code} value={p.code}>
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between gap-3">
-                    <CardTitle>{p.display_name}</CardTitle>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <CardTitle>{p.display_name}</CardTitle>
+                      {yearSelector}
+                    </div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -159,6 +170,7 @@ export function LineTab({ policyYearId, line, groups, onSelectCategory }: Props)
         </Tabs>
       ) : (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border p-10 text-center">
+          {yearSelector}
           <Upload className="size-6 text-muted-foreground" />
           <div className="text-sm text-muted-foreground">
             No {LINE_LABELS[line]} products yet — upload a placement slip above,

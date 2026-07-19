@@ -9,22 +9,19 @@ import {
   useUpdatePolicyYear,
 } from "@/api/hooks";
 import { api } from "@/api/client";
-import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
 import { triggerDownload } from "@/lib/download";
+import { isWithinPolicyPeriod } from "@/lib/policy-year";
 import type { PolicyYear } from "@/types";
 
 /** `2026-01-01` + `2026-12-31` → `202601-202612` (insurer-style benefit-year id). */
@@ -103,10 +100,18 @@ function DownloadButton({
   );
 }
 
-export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
-  const currentId = useSession((s) => s.currentPolicyYearId);
-  const setPolicyYear = useSession((s) => s.setPolicyYear);
-
+export function BenefitYearPanel({
+  years,
+  viewingId,
+  onViewYear,
+}: {
+  years: PolicyYear[];
+  // The year currently being viewed on the Configuration page (highlighted).
+  viewingId: string | null;
+  // Switch which year the config page views (add/copy select the new year;
+  // deleting the viewed year clears it back to the current one).
+  onViewYear: (id: string | null) => void;
+}) {
   const create = useCreatePolicyYear();
   const update = useUpdatePolicyYear();
   const remove = useDeletePolicyYear();
@@ -114,9 +119,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
   const copy = useCopyPolicyYear();
 
   const [confirmDelete, setConfirmDelete] = useState<PolicyYear | null>(null);
-  // Grace-period edit buffer keyed by year id, so typing doesn't fight the
-  // query cache; committed on blur.
-  const [graceDraft, setGraceDraft] = useState<Record<string, string>>({});
   // Date edit buffer, keyed by year id → field. Makes the date inputs
   // controlled so a rejected PATCH (e.g. an overlap 409) reverts to the server
   // value instead of leaving the invalid typed date on screen.
@@ -124,7 +126,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
     Record<string, { start_date?: string; end_date?: string }>
   >({});
 
-  const selected = years.find((y) => y.id === currentId) ?? years[0] ?? null;
   // "Copy" seeds the new year from the PREVIOUS period — the most recent
   // existing year by date — since the new year's span sits right after it. That
   // carries config forward at renewal even when building several years ahead
@@ -159,30 +160,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
     }
   };
 
-  const commitGrace = async (py: PolicyYear) => {
-    const raw = graceDraft[py.id];
-    if (raw === undefined) return;
-    const trimmed = raw.trim();
-    // Number() (not parseInt) so "30.5"/"30x" are rejected rather than silently
-    // truncated to 30.
-    const parsed = trimmed === "" ? null : Number(trimmed);
-    const next = parsed;
-    if (next !== null && (!Number.isInteger(next) || next < 0)) {
-      toast.error("Grace period must be a whole number of days (or blank).");
-      return;
-    }
-    if (next === py.claim_grace_period_days) return;
-    try {
-      await update.mutateAsync({
-        policyYearId: py.id,
-        payload: { claim_grace_period_days: next },
-      });
-      toast.success("Claim grace period updated");
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
   const onAdd = async () => {
     const span = nextSpan(years);
     try {
@@ -190,7 +167,7 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
         start_date: span.start,
         end_date: span.end,
       });
-      setPolicyYear(created.id);
+      onViewYear(created.id);
       toast.success("Benefit year added");
     } catch (e) {
       toast.error(formatError(e));
@@ -205,7 +182,7 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
         sourceId: previousYear.id,
         payload: { start_date: span.start, end_date: span.end },
       });
-      setPolicyYear(result.policy_year.id);
+      onViewYear(result.policy_year.id);
       const n = Object.values(result.copied).reduce((a, b) => a + b, 0);
       toast.success(
         `Copied ${n} configuration rows from ${benefitYearId(
@@ -254,10 +231,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
       <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
         <div>
           <CardTitle>Benefit years</CardTitle>
-          <CardDescription>
-            Each benefit year holds one version of this client's configuration.
-            The <strong>current</strong> year is what the employee portal shows.
-          </CardDescription>
         </div>
         <div className="flex shrink-0 gap-2">
           <Button
@@ -298,7 +271,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
               <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
                 <th className="pb-2 pr-3 font-medium">Start date</th>
                 <th className="pb-2 pr-3 font-medium">End date</th>
-                <th className="pb-2 pr-3 font-medium">ID</th>
                 <th className="pb-2 pr-3 font-medium">Current</th>
                 <th className="pb-2 pr-3 font-medium">Documents</th>
                 <th className="pb-2 font-medium text-right">Remove</th>
@@ -307,7 +279,14 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
             <tbody>
               {years.map((py) => {
                 const isCurrent = py.status === "active";
-                const isSelected = py.id === selected?.id;
+                const isSelected = py.id === viewingId;
+                // A year can only be made "current" while today's date is inside
+                // its coverage period (the range shown in the picker), matching
+                // the member-facing "active year" rule.
+                const canSetCurrent = isWithinPolicyPeriod(
+                  py.coverage_start,
+                  py.coverage_end,
+                );
                 return (
                   <tr
                     key={py.id}
@@ -343,9 +322,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
                         onBlur={(e) => patchDates(py, "end_date", e.target.value)}
                       />
                     </td>
-                    <td className="py-2 pr-3 font-mono text-xs text-muted-foreground">
-                      {benefitYearId(py.start_date, py.end_date)}
-                    </td>
                     <td className="py-2 pr-3">
                       {isCurrent ? (
                         <Badge variant="good">
@@ -356,7 +332,12 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
                           size="sm"
                           variant="ghost"
                           className="h-7 text-xs"
-                          disabled={setCurrent.isPending}
+                          disabled={setCurrent.isPending || !canSetCurrent}
+                          title={
+                            canSetCurrent
+                              ? undefined
+                              : "Today's date must fall within this benefit year's period to make it current."
+                          }
                           onClick={async () => {
                             try {
                               await setCurrent.mutateAsync(py.id);
@@ -412,36 +393,6 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
           </table>
         </div>
 
-        {selected && (
-          <div className="flex flex-col gap-1.5 border-t border-border pt-4 sm:max-w-md">
-            <div className="flex items-center gap-1">
-              <Label htmlFor="grace">Claim submission grace period (days)</Label>
-              <InfoHint>
-                Days after this year's coverage period ends during which members
-                may still submit claims. Leave blank for no submission deadline.
-              </InfoHint>
-            </div>
-            <Input
-              id="grace"
-              type="number"
-              min={0}
-              placeholder="No deadline"
-              className="h-9 w-40"
-              value={
-                graceDraft[selected.id] ??
-                (selected.claim_grace_period_days?.toString() ?? "")
-              }
-              onChange={(e) =>
-                setGraceDraft((d) => ({ ...d, [selected.id]: e.target.value }))
-              }
-              onBlur={() => commitGrace(selected)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Applies to the selected benefit year (
-              {benefitYearId(selected.start_date, selected.end_date)}).
-            </p>
-          </div>
-        )}
       </CardContent>
 
       <AlertDialog
@@ -470,7 +421,7 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
           if (!confirmDelete) return;
           try {
             await remove.mutateAsync(confirmDelete.id);
-            if (confirmDelete.id === currentId) setPolicyYear(null);
+            if (confirmDelete.id === viewingId) onViewYear(null);
             toast.success("Benefit year deleted");
             setConfirmDelete(null);
           } catch (e) {

@@ -936,6 +936,17 @@ export function usePatchClient() {
   });
 }
 
+export function useDeleteClient() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/admin/clients/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "clients"] });
+      qc.invalidateQueries({ queryKey: ["me"] }); // switcher's accessible clients
+    },
+  });
+}
+
 export function useAdminUsers() {
   return useQuery({
     queryKey: ["admin", "users"],

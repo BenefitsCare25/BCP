@@ -1,18 +1,10 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { AttributeSchemaEditor } from "@/components/primitives/AttributeSchemaEditor";
 import { AlertDialog } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonTable } from "@/components/ui/skeleton";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Field, InfoHint } from "@/components/ui/tooltip";
 import {
@@ -76,18 +68,23 @@ function toDraft(attr: AttributeSchema): Draft {
   };
 }
 
-export function SchemaAttributesPage() {
+export function SchemaAttributesPage({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const { data: attrs = [], isLoading } = useEmployeeAttributes();
   const create = useCreateAttribute();
   const update = useUpdateAttribute();
   const remove = useDeleteAttribute();
   const [editing, setEditing] = useState<AttributeSchema | null>(null);
-  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [deleting, setDeleting] = useState<AttributeSchema | null>(null);
 
   const onSheetOpenChange = (next: boolean) => {
-    setOpen(next);
+    onOpenChange(next);
     if (!next) {
       setDraft(EMPTY_DRAFT);
       setEditing(null);
@@ -97,7 +94,7 @@ export function SchemaAttributesPage() {
   const beginEdit = (attr: AttributeSchema) => {
     setEditing(attr);
     setDraft(toDraft(attr));
-    setOpen(true);
+    onOpenChange(true);
   };
 
   const submit = async () => {
@@ -134,7 +131,7 @@ export function SchemaAttributesPage() {
         });
         toast.success(`Added ${draft.display_name}`);
       }
-      setOpen(false);
+      onOpenChange(false);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -142,11 +139,7 @@ export function SchemaAttributesPage() {
 
   return (
     <div className="space-y-4 max-w-7xl">
-      <div className="flex justify-end gap-3">
-        <Button onClick={() => setOpen(true)}>
-          <Plus className="size-4" /> Add attribute
-        </Button>
-        <Sheet open={open} onOpenChange={onSheetOpenChange}>
+      <Sheet open={open} onOpenChange={onSheetOpenChange}>
           <SheetContent side="right">
             <SheetHeader>
               <div className="flex items-center gap-1.5">
@@ -272,21 +265,9 @@ export function SchemaAttributesPage() {
             </SheetFooter>
           </SheetContent>
         </Sheet>
-      </div>
 
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Attributes</CardTitle>
-              <CardDescription>
-                {attrs.length} attribute{attrs.length === 1 ? "" : "s"} defined
-              </CardDescription>
-            </div>
-            <Badge variant="outline">Singapore defaults</Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="pt-6">
           {isLoading ? (
             <SkeletonTable rows={6} columns={5} />
           ) : (

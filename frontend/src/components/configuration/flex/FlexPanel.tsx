@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { useFlexScheme } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,8 @@ import { FlexOverviewCard } from "./FlexOverviewCard";
 
 interface Props {
   policyYearId: string;
+  // Benefit-year picker (Flex has no per-product title, so it sits at the top).
+  yearSelector?: ReactNode;
 }
 
 /**
@@ -18,7 +21,7 @@ interface Props {
  * review/edit form appears. The family-status headcount + coverage checks are
  * shown above it, tying the scheme back to the actual member population.
  */
-export function FlexPanel({ policyYearId }: Props) {
+export function FlexPanel({ policyYearId, yearSelector }: Props) {
   const { data: scheme, isLoading, isError, error, refetch } =
     useFlexScheme(policyYearId);
 
@@ -48,6 +51,7 @@ export function FlexPanel({ policyYearId }: Props) {
 
   return (
     <div className="space-y-4">
+      {yearSelector && <div className="flex justify-end">{yearSelector}</div>}
       <FlexOverviewCard policyYearId={policyYearId} />
       {scheme && <FlexSchemeForm policyYearId={policyYearId} scheme={scheme} />}
     </div>

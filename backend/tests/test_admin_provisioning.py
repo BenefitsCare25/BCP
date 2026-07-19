@@ -19,7 +19,10 @@ from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # 
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import BrokerFirm, Client, User  # noqa: E402
+from datetime import date  # noqa: E402
+
+from app.models import BrokerFirm, Client, PolicyYear, User  # noqa: E402
+from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
 FIRM2_ID = "00000000-0000-0000-0000-0000000000a2"
@@ -96,6 +99,38 @@ def test_broker_client_list_scoped_to_firm(broker: TestClient) -> None:
     rows = broker.get("/api/v1/admin/clients").json()
     assert all(c["broker_firm_id"] == DEMO_BROKER_FIRM_ID for c in rows)
     assert CLIENT_F2_ID not in {c["id"] for c in rows}
+
+
+def test_broker_deletes_empty_client(broker: TestClient) -> None:
+    created = broker.post("/api/v1/admin/clients", json={"name": "Disposable Co"}).json()
+    res = broker.delete(f"/api/v1/admin/clients/{created['id']}")
+    assert res.status_code == 204
+    rows = broker.get("/api/v1/admin/clients").json()
+    assert created["id"] not in {c["id"] for c in rows}
+
+
+def test_broker_cannot_delete_other_firm_client(broker: TestClient) -> None:
+    res = broker.delete(f"/api/v1/admin/clients/{CLIENT_F2_ID}")
+    assert res.status_code == 404
+
+
+def test_delete_client_blocked_while_it_has_benefit_years(broker: TestClient) -> None:
+    created = broker.post("/api/v1/admin/clients", json={"name": "Has Years Co"}).json()
+    with SessionLocal() as s:
+        s.add(
+            PolicyYear(
+                client_id=created["id"],
+                year=2027,
+                start_date=date(2027, 1, 1),
+                end_date=date(2027, 12, 31),
+                status=PolicyYearStatus.active,
+            )
+        )
+        s.commit()
+    res = broker.delete(f"/api/v1/admin/clients/{created['id']}")
+    assert res.status_code == 409
+    rows = broker.get("/api/v1/admin/clients").json()
+    assert created["id"] in {c["id"] for c in rows}  # still present
 
 
 # ── Invitations / users ───────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, Plus, ShieldAlert } from "lucide-react";
+import { Loader2, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import {
   type AdminUser,
   useAdminClients,
@@ -8,12 +8,14 @@ import {
   useCreateBrokerFirm,
   useCreateClient,
   useCreateInvitation,
+  useDeleteClient,
   useInvitations,
   useMe,
   usePatchClient,
   usePatchUser,
   useRevokeInvitation,
 } from "@/api/hooks";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -98,12 +100,6 @@ export function AdminPage() {
 
   return (
     <div className="space-y-5 max-w-5xl">
-      <div>
-        <h2 className="text-lg font-semibold text-foreground">Administration</h2>
-        <p className="text-sm text-muted-foreground">
-          Manage client companies, users, and access for your broker firm.
-        </p>
-      </div>
       {isSystemAdmin && <BrokerFirmsCard />}
       <ClientsCard />
       <UsersCard meRole={me?.role ?? "broker_viewer"} />
@@ -167,9 +163,13 @@ function ClientsCard() {
   const { data: clients = [] } = useAdminClients();
   const create = useCreateClient();
   const patch = usePatchClient();
+  const del = useDeleteClient();
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(
+    null,
+  );
 
   const onCreate = async () => {
     if (!name.trim()) return;
@@ -192,7 +192,20 @@ function ClientsCard() {
     }
   };
 
+  const onDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await del.mutateAsync(deleteTarget.id);
+      toast.success("Company deleted");
+    } catch (e) {
+      toast.error(formatError(e));
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-1.5 text-sm">
@@ -236,16 +249,27 @@ function ClientsCard() {
               ) : (
                 <>
                   <span className="font-medium">{c.name}</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setEditing(c.id);
-                      setEditName(c.name);
-                    }}
-                  >
-                    Rename
-                  </Button>
+                  <div className="flex gap-1 shrink-0">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setEditing(c.id);
+                        setEditName(c.name);
+                      }}
+                    >
+                      Rename
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-error hover:text-error"
+                      aria-label={`Delete ${c.name}`}
+                      onClick={() => setDeleteTarget({ id: c.id, name: c.name })}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
                 </>
               )}
             </li>
@@ -256,6 +280,17 @@ function ClientsCard() {
         </ul>
       </CardContent>
     </Card>
+    <AlertDialog
+      open={deleteTarget !== null}
+      onOpenChange={(open) => !open && setDeleteTarget(null)}
+      title={`Delete ${deleteTarget?.name ?? "company"}?`}
+      description="This permanently removes the company and its user-access grants. If it still has benefit years, delete those first. This cannot be undone."
+      confirmLabel="Delete company"
+      confirmVariant="destructive"
+      loading={del.isPending}
+      onConfirm={onDelete}
+    />
+    </>
   );
 }
 

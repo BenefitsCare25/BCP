@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  useAIStatus,
   useAuditLog,
   useCategoriesGrouped,
   useEmployeeAttributes,
@@ -21,29 +20,53 @@ import { CategoryEditPanel } from "@/components/configuration/CategoryEditPanel"
 import { LineTab } from "@/components/configuration/LineTab";
 import { FlexPanel } from "@/components/configuration/flex/FlexPanel";
 import { FlexUploadCard } from "@/components/configuration/flex/FlexUploadCard";
-import { RecommendationPanel } from "@/components/configuration/RecommendationPanel";
 import { SlipPeriodBanner } from "@/components/configuration/SlipPeriodBanner";
 import {
   SlipUploadButton,
   SlipUploadPanel,
   useSlipUpload,
 } from "@/components/configuration/UploadCard";
-import { PageGuide } from "@/components/ui/page-guide";
-import { useSession } from "@/stores/session";
+import { ViewingYearSelect } from "@/components/configuration/ViewingYearSelect";
+import { cn } from "@/lib/cn";
+import { isPastPolicyPeriod } from "@/lib/policy-year";
 import type { Category, InsuranceLine } from "@/types";
 import { INSURANCE_LINES, LINE_LABELS } from "@/lib/insuranceLines";
 
 export function ConfigurationPage() {
-  const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const { data: policyYears = [], isLoading: yearsLoading } = usePolicyYears();
+  const activeYearId =
+    policyYears.find((y) => y.status === "active")?.id ??
+    policyYears[0]?.id ??
+    null;
+  // Which benefit year the page views. Local to Configuration (the global
+  // top-bar picker is gone; every other page follows the current year). Defaults
+  // to the current year; a stale selection falls back to it. Past (ended) years
+  // are read-only; the current + future years stay editable. The read-only /
+  // set-current gates key off the coverage envelope (what the picker displays),
+  // not the nominal span, so "is today in the period" matches the shown dates.
+  const [viewingId, setViewingId] = useState<string | null>(null);
+  const policyYearId =
+    viewingId && policyYears.some((y) => y.id === viewingId)
+      ? viewingId
+      : activeYearId;
+  const viewedYear = policyYears.find((y) => y.id === policyYearId) ?? null;
+  const readOnly = viewedYear
+    ? isPastPolicyPeriod(viewedYear.coverage_end)
+    : false;
+
   const { data: groups = [], isLoading } = useCategoriesGrouped(
     policyYearId ?? undefined,
   );
   const { data: schema = [] } = useEmployeeAttributes();
-  const { data: aiStatus } = useAIStatus();
   const { data: audit } = useAuditLog();
-  const { data: policyYears = [] } = usePolicyYears();
   const [tab, setTab] = useState<InsuranceLine>("medical");
   const [selected, setSelected] = useState<Category | null>(null);
+  // Switching the viewed year closes any open category editor — the panel edits
+  // a category from the previously-viewed year and must not linger over another
+  // year (or over a read-only past year, where the page is otherwise disabled).
+  useEffect(() => {
+    setSelected(null);
+  }, [policyYearId]);
   // Placement-slip upload state, lifted so the trigger button sits on the tab
   // row while the extraction-result panel renders below the tabs.
   const slip = useSlipUpload(policyYearId ?? "");
@@ -58,88 +81,123 @@ export function ConfigurationPage() {
     return by;
   }, [groups]);
 
+  // Tab badge = number of products configured under each line (one group per
+  // product_code), not the total category count. Skip the "(unassigned)"
+  // pseudo-group — it holds categories not yet matched to a product.
   const countByLine = useMemo(() => {
     const c: Record<InsuranceLine, number> = { medical: 0, life: 0, flex: 0 };
-    for (const g of groups) c[g.line] += g.categories.length;
+    for (const g of groups) {
+      if (g.product_code === "(unassigned)") continue;
+      c[g.line] += 1;
+    }
     return c;
   }, [groups]);
 
   if (!policyYearId) {
+    // While the year list is still loading, show a skeleton rather than the
+    // empty-state card — otherwise a cold load flashes "No benefit year".
+    if (yearsLoading) {
+      return <SkeletonTable rows={8} columns={4} />;
+    }
     return (
       <Card>
         <CardHeader>
-          <CardTitle>No policy year</CardTitle>
+          <CardTitle>No benefit year</CardTitle>
           <CardDescription>
-            Pick a policy year from the top bar to begin.
+            Add a benefit year to begin configuring this client.
           </CardDescription>
         </CardHeader>
       </Card>
     );
   }
 
+  // The benefit-year picker now sits beside the product title (passed down to
+  // LineTab / FlexPanel). Only the active tab mounts, so this single node
+  // renders in exactly one place at a time.
+  const yearSelector = (
+    <ViewingYearSelect
+      value={policyYearId}
+      years={policyYears}
+      onChange={setViewingId}
+    />
+  );
+
   return (
     <div className="space-y-5 max-w-7xl">
       {/* Benefit-year management applies to the insured configuration; Flex is a
-          separate module, so it doesn't carry the benefit-years section. */}
-      {tab !== "flex" && <BenefitYearPanel years={policyYears} />}
-
-      {isLoading ? (
-        <SkeletonTable rows={8} columns={4} />
-      ) : (
-        <Tabs value={tab} onValueChange={(v) => setTab(v as InsuranceLine)}>
-          <div className="flex items-center justify-between gap-3">
-            <TabsList>
-              {INSURANCE_LINES.map((line) => (
-                <TabsTrigger key={line} value={line} className="gap-2">
-                  {LINE_LABELS[line]}
-                  {countByLine[line] > 0 && (
-                    <Badge variant="outline">{countByLine[line]}</Badge>
-                  )}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            {/* Insured products upload an .xls placement slip; the Flex tab
-                uploads its own (AI-extracted) benefit documents. */}
-            {tab === "flex" ? (
-              <FlexUploadCard policyYearId={policyYearId} compact />
-            ) : (
-              <SlipUploadButton slip={slip} />
-            )}
-          </div>
-
-          {/* Slip upload results + period guard — insured products only. */}
-          {tab !== "flex" && (
-            <>
-              <SlipUploadPanel slip={slip} />
-              <SlipPeriodBanner policyYearId={policyYearId} />
-            </>
-          )}
-
-          {INSURANCE_LINES.map((line) => (
-            <TabsContent key={line} value={line}>
-              {line === "flex" ? (
-                <FlexPanel policyYearId={policyYearId} />
-              ) : (
-                <LineTab
-                  policyYearId={policyYearId}
-                  line={line}
-                  groups={groupsByLine[line]}
-                  onSelectCategory={setSelected}
-                />
-              )}
-            </TabsContent>
-          ))}
-        </Tabs>
-      )}
-
-      {/* Slip-driven attribute/product recommendations — insured products only. */}
+          separate module, so it doesn't carry the benefit-years section. Year
+          management stays interactive even while viewing a read-only year. */}
       {tab !== "flex" && (
-        <RecommendationPanel
-          policyYearId={policyYearId}
-          aiConfigured={Boolean(aiStatus?.configured)}
-          hasCategories={groups.length > 0}
+        <BenefitYearPanel
+          years={policyYears}
+          viewingId={policyYearId}
+          onViewYear={setViewingId}
         />
       )}
+
+      {/* Config editing is disabled when viewing a past year. pointer-events is
+          inherited, so re-enabling it on the tab navigation (Radix tablists +
+          the product-form section tabs) keeps browsing available read-only. */}
+      <div
+        className={cn(
+          readOnly &&
+            "pointer-events-none select-none opacity-95 [&_[role=tablist]]:pointer-events-auto [&_.config-nav]:pointer-events-auto",
+        )}
+        aria-disabled={readOnly || undefined}
+      >
+        {isLoading ? (
+          <SkeletonTable rows={8} columns={4} />
+        ) : (
+          <Tabs value={tab} onValueChange={(v) => setTab(v as InsuranceLine)}>
+            <div className="flex items-center justify-between gap-3">
+              <TabsList>
+                {INSURANCE_LINES.map((line) => (
+                  <TabsTrigger key={line} value={line} className="gap-2">
+                    {LINE_LABELS[line]}
+                    {countByLine[line] > 0 && (
+                      <Badge variant="outline">{countByLine[line]}</Badge>
+                    )}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {/* Insured products upload an .xls placement slip; the Flex tab
+                  uploads its own (AI-extracted) benefit documents. */}
+              {tab === "flex" ? (
+                <FlexUploadCard policyYearId={policyYearId} compact />
+              ) : (
+                <SlipUploadButton slip={slip} />
+              )}
+            </div>
+
+            {/* Slip upload results + period guard — insured products only. */}
+            {tab !== "flex" && (
+              <>
+                <SlipUploadPanel slip={slip} />
+                <SlipPeriodBanner policyYearId={policyYearId} />
+              </>
+            )}
+
+            {INSURANCE_LINES.map((line) => (
+              <TabsContent key={line} value={line}>
+                {line === "flex" ? (
+                  <FlexPanel
+                    policyYearId={policyYearId}
+                    yearSelector={yearSelector}
+                  />
+                ) : (
+                  <LineTab
+                    policyYearId={policyYearId}
+                    line={line}
+                    groups={groupsByLine[line]}
+                    onSelectCategory={setSelected}
+                    yearSelector={yearSelector}
+                  />
+                )}
+              </TabsContent>
+            ))}
+          </Tabs>
+        )}
+      </div>
 
       {audit && audit.items.length > 0 && (
         <Card>
@@ -180,15 +238,6 @@ export function ConfigurationPage() {
         category={selected}
         schema={schema}
         onClose={() => setSelected(null)}
-      />
-
-      <PageGuide
-        purpose="Manage benefit categories extracted from placement slips. Each category maps a plan description to a product code and matching rule. Use AI to generate rules, then bulk-confirm high-confidence ones."
-        connections={[
-          { label: "← Placement slips", description: "Categories are auto-extracted when a placement slip is uploaded" },
-          { label: "→ Match results", description: "Confirmed categories with rules drive the employee matching engine" },
-          { label: "← AI provider", description: "AI rule suggestions require a configured AI provider under Schema" },
-        ]}
       />
     </div>
   );

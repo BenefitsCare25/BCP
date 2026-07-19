@@ -1,4 +1,7 @@
+import { useState } from "react";
+import { Plus } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SchemaAttributesPage } from "./attributes";
 import { SchemaProductsPage } from "./products";
@@ -12,11 +15,16 @@ type SchemaTab = (typeof TABS)[number]["key"];
 
 // Attributes + products are twin CRUD surfaces over the client schema; they
 // live as tabs of one page so the sidebar stays flat. The active tab rides
-// the ?tab= search param so both views stay deep-linkable.
+// the ?tab= search param so both views stay deep-linkable. The "Add" action
+// sits on the tab row; its sheet's open state is lifted here (edit/draft stay
+// local to each tab — the sheet always resets on close, so a bare open flag
+// is enough).
 export function SchemaPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string };
   const tab: SchemaTab = search.tab === "products" ? "products" : "attributes";
+  const [addAttrOpen, setAddAttrOpen] = useState(false);
+  const [addProductOpen, setAddProductOpen] = useState(false);
 
   return (
     <Tabs
@@ -25,18 +33,29 @@ export function SchemaPage() {
         navigate({ to: "/schema", search: { tab: value } })
       }
     >
-      <TabsList>
-        {TABS.map((t) => (
-          <TabsTrigger key={t.key} value={t.key}>
-            {t.label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      <div className="flex items-center justify-between gap-3">
+        <TabsList>
+          {TABS.map((t) => (
+            <TabsTrigger key={t.key} value={t.key}>
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {tab === "attributes" ? (
+          <Button onClick={() => setAddAttrOpen(true)}>
+            <Plus className="size-4" /> Add attribute
+          </Button>
+        ) : (
+          <Button onClick={() => setAddProductOpen(true)}>
+            <Plus className="size-4" /> Add product
+          </Button>
+        )}
+      </div>
       <TabsContent value="attributes">
-        <SchemaAttributesPage />
+        <SchemaAttributesPage open={addAttrOpen} onOpenChange={setAddAttrOpen} />
       </TabsContent>
       <TabsContent value="products">
-        <SchemaProductsPage />
+        <SchemaProductsPage open={addProductOpen} onOpenChange={setAddProductOpen} />
       </TabsContent>
     </Tabs>
   );

@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Layers, ListChecks, Sparkles } from "lucide-react";
+import { Layers, ListChecks } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMe } from "@/api/hooks";
 import { ADMIN_GROUP, NAV_GROUPS } from "./nav";
@@ -12,16 +12,12 @@ export function Sidebar() {
   const nav = canAdmin ? [...NAV_GROUPS, ADMIN_GROUP] : NAV_GROUPS;
   return (
     <aside className="w-60 shrink-0 border-r border-border bg-sidebar h-full flex flex-col">
-      <div className="px-5 py-5 flex items-center gap-2 border-b border-border">
-        <div className="size-7 rounded-md bg-primary text-primary-foreground grid place-items-center">
-          <Sparkles className="size-4" />
-        </div>
-        <div className="flex flex-col leading-tight">
-          <span className="font-semibold text-foreground text-sm">Inspro</span>
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Group Benefits
-          </span>
-        </div>
+      <div className="h-14 px-5 flex items-center border-b border-border">
+        <img
+          src="/inspro-logo.png"
+          alt="Inspro Insurance Brokers"
+          className="max-h-9 w-auto"
+        />
       </div>
       <nav className="flex-1 p-3 overflow-y-auto space-y-5">
         {nav.map((group) => {

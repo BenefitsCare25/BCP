@@ -408,9 +408,9 @@ export function ProductSetupForm({
   // travel, life, accident, statutory); the tabs follow that list, not hardcoded.
   const sectionInner: Record<string, React.ReactNode> = {
     header: (
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {template.header_fields.map((f) => (
-          <div key={f.id} className={f.type === "textarea" ? "col-span-2" : undefined}>
+          <div key={f.id} className={f.type === "textarea" ? "col-span-3" : undefined}>
             <FieldControl
               field={f}
               value={answers.header[f.id] ?? ""}
@@ -422,12 +422,14 @@ export function ProductSetupForm({
       </div>
     ),
     eligibility: (
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {template.eligibility_fields.map((f) => (
           <div
             key={f.id}
             className={
-              f.type === "multichoice" || f.type === "taglist"
+              f.type === "multichoice" ||
+              f.type === "taglist" ||
+              f.type === "textarea"
                 ? "col-span-2"
                 : undefined
             }
@@ -498,7 +500,7 @@ export function ProductSetupForm({
             <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
               Cover details
             </Label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {template.profile_fields.map((f) => (
                 <FieldControl
                   key={f.id}
@@ -564,7 +566,7 @@ export function ProductSetupForm({
     <div className="flex flex-col gap-4">
       {/* Single-row section tabs. Switching tabs auto-saves the draft, and each
           tab has its own Save draft — so edits are never lost on navigation. */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
+      <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border">
         {sections.map((id) => {
           const count =
             id === "basis_of_cover" ? group?.categories.length ?? 0 : 0;
@@ -591,19 +593,7 @@ export function ProductSetupForm({
         })}
       </div>
 
-      <div className="flex flex-col gap-4">
-        {sectionInner[activeId] ?? null}
-        <div className="flex items-center justify-end border-t border-border pt-3">
-          <Button variant="outline" size="sm" onClick={onSave} disabled={save.isPending}>
-            {save.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Save className="size-4" />
-            )}
-            Save draft
-          </Button>
-        </div>
-      </div>
+      <div className="flex flex-col gap-4">{sectionInner[activeId] ?? null}</div>
 
       <div className="flex items-center justify-between border-t border-border pt-3">
         <span className="text-xs text-muted-foreground">
@@ -613,12 +603,22 @@ export function ProductSetupForm({
             </span>
           ) : null}
         </span>
-        <Button
-          onClick={() => setConfirmOpen(true)}
-          disabled={selectedPlans.length === 0}
-        >
-          Confirm & create
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={onSave} disabled={save.isPending}>
+            {save.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
+            Save draft
+          </Button>
+          <Button
+            onClick={() => setConfirmOpen(true)}
+            disabled={selectedPlans.length === 0}
+          >
+            Confirm & create
+          </Button>
+        </div>
       </div>
 
       <AlertDialog
