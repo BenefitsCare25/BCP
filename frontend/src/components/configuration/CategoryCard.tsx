@@ -523,7 +523,7 @@ export function CategoryCard({
           {statusPill(category.status)}
           {confidencePill(category.confidence)}
           {category.human_modified && (
-            <Badge variant="primary" className="gap-1">
+            <Badge variant="outline" className="gap-1">
               <Sparkles className="size-3" /> Edited
             </Badge>
           )}

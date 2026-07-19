@@ -79,7 +79,7 @@ export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
                     </Badge>
                   )}
                   {attr.derived_from && (
-                    <Badge variant="primary">Derived from {attr.derived_from}</Badge>
+                    <Badge variant="outline">Derived from {attr.derived_from}</Badge>
                   )}
                 </div>
               </TableCell>
@@ -89,7 +89,7 @@ export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
                     <Globe className="size-3" /> Global default
                   </Badge>
                 ) : (
-                  <Badge variant="primary">Client-specific</Badge>
+                  <Badge variant="default">Client-specific</Badge>
                 )}
               </TableCell>
               {hasActions && (

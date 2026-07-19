@@ -319,10 +319,10 @@ export function SchemaProductsPage() {
                       <TableCell>
                         <div className="flex gap-1 flex-wrap">
                           {p.has_dependants && (
-                            <Badge variant="primary">Dependants</Badge>
+                            <Badge variant="outline">Dependants</Badge>
                           )}
                           {p.is_outpatient && (
-                            <Badge variant="primary">Outpatient</Badge>
+                            <Badge variant="outline">Outpatient</Badge>
                           )}
                         </div>
                       </TableCell>
@@ -332,7 +332,7 @@ export function SchemaProductsPage() {
                             <Globe className="size-3" /> Global
                           </Badge>
                         ) : (
-                          <Badge variant="primary">Client-specific</Badge>
+                          <Badge variant="default">Client-specific</Badge>
                         )}
                       </TableCell>
                       <TableCell>

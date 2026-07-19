@@ -130,7 +130,7 @@ function ProductDiagnostics({
                   ? "empty SOB"
                   : p.reconciliation.replace("_", " ")}
             </Badge>
-            {p.used_ai && <Badge variant="primary">AI</Badge>}
+            {p.used_ai && <Badge variant="outline">AI</Badge>}
             <span className="text-muted-foreground">
               {Math.round(p.confidence * 100)}% confidence · {p.n_benefit_items}{" "}
               benefit line{p.n_benefit_items === 1 ? "" : "s"}

@@ -187,7 +187,7 @@ export function MemberEnrollmentPanel({
               {" — after that your current selections are locked in."}
             </p>
           </div>
-          <Badge variant={finalized ? "good" : submitted ? "primary" : "outline"}>
+          <Badge variant={finalized ? "good" : submitted ? "info" : "outline"}>
             {STATUS_LABEL[status] ?? status}
           </Badge>
         </div>

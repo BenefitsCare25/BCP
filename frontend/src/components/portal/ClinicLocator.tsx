@@ -106,7 +106,7 @@ function ClinicCard({ clinic, rank }: { clinic: Clinic; rank: number | null }) {
           </div>
         </div>
         {clinic.distance_km !== null && (
-          <Badge variant="primary" className="shrink-0">
+          <Badge variant="outline" className="shrink-0">
             {formatDistance(clinic.distance_km)}
           </Badge>
         )}
@@ -250,7 +250,7 @@ function OriginPanel({
       </div>
       {origin && (
         <div className="mt-2 flex items-center gap-2">
-          <Badge variant="primary" className="max-w-full">
+          <Badge variant="outline" className="max-w-full">
             <MapPin className="mr-1 size-3 shrink-0" />
             <span className="truncate">Near {origin.label}</span>
           </Badge>

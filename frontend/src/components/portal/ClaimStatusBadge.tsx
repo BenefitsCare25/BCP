@@ -2,12 +2,12 @@ import { Badge } from "@/components/ui/badge";
 
 /** Member-safe status labels — AI-internal states read as "under review";
  * fraud signals are never surfaced to members. */
-const MEMBER_STATUS: Record<string, { label: string; variant: "good" | "warn" | "error" | "outline" | "primary" }> = {
+const MEMBER_STATUS: Record<string, { label: string; variant: "good" | "warn" | "error" | "outline" | "info" }> = {
   draft: { label: "Draft", variant: "outline" },
-  submitted: { label: "Under review", variant: "primary" },
-  ai_review_pending: { label: "Under review", variant: "primary" },
-  ai_verified: { label: "Under review", variant: "primary" },
-  ai_flagged: { label: "Under review", variant: "primary" },
+  submitted: { label: "Under review", variant: "info" },
+  ai_review_pending: { label: "Under review", variant: "info" },
+  ai_verified: { label: "Under review", variant: "info" },
+  ai_flagged: { label: "Under review", variant: "info" },
   needs_info: { label: "More info needed", variant: "warn" },
   approved: { label: "Approved", variant: "good" },
   rejected: { label: "Rejected", variant: "error" },

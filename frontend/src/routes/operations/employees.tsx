@@ -827,7 +827,7 @@ export function EmployeesPage() {
                     </div>
                     {detail.matched_category_id && detail.match_method && (
                       <div className="flex items-center gap-1.5">
-                        <Badge variant="primary">
+                        <Badge variant="outline">
                           {METHOD_LABEL[detail.match_method as MatchMethod]}
                         </Badge>
                         {detail.match_confidence !== null && (

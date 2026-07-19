@@ -25,7 +25,7 @@ import {
 
 const OUTCOME_COLOR: Record<string, string> = {
   applied: "text-good",
-  would_apply: "text-primary",
+  would_apply: "text-info",
   skipped: "text-warn",
   error: "text-error",
 };

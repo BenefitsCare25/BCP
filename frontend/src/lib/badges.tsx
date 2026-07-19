@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import type { CategoryStatus, SourceKind } from "@/types";
 
 export function sourcePill(source: SourceKind) {
-  if (source === "manual") return <Badge variant="primary">Manual</Badge>;
+  if (source === "manual") return <Badge variant="default">Manual</Badge>;
   if (source === "ai_extracted") return <Badge variant="warn">AI</Badge>;
   if (source === "system_generated") return <Badge variant="outline">Auto</Badge>;
   return <Badge variant="default">CSV</Badge>;

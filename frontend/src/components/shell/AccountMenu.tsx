@@ -14,7 +14,7 @@ import { ENTRA_ENABLED, signIn, signOut } from "@/auth/msal";
 export function AccountMenu() {
   if (!ENTRA_ENABLED) {
     return (
-      <Badge variant="primary" className="gap-1.5">
+      <Badge variant="info" className="gap-1.5">
         <ShieldCheck className="size-3" />
         Mock auth (dev)
       </Badge>

@@ -108,7 +108,7 @@ export function FlexUploadCard({ policyYearId, compact = false }: Props) {
             <div>
               <div className="font-medium text-foreground flex items-center gap-2">
                 Upload Flexible Benefits documents
-                <Badge variant="primary" className="gap-1">
+                <Badge variant="outline" className="gap-1">
                   <Sparkles className="size-3" /> AI extraction
                 </Badge>
                 <InfoHint>

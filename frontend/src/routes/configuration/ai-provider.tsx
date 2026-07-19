@@ -117,7 +117,7 @@ export function AIProviderPage() {
       </Badge>
     ),
     env: (
-      <Badge variant="primary" className="gap-1">
+      <Badge variant="info" className="gap-1">
         <Cloud className="size-3" /> Using platform key
       </Badge>
     ),

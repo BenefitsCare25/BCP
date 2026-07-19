@@ -52,7 +52,7 @@ export function AIUsageTile() {
     status.source === "byok" ? (
       <Badge variant="good">BYOK</Badge>
     ) : (
-      <Badge variant="primary">platform key</Badge>
+      <Badge variant="info">platform key</Badge>
     );
 
   const used = spend?.month_to_date_tokens ?? status.month_to_date_tokens ?? 0;

@@ -167,7 +167,7 @@ function StatusDot({ status }: { status: string }) {
   const map: Record<string, string> = {
     not_started: "text-muted-foreground/60",
     in_progress: "text-warn",
-    submitted: "text-primary",
+    submitted: "text-info",
     confirmed: "text-good",
     deemed: "text-muted-foreground",
     declined: "text-muted-foreground",

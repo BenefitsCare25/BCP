@@ -227,7 +227,7 @@ function EditForm({
 
         {category.human_modified && (
           <div className="flex items-center gap-1">
-            <Badge variant="primary">Human-modified</Badge>
+            <Badge variant="outline">Human-modified</Badge>
             <InfoHint>Source flipped from AI to manual on last edit.</InfoHint>
           </div>
         )}

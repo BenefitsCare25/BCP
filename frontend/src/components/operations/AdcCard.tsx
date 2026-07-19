@@ -163,7 +163,7 @@ export function AdcCard({ policyYearId }: Props) {
           <SheetBody className="flex-1 space-y-4 overflow-y-auto">
             <div className="flex flex-wrap gap-2 text-sm">
               <Badge variant="good">{c.additions ?? 0} additions</Badge>
-              <Badge variant="primary">{c.changes ?? 0} changes</Badge>
+              <Badge variant="info">{c.changes ?? 0} changes</Badge>
               <Badge variant="warn">{c.deletions ?? 0} terminations</Badge>
               {(c.issues ?? 0) > 0 && (
                 <Badge variant="error">{c.issues} issues</Badge>
