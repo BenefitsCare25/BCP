@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -159,6 +159,45 @@ export function Section({
   );
 }
 
+/** Fields rendered as a wrapping, auto-growing textarea rather than a
+ *  single-line input. `insured` is a comma list of every covered legal entity —
+ *  routinely longer than one line, and it must be readable in full because it
+ *  is the wording reproduced on the exported placement slip. */
+const WIDE_FIELD_IDS = new Set(["insured"]);
+
+export const isWideField = (f: TemplateField) =>
+  f.type === "textarea" || WIDE_FIELD_IDS.has(f.id);
+
+/** Textarea that grows to fit its content, so a long value is never hidden
+ *  behind a scrollbar. Height is recomputed on every value change (including
+ *  external ones like a slip pre-fill), not just on typing. */
+function AutoTextarea({
+  value,
+  onChange,
+  minRows = 2,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  minRows?: number;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={minRows}
+      className="resize-none overflow-hidden rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+    />
+  );
+}
+
 export function FieldControl({
   field,
   value,
@@ -186,13 +225,8 @@ export function FieldControl({
         />
       ) : field.type === "taglist" ? (
         <TagListControl value={value} onChange={onChange} />
-      ) : field.type === "textarea" ? (
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={2}
-          className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
-        />
+      ) : isWideField(field) ? (
+        <AutoTextarea value={value} onChange={onChange} />
       ) : field.id === "insurer" ? (
         // Every product template carries an `insurer` header field, so routing
         // it here turns all of them into the catalog dropdown at once. Prior

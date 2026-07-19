@@ -418,28 +418,33 @@ export function ProductSetupForm({
   // travel, life, accident, statutory); the tabs follow that list, not hardcoded.
   const sectionInner: Record<string, React.ReactNode> = {
     header: (
-      <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-3 gap-3">
+      <div className="flex flex-col gap-4">
+        {/* Two columns, not three: these are slip fields whose values are long
+            (entity lists, addresses, period wording), and a third column made
+            every one of them truncate. Every field takes one column — the long
+            ones render as auto-growing textareas (see `isWideField`) and simply
+            get taller, so Insured and Office address sit side by side and both
+            stay fully readable. */}
+        <div className="grid grid-cols-1 items-start gap-x-4 gap-y-3 md:grid-cols-2">
           {template.header_fields.map((f) => (
-            <div key={f.id} className={f.type === "textarea" ? "col-span-3" : undefined}>
-              <FieldControl
-                field={f}
-                value={String(answers.header[f.id] ?? "")}
-                onChange={(v) => setHeader(f.id, v)}
-                suggestions={suggestions?.header[f.id] ?? []}
-              />
-            </div>
+            <FieldControl
+              key={f.id}
+              field={f}
+              value={String(answers.header[f.id] ?? "")}
+              onChange={(v) => setHeader(f.id, v)}
+              suggestions={suggestions?.header[f.id] ?? []}
+            />
           ))}
         </div>
-        {/* The functional counterpart to the free-text Insured field above:
-            Insured records the slip's legal wording (and is what the exported
-            slip reproduces), while these picked entities are what employee
-            matching actually gates on — for every category of this product. */}
-        <div className="border-t border-border pt-3">
+        {/* Set apart from the slip fields above because it behaves differently:
+            everything above is transcribed wording, this one changes which
+            employees match. Insured records the legal names (and is what the
+            exported slip reproduces); these picked entities are the gate. */}
+        <div className="rounded-md border border-border bg-muted/30 p-3">
           <InsuredPicker
             policyYearId={policyYearId}
-            label="Entities covered"
-            hint="Which legal entities this product covers, picked from the roster. Only employees whose roster Entity matches will match this product's categories. Leave empty to cover everyone. The Insured field above stays as the slip's wording — it is not used for matching."
+            label="Entities covered · used for matching"
+            hint="Which legal entities this product covers, picked from the roster so the spelling always matches. Only employees whose roster Entity is one of these will match this product's categories. Leave empty to cover every entity. The Insured field above stays as the slip's wording — it is never used for matching."
             value={headerEntities}
             onChange={(next) => setHeader("entities", next)}
           />
