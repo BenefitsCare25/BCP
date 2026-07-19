@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -94,6 +94,10 @@ function CheckRow({
 
 interface Props {
   policyYearId: string;
+  // Benefit-year picker, rendered beside the coverage download. It must survive
+  // every fallback branch below — you have to be able to switch back to a year
+  // whose roster loads even when this one's doesn't.
+  yearSelector?: ReactNode;
 }
 
 /**
@@ -103,7 +107,7 @@ interface Props {
  * the distribution up top, the pass/fail checks below, each exception opening a
  * slide-over of exactly who and downloadable as an .xlsx.
  */
-export function FlexOverviewCard({ policyYearId }: Props) {
+export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
   const membership = useFlexMembership(policyYearId);
   const coverage = useFlexCoverage(policyYearId);
   const [active, setActive] = useState<CoverageBucket | null>(null);
@@ -121,38 +125,49 @@ export function FlexOverviewCard({ policyYearId }: Props) {
     }
   };
 
+  // Right-aligned picker row, used by the branches that render no card header.
+  const selectorRow = yearSelector ? (
+    <div className="flex justify-end">{yearSelector}</div>
+  ) : null;
+
   if (membership.isError || coverage.isError) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
-          <span>Couldn't load the Flex overview.</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              void membership.refetch();
-              void coverage.refetch();
-            }}
-          >
-            <RefreshCw className="size-4" /> Retry
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        {selectorRow}
+        <Card>
+          <CardContent className="flex items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
+            <span>Couldn't load the Flex overview.</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void membership.refetch();
+                void coverage.refetch();
+              }}
+            >
+              <RefreshCw className="size-4" /> Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   const m = membership.data;
-  if (membership.isLoading || !m) return null;
+  if (membership.isLoading || !m) return selectorRow;
 
   if (m.employees_total === 0) {
     return (
-      <Card>
-        <CardContent className="p-4 text-sm text-muted-foreground">
-          Upload the employee &amp; dependant rosters under{" "}
-          <span className="font-medium text-foreground">Operations</span> to see
-          the family-status distribution and coverage checks.
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        {selectorRow}
+        <Card>
+          <CardContent className="p-4 text-sm text-muted-foreground">
+            Upload the employee &amp; dependant rosters under{" "}
+            <span className="font-medium text-foreground">Operations</span> to
+            see the family-status distribution and coverage checks.
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -202,15 +217,18 @@ export function FlexOverviewCard({ policyYearId }: Props) {
               </p>
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void onDownload()}
-            disabled={downloading || !c}
-          >
-            <Download className="size-4" />
-            {downloading ? "Preparing…" : "Download .xlsx"}
-          </Button>
+          <div className="flex items-center gap-2">
+            {yearSelector}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void onDownload()}
+              disabled={downloading || !c}
+            >
+              <Download className="size-4" />
+              {downloading ? "Preparing…" : "Download .xlsx"}
+            </Button>
+          </div>
         </div>
 
         {/* Family-status distribution */}

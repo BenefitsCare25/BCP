@@ -10,7 +10,8 @@ import { FlexOverviewCard } from "./FlexOverviewCard";
 
 interface Props {
   policyYearId: string;
-  // Benefit-year picker (Flex has no per-product title, so it sits at the top).
+  // Benefit-year picker (Flex has no per-product title, so it rides the
+  // overview card's header alongside the coverage download).
   yearSelector?: ReactNode;
 }
 
@@ -51,8 +52,10 @@ export function FlexPanel({ policyYearId, yearSelector }: Props) {
 
   return (
     <div className="space-y-4">
-      {yearSelector && <div className="flex justify-end">{yearSelector}</div>}
-      <FlexOverviewCard policyYearId={policyYearId} />
+      <FlexOverviewCard
+        policyYearId={policyYearId}
+        yearSelector={yearSelector}
+      />
       {scheme && <FlexSchemeForm policyYearId={policyYearId} scheme={scheme} />}
     </div>
   );
