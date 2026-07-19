@@ -54,6 +54,7 @@ export function CoveragePeriodEditor({
   const [fcl, setFcl] = useState<string>(
     term.free_cover_limit != null ? String(term.free_cover_limit) : "",
   );
+  const [policyNo, setPolicyNo] = useState<string>(term.policy_number ?? "");
   const setTerm = useSetProductTerm(policyYearId);
   const resetTerm = useResetProductTerm(policyYearId);
 
@@ -65,7 +66,9 @@ export function CoveragePeriodEditor({
     (gstOpinion === "include" && parsedRate !== term.gst_rate);
   const parsedFcl = fcl.trim() === "" ? null : Number(fcl.replace(/,/g, ""));
   const fclDirty = parsedFcl !== term.free_cover_limit;
-  const dirty = datesDirty || gstDirty || fclDirty;
+  const trimmedPolicyNo = policyNo.trim() === "" ? null : policyNo.trim();
+  const policyNoDirty = trimmedPolicyNo !== (term.policy_number ?? null);
+  const dirty = datesDirty || gstDirty || fclDirty || policyNoDirty;
 
   const datesValid = Boolean(start) && Boolean(end) && end >= start;
   const rateValid =
@@ -81,7 +84,8 @@ export function CoveragePeriodEditor({
     !term.is_default ||
     term.gst_included !== null ||
     term.gst_rate != null ||
-    term.free_cover_limit != null;
+    term.free_cover_limit != null ||
+    term.policy_number != null;
 
   const save = async () => {
     try {
@@ -97,6 +101,7 @@ export function CoveragePeriodEditor({
             }
           : {}),
         ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
+        ...(policyNoDirty ? { policyNumber: trimmedPolicyNo } : {}),
       });
       toast.success(`Updated ${term.code} terms`);
     } catch (err) {
@@ -168,6 +173,22 @@ export function CoveragePeriodEditor({
                 <span className="text-sm text-muted-foreground">%</span>
               </div>
             )}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">Policy no.</Label>
+            <InfoHint>
+              Insurer-issued policy number for this product&apos;s placement.
+              Appears on the placement slip export; editable after activation.
+            </InfoHint>
+            <Input
+              className="w-[150px]"
+              maxLength={64}
+              value={policyNo}
+              onChange={(e) => setPolicyNo(e.target.value)}
+              placeholder="Not issued"
+              aria-label={`${term.code} policy number`}
+            />
           </div>
 
           <div className="flex items-center gap-1.5">

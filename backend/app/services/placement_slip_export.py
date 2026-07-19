@@ -765,7 +765,12 @@ def _write_product_sheet(
     ws.append([])
 
     insured = ", ".join(_distinct_insured(categories))
+    # A quotation goes out to prospective insurers — the incumbent's identity
+    # and issued policy number stay blank alongside the rates.
     insurer = "" if mode == "quotation" or product is None else (product.insurer or "")
+    policy_no = (
+        "" if mode == "quotation" or term is None else (term.policy_number or "")
+    )
     _label_value_rows(ws, [
         ("Group :", ""),
         ("Policyholder :", py.client.name if py.client else ""),
@@ -775,7 +780,7 @@ def _write_product_sheet(
         ("Period of Insurance :", _coverage_window(py, term)),
         ("Insurer :", insurer),
         ("Pool :", ""),
-        ("Policy No. :", ""),
+        ("Policy No. :", policy_no),
         None,
         ("Eligibility :", ""),
         ("Eligibility Date :", ""),

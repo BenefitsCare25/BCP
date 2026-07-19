@@ -59,3 +59,6 @@ class ProductTerm(Base, TimestampMixin):
     # Free cover limit: sum insured auto-accepted without medical underwriting.
     # None = no FCL (everything auto-accepted). Drives underwriting-case sync.
     free_cover_limit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Insurer-issued policy number for this product's placement. Operational
+    # metadata (issued after activation) — editable on active years, like FCL.
+    policy_number: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -239,6 +239,8 @@ class ProductTermOut(BaseModel):
     gst_rate: float | None = None
     # Free cover limit (underwriting): SI auto-accepted without medicals.
     free_cover_limit: float | None = None
+    # Insurer-issued policy number for this product's placement.
+    policy_number: str | None = None
 
 
 class ProductTermUpdate(BaseModel):
@@ -251,6 +253,7 @@ class ProductTermUpdate(BaseModel):
     gst_included: bool | None = None
     gst_rate: float | None = Field(default=None, ge=0, le=100)
     free_cover_limit: float | None = Field(default=None, ge=0)
+    policy_number: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _check_range(self) -> ProductTermUpdate:

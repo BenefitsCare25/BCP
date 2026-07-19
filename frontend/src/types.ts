@@ -170,6 +170,8 @@ export interface ProductTerm {
   gst_rate: number | null;
   // Free cover limit (underwriting): SI auto-accepted without medicals.
   free_cover_limit: number | null;
+  // Insurer-issued policy number for this product's placement.
+  policy_number: string | null;
 }
 
 export type SourceKind =

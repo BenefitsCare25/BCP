@@ -213,7 +213,7 @@ def test_header_label_block(client: TestClient) -> None:
     assert value_of("Period of Insurance :") == "01 Jan 2034 to 31 Dec 2034"
     assert value_of("Insurer :") == "AIA"
     # Unknown slip fields are emitted as labelled blanks for the broker.
-    for label in ("Group :", "Pool :", "Policy No. :", "Eligibility :",
+    for label in ("Group :", "Pool :", "Eligibility :",
                   "Type of Administration :"):
         assert _blankish(value_of(label))
     # The unstored terms appear as labelled blank rows too.
@@ -330,6 +330,40 @@ def test_premium_total_semantics() -> None:
         for _ in range(2)
     ]
     assert _annual_premium_total(derived) == 144.0
+
+
+def test_policy_number_operational_and_exported(client: TestClient) -> None:
+    """Policy numbers are insurer-issued AFTER placement: settable on an ACTIVE
+    (config-locked) year, while coverage dates stay locked; the placement slip
+    shows it, the quotation leaves it blank (goes to prospective insurers)."""
+    with SessionLocal() as s:
+        s.get(PolicyYear, PY_ID).status = PolicyYearStatus.active
+        s.commit()
+    try:
+        res = client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{GHS_ID}",
+            json={"policy_number": "POL-2034-001"},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["policy_number"] == "POL-2034-001"
+        # Config dimensions keep the activation lock.
+        assert client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{GHS_ID}",
+            json={"coverage_start": "2034-02-01", "coverage_end": "2034-12-31"},
+        ).status_code == 409
+
+        ghs = _cells(_download(client)["GHS"])
+        assert ghs[_row_index(ghs, "Policy No. :")][2] == "POL-2034-001"
+        ghs_q = _cells(_download(client, kind="quotation")["GHS"])
+        assert _blankish(ghs_q[_row_index(ghs_q, "Policy No. :")][2])
+    finally:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{GHS_ID}",
+            json={"policy_number": None},
+        )
+        with SessionLocal() as s:
+            s.get(PolicyYear, PY_ID).status = PolicyYearStatus.draft
+            s.commit()
 
 
 def test_unassigned_sheet_and_audit(client: TestClient) -> None:

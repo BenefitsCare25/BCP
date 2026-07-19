@@ -34,6 +34,8 @@ class ResolvedTerm:
     gst_rate: float | None = None
     # Free cover limit (underwriting) — None = no FCL.
     free_cover_limit: float | None = None
+    # Insurer-issued policy number — None until the placement is issued.
+    policy_number: str | None = None
 
 
 def gst_multiplier(included: bool | None, rate: float | None) -> float:
@@ -124,6 +126,7 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
                 gst_included=term.gst_included if term else None,
                 gst_rate=term.gst_rate if term else None,
                 free_cover_limit=term.free_cover_limit if term else None,
+                policy_number=term.policy_number if term else None,
             )
         )
     out.sort(key=lambda r: (r.code, r.display_name))

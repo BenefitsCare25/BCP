@@ -61,6 +61,7 @@ def list_product_terms(
             gst_included=r.gst_included,
             gst_rate=r.gst_rate,
             free_cover_limit=r.free_cover_limit,
+            policy_number=r.policy_number,
         )
         for r in resolved
     ]
@@ -104,6 +105,7 @@ def list_product_terms(
                     gst_included=t.gst_included if t else None,
                     gst_rate=t.gst_rate if t else None,
                     free_cover_limit=t.free_cover_limit if t else None,
+                    policy_number=t.policy_number if t else None,
                 )
             )
     items.sort(key=lambda x: (x.code, x.display_name))
@@ -122,10 +124,11 @@ def set_product_term(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProductTermOut:
-    # The free cover limit is OPERATIONAL underwriting config (report-facing,
-    # doesn't change coverage) — an FCL-only body stays editable after
-    # activation. Coverage dates / GST keep the lock.
-    if body.model_fields_set != {"free_cover_limit"}:
+    # The free cover limit and policy number are OPERATIONAL config (the policy
+    # number is insurer-issued AFTER placement; FCL is report-facing) — bodies
+    # touching only those stay editable after activation. Coverage dates / GST
+    # keep the lock.
+    if not body.model_fields_set <= {"free_cover_limit", "policy_number"}:
         assert_policy_year_editable(py)
     product = _require_product_in_year(db, py, product_id)
     term = db.execute(
@@ -154,6 +157,9 @@ def set_product_term(
         term.gst_rate = body.gst_rate
     if "free_cover_limit" in sent:
         term.free_cover_limit = body.free_cover_limit
+    if "policy_number" in sent:
+        cleaned = (body.policy_number or "").strip()
+        term.policy_number = cleaned or None
     db.flush()
 
     has_dates = term.coverage_start is not None
@@ -169,6 +175,7 @@ def set_product_term(
             "gst_included": term.gst_included,
             "gst_rate": term.gst_rate,
             "free_cover_limit": term.free_cover_limit,
+            "policy_number": term.policy_number,
         },
     )
     db.commit()
@@ -183,6 +190,7 @@ def set_product_term(
         gst_included=term.gst_included,
         gst_rate=term.gst_rate,
         free_cover_limit=term.free_cover_limit,
+        policy_number=term.policy_number,
     )
 
 
