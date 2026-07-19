@@ -1268,7 +1268,10 @@ export interface RosterVocab {
 export interface EntityVocab {
   employees_total: number;
   roster: VocabValue[];
-  known: VocabValue[];
+  known: (VocabValue & {
+    /** The roster spelling this most likely means — powers one-click aliasing. */
+    suggestion?: string | null;
+  })[];
 }
 
 /** Outcome of persisting Flex wallets onto the roster (the assign endpoint). */

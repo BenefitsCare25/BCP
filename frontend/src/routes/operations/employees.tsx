@@ -55,6 +55,7 @@ import { useCoverageHistory } from "@/api/enrollment";
 import { FlexPriceTagSummary } from "@/components/benefits/FlexPriceTagSummary";
 import { CoverageHistory } from "@/components/enrollment/CoverageHistory";
 import { CoverageRevertControls } from "@/components/enrollment/CoverageRevertControls";
+import { EntityReconciliationPanel } from "@/components/configuration/EntityReconciliationPanel";
 import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
 import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
@@ -234,6 +235,10 @@ export function EmployeesPage() {
           />
         </div>
       )}
+
+      {/* Entity-gate mismatches — the usual silent cause of "unmatched".
+          Hidden when everything reconciles. */}
+      <EntityReconciliationPanel policyYearId={policyYearId} />
 
       {/* Overrides stranded by a re-match — hidden when there are none. */}
       <OrphanOverridesPanel policyYearId={policyYearId} />

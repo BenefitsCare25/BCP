@@ -163,6 +163,8 @@ class EntityValueOut(BaseModel):
     value: str
     count: int
     claimed: bool
+    # For an unreconciled entity: the roster spelling it most likely means.
+    suggestion: str | None = None
 
 
 class EntityVocabOut(BaseModel):

@@ -480,3 +480,23 @@ def test_alias_bridges_either_side() -> None:
     # Single-hop: A->B, B->C must not chain A->C.
     chain = {"a": "b", "b": "c"}
     assert resolve_entity("A", chain) == "b"
+
+
+def test_entity_vocab_reconciliation_and_suggestions() -> None:
+    """Config entities that match no roster value are surfaced with the roster
+    spelling they most likely mean — acronyms included, which token overlap
+    alone cannot find."""
+    from app.services.entity_vocab import _acronym, _closest
+
+    roster = {
+        "city serviced offices pte ltd": {"value": "City Serviced Offices Pte Ltd"},
+        "le grove management pte ltd": {"value": "Le Grove Management Pte Ltd"},
+    }
+    # Acronym — shares no words with its expansion.
+    assert _closest("cso", roster) == "City Serviced Offices Pte Ltd"
+    # Partial name — found by token overlap.
+    assert _closest("le grove", roster) == "Le Grove Management Pte Ltd"
+    # Unrelated — no suggestion rather than a nonsense one.
+    assert _closest("totally unrelated zzz", roster) is None
+    # Corporate suffixes carry no identity and are dropped from initials.
+    assert _acronym("city serviced offices pte ltd") == "cso"
