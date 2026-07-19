@@ -26,7 +26,7 @@ import json
 from typing import Any, Literal
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import select
@@ -44,6 +44,8 @@ _NOTE = Font(italic=True, size=9)
 _WRAP = Alignment(wrap_text=True, vertical="top")
 _MONEY = "#,##0.00"
 _COUNT = "#,##0"
+_THIN = Side(style="thin")
+_BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
 # Canonical tier vocabulary (mirror of product_registry TIER_SCHEMES labels):
 # composite employee tiers first, dependant-only tiers after. A slip-specific
@@ -159,6 +161,14 @@ def _style_row(ws: Worksheet, font: Font | None = None, wrap_cols: tuple[int, ..
     return row
 
 
+def _border_row(ws: Worksheet, first: int, last: int, row: int | None = None) -> None:
+    """Grid the table cells — every table row gets a full thin border so the
+    workbook reads like the reference slips, not floating text."""
+    r = row or ws.max_row
+    for col in range(first, last + 1):
+        ws.cell(row=r, column=col).border = _BORDER
+
+
 def _label_value_rows(ws: Worksheet, rows: list[tuple[str, str] | None]) -> None:
     """Header block: label in col A, value in col C (reference layout)."""
     for entry in rows:
@@ -196,9 +206,12 @@ def _write_basis_of_cover(ws: Worksheet, categories: list[Category]) -> None:
     _style_row(ws, font=_SECTION)
     cols = _basis_columns(categories)
 
+    last_col = 4 + len(cols)
+
     def _header() -> None:
         ws.append(["", "Insured", "Category", "Participation"] + [h for h, _ in cols])
         _style_row(ws, font=_HEADER)
+        _border_row(ws, 2, last_col)
 
     prev_key: tuple[str, str] | None = None
     prev_name = ""
@@ -236,6 +249,7 @@ def _write_basis_of_cover(ws: Worksheet, categories: list[Category]) -> None:
             *values,
         ])
         _style_row(ws, wrap_cols=(2, 3, 4))
+        _border_row(ws, 2, last_col)
         for i, ((header, _), value) in enumerate(zip(cols, values, strict=True)):
             if ("Sum Insured" in header or "earnings" in header or header == "Basis") \
                     and isinstance(value, (int, float)):
@@ -267,10 +281,13 @@ def _write_tiered_rates(
     for code in codes:
         head1 += [code, ""]
         head2 += ["Rate", "Premium"]
+    last_col = 4 + 2 * len(codes)
     ws.append([*head1, ""])
     _style_row(ws, font=_SECTION)
+    _border_row(ws, 4, last_col)
     ws.append(head2)
     _style_row(ws, font=_HEADER)
+    _border_row(ws, 2, last_col)
 
     prev_insured: str | None = None
     prev_name = ""
@@ -297,6 +314,7 @@ def _write_tiered_rates(
                 row += [cell.get("rate"), "" if not premium else premium]
         ws.append(row)
         r = _style_row(ws, wrap_cols=(2, 3))
+        _border_row(ws, 2, last_col)
         for i in range(len(codes)):
             ws.cell(row=r, column=6 + 2 * i).number_format = _MONEY
         prev_insured = insured
@@ -331,6 +349,7 @@ def _write_flat_rates(
         _style_row(ws, font=_SECTION)
     ws.append(["", "Insured", "Category", amount_header, rate_header, "Annual Premium"])
     _style_row(ws, font=_HEADER)
+    _border_row(ws, 2, 6)
     prev_insured: str | None = None
     prev_premium: Any = object()
     for c in categories:
@@ -370,6 +389,7 @@ def _write_flat_rates(
             premium,
         ])
         r = _style_row(ws, wrap_cols=(2, 3, 6))
+        _border_row(ws, 2, 6)
         ws.cell(row=r, column=4).number_format = _COUNT
         if not isinstance(premium, str):
             ws.cell(row=r, column=6).number_format = _MONEY
@@ -389,6 +409,7 @@ def _write_per_member_rates(
         _style_row(ws, font=_SECTION)
     ws.append(["", "Insured", "Plan", "Rate", "Premium"])
     _style_row(ws, font=_HEADER)
+    _border_row(ws, 2, 5)
     seen_plans: set[str] = set()
     prev_insured: str | None = None
     for c in categories:
@@ -408,10 +429,12 @@ def _write_per_member_rates(
         label = f"{plan} - Employees / Dependents" if combined else f"{plan} - Employees"
         ws.append(["", show_insured, label, "" if blank else emp_rate, premium])
         row = _style_row(ws, wrap_cols=(2, 5))
+        _border_row(ws, 2, 5)
         if not isinstance(premium, str):
             ws.cell(row=row, column=5).number_format = _MONEY
         if dep_rate is not None and not combined:
             ws.append(["", "", f"{plan} - Dependents", "" if blank else dep_rate, ""])
+            _border_row(ws, 2, 5)
         prev_insured = insured
 
 
@@ -443,10 +466,12 @@ def _write_voluntary_rates(
             _style_row(ws, font=_HEADER)
         ws.append(["", "Based on Age Last Birthday", "Rate per 1,000 Sum assured (S$)"])
         _style_row(ws, font=_HEADER)
+        _border_row(ws, 2, 3)
         for band in bands:
             if not isinstance(band, dict):
                 continue
             ws.append(["", str(band.get("label") or ""), "" if blank else band.get("rate")])
+            _border_row(ws, 2, 3)
 
 
 def _annual_premium_total(categories: list[Category]) -> float | None:
@@ -591,6 +616,8 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
     _style_row(ws, font=_SECTION)
     ws.append(["No.", "Benefit"] + [str(col.get("label") or "") for col in columns])
     _style_row(ws, font=_HEADER)
+    sob_last_col = 2 + len(columns)
+    _border_row(ws, 1, sob_last_col)
     value_cols = range(3, 3 + len(columns))
 
     def _value_row(number: str, name: str, entry: dict[str, Any]) -> None:
@@ -603,6 +630,7 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
         ws.cell(row=row, column=2).alignment = _WRAP
         for col in value_cols:
             ws.cell(row=row, column=col).alignment = _WRAP
+        _border_row(ws, 1, sob_last_col)
 
     def _limit_rows(limits: Any, indent: str) -> None:
         for lim in limits or []:
@@ -613,6 +641,7 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
             text = f"{label}: {value}" if value else label
             if text:
                 ws.append(["", f"{indent}· {text}"])
+                _border_row(ws, 1, sob_last_col)
 
     for it in items:
         name = str(it.get("name") or "")
@@ -633,9 +662,11 @@ def _write_sob(ws: Worksheet, plans: list[Plan]) -> None:
                     for col in columns
                 ]
                 ws.append(["", f"    · {key}", *values])
+                _border_row(ws, 1, sob_last_col)
         elif isinstance(it.get("properties"), dict):
             for k, v in it["properties"].items():
                 ws.append(["", f"    · {k}: {v}"])
+                _border_row(ws, 1, sob_last_col)
         _limit_rows(it.get("limits"), "    ")
         for sub in it.get("sub_items") or []:
             sub_name = str(sub.get("name") or "")
@@ -658,12 +689,14 @@ def _write_plan_details(ws: Worksheet, plans: list[Plan]) -> None:
     _style_row(ws, font=_SECTION)
     ws.append(["Plan", "Cover Description", "Annual Policy Limit", "Report Label"])
     _style_row(ws, font=_HEADER)
+    _border_row(ws, 1, 4)
     for p in rows:
         ws.append([
             p.code, p.cover_description or "",
             p.annual_policy_limit or "", p.report_label or "",
         ])
         _style_row(ws, wrap_cols=(2,))
+        _border_row(ws, 1, 4)
 
 
 # ── Sheet assembly ───────────────────────────────────────────────────────────
@@ -779,6 +812,7 @@ def _build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
     )
     for cell in overview[overview.max_row]:
         cell.font = _HEADER
+    _border_row(overview, 1, 6)
     for product in products:
         overview.append([
             product.code,
@@ -788,6 +822,7 @@ def _build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
             len(cats_by_product.get(product.id, [])),
             len(plans_by_product.get(product.id, [])),
         ])
+        _border_row(overview, 1, 6)
 
     taken: set[str] = {overview.title.lower()}
     for product in products:
