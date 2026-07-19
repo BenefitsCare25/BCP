@@ -12,6 +12,8 @@ from pathlib import Path
 TEST_DB = Path(__file__).parent / "_test_admin_provisioning.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
+from datetime import date  # noqa: E402
+
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -19,8 +21,6 @@ from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # 
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from datetime import date  # noqa: E402
-
 from app.models import BrokerFirm, Client, PolicyYear, User  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402

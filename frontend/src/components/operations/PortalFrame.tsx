@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import {
   usePortalPreviewContext,
+  usePreviewCards,
   usePreviewClaims,
   usePreviewClinics,
   usePreviewDependants,
@@ -24,8 +25,10 @@ import {
   usePreviewStatement,
   usePreviewUtilization,
 } from "@/api/portalPreview";
+import { useBrokerCardArtwork } from "@/api/panelCards";
 import type { ClinicSearchParams } from "@/api/panelListings";
 import { ClinicLocator } from "@/components/portal/ClinicLocator";
+import { MemberCardList } from "@/components/portal/MemberCard";
 import { BenefitStatement } from "@/components/benefits/BenefitStatement";
 import { UtilizationView } from "@/components/benefits/UtilizationView";
 import type { DependantRef } from "@/components/enrollment/electionShared";
@@ -50,6 +53,7 @@ import { formatPolicyRange } from "@/lib/policy-year";
 const TABS = [
   { key: "coverage", label: "My coverage" },
   { key: "claims", label: "My claims" },
+  { key: "card", label: "My card" },
   { key: "clinics", label: "Find a clinic" },
   { key: "enrollment", label: "My enrollment" },
 ] as const;
@@ -195,6 +199,36 @@ function DependantsTab({ employeeId }: { employeeId: string }) {
       ) : (
         <DependantsTable rows={rows} />
       )}
+    </div>
+  );
+}
+
+function CardTab({ employeeId }: { employeeId: string }) {
+  const cards = usePreviewCards(employeeId);
+  if (cards.isLoading) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> Loading cards…
+      </div>
+    );
+  }
+  if (cards.error) {
+    return isNotFoundError(cards.error) ? <NoCoverageCard /> : <PortalErrorState onRetry={() => void cards.refetch()} />;
+  }
+  return (
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-lg font-semibold text-foreground">My card</h1>
+        <p className="text-sm text-muted-foreground">
+          Show this at a panel clinic. One card per plan you're covered under,
+          plus a card for each covered family member.
+        </p>
+      </div>
+      <MemberCardList
+        cards={cards.data?.items ?? []}
+        useArtwork={useBrokerCardArtwork}
+        emptyMessage="No e-cards have been issued for this employee's plan yet."
+      />
     </div>
   );
 }
@@ -388,6 +422,7 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
           <div className="mx-auto max-w-4xl">
             {tab === "coverage" && <CoverageTab employeeId={employeeId} />}
             {tab === "claims" && <ClaimsTab employeeId={employeeId} />}
+            {tab === "card" && <CardTab employeeId={employeeId} />}
             {tab === "clinics" && <ClinicsTab employeeId={employeeId} />}
             {tab === "enrollment" && <EnrollmentTab employeeId={employeeId} />}
           </div>

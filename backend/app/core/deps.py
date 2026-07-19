@@ -22,6 +22,7 @@ from app.models import (
     Employee,
     Enrollment,
     EnrollmentWindow,
+    PanelCard,
     PanelListing,
     PlacementSlipRow,
     Plan,
@@ -285,6 +286,21 @@ def load_panel_listing(
     if listing.client_id is not None and not user_owns(user, listing.client_id):
         raise _deny_cross_tenant(user, "Panel listing", listing_id)
     return listing
+
+
+def load_panel_card(
+    card_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PanelCard:
+    """Load a PanelCard. NULL client_id = shared library entry (same posture
+    as `load_panel_listing`); a client-pinned row keeps strict ownership."""
+    card = db.get(PanelCard, card_id)
+    if card is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Panel card not found")
+    if card.client_id is not None and not user_owns(user, card.client_id):
+        raise _deny_cross_tenant(user, "Panel card", card_id)
+    return card
 
 
 def load_plan(

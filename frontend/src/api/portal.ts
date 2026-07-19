@@ -7,6 +7,11 @@ import type {
   EnrollmentWindow,
 } from "@/api/enrollment";
 import {
+  useArtworkObjectUrl,
+  type CardFace,
+  type MemberCards,
+} from "@/api/panelCards";
+import {
   clinicSearchQuery,
   type ClinicSearch,
   type ClinicSearchParams,
@@ -96,6 +101,31 @@ export function usePortalDependants() {
     meta: { localErrorHandling: true },
     retry: false,
   });
+}
+
+// ── Panel e-cards ─────────────────────────────────────────────────────────────
+
+export function usePortalCards() {
+  return useQuery({
+    queryKey: ["portal", "cards"],
+    queryFn: () => portalApi.get<MemberCards>("/portal/cards"),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+/** Card artwork for the member surface — the member token rides an
+ * Authorization header, so the image is fetched as a blob and rendered from an
+ * object URL. Mirrors useBrokerCardArtwork on the broker side. */
+export function usePortalCardArtwork(
+  cardId: string | null,
+  face: CardFace,
+  enabled = true,
+): string | null {
+  return useArtworkObjectUrl(
+    (path) => portalApi.blob(path),
+    cardId && enabled ? `/portal/cards/${cardId}/artwork/${face}` : null,
+  );
 }
 
 // ── Clinic locator ────────────────────────────────────────────────────────────

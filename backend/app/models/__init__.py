@@ -18,6 +18,7 @@ from app.models.invitation import Invitation
 from app.models.leave_election import LeaveElection
 from app.models.leave_policy import LeavePolicy
 from app.models.member_account import MemberAccount, MemberOtpCode
+from app.models.panel_card import PanelCard, PolicyYearCard
 from app.models.panel_clinic import PanelClinic, PanelListing, PolicyYearPanel
 from app.models.placement_slip import PlacementSlipRow
 from app.models.plan import Plan
@@ -55,12 +56,14 @@ __all__ = [
     "LeavePolicy",
     "MemberAccount",
     "MemberOtpCode",
+    "PanelCard",
     "PanelClinic",
     "PanelListing",
     "PlacementSlipRow",
     "Plan",
     "PlanAttributeSchema",
     "PolicyYear",
+    "PolicyYearCard",
     "PolicyYearPanel",
     "Product",
     "ProductSetup",

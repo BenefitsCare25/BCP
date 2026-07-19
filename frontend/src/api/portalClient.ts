@@ -55,6 +55,17 @@ export const portalApi = {
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  /** Binary fetch (card artwork). The member token rides an Authorization
+   * header, so images can't be loaded via a plain <img src> — callers turn
+   * the blob into an object URL. */
+  blob: async (path: string): Promise<Blob> => {
+    const res = await fetch(`${API_BASE}${path}`, { headers: authHeader() });
+    if (res.status === 401) return handleUnauthorized();
+    if (!res.ok) {
+      throw new Error(parseErrorText(await res.text(), res.statusText));
+    }
+    return await res.blob();
+  },
   /** Multipart upload — no Content-Type so the browser sets the boundary. */
   upload: async <T>(path: string, formData: FormData): Promise<T> => {
     const res = await fetch(`${API_BASE}${path}`, {

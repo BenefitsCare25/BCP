@@ -38,6 +38,7 @@ from app.models import (  # noqa: E402
     Employee,
     Enrollment,
     EnrollmentWindow,
+    PanelCard,
     PanelListing,
     Plan,
     PolicyYear,
@@ -199,6 +200,18 @@ def _setup_db():
             )
         )
 
+        # A panel e-card PINNED to client B (e-card isolation checks).
+        session.add(
+            PanelCard(
+                id=CARD_B,
+                client_id=CLIENT_B_ID,
+                insurer="GE-SG",
+                panel_provider="Adept",
+                name="GE Adept Card",
+                artwork_front_path="firm/b/panel_card/x/front.png",
+            )
+        )
+
         session.commit()
 
     yield
@@ -246,6 +259,9 @@ PRODUCT_B = "00000000-0000-0000-0000-0000000000b7"
 WINDOW_B = "00000000-0000-0000-0000-0000000000b8"
 ENROLL_B = "00000000-0000-0000-0000-0000000000b9"
 PANEL_B = "00000000-0000-0000-0000-0000000000ba"
+CARD_B = "00000000-0000-0000-0000-0000000000bb"
+# Any assignment id — the guard rejects at the policy year first.
+CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
 
 
 # ── PolicyYear ──────────────────────────────────────────────────────────────
@@ -1186,6 +1202,66 @@ def test_policy_year_panels_cannot_tag_foreign_listing(client_as_a: TestClient) 
 
 def test_portal_preview_clinics_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/employees/{EMP_B}/portal-preview/clinics")
+    assert res.status_code == 404
+
+
+def test_panel_card_cross_tenant_404(client_as_a: TestClient) -> None:
+    """Card mutations go through load_panel_card — another tenant's PINNED
+    card stays invisible (library cards, client_id NULL, are shared)."""
+    assert client_as_a.patch(
+        f"/api/v1/panel-cards/{CARD_B}", json={"name": "hijack"}
+    ).status_code == 404
+    assert client_as_a.delete(f"/api/v1/panel-cards/{CARD_B}").status_code == 404
+    assert (
+        client_as_a.get(f"/api/v1/panel-cards/{CARD_B}/artwork/front").status_code == 404
+    )
+    assert client_as_a.put(
+        f"/api/v1/panel-cards/{CARD_B}/placements", json={"fields": []}
+    ).status_code == 404
+
+
+def test_panel_card_list_excludes_other_tenant(client_as_a: TestClient) -> None:
+    res = client_as_a.get("/api/v1/panel-cards")
+    assert res.status_code == 200
+    assert all(card["id"] != CARD_B for card in res.json())
+
+
+def test_policy_year_cards_cross_tenant_404(client_as_a: TestClient) -> None:
+    assert client_as_a.get(f"/api/v1/policy-years/{PY_B}/cards").status_code == 404
+    assert client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/cards",
+        json={"panel_card_id": CARD_B, "product_id": PRODUCT_B},
+    ).status_code == 404
+    assert client_as_a.put(
+        f"/api/v1/policy-years/{PY_B}/cards/{CARD_ASSIGNMENT_B}",
+        json={"panel_card_id": CARD_B, "product_id": PRODUCT_B},
+    ).status_code == 404
+    assert client_as_a.delete(
+        f"/api/v1/policy-years/{PY_B}/cards/{CARD_ASSIGNMENT_B}"
+    ).status_code == 404
+
+
+def test_card_assignment_probe_on_own_year_404s(client_as_a: TestClient) -> None:
+    """An assignment id belonging to ANOTHER year, probed through a year the
+    caller legitimately owns, must 404 (and is security-logged)."""
+    py_a = client_as_a.get("/api/v1/policy-years").json()[0]["id"]
+    assert client_as_a.delete(
+        f"/api/v1/policy-years/{py_a}/cards/{CARD_ASSIGNMENT_B}"
+    ).status_code == 404
+
+
+def test_policy_year_cards_cannot_assign_foreign_card(client_as_a: TestClient) -> None:
+    """Assigning client B's pinned card onto client A's own year must 404."""
+    py_a = client_as_a.get("/api/v1/policy-years").json()[0]["id"]
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{py_a}/cards",
+        json={"panel_card_id": CARD_B, "product_id": PRODUCT_B},
+    )
+    assert res.status_code == 404
+
+
+def test_portal_preview_cards_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/employees/{EMP_B}/portal-preview/cards")
     assert res.status_code == 404
 
 

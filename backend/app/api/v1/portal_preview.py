@@ -22,6 +22,7 @@ from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import ClaimList, CoverageOptionsOut, UtilizationOut
 from app.schemas.enrollment import PortalEnrollmentOut
 from app.schemas.panel import ClinicSearchOut
+from app.schemas.panel_card import MemberCardsOut
 from app.schemas.portal import (
     MemberAccountOut,
     PortalEmployeeOut,
@@ -34,6 +35,7 @@ from app.services.enrollment_elections import (
     open_window_for,
 )
 from app.services.member_statement import build_member_statement
+from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
 from app.services.utilization import build_utilization
 
@@ -146,6 +148,30 @@ def portal_preview_dependants(
         .order_by(Dependant.id)
     ).scalars().all()
     return [DependantOut.model_validate(r) for r in rows]
+
+
+@router.get("/cards", response_model=MemberCardsOut)
+def portal_preview_cards(
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> MemberCardsOut:
+    """Mirror of `GET /portal/cards` — same resolver over the member statement,
+    so the broker sees the member's cards with the same values printed.
+
+    The member's portal-account email must be passed through: the live portal
+    falls back to it when the roster has no email column, so omitting it here
+    would print a blank Email / Member ID field that the member does not see.
+    """
+    statement = build_member_statement(db, employee)
+    account = _member_account_for(db, employee)
+    return MemberCardsOut(
+        items=build_member_cards(
+            db,
+            employee,
+            statement,
+            member_email=account.email if account is not None else None,
+        )
+    )
 
 
 @router.get("/clinics", response_model=ClinicSearchOut)

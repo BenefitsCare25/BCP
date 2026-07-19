@@ -1,11 +1,16 @@
-/** Panel clinic locations — a SHARED library of clinic network lists.
+/** Panel clinics — two sibling surfaces under one settings page.
  *
- * Each row is one clinic network (insurer + panel provider + country + clinic
- * type) uploaded once and available to every company. The "Enabled" switch is
- * the per-company selection: it tags the listing to the ACTIVE company's
- * policy year, which is what exposes its clinics to that company's members
- * via /portal/clinics. Tagging is operational (not locked by activation) —
- * panel networks change mid-year.
+ * "Locations" is a SHARED library of clinic network lists: each row is one
+ * network (insurer + panel provider + country + clinic type) uploaded once and
+ * available to every company. The "Enabled" switch is the per-company
+ * selection: it tags the listing to the ACTIVE company's policy year, which is
+ * what exposes its clinics to that company's members via /portal/clinics.
+ *
+ * "Cards" is the matching e-card library (artwork + printed-field layout),
+ * assigned per benefit year and product — see cards/PanelCardsPanel.
+ *
+ * Both are operational (not locked by activation) — panel networks and card
+ * artwork change mid-year.
  */
 import { useMemo, useRef, useState } from "react";
 import {
@@ -36,6 +41,7 @@ import {
   type PanelListingInput,
 } from "@/api/panelListings";
 import { usePolicyYears } from "@/api/hooks";
+import { PanelCardsPanel } from "@/components/configuration/cards/PanelCardsPanel";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -63,6 +69,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { InfoHint } from "@/components/ui/tooltip";
 import {
   Table,
@@ -544,6 +551,7 @@ function LibraryTable({
 
 export function PanelClinicsPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const [tab, setTab] = useState<"locations" | "cards">("locations");
   const { data: policyYears = [] } = usePolicyYears();
   const { data: listings = [], isLoading } = usePanelListings();
   // Only query with a year id CONFIRMED in the active client's list — the
@@ -594,7 +602,24 @@ export function PanelClinicsPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <Tabs
+      value={tab}
+      onValueChange={(v) => setTab(v as "locations" | "cards")}
+      className="space-y-4"
+    >
+      <TabsList>
+        <TabsTrigger value="locations">Locations</TabsTrigger>
+        <TabsTrigger value="cards">Cards</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="cards">
+        <PanelCardsPanel
+          policyYearId={validYearId}
+          yearLabel={currentYear ? String(currentYear.year) : ""}
+        />
+      </TabsContent>
+
+      <TabsContent value="locations" className="space-y-4">
       <Card>
         <CardHeader className="flex-row items-start justify-end space-y-0">
           <Button
@@ -672,6 +697,7 @@ export function PanelClinicsPage() {
         loading={remove.isPending}
         onConfirm={() => void confirmDelete()}
       />
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }

@@ -85,6 +85,10 @@ const PortalClinicsPage = lazyRouteComponent(
   () => import("@/routes/portal/clinics"),
   "PortalClinicsPage",
 );
+const PortalCardPage = lazyRouteComponent(
+  () => import("@/routes/portal/card"),
+  "PortalCardPage",
+);
 const PortalNewClaimPage = lazyRouteComponent(
   () => import("@/routes/portal/claims/new"),
   "PortalNewClaimPage",
@@ -210,6 +214,12 @@ const portalClinicsRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
   path: "/portal/clinics",
   component: PortalClinicsPage,
+});
+
+const portalCardRoute = createRoute({
+  getParentRoute: () => portalLayoutRoute,
+  path: "/portal/card",
+  component: PortalCardPage,
 });
 
 const portalNewClaimRoute = createRoute({
@@ -468,6 +478,7 @@ const routeTree = rootRoute.addChildren([
     portalEnrollmentRoute,
     portalClaimsRoute,
     portalClinicsRoute,
+    portalCardRoute,
     portalNewClaimRoute,
     portalClaimDetailRoute,
   ]),

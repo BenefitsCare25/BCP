@@ -8,7 +8,8 @@ router-level `get_current_member` dependency.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,11 +20,14 @@ from app.core.portal_auth import (
     get_current_member,
     resolve_member_employee,
 )
+from app.core.storage import get_storage
 from app.db.session import get_db
-from app.models import Dependant
+from app.models import Dependant, PanelCard, PolicyYearCard
+from app.models.panel_card import CARD_FACES
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import UtilizationOut
 from app.schemas.panel import ClinicSearchOut
+from app.schemas.panel_card import MemberCardsOut
 from app.schemas.portal import (
     PortalEmployeeOut,
     PortalMe,
@@ -32,6 +36,7 @@ from app.schemas.portal import (
 )
 from app.services.enrollment_elections import open_window_for
 from app.services.member_statement import build_member_statement
+from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
 from app.services.utilization import build_utilization
 
@@ -127,6 +132,62 @@ def portal_clinics(
         lng=lng,
         offset=offset,
         limit=limit,
+    )
+
+
+@router.get("/cards", response_model=MemberCardsOut)
+def portal_cards(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> MemberCardsOut:
+    """The member's panel e-cards — one per covered product, plus one per
+    dependant covered under that product."""
+    employee = resolve_member_employee(db, member)
+    statement = build_member_statement(db, employee)
+    return MemberCardsOut(
+        items=build_member_cards(db, employee, statement, member_email=member.email)
+    )
+
+
+@router.get("/cards/{card_id}/artwork/{face}")
+def portal_card_artwork(
+    card_id: str,
+    face: str,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Stream card artwork to the member.
+
+    Access is gated on the card being ASSIGNED to the member's own policy year
+    — the same switch that makes the card appear in `GET /portal/cards`. An
+    unassigned (or another company's) card id 404s rather than 403ing, so the
+    member surface can't be used to probe the card library.
+    """
+    if face not in CARD_FACES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found")
+    employee = resolve_member_employee(db, member)
+    assigned = db.execute(
+        select(PolicyYearCard.id).where(
+            PolicyYearCard.policy_year_id == employee.policy_year_id,
+            PolicyYearCard.panel_card_id == card_id,
+        )
+    ).first()
+    if assigned is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found")
+    card = db.get(PanelCard, card_id)
+    path = getattr(card, f"artwork_{face}_path", None) if card is not None else None
+    if not path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found")
+    try:
+        content = get_storage().read(path)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Artwork could not be retrieved"
+        ) from exc
+    return Response(
+        content=content,
+        media_type=getattr(card, f"artwork_{face}_mime") or "application/octet-stream",
+        headers={"Cache-Control": "private, max-age=300"},
     )
 
 

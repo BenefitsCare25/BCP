@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 // change both together.
 const NAV = [
   { label: "My coverage", to: "/portal/coverage" },
+  { label: "My card", to: "/portal/card" },
   { label: "My claims", to: "/portal/claims" },
   { label: "Find a clinic", to: "/portal/clinics" },
   { label: "My enrollment", to: "/portal/enrollment" },

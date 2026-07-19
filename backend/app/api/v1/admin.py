@@ -27,7 +27,6 @@ from app.core.deps import require_firm_admin, require_system_admin
 from app.db.session import engine, get_db
 from app.db.tenancy import provision_firm_schema
 from app.models import BrokerFirm, Client, PolicyYear, User, UserClientAccess
-from app.models.policy_year import PolicyYear
 from app.models.invitation import (
     INVITE_STATUS_PENDING,
     INVITE_STATUS_REVOKED,

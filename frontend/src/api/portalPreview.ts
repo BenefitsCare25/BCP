@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { PortalClaimList, PortalEnrollmentData } from "@/api/portal";
 import type { MemberAccount } from "@/api/memberAccounts";
+import type { MemberCards } from "@/api/panelCards";
 import {
   clinicSearchQuery,
   type ClinicSearch,
@@ -77,6 +78,10 @@ export function usePreviewEnrollment(employeeId: string | null) {
     "/enrollment",
     "enrollment",
   );
+}
+
+export function usePreviewCards(employeeId: string | null) {
+  return usePreviewQuery<MemberCards>(employeeId, "/cards", "cards");
 }
 
 export function usePreviewClinics(
