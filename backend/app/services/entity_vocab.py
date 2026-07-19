@@ -26,12 +26,14 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Category, Employee, PolicyYear, ProductSetup
+from app.core.pagination import MAX_LIMIT
+from app.models import Category, Employee, PolicyYear, Product, ProductSetup
 from app.services.matching_engine import (
     EntityAliases,
     entity_alias_map,
     insured_names,
     jaccard,
+    product_entities,
     resolve_entity,
     tokenize,
 )
@@ -80,7 +82,39 @@ def _acronym(norm: str) -> str:
     return "".join(t[0] for t in norm.split() if t and t not in _SUFFIX_TOKENS)
 
 
-def _closest(norm: str, candidates: dict[str, dict]) -> str | None:
+@dataclass(frozen=True)
+class _Candidate:
+    """A roster entity pre-indexed for suggestion matching. Built ONCE per
+    request — `_closest` runs per unreconciled name, so tokenizing inside its
+    loop would re-tokenize the whole roster for each one."""
+
+    value: str
+    tokens: frozenset[str]
+    acronym: str
+
+
+def _identity_tokens(norm: str) -> frozenset[str]:
+    """Tokens that actually identify the company.
+
+    Corporate suffixes are dropped: almost every Singapore entity ends in
+    "Pte Ltd", so counting them makes any two names look ~40% similar and the
+    UI proposes a nonsense alias between unrelated companies.
+    """
+    return frozenset(t for t in tokenize(norm) if t not in _SUFFIX_TOKENS)
+
+
+def _index_candidates(bucket: dict[str, dict]) -> list[_Candidate]:
+    return [
+        _Candidate(
+            value=slot["value"],
+            tokens=_identity_tokens(norm),
+            acronym=_acronym(norm),
+        )
+        for norm, slot in bucket.items()
+    ]
+
+
+def _closest(norm: str, candidates: list[_Candidate]) -> str | None:
     """The roster entity a config-only name most likely means.
 
     Two signals, because the two failure modes look nothing alike:
@@ -94,48 +128,79 @@ def _closest(norm: str, candidates: dict[str, dict]) -> str | None:
     An unrelated name matches neither and yields no suggestion, so the UI never
     proposes a nonsense alias.
     """
-    target = tokenize(norm)
+    target = set(_identity_tokens(norm))
     if not target:
         return None
     target_acronym = norm.replace(" ", "")
     best, best_score = None, 0.0
-    for cand_norm, slot in candidates.items():
+    for cand in candidates:
         # An exact acronym hit outranks any partial word overlap.
-        if target_acronym and _acronym(cand_norm) == target_acronym:
-            return slot["value"]
-        score = jaccard(target, tokenize(cand_norm))
+        if target_acronym and cand.acronym == target_acronym:
+            return cand.value
+        score = jaccard(target, set(cand.tokens))
         if score > best_score:
-            best, best_score = slot["value"], score
+            best, best_score = cand.value, score
     return best if best_score > 0 else None
 
 
-def _category_entities(
+def _gating_entities(
     db: Session, policy_year_id: str, aliases: EntityAliases
 ) -> dict[str, str]:
-    """{resolved: raw spelling} for every entity named by a category."""
+    """{resolved: raw spelling} for every entity that actually GATES matching.
+
+    Must cover BOTH sources, in the same precedence the matcher applies
+    (`_build_product_indices`): a product's own `product_metadata["entities"]`
+    when set, otherwise each of its categories' `plan_assignments["insured"]`.
+    Reading only the category side would mark a roster entity "unclaimed" while
+    a product gate is actively excluding everyone else — which is precisely the
+    silent exclusion the reconciliation panel exists to surface.
+    """
     out: dict[str, str] = {}
-    rows = db.execute(
-        select(Category.plan_assignments).where(
-            Category.policy_year_id == policy_year_id
-        )
-    ).scalars()
-    for pa in rows:
-        if not isinstance(pa, dict):
-            continue
-        for name in insured_names(pa.get("insured")):
+
+    def _add(raw_value: object) -> None:
+        for name in insured_names(raw_value):
             if norm := resolve_entity(name, aliases):
                 out.setdefault(norm, name)
+
+    cats = list(
+        db.execute(
+            select(Category.product_id, Category.plan_assignments).where(
+                Category.policy_year_id == policy_year_id
+            )
+        ).all()
+    )
+    product_ids = {pid for pid, _ in cats if pid}
+    products = (
+        {
+            p.id: p
+            for p in db.execute(
+                select(Product).where(Product.id.in_(product_ids))
+            ).scalars()
+        }
+        if product_ids
+        else {}
+    )
+    for product_id, pa in cats:
+        gate = product_entities(products.get(product_id), aliases)
+        if gate:
+            # Product-level field wins — record its RAW spellings, not the
+            # normalized set, so the UI can show what the broker typed.
+            meta = products[product_id].product_metadata or {}
+            _add(meta.get("entities"))
+        elif isinstance(pa, dict):
+            _add(pa.get("insured"))
     return out
 
 
 def _setup_header_entities(
     db: Session, policy_year_id: str, aliases: EntityAliases
 ) -> dict[str, str]:
-    """{normalized: raw} from each product setup's descriptive header Insured.
+    """{normalized: raw} from each product setup's header.
 
-    The header field is display-only — nothing matches on it — but it is where
-    a broker typically lists every covered entity, so it is the best source of
-    suggestions before any category names one.
+    Covers the descriptive `insured` wording AND the picked `entities` — the
+    latter because a DRAFT setup has entities the broker chose but hasn't
+    confirmed onto the product yet, and those are worth reconciling before they
+    become the live gate.
     """
     out: dict[str, str] = {}
     rows = db.execute(
@@ -149,9 +214,10 @@ def _setup_header_entities(
         header = answers.get("header")
         if not isinstance(header, dict):
             continue
-        for name in insured_names(header.get("insured")):
-            if norm := resolve_entity(name, aliases):
-                out.setdefault(norm, name)
+        for key in ("insured", "entities"):
+            for name in insured_names(header.get(key)):
+                if norm := resolve_entity(name, aliases):
+                    out.setdefault(norm, name)
     return out
 
 
@@ -171,12 +237,16 @@ def entity_vocabulary(db: Session, policy_year: PolicyYear) -> EntityVocab:
     for emp in employees:
         _tally(roster_bucket, (emp.attribute_values or {}).get("entity"), aliases)
 
-    claimed = _category_entities(db, policy_year.id, aliases)
+    claimed = _gating_entities(db, policy_year.id, aliases)
     configured = {
         **_setup_header_entities(db, policy_year.id, aliases),
         **claimed,
     }
 
+    # Both lists are capped: a roster with dirty free-text entity data can hold
+    # thousands of distinct spellings, and every picker/panel refetches this.
+    # Roster is sorted by headcount so the cap drops the long tail, not the
+    # entities that matter.
     roster = [
         EntityValue(
             value=slot["value"], count=slot["count"], claimed=norm in claimed
@@ -184,17 +254,18 @@ def entity_vocabulary(db: Session, policy_year: PolicyYear) -> EntityVocab:
         for norm, slot in sorted(
             roster_bucket.items(), key=lambda kv: (-kv[1]["count"], kv[0])
         )
-    ]
+    ][:MAX_LIMIT]
+    candidates = _index_candidates(roster_bucket)
     known = [
         EntityValue(
             value=raw,
             count=0,
             claimed=norm in claimed,
-            suggestion=_closest(norm, roster_bucket),
+            suggestion=_closest(norm, candidates),
         )
         for norm, raw in sorted(configured.items())
         if norm not in roster_bucket
-    ]
+    ][:MAX_LIMIT]
     return EntityVocab(
         employees_total=len(employees), roster=roster, known=known
     )

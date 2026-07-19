@@ -136,8 +136,22 @@ def _insured_text(pa: dict) -> str:
     return ", ".join(insured_names(pa.get("insured")))
 
 
-def _distinct_insured(categories: list[Category]) -> list[str]:
-    """Every distinct entity named across the categories, in first-seen order."""
+def _distinct_insured(
+    categories: list[Category], product: Product | None = None
+) -> list[str]:
+    """Every distinct entity covered, in first-seen order.
+
+    Mirrors the matching gate's precedence (`_build_product_indices`): the
+    product's own `entities` when set, otherwise whatever the categories name.
+    Without the product arm this line goes out BLANK for any product configured
+    through the setup header — the per-category `insured` has no editor, so a
+    manually built product never populates it.
+    """
+    product_names = insured_names(
+        (product.product_metadata or {}).get("entities") if product else None
+    )
+    if product_names:
+        return product_names
     seen: list[str] = []
     for c in categories:
         for name in insured_names(_pa(c).get("insured")):
@@ -221,7 +235,9 @@ def _basis_columns(categories: list[Category]) -> list[tuple[str, str]]:
     return cols
 
 
-def _write_basis_of_cover(ws: Worksheet, categories: list[Category]) -> None:
+def _write_basis_of_cover(
+    ws: Worksheet, categories: list[Category], insured_default: str = ""
+) -> None:
     ws.append(["Basis of Cover :"])
     _style_row(ws, font=_SECTION)
     cols = _basis_columns(categories)
@@ -237,7 +253,7 @@ def _write_basis_of_cover(ws: Worksheet, categories: list[Category]) -> None:
     prev_name = ""
     for c in categories:
         pa = _pa(c)
-        insured = _insured_text(pa)
+        insured = _insured_text(pa) or insured_default
         participation = _participation_text(c)
         key = (insured, participation)
         new_block = key != prev_key
@@ -293,7 +309,11 @@ def _tier_codes(categories: list[Category]) -> list[str]:
 
 
 def _write_tiered_rates(
-    ws: Worksheet, categories: list[Category], codes: list[str], blank: bool
+    ws: Worksheet,
+    categories: list[Category],
+    codes: list[str],
+    blank: bool,
+    insured_default: str = "",
 ) -> float | None:
     """Render the tiered rate table; return the sum of the premiums actually
     SHOWN (None if none), so the caller's total always reconciles with the
@@ -321,7 +341,7 @@ def _write_tiered_rates(
         tiers = pa.get("rate_tiers")
         if not isinstance(tiers, dict) or not tiers:
             continue
-        insured = _insured_text(pa)
+        insured = _insured_text(pa) or insured_default
         row: list[Any] = [
             "",
             insured if insured != prev_insured else "",
@@ -368,6 +388,7 @@ def _write_flat_rates(
     earnings_based: bool,
     with_label: bool,
     blank: bool,
+    insured_default: str = "",
 ) -> float | None:
     """Render the flat rate table; return the sum of the premiums actually
     SHOWN (None if none), so the caller's total reconciles with the rows.
@@ -396,7 +417,7 @@ def _write_flat_rates(
     found = False
     for c in categories:
         pa = _pa(c)
-        insured = _insured_text(pa)
+        insured = _insured_text(pa) or insured_default
         amount = (
             pa.get("estimated_annual_earnings")
             if earnings_based
@@ -448,7 +469,11 @@ def _write_flat_rates(
 
 
 def _write_per_member_rates(
-    ws: Worksheet, categories: list[Category], with_label: bool, blank: bool
+    ws: Worksheet,
+    categories: list[Category],
+    with_label: bool,
+    blank: bool,
+    insured_default: str = "",
 ) -> float | None:
     """Per-member products (GCGP/GCSP/GD): one rate per head, with a separate
     dependant rate. The slips price these per PLAN, not per category — the
@@ -474,7 +499,7 @@ def _write_per_member_rates(
         if plan in seen_plans:
             continue
         seen_plans.add(plan)
-        insured = _insured_text(pa)
+        insured = _insured_text(pa) or insured_default
         emp_rate = pa.get("premium_rate")
         dep_rate = pa.get("dependant_rate")
         stored = pa.get("annual_premium")
@@ -540,6 +565,7 @@ def _write_rate_section(
     categories: list[Category],
     term: ProductTerm | None,
     mode: Mode,
+    insured_default: str = "",
 ) -> None:
     blank = mode == "quotation"
     tiered = [
@@ -578,13 +604,18 @@ def _write_rate_section(
     subtotals: list[float] = []
     ws.append([])
     if tiered:
-        t = _write_tiered_rates(ws, tiered, _tier_codes(tiered), blank)
+        t = _write_tiered_rates(
+            ws, tiered, _tier_codes(tiered), blank, insured_default
+        )
         if t is not None:
             subtotals.append(t)
     if per_member:
         if tiered:
             ws.append([])
-        t = _write_per_member_rates(ws, per_member, with_label=not tiered, blank=blank)
+        t = _write_per_member_rates(
+            ws, per_member, with_label=not tiered, blank=blank,
+            insured_default=insured_default,
+        )
         if t is not None:
             subtotals.append(t)
     if flat:
@@ -596,6 +627,7 @@ def _write_rate_section(
         t = _write_flat_rates(
             ws, flat, earnings_based,
             with_label=not (tiered or per_member), blank=blank,
+            insured_default=insured_default,
         )
         if t is not None:
             subtotals.append(t)
@@ -804,7 +836,7 @@ def _write_product_sheet(
     _style_row(ws, font=_TITLE)
     ws.append([])
 
-    insured = ", ".join(_distinct_insured(categories))
+    insured = ", ".join(_distinct_insured(categories, product))
     # A quotation goes out to prospective insurers — the incumbent's identity
     # and issued policy number stay blank alongside the rates.
     insurer = "" if mode == "quotation" or product is None else (product.insurer or "")
@@ -831,8 +863,10 @@ def _write_product_sheet(
     ws.append([])
 
     if categories:
-        _write_basis_of_cover(ws, categories)
-        _write_rate_section(ws, categories, term, mode)
+        # Per-block Insured cells fall back to the product-level entities for
+        # the same reason the header line does.
+        _write_basis_of_cover(ws, categories, insured)
+        _write_rate_section(ws, categories, term, mode, insured)
 
     if plans:
         ws.append([])

@@ -181,6 +181,9 @@ class ProductCreate(BaseModel):
     form_profile: str | None = None
     layout_family: LayoutFamilyStr | None = None
     report_code: str | None = None
+    # Legal entities this product is written on — the matching gate for
+    # ALL its categories. `[]` clears the restriction; omitted leaves it.
+    entities: list[str] | None = None
 
 
 class ProductPatch(BaseModel):
@@ -196,6 +199,9 @@ class ProductPatch(BaseModel):
     form_profile: str | None = None
     layout_family: LayoutFamilyStr | None = None
     report_code: str | None = None
+    # Legal entities this product is written on — the matching gate for
+    # ALL its categories. `[]` clears the restriction; omitted leaves it.
+    entities: list[str] | None = None
 
 
 class PolicyYearOut(_Base):

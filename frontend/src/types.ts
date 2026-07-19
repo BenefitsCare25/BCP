@@ -34,6 +34,9 @@ export interface Product {
   // Insurer-report display code when it differs from the internal code
   // (e.g. GCGP → "GOGP"). Rides product_metadata.
   report_code?: string | null;
+  // Legal entities this product is written on — the matching gate for ALL its
+  // categories. Empty = no restriction. Rides product_metadata.
+  entities?: string[];
 }
 
 // ── Product registry (static classification catalog from the backend) ────────

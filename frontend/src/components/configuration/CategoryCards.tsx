@@ -1,7 +1,12 @@
 import { useMemo } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useCreateCategory, useMemberCounts, usePlans } from "@/api/hooks";
+import {
+  useCreateCategory,
+  useMemberCounts,
+  usePlans,
+  useProducts,
+} from "@/api/hooks";
 import { formatError } from "@/lib/errors";
 import { insuredNames } from "@/lib/insured";
 import type {
@@ -59,6 +64,21 @@ export function CategoryCards({
     [plans],
   );
 
+  // The entities actually gating this product's categories, in the matcher's
+  // precedence: the product-level field when set, else each category's own
+  // slip-parsed `insured`. Shown on every card so the gate is visible where the
+  // categories are — it is now chosen on the header tab, and a card that gives
+  // no hint of it looks unrestricted when it is not.
+  const { data: products } = useProducts();
+  const productEntities = useMemo(
+    () => insuredNames(products?.find((p) => p.id === productId)?.entities),
+    [products, productId],
+  );
+  const entitiesFor = (c: Category): string[] =>
+    productEntities.length
+      ? productEntities
+      : insuredNames((c.plan_assignments as PlanAssignment | null)?.insured);
+
   // Live roster headcount per category, matched off its description. The
   // category's insured entities ride along so multi-subsidiary products count
   // each entity's employees separately (same gate as real matching).
@@ -67,11 +87,13 @@ export function CategoryCards({
       categories.map((c) => ({
         key: c.id,
         description: c.raw_description || c.display_name,
-        insured: insuredNames(
-          (c.plan_assignments as PlanAssignment | null)?.insured,
-        ),
+        // Server-side the product field wins anyway; sending it keeps the
+        // request honest when a category carries a different slip value.
+        insured: productEntities.length
+          ? productEntities
+          : insuredNames((c.plan_assignments as PlanAssignment | null)?.insured),
       })),
-    [categories],
+    [categories, productEntities],
   );
   const { data: memberCounts, isError: countsError } = useMemberCounts(
     policyYearId,
@@ -98,18 +120,6 @@ export function CategoryCards({
       voluntary_rates?: VoluntaryRateBand[] | null;
     };
     return { bands: pa.voluntary_rates ?? [], planCount: banded.length };
-  }, [categories]);
-
-  // Show the insured legal entity on each card only when the product actually
-  // spans multiple entities (WICA-style per-subsidiary blocks) — a single-entity
-  // product would just repeat the same company list on every card.
-  const multiInsured = useMemo(() => {
-    const entities = new Set(
-      categories.flatMap((c) =>
-        insuredNames((c.plan_assignments as PlanAssignment | null)?.insured),
-      ),
-    );
-    return entities.size > 1;
   }, [categories]);
 
   const addCategory = () =>
@@ -180,7 +190,7 @@ export function CategoryCards({
               hasDependants={hasDependants}
               count={countsByKey[c.id]}
               countsError={countsError}
-              showInsured={multiInsured}
+              insuredEntities={entitiesFor(c)}
               onEditRule={() => onEditRule(c)}
             />
           );

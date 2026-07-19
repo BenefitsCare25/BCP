@@ -934,7 +934,12 @@ def _collect_section(dst: dict[str, list[str]], section: Any) -> None:
     if not isinstance(section, dict):
         return
     for key, raw in section.items():
-        val = str(raw or "").strip()
+        # Suggestions back FREE-TEXT pickers only. `header.entities` is a token
+        # list, and str()-ing it would offer the broker a Python repr
+        # ("['Acme Pte Ltd', ...]") as a pickable value.
+        if not isinstance(raw, str):
+            continue
+        val = raw.strip()
         if not val:
             continue
         bucket = dst.setdefault(str(key), [])

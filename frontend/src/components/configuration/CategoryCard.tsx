@@ -21,7 +21,6 @@ import {
 } from "@/api/hooks";
 import { confidencePill, sourcePill, statusPill } from "@/lib/badges";
 import { formatError } from "@/lib/errors";
-import { insuredLabel, insuredNames } from "@/lib/insured";
 import type {
   BasisModel,
   Category,
@@ -108,7 +107,7 @@ export function CategoryCard({
   hasDependants,
   count,
   countsError = false,
-  showInsured = false,
+  insuredEntities = [],
   onEditRule,
 }: {
   category: Category;
@@ -121,9 +120,10 @@ export function CategoryCard({
   // True when the member-counts query failed — shows "Count unavailable"
   // instead of a perpetual "Calculating…".
   countsError?: boolean;
-  // True when the product spans multiple insured entities (per-subsidiary
-  // blocks) — shows which legal entity this category belongs to.
-  showInsured?: boolean;
+  // The legal entities gating this category, already resolved by the parent in
+  // the matcher's precedence (product-level field, else the slip's own value).
+  // Empty = covers every entity.
+  insuredEntities?: string[];
   onEditRule: () => void;
 }) {
   const patch = usePatchCategory();
@@ -133,7 +133,6 @@ export function CategoryCard({
   const [showDelete, setShowDelete] = useState(false);
 
   const assignments = (category.plan_assignments ?? {}) as PlanAssignment;
-  const insuredList = insuredNames(assignments.insured);
 
   // Local field state so typing is smooth and concurrent field edits compose.
   // The parent remounts this card (its key includes updated_at) whenever the
@@ -542,16 +541,15 @@ export function CategoryCard({
               entities this category covers. Click to edit — this is a real
               matching gate, so it has to agree with the roster's Entity value. */}
           {/* Read-only: entities are chosen ONCE per product on the setup
-              header ("Entities covered") and gate every category. This badge
-              shows the slip's own per-block entity, which still gates when the
-              product-level field is empty (legacy + multi-entity slips). */}
-          {showInsured && insuredList.length > 0 && (
+              header ("Entities covered") and gate every category. Shown here so
+              an active restriction is visible where the categories are. */}
+          {insuredEntities.length > 0 && (
             <Badge
               variant="outline"
               className="max-w-64 truncate text-[10px]"
-              title={insuredLabel(assignments.insured)}
+              title={`Only employees of ${insuredEntities.join(", ")} match this category`}
             >
-              {insuredLabel(assignments.insured)}
+              {insuredEntities.join(", ")}
             </Badge>
           )}
         </div>

@@ -26,10 +26,15 @@ export function EntityBreakdownCard({
   const entities = data?.roster ?? [];
   if (entities.length === 0) return null;
 
-  const total = entities.reduce((sum, e) => sum + e.count, 0);
+  const withEntity = entities.reduce((sum, e) => sum + e.count, 0);
   // Employees whose Entity cell is blank — they match every category, so they
   // are not an entity, but the numbers have to add up.
-  const unassigned = (data?.employees_total ?? 0) - total;
+  const employeesTotal = data?.employees_total ?? 0;
+  const unassigned = employeesTotal - withEntity;
+  // Percentages are of the WHOLE roster, matching the caption's total. Dividing
+  // by `withEntity` instead would make an entity read 50% next to a stated 500
+  // employees while actually covering 40% of them.
+  const shareOf = (n: number) => (employeesTotal > 0 ? (n / employeesTotal) * 100 : 0);
 
   return (
     <Card>
@@ -41,16 +46,15 @@ export function EntityBreakdownCard({
           </CardTitle>
         </div>
         <CardDescription>
-          {total.toLocaleString()} of{" "}
-          {(data?.employees_total ?? 0).toLocaleString()} employees carry an
-          entity on the roster
+          {withEntity.toLocaleString()} of {employeesTotal.toLocaleString()}{" "}
+          employees carry an entity on the roster
           {unassigned > 0 ? ` · ${unassigned.toLocaleString()} blank` : ""}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-1.5">
           {entities.map((e) => {
-            const share = total > 0 ? (e.count / total) * 100 : 0;
+            const share = shareOf(e.count);
             return (
               <div key={e.value} className="flex items-center gap-3">
                 <span className="w-64 shrink-0 truncate text-sm text-foreground">
@@ -74,9 +78,17 @@ export function EntityBreakdownCard({
               <span className="w-64 shrink-0 truncate text-sm text-muted-foreground">
                 No entity on the roster
               </span>
-              <div className="h-1.5 min-w-0 flex-1" />
+              <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-muted-foreground/25"
+                  style={{ width: `${shareOf(unassigned)}%` }}
+                />
+              </div>
               <span className="w-28 shrink-0 text-right text-sm tabular-nums text-muted-foreground">
                 {unassigned.toLocaleString()}
+                <span className="ml-1 text-xs">
+                  ({shareOf(unassigned).toFixed(1)}%)
+                </span>
               </span>
             </div>
           )}

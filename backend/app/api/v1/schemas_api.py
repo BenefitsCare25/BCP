@@ -30,7 +30,13 @@ router = APIRouter(tags=["schemas"])
 
 # ProductPatch fields that live in product_metadata (classification overrides
 # + insurer-report display code), not as Product columns.
-_METADATA_PATCH_KEYS = ("line", "form_profile", "layout_family", "report_code")
+_METADATA_PATCH_KEYS = (
+    "line",
+    "form_profile",
+    "layout_family",
+    "report_code",
+    "entities",
+)
 
 
 def _product_out(p: Product) -> ProductOut:
@@ -224,7 +230,8 @@ def create_product(
             status.HTTP_409_CONFLICT,
             f"Product {payload.code!r} already exists for this client.",
         )
-    metadata: dict[str, str] = {}
+    # Mostly str values; `entities` is a token list (see ProductCreate).
+    metadata: dict[str, object] = {}
     if payload.line:
         metadata["line"] = payload.line
     if payload.form_profile:
@@ -233,6 +240,8 @@ def create_product(
         metadata["layout_family"] = payload.layout_family
     if payload.report_code:
         metadata["report_code"] = payload.report_code
+    if payload.entities:
+        metadata["entities"] = insured_names(payload.entities)
     row = Product(
         client_id=client_id,
         code=payload.code,
@@ -275,6 +284,9 @@ def update_product(
         before["product_metadata"] = dict(row.product_metadata or {})
         metadata = dict(row.product_metadata or {})
         for key, value in meta_patch.items():
+            if key == "entities":
+                # Token list; an explicit [] lifts the restriction entirely.
+                value = insured_names(value) or None
             if value is None:
                 metadata.pop(key, None)
             else:
