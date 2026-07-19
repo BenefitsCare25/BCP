@@ -403,3 +403,39 @@ def test_entity_gate_applies_to_rule_tier() -> None:
     )
     assert out.category_id == "legrove"
     assert out.method == "rule"
+
+
+def test_entity_gate_accepts_token_list() -> None:
+    """`insured` is stored as a LIST of entity tokens (the picker's shape). A
+    legacy comma-joined string keeps working — see `insured_names`."""
+    cats = [
+        _cat(
+            "c1",
+            "All Employees",
+            insured=["City Developments Ltd", "CityNexus Pte Ltd"],
+        )
+    ]
+    assert _match(_emp("All Employees", entity="CityNexus Pte. Ltd."), cats).category_id == "c1"
+    assert _match(_emp("All Employees", entity="Le Grove Pte Ltd"), cats).category_id is None
+
+
+def test_entity_token_keeps_comma_inside_legal_name() -> None:
+    """A registered name containing a comma is ONE entity when stored as a
+    token. The comma-string form is what splits it — the bug the list fixes."""
+    name = "Acme Pte Ltd, Singapore Branch"
+    cats = [_cat("c1", "All Employees", insured=[name])]
+    assert _match(_emp("All Employees", entity=name), cats).category_id == "c1"
+
+    # Same name in the legacy string form splits on the comma and no longer
+    # matches the whole entity — documents why storage moved to tokens.
+    legacy = [_cat("c2", "All Employees", insured=name)]
+    assert _match(_emp("All Employees", entity=name), legacy).category_id is None
+
+
+def test_insured_names_shapes() -> None:
+    from app.services.matching_engine import insured_names
+
+    assert insured_names(["A", " B ", ""]) == ["A", "B"]
+    assert insured_names("A, B") == ["A", "B"]
+    assert insured_names(None) == []
+    assert insured_names("") == []

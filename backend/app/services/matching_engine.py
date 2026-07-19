@@ -85,13 +85,30 @@ def normalize_entity(name: str | None) -> str:
     return " ".join(_CORP_SUFFIX_MAP.get(t, t) for t in tokens)
 
 
+def insured_names(raw: object) -> list[str]:
+    """The RAW entity names in an Insured cell, in order, as typed.
+
+    Storage is a list — one element per entity — so an entity whose registered
+    name contains a comma ("Acme Pte Ltd, Singapore Branch") stays one entity.
+    A legacy `str` (everything written before the token picker, plus the slip
+    parser's single-entity cell) still splits on commas, so old rows keep
+    working without a data migration.
+
+    Callers that need to COMPARE entities want `insured_entities`; this one is
+    for display and round-tripping (e.g. the placement-slip export, which must
+    reproduce the legal spelling verbatim).
+    """
+    if not raw:
+        return []
+    parts = raw if isinstance(raw, list) else str(raw).split(",")
+    return [name for part in parts if (name := str(part).strip())]
+
+
 def insured_entities(raw: object) -> frozenset[str]:
-    """The set of normalized entity names in an Insured cell (comma-separated
-    legal-entity list from the slip). Empty set = no entity restriction."""
-    if not raw or not isinstance(raw, str):
-        return frozenset()
+    """The set of NORMALIZED entity names in an Insured cell. Empty set = no
+    entity restriction."""
     return frozenset(
-        norm for part in raw.split(",") if (norm := normalize_entity(part))
+        norm for part in insured_names(raw) if (norm := normalize_entity(part))
     )
 
 

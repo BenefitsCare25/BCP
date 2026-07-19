@@ -28,6 +28,7 @@ from app.services.matching_engine import (
     _normalize,
     _status_rank,
     canonicalize_category_name,
+    insured_names,
     match_one,
     tokenize,
 )
@@ -44,7 +45,8 @@ class DraftCategory:
 
     key: str
     description: str
-    insured: str | None = None
+    # List of entity tokens; a legacy comma-joined string is still accepted.
+    insured: str | list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -104,9 +106,11 @@ def _transient_categories(
         # The draft row's insured entities (falling back to the persisted
         # category's) ride plan_assignments so match_one applies the same
         # insured-entity gate here as in a real matching run.
-        insured = (draft.insured or "").strip()
+        # Tokens, not a joined string — see `insured_names`. Falls back to the
+        # persisted category's entities when the draft row hasn't set any.
+        insured = insured_names(draft.insured)
         if not insured and match is not None and isinstance(match.plan_assignments, dict):
-            insured = str(match.plan_assignments.get("insured") or "")
+            insured = insured_names(match.plan_assignments.get("insured"))
         cats.append(
             Category(
                 id=draft.key,

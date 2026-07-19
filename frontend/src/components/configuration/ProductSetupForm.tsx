@@ -25,6 +25,7 @@ import type {
   TemplateField,
 } from "@/types";
 import { formatError } from "@/lib/errors";
+import { insuredNames } from "@/lib/insured";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
 import { CategoryCards } from "./CategoryCards";
@@ -117,7 +118,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
     );
   const blankCategory = (): BasisOfCoverRow => ({
     id: crypto.randomUUID(),
-    insured: "",
+    insured: [],
     category: "",
     participation: "",
     plan_code: tpl.plans.find((p) => p.default_selected)?.code ?? "",
@@ -146,7 +147,13 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
       plans,
       sob,
       rate_table: a.rate_table ?? {},
-      categories: a.categories ?? [],
+      // A saved draft (or a slip-derived one) may still carry `insured` as a
+      // comma-joined string — normalize to tokens on the way in so the picker
+      // and the submit payload only ever see the list form.
+      categories: (a.categories ?? []).map((c) => ({
+        ...c,
+        insured: insuredNames(c.insured),
+      })),
       arrangements: a.arrangements ?? arrangementDefaults(),
     };
   }
@@ -290,7 +297,7 @@ export function ProductSetupForm({
       answers.categories.map((c) => ({
         key: c.id,
         description: c.category,
-        insured: c.insured || null,
+        insured: c.insured.length ? c.insured : null,
       })),
     [answers.categories],
   );

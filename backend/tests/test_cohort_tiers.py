@@ -553,3 +553,28 @@ def test_dependant_option_overlay_freestanding_levels_become_choices() -> None:
             for r in rows:
                 s.query(Category).filter(Category.id == r.id).delete()
             s.commit()
+
+
+def test_insured_key_folds_suffix_variance() -> None:
+    """Cohort splitting shares the matching engine's entity normalization, so
+    "Pte. Ltd." and "Pte Ltd" are ONE entity here too. Before this, cohorts used
+    a local lower()/whitespace key and split a cohort the match gate treated as
+    one — the two disagreed."""
+    from app.services.cohort_tiers import _insured_key, _same_insured
+
+    a = _cat("a", None, "Managers", "1", "compulsory", None)
+    b = _cat("b", None, "Managers", "2", "compulsory", None)
+    a.plan_assignments = {"plan_code": "1", "insured": "CityNexus Pte. Ltd."}
+    b.plan_assignments = {"plan_code": "2", "insured": ["CityNexus Pte Ltd"]}
+    assert _insured_key(a) == _insured_key(b)
+    assert _same_insured(a, b)
+
+    # A genuinely different entity still splits the cohort.
+    c = _cat("c", None, "Managers", "3", "compulsory", None)
+    c.plan_assignments = {"plan_code": "3", "insured": ["Le Grove Pte Ltd"]}
+    assert not _same_insured(a, c)
+
+    # Blank on either side stays a wildcard.
+    d = _cat("d", None, "Managers", "4", "compulsory", None)
+    d.plan_assignments = {"plan_code": "4"}
+    assert _same_insured(a, d)

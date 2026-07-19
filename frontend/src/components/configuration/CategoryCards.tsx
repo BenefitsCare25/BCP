@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCreateCategory, useMemberCounts, usePlans } from "@/api/hooks";
 import { formatError } from "@/lib/errors";
+import { insuredNames } from "@/lib/insured";
 import type {
   BasisModel,
   Category,
@@ -66,9 +67,9 @@ export function CategoryCards({
       categories.map((c) => ({
         key: c.id,
         description: c.raw_description || c.display_name,
-        insured:
-          ((c.plan_assignments as PlanAssignment | null)?.insured ?? null) ||
-          null,
+        insured: insuredNames(
+          (c.plan_assignments as PlanAssignment | null)?.insured,
+        ),
       })),
     [categories],
   );
@@ -104,11 +105,9 @@ export function CategoryCards({
   // product would just repeat the same company list on every card.
   const multiInsured = useMemo(() => {
     const entities = new Set(
-      categories
-        .map((c) =>
-          ((c.plan_assignments as PlanAssignment | null)?.insured ?? "").trim(),
-        )
-        .filter(Boolean),
+      categories.flatMap((c) =>
+        insuredNames((c.plan_assignments as PlanAssignment | null)?.insured),
+      ),
     );
     return entities.size > 1;
   }, [categories]);

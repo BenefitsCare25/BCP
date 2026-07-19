@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import tenant_or_global
 from app.models import Category, Plan, PolicyYear, Product, ProductTerm
+from app.services.matching_engine import insured_names
 from app.services.product_terms import envelope_for
 from app.services.sob_columns import sob_from_plan_items
 
@@ -124,12 +125,24 @@ def _participation_text(c: Category) -> str:
     return text
 
 
+def _insured_text(pa: dict) -> str:
+    """The category's insured entities as they must appear ON THE SLIP.
+
+    The export reproduces the LEGAL spelling verbatim — this document goes to
+    an insurer — so it renders the stored names, never a normalized or
+    alias-resolved form. Storage is a token list; a legacy comma-joined string
+    round-trips unchanged.
+    """
+    return ", ".join(insured_names(pa.get("insured")))
+
+
 def _distinct_insured(categories: list[Category]) -> list[str]:
+    """Every distinct entity named across the categories, in first-seen order."""
     seen: list[str] = []
     for c in categories:
-        name = str(_pa(c).get("insured") or "").strip()
-        if name and name not in seen:
-            seen.append(name)
+        for name in insured_names(_pa(c).get("insured")):
+            if name not in seen:
+                seen.append(name)
     return seen
 
 
@@ -224,7 +237,7 @@ def _write_basis_of_cover(ws: Worksheet, categories: list[Category]) -> None:
     prev_name = ""
     for c in categories:
         pa = _pa(c)
-        insured = str(pa.get("insured") or "").strip()
+        insured = _insured_text(pa)
         participation = _participation_text(c)
         key = (insured, participation)
         new_block = key != prev_key
@@ -308,7 +321,7 @@ def _write_tiered_rates(
         tiers = pa.get("rate_tiers")
         if not isinstance(tiers, dict) or not tiers:
             continue
-        insured = str(pa.get("insured") or "").strip()
+        insured = _insured_text(pa)
         row: list[Any] = [
             "",
             insured if insured != prev_insured else "",
@@ -383,7 +396,7 @@ def _write_flat_rates(
     found = False
     for c in categories:
         pa = _pa(c)
-        insured = str(pa.get("insured") or "").strip()
+        insured = _insured_text(pa)
         amount = (
             pa.get("estimated_annual_earnings")
             if earnings_based
@@ -461,7 +474,7 @@ def _write_per_member_rates(
         if plan in seen_plans:
             continue
         seen_plans.add(plan)
-        insured = str(pa.get("insured") or "").strip()
+        insured = _insured_text(pa)
         emp_rate = pa.get("premium_rate")
         dep_rate = pa.get("dependant_rate")
         stored = pa.get("annual_premium")

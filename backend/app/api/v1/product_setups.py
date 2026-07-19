@@ -18,6 +18,7 @@ tenant-checked policy year), matching the recommendations router pattern.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -56,9 +57,10 @@ from app.services.dynamic_template import (
     merge_file_overlay,
     synthesize_template,
 )
+from app.services.entity_vocab import entity_vocabulary
 from app.services.form_profiles import basis_model_for, infer_profile, rate_model_for
 from app.services.insurance_lines import infer_line
-from app.services.matching_engine import match_policy_year
+from app.services.matching_engine import insured_names, match_policy_year
 from app.services.member_counts import DraftCategory, compute_member_counts
 from app.services.placement_slip_parser import (
     normalize_participation,
@@ -131,7 +133,8 @@ class MemberCountCategoryIn(BaseModel):
 
     key: str
     description: str = ""
-    insured: str | None = None
+    # Token list from the picker; a legacy comma-joined string still parses.
+    insured: str | list[str] | None = None
 
 
 class MemberCountsIn(BaseModel):
@@ -154,6 +157,20 @@ class MemberCountsOut(BaseModel):
     employees_total: int
     employees_matched: int
     has_dependants: bool
+
+
+class EntityValueOut(BaseModel):
+    value: str
+    count: int
+    claimed: bool
+
+
+class EntityVocabOut(BaseModel):
+    """Legal entities the Insured picker offers — see `services/entity_vocab`."""
+
+    employees_total: int
+    roster: list[EntityValueOut]
+    known: list[EntityValueOut]
 
 
 def _setup_out(s: ProductSetup) -> SetupOut:
@@ -388,6 +405,28 @@ def get_setup_template(
             f"No template or slip data for product {product_code!r}",
         )
     return tpl
+
+
+@router.get(
+    "/policy-years/{policy_year_id}/entity-vocab",
+    response_model=EntityVocabOut,
+)
+def get_entity_vocab(
+    policy_year_id: str,
+    py: PolicyYear = Depends(load_policy_year),
+    db: Session = Depends(get_db),
+) -> EntityVocabOut:
+    """Legal entities available to a category's Insured field.
+
+    ``roster`` entities carry headcounts and are safe to pick — the matching
+    gate will let those employees through. ``known`` entities are named in the
+    configuration (a category's insured list or a setup header) but match no
+    roster entity, so they are the reconciliation backlog. Before the roster is
+    uploaded ``roster`` is legitimately empty and the picker falls back to free
+    entry. Tenant scoping rides on ``load_policy_year``.
+    """
+    vocab = entity_vocabulary(db, py)
+    return EntityVocabOut(**asdict(vocab))
 
 
 @router.post(
@@ -1367,7 +1406,9 @@ def _category_plan_assignments(
     )
     pa: dict[str, Any] = {
         "plan_code": plan_code,
-        "insured": str(row.get("insured") or ""),
+        # Token list — one element per legal entity, so a comma inside a
+        # registered name can't split it into two (see `insured_names`).
+        "insured": insured_names(row.get("insured")),
         "num_employees": num_employees,
         "tier_counts": tier_counts,
     }

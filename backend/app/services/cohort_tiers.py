@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.models import Employee, Plan
 from app.models.category import Category
 from app.schemas.api import PlanFinancials
+from app.services.matching_engine import category_insured_entities
 from app.services.plan_hydration import (
     basis_amount,
     member_age,
@@ -71,15 +72,19 @@ def _plan_code(cat: Category) -> str | None:
     return str(code) if code not in (None, "") else None
 
 
-def _insured_key(cat: Category) -> str:
-    """Normalized insured-entity string from the slip's Insured column.
+def _insured_key(cat: Category) -> frozenset[str]:
+    """Normalized insured-entity SET from the category's Insured column.
 
     Multi-entity slips (WICA-style: one block per subsidiary) repeat the same
-    category names under different legal entities; the insured string is what
-    keeps "Non-Manual Staffs @ CDL" and "Non-Manual Staffs @ Le Grove" apart.
+    category names under different legal entities; the insured entities are what
+    keep "Non-Manual Staffs @ CDL" and "Non-Manual Staffs @ Le Grove" apart.
+
+    Shares `category_insured_entities` with the matching engine so cohort
+    splitting and the match gate can't disagree — the previous local
+    normalization only collapsed whitespace and case, so "Pte. Ltd." and
+    "Pte Ltd" split a cohort the gate treated as one entity.
     """
-    pa = cat.plan_assignments if isinstance(cat.plan_assignments, dict) else {}
-    return re.sub(r"\s+", " ", str(pa.get("insured") or "")).strip().lower()
+    return category_insured_entities(cat)
 
 
 def _same_insured(a: Category, b: Category) -> bool:

@@ -13,6 +13,25 @@ interface Props {
   options: VocabValue[];
   onChange: (next: string[]) => void;
   placeholder?: string;
+  /**
+   * Allow committing a value that isn't in `options` (Enter or Tab).
+   *
+   * OFF by default, and that default is load-bearing for flex tiers: a tier
+   * match set that names a value absent from the roster matches nobody, so
+   * free text there is always a mistake. The Insured picker turns it ON
+   * because product setup routinely happens BEFORE the roster is uploaded —
+   * there the vocabulary is legitimately empty and the broker must still be
+   * able to record the entities the slip names.
+   */
+  allowCustom?: boolean;
+  /** Suffix on an option already selected elsewhere (context-specific). */
+  claimedNote?: string;
+  /** Shown when there are no options at all. */
+  emptyHint?: string;
+  /** Tooltip on a chip that matches no option. */
+  unknownNote?: string;
+  /** Noun used in chip tooltips ("employee" → "3 employees on the roster"). */
+  countNoun?: string;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -21,12 +40,16 @@ const norm = (s: string) => s.trim().toLowerCase();
 const MAX_VISIBLE = 50;
 
 /**
- * Searchable, SELECT-ONLY chip multi-select for a tier's roster-anchored match
- * set. Values come exclusively from the roster vocabulary (with headcounts) — a
- * value that isn't on the roster would match no employee, so free text isn't
- * allowed; the broker searches and picks. Already-selected values that are no
- * longer on the roster (e.g. an AI-seeded term, or the roster changed) still show
- * with a "not found" warning so they can be reviewed and removed.
+ * Searchable chip multi-select over a roster-anchored vocabulary.
+ *
+ * SELECT-ONLY by default (flex tier match sets): values come exclusively from
+ * the roster vocabulary with headcounts, because a value that isn't on the
+ * roster would match no employee. Pass `allowCustom` to also accept typed
+ * values — see that prop for when that's correct.
+ *
+ * Already-selected values that are no longer on the roster (an AI-seeded term,
+ * a changed roster, or a slip spelling the roster doesn't use) still show with
+ * a "not found" warning so they can be reviewed and remapped.
  */
 export function MatchSetPicker({
   label,
@@ -35,6 +58,11 @@ export function MatchSetPicker({
   options,
   onChange,
   placeholder,
+  allowCustom = false,
+  claimedNote = " · in another tier",
+  emptyHint = "No roster values yet — upload a roster first.",
+  unknownNote = "Not found on the current roster",
+  countNoun = "employee",
 }: Props) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
@@ -94,7 +122,15 @@ export function MatchSetPicker({
               setActive((a) => Math.max(a - 1, 0));
             } else if (e.key === "Enter") {
               e.preventDefault();
+              // The highlighted suggestion wins; otherwise commit the typed
+              // text as its own token when free entry is allowed.
               if (shown[active]) addValue(shown[active].value);
+              else if (allowCustom) addValue(draft.trim());
+            } else if (e.key === "Tab" && allowCustom && draft.trim()) {
+              // Tab commits the token and keeps focus, so several entities can
+              // be entered in a row without reaching for the mouse.
+              e.preventDefault();
+              addValue(draft.trim());
             } else if (e.key === "Escape") {
               setOpen(false);
             }
@@ -111,9 +147,11 @@ export function MatchSetPicker({
           >
             {shown.length === 0 ? (
               <li className="px-2 py-1.5 text-xs text-muted-foreground">
-                {options.length === 0
-                  ? "No roster values yet — upload a roster first."
-                  : "No matching roster value."}
+                {allowCustom && draft.trim()
+                  ? `Press Enter to add “${draft.trim()}”.`
+                  : options.length === 0
+                    ? emptyHint
+                    : "No matching roster value."}
               </li>
             ) : (
               shown.map((o, i) => (
@@ -133,7 +171,7 @@ export function MatchSetPicker({
                   >
                     <span className="truncate text-foreground">{o.value}</span>
                     <span className="shrink-0 text-xs text-muted-foreground">
-                      {o.count} staff{o.claimed ? " · in another tier" : ""}
+                      {o.count} staff{o.claimed ? claimedNote : ""}
                     </span>
                   </button>
                 </li>
@@ -162,8 +200,8 @@ export function MatchSetPicker({
                 }`}
                 title={
                   inRoster
-                    ? `${c} employee${c === 1 ? "" : "s"} on the roster`
-                    : "Not found on the current roster"
+                    ? `${c} ${countNoun}${c === 1 ? "" : "s"} on the roster`
+                    : unknownNote
                 }
               >
                 <span className="text-foreground">{v}</span>

@@ -33,6 +33,7 @@ import type {
   FlexSchemeBody,
   FlexMembership,
   FlexCoverage,
+  EntityVocab,
   RosterVocab,
   InsuranceLine,
   MatchResults,
@@ -1307,7 +1308,11 @@ export function useMemberCounts(
   hasDependants: boolean,
   // `insured` (the row's legal-entity list) scopes counts to that entity's
   // employees on multi-subsidiary schemes — mirror of the matching gate.
-  categories: { key: string; description: string; insured?: string | null }[],
+  categories: {
+    key: string;
+    description: string;
+    insured?: string[] | string | null;
+  }[],
 ) {
   const cid = useActiveClientId();
   const enabled = Boolean(
@@ -1575,6 +1580,21 @@ export async function downloadFlexCoverage(policyYearId: string): Promise<void> 
  * each flagged whether a tier already selects it. Drives the tier match-set
  * dropdowns and their coverage hints.
  */
+/**
+ * Legal entities available to a category's Insured field: roster entities with
+ * headcounts, plus entities named in the config that match no roster value.
+ * Powers the Insured token picker on the setup form and category cards.
+ */
+export function useEntityVocab(policyYearId: string | undefined) {
+  const cid = useActiveClientId();
+  return useQuery({
+    queryKey: ["entity-vocab", policyYearId, cid],
+    queryFn: () =>
+      api.get<EntityVocab>(`/policy-years/${policyYearId}/entity-vocab`),
+    enabled: Boolean(policyYearId),
+  });
+}
+
 export function useFlexRosterVocab(policyYearId: string | undefined) {
   const cid = useActiveClientId();
   return useQuery({

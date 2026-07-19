@@ -1308,3 +1308,10 @@ def test_insurer_update_cross_tenant_404(client_as_a: TestClient) -> None:
 def test_insurer_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/schemas/insurers/{INSURER_B}")
     assert res.status_code == 404
+
+
+def test_entity_vocab_cross_tenant_404(client_as_a: TestClient) -> None:
+    """The Insured picker's vocabulary exposes roster entity names — it must
+    not leak another tenant's."""
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/entity-vocab")
+    assert res.status_code == 404

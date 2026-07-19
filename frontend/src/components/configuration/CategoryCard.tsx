@@ -16,11 +16,14 @@ import {
 import {
   useConfirmCategory,
   useDeleteCategory,
+  useEntityVocab,
   usePatchCategory,
   useUpdatePlan,
 } from "@/api/hooks";
+import { InsuredPicker } from "@/components/configuration/InsuredPicker";
 import { confidencePill, sourcePill, statusPill } from "@/lib/badges";
 import { formatError } from "@/lib/errors";
+import { insuredLabel, insuredNames } from "@/lib/insured";
 import type {
   BasisModel,
   Category,
@@ -130,8 +133,16 @@ export function CategoryCard({
   const deleteCat = useDeleteCategory();
   const updatePlan = useUpdatePlan();
   const [showDelete, setShowDelete] = useState(false);
+  const [editingInsured, setEditingInsured] = useState(false);
 
   const assignments = (category.plan_assignments ?? {}) as PlanAssignment;
+  const insuredList = insuredNames(assignments.insured);
+  // The Insured control only appears once the roster actually carries an Entity
+  // column (or the slip already split this product by entity). A single-entity
+  // client never sees it, so the card stays uncluttered where the gate is moot.
+  const { data: entityVocab } = useEntityVocab(category.policy_year_id);
+  const entityGateRelevant =
+    showInsured || insuredList.length > 0 || (entityVocab?.roster.length ?? 0) > 1;
 
   // Local field state so typing is smooth and concurrent field edits compose.
   // The parent remounts this card (its key includes updated_at) whenever the
@@ -537,15 +548,23 @@ export function CategoryCard({
             </Badge>
           )}
           {/* Multi-entity products (WICA per-subsidiary blocks): which legal
-              entity this category covers. */}
-          {showInsured && assignments.insured && (
-            <Badge
-              variant="outline"
-              className="max-w-64 truncate text-[10px]"
-              title={assignments.insured}
+              entities this category covers. Click to edit — this is a real
+              matching gate, so it has to agree with the roster's Entity value. */}
+          {entityGateRelevant && (
+            <button
+              type="button"
+              onClick={() => setEditingInsured((v) => !v)}
+              title={
+                insuredList.length
+                  ? `${insuredLabel(assignments.insured)} — click to edit`
+                  : "Covers every entity — click to restrict"
+              }
+              className="max-w-64 truncate rounded-md border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/60"
             >
-              {assignments.insured}
-            </Badge>
+              {insuredList.length
+                ? insuredLabel(assignments.insured)
+                : "All entities"}
+            </button>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -594,6 +613,25 @@ export function CategoryCard({
             className="h-8 text-sm"
           />
         </Field>
+        {editingInsured && (
+          <div className="col-span-full">
+            <InsuredPicker
+              policyYearId={category.policy_year_id}
+              value={insuredList}
+              onChange={(next) =>
+                savePatch(
+                  {
+                    plan_assignments: {
+                      ...assignments,
+                      insured: next,
+                    } as Category["plan_assignments"],
+                  },
+                  "Insured entities",
+                )
+              }
+            />
+          </div>
+        )}
         <Field label="Plan Type">
           {renamingPlan ? (
             <div className="flex items-center gap-1">

@@ -346,9 +346,10 @@ export interface PlanAssignment {
   rate_tiers?: Record<string, RateTier> | null;
   // The slip's own label per tier code (e.g. { SO: "Spouse" }) — display only.
   tier_labels?: Record<string, string> | null;
-  // Legal entity (company / subsidiary) covering this category, from the slip's
-  // Insured column. Multi-entity slips (WICA) carry a distinct value per block.
-  insured?: string | null;
+  // Legal entities (company / subsidiary) covering this category. Stored as a
+  // token list; rows written before the picker may still be a comma-joined
+  // string, so read it through `insuredNames()` in lib/insured.ts.
+  insured?: string[] | string | null;
 }
 
 // A qualifier row that sits beneath a benefit value, e.g.
@@ -945,7 +946,9 @@ export interface SobSchedule {
 
 export interface BasisOfCoverRow {
   id: string;
-  insured: string;
+  // Legal entities this row covers, as TOKENS — one element per entity, so a
+  // registered name containing a comma stays one entity. Empty = every entity.
+  insured: string[];
   category: string;
   participation: "compulsory" | "voluntary" | "";
   plan_code: string;
@@ -1252,6 +1255,20 @@ export interface RosterVocab {
   employees_total: number;
   designations: VocabValue[];
   grades: VocabValue[];
+}
+
+/**
+ * Legal entities the Insured picker offers.
+ *
+ * `roster` values exist on the active roster — picking one guarantees the
+ * matching gate lets those employees through. `known` values are named in the
+ * configuration (a category's insured list or a setup header) but match NO
+ * roster entity, so they are the reconciliation backlog; their `count` is 0.
+ */
+export interface EntityVocab {
+  employees_total: number;
+  roster: VocabValue[];
+  known: VocabValue[];
 }
 
 /** Outcome of persisting Flex wallets onto the roster (the assign endpoint). */
