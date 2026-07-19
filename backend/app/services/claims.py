@@ -435,14 +435,16 @@ def submit_claim(
             f"({window_start.isoformat()} to {window_end.isoformat()}).",
         )
 
-    # Submission grace period: once configured, claims for a year can only be
-    # submitted up to N days after the coverage period ends. None = no deadline.
+    # Submission grace period: once configured, claims can only be submitted up
+    # to N days after the enforced period ends. Anchored to `window_end` (the
+    # flex effective end for flex claims, the policy-year end otherwise) so the
+    # grace lines up with the incurred-window check above. None = no deadline.
     if year.claim_grace_period_days is not None:
-        deadline = year.end_date + timedelta(days=year.claim_grace_period_days)
+        deadline = window_end + timedelta(days=year.claim_grace_period_days)
         if datetime.now(tz=UTC).date() > deadline:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "The claim submission window for this policy year closed on "
+                f"The claim submission window for this {period_label} closed on "
                 f"{deadline.isoformat()} (period end + "
                 f"{year.claim_grace_period_days} days grace).",
             )

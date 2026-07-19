@@ -117,6 +117,12 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
   // Grace-period edit buffer keyed by year id, so typing doesn't fight the
   // query cache; committed on blur.
   const [graceDraft, setGraceDraft] = useState<Record<string, string>>({});
+  // Date edit buffer, keyed by year id → field. Makes the date inputs
+  // controlled so a rejected PATCH (e.g. an overlap 409) reverts to the server
+  // value instead of leaving the invalid typed date on screen.
+  const [dateDraft, setDateDraft] = useState<
+    Record<string, { start_date?: string; end_date?: string }>
+  >({});
 
   const selected = years.find((y) => y.id === currentId) ?? years[0] ?? null;
   // "Copy" seeds the new year from the PREVIOUS period — the most recent
@@ -127,12 +133,18 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
     ? years.reduce((a, b) => (a.start_date > b.start_date ? a : b))
     : null;
 
+  const clearDateDraft = (id: string, field: "start_date" | "end_date") =>
+    setDateDraft((d) => ({ ...d, [id]: { ...d[id], [field]: undefined } }));
+
   const patchDates = async (
     py: PolicyYear,
     field: "start_date" | "end_date",
     value: string,
   ) => {
-    if (!value || value === py[field]) return;
+    if (!value || value === py[field]) {
+      clearDateDraft(py.id, field);
+      return;
+    }
     try {
       await update.mutateAsync({
         policyYearId: py.id,
@@ -140,6 +152,10 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
       });
     } catch (e) {
       toast.error(formatError(e));
+    } finally {
+      // Drop the local buffer so the input reflects the server value —
+      // reverted on failure, refreshed on success.
+      clearDateDraft(py.id, field);
     }
   };
 
@@ -147,8 +163,11 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
     const raw = graceDraft[py.id];
     if (raw === undefined) return;
     const trimmed = raw.trim();
-    const next = trimmed === "" ? null : Number.parseInt(trimmed, 10);
-    if (next !== null && (Number.isNaN(next) || next < 0)) {
+    // Number() (not parseInt) so "30.5"/"30x" are rejected rather than silently
+    // truncated to 30.
+    const parsed = trimmed === "" ? null : Number(trimmed);
+    const next = parsed;
+    if (next !== null && (!Number.isInteger(next) || next < 0)) {
       toast.error("Grace period must be a whole number of days (or blank).");
       return;
     }
@@ -300,7 +319,13 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
                       <Input
                         type="date"
                         className="h-8 w-[150px]"
-                        defaultValue={py.start_date}
+                        value={dateDraft[py.id]?.start_date ?? py.start_date}
+                        onChange={(e) =>
+                          setDateDraft((d) => ({
+                            ...d,
+                            [py.id]: { ...d[py.id], start_date: e.target.value },
+                          }))
+                        }
                         onBlur={(e) => patchDates(py, "start_date", e.target.value)}
                       />
                     </td>
@@ -308,7 +333,13 @@ export function BenefitYearPanel({ years }: { years: PolicyYear[] }) {
                       <Input
                         type="date"
                         className="h-8 w-[150px]"
-                        defaultValue={py.end_date}
+                        value={dateDraft[py.id]?.end_date ?? py.end_date}
+                        onChange={(e) =>
+                          setDateDraft((d) => ({
+                            ...d,
+                            [py.id]: { ...d[py.id], end_date: e.target.value },
+                          }))
+                        }
                         onBlur={(e) => patchDates(py, "end_date", e.target.value)}
                       />
                     </td>

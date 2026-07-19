@@ -157,6 +157,15 @@ def test_delete_year_with_config_cascades(client: TestClient) -> None:
         db.close()
 
 
+def test_patch_explicit_null_date_422(client: TestClient) -> None:
+    """An explicit null date must 422, not 500 (date < None TypeError)."""
+    y = client.post(
+        API, json={"start_date": "2037-01-01", "end_date": "2037-12-31"}
+    ).json()
+    res = client.patch(f"{API}/{y['id']}", json={"start_date": None})
+    assert res.status_code == 422, res.text
+
+
 def test_overlap_rejected(client: TestClient) -> None:
     client.post(API, json={"start_date": "2040-01-01", "end_date": "2040-12-31"})
     res = client.post(

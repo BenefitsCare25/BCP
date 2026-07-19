@@ -59,9 +59,12 @@ export function ProductConfigurator({
         </p>
       ) : (
         <ProductSetupForm
-          // Remount on draft identity so the form is a pure function of server
-          // state (discard/replace rebuilds it).
-          key={`${code}:${draft?.id ?? "new"}`}
+          // Key on the product code only — NOT draft.id. Keying on draft.id
+          // remounted the form the moment the first save created a draft, which
+          // discarded any edits typed while that save was in flight. The form
+          // instead rebuilds from a genuinely different draft via an effect (see
+          // ProductSetupForm) so a slip re-upload still refreshes it.
+          key={code}
           policyYearId={policyYearId}
           template={template}
           draft={draft}

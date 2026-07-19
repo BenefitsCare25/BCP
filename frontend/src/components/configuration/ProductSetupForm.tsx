@@ -1,13 +1,13 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
-import { CircleCheck, Loader2, Save, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CircleCheck, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { AlertDialog } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/cn";
 import {
   useConfirmSetup,
-  useDiscardSetup,
   useFieldSuggestions,
   useMemberCounts,
   usePlans,
@@ -26,7 +26,7 @@ import type {
 } from "@/types";
 import { formatError } from "@/lib/errors";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
-import { FieldControl, Section } from "./setup/SetupPrimitives";
+import { FieldControl } from "./setup/SetupPrimitives";
 import { CategoryCards } from "./CategoryCards";
 import { DependantCards } from "./DependantCard";
 import { splitList } from "./setup/SetupPrimitives";
@@ -41,6 +41,14 @@ interface Props {
   // Opens the slim rule editor for a category.
   onEditRule: (c: Category) => void;
 }
+
+// Single-row tab labels per setup section.
+const SECTION_LABELS: Record<string, string> = {
+  header: "Header & Policy",
+  eligibility: "Eligibility",
+  basis_of_cover: "Employee Category & Plan Type",
+  schedule_of_benefits: "SOB",
+};
 
 // A legacy draft (pre-`sob`) carries the SOB grid replicated into each plan's
 // `benefit_items`. Normalize it enough that buildSobFromPlans can de-dupe it
@@ -215,11 +223,32 @@ export function ProductSetupForm({
     buildAnswers(template, draft),
   );
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
+  // Which section tab is open. Local: the form no longer remounts on the first
+  // save (parent keys on `code`), so this survives naturally.
+  const [activeSection, setActiveSection] = useState<string | null>(null);
   const save = useSaveSetup(policyYearId);
   const confirm = useConfirmSetup(policyYearId);
-  const discard = useDiscardSetup(policyYearId);
   const { data: suggestions } = useFieldSuggestions(policyYearId, template.code);
+
+  // Serialized snapshot of what's saved on the server, so we only auto-save on
+  // tab-switch when the form is actually dirty (avoids materializing a draft for
+  // a product the user merely clicked through, and redundant concurrent saves).
+  const savedSnapshot = useRef<string>(JSON.stringify(answers));
+
+  // Rebuild the form ONLY when the draft is replaced by a genuinely different
+  // persisted draft (e.g. a slip re-upload mints a new setup id) — never on the
+  // new→first-save transition (same data we just saved), which would clobber
+  // edits made while that save was in flight.
+  const builtFromId = useRef<string | null>(draft?.id ?? null);
+  useEffect(() => {
+    const currentId = draft?.id ?? null;
+    if (currentId && builtFromId.current && currentId !== builtFromId.current) {
+      const rebuilt = buildAnswers(template, draft);
+      setAnswers(rebuilt);
+      savedSnapshot.current = JSON.stringify(rebuilt);
+    }
+    builtFromId.current = currentId;
+  }, [draft, template]);
   // Canonical plan names. `Plan.display_name` is the source of truth for a plan's
   // label (the category cards rename it); the draft's `answers.plans[].label` is
   // only a cached copy. Sync it below so Rate / Schedule of Benefits show the
@@ -322,14 +351,23 @@ export function ProductSetupForm({
       arrangements: { ...a.arrangements, [id]: !a.arrangements[id] },
     }));
 
-  const onSave = () =>
+  // Persist the current answers. `silent` skips the success toast (used by the
+  // auto-save on tab switch). The saved snapshot is captured at call time so a
+  // later dirty-check compares against exactly what was sent.
+  const persist = (opts?: { silent?: boolean }) => {
+    const snapshot = JSON.stringify(answers);
     save.mutate(
       { code: template.code, answers, templateVersion: template.version },
       {
-        onSuccess: () => toast.success("Draft saved"),
+        onSuccess: () => {
+          savedSnapshot.current = snapshot;
+          if (!opts?.silent) toast.success("Draft saved");
+        },
         onError: (e) => toast.error(formatError(e)),
       },
     );
+  };
+  const onSave = () => persist();
   const onConfirm = () =>
     confirm.mutate(
       { code: template.code, answers, templateVersion: template.version },
@@ -353,81 +391,62 @@ export function ProductSetupForm({
         onError: (e) => toast.error(formatError(e)),
       },
     );
-  const onDiscard = () => {
-    const reset = () => {
-      setAnswers(buildAnswers(template, null));
-      setDiscardOpen(false);
-      toast.success("Draft discarded — form reset");
-    };
-    if (draft) {
-      discard.mutate(template.code, {
-        onSuccess: reset,
-        onError: (e) => toast.error(formatError(e)),
-      });
-    } else {
-      reset();
-    }
-  };
-
   const enabledArrangements = Object.values(answers.arrangements).filter(
     Boolean,
   ).length;
 
-  // Each section renders only when the template's profile includes it. The
-  // backend orders `template.sections` per product family (medical, travel,
-  // life, accident, statutory) — the form is driven by that list, not hardcoded.
-  const sectionMap: Record<string, React.ReactNode> = {
+  // The product covers dependants when the catalog/slip says so (has_dependants
+  // is authoritative — it unions the catalog flag with slip-parsed dependant
+  // signals) or the eligibility field names Spouse/Child (legacy fallback).
+  const coveredMembers = splitList(answers.eligibility.member_cover_eligibility ?? "");
+  const showDependants =
+    template.has_dependants ||
+    coveredMembers.some((m) => ["Spouse", "Child", "Dependant"].includes(m));
+
+  // Each setup section is one tab PANEL (content only — the tab bar supplies the
+  // title). The backend orders `template.sections` per product family (medical,
+  // travel, life, accident, statutory); the tabs follow that list, not hardcoded.
+  const sectionInner: Record<string, React.ReactNode> = {
     header: (
-      <Section key="header" title="Header & Policy" defaultOpen>
-        <div className="grid grid-cols-2 gap-3">
-          {template.header_fields.map((f) => (
-            <div key={f.id} className={f.type === "textarea" ? "col-span-2" : undefined}>
-              <FieldControl
-                field={f}
-                value={answers.header[f.id] ?? ""}
-                onChange={(v) => setHeader(f.id, v)}
-                suggestions={suggestions?.header[f.id] ?? []}
-              />
-            </div>
-          ))}
-        </div>
-      </Section>
+      <div className="grid grid-cols-2 gap-3">
+        {template.header_fields.map((f) => (
+          <div key={f.id} className={f.type === "textarea" ? "col-span-2" : undefined}>
+            <FieldControl
+              field={f}
+              value={answers.header[f.id] ?? ""}
+              onChange={(v) => setHeader(f.id, v)}
+              suggestions={suggestions?.header[f.id] ?? []}
+            />
+          </div>
+        ))}
+      </div>
     ),
     eligibility: (
-      <Section key="eligibility" title="Eligibility" defaultOpen>
-        <div className="grid grid-cols-2 gap-3">
-          {template.eligibility_fields.map((f) => (
-            <div
-              key={f.id}
-              className={
-                f.type === "multichoice" || f.type === "taglist"
-                  ? "col-span-2"
-                  : undefined
-              }
-            >
-              <FieldControl
-                field={f}
-                value={answers.eligibility[f.id] ?? ""}
-                onChange={(v) => setElig(f.id, v)}
-                suggestions={suggestions?.eligibility[f.id] ?? []}
-              />
-            </div>
-          ))}
-        </div>
-      </Section>
+      <div className="grid grid-cols-2 gap-3">
+        {template.eligibility_fields.map((f) => (
+          <div
+            key={f.id}
+            className={
+              f.type === "multichoice" || f.type === "taglist"
+                ? "col-span-2"
+                : undefined
+            }
+          >
+            <FieldControl
+              field={f}
+              value={answers.eligibility[f.id] ?? ""}
+              onChange={(v) => setElig(f.id, v)}
+              suggestions={suggestions?.eligibility[f.id] ?? []}
+            />
+          </div>
+        ))}
+      </div>
     ),
     // Employee Category & Plan Type = the editable category cards (bound to the
-    // persisted categories). Each card tags an employee category with a plan
-    // type, participation and (for life/accident products) the amount covered
-    // per employee; edits autosave. Replaces the old "Basis of Cover" draft grid
-    // and the separate read-only "Current categories" list; sits above Rate.
+    // persisted categories; edits autosave). Dependant cards follow when the
+    // product covers dependants.
     basis_of_cover: (
-      <Section
-        key="basis_of_cover"
-        title="Employee Category & Plan Type"
-        subtitle={`${group?.categories.length ?? 0} categor${(group?.categories.length ?? 0) === 1 ? "y" : "ies"}`}
-        defaultOpen
-      >
+      <div className="flex flex-col gap-5">
         <CategoryCards
           policyYearId={policyYearId}
           productCode={template.code}
@@ -439,142 +458,152 @@ export function ProductSetupForm({
           categories={group?.categories ?? []}
           onEditRule={onEditRule}
         />
-      </Section>
-    ),
-    // Rate is no longer a standalone section — rate + premium are edited inline on
-    // each Employee Category & Plan Type card (per-member premium for medical,
-    // per-tier rates for tiered medical, amount-covered rate for sum-assured).
-    // Schedule of Benefits = what's covered: cover description + cover-term
-    // fields (profile fields) + the benefit-line table + additional arrangements
-    // (folded in from the old standalone sections, matching the Excel order).
-    schedule_of_benefits: (
-      <Section
-        key="schedule_of_benefits"
-        title="Schedule of Benefits"
-        subtitle="cover terms, benefit lines & arrangements"
-        defaultOpen
-      >
-        <div className="flex flex-col gap-5">
-          <div className="flex flex-col gap-1.5">
+        {showDependants && (
+          <div className="flex flex-col gap-2 border-t border-border pt-4">
             <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Cover
+              Dependant Category &amp; Plan Type · dependant participation &amp; rate
             </Label>
-            <textarea
-              value={answers.cover_description}
-              onChange={(e) =>
-                setAnswers((a) => ({ ...a, cover_description: e.target.value }))
-              }
-              rows={2}
-              placeholder="What this product covers…"
-              className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+            <DependantCards
+              policyYearId={policyYearId}
+              productId={group?.product_id ?? null}
+              rateModel={template.rate_model}
+              categories={group?.categories ?? []}
             />
           </div>
-
-          {template.profile_fields.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                Cover details
-              </Label>
-              <div className="grid grid-cols-2 gap-3">
-                {template.profile_fields.map((f) => (
-                  <FieldControl
-                    key={f.id}
-                    field={f}
-                    value={answers.profile[f.id] ?? ""}
-                    onChange={(v) => setProfileField(f.id, v)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          <ScheduleOfBenefitsSection
-            sob={answers.sob ?? { columns: [], items: [] }}
-            plans={selectedPlans}
-            columnAxis={template.column_axis}
-            setSob={setSob}
+        )}
+      </div>
+    ),
+    // Schedule of Benefits = what's covered: cover description + cover-term
+    // fields (profile fields) + the benefit-line table + additional arrangements.
+    // (Rate + premium are edited inline on each Category card, not here.)
+    schedule_of_benefits: (
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            Cover
+          </Label>
+          <textarea
+            value={answers.cover_description}
+            onChange={(e) =>
+              setAnswers((a) => ({ ...a, cover_description: e.target.value }))
+            }
+            rows={2}
+            placeholder="What this product covers…"
+            className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
           />
+        </div>
 
-          {template.additional_arrangements.length > 0 && (
-            <div className="flex flex-col gap-2.5">
-              <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                Additional arrangements · {enabledArrangements} enabled
-              </Label>
-              {template.additional_arrangements.map((a) => (
-                <div key={a.id} className="flex items-start gap-3">
-                  <Switch
-                    checked={Boolean(answers.arrangements[a.id])}
-                    onCheckedChange={() => toggleArrangement(a.id)}
-                  />
-                  <span className="text-sm text-foreground">{a.label}</span>
-                </div>
+        {template.profile_fields.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Cover details
+            </Label>
+            <div className="grid grid-cols-2 gap-3">
+              {template.profile_fields.map((f) => (
+                <FieldControl
+                  key={f.id}
+                  field={f}
+                  value={answers.profile[f.id] ?? ""}
+                  onChange={(v) => setProfileField(f.id, v)}
+                />
               ))}
             </div>
-          )}
-        </div>
-      </Section>
+          </div>
+        )}
+
+        <ScheduleOfBenefitsSection
+          sob={answers.sob ?? { columns: [], items: [] }}
+          plans={selectedPlans}
+          columnAxis={template.column_axis}
+          setSob={setSob}
+        />
+
+        {template.additional_arrangements.length > 0 && (
+          <div className="flex flex-col gap-2.5">
+            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Additional arrangements · {enabledArrangements} enabled
+            </Label>
+            {template.additional_arrangements.map((a) => (
+              <div key={a.id} className="flex items-start gap-3">
+                <Switch
+                  checked={Boolean(answers.arrangements[a.id])}
+                  onCheckedChange={() => toggleArrangement(a.id)}
+                />
+                <span className="text-sm text-foreground">{a.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     ),
   };
 
-  const sections = template.sections?.length
-    ? template.sections
-    : Object.keys(sectionMap);
+  // Follow the backend's section order, but only tab through sections the form
+  // actually renders — ids like `rate_table` are folded into the category cards
+  // and have no panel of their own.
+  const sections = (
+    template.sections?.length ? template.sections : Object.keys(sectionInner)
+  ).filter((id) => id in sectionInner);
 
-  // The Dependant section appears below the employee categories when the
-  // product covers dependants. The template's has_dependants is authoritative —
-  // it unions the catalog flag with slip-parsed dependant signals (dependant
-  // participation clauses, per-dependant rates, family tiers) — so a slip that
-  // states dependant coverage un-hides the section even when the eligibility
-  // field wasn't populated. The Spouse/Child token check stays as a fallback
-  // for older drafts. ("Dependant" is legacy — the option was split.)
-  const coveredMembers = splitList(answers.eligibility.member_cover_eligibility ?? "");
-  const showDependants =
-    template.has_dependants ||
-    coveredMembers.some((m) => ["Spouse", "Child", "Dependant"].includes(m));
-  const dependantSection = showDependants ? (
-    <Section
-      key="dependant_cover"
-      title="Dependant Category & Plan Type"
-      subtitle="dependant participation & rate"
-      defaultOpen
-    >
-      <DependantCards
-        policyYearId={policyYearId}
-        productId={group?.product_id ?? null}
-        rateModel={template.rate_model}
-        categories={group?.categories ?? []}
-      />
-    </Section>
-  ) : null;
+  // Active tab, falling back to the first section if the parent's stored value
+  // isn't valid for this product's section list.
+  const activeId =
+    activeSection && sections.includes(activeSection) ? activeSection : sections[0];
+
+  // Switching tabs auto-saves the draft so edits are never lost on navigation —
+  // but only when the form is actually dirty and no save is already in flight,
+  // so merely browsing tabs doesn't create a draft or fire redundant saves.
+  const switchSection = (next: string) => {
+    if (next === activeId) return;
+    const dirty = JSON.stringify(answers) !== savedSnapshot.current;
+    if (dirty && !save.isPending) persist({ silent: true });
+    setActiveSection(next);
+  };
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* Accessible Save so a long form's edits can be persisted before switching
-          product tabs (which remounts this form and discards unsaved edits). */}
-      <div className="flex items-center justify-end gap-2 border-b border-border pb-3">
-        <span className="mr-auto text-xs text-muted-foreground">
-          {draft?.status === "confirmed" ? (
-            <span className="inline-flex items-center gap-1 text-good">
-              <CircleCheck className="size-3.5" /> Previously confirmed
-            </span>
-          ) : null}
-        </span>
-        <Button variant="outline" size="sm" onClick={onSave} disabled={save.isPending}>
-          {save.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Save className="size-4" />
-          )}
-          Save draft
-        </Button>
+    <div className="flex flex-col gap-4">
+      {/* Single-row section tabs. Switching tabs auto-saves the draft, and each
+          tab has its own Save draft — so edits are never lost on navigation. */}
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-border">
+        {sections.map((id) => {
+          const count =
+            id === "basis_of_cover" ? group?.categories.length ?? 0 : 0;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => switchSection(id)}
+              className={cn(
+                "shrink-0 whitespace-nowrap border-b-2 -mb-px px-3 py-2 text-sm font-medium transition-colors",
+                activeId === id
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {SECTION_LABELS[id] ?? id}
+              {count > 0 && (
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  · {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
-      {sections.map((id) => (
-        <Fragment key={id}>
-          {sectionMap[id] ?? null}
-          {id === "basis_of_cover" && dependantSection}
-        </Fragment>
-      ))}
+      <div className="flex flex-col gap-4">
+        {sectionInner[activeId] ?? null}
+        <div className="flex items-center justify-end border-t border-border pt-3">
+          <Button variant="outline" size="sm" onClick={onSave} disabled={save.isPending}>
+            {save.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
+            Save draft
+          </Button>
+        </div>
+      </div>
 
       <div className="flex items-center justify-between border-t border-border pt-3">
         <span className="text-xs text-muted-foreground">
@@ -584,29 +613,12 @@ export function ProductSetupForm({
             </span>
           ) : null}
         </span>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setDiscardOpen(true)}
-            disabled={discard.isPending}
-          >
-            <Trash2 className="size-4" /> Discard draft
-          </Button>
-          <Button variant="outline" onClick={onSave} disabled={save.isPending}>
-            {save.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Save className="size-4" />
-            )}
-            Save draft
-          </Button>
-          <Button
-            onClick={() => setConfirmOpen(true)}
-            disabled={selectedPlans.length === 0}
-          >
-            Confirm & create
-          </Button>
-        </div>
+        <Button
+          onClick={() => setConfirmOpen(true)}
+          disabled={selectedPlans.length === 0}
+        >
+          Confirm & create
+        </Button>
       </div>
 
       <AlertDialog
@@ -625,22 +637,6 @@ export function ProductSetupForm({
             Schedule of Benefits. Eligibility categories are managed in the
             Employee Category &amp; Plan Type cards and are left untouched here.
             Re-confirming refreshes the product and plans only.
-          </span>
-        }
-      />
-
-      <AlertDialog
-        open={discardOpen}
-        onOpenChange={setDiscardOpen}
-        title="Discard this setup draft?"
-        confirmLabel="Discard draft"
-        loading={discard.isPending}
-        onConfirm={onDiscard}
-        description={
-          <span>
-            This clears the in-progress <strong>{template.code}</strong> setup
-            form and deletes its saved draft. Confirmed setups and any products
-            already created are kept. This cannot be undone.
           </span>
         }
       />

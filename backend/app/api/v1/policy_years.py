@@ -161,6 +161,14 @@ def update_policy_year(
     fields = payload.model_fields_set
     new_start = payload.start_date if "start_date" in fields else py.start_date
     new_end = payload.end_date if "end_date" in fields else py.end_date
+    # Dates are nullable in the schema (absent = keep), but an EXPLICIT null
+    # can't be persisted (NOT NULL columns) — reject it cleanly instead of
+    # letting `date < None` raise a 500.
+    if new_start is None or new_end is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "start_date and end_date cannot be null",
+        )
     if new_end < new_start:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
