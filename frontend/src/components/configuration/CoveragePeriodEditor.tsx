@@ -12,7 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useResetProductTerm, useSetProductTerm } from "@/api/hooks";
+import {
+  usePolicyYears,
+  useResetProductTerm,
+  useSetProductTerm,
+} from "@/api/hooks";
 import { formatPolicyRange } from "@/lib/policy-year";
 import { formatError } from "@/lib/errors";
 import type { ProductTerm } from "@/types";
@@ -57,6 +61,13 @@ export function CoveragePeriodEditor({
   const [policyNo, setPolicyNo] = useState<string>(term.policy_number ?? "");
   const setTerm = useSetProductTerm(policyYearId);
   const resetTerm = useResetProductTerm(policyYearId);
+  // Reset (DELETE) clears the whole row incl. the activation-locked coverage
+  // dates / GST, so the server rejects it on a non-draft year. Only the
+  // operational fields (FCL, policy no.) stay editable there — cleared by
+  // blanking + Save — so don't offer a Reset that would only 409.
+  const { data: policyYears = [] } = usePolicyYears();
+  const activeYear = policyYears.find((y) => y.id === policyYearId);
+  const locked = activeYear !== undefined && activeYear.status !== "draft";
 
   const datesDirty = start !== term.coverage_start || end !== term.coverage_end;
   const parsedRate = gstRate.trim() === "" ? null : Number(gstRate);
@@ -239,7 +250,7 @@ export function CoveragePeriodEditor({
           <Button size="sm" disabled={!dirty || !valid || busy} onClick={save}>
             Save
           </Button>
-          {hasOverride && (
+          {hasOverride && !locked && (
             <Button
               size="sm"
               variant="outline"

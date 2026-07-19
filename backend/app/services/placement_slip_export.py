@@ -33,7 +33,9 @@ from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.deps import tenant_or_global
 from app.models import Category, Plan, PolicyYear, Product, ProductTerm
+from app.services.product_terms import envelope_for
 from app.services.sob_columns import sob_from_plan_items
 
 Mode = Literal["placement", "quotation"]
@@ -131,12 +133,16 @@ def _distinct_insured(categories: list[Category]) -> list[str]:
     return seen
 
 
-def _coverage_window(py: PolicyYear, term: ProductTerm | None) -> str:
-    start = term.coverage_start if term and term.coverage_start else py.start_date
-    end = term.coverage_end if term and term.coverage_end else py.end_date
+def _fmt_window(start: Any, end: Any) -> str:
     if not start or not end:
         return ""
     return f"{start:%d %b %Y} to {end:%d %b %Y}"
+
+
+def _coverage_window(py: PolicyYear, term: ProductTerm | None) -> str:
+    start = term.coverage_start if term and term.coverage_start else py.start_date
+    end = term.coverage_end if term and term.coverage_end else py.end_date
+    return _fmt_window(start, end)
 
 
 def _gst_suffix(term: ProductTerm | None) -> str:
@@ -275,7 +281,10 @@ def _tier_codes(categories: list[Category]) -> list[str]:
 
 def _write_tiered_rates(
     ws: Worksheet, categories: list[Category], codes: list[str], blank: bool
-) -> None:
+) -> float | None:
+    """Render the tiered rate table; return the sum of the premiums actually
+    SHOWN (None if none), so the caller's total always reconciles with the
+    printed rows."""
     # Row 1: tier codes above each Rate/Premium pair; row 2: the pair headers.
     head1 = ["Rate :", "", ""]
     head2 = ["", "Insured", "Category", "Plan"]
@@ -290,6 +299,8 @@ def _write_tiered_rates(
     _style_row(ws, font=_HEADER)
     _border_row(ws, 2, last_col)
 
+    running = 0.0
+    found = False
     prev_insured: str | None = None
     prev_name = ""
     for c in categories:
@@ -306,13 +317,16 @@ def _write_tiered_rates(
         ]
         for code in codes:
             cell = tiers.get(code) or {}
-            if blank or not isinstance(cell, dict):
-                row += ["", ""]
-            else:
+            premium = cell.get("premium") if isinstance(cell, dict) else None
+            if blank or not premium:
                 # A stored zero premium is the parser's "no committed premium"
                 # (voluntary tiers) — the slips leave those cells empty.
-                premium = cell.get("premium")
-                row += [cell.get("rate"), "" if not premium else premium]
+                rate = "" if blank else (cell.get("rate") if isinstance(cell, dict) else "")
+                row += [rate, ""]
+            else:
+                row += [cell.get("rate"), premium]
+                running += float(premium)
+                found = True
         ws.append(row)
         r = _style_row(ws, wrap_cols=(2, 3))
         _border_row(ws, 2, last_col)
@@ -320,6 +334,7 @@ def _write_tiered_rates(
             ws.cell(row=r, column=6 + 2 * i).number_format = _MONEY
         prev_insured = insured
         prev_name = c.display_name
+    return running if found else None
 
 
 def _derived_premium(pa: dict[str, Any]) -> float | None:
@@ -340,7 +355,18 @@ def _write_flat_rates(
     earnings_based: bool,
     with_label: bool,
     blank: bool,
-) -> None:
+) -> float | None:
+    """Render the flat rate table; return the sum of the premiums actually
+    SHOWN (None if none), so the caller's total reconciles with the rows.
+
+    Two premium kinds are treated differently, matching the slips:
+    * Block-level (``annual_premium`` / ``premium_note``): the parser copies one
+      figure onto every category in a block, so it prints once — blank
+      consecutive repeats for the same insured, and count it once.
+    * Derived per-S$1,000-SI (``_derived_premium``): a genuine per-row figure —
+      never blanked (two cohorts with equal SI still each carry it) and always
+      summed.
+    """
     amount_header = (
         "* Estimated annual earnings" if earnings_based else "Sum Insured ( SI )"
     )
@@ -352,7 +378,9 @@ def _write_flat_rates(
     _style_row(ws, font=_HEADER)
     _border_row(ws, 2, 6)
     prev_insured: str | None = None
-    prev_premium: Any = object()
+    prev_display: Any = object()
+    running = 0.0
+    found = False
     for c in categories:
         pa = _pa(c)
         insured = str(pa.get("insured") or "").strip()
@@ -361,26 +389,31 @@ def _write_flat_rates(
             if earnings_based
             else pa.get("sum_insured")
         )
+        # `premium` is what the cell shows; `numeric` is what it contributes to
+        # the total (None when blanked or non-numeric, e.g. an annotated note).
+        numeric: float | None = None
         if blank:
             rate: Any = ""
             premium: Any = ""
         else:
             rate = pa.get("premium_rate")
-            # An annotated premium ("S$3,169.80 subject to minimum…") carries
-            # its full text; the plain number is the fallback; a per-1000-SI
-            # rate with no stored premium derives it (SI/1000 x rate).
-            premium = (
-                pa.get("premium_note")
-                or pa.get("annual_premium")
-                or _derived_premium(pa)
-            )
-            # The parser copies a block-level premium down onto every category
-            # sharing it — the slips print it once, so blank the repeats.
-            if (premium is not None and premium == prev_premium
-                    and insured == (prev_insured or insured)):
-                premium = ""
-            elif premium is not None:
-                prev_premium = premium
+            derived = _derived_premium(pa)
+            if derived is not None:
+                premium = derived
+                numeric = derived
+            else:
+                # An annotated premium ("S$3,169.80 subject to minimum…") carries
+                # its full text; the plain number is the fallback.
+                display = pa.get("premium_note") or pa.get("annual_premium")
+                stored = pa.get("annual_premium")
+                if (display is not None and display == prev_display
+                        and insured == prev_insured):
+                    premium = ""  # block copy already printed above
+                else:
+                    premium = display if display is not None else ""
+                    if display is not None:
+                        prev_display = display
+                    numeric = float(stored) if stored is not None else None
         ws.append([
             "",
             insured if insured != prev_insured else "",
@@ -394,17 +427,24 @@ def _write_flat_rates(
         ws.cell(row=r, column=4).number_format = _COUNT
         if not isinstance(premium, str):
             ws.cell(row=r, column=6).number_format = _MONEY
+        if numeric is not None:
+            running += numeric
+            found = True
         prev_insured = insured
+    return running if found else None
 
 
 def _write_per_member_rates(
     ws: Worksheet, categories: list[Category], with_label: bool, blank: bool
-) -> None:
+) -> float | None:
     """Per-member products (GCGP/GCSP/GD): one rate per head, with a separate
     dependant rate. The slips price these per PLAN, not per category — the
     same rate row is replicated across every cohort sharing the plan — so
     collapse to one block per plan: "1 - Employees" / "1 - Dependents"
-    (combined when the two rates match, mirroring the reference slips)."""
+    (combined when the two rates match, mirroring the reference slips).
+
+    Returns the sum of the premiums SHOWN (None if none) so the caller's total
+    reconciles with the rows."""
     if with_label:
         ws.append(["Rate :"])
         _style_row(ws, font=_SECTION)
@@ -413,6 +453,8 @@ def _write_per_member_rates(
     _border_row(ws, 2, 5)
     seen_plans: set[str] = set()
     prev_insured: str | None = None
+    running = 0.0
+    found = False
     for c in categories:
         pa = _pa(c)
         plan = str(pa.get("plan_code") or "")
@@ -422,6 +464,7 @@ def _write_per_member_rates(
         insured = str(pa.get("insured") or "").strip()
         emp_rate = pa.get("premium_rate")
         dep_rate = pa.get("dependant_rate")
+        stored = pa.get("annual_premium")
         premium: Any = "" if blank else (
             pa.get("premium_note") or pa.get("annual_premium") or ""
         )
@@ -433,10 +476,14 @@ def _write_per_member_rates(
         _border_row(ws, 2, 5)
         if not isinstance(premium, str):
             ws.cell(row=row, column=5).number_format = _MONEY
+        if not blank and stored is not None:
+            running += float(stored)
+            found = True
         if dep_rate is not None and not combined:
             ws.append(["", "", f"{plan} - Dependents", "" if blank else dep_rate, ""])
             _border_row(ws, 2, 5)
         prev_insured = insured
+    return running if found else None
 
 
 def _write_voluntary_rates(
@@ -473,39 +520,6 @@ def _write_voluntary_rates(
                 continue
             ws.append(["", str(band.get("label") or ""), "" if blank else band.get("rate")])
             _border_row(ws, 2, 3)
-
-
-def _annual_premium_total(categories: list[Category]) -> float | None:
-    """Sum of the slip's stated premiums. The parser copies a block-level
-    premium down onto every category sharing it (GCGP's 4 cohorts all carry
-    the plan's 186,732; GBT's two rows both carry the policy's 3,169.80), so
-    identical (insured, premium) pairs count ONCE — verified against the
-    reference slips' printed totals. Derived per-1000-SI premiums are genuine
-    per-row figures and always sum."""
-    total = 0.0
-    found = False
-    seen: set[tuple[str, float]] = set()
-    for c in categories:
-        pa = _pa(c)
-        if pa.get("annual_premium") is not None:
-            key = (str(pa.get("insured") or ""), round(float(pa["annual_premium"]), 2))
-            if key not in seen:
-                seen.add(key)
-                total += float(pa["annual_premium"])
-            found = True
-            continue
-        derived = _derived_premium(pa)
-        if derived is not None:
-            total += derived
-            found = True
-            continue
-        tiers = pa.get("rate_tiers")
-        if isinstance(tiers, dict):
-            for cell in tiers.values():
-                if isinstance(cell, dict) and cell.get("premium") is not None:
-                    total += float(cell["premium"])
-                    found = True
-    return total if found else None
 
 
 def _write_rate_section(
@@ -545,23 +559,33 @@ def _write_rate_section(
     )
     if not tiered and not per_member and not flat and not has_voluntary:
         return
+    # Each writer returns the sum of the premiums it actually printed (None if
+    # none), so the "Annual Premium" total below is the sum of what's on the
+    # page — the rows always reconcile with the total by construction.
+    subtotals: list[float] = []
     ws.append([])
     if tiered:
-        _write_tiered_rates(ws, tiered, _tier_codes(tiered), blank)
+        t = _write_tiered_rates(ws, tiered, _tier_codes(tiered), blank)
+        if t is not None:
+            subtotals.append(t)
     if per_member:
         if tiered:
             ws.append([])
-        _write_per_member_rates(ws, per_member, with_label=not tiered, blank=blank)
+        t = _write_per_member_rates(ws, per_member, with_label=not tiered, blank=blank)
+        if t is not None:
+            subtotals.append(t)
     if flat:
         if tiered or per_member:
             ws.append([])
         earnings_based = any(
             _pa(c).get("estimated_annual_earnings") is not None for c in flat
         )
-        _write_flat_rates(
+        t = _write_flat_rates(
             ws, flat, earnings_based,
             with_label=not (tiered or per_member), blank=blank,
         )
+        if t is not None:
+            subtotals.append(t)
     # A product placed purely on voluntary age-banded rates still needs the
     # section label above its table.
     if has_voluntary and not tiered and not per_member and not flat:
@@ -571,7 +595,7 @@ def _write_rate_section(
 
     ws.append([])
     label = f"Annual Premium {_gst_suffix(term)} :"
-    total = None if blank else _annual_premium_total(categories)
+    total = None if blank or not subtotals else sum(subtotals)
     ws.append([label, "", total if total is not None else ""])
     r = _style_row(ws, font=_HEADER)
     if total is not None:
@@ -721,9 +745,12 @@ def _write_plan_details(
         desc = (p.cover_description or "").strip()
         return "" if shared_cover is not None and desc == shared_cover else desc
 
+    # Resolve each plan's own-cover once, then keep the rows that carry anything
+    # the Cover line doesn't already say.
     rows = [
-        p for p in plans
-        if _own_cover(p) or p.annual_policy_limit or p.report_label
+        (p, own)
+        for p in plans
+        if (own := _own_cover(p)) or p.annual_policy_limit or p.report_label
     ]
     if not rows:
         return
@@ -733,9 +760,9 @@ def _write_plan_details(
     ws.append(["Plan", "Cover Description", "Annual Policy Limit", "Report Label"])
     _style_row(ws, font=_HEADER)
     _border_row(ws, 1, 4)
-    for p in rows:
+    for p, own in rows:
         ws.append([
-            p.code, _own_cover(p),
+            p.code, own,
             p.annual_policy_limit or "", p.report_label or "",
         ])
         _style_row(ws, wrap_cols=(2,))
@@ -827,7 +854,15 @@ def _build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
     product_ids = {c.product_id for c in categories if c.product_id}
     product_ids |= {p.product_id for p in plans}
     products = sorted(
-        db.execute(select(Product).where(Product.id.in_(product_ids))).scalars()
+        db.execute(
+            select(Product).where(
+                Product.id.in_(product_ids),
+                # Product mixes global + per-client rows — scope to this tenant
+                # (plus global catalog) even though the ids come from this year's
+                # already-scoped categories/plans (defense in depth).
+                tenant_or_global(Product.client_id, py.client_id),
+            )
+        ).scalars()
         if product_ids
         else [],
         key=lambda p: p.code,
@@ -848,7 +883,10 @@ def _build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
     overview.cell(row=1, column=1).font = _TITLE
     overview.append(["Client", py.client.name if py.client else ""])
     overview.append(["Policy Year", str(py.year)])
-    overview.append(["Period of Insurance", _coverage_window(py, None)])
+    # Company-level period = earliest product start → latest product end (the
+    # shared envelope), not the bare policy-year span — products can renew
+    # off-cycle via ProductTerm coverage overrides.
+    overview.append(["Period of Insurance", _fmt_window(*envelope_for(db, py))])
     overview.append(["Status", py.status.value])
     overview.append([
         "Note", "All premium amounts are GST-exclusive, as extracted/configured.",

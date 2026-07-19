@@ -297,13 +297,13 @@ def test_quotation_mode_blanks_insurer_and_rates(client: TestClient) -> None:
     assert ghs[basis_i + 2][6] == 100000
 
 
-def test_premium_total_semantics() -> None:
-    """Carried-down block premiums count once; distinct premiums sum; a
-    per-1000-SI rate with no stored premium derives one (GPA-style)."""
-    from app.services.placement_slip_export import (
-        _annual_premium_total,
-        _derived_premium,
-    )
+def test_flat_premium_rows_reconcile_with_total() -> None:
+    """The 'Annual Premium' total is the sum of the premiums actually PRINTED —
+    block copies collapse to one shown+counted row, distinct premiums sum, and
+    derived per-row premiums (equal SI) each show AND count (never blanked)."""
+    from openpyxl import Workbook
+
+    from app.services.placement_slip_export import _derived_premium, _write_flat_rates
 
     def cat(pa: dict) -> Category:
         return Category(
@@ -311,25 +311,51 @@ def test_premium_total_semantics() -> None:
             plan_assignments=pa,
         )
 
-    # GCGP-style: 4 cohorts all carry the plan's 186,732 → one premium.
-    dup = [cat({"insured": "A", "annual_premium": 186732.0}) for _ in range(4)]
-    assert _annual_premium_total(dup) == 186732.0
-    # GTL-style distinct per-category premiums still sum.
-    distinct = [
+    def total_and_shown(cats: list[Category]) -> tuple[float | None, list[float]]:
+        ws = Workbook().active
+        total = _write_flat_rates(
+            ws, cats, earnings_based=False, with_label=False, blank=False
+        )
+        shown = [
+            r[5] for r in ws.iter_rows(min_row=2, values_only=True)
+            if isinstance(r[5], (int, float))
+        ]
+        return total, shown
+
+    # GCGP-style: 4 cohorts all carry the plan's 186,732 → printed + counted once.
+    total, shown = total_and_shown(
+        [cat({"insured": "A", "annual_premium": 186732.0}) for _ in range(4)]
+    )
+    assert total == 186732.0 and shown == [186732.0]
+
+    # Distinct per-category premiums all show and sum.
+    total, shown = total_and_shown([
         cat({"insured": "A", "annual_premium": 100.0}),
         cat({"insured": "A", "annual_premium": 200.0}),
-    ]
-    assert _annual_premium_total(distinct) == 300.0
+    ])
+    assert total == 300.0 and sorted(shown) == [100.0, 200.0]
+
     assert _derived_premium(
         {"rate_basis": "per_1000_si", "premium_rate": 0.072, "sum_insured": 4_000_000.0}
     ) == 288.0
-    # Derived premiums are genuine per-row figures — never deduped.
-    derived = [
+    # Derived premiums are genuine per-row figures: two equal-SI cohorts each
+    # print 72 and the total is 144 — rows reconcile with the total.
+    total, shown = total_and_shown([
         cat({"insured": "A", "rate_basis": "per_1000_si",
              "premium_rate": 0.072, "sum_insured": 1_000_000.0})
         for _ in range(2)
-    ]
-    assert _annual_premium_total(derived) == 144.0
+    ])
+    assert total == 144.0 and shown == [72.0, 72.0]
+
+    # An annotated note (string) prints once but still contributes its numeric
+    # annual_premium to the total; the repeated block copy is blanked.
+    total, shown = total_and_shown([
+        cat({"insured": "A", "annual_premium": 3169.8,
+             "premium_note": "$3,169.80 (min S$500)"}),
+        cat({"insured": "A", "annual_premium": 3169.8,
+             "premium_note": "$3,169.80 (min S$500)"}),
+    ])
+    assert total == 3169.8 and shown == []  # both cells hold the string note
 
 
 def test_policy_number_operational_and_exported(client: TestClient) -> None:
