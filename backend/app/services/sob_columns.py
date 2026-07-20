@@ -35,18 +35,103 @@ def _items_of(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return items if isinstance(items, list) else []
 
 
+def _effective(overrides: Any, col_id: str | None, base: Any) -> Any:
+    """Resolve a cell: an ABSENT *or NULL* override inherits the base value.
+
+    `None` must mean "inherit", not "blank" — the frontend mirror resolves with
+    `??`, so treating a stored null as a real value made the broker see the base
+    in the editor while the member got an empty row.
+    """
+    if col_id is None or not isinstance(overrides, dict):
+        return base
+    ov = overrides.get(col_id)
+    return base if ov is None else ov
+
+
+def _row_key(item: dict[str, Any]) -> str:
+    """Identity of a benefit row across columns: its NAME.
+
+    Deliberately NOT the number. ``placement_slip_sob`` auto-assigns
+    ``number = str(len(items) + 1)`` for name-first products (GBT/OSI/GD), so a
+    plan that omits an early row has every later row renumbered. Keying on the
+    number would make those rows look distinct, and ``_union_rows`` would emit
+    each benefit twice — exactly the missing-row case the union exists to
+    handle.
+
+    The name is already this system's benefit identity: ``claims.py`` and
+    ``utilization.py`` both join on ``name.strip().lower()``. Names are unique
+    within a plan; the number only orders and displays. A nameless row falls
+    back to its number so blank rows don't all collide into one.
+    """
+    name = str(item.get("name") or "").strip().lower()
+    return name or f"#{str(item.get('number') or '').strip().lower()}"
+
+
+def _sub_key(sub: dict[str, Any]) -> str:
+    name = str(sub.get("name") or "").strip().lower()
+    return name or f"#{str(sub.get('key') or '').strip().lower()}"
+
+
+def _union_rows(rep_items: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Every distinct row across all columns, in first-seen order.
+
+    Column 0 defines the order it knows about; rows only a later column carries
+    are appended after the row they followed there, so a richer plan's extra
+    lines survive instead of being truncated away.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for items_ in rep_items:
+        anchor = len(out)
+        for row in items_:
+            key = _row_key(row)
+            if key in seen:
+                # Re-anchor so this column's subsequent new rows land in the
+                # right neighbourhood rather than all at the very end.
+                anchor = next(
+                    (i for i, r in enumerate(out) if _row_key(r) == key), anchor
+                ) + 1
+                continue
+            seen.add(key)
+            out.insert(anchor, row)
+            anchor += 1
+    return out
+
+
+# Qualifier keys the slip parser mirrors into `limits` as well as `properties`
+# (placement_slip_sob._SOB_PROPERTY_PATTERNS). `limits` is SHARED across
+# columns, so these can never be represented per-column — including them in the
+# grouping vector would split columns on a difference the model cannot store.
+# Mirrored in BenefitScheduleView.MIRRORED_INTO_LIMITS.
+_SHARED_PROPERTY_KEYS = frozenset(
+    {"maximum_days", "qualification_period", "co_insurance", "surgical_schedule"}
+)
+
+
+def _varying_props(item: dict[str, Any] | None) -> list[tuple[str, Any]]:
+    """The per-plan-varying subset of a row's `properties`, ordered.
+
+    Copay fields and the dental Panel/Non-Panel axis vary by plan; the parser's
+    shared qualifier keys do not (see `_SHARED_PROPERTY_KEYS`).
+    """
+    props = (item or {}).get("properties") or {}
+    if not isinstance(props, dict):
+        return []
+    return sorted((k, v) for k, v in props.items() if k not in _SHARED_PROPERTY_KEYS)
+
+
 def _plan_vector(items: list[dict[str, Any]]) -> str:
     """Group key: only the genuinely per-plan-varying fields (item value,
-    sub-item values, copay properties). Structural fields are shared."""
+    sub-item values, varying properties). Structural fields are shared.
+
+    `properties` participates for every kind, not just copay — the dental axis
+    (Panel/Non-Panel) lives there too, so two plans differing only in their
+    panel limits must stay separate columns instead of collapsing into one.
+    """
     vec: list[Any] = []
     for b in items:
         subs = [s.get("value") or "" for s in (b.get("sub_items") or []) if isinstance(s, dict)]
-        copay = (
-            sorted((b.get("properties") or {}).items())
-            if b.get("kind") == "copay"
-            else None
-        )
-        vec.append([b.get("value") or "", subs, copay])
+        vec.append([b.get("value") or "", subs, _varying_props(b)])
     return json.dumps(vec, sort_keys=True, default=str)
 
 
@@ -96,33 +181,71 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
         )
         rep_items.append(_items_of(members[0]))
 
-    canonical = rep_items[0] if rep_items else []
+    # Row skeleton = the UNION of rows across every column, not just column 0's.
+    # A later column carrying rows the first one lacks (a richer plan) used to
+    # have them silently discarded on import.
+    canonical = _union_rows(rep_items)
+    # Rows are matched across columns by IDENTITY, not position — with a union
+    # skeleton a column that lacks an early row would otherwise have every
+    # later row shifted up by one.
+    by_key = [{_row_key(r): r for r in items_} for items_ in rep_items]
+
     items: list[dict[str, Any]] = []
-    for idx, base in enumerate(canonical):
-        base_value = base.get("value") or ""
-        is_copay = base.get("kind") == "copay"
+    for base in canonical:
+        row_key = _row_key(base)
+        # `properties` is PER-COLUMN whenever any plan differs on it — copay
+        # fields and the dental Panel/Non-Panel axis both live there, and both
+        # can legitimately vary by plan. A row where every plan agrees keeps
+        # them on the shared bag so the common case stays compact.
+        # `or {}` on the INNER lookup too: a row dict that omits `properties`
+        # and one carrying an empty dict both mean "no qualifiers", so they must
+        # not compare unequal and force a needless per-column split.
+        first_props = _varying_props(by_key[0].get(row_key))
+        per_column_props = any(
+            _varying_props(by_key[ci].get(row_key)) != first_props
+            for ci in range(1, len(columns))
+        )
+        # A column that genuinely lacks this row is EXCLUDED from it, which is
+        # exactly what NOT_COVERED means — don't let it inherit the base. That
+        # includes column 0, whose cell IS the base value.
+        cells = [
+            (c.get("value") or "") if (c := by_key[ci].get(row_key)) is not None
+            else NOT_COVERED
+            for ci in range(len(columns))
+        ]
+        base_value = cells[0] if cells else ""
         overrides: dict[str, Any] = {}
         column_properties: dict[str, dict[str, str]] = {}
         for ci, col in enumerate(columns):
-            cell = rep_items[ci][idx] if idx < len(rep_items[ci]) else {}
-            v = cell.get("value") or ""
-            if ci > 0 and v != base_value:
-                overrides[col["id"]] = v
-            if is_copay:
+            cell = by_key[ci].get(row_key)
+            if ci > 0 and cells[ci] != base_value:
+                overrides[col["id"]] = cells[ci]
+            if per_column_props:
                 column_properties[col["id"]] = {
-                    str(k): str(val) for k, val in (cell.get("properties") or {}).items()
+                    str(k): str(val)
+                    for k, val in ((cell or {}).get("properties") or {}).items()
                 }
 
         sub_items: list[dict[str, Any]] = []
-        for si, sub in enumerate(base.get("sub_items") or []):
+        for sub in base.get("sub_items") or []:
+            sub_key = _sub_key(sub)
             sub_base = sub.get("value")
             sub_overrides: dict[str, Any] = {}
             for ci, col in enumerate(columns):
                 if ci == 0:
                     continue
-                rep_subs = rep_items[ci][idx].get("sub_items") if idx < len(rep_items[ci]) else None
-                sv = (rep_subs[si].get("value") if rep_subs and si < len(rep_subs) else None)
-                if sv != sub_base:
+                cell = by_key[ci].get(row_key) or {}
+                sv = next(
+                    (
+                        s.get("value")
+                        for s in (cell.get("sub_items") or [])
+                        if _sub_key(s) == sub_key
+                    ),
+                    None,
+                )
+                # Only a genuine DIFFERENCE is an override; `None` means
+                # "inherit", so never persist it as one.
+                if sv is not None and sv != sub_base:
                     sub_overrides[col["id"]] = sv
             sub_items.append(
                 {
@@ -145,8 +268,8 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
                 "limits": base.get("limits") or [],
                 "base_value": base_value,
                 "overrides": overrides,
-                "properties": {} if is_copay else dict(base.get("properties") or {}),
-                "column_properties": column_properties if is_copay else None,
+                "properties": {} if per_column_props else dict(base.get("properties") or {}),
+                "column_properties": column_properties if per_column_props else None,
                 "sub_items": sub_items,
             }
         )
@@ -180,9 +303,7 @@ def resolve_plan_schedule(
     for it in items_in[:max_items]:
         if not isinstance(it, dict):
             continue
-        overrides = it.get("overrides") or {}
-        base = it.get("base_value")
-        value = overrides.get(col_id, base) if col_id is not None else base
+        value = _effective(it.get("overrides"), col_id, it.get("base_value"))
         properties = {
             str(k): str(v) for k, v in (it.get("properties") or {}).items()
         }
@@ -193,16 +314,17 @@ def resolve_plan_schedule(
         for s in it.get("sub_items") or []:
             if not isinstance(s, dict):
                 continue
-            s_ov = s.get("overrides") or {}
-            s_base = s.get("base_value")
-            s_val = s_ov.get(col_id, s_base) if col_id is not None else s_base
             subs_out.append(
                 {
                     "key": s.get("key") or "",
                     "name": s.get("name") or "",
-                    "value": s_val,
+                    "value": _effective(s.get("overrides"), col_id, s.get("base_value")),
                     "note": s.get("note"),
                     "limits": s.get("limits") or [],
+                    # `kind` must survive to the stored schedule: it is the only
+                    # type signal the member-facing renderer has, and without it
+                    # a visit COUNT ("6") renders as a currency ("$6").
+                    "kind": s.get("kind"),
                 }
             )
         out.append(
@@ -214,6 +336,7 @@ def resolve_plan_schedule(
                 "limits": it.get("limits") or [],
                 "sub_items": subs_out,
                 "properties": properties,
+                "kind": it.get("kind"),
             }
         )
     return out

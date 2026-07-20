@@ -339,7 +339,6 @@ def merge_file_overlay(
         column_axis=list(file_tpl.column_axis),
         header_fields=[f.model_copy() for f in file_tpl.header_fields],
         eligibility_fields=[f.model_copy() for f in file_tpl.eligibility_fields],
-        profile_fields=[f.model_copy() for f in file_tpl.profile_fields],
         plans=[p.model_copy() for p in (base.plans or file_tpl.plans)],
         tiers=[t.model_copy() for t in (base.tiers or file_tpl.tiers)],
         benefit_items=benefit_items,

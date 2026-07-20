@@ -112,39 +112,15 @@ PROFILE_SECTIONS: dict[FormProfile, list[str]] = {
     "statutory": list(_UNIFIED_SECTIONS),
 }
 
-# ── Profile-specific fields: (id, label, type) ──────────────────────────────
-PROFILE_FIELD_SPECS: dict[FormProfile, list[tuple[str, str, str]]] = {
-    "tiered_medical": [],
-    "outpatient": [
-        ("panel_model", "Panel / Remuneration Model", "text"),
-        ("co_payment", "Co-payment / Co-insurance", "text"),
-    ],
-    "dental": [
-        ("panel_basis", "Panel Basis", "text"),
-        ("overall_annual_limit", "Overall Annual Limit", "text"),
-    ],
-    "sum_assured": [
-        ("sum_assured_basis", "Sum Assured Basis", "text"),
-        ("free_cover_limit", "Free Cover / Non-Evidence Limit", "text"),
-        ("maximum_benefit", "Maximum Limit Per Insured Person", "text"),
-    ],
-    "accident": [
-        ("capital_sum_insured", "Capital Sum Insured", "text"),
-        ("scale_of_benefits", "Scale of Compensation", "textarea"),
-        ("ttd_benefit", "Temporary Total Disablement", "text"),
-    ],
-    "travel": [
-        ("geographical_scope", "Geographical Scope", "text"),
-        ("max_trip_duration", "Max Trip Duration (days)", "number"),
-        ("medical_expenses_limit", "Medical Expenses Limit", "text"),
-        ("annual_aggregate_limit", "Annual Aggregate Limit", "text"),
-    ],
-    "statutory": [
-        ("earnings_basis", "Earnings Basis", "text"),
-        ("rate_on_earnings", "Rate on Earnings (%)", "number"),
-        ("statutory_reference", "Statutory Reference", "text"),
-    ],
-}
+# NOTE: there was once a `PROFILE_FIELD_SPECS` map here, rendered by the setup
+# form as a "Cover details" block (Geographical Scope, Free Cover Limit, Scale
+# of Compensation, …). It was removed because NOTHING ever read
+# `answers["profile"]` — not confirm/materialize, not the placement-slip export,
+# not the fact-find, not the benefit statement — so the values a broker typed
+# went nowhere. Worse, every field duplicated somewhere that does work: the
+# Schedule of Benefits rows, `Plan.annual_policy_limit`, or the product header's
+# free-cover-limit. Don't reintroduce a parallel capture surface; add the field
+# to the SOB or the product header instead.
 
 
 def _coerce(value: str | None) -> FormProfile:
@@ -163,10 +139,6 @@ def infer_profile(code: str, override: str | None = None) -> FormProfile:
 
 def sections_for(profile: str) -> list[str]:
     return list(PROFILE_SECTIONS.get(_coerce(profile), PROFILE_SECTIONS[DEFAULT_PROFILE]))
-
-
-def field_specs_for(profile: str) -> list[tuple[str, str, str]]:
-    return list(PROFILE_FIELD_SPECS.get(_coerce(profile), []))
 
 
 def basis_model_for(profile: str) -> BasisModel:

@@ -59,7 +59,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
   if (!statement) return null;
   return (
     <div className="space-y-4">
-      <BenefitStatement data={statement} />
+      <BenefitStatement data={statement} utilization={utilization} />
       {utilization && (
         <div>
           <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">

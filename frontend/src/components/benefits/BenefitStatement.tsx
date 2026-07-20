@@ -1,11 +1,25 @@
 import { FileWarning } from "lucide-react";
-import type { BenefitStatement as BenefitStatementData } from "@/types";
+import type {
+  BenefitStatement as BenefitStatementData,
+  Utilization,
+} from "@/types";
 import { StatementHeader } from "./StatementHeader";
 import { CoverageCard } from "./CoverageCard";
 import { FlexCoverageCard } from "./FlexCoverageCard";
 import { DependantsPanel } from "./DependantsPanel";
 
-export function BenefitStatement({ data }: { data: BenefitStatementData }) {
+export function BenefitStatement({
+  data,
+  utilization,
+}: {
+  data: BenefitStatementData;
+  /**
+   * Claim usage for the same employee. Optional so a surface can render the
+   * statement before (or without) it; when present each benefit line shows what
+   * is left, which is the question a member actually opens this page to answer.
+   */
+  utilization?: Utilization | null;
+}) {
   const hasFlex = Boolean(data.flex);
   const hasAnyCoverage = data.is_matched || hasFlex;
 
@@ -29,7 +43,11 @@ export function BenefitStatement({ data }: { data: BenefitStatementData }) {
           )}
           <div className="space-y-3">
             {data.coverage.map((line) => (
-              <CoverageCard key={line.product_code} line={line} />
+              <CoverageCard
+                key={line.product_code}
+                line={line}
+                utilization={utilization}
+              />
             ))}
             {data.flex && <FlexCoverageCard flex={data.flex} />}
           </div>

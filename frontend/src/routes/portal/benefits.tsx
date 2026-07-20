@@ -1,7 +1,7 @@
 /** "My benefits" — the member's own statement, rendered with the same
  * components as the broker view (financials are stripped server-side). */
 import { FileWarning } from "lucide-react";
-import { usePortalStatement } from "@/api/portal";
+import { usePortalStatement, usePortalUtilization } from "@/api/portal";
 import { BenefitStatement } from "@/components/benefits/BenefitStatement";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,6 +9,9 @@ import { isNotFoundError } from "@/lib/errors";
 
 export function PortalBenefitsPage() {
   const statement = usePortalStatement();
+  // Fetched alongside the statement so each benefit line can show what's left.
+  // Never gates rendering: the schedule is still useful if usage fails to load.
+  const utilization = usePortalUtilization();
 
   if (statement.isLoading) {
     return (
@@ -41,5 +44,5 @@ export function PortalBenefitsPage() {
     );
   }
 
-  return <BenefitStatement data={statement.data} />;
+  return <BenefitStatement data={statement.data} utilization={utilization.data} />;
 }

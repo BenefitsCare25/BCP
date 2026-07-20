@@ -13,6 +13,7 @@
 
 import type {
   BenefitItemAnswer,
+  BenefitKind,
   PlanAnswer,
   SobColumn,
   SobItemAnswer,
@@ -28,20 +29,102 @@ export const NOT_COVERED = "Not covered";
 const uid = () => crypto.randomUUID();
 
 // Per-plan value vector used to group plans into columns: only the genuinely
-// per-plan-varying fields (item value, sub-item values, copay properties).
+// per-plan-varying fields (item value, sub-item values, properties).
 // Structural fields (number/name/note/limits) are shared, so they're excluded.
+//
+// `properties` participates for EVERY kind, not just copay: the dental axis
+// (Panel/Non-Panel) lives there too, so two plans that differ only in their
+// panel limits must stay separate columns instead of collapsing into one.
 function planVector(items: BenefitItemAnswer[]): string {
   return JSON.stringify(
     items.map((b) => [
       b.value ?? "",
       (b.sub_items ?? []).map((s) => s.value ?? ""),
-      b.kind === "copay" ? sortedEntries(b.properties) : null,
+      varyingProps(b),
     ]),
   );
 }
 
+/**
+ * Identity of a benefit row across columns: its NAME.
+ *
+ * Deliberately NOT the number. placement_slip_sob auto-assigns
+ * number = str(len(items)+1) for name-first products (GBT/OSI/GD), so a plan
+ * that omits an early row has every later row renumbered. Keying on the number
+ * would make those rows look distinct, and unionRows would emit each benefit
+ * twice - exactly the missing-row case the union exists to handle.
+ *
+ * The name is already this system's benefit identity: claims.py and
+ * utilization.py both join on name.strip().lower(). Names are unique within a
+ * plan; the number only orders and displays. A nameless row falls back to its
+ * number so blank rows do not all collide into one.
+ */
+function rowKey(item: { number?: string; name?: string }): string {
+  const name = (item.name ?? "").trim().toLowerCase();
+  return name || `#${(item.number ?? "").trim().toLowerCase()}`;
+}
+
+function subKey(sub: { key?: string; name?: string }): string {
+  const name = (sub.name ?? "").trim().toLowerCase();
+  return name || `#${(sub.key ?? "").trim().toLowerCase()}`;
+}
+
+/**
+ * Every distinct row across all columns, in first-seen order. Column 0 defines
+ * the order it knows about; rows only a later column carries are inserted after
+ * the row they followed there rather than all being appended at the end.
+ */
+function unionRows(repItems: BenefitItemAnswer[][]): BenefitItemAnswer[] {
+  const out: BenefitItemAnswer[] = [];
+  const seen = new Set<string>();
+  for (const items_ of repItems) {
+    let anchor = out.length;
+    for (const row of items_) {
+      const key = rowKey(row);
+      if (seen.has(key)) {
+        const at = out.findIndex((r) => rowKey(r) === key);
+        if (at >= 0) anchor = at + 1;
+        continue;
+      }
+      seen.add(key);
+      out.splice(anchor, 0, row);
+      anchor += 1;
+    }
+  }
+  return out;
+}
+
 function sortedEntries(props: Record<string, string> | undefined): [string, string][] {
   return Object.entries(props ?? {}).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+// Qualifier keys the slip parser mirrors into `limits` as well as `properties`
+// (placement_slip_sob._SOB_PROPERTY_PATTERNS). `limits` is SHARED across
+// columns, so these can never be represented per-column - including them in the
+// grouping vector would split columns on a difference the model cannot store.
+// Mirrored in sob_columns._SHARED_PROPERTY_KEYS.
+const SHARED_PROPERTY_KEYS = new Set([
+  "maximum_days",
+  "qualification_period",
+  "co_insurance",
+  "surgical_schedule",
+]);
+
+/**
+ * The per-plan-varying subset of a row's `properties`, serialised for equality.
+ * Copay fields and the dental Panel/Non-Panel axis vary by plan; the parser's
+ * shared qualifier keys do not.
+ *
+ * Takes the ROW (not the bag) so an absent `properties` key and an empty one
+ * both normalise to the same result - otherwise they compare unequal and force
+ * a needless per-column split.
+ */
+function varyingProps(
+  item: { properties?: Record<string, string> } | undefined,
+): string {
+  return JSON.stringify(
+    sortedEntries(item?.properties).filter(([k]) => !SHARED_PROPERTY_KEYS.has(k)),
+  );
 }
 
 // Label a column from the plans it covers: the plan label when it owns exactly
@@ -82,27 +165,54 @@ export function buildSobFromPlans(plans: PlanAnswer[]): SobSchedule | null {
     repItems.push(members[0].benefit_items ?? []);
   }
 
-  // Canonical row count/structure comes from the first column's representative.
-  const canonical = repItems[0] ?? [];
-  const items: SobItemAnswer[] = canonical.map((base, idx) => {
-    const baseValue = base.value ?? "";
+  // Row skeleton = the UNION of rows across every column (mirrors
+  // sob_columns._union_rows). Taking only the first column's rows silently
+  // discarded lines that a richer later plan introduced.
+  const canonical = unionRows(repItems);
+  // Rows match across columns by IDENTITY, not position — a column missing an
+  // early row must not shift every later row up by one.
+  const byKey = repItems.map(
+    (items_) => new Map(items_.map((r) => [rowKey(r), r])),
+  );
+
+  const items: SobItemAnswer[] = canonical.map((base) => {
+    const key = rowKey(base);
+    // `properties` is PER-COLUMN whenever any plan differs on it — copay fields
+    // and the dental Panel/Non-Panel axis both live there, and both can
+    // legitimately vary by plan. Rows where every plan agrees keep the shared
+    // bag so the common case stays compact.
+    const firstProps = varyingProps(byKey[0]?.get(key));
+    const perColumnProps = columns.some(
+      (_, ci) => ci > 0 && varyingProps(byKey[ci]?.get(key)) !== firstProps,
+    );
+    // A column that genuinely lacks the row is EXCLUDED from it — which is what
+    // NOT_COVERED means — rather than quietly inheriting the base. That
+    // includes column 0, whose cell IS the base value.
+    const cells = columns.map((_, ci) => {
+      const cell = byKey[ci]?.get(key);
+      return cell ? (cell.value ?? "") : NOT_COVERED;
+    });
+    const baseValue = cells[0] ?? "";
     const overrides: Record<string, string | null> = {};
     const columnProps: Record<string, Record<string, string>> = {};
-    const isCopay = base.kind === "copay";
     columns.forEach((col, ci) => {
-      const cell = repItems[ci]?.[idx];
-      const v = cell?.value ?? "";
-      if (ci > 0 && v !== baseValue) overrides[col.id] = v;
-      if (isCopay) columnProps[col.id] = { ...(cell?.properties ?? {}) };
+      if (ci > 0 && cells[ci] !== baseValue) overrides[col.id] = cells[ci];
+      if (perColumnProps)
+        columnProps[col.id] = { ...(byKey[ci]?.get(key)?.properties ?? {}) };
     });
 
-    const subItems: SobSubItemAnswer[] = (base.sub_items ?? []).map((sub, si) => {
+    const subItems: SobSubItemAnswer[] = (base.sub_items ?? []).map((sub) => {
+      const sKey = subKey(sub);
       const subBase = sub.value ?? null;
       const subOverrides: Record<string, string | null> = {};
       columns.forEach((col, ci) => {
         if (ci === 0) return;
-        const sv = repItems[ci]?.[idx]?.sub_items?.[si]?.value ?? null;
-        if (sv !== subBase) subOverrides[col.id] = sv;
+        const sv =
+          byKey[ci]?.get(key)?.sub_items?.find((s) => subKey(s) === sKey)?.value ??
+          null;
+        // Only a genuine difference is an override; null means "inherit", so
+        // never persist it as one (the backend would read it as a real blank).
+        if (sv !== null && sv !== subBase) subOverrides[col.id] = sv;
       });
       return {
         uid: sub.uid ?? uid(),
@@ -125,9 +235,8 @@ export function buildSobFromPlans(plans: PlanAnswer[]): SobSchedule | null {
       limits: base.limits ?? [],
       base_value: baseValue,
       overrides,
-      // Axis (dental) values are plan-independent → shared on the row.
-      properties: isCopay ? {} : { ...(base.properties ?? {}) },
-      column_properties: isCopay ? columnProps : undefined,
+      properties: perColumnProps ? {} : { ...(base.properties ?? {}) },
+      column_properties: perColumnProps ? columnProps : undefined,
       sub_items: subItems,
     };
   });
@@ -147,10 +256,48 @@ export function subCellValue(sub: SobSubItemAnswer, columnId: string): string {
   return (ov ?? sub.base_value ?? "") as string;
 }
 
-/** True when a column's cell deviates from the row's base value. */
+/**
+ * True when a column's cell deviates from the row's base value.
+ *
+ * Must agree with `cellValue`: a `null` override means "inherit", so it is NOT
+ * an override — reporting it as one put a "reset" affordance on cells that were
+ * already showing the inherited value.
+ */
 export function isOverridden(item: SobItemAnswer, columnId: string): boolean {
   const ov = item.overrides[columnId];
-  return ov !== undefined && ov !== (item.base_value ?? "");
+  return ov != null && ov !== (item.base_value ?? "");
+}
+
+/** Sub-item counterpart of `isOverridden`. */
+export function isSubOverridden(sub: SobSubItemAnswer, columnId: string): boolean {
+  const ov = sub.overrides[columnId];
+  return ov != null && ov !== (sub.base_value ?? "");
+}
+
+/**
+ * Effective dental-axis value ("Panel" / "Non-Panel") for one column.
+ *
+ * Axis values are PER-COLUMN (`column_properties`), so two dental plans can
+ * carry different panel limits. Falls back to the row-level `properties` bag,
+ * which is where drafts authored before that change stored them — and which
+ * `resolve_plan_schedule` still merges under the per-column values, so both
+ * shapes project correctly.
+ */
+export function axisValue(
+  item: SobItemAnswer,
+  columnId: string,
+  label: string,
+): string {
+  return (
+    item.column_properties?.[columnId]?.[label] ??
+    item.properties?.[label] ??
+    ""
+  );
+}
+
+/** Columns no basis-of-cover plan maps to — their values reach nobody. */
+export function unassignedColumns(sob: SobSchedule): SobColumn[] {
+  return sob.columns.filter((c) => c.plan_codes.length === 0);
 }
 
 /**
@@ -200,7 +347,59 @@ export function setItemField(
   idx: number,
   patch: Partial<SobItemAnswer>,
 ): SobSchedule {
+  if (patch.kind !== undefined) {
+    const { kind, ...rest } = patch;
+    const withKind = setItemKind(sob, idx, kind as BenefitKind);
+    return Object.keys(rest).length ? mapItem(withKind, idx, (it) => ({ ...it, ...rest })) : withKind;
+  }
   return mapItem(sob, idx, (it) => ({ ...it, ...patch }));
+}
+
+/**
+ * Change a row's value type, MIGRATING the data that type owns.
+ *
+ * `copay` stores its fields per column (`column_properties`); every other kind
+ * stores plan-independent values on `properties`. Switching between them used
+ * to leave the old bag in place, unreachable and invisible — the broker saw the
+ * fields empty and their values silently stopped being exported.
+ *
+ * Nothing is deleted: values move to where the new kind reads them, and
+ * `sub_items` are left intact (list/scale reuse them as rows, so a round-trip
+ * back to a valued kind restores the original grid).
+ */
+export function setItemKind(
+  sob: SobSchedule,
+  idx: number,
+  kind: BenefitKind,
+): SobSchedule {
+  return mapItem(sob, idx, (it) => {
+    const was = it.kind ?? "amount";
+    if (was === kind) return { ...it, kind };
+
+    if (kind === "copay") {
+      // Fan the shared bag out to every column so each starts from what the
+      // row already said, rather than blank.
+      const shared = it.properties ?? {};
+      const columnProps: Record<string, Record<string, string>> = {};
+      for (const col of sob.columns) {
+        columnProps[col.id] = { ...shared, ...(it.column_properties?.[col.id] ?? {}) };
+      }
+      return { ...it, kind, properties: {}, column_properties: columnProps };
+    }
+
+    if (was === "copay") {
+      // Collapse back to the shared bag, first column wins (it is the base).
+      const first = sob.columns[0]?.id;
+      const merged: Record<string, string> = { ...(it.properties ?? {}) };
+      for (const col of [...sob.columns].reverse()) {
+        Object.assign(merged, it.column_properties?.[col.id] ?? {});
+      }
+      if (first) Object.assign(merged, it.column_properties?.[first] ?? {});
+      return { ...it, kind, properties: merged, column_properties: undefined };
+    }
+
+    return { ...it, kind };
+  });
 }
 
 /** Write a cell: the first column edits base_value; others write an override. */
@@ -214,6 +413,12 @@ export function setCell(
     if (columnIndex === 0) return { ...it, base_value: value };
     const col = sob.columns[columnIndex];
     if (!col) return it;
+    // Writing the base value back into a column clears the override rather
+    // than storing a redundant copy that would drift if the base changes.
+    if (value === (it.base_value ?? "")) {
+      const { [col.id]: _drop, ...rest } = it.overrides;
+      return { ...it, overrides: rest };
+    }
     return { ...it, overrides: { ...it.overrides, [col.id]: value } };
   });
 }
@@ -228,6 +433,44 @@ export function clearCell(
     const { [columnId]: _drop, ...rest } = it.overrides;
     return { ...it, overrides: rest };
   });
+}
+
+/**
+ * Split a clipboard payload into one value per row.
+ *
+ * SOB data originates in spreadsheets, so a broker correcting a column pastes a
+ * vertical selection. Excel/Sheets serialise that as newline-separated rows;
+ * when the selection is more than one column wide each row is tab-separated, so
+ * take the FIRST cell of each — pasting a two-column selection into one column
+ * should fill that column, not concatenate.
+ */
+export function parsePastedColumn(text: string): string[] {
+  const rows = text.replace(/\r\n?/g, "\n").split("\n");
+  // A trailing newline is what Excel appends after the last cell; it is not an
+  // extra (blank) row and must not wipe the value below the paste.
+  if (rows.length > 1 && rows[rows.length - 1] === "") rows.pop();
+  return rows.map((r) => (r.split("\t")[0] ?? "").trim());
+}
+
+/**
+ * Fill a column downwards from `startIdx` with `values`, one per benefit row.
+ *
+ * Stops at the end of the schedule — pasting more rows than exist never creates
+ * benefit lines, because a stray paste must not invent coverage.
+ */
+export function pasteColumn(
+  sob: SobSchedule,
+  startIdx: number,
+  columnIndex: number,
+  values: string[],
+): SobSchedule {
+  let next = sob;
+  values.forEach((value, offset) => {
+    const idx = startIdx + offset;
+    if (idx >= sob.items.length) return;
+    next = setCell(next, idx, columnIndex, value);
+  });
+  return next;
 }
 
 export function addItem(sob: SobSchedule): SobSchedule {
@@ -253,6 +496,48 @@ export function addItem(sob: SobSchedule): SobSchedule {
 
 export function removeItem(sob: SobSchedule, idx: number): SobSchedule {
   return { ...sob, items: sob.items.filter((_, i) => i !== idx) };
+}
+
+/** Move a benefit row one position up (-1) or down (+1). No-op at the ends. */
+export function moveItem(
+  sob: SobSchedule,
+  idx: number,
+  delta: number,
+): SobSchedule {
+  const to = idx + delta;
+  if (idx < 0 || idx >= sob.items.length || to < 0 || to >= sob.items.length) {
+    return sob;
+  }
+  const items = [...sob.items];
+  const [row] = items.splice(idx, 1);
+  items.splice(to, 0, row);
+  return { ...sob, items };
+}
+
+/**
+ * Rewrite every row's displayed `number` to its position (1, 2, 3 …).
+ *
+ * `number` is free text while ORDER is the array index, so the two drift apart
+ * as soon as a row is inserted or moved — "Add benefit line" appends with a
+ * blank number, and reordering leaves the old numbering behind. This is the
+ * one-click reconciliation.
+ *
+ * Rows whose number is a non-numeric enumerator (GCGP's letter rows "A".."G",
+ * the dash-group "-1" copay headers) are left alone — those aren't a sequence,
+ * they're a vocabulary the parser and the slip export both rely on.
+ */
+export function renumberItems(sob: SobSchedule): SobSchedule {
+  let n = 0;
+  return {
+    ...sob,
+    items: sob.items.map((it) => {
+      const current = (it.number ?? "").trim();
+      const isSequential = current === "" || /^\d+$/.test(current);
+      if (!isSequential) return it;
+      n += 1;
+      return { ...it, number: String(n) };
+    }),
+  };
 }
 
 export function setSubField(
@@ -281,6 +566,12 @@ export function setSubCell(
       if (columnIndex === 0) return { ...s, base_value: value };
       const col = sob.columns[columnIndex];
       if (!col) return s;
+      // Writing the base value back into a column clears the override rather
+      // than storing a redundant copy that would drift if the base changes.
+      if (value === (s.base_value ?? "")) {
+        const { [col.id]: _drop, ...rest } = s.overrides;
+        return { ...s, overrides: rest };
+      }
       return { ...s, overrides: { ...s.overrides, [col.id]: value } };
     }),
   }));
@@ -356,7 +647,7 @@ export const COPAY_FIELD_PRESETS: { key: string; label: string }[] = [
 ];
 
 /** Human label for a copay property key ("per_visit_private" → "Per visit — Private"). */
-export function copayFieldLabel(key: string): string {
+export function propertyLabel(key: string): string {
   const known = [...COPAY_FIELDS, ...COPAY_FIELD_PRESETS].find((f) => f.key === key);
   if (known) return known.label;
   const words = key.replace(/_/g, " ").trim();
@@ -375,7 +666,7 @@ export function copayFields(item: SobItemAnswer): { key: string; label: string }
     for (const key of Object.keys(props)) {
       if (!seen.has(key)) {
         seen.add(key);
-        extras.push({ key, label: copayFieldLabel(key) });
+        extras.push({ key, label: propertyLabel(key) });
       }
     }
   }

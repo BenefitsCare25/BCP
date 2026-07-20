@@ -383,6 +383,9 @@ export interface BenefitItem {
   limits?: BenefitLimit[];
   sub_items: BenefitSubItem[];
   properties: Record<string, string>;
+  // Persisted from the editor so read-only renderers format by TYPE instead of
+  // guessing from the string (a "6" visit count is not "$6").
+  kind?: BenefitKind;
 }
 
 export interface BenefitSchedule {
@@ -818,7 +821,6 @@ export interface ProductTemplate {
   sections: string[];
   header_fields: TemplateField[];
   eligibility_fields: TemplateField[];
-  profile_fields: TemplateField[];
   plans: TemplatePlan[];
   tiers: TemplateTier[];
   benefit_items: TemplateBenefitItem[];
@@ -986,7 +988,6 @@ export interface SetupAnswers {
   // free-text `insured` beside it is slip wording only).
   header: Record<string, string | string[]>;
   eligibility: Record<string, string>;
-  profile: Record<string, string>;
   participation: string;
   cover_description: string;
   plans: PlanAnswer[];

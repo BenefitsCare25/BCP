@@ -1,10 +1,10 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { InfoHint } from "@/components/ui/tooltip";
 import { BenefitScheduleView } from "@/components/configuration/BenefitScheduleView";
 import { fmtAmount } from "@/lib/format";
-import type { CoverageLine, PlanFinancials } from "@/types";
+import type { CoverageLine, PlanFinancials, Utilization } from "@/types";
 
 const METHOD_LABEL: Record<string, string> = {
   exact_name: "Exact match",
@@ -62,7 +62,29 @@ function CoverageFinancials({ fin }: { fin: PlanFinancials }) {
   );
 }
 
-export function CoverageCard({ line }: { line: CoverageLine }) {
+export function CoverageCard({
+  line,
+  utilization,
+}: {
+  line: CoverageLine;
+  utilization?: Utilization | null;
+}) {
+  // Only this product's buckets, keyed by the benefit NAME the schedule uses —
+  // the same lowercased join key utilization.py buckets on. Memoised: a member
+  // with 11 products renders 11 of these, and a fresh Map identity on every
+  // render would also defeat any memo on the schedule below.
+  const { usageByBenefit, productUsage } = useMemo(() => {
+    const buckets = utilization?.insured ?? [];
+    const mine = buckets.filter((b) => b.product_code === line.product_code);
+    return {
+      usageByBenefit: new Map(
+        mine
+          .filter((b) => b.benefit_key)
+          .map((b) => [b.benefit_key!.trim().toLowerCase(), b]),
+      ),
+      productUsage: mine.find((b) => !b.benefit_key) ?? null,
+    };
+  }, [utilization, line.product_code]);
   const hasSchedule = Boolean(line.benefit_schedule?.items?.length);
   const confidencePct =
     line.match_confidence != null
@@ -126,6 +148,8 @@ export function CoverageCard({ line }: { line: CoverageLine }) {
             schedule={line.benefit_schedule}
             annualPolicyLimit={line.annual_policy_limit}
             coverDescription={line.cover_description}
+            usageByBenefit={usageByBenefit}
+            productUsage={productUsage}
           />
         ) : (
           <p className="text-xs text-muted-foreground">

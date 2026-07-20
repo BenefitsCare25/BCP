@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,7 +20,12 @@ from app.core.pagination import MAX_LIMIT
 from app.db.session import get_db
 from app.models import Plan, PolicyYear
 from app.models.category import Category
+from app.models.product import Product
 from app.schemas.api import PlanFinancials
+from app.services.benefit_key_guard import (
+    orphan_conflict_detail,
+    orphaned_benefit_keys,
+)
 from app.services.plan_hydration import build_financials
 
 router = APIRouter(prefix="/plans", tags=["plans"])
@@ -73,6 +78,10 @@ class BenefitItemIn(BaseModel):
     limits: list[BenefitLimitIn] = []
     sub_items: list[BenefitSubItemIn] = []
     properties: dict[str, str] = {}
+    # The value's type (currency/percent/days/list/…). Persisted because it is
+    # the only type signal the read-only renderers have; without it they must
+    # guess from the string and render a visit count as a dollar amount.
+    kind: str | None = None
 
 
 class BenefitScheduleIn(BaseModel):
@@ -86,6 +95,9 @@ class PlanUpdate(BaseModel):
     annual_policy_limit: str | None = None
     report_label: str | None = None
     status: str | None = None
+    # Proceed even though the new schedule drops a benefit name that existing
+    # claims reference (409 `orphaned_benefit_keys` otherwise).
+    acknowledge: bool = False
 
 
 def _plan_out(p: Plan, financials: PlanFinancials | None = None) -> PlanOut:
@@ -195,12 +207,31 @@ def update_plan(
     db: Session = Depends(get_db),
 ) -> PlanOut:
     updates = body.model_dump(exclude_unset=True)
+    acknowledge = bool(updates.pop("acknowledge", False))
     py = db.get(PolicyYear, plan.policy_year_id)
     # report_label is OPERATIONAL metadata (insurer report display text) — it
     # doesn't alter coverage, so a label-only patch stays editable after
     # activation. Anything touching real plan config keeps the lock.
     if py is not None and not set(updates) <= {"report_label"}:
         assert_policy_year_editable(py)
+    # Renaming/removing a benefit line strands claims that reference it by name
+    # (see services/benefit_key_guard). Confirmable, not a hard block.
+    if body.benefit_schedule is not None and not acknowledge:
+        product = db.get(Product, plan.product_id)
+        orphaned = orphaned_benefit_keys(
+            db,
+            policy_year_id=plan.policy_year_id,
+            product_code=product.code if product else None,
+            new_items=[i.model_dump() for i in body.benefit_schedule.items],
+        )
+        if orphaned:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=orphan_conflict_detail(
+                    orphaned, product.code if product else ""
+                ),
+            )
+
     before = {"benefit_schedule": plan.benefit_schedule, "status": plan.status}
     for field, value in updates.items():
         setattr(plan, field, value)

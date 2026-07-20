@@ -35,7 +35,6 @@ from app.services.form_profiles import (
     BasisModel,
     RateModel,
     basis_model_for,
-    field_specs_for,
     rate_model_for,
     sections_for,
 )
@@ -162,9 +161,6 @@ class ProductTemplate(BaseModel):
     sections: list[str] = Field(default_factory=list)
     header_fields: list[TemplateField] = Field(default_factory=list)
     eligibility_fields: list[TemplateField] = Field(default_factory=list)
-    # Profile-specific fields (e.g. travel trip limits, life sum-assured basis).
-    # Filled from `form_profile` when empty.
-    profile_fields: list[TemplateField] = Field(default_factory=list)
     plans: list[TemplatePlan] = Field(default_factory=list)
     tiers: list[TemplateTier] = Field(default_factory=list)
     benefit_items: list[TemplateBenefitItem] = Field(default_factory=list)
@@ -178,11 +174,6 @@ class ProductTemplate(BaseModel):
             self.basis_model = basis_model_for(self.form_profile)
         if self.rate_model is None:
             self.rate_model = rate_model_for(self.form_profile)
-        if not self.profile_fields:
-            self.profile_fields = [
-                TemplateField(id=fid, label=label, type=ftype)  # type: ignore[arg-type]
-                for fid, label, ftype in field_specs_for(self.form_profile)
-            ]
         # Guarantee Office Address + Type of Administration on every header.
         ensure_standard_header_fields(self.header_fields)
         # Guarantee the standard eligibility fields on every product (hand-authored,

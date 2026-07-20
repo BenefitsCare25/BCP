@@ -92,6 +92,9 @@ function NoCoverageCard() {
 
 function BenefitsTab({ employeeId }: { employeeId: string }) {
   const statement = usePreviewStatement(employeeId);
+  // Mirrors the member surface — the preview must show the same remaining
+  // balances the member sees. Never gates rendering.
+  const utilization = usePreviewUtilization(employeeId);
   if (statement.isLoading) {
     return (
       <div className="space-y-4">
@@ -106,7 +109,7 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
     return <PortalErrorState onRetry={() => void statement.refetch()} />;
   }
   if (statement.isError || !statement.data) return <NoCoverageCard />;
-  return <BenefitStatement data={statement.data} />;
+  return <BenefitStatement data={statement.data} utilization={utilization.data} />;
 }
 
 function ClaimsTab({ employeeId }: { employeeId: string }) {

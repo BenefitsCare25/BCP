@@ -51,6 +51,11 @@ from app.models.category import CategoryStatus, SourceKind
 from app.models.product_setup import ProductSetupOrigin, ProductSetupStatus
 from app.schemas.api import InsuranceLineStr
 from app.services import product_registry
+from app.services.benefit_key_guard import (
+    orphan_conflict_detail,
+    orphaned_benefit_keys,
+    schedule_benefit_names,
+)
 from app.services.category_factory import build_manual_category
 from app.services.dynamic_template import (
     generic_starter_template,
@@ -101,6 +106,9 @@ class SetupOut(BaseModel):
 class SetupSaveIn(BaseModel):
     answers: dict[str, Any] = Field(default_factory=dict)
     template_version: int = 1
+    # Proceed even though renaming/removing a benefit line would strand existing
+    # claims that reference it by name (409 `orphaned_benefit_keys` otherwise).
+    acknowledge: bool = False
 
 
 class ConfirmResult(BaseModel):
@@ -827,6 +835,33 @@ def confirm_setup(
     if _map_category_plan_codes(setup.answers, selected):
         flag_modified(setup, "answers")
 
+    # A benefit line's NAME is the join key for claims + utilization
+    # (see services/benefit_key_guard). Renaming or deleting one strands every
+    # claim that referenced it, so warn before materializing — confirmable,
+    # because fixing a slip typo is a legitimate rename.
+    # Projected ONCE and handed to _materialize_plans below — recomputing it
+    # there would double the work and let the guard validate names that the
+    # stored schedule never ends up carrying.
+    schedules = {
+        str(plan.get("code") or ""): _benefit_schedule(setup.answers, plan)
+        for plan in selected
+    }
+    if not body.acknowledge:
+        surviving: set[str] = set()
+        for schedule in schedules.values():
+            surviving |= schedule_benefit_names(schedule.get("items"))
+        orphaned = orphaned_benefit_keys(
+            db,
+            policy_year_id=policy_year_id,
+            product_code=tpl.code,
+            new_items=[{"name": n} for n in surviving],
+        )
+        if orphaned:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=orphan_conflict_detail(orphaned, tpl.code),
+            )
+
     cover_description = (
         str(setup.answers.get("cover_description") or "")[:_MAX_COVER_DESC] or None
     )
@@ -836,7 +871,8 @@ def confirm_setup(
         if setup.origin == ProductSetupOrigin.placement_slip:
             _supersede_slip_provisional(db, user, product, policy_year_id)
         created, updated, removed = _materialize_plans(
-            db, user, product, policy_year_id, setup.answers, selected, cover_description
+            db, user, product, policy_year_id, setup.answers, selected,
+            cover_description, schedules,
         )
         # Categories are now edited directly through the category cards
         # (PATCH/POST/DELETE /categories). Confirm only *seeds* them on a
@@ -1198,12 +1234,16 @@ def _benefit_schedule(answers: dict[str, Any], plan: dict[str, Any]) -> dict[str
                         "value": _clean_value(s.get("value")),
                         "note": _clean_value(s.get("note")),
                         "limits": _clean_limits(s.get("limits")),
+                        "kind": _clean_value(s.get("kind")),
                     }
                     for s in subs_in if isinstance(s, dict)
                 ],
                 "properties": {
                     str(k): str(v) for k, v in (it.get("properties") or {}).items()
                 } if isinstance(it.get("properties"), dict) else {},
+                # Carried so the employee-facing renderer can format the value
+                # by type instead of guessing from its digits.
+                "kind": _clean_value(it.get("kind")),
             })
     return {"items": items}
 
@@ -1300,6 +1340,7 @@ def _materialize_plans(
     answers: dict[str, Any],
     selected: list[dict[str, Any]],
     cover_description: str | None,
+    schedules: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[int, int, int]:
     existing = {
         p.code: p
@@ -1315,7 +1356,10 @@ def _materialize_plans(
     for plan in selected:
         code = str(plan["code"]).strip()
         seen_codes.add(code)
-        schedule = _benefit_schedule(answers, plan)
+        # Reuse the caller's projection when it has one (confirm_setup builds
+        # it for the orphan-key guard), so the two can never disagree.
+        code = str(plan.get("code") or "")
+        schedule = (schedules or {}).get(code) or _benefit_schedule(answers, plan)
         label = str(plan.get("label") or f"Plan {code}")[:255]
         row = existing.get(code)
         if row is None:

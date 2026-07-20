@@ -142,7 +142,6 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
       ...a,
       header: a.header ?? fieldDefaults(tpl.header_fields),
       eligibility: a.eligibility ?? fieldDefaults(tpl.eligibility_fields),
-      profile: a.profile ?? fieldDefaults(tpl.profile_fields),
       participation: a.participation ?? "",
       cover_description: a.cover_description ?? "",
       plans,
@@ -200,7 +199,6 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
   return {
     header: fieldDefaults(tpl.header_fields),
     eligibility: fieldDefaults(tpl.eligibility_fields),
-    profile: fieldDefaults(tpl.profile_fields),
     participation: "",
     cover_description: "",
     plans: fullPlans.map(planStub),
@@ -348,8 +346,6 @@ export function ProductSetupForm({
   const headerEntities = insuredNames(answers.header.entities);
   const setElig = (id: string, v: string) =>
     setAnswers((a) => ({ ...a, eligibility: { ...a.eligibility, [id]: v } }));
-  const setProfileField = (id: string, v: string) =>
-    setAnswers((a) => ({ ...a, profile: { ...a.profile, [id]: v } }));
   // Single entry point for every Schedule-of-Benefits edit. The section is a
   // controlled component over `answers.sob`; it expresses edits via the pure
   // helpers in lib/sob.ts, so there's no per-field handler fan-out here.
@@ -506,7 +502,7 @@ export function ProductSetupForm({
       </div>
     ),
     // Schedule of Benefits = what's covered: cover description + cover-term
-    // fields (profile fields) + the benefit-line table + additional arrangements.
+    // fields + the benefit-line table + additional arrangements.
     // (Rate + premium are edited inline on each Category card, not here.)
     schedule_of_benefits: (
       <div className="flex flex-col gap-5">
@@ -524,24 +520,6 @@ export function ProductSetupForm({
             className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
           />
         </div>
-
-        {template.profile_fields.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
-              Cover details
-            </Label>
-            <div className="grid grid-cols-3 gap-3">
-              {template.profile_fields.map((f) => (
-                <FieldControl
-                  key={f.id}
-                  field={f}
-                  value={answers.profile[f.id] ?? ""}
-                  onChange={(v) => setProfileField(f.id, v)}
-                />
-              ))}
-            </div>
-          </div>
-        )}
 
         <ScheduleOfBenefitsSection
           sob={answers.sob ?? { columns: [], items: [] }}

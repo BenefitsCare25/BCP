@@ -85,22 +85,19 @@ def test_all_profiles_share_unified_sections() -> None:
     ):
         assert sections_for(profile) == expected
     # Folded-away sections are no longer section ids.
-    for dropped in ("plans", "profile_fields", "arrangements"):
+    for dropped in ("plans", "arrangements"):
         assert dropped not in sections_for("travel")
 
 
-def test_template_validator_fills_sections_and_profile_fields() -> None:
+def test_template_validator_fills_sections() -> None:
     tpl = ProductTemplate(
         code="GBT", version=1, display_name="Group Business Travel",
         form_profile="travel",
     )
     assert tpl.sections == sections_for("travel")
-    assert {f.id for f in tpl.profile_fields} == {
-        "geographical_scope",
-        "max_trip_duration",
-        "medical_expenses_limit",
-        "annual_aggregate_limit",
-    }
+    # `profile_fields` (the old "Cover details" block) is gone — it was a
+    # write-only capture surface nothing ever read. See form_profiles.py.
+    assert not hasattr(tpl, "profile_fields")
 
 
 def test_template_validator_fills_basis_and_rate_models() -> None:
