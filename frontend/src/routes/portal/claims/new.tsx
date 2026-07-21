@@ -27,17 +27,27 @@
  * validations (intake profile, coverage/eligibility, in-period, duplicates). */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft, Loader2, Paperclip, Send, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Loader2,
+  Paperclip,
+  Send,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   useCoverageOptions,
   useCreateClaim,
   useDeleteDraftClaim,
   useDeleteReferralLetter,
+  useExtractClaimIntake,
   useReferralLetters,
   useSubmitClaim,
   useUploadClaimDocument,
   useUploadReferralLetter,
+  type ClaimIntakeSuggestion,
   type InsuredClaimOption,
 } from "@/api/portal";
 import { DiagnosisPicker } from "@/components/portal/DiagnosisPicker";
@@ -61,6 +71,15 @@ const INSURED_PREFIX = "insured:";
 const FLEX_PREFIX = "flex:";
 
 const MAX_REMARKS = 500;
+
+// Friendly names for the autofill "double-check these" hint.
+const LOW_CONF_LABELS: Record<string, string> = {
+  provider_name: "provider",
+  amount: "amount",
+  incurred_date: "date",
+  invoice_number: "invoice number",
+  diagnosis: "diagnosis",
+};
 
 // Sentinel for an unlisted/overseas hospital — frees the provider text input.
 const OTHER_HOSPITAL = "__other__";
@@ -121,6 +140,7 @@ export function PortalNewClaimPage() {
   const deleteReferral = useDeleteReferralLetter();
   const submitClaim = useSubmitClaim();
   const deleteDraft = useDeleteDraftClaim();
+  const extractIntake = useExtractClaimIntake();
 
   const insured = options.data?.insured ?? [];
   const flex = options.data?.flex ?? null;
@@ -156,8 +176,17 @@ export function PortalNewClaimPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Document-driven autofill: the receipt the member uploaded to prefill the
+  // form — reused as the claim's primary evidence so they don't upload twice.
+  const [autofillFile, setAutofillFile] = useState<File | null>(null);
+  const [autofillNote, setAutofillNote] = useState<string | null>(null);
+  const [lowConfidence, setLowConfidence] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const referralInput = useRef<HTMLInputElement>(null);
+  const autofillInput = useRef<HTMLInputElement>(null);
+  // Set once the member removes the autofill receipt from a slot, so the
+  // auto-place effect stops re-adding it on later claim-type changes.
+  const autofillCleared = useRef(false);
 
   // Kind + identifiers + sub-type are DERIVED from the single selection.
   const effectiveKind: "insured" | "flex" | null = selection.startsWith(
@@ -209,6 +238,7 @@ export function PortalNewClaimPage() {
           selectedClaimType?.doc_slots ??
           [])
         : (selectedClaimType?.doc_slots ?? []);
+  const docSlotKey = docSlots.map((s) => s.key).join(",");
 
   // Insured products offered for the current claimant: everything for the
   // member; for a dependant, only products that actually cover them.
@@ -280,6 +310,29 @@ export function PortalNewClaimPage() {
     }
   }, [visitType, referralMode, referralLetters.data]);
 
+  // The autofill receipt fills the first required-document slot once a claim
+  // type is chosen — so it counts as the claim's evidence and validation sees
+  // it (idempotent: it never overwrites a slot the member already filled).
+  useEffect(() => {
+    if (!autofillFile || autofillCleared.current || docSlots.length === 0) return;
+    const first = docSlots[0];
+    setSlotFiles((prev) =>
+      prev[first.key] ? prev : { ...prev, [first.key]: autofillFile },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autofillFile, docSlotKey]);
+
+  // Hospitalisation: map the extracted provider to a registry hospital (or the
+  // "Other" free-text path) once the type resolves the picker into view.
+  useEffect(() => {
+    if (!autofillFile || !isHospitalisation || hospital || !provider) return;
+    const match = hospitals.find(
+      (h) => normHospital(h.name) === normHospital(provider),
+    );
+    setHospital(match ? match.name : OTHER_HOSPITAL);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autofillFile, isHospitalisation, hospital, provider]);
+
   if (options.isLoading) return <Skeleton className="h-64 w-full" />;
   if (options.isError || !options.data || (!hasInsured && !hasFlex)) {
     return (
@@ -323,6 +376,70 @@ export function PortalNewClaimPage() {
     setSelection("");
     resetTypeFields();
     setCurrency("SGD");
+  };
+
+  // Apply the AI reading of the receipt to the form. Order matters: claimant
+  // first (it filters the claim-type list), then the type, then the fields.
+  const applySuggestion = (s: ClaimIntakeSuggestion, file: File) => {
+    setAutofillFile(file);
+    if (!s.available) {
+      setLowConfidence([]);
+      setAutofillNote(
+        s.reason ?? "Autofill is unavailable — please fill in the claim below.",
+      );
+      return;
+    }
+    if (s.claimant) {
+      setDependantId(
+        s.claimant.kind === "dependant" ? (s.claimant.dependant_id ?? "") : "",
+      );
+    }
+    resetTypeFields();
+    const insuredPick = s.claim_selection?.startsWith(INSURED_PREFIX) ?? false;
+    if (s.claim_selection) {
+      setSelection(s.claim_selection);
+      if (!insuredPick) setCurrency("SGD");
+    }
+    const f = s.fields;
+    if (f.provider_name) setProvider(f.provider_name);
+    if (f.incurred_date) setIncurredDate(f.incurred_date);
+    if (f.invoice_number) setInvoiceNumber(f.invoice_number);
+    if (f.amount != null) setAmount(String(f.amount));
+    if (f.currency && insuredPick) setCurrency(f.currency);
+    if (f.diagnosis) {
+      setDiagnosis(
+        f.diagnosis.startsWith("Other:") ? f.diagnosis : `Other: ${f.diagnosis}`,
+      );
+    }
+    setLowConfidence(s.low_confidence);
+    const parts = [
+      "We filled in what we could read from your receipt — please check everything before submitting.",
+    ];
+    if (!s.claim_selection && s.claim_candidates.length > 0) {
+      parts.push("Confirm the claim type below.");
+    }
+    if (!s.claimant) parts.push("Confirm who this claim is for.");
+    setAutofillNote(parts.join(" "));
+  };
+
+  const runAutofill = async (file: File) => {
+    if (file.size > MAX_BYTES) {
+      toast.error(`${file.name} exceeds 15 MB`);
+      return;
+    }
+    autofillCleared.current = false; // a fresh receipt — allow auto-placement
+    try {
+      const suggestion = await extractIntake.mutateAsync(file);
+      applySuggestion(suggestion, file);
+    } catch (err) {
+      // Extraction failed — keep the file as evidence, just no prefill.
+      setAutofillFile(file);
+      setLowConfidence([]);
+      setAutofillNote(
+        "We couldn't read this file for autofill — fill in the claim and it'll still be attached.",
+      );
+      toast.error(formatError(err));
+    }
   };
 
   const pickFiles = (picked: FileList | null) => {
@@ -375,7 +492,7 @@ export function PortalNewClaimPage() {
       }
     }
     if (!incurredDate) {
-      errs.incurred_date = "Enter the date on the bill.";
+      errs.incurred_date = "Enter the visit date.";
     } else if (incurredDate < yearStart || incurredDate > yearEnd) {
       errs.incurred_date = `Must fall within your policy year (${yearStart} to ${yearEnd}).`;
     } else if (incurredDate > today) {
@@ -466,7 +583,17 @@ export function PortalNewClaimPage() {
           });
         }
       }
-      for (const file of files) {
+      // The autofill receipt is evidence — attach it if the member replaced it
+      // in every slot / it isn't already among the additional documents.
+      const extras = [...files];
+      if (
+        autofillFile &&
+        !Object.values(slotFiles).includes(autofillFile) &&
+        !extras.includes(autofillFile)
+      ) {
+        extras.push(autofillFile);
+      }
+      for (const file of extras) {
         await uploadDoc.mutateAsync({ claimId: claim.id, file });
       }
       await submitClaim.mutateAsync(claim.id);
@@ -513,6 +640,62 @@ export function PortalNewClaimPage() {
             incurred within your policy year ({yearStart} to {yearEnd}); your
             broker reviews every claim before it's approved.
           </p>
+        </div>
+
+        {/* Autofill from receipt — the AI reads the upload and prefills the
+            form; everything stays editable and the file becomes the evidence. */}
+        <div className="space-y-2 rounded-md border border-dashed border-border bg-muted/40 p-3">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <Sparkles className="size-3.5" /> Autofill from your receipt
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Upload the receipt and we'll read it to fill in the claim for you.
+            You can edit everything before submitting.
+          </p>
+          <input
+            ref={autofillInput}
+            type="file"
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              e.target.value = "";
+              if (f) void runAutofill(f);
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={extractIntake.isPending}
+            onClick={() => autofillInput.current?.click()}
+          >
+            {extractIntake.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Paperclip className="size-4" />
+            )}
+            <span className="ml-1.5 truncate">
+              {autofillFile ? autofillFile.name : "Upload receipt to autofill"}
+            </span>
+          </Button>
+          {autofillNote && (
+            <div className="flex items-start gap-1.5 rounded-md bg-background px-2.5 py-2 text-xs text-foreground">
+              <Sparkles className="mt-0.5 size-3.5 shrink-0 text-accent" />
+              <div className="space-y-1">
+                <p>{autofillNote}</p>
+                {lowConfidence.length > 0 && (
+                  <p className="text-muted-foreground">
+                    Double-check the{" "}
+                    {lowConfidence
+                      .map((k) => LOW_CONF_LABELS[k] ?? k)
+                      .join(", ")}
+                    .
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Who is this claim for? — a covered dependant filters the claim-type
@@ -580,6 +763,20 @@ export function PortalNewClaimPage() {
           <FieldError msg={fieldErrors.claim_type} />
         </div>
 
+        {/* Insurer member ID — read-only, keyed off the selected claim type's
+            product/insurer (from the roster). Hidden when none on file. */}
+        {selectedProduct?.insurer_member_id && (
+          <div className="rounded-md bg-muted px-3 py-2 text-xs">
+            <span className="text-muted-foreground">Insurer member ID</span>{" "}
+            <span className="font-medium text-foreground">
+              {selectedProduct.insurer_member_id}
+            </span>
+            {selectedProduct.insurer && (
+              <span className="text-muted-foreground"> · {selectedProduct.insurer}</span>
+            )}
+          </div>
+        )}
+
         {/* Specialist claims: first vs follow-up visit decides the referral
             rule (first must attach a letter; follow-up reuses the latest on
             file, prompting only when none is tracked). */}
@@ -609,7 +806,7 @@ export function PortalNewClaimPage() {
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="claim-date">
-              Incurred date <span className="text-error">*</span>
+              Visit date <span className="text-error">*</span>
             </Label>
             <Input
               id="claim-date"
@@ -862,9 +1059,12 @@ export function PortalNewClaimPage() {
                   {slotFiles[slot.key] && (
                     <button
                       type="button"
-                      onClick={() =>
-                        setSlotFiles((prev) => ({ ...prev, [slot.key]: null }))
-                      }
+                      onClick={() => {
+                        if (slotFiles[slot.key] === autofillFile) {
+                          autofillCleared.current = true;
+                        }
+                        setSlotFiles((prev) => ({ ...prev, [slot.key]: null }));
+                      }}
                       className="text-muted-foreground hover:text-foreground"
                     >
                       <X className="size-3.5" />

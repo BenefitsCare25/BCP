@@ -121,7 +121,7 @@ def portal_preview_coverage_options(
     state) — same shared builder, keyed off the previewed employee's own year."""
     year = db.get(PolicyYear, employee.policy_year_id)
     statement = build_member_statement(db, employee)
-    return build_coverage_options(statement, year)
+    return build_coverage_options(db, statement, employee, year)
 
 
 @router.get("/enrollment", response_model=PortalEnrollmentOut)

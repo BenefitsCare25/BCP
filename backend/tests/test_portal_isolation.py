@@ -210,6 +210,49 @@ def test_token_client_mismatch_401(anon: TestClient):
     assert res.status_code == 401
 
 
+def _png_bytes() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (300, 300), "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_claim_intake_scoped_to_own_member(anon: TestClient, monkeypatch):
+    """The autofill-extraction endpoint takes no client/employee id — it resolves
+    the caller's own row and never another member's. AI is stubbed unavailable
+    (the shared test DB may carry an AI config from another module) so the
+    graceful-degrade path is deterministic."""
+    from app.services.ai_extractor import AINotConfiguredError
+
+    def _unavailable(*args, **kwargs):
+        raise AINotConfiguredError("no ai in tests")
+
+    monkeypatch.setattr(
+        "app.services.ai_gateway.extract_claim_document", _unavailable
+    )
+    files = {"file": ("receipt.png", _png_bytes(), "image/png")}
+    res = anon.post(
+        "/api/v1/portal/claims/intake", headers=_auth(ACC_ALICE), files=files
+    )
+    assert res.status_code == 200
+    assert res.json()["available"] is False
+
+
+def test_claim_intake_requires_active_year(anon: TestClient):
+    """A member with no active policy year (client B) gets 404, not another
+    tenant's context."""
+    files = {"file": ("receipt.png", _png_bytes(), "image/png")}
+    res = anon.post(
+        "/api/v1/portal/claims/intake",
+        headers=_auth(ACC_BOB_B, CLIENT_B_ID),
+        files=files,
+    )
+    assert res.status_code == 404
+
+
 # ── Staff-id fallback binding ────────────────────────────────────────────────
 
 

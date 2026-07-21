@@ -3,6 +3,9 @@ Employee row via `resolve_member_employee`; a claim id belonging to anyone
 else 404s (same not-403 convention as tenant scoping)."""
 from __future__ import annotations
 
+import hashlib
+import logging
+
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -27,8 +30,10 @@ from app.core.portal_auth import (
     resolve_member_employee,
 )
 from app.core.rate_limit import limiter
+from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES
+from app.core.uploads import saved_upload
 from app.db.session import get_db
-from app.models import Claim, ClaimAIReview, StoredDocument
+from app.models import Claim, ClaimAIReview, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
     CLAIM_KIND_FLEX,
     CLAIM_STATUS_AI_REVIEW_PENDING,
@@ -37,6 +42,7 @@ from app.models.claim import (
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import (
     ClaimCreateIn,
+    ClaimIntakeSuggestionOut,
     ClaimList,
     ClaimOut,
     ClaimTypeOption,
@@ -50,6 +56,10 @@ from app.schemas.claims import (
     InsuredClaimOption,
     StoredDocumentOut,
 )
+from app.services import ai_gateway
+from app.services.ai_breaker import CircuitOpenError
+from app.services.ai_extractor import AINotConfiguredError, AIParseError
+from app.services.ai_gateway import AIBudgetExceededError
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     CATEGORY_INPATIENT,
@@ -60,6 +70,7 @@ from app.services.claim_intake import (
     claim_profile_for,
     required_doc_slots,
 )
+from app.services.claim_intake_suggest import suggest_from_extraction
 from app.services.claims import (
     attach_document,
     claim_to_out,
@@ -69,9 +80,14 @@ from app.services.claims import (
     submit_claim,
 )
 from app.services.claims_review.pipeline import run_review
+from app.services.doc_images import DocImageError, vision_blocks_for_document
+from app.services.enrollment_products import resolve_products_by_codes
+from app.services.insurer_listings import member_id_for_insurer
 from app.services.member_statement import build_member_statement
 from app.services.sg_diagnoses import search_diagnoses
 from app.services.sg_hospitals import hospital_directory
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/portal/claims",
@@ -104,7 +120,7 @@ def coverage_options(
     employee = resolve_member_employee(db, member)
     year = active_policy_year(db, member.client_id)
     statement = build_member_statement(db, employee)
-    return build_coverage_options(statement, year)
+    return build_coverage_options(db, statement, employee, year)
 
 
 def _slots(keys: list[str]) -> list[DocSlotOut]:
@@ -131,9 +147,22 @@ def _claim_type_option(
     )
 
 
-def build_coverage_options(statement, year) -> CoverageOptionsOut:
+def build_coverage_options(
+    db: Session, statement, employee: Employee, year: PolicyYear
+) -> CoverageOptionsOut:
     """Shared by the live portal endpoint above and the broker employee-view
-    preview (`portal_preview.py`) so the two can never drift."""
+    preview (`portal_preview.py`) so the two can never drift.
+
+    `db` + `employee` are needed to resolve each product's insurer and the
+    member's ID with that insurer (roster `insurer_member_ids`), shown read-only
+    on the form for the selected claim type. A dependant claimant falls back to
+    the policyholder's ID (same convention as the panel cards)."""
+    attrs = employee.attribute_values or {}
+    # Resolve every coverage product's insurer in ONE batch (not per line) so
+    # the member's insurer ID can be shown for the selected claim type.
+    products_by_code = resolve_products_by_codes(
+        db, year, [line.product_code for line in statement.coverage]
+    )
     insured = []
     for line in statement.coverage:
         profile = claim_profile_for(line.product_code)
@@ -160,6 +189,9 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
                     for s in profile.sub_types
                     if benefit_row_for_sub_type(line.benefit_schedule, s)
                 )
+        product = products_by_code.get(line.product_code)
+        insurer = product.insurer if product is not None else None
+        member_id = member_id_for_insurer(attrs, insurer)
         insured.append(
             InsuredClaimOption(
                 product_code=line.product_code,
@@ -168,6 +200,8 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
                 annual_policy_limit=line.annual_policy_limit,
                 covers_dependants=line.covers_dependants,
                 covered_dependant_ids=[d.id for d in line.covered_dependants],
+                insurer=insurer,
+                insurer_member_id=member_id or None,
                 sub_types=list(profile.sub_types),
                 requires_referral=profile.requires_referral,
                 diagnosis_group=profile.diagnosis_group,
@@ -207,6 +241,88 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
         currencies=list(ALLOWED_CURRENCIES),
         hospitals=[HospitalOut(**h) for h in hospital_directory()],
     )
+
+
+@options_router.post("/claims/intake", response_model=ClaimIntakeSuggestionOut)
+@limiter.limit("20/minute")
+async def extract_claim_intake(
+    request: Request,
+    file: UploadFile = File(...),
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> ClaimIntakeSuggestionOut:
+    """Read an uploaded receipt and return claim-form field SUGGESTIONS.
+
+    Runs the same AI extraction the post-submit review uses (cache key = the
+    document's SHA-256), so this warms the cache and the later review re-extract
+    is a free hit. Nothing is persisted here (no Claim, no StoredDocument) — the
+    member reviews/edits the prefill and the real upload happens on submit. When
+    the AI is unavailable (not configured / over budget / breaker open / parse
+    fault) it degrades to `available=False` and the form stays manual.
+    """
+    employee = resolve_member_employee(db, member)
+    year = active_policy_year(db, member.client_id)
+
+    # Stream to a temp file with the size cap enforced DURING read (never buffer
+    # an over-cap upload in memory), then read the bounded bytes back for the
+    # vision blocks + hash. saved_upload also enforces the suffix allowlist.
+    async with saved_upload(
+        file, set(DOCUMENT_SUFFIXES), max_bytes=MAX_DOCUMENT_BYTES
+    ) as tmp_path:
+        data = tmp_path.read_bytes()
+        suffix = tmp_path.suffix.lower()
+    if not data:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The file is empty.")
+
+    try:
+        blocks = vision_blocks_for_document(data, suffix)
+    except DocImageError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "We couldn't read this file — try a clearer photo or PDF.",
+        ) from exc
+
+    sha256 = hashlib.sha256(data).hexdigest()
+    try:
+        result = ai_gateway.extract_claim_document(
+            db,
+            client_id=employee.client_id,
+            policy_year_id=year.id,
+            sha256=sha256,
+            blocks=blocks,
+            file_name=file.filename or "receipt",
+        )
+    except (AINotConfiguredError, AIBudgetExceededError, CircuitOpenError, AIParseError):
+        # Expected degradations (no provider / over budget / breaker open / our
+        # parser fault) — the member fills the form manually.
+        return ClaimIntakeSuggestionOut(
+            available=False,
+            reason="Autofill is unavailable right now — please fill in the claim.",
+        )
+    except Exception:
+        # Any other provider fault (bad credentials, throttling, network,
+        # unsupported document) must NOT 500 the member — degrade to manual and
+        # log the real error for the broker/ops to act on (e.g. fix the tenant's
+        # AI credentials on the AI Setting page).
+        logger.exception(
+            "Claim intake extraction failed for client %s", employee.client_id
+        )
+        db.rollback()
+        return ClaimIntakeSuggestionOut(
+            available=False,
+            reason="We couldn't read this document automatically — please fill in the claim.",
+        )
+
+    write_member_audit(
+        db, member, "claim.intake_extracted", "employee", employee.id,
+        after={"sha256": sha256, "cache_hit": result.cache_hit},
+        employee_id=employee.id,
+    )
+    db.commit()
+
+    statement = build_member_statement(db, employee)
+    coverage_opts = build_coverage_options(db, statement, employee, year)
+    return suggest_from_extraction(result.document, coverage_opts, employee, year)
 
 
 @options_router.get("/claim-diagnoses", response_model=DiagnosisSearchOut)

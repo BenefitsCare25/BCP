@@ -367,15 +367,23 @@ def _ident(attrs: dict, keys: tuple[str, ...], masked: bool) -> str:
     return mask_nric(raw) if masked else (raw or "")
 
 
-def _member_id(attrs: dict, insurer: str) -> str:
-    ids = attrs.get(INSURER_MEMBER_ID_KEY) or {}
+def member_id_for_insurer(attrs: dict | None, insurer: str | None) -> str:
+    """The member's ID with ``insurer`` from a roster ``insurer_member_ids`` map,
+    tolerating casing drift between the roster column header and
+    ``Product.insurer``. Returns "" when unknown."""
+    if not insurer:
+        return ""
+    ids = (attrs or {}).get(INSURER_MEMBER_ID_KEY) or {}
     if insurer in ids:
         return str(ids[insurer])
-    # Tolerate casing drift between the roster column and Product.insurer.
     for name, value in ids.items():
         if str(name).strip().lower() == insurer.strip().lower():
             return str(value)
     return ""
+
+
+def _member_id(attrs: dict, insurer: str) -> str:
+    return member_id_for_insurer(attrs, insurer)
 
 
 def insurer_product_blocks(

@@ -291,6 +291,9 @@ export interface InsuredClaimOption {
   annual_policy_limit: string | null;
   covers_dependants: boolean;
   covered_dependant_ids: string[];
+  /** Insurer + the member's ID with it (display-only, keys off claim type). */
+  insurer: string | null;
+  insurer_member_id: string | null;
   /** Claim-intake profile — drives the conditional form fields. */
   sub_types: string[];
   requires_referral: boolean;
@@ -334,6 +337,43 @@ export function useCoverageOptions() {
     queryFn: () => portalApi.get<CoverageOptions>("/portal/coverage-options"),
     meta: { localErrorHandling: true },
     retry: false,
+  });
+}
+
+/** Document-driven autofill: what the AI read off an uploaded receipt, mapped
+ * to claim-form fields. Every value is a suggestion the member confirms. */
+export interface ClaimIntakeSuggestion {
+  available: boolean;
+  reason: string | null;
+  document_type: string | null;
+  claimant: {
+    kind: "self" | "dependant";
+    dependant_id: string | null;
+    name: string | null;
+    confidence: number;
+  } | null;
+  /** Encoded claim-type selection (`insured:<code>:<idx>` / `flex:<name>`). */
+  claim_selection: string | null;
+  claim_candidates: string[];
+  fields: {
+    provider_name: string | null;
+    incurred_date: string | null;
+    invoice_number: string | null;
+    amount: number | null;
+    currency: string | null;
+    diagnosis: string | null;
+  };
+  low_confidence: string[];
+}
+
+export function useExtractClaimIntake() {
+  return useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return portalApi.upload<ClaimIntakeSuggestion>("/portal/claims/intake", fd);
+    },
+    meta: { localErrorHandling: true },
   });
 }
 

@@ -234,6 +234,12 @@ class InsuredClaimOption(BaseModel):
     annual_policy_limit: str | None = None
     covers_dependants: bool = False
     covered_dependant_ids: list[str] = Field(default_factory=list)
+    # Insurer + the member's ID with that insurer (from the roster
+    # `insurer_member_ids` map). Display-only: the ID shown on the claim form
+    # keys off the selected claim type's product/insurer. Blank when the roster
+    # carries no ID for this insurer.
+    insurer: str | None = None
+    insurer_member_id: str | None = None
     # Claim-intake profile (claim_intake.py) — drives the conditional form
     # fields: SP referral requirement, diagnosis search.
     sub_types: list[str] = Field(default_factory=list)
@@ -273,6 +279,46 @@ class CoverageOptionsOut(BaseModel):
     # Hospital picker for inpatient claims (sg_hospitals.py) — sector drives
     # the document requirements.
     hospitals: list[HospitalOut] = Field(default_factory=list)
+
+
+# ── Claim intake autofill (document-driven prefill) ───────────────────────────
+
+
+class IntakeClaimant(BaseModel):
+    kind: str  # "self" | "dependant"
+    dependant_id: str | None = None
+    name: str | None = None
+    confidence: float = 0.0
+
+
+class IntakeFields(BaseModel):
+    provider_name: str | None = None
+    incurred_date: str | None = None  # ISO date
+    invoice_number: str | None = None
+    amount: float | None = None
+    currency: str | None = None
+    diagnosis: str | None = None
+
+
+class ClaimIntakeSuggestionOut(BaseModel):
+    """What the AI read off an uploaded receipt, mapped to claim-form fields.
+    Every value is a SUGGESTION — the member confirms/edits before submit."""
+    # False when extraction is unavailable (no AI provider / budget / breaker /
+    # parse fault) — the form stays fully manual.
+    available: bool = True
+    reason: str | None = None
+    document_type: str | None = None
+    # Preselected claimant (self / a dependant), when a patient name matched.
+    claimant: IntakeClaimant | None = None
+    # Encoded claim-type selection (`insured:<code>:<idx>` / `flex:<name>`) when
+    # the setting maps unambiguously to ONE of the member's claim types.
+    claim_selection: str | None = None
+    # Plausible claim-type selections when the setting is ambiguous — the member
+    # picks. Empty when we have no signal at all.
+    claim_candidates: list[str] = Field(default_factory=list)
+    fields: IntakeFields = Field(default_factory=IntakeFields)
+    # Field names (of `fields`) the model was unsure about — the UI flags them.
+    low_confidence: list[str] = Field(default_factory=list)
 
 
 class DiagnosisOut(BaseModel):

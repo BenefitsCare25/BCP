@@ -42,6 +42,33 @@ def resolve_product_by_code(
     return candidates[0]
 
 
+def resolve_products_by_codes(
+    db: Session, py: PolicyYear, codes: list[str] | set[str]
+) -> dict[str, Product]:
+    """Batch ``resolve_product_by_code`` — ONE ``product_ids_in_year`` query and
+    ONE candidate query for all codes, then the same in-year > client-owned >
+    global precedence per code. Use this over a per-code loop to avoid re-running
+    ``product_ids_in_year`` on every iteration."""
+    wanted = {c for c in codes if c}
+    if not wanted:
+        return {}
+    in_year = product_ids_in_year(db, py.id)
+    rows = list(
+        db.execute(
+            select(Product).where(
+                Product.code.in_(wanted),
+                tenant_or_global(Product.client_id, py.client_id),
+            )
+        ).scalars()
+    )
+    best: dict[str, Product] = {}
+    for p in sorted(
+        rows, key=lambda p: (p.id in in_year, p.client_id is not None), reverse=True
+    ):
+        best.setdefault(p.code, p)
+    return best
+
+
 def available_plan_codes(db: Session, policy_year_id: str, product_id: str) -> set[str]:
     """Electable plan tier codes for a product in a policy year (its Plan rows)."""
     return set(
