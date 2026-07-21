@@ -39,7 +39,7 @@ class ClaimCreateIn(BaseModel):
     provider_name: str = Field(min_length=2, max_length=255)
     invoice_number: str = Field(min_length=1, max_length=128)
     diagnosis: str | None = Field(default=None, max_length=512)
-    remarks: str | None = Field(default=None, max_length=2000)
+    remarks: str | None = Field(default=None, max_length=500)
     amount_claimed: float = Field(gt=0, le=1_000_000)
     currency: str = Field(default="SGD", min_length=3, max_length=8)
     dependant_id: str | None = None
@@ -121,6 +121,10 @@ class BrokerClaimOut(ClaimOut):
     staff_id: str | None = None
     employee_name: str | None = None
     ai_review: ClaimAIReviewSummary | None = None
+    # Remaining amount in the claim's tightest utilization bucket (see
+    # `remaining_for_claim`); None = no numeric limit known. Computed on the
+    # single-claim detail only — the list stays cheap.
+    remaining_limit: float | None = None
 
 
 class BrokerClaimList(BaseModel):
@@ -189,6 +193,13 @@ class UtilizationOut(BaseModel):
 # ── Coverage options (drives the member claim-form picker) ────────────────────
 
 
+# One entry in the claim-type dropdown. The sub-type is folded into the
+# selection (inpatient setting / GP rider), never a second picker.
+class ClaimTypeOption(BaseModel):
+    label: str
+    sub_type: str | None = None
+
+
 class InsuredClaimOption(BaseModel):
     product_code: str
     product_name: str | None = None
@@ -197,11 +208,16 @@ class InsuredClaimOption(BaseModel):
     covers_dependants: bool = False
     covered_dependant_ids: list[str] = Field(default_factory=list)
     # Claim-intake profile (claim_intake.py) — drives the conditional form
-    # fields: GHS sub-type picker, SP referral requirement, diagnosis search.
+    # fields: SP referral requirement, diagnosis search.
     sub_types: list[str] = Field(default_factory=list)
     requires_referral: bool = False
     diagnosis_group: str | None = None
     diagnosis_required: bool = False
+    # Outpatient / Inpatient / other grouping + the dropdown entries this
+    # product contributes (plan-aware: GP riders appear only when the member's
+    # schedule carries a matching row).
+    category: str = "other"
+    claim_types: list[ClaimTypeOption] = Field(default_factory=list)
 
 
 class FlexClaimCategoryOption(BaseModel):

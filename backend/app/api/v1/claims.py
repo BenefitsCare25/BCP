@@ -34,6 +34,7 @@ from app.models.claim import (
     CLAIM_STATUS_APPROVED,
     CLAIM_STATUS_NEEDS_INFO,
     CLAIM_STATUS_REJECTED,
+    LIVE_STATUSES,
 )
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.claims import (
@@ -138,7 +139,13 @@ def get_claim(
     db: Session = Depends(get_db),
 ) -> BrokerClaimOut:
     employee = db.get(Employee, claim.employee_id)
-    return _broker_out(db, claim, employee)
+    out = _broker_out(db, claim, employee)
+    # The remaining limit for this claim's bucket, shown ahead of the decision
+    # (the approve endpoint still enforces it). Detail-only — utilization is
+    # computed-on-read and too heavy for the list.
+    if employee is not None and claim.status in LIVE_STATUSES:
+        out.remaining_limit = remaining_for_claim(db, claim, employee)
+    return out
 
 
 @router.post("/{claim_id}/decision", response_model=BrokerClaimOut)

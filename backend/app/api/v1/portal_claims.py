@@ -34,6 +34,7 @@ from app.schemas.claims import (
     ClaimCreateIn,
     ClaimList,
     ClaimOut,
+    ClaimTypeOption,
     CoverageOptionsOut,
     DiagnosisOut,
     DiagnosisSearchOut,
@@ -42,7 +43,12 @@ from app.schemas.claims import (
     InsuredClaimOption,
     StoredDocumentOut,
 )
-from app.services.claim_intake import ALLOWED_CURRENCIES, claim_profile_for
+from app.services.claim_intake import (
+    ALLOWED_CURRENCIES,
+    CATEGORY_INPATIENT,
+    benefit_row_for_sub_type,
+    claim_profile_for,
+)
 from app.services.claims import (
     attach_document,
     claim_to_out,
@@ -95,6 +101,24 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
     insured = []
     for line in statement.coverage:
         profile = claim_profile_for(line.product_code)
+        base_label = (
+            profile.claim_type_label or line.product_name or line.product_code
+        )
+        # The dropdown entries this product contributes. Inpatient products
+        # expand into their sub-claim types; GP-family adds TCM/Physio riders
+        # only when the member's schedule actually carries a matching row.
+        if profile.category == CATEGORY_INPATIENT:
+            claim_types = [
+                ClaimTypeOption(label=s, sub_type=s) for s in profile.sub_types
+            ]
+        else:
+            claim_types = [ClaimTypeOption(label=base_label, sub_type=None)]
+            if not profile.sub_type_required:
+                claim_types.extend(
+                    ClaimTypeOption(label=s, sub_type=s)
+                    for s in profile.sub_types
+                    if benefit_row_for_sub_type(line.benefit_schedule, s)
+                )
         insured.append(
             InsuredClaimOption(
                 product_code=line.product_code,
@@ -107,6 +131,8 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
                 requires_referral=profile.requires_referral,
                 diagnosis_group=profile.diagnosis_group,
                 diagnosis_required=profile.diagnosis_required,
+                category=profile.category,
+                claim_types=claim_types,
             )
         )
 

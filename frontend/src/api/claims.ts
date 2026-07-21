@@ -98,6 +98,9 @@ export interface BrokerClaim {
   created_at: string;
   documents: StoredDocumentMeta[];
   ai_review: ClaimAIReviewSummary | null;
+  /** Remaining amount in the claim's tightest utilization bucket — detail
+   *  endpoint only (null = no numeric limit known / list payload). */
+  remaining_limit?: number | null;
 }
 
 export interface BrokerClaimList {
@@ -133,6 +136,17 @@ export function useBrokerClaims(
  * Other failures REJECT so the panel can show a real error state instead of
  * a misleading "no review yet". `refetchInterval` lets the panel poll while a
  * review is running. */
+/** Single-claim detail — carries `remaining_limit`, which the list omits. */
+export function useBrokerClaimDetail(claimId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-detail", cid, claimId],
+    queryFn: () => api.get<BrokerClaim>(`/claims/${claimId}`),
+    enabled: !!claimId,
+    meta: { localErrorHandling: true },
+  });
+}
+
 export function useClaimReview(
   claimId: string | null,
   refetchInterval?: number | false,
@@ -188,6 +202,7 @@ export function useDecideClaim() {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       // Approval changes the employee's usage-vs-limits view.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
     },
     meta: { localErrorHandling: true },
   });

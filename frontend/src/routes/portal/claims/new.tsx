@@ -1,19 +1,21 @@
 /** Submit-a-claim form.
  *
- * There is no separate "claim category" step — a claim TYPE already implies
- * its category (GHS/GMM/… are Insurance, Dental/Optical/… are Flexible
- * Benefits), so the two were merged into one grouped dropdown. `claim_kind`
- * is DERIVED from the chosen type, which makes a category/type mismatch
- * structurally impossible.
+ * There is no separate "claim category" step — the claim-type dropdown is
+ * grouped Outpatient (GP/SP/Dental/TCM/Physio) / Inpatient (the four
+ * hospital sub-claim types) / Other insurance / Flexible Benefits, and both
+ * `claim_kind` AND `sub_type` are DERIVED from the chosen entry, which makes
+ * a category/type/sub-type mismatch structurally impossible. Entries come
+ * from `/portal/coverage-options` `claim_types`, so the list is plan-aware:
+ * TCM/Physio appear only when the member's GP schedule carries a matching
+ * row, and Inpatient only when they hold a GHS-family product.
  *
  * Flow:
  *   Who is this claim for?  (Myself / a dependant — only when they have one)
- *     → Claim type          (one dropdown, grouped Insurance / Flexible
- *                            Benefits; filtered to what the claimant can claim)
+ *     → Claim type          (one grouped dropdown, filtered to the claimant)
  *       → conditional intake fields from the product's claim profile:
- *         GHS-family → Claim Sub-Type; specialist → referral letter
- *         (upload / reuse / not applicable); medical types → searchable
- *         diagnosis (curated ICD-10 catalog, "Other" free text).
+ *         specialist → referral letter (upload / reuse / not applicable);
+ *         medical types → searchable diagnosis (curated ICD-10 catalog,
+ *         "Other" free text).
  *
  * A dependant sees the flex categories PLUS the insured products that cover
  * them (GHS/GMM/GD); products that don't extend to dependants are hidden. The
@@ -48,10 +50,27 @@ const MAX_BYTES = 15 * 1024 * 1024;
 // backend's ALLOWED_CURRENCIES stays the single source of truth.
 const FALLBACK_CURRENCIES = ["SGD", "USD", "MYR", "EUR", "GBP", "AUD"];
 
-// The unified claim-type dropdown encodes both the kind and the identifier in
-// one value so `claim_kind` is derived, never separately chosen.
+// The unified claim-type dropdown encodes the kind, the product, and the
+// claim-type entry index in one value (`insured:<code>:<idx>` / `flex:<name>`)
+// so `claim_kind` and `sub_type` are derived, never separately chosen.
 const INSURED_PREFIX = "insured:";
 const FLEX_PREFIX = "flex:";
+
+const MAX_REMARKS = 500;
+
+const GROUP_LABELS = {
+  outpatient: "Outpatient",
+  inpatient: "Inpatient",
+  other: "Other insurance",
+} as const;
+
+type InsuredGroupKey = keyof typeof GROUP_LABELS;
+
+interface TypeEntry {
+  value: string;
+  label: string;
+  product: InsuredClaimOption;
+}
 
 type ReferralMode = "" | "upload" | "existing" | "na";
 
@@ -87,7 +106,6 @@ export function PortalNewClaimPage() {
   // Claimant ("" = the member themself) and the merged claim-type selection.
   const [dependantId, setDependantId] = useState("");
   const [selection, setSelection] = useState("");
-  const [subType, setSubType] = useState("");
   const [incurredDate, setIncurredDate] = useState("");
   const [provider, setProvider] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -105,7 +123,7 @@ export function PortalNewClaimPage() {
   const fileInput = useRef<HTMLInputElement>(null);
   const referralInput = useRef<HTMLInputElement>(null);
 
-  // Kind + identifiers are DERIVED from the single selection.
+  // Kind + identifiers + sub-type are DERIVED from the single selection.
   const effectiveKind: "insured" | "flex" | null = selection.startsWith(
     INSURED_PREFIX,
   )
@@ -113,8 +131,13 @@ export function PortalNewClaimPage() {
     : selection.startsWith(FLEX_PREFIX)
       ? "flex"
       : null;
-  const productCode =
-    effectiveKind === "insured" ? selection.slice(INSURED_PREFIX.length) : "";
+  const insuredParts =
+    effectiveKind === "insured"
+      ? selection.slice(INSURED_PREFIX.length).split(":")
+      : null;
+  const productCode = insuredParts ? insuredParts[0] : "";
+  const claimTypeIndex =
+    insuredParts && insuredParts.length > 1 ? Number(insuredParts[1]) : -1;
   const flexCategory =
     effectiveKind === "flex" ? selection.slice(FLEX_PREFIX.length) : "";
   const effectiveCurrency = effectiveKind === "flex" ? walletCurrency : currency;
@@ -123,6 +146,9 @@ export function PortalNewClaimPage() {
     () => insured.find((p) => p.product_code === productCode) ?? null,
     [insured, productCode],
   );
+  const selectedClaimType =
+    selectedProduct?.claim_types[claimTypeIndex] ?? null;
+  const subType = selectedClaimType?.sub_type ?? null;
 
   // Insured products offered for the current claimant: everything for the
   // member; for a dependant, only products that actually cover them.
@@ -132,6 +158,45 @@ export function PortalNewClaimPage() {
       (p) => p.covers_dependants && p.covered_dependant_ids.includes(dependantId),
     );
   }, [insured, dependantId]);
+
+  // Grouped dropdown entries: Outpatient / Inpatient / Other insurance.
+  // Duplicate labels within a group (two GP products, GHS + GMM inpatient)
+  // get the product name appended so the entries stay distinguishable.
+  const insuredGroups = useMemo(() => {
+    const groups: Record<InsuredGroupKey, TypeEntry[]> = {
+      outpatient: [],
+      inpatient: [],
+      other: [],
+    };
+    for (const p of claimantInsured) {
+      const cat: InsuredGroupKey =
+        p.category === "outpatient" || p.category === "inpatient"
+          ? p.category
+          : "other";
+      p.claim_types.forEach((t, i) => {
+        groups[cat].push({
+          value: `${INSURED_PREFIX}${p.product_code}:${i}`,
+          label: t.label,
+          product: p,
+        });
+      });
+    }
+    for (const key of Object.keys(groups) as InsuredGroupKey[]) {
+      const counts = new Map<string, number>();
+      for (const e of groups[key]) {
+        counts.set(e.label, (counts.get(e.label) ?? 0) + 1);
+      }
+      groups[key] = groups[key].map((e) =>
+        (counts.get(e.label) ?? 0) > 1
+          ? {
+              ...e,
+              label: `${e.label} — ${e.product.product_name || e.product.product_code}`,
+            }
+          : e,
+      );
+    }
+    return groups;
+  }, [claimantInsured]);
 
   const noTypesForClaimant = claimantInsured.length === 0 && !hasFlex;
   const needsReferral = selectedProduct?.requires_referral ?? false;
@@ -157,7 +222,6 @@ export function PortalNewClaimPage() {
 
   // Fields that depend on the chosen claim type — reset when the type changes.
   const resetTypeFields = () => {
-    setSubType("");
     setDiagnosis("");
     setReferralMode("");
     setReferralFile(null);
@@ -201,9 +265,6 @@ export function PortalNewClaimPage() {
     if (!effectiveKind) {
       errs.claim_type = "Select what you're claiming for.";
     } else if (effectiveKind === "insured") {
-      if (selectedProduct && selectedProduct.sub_types.length > 0 && !subType) {
-        errs.sub_type = "Select the claim sub-type.";
-      }
       if (
         selectedProduct?.diagnosis_required &&
         !diagnosis.trim().replace(/^Other:\s*$/, "")
@@ -274,8 +335,8 @@ export function PortalNewClaimPage() {
         claim_type:
           effectiveKind === "flex"
             ? flexCategory
-            : selectedProduct?.product_name || productCode,
-        sub_type: effectiveKind === "insured" && subType ? subType : null,
+            : selectedClaimType?.label || productCode,
+        sub_type: effectiveKind === "insured" ? subType : null,
         incurred_date: incurredDate,
         provider_name: provider.trim(),
         invoice_number: invoiceNumber.trim(),
@@ -375,20 +436,17 @@ export function PortalNewClaimPage() {
               onChange={(e) => changeSelection(e.target.value)}
             >
               <option value="">Select an option</option>
-              {claimantInsured.length > 0 && (
-                <optgroup label="Insurance">
-                  {claimantInsured.map((p) => (
-                    <option
-                      key={p.product_code}
-                      value={`${INSURED_PREFIX}${p.product_code}`}
-                    >
-                      {p.product_name || p.product_code}
-                      {p.product_name && p.product_code
-                        ? ` (${p.product_code})`
-                        : ""}
-                    </option>
-                  ))}
-                </optgroup>
+              {(Object.keys(GROUP_LABELS) as InsuredGroupKey[]).map(
+                (key) =>
+                  insuredGroups[key].length > 0 && (
+                    <optgroup key={key} label={GROUP_LABELS[key]}>
+                      {insuredGroups[key].map((entry) => (
+                        <option key={entry.value} value={entry.value}>
+                          {entry.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ),
               )}
               {hasFlex && (
                 <optgroup label="Flexible Benefits">
@@ -404,30 +462,6 @@ export function PortalNewClaimPage() {
           )}
           <FieldError msg={fieldErrors.claim_type} />
         </div>
-
-        {/* GHS-family: the sub-claim type states the treatment setting. */}
-        {effectiveKind === "insured" &&
-          selectedProduct &&
-          selectedProduct.sub_types.length > 0 && (
-            <div className="space-y-1.5">
-              <Label>
-                Claim sub-type <span className="text-error">*</span>
-              </Label>
-              <select
-                className={selectClass}
-                value={subType}
-                onChange={(e) => setSubType(e.target.value)}
-              >
-                <option value="">Select an option</option>
-                {selectedProduct.sub_types.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-              <FieldError msg={fieldErrors.sub_type} />
-            </div>
-          )}
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
@@ -651,14 +685,19 @@ export function PortalNewClaimPage() {
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="claim-remarks">Remarks</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="claim-remarks">Remarks</Label>
+            <span className="text-xs text-muted-foreground/60">
+              {remarks.length}/{MAX_REMARKS}
+            </span>
+          </div>
           <textarea
             id="claim-remarks"
             rows={3}
             className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring"
             placeholder="Anything your broker should know about this claim (optional)"
             value={remarks}
-            maxLength={2000}
+            maxLength={MAX_REMARKS}
             onChange={(e) => setRemarks(e.target.value)}
           />
         </div>

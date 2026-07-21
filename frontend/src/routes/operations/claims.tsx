@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, RefreshCw } from "lucide-react";
 import {
   downloadClaimDocument,
+  useBrokerClaimDetail,
   useBrokerClaims,
   useDecideClaim,
   useRerunReview,
@@ -205,6 +206,10 @@ export function ClaimsQueuePage() {
     () => data?.items.find((c) => c.id === selectedId) ?? null,
     [data, selectedId],
   );
+  // Detail fetch rides alongside the list item for the fields the list omits
+  // (the remaining benefit limit for this claim's bucket).
+  const detail = useBrokerClaimDetail(selectedId);
+  const remainingLimit = detail.data?.remaining_limit ?? null;
 
   useEffect(() => {
     setPage(0);
@@ -443,6 +448,22 @@ export function ClaimsQueuePage() {
                               : ""
                         }`}
                   </div>
+                  {remainingLimit != null && (
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        Remaining limit
+                      </div>
+                      <span
+                        className={
+                          selected.amount_claimed > remainingLimit
+                            ? "text-warn"
+                            : undefined
+                        }
+                      >
+                        {selected.currency} {remainingLimit.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                       Incurred

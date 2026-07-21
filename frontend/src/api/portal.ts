@@ -262,6 +262,12 @@ export interface ClaimCreateInput {
   referral_not_applicable?: boolean;
 }
 
+/** One claim-type dropdown entry — the sub-type rides in the selection. */
+export interface ClaimTypeOption {
+  label: string;
+  sub_type: string | null;
+}
+
 export interface InsuredClaimOption {
   product_code: string;
   product_name: string | null;
@@ -274,6 +280,10 @@ export interface InsuredClaimOption {
   requires_referral: boolean;
   diagnosis_group: string | null;
   diagnosis_required: boolean;
+  /** Outpatient / Inpatient / other grouping for the claim-type dropdown. */
+  category: "outpatient" | "inpatient" | "other";
+  /** Plan-aware dropdown entries (GP riders only when the schedule has them). */
+  claim_types: ClaimTypeOption[];
 }
 
 export interface CoverageOptions {

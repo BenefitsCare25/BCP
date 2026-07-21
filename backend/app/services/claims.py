@@ -31,7 +31,12 @@ from app.models.policy_year import PolicyYearStatus
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, StoredDocumentOut
-from app.services.claim_intake import assert_intake_valid
+from app.services.claim_intake import (
+    GP_SUB_TYPES,
+    assert_intake_valid,
+    benefit_row_for_sub_type,
+    normalize_sub_type,
+)
 from app.services.flex_membership import flex_effective_window
 from app.services.member_statement import build_member_statement
 from app.services.roster_attributes import NAME_KEYS, first_value
@@ -185,13 +190,16 @@ def create_claim(
                 "be claimed for yet.",
             )
 
+    # Canonical sub-type label (folds pre-rename values from stale clients).
+    sub_type = normalize_sub_type(body.sub_type)
+
     # Profile-driven intake rules (sub-type / diagnosis / referral / currency).
     assert_intake_valid(
         db,
         employee,
         claim_kind=body.claim_kind,
         product_code=body.product_code,
-        sub_type=body.sub_type,
+        sub_type=sub_type,
         diagnosis=body.diagnosis,
         referral_document_id=body.referral_document_id,
         referral_not_applicable=body.referral_not_applicable,
@@ -207,7 +215,7 @@ def create_claim(
         product_code=body.product_code,
         flex_category_name=body.flex_category_name,
         claim_type=body.claim_type,
-        sub_type=body.sub_type,
+        sub_type=sub_type,
         incurred_date=body.incurred_date,
         provider_name=body.provider_name,
         invoice_number=body.invoice_number,
@@ -222,7 +230,7 @@ def create_claim(
         # `remarks` is a free-text note, not a document-matched field.
         form_fields={
             "claim_type": body.claim_type,
-            "sub_type": body.sub_type,
+            "sub_type": sub_type,
             "incurred_date": body.incurred_date.isoformat(),
             "provider_name": body.provider_name,
             "invoice_number": body.invoice_number,
@@ -297,6 +305,30 @@ def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
         except Exception:
             logger.warning("Failed to delete blob %s", doc.storage_path)
         db.delete(doc)
+
+
+def _apply_gp_rider_benefit_key(statement: BenefitStatementOut, claim: Claim) -> None:
+    """TCM/Physio claims ride on GP coverage: bind the claim to the plan's
+    matching schedule row — 422 when the member's plan doesn't carry one — so
+    utilization and the broker's over-limit approve guard track that row's
+    limit. Runs before `_assert_coverage_claimable`, which then re-validates
+    the stamped `benefit_key` against the schedule like any other."""
+    if claim.claim_kind != CLAIM_KIND_INSURED or claim.sub_type not in GP_SUB_TYPES:
+        return
+    line = next(
+        (c for c in statement.coverage if c.product_code == claim.product_code),
+        None,
+    )
+    row = benefit_row_for_sub_type(
+        line.benefit_schedule if line is not None else None, claim.sub_type
+    )
+    if row is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Your {claim.product_code} plan does not include "
+            f"{claim.sub_type} cover.",
+        )
+    claim.benefit_key = row
 
 
 def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> None:
@@ -450,7 +482,9 @@ def submit_claim(
             )
 
     # Re-run the intake rules at submit so a draft created before a rule (or
-    # profile) change can't slip through with missing sub-type/referral.
+    # profile) change can't slip through with missing sub-type/referral. A
+    # draft holding a pre-rename sub-type label is folded onto the current one.
+    claim.sub_type = normalize_sub_type(claim.sub_type)
     assert_intake_valid(
         db,
         employee,
@@ -464,7 +498,9 @@ def submit_claim(
         ),
         currency=claim.currency,
     )
-    _assert_coverage_claimable(build_member_statement(db, employee), claim)
+    statement = build_member_statement(db, employee)
+    _apply_gp_rider_benefit_key(statement, claim)
+    _assert_coverage_claimable(statement, claim)
     _assert_no_duplicate_receipt(db, claim)
 
     claim.status = CLAIM_STATUS_SUBMITTED

@@ -68,12 +68,22 @@ FIELD_MAPS: list[dict[str, Any]] = [
 _DEFAULT_REQUIRED_DOCS = ["receipt or tax invoice"]
 
 _SUB_TYPE_REQUIRED_DOCS: dict[str, list[str]] = {
+    "hospitalisation/day surgery/other inpatient treatment": [
+        "hospital bill or tax invoice",
+        "discharge summary or medical report",
+    ],
+    "follow up pre-/post-hospitalisation": ["receipt or tax invoice"],
+    "emergency accidental outpatient treatment": ["receipt or tax invoice"],
+    "kidney dialysis/cancer treatment": ["receipt or tax invoice"],
+    # GP riders (see claim_intake.GP_SUB_TYPES).
+    "tcm (traditional chinese medicine)": ["receipt or tax invoice"],
+    "physiotherapy": ["receipt or tax invoice"],
+    # Pre-rename labels still on old claims — reruns must keep resolving.
     "hospitalisation or day surgery": [
         "hospital bill or tax invoice",
         "discharge summary or medical report",
     ],
     "pre and post hospitalisation": ["receipt or tax invoice"],
-    "emergency accidental outpatient treatment": ["receipt or tax invoice"],
     "outpatient kidney dialysis and cancer treatment": ["receipt or tax invoice"],
 }
 
@@ -132,8 +142,10 @@ AI_RULES: list[str] = [
     "type and sub-type: a GP claim should show a general-practice clinic "
     "visit (an inpatient hospital bill means the wrong claim type was "
     "chosen); a specialist claim should show a specialist consultation; a "
-    "'Hospitalisation or Day Surgery' claim should show an inpatient or day "
-    "surgery bill.",
+    "'Hospitalisation/Day Surgery/Other Inpatient Treatment' claim should "
+    "show an inpatient or day surgery bill; a TCM claim should show a "
+    "registered TCM practitioner or Chinese physician visit; a "
+    "physiotherapy claim should show a physiotherapy session.",
     "If a diagnosis is stated on the documents, it should be consistent with "
     "the declared diagnosis and plausible for the claim type.",
 ]

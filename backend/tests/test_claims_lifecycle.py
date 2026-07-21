@@ -87,7 +87,27 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 # Elected subset: DEP_A only — DEP_B is active on the record
                 # but NOT covered under this plan.
                 covered_dependants=[dep] if employee.id == EMP_A else [],
-            )
+            ),
+            # GP coverage whose schedule carries a TCM row but no physio row —
+            # exercises the plan-aware GP riders (TCM offered/claimable,
+            # Physiotherapy rejected at submit).
+            CoverageLine(
+                product_code="GCGP",
+                product_name="Group Clinical GP",
+                plan_code="P1",
+                benefit_schedule={
+                    "items": [
+                        {"number": "1", "name": "GP Consultation", "value": "As charged"},
+                        {
+                            "number": "2",
+                            "name": "TCM & Chiropractor",
+                            "value": "S$300 per policy year",
+                        },
+                    ]
+                },
+                covers_dependants=False,
+                covered_dependants=[],
+            ),
         ],
         dependants=[dep, dep_b] if employee.id == EMP_A else [],
         flex=FlexCoverageLine(
@@ -235,7 +255,7 @@ def _draft(
         "claim_kind": "insured",
         "product_code": "GHS",
         "claim_type": "Group Hospital & Surgical",
-        "sub_type": "Hospitalisation or Day Surgery",
+        "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
         "invoice_number": "INV-00123",
@@ -294,13 +314,26 @@ def test_coverage_options(anon: TestClient):
     assert ghs["product_code"] == "GHS"
     # Claim-intake profile drives the conditional form fields.
     assert ghs["sub_types"] == [
-        "Hospitalisation or Day Surgery",
-        "Pre and Post Hospitalisation",
+        "Follow up Pre-/Post-Hospitalisation",
+        "Hospitalisation/Day Surgery/Other Inpatient Treatment",
         "Emergency Accidental Outpatient Treatment",
-        "Outpatient Kidney Dialysis and Cancer Treatment",
+        "Kidney Dialysis/Cancer Treatment",
     ]
     assert ghs["diagnosis_required"] is True
     assert ghs["requires_referral"] is False
+    # Inpatient products expand into their sub-claim types.
+    assert ghs["category"] == "inpatient"
+    assert [t["sub_type"] for t in ghs["claim_types"]] == ghs["sub_types"]
+    # GP-family is outpatient: plain GP always, TCM only because the plan's
+    # schedule has a TCM row, no Physiotherapy (no matching row).
+    gp = body["insured"][1]
+    assert gp["product_code"] == "GCGP"
+    assert gp["category"] == "outpatient"
+    assert [t["label"] for t in gp["claim_types"]] == [
+        "GP (General Practitioner)",
+        "TCM (Traditional Chinese Medicine)",
+    ]
+    assert gp["claim_types"][0]["sub_type"] is None
     assert "SGD" in body["currencies"]
     assert body["flex"]["categories"] == [
         {"name": "Dental", "sub_limit": 500.0, "note": None}
@@ -370,7 +403,7 @@ def _draft_res(anon: TestClient, account: str = ACC_A, **overrides):
         "claim_kind": "insured",
         "product_code": "GHS",
         "claim_type": "Group Hospital & Surgical",
-        "sub_type": "Hospitalisation or Day Surgery",
+        "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
         "invoice_number": "INV-00123",
@@ -394,7 +427,11 @@ def test_ghs_invalid_sub_type_422(anon: TestClient):
 
 
 def test_sub_type_on_non_ghs_product_422(anon: TestClient):
-    res = _draft_res(anon, product_code="GTL", sub_type="Hospitalisation or Day Surgery")
+    res = _draft_res(
+        anon,
+        product_code="GTL",
+        sub_type="Hospitalisation/Day Surgery/Other Inpatient Treatment",
+    )
     assert res.status_code == 422
 
 
@@ -421,6 +458,64 @@ def test_unsupported_currency_422(anon: TestClient):
     res = _draft_res(anon, currency="BTC")
     assert res.status_code == 422
     assert "currency" in res.text.lower()
+
+
+def test_legacy_sub_type_normalized(anon: TestClient):
+    # Drafts created before the 2026-07 relabel (or by stale clients) fold
+    # onto the current wording.
+    claim = _draft(anon, sub_type="Hospitalisation or Day Surgery")
+    assert claim["sub_type"] == "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+
+
+def test_remarks_over_500_chars_422(anon: TestClient):
+    res = _draft_res(anon, remarks="x" * 501)
+    assert res.status_code == 422
+    assert _draft_res(anon, remarks="x" * 500).status_code == 201
+
+
+def test_tcm_claim_binds_benefit_row(anon: TestClient):
+    # TCM rides on GP coverage — submit stamps the plan's TCM row as the
+    # claim's benefit_key so utilization tracks that row's limit.
+    claim = _draft(
+        anon,
+        product_code="GCGP",
+        claim_type="TCM (Traditional Chinese Medicine)",
+        sub_type="TCM (Traditional Chinese Medicine)",
+        diagnosis="Other: lower back pain",
+    )
+    assert _upload(anon, claim["id"], PDF + b" tcm-1").status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 200, res.text
+    assert res.json()["benefit_key"] == "TCM & Chiropractor"
+
+
+def test_physio_without_plan_row_422(anon: TestClient):
+    # The canned GP schedule has no physiotherapy row — the claim type isn't
+    # available to this plan, so submit refuses it.
+    claim = _draft(
+        anon,
+        product_code="GCGP",
+        claim_type="Physiotherapy",
+        sub_type="Physiotherapy",
+        diagnosis="Other: knee strain",
+    )
+    assert _upload(anon, claim["id"], PDF + b" phy-1").status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 422
+    assert "does not include" in res.text
+
+
+def test_plain_gp_claim_needs_no_sub_type(anon: TestClient):
+    claim = _draft(
+        anon,
+        product_code="GCGP",
+        claim_type="GP (General Practitioner)",
+        sub_type=None,
+        diagnosis="Acute upper respiratory infection",
+    )
+    assert claim["sub_type"] is None
+    assert _upload(anon, claim["id"], PDF + b" gp-1").status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
 
 
 def test_specialist_requires_referral_422(anon: TestClient):
@@ -658,7 +753,7 @@ def test_claim_for_someone_elses_dependant_404(anon: TestClient):
             "claim_kind": "insured",
             "product_code": "GHS",
             "claim_type": "Group Hospital & Surgical",
-            "sub_type": "Hospitalisation or Day Surgery",
+            "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
             "incurred_date": "2027-06-15",
             "provider_name": "Raffles Medical",
             "invoice_number": "INV-00123",
