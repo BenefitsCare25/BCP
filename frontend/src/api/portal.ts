@@ -340,6 +340,33 @@ export function useCoverageOptions() {
   });
 }
 
+/** One document's field reading in an autofill suggestion. */
+export interface IntakeSuggestFields {
+  provider_name: string | null;
+  incurred_date: string | null;
+  invoice_number: string | null;
+  amount: number | null;
+  currency: string | null;
+  diagnosis: string | null;
+}
+
+/** One uploaded document in the autofill set. `claim_index` is set when the
+ * set carries several distinct invoices — this document anchors its own claim
+ * (0 = the claim prefilled now); null = supporting document. */
+export interface IntakeSuggestDocument {
+  file_name: string;
+  /** 0-based position in the original upload — join File objects to documents
+   *  on this (robust to duplicate names and to skipped files). */
+  upload_index: number;
+  detected_doc_type: string | null;
+  doc_slot: string | null;
+  claim_index: number | null;
+  fields: IntakeSuggestFields | null;
+  /** Field names of `fields` the AI was unsure about (only when `fields` is
+   *  set) — the form flags them when it advances to this claim. */
+  low_confidence: string[];
+}
+
 /** Document-driven autofill: what the AI read off an uploaded receipt, mapped
  * to claim-form fields. Every value is a suggestion the member confirms. */
 export interface ClaimIntakeSuggestion {
@@ -352,11 +379,10 @@ export interface ClaimIntakeSuggestion {
   /** Required-document slot key the primary upload fills, when unambiguous. */
   doc_slot: string | null;
   /** Per-document classification for the whole uploaded set (up to 3). */
-  documents: {
-    file_name: string;
-    detected_doc_type: string | null;
-    doc_slot: string | null;
-  }[];
+  documents: IntakeSuggestDocument[];
+  /** ≥2 distinct invoices detected — one claim per invoice; the top-level
+   *  fields prefill the first invoice's claim. */
+  multi_claim: boolean;
   claimant: {
     kind: "self" | "dependant";
     dependant_id: string | null;
@@ -366,14 +392,7 @@ export interface ClaimIntakeSuggestion {
   /** Encoded claim-type selection (`insured:<code>:<idx>` / `flex:<name>`). */
   claim_selection: string | null;
   claim_candidates: string[];
-  fields: {
-    provider_name: string | null;
-    incurred_date: string | null;
-    invoice_number: string | null;
-    amount: number | null;
-    currency: string | null;
-    diagnosis: string | null;
-  };
+  fields: IntakeSuggestFields;
   low_confidence: string[];
 }
 

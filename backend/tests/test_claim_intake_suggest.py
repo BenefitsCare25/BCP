@@ -524,6 +524,195 @@ def test_build_intake_suggestion_merges_invoice_and_discharge_summary():
     assert by_name["discharge.pdf"].doc_slot == "discharge_summary"
 
 
+def _invoice_extraction(
+    file_name: str,
+    invoice_no: str | None,
+    amount: str,
+    day: str,
+    provider: str = "Raffles Medical Clinic",
+):
+    fields = [
+        {"id": "1", "label": "Clinic Name", "value": provider,
+         "field_type": "name", "confidence": 0.9},
+        {"id": "2", "label": "Total Amount Payable", "value": amount,
+         "field_type": "currency", "confidence": 0.9},
+        {"id": "3", "label": "Invoice Date", "value": day,
+         "field_type": "date", "confidence": 0.9},
+    ]
+    if invoice_no is not None:
+        fields.append(
+            {"id": "4", "label": "Invoice No", "value": invoice_no,
+             "field_type": "text", "confidence": 0.9}
+        )
+    return {"file_name": file_name, "document_type": "receipt", "fields": fields}
+
+
+def test_multi_invoice_upload_detected_as_separate_claims():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # Three receipts with three DIFFERENT invoice numbers = three visits.
+    # The top-level suggestion prefills the FIRST invoice's claim — never the
+    # largest amount across the set — and each invoice anchors its own claim.
+    out = build_intake_suggestion(
+        [
+            _invoice_extraction("a.pdf", "ENU100", "45.00", "2027-03-15"),
+            _invoice_extraction("b.pdf", "ENU200", "980.00", "2027-04-02"),
+            _invoice_extraction("c.pdf", "ENU300", "62.50", "2027-05-20"),
+        ],
+        _coverage([_gp_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert out.multi_claim is True
+    assert out.fields.amount == 45.0            # first invoice, not the max
+    assert out.fields.invoice_number == "ENU100"
+    assert out.fields.incurred_date == "2027-03-15"
+    by_name = {d.file_name: d for d in out.documents}
+    assert [by_name[n].claim_index for n in ("a.pdf", "b.pdf", "c.pdf")] == [0, 1, 2]
+    assert by_name["b.pdf"].fields is not None
+    assert by_name["b.pdf"].fields.amount == 980.0
+    assert by_name["b.pdf"].fields.invoice_number == "ENU200"
+    assert by_name["c.pdf"].fields.incurred_date == "2027-05-20"
+
+
+def test_single_episode_document_set_stays_one_claim():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # Invoice + discharge summary of ONE hospital stay: the discharge summary
+    # has no billing identity, so nothing splits — one merged claim.
+    invoice = {
+        "file_name": "invoice.pdf",
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "1", "label": "Invoice No", "value": "IV-9", "field_type": "text",
+             "confidence": 0.9},
+            {"id": "2", "label": "Admission Date", "value": "2027-05-10",
+             "field_type": "date", "confidence": 0.9},
+            {"id": "3", "label": "Final Bill", "value": "8,400.00",
+             "field_type": "currency", "confidence": 0.9},
+        ],
+    }
+    discharge = {
+        "file_name": "discharge.pdf",
+        "document_type": "discharge summary",
+        "fields": [
+            {"id": "1", "label": "Diagnosis", "value": "Appendicitis",
+             "field_type": "text", "confidence": 0.9},
+        ],
+    }
+    out = build_intake_suggestion(
+        [invoice, discharge], _coverage([_ghs_option()]), _employee(), YEAR
+    )
+    assert out.multi_claim is False
+    assert all(d.claim_index is None for d in out.documents)
+    assert out.fields.amount == 8400.0
+    assert out.fields.diagnosis == "Appendicitis"
+
+
+def test_same_invoice_number_documents_stay_one_claim_with_amount_hint():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # An invoice and its itemised bill reprint the SAME number with different
+    # totals (net payable vs gross) — supporting material, not a second claim.
+    # The differing amounts surface through the "double-check" hint.
+    out = build_intake_suggestion(
+        [
+            _invoice_extraction("final.pdf", "IV-77", "165.83", "2027-06-27"),
+            _invoice_extraction("itemised.pdf", "IV - 77", "441.97", "2027-06-27"),
+        ],
+        _coverage([_gp_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert out.multi_claim is False
+    assert all(d.claim_index is None for d in out.documents)
+    assert "amount" in out.low_confidence
+
+
+def test_documents_without_invoice_numbers_never_split():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # No readable invoice numbers → conservative single-claim merge, even with
+    # two amounts on two dates (a hard-to-read set must not fragment).
+    out = build_intake_suggestion(
+        [
+            _invoice_extraction("a.pdf", None, "45.00", "2027-03-15"),
+            _invoice_extraction("b.pdf", None, "62.50", "2027-03-18"),
+        ],
+        _coverage([_gp_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert out.multi_claim is False
+    assert all(d.claim_index is None for d in out.documents)
+    assert "amount" in out.low_confidence
+
+
+def test_later_invoice_itemised_bill_does_not_pollute_first_claim():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # Invoice A (#100, $45), Invoice B (#200, $50), and B's itemised bill
+    # (#200, gross $8000). The itemised bill supports B's claim, NOT A's — it
+    # must never bleed its $8000 into the first claim's merged amount.
+    out = build_intake_suggestion(
+        [
+            _invoice_extraction("a.pdf", "INV-100", "45.00", "2027-03-15"),
+            _invoice_extraction("b.pdf", "INV-200", "50.00", "2027-04-02"),
+            _invoice_extraction("b_itemised.pdf", "INV-200", "8000.00", "2027-04-02"),
+        ],
+        _coverage([_gp_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert out.multi_claim is True
+    # Two DISTINCT invoice numbers → two claims (the itemised bill is not a 3rd).
+    by_name = {d.file_name: d for d in out.documents}
+    assert by_name["a.pdf"].claim_index == 0
+    assert by_name["b.pdf"].claim_index == 1
+    assert by_name["b_itemised.pdf"].claim_index is None  # supports B, not its own
+    # First claim keeps A's own $45 — the later invoice's $8000 must not leak in.
+    assert out.fields.amount == 45.0
+    assert out.fields.invoice_number == "INV-100"
+
+
+def test_later_claim_carries_its_own_low_confidence_fields():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # The second invoice's amount is read below the confidence floor — the
+    # queued claim must carry that low-confidence flag so the form can warn.
+    b = _invoice_extraction("b.pdf", "ENU200", "980.00", "2027-04-02")
+    b["fields"][1]["confidence"] = 0.3  # the amount field
+    out = build_intake_suggestion(
+        [_invoice_extraction("a.pdf", "ENU100", "45.00", "2027-03-15"), b],
+        _coverage([_gp_option()]),
+        _employee(),
+        YEAR,
+    )
+    by_name = {d.file_name: d for d in out.documents}
+    assert "amount" in by_name["b.pdf"].low_confidence
+    # The first claim + supporting docs never ship an unused per-doc reading.
+    assert by_name["a.pdf"].fields is None
+    assert by_name["a.pdf"].low_confidence == []
+
+
+def test_upload_index_tracks_original_position_across_skips():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # The endpoint may skip an unreadable file, so it stamps each extraction's
+    # original upload position; documents must echo it verbatim (the form joins
+    # File objects on it). Here the middle file (index 1) was skipped.
+    a = _invoice_extraction("a.pdf", "ENU100", "45.00", "2027-03-15")
+    a["upload_index"] = 0
+    c = _invoice_extraction("c.pdf", "ENU300", "62.50", "2027-05-20")
+    c["upload_index"] = 2
+    out = build_intake_suggestion(
+        [a, c], _coverage([_gp_option()]), _employee(), YEAR
+    )
+    by_name = {d.file_name: d for d in out.documents}
+    assert by_name["a.pdf"].upload_index == 0
+    assert by_name["c.pdf"].upload_index == 2
+
+
 def test_custom_sector_neutral_type_does_not_shadow_invoice():
     from app.services.claim_doc_types import (
         DEFAULT_DOC_TYPES,

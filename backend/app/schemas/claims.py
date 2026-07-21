@@ -305,8 +305,23 @@ class IntakeDocument(BaseModel):
     the required-document slot it fills (when unambiguous)."""
 
     file_name: str
+    # 0-based position in the ORIGINAL upload — the form joins its File objects
+    # to these documents on this (robust to duplicate file names, and to the
+    # endpoint skipping an unreadable file mid-set).
+    upload_index: int = 0
     detected_doc_type: str | None = None
     doc_slot: str | None = None
+    # Multi-claim uploads: when the set carries several DISTINCT invoices (one
+    # visit each), every invoice document anchors its own claim — this is its
+    # 0-based order (0 = the claim prefilled now). None = supporting document.
+    claim_index: int | None = None
+    # A LATER anchor's OWN reading, used to prefill its claim when the form
+    # advances to it. None for the first claim + supporting docs (they prefill
+    # from the top-level merged suggestion, never from here).
+    fields: IntakeFields | None = None
+    # Field names of `fields` the AI was unsure about (only set alongside
+    # `fields`) — the form flags them when it advances to this claim.
+    low_confidence: list[str] = Field(default_factory=list)
 
 
 class ClaimIntakeSuggestionOut(BaseModel):
@@ -326,6 +341,10 @@ class ClaimIntakeSuggestionOut(BaseModel):
     # Per-document classification for the whole uploaded set (up to 3) — the
     # form drops each file into the slot it fills.
     documents: list[IntakeDocument] = Field(default_factory=list)
+    # True when the set carries ≥2 DISTINCT invoices — separate visits that
+    # need one claim each. The top-level fields prefill the FIRST invoice's
+    # claim; the rest ride on `documents[].claim_index`/`fields`.
+    multi_claim: bool = False
     # Preselected claimant (self / a dependant), when a patient name matched.
     claimant: IntakeClaimant | None = None
     # Encoded claim-type selection (`insured:<code>:<idx>` / `flex:<name>`) when

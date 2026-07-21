@@ -30,6 +30,7 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   AlertTriangle,
   ArrowLeft,
+  Files,
   Loader2,
   Paperclip,
   Send,
@@ -49,6 +50,7 @@ import {
   useUploadReferralLetter,
   type ClaimIntakeSuggestion,
   type InsuredClaimOption,
+  type IntakeSuggestFields,
 } from "@/api/portal";
 import { DiagnosisPicker } from "@/components/portal/DiagnosisPicker";
 import { formatError } from "@/lib/errors";
@@ -128,6 +130,20 @@ interface TypeEntry {
 
 type ReferralMode = "" | "upload" | "existing";
 
+/** One queued claim in a multi-invoice upload: the invoice document that
+ * anchors it plus the fields read off it. `uploadIndex` is the stable id
+ * (original upload position) — used as the list key and removal handle so
+ * duplicate file names can't collapse two queued claims into one. */
+interface PendingClaim {
+  uploadIndex: number;
+  fileName: string;
+  file: File | null;
+  slot: string | null;
+  detectedType: string | null;
+  fields: IntakeSuggestFields | null;
+  lowConfidence: string[];
+}
+
 const selectClass =
   "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring disabled:cursor-not-allowed disabled:opacity-60";
 
@@ -186,9 +202,13 @@ export function PortalNewClaimPage() {
   // identified it as, so they don't upload twice. `slot` is the required-doc
   // slot key the AI matched the file to (null = unknown → first free slot).
   const [autofillDocs, setAutofillDocs] = useState<
-    { file: File; slot: string | null }[]
+    { file: File; slot: string | null; detectedType: string | null }[]
   >([]);
   const [autofillNote, setAutofillNote] = useState<string | null>(null);
+  // Multi-invoice upload: the claims still to submit after this one (one per
+  // distinct invoice) and how many were already submitted in this run.
+  const [pendingClaims, setPendingClaims] = useState<PendingClaim[]>([]);
+  const [multiDone, setMultiDone] = useState(0);
   const [lowConfidence, setLowConfidence] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const referralInput = useRef<HTMLInputElement>(null);
@@ -406,13 +426,42 @@ export function PortalNewClaimPage() {
   // claimant first (it filters the claim-type list), then the type, then the
   // fields. Each uploaded file is paired with the slot the AI matched it to.
   const applySuggestion = (s: ClaimIntakeSuggestion, files: File[]) => {
-    // Map each file to its detected slot (by file name, as returned).
-    const slotByName = new Map(
-      (s.documents ?? []).map((d) => [d.file_name, d.doc_slot]),
-    );
+    // Join files to documents on upload_index, not file name — two uploads can
+    // share a name, and the backend may skip an unreadable file, so position in
+    // the original upload is the only stable key.
+    const metaByIdx = new Map((s.documents ?? []).map((d) => [d.upload_index, d]));
+    // Multi-invoice upload: each anchor invoice is its own claim. The first
+    // prefills this form (its fields ARE the top-level suggestion); the rest
+    // queue up and must NOT ride along as this claim's evidence.
+    const anchors = s.multi_claim
+      ? (s.documents ?? [])
+          .filter((d) => d.claim_index != null)
+          .sort((a, b) => (a.claim_index ?? 0) - (b.claim_index ?? 0))
+      : [];
+    const laterAnchors = anchors.slice(1);
+    const laterIdx = new Set(laterAnchors.map((d) => d.upload_index));
     setAutofillDocs(
-      files.map((file) => ({ file, slot: slotByName.get(file.name) ?? null })),
+      files
+        .map((file, i) => ({ file, i }))
+        .filter(({ i }) => !laterIdx.has(i))
+        .map(({ file, i }) => ({
+          file,
+          slot: metaByIdx.get(i)?.doc_slot ?? null,
+          detectedType: metaByIdx.get(i)?.detected_doc_type ?? null,
+        })),
     );
+    setPendingClaims(
+      laterAnchors.map((d) => ({
+        uploadIndex: d.upload_index,
+        fileName: d.file_name,
+        file: files[d.upload_index] ?? null,
+        slot: d.doc_slot ?? null,
+        detectedType: d.detected_doc_type ?? null,
+        fields: d.fields,
+        lowConfidence: d.low_confidence ?? [],
+      })),
+    );
+    setMultiDone(0);
     if (!s.available) {
       setLowConfidence([]);
       setAutofillNote(
@@ -470,13 +519,51 @@ export function PortalNewClaimPage() {
       applySuggestion(suggestion, withinSize);
     } catch (err) {
       // Extraction failed — keep the files as evidence, just no prefill.
-      setAutofillDocs(withinSize.map((file) => ({ file, slot: null })));
+      setAutofillDocs(
+        withinSize.map((file) => ({ file, slot: null, detectedType: null })),
+      );
+      setPendingClaims([]);
+      setMultiDone(0);
       setLowConfidence([]);
       setAutofillNote(
         "We couldn't read these files for autofill — fill in the claim and they'll still be attached.",
       );
       toast.error(formatError(err));
     }
+  };
+
+  // Multi-invoice flow: after one claim submits, load the next queued invoice
+  // into a fresh form. Claimant + claim type carry over (the invoices almost
+  // always share them and both stay editable); everything per-visit resets.
+  const advanceToNextClaim = () => {
+    const [next, ...rest] = pendingClaims;
+    if (!next) return;
+    setMultiDone((d) => d + 1);
+    setPendingClaims(rest);
+    resetTypeFields();
+    setFiles([]);
+    setRemarks("");
+    setError(null);
+    setLowConfidence(next.lowConfidence);
+    clearedFiles.current = new Set();
+    const f = next.fields;
+    setIncurredDate(f?.incurred_date ?? "");
+    setProvider(f?.provider_name ?? "");
+    setInvoiceNumber(f?.invoice_number ?? "");
+    setAmount(f?.amount != null ? String(f.amount) : "");
+    if (f?.currency && effectiveKind === "insured") setCurrency(f.currency);
+    setDiagnosis(f?.diagnosis ?? "");
+    setAutofillDocs(
+      next.file
+        ? [{ file: next.file, slot: next.slot, detectedType: next.detectedType }]
+        : [],
+    );
+    setAutofillNote(
+      next.file
+        ? `We've filled in the next claim from ${next.fileName} — check everything before submitting.`
+        : `We've filled in the next claim from ${next.fileName}, but couldn't reuse the file — attach the invoice below.`,
+    );
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const pickFiles = (picked: FileList | null) => {
@@ -633,8 +720,16 @@ export function PortalNewClaimPage() {
         await uploadDoc.mutateAsync({ claimId: claim.id, file });
       }
       await submitClaim.mutateAsync(claim.id);
-      toast.success("Claim submitted");
-      void navigate({ to: "/portal/claims" });
+      if (pendingClaims.length > 0) {
+        const done = multiDone + 1;
+        toast.success(
+          `Claim ${done} of ${done + pendingClaims.length} submitted`,
+        );
+        advanceToNextClaim();
+      } else {
+        toast.success("Claim submitted");
+        void navigate({ to: "/portal/claims" });
+      }
     } catch (err) {
       setError(formatError(err));
       // Roll the draft back so a failed validation doesn't strand it — before
@@ -657,6 +752,14 @@ export function PortalNewClaimPage() {
       setBusy(false);
     }
   };
+
+  // Autofill files not placed into a required-document slot are attached as
+  // additional documents on submit — surfaced in that section (removable) so
+  // nothing rides along invisibly.
+  const slottedSet = new Set(Object.values(slotFiles).filter(Boolean));
+  const unplacedAutofill = autofillDocs
+    .map((d) => d.file)
+    .filter((f) => !slottedSet.has(f) && !files.includes(f));
 
   return (
     <div className="mx-auto max-w-lg space-y-4">
@@ -727,15 +830,33 @@ export function PortalNewClaimPage() {
           </Button>
           {autofillDocs.length > 0 && (
             <ul className="space-y-1">
-              {autofillDocs.map(({ file }, i) => (
-                <li
-                  key={`${file.name}-${i}`}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                >
-                  <Paperclip className="size-3 shrink-0" />
-                  <span className="truncate">{file.name}</span>
-                </li>
-              ))}
+              {autofillDocs.map(({ file, detectedType }, i) => {
+                // Where this file goes on submit: the required-document slot
+                // it fills, else it rides along as an additional document.
+                const filledSlot = docSlots.find(
+                  (s) => slotFiles[s.key] === file,
+                );
+                const destination = filledSlot
+                  ? filledSlot.label
+                  : effectiveKind
+                    ? "additional document"
+                    : null;
+                return (
+                  <li
+                    key={`${file.name}-${i}`}
+                    className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                  >
+                    <Paperclip className="size-3 shrink-0" />
+                    <span className="truncate">{file.name}</span>
+                    {(detectedType || destination) && (
+                      <span className="shrink-0 text-muted-foreground/60">
+                        {detectedType ? ` · ${detectedType}` : ""}
+                        {destination ? ` → ${destination}` : ""}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
           {autofillNote && (
@@ -756,6 +877,64 @@ export function PortalNewClaimPage() {
             </div>
           )}
         </div>
+
+        {/* Multi-invoice upload — each distinct invoice is a separate visit
+            and needs its own claim (per-visit limits and duplicate checks
+            adjudicate per invoice). The form walks them one at a time. */}
+        {(pendingClaims.length > 0 || multiDone > 0) && (
+          <div className="space-y-2 rounded-md border border-accent/40 bg-accent/5 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Files className="size-3.5 shrink-0 text-accent" />
+              Claim {multiDone + 1} of {multiDone + 1 + pendingClaims.length}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {pendingClaims.length > 0
+                ? "Your upload contains several different invoices. Each invoice is a separate visit and needs its own claim — submit this one and we'll prefill the next automatically."
+                : "This is the last claim from your upload."}
+            </p>
+            {pendingClaims.length > 0 && (
+              <ul className="space-y-1">
+                {pendingClaims.map((p) => (
+                  <li
+                    key={p.uploadIndex}
+                    className="flex items-center justify-between rounded-md bg-background px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="truncate text-foreground">
+                      {p.fields?.invoice_number ?? p.fileName}
+                      <span className="text-muted-foreground">
+                        {p.fields?.incurred_date
+                          ? ` · ${p.fields.incurred_date}`
+                          : ""}
+                        {p.fields?.amount != null
+                          ? ` · ${p.fields.amount.toFixed(2)}`
+                          : ""}
+                        {" · up next"}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      title="Don't submit a claim for this invoice"
+                      onClick={() =>
+                        setPendingClaims((prev) =>
+                          prev.filter((q) => q.uploadIndex !== p.uploadIndex),
+                        )
+                      }
+                      className="ml-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {pendingClaims.length > 0 && (
+              <p className="text-xs text-muted-foreground/60">
+                Remove an invoice if you don't want to submit a claim for it.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Who is this claim for? — a covered dependant filters the claim-type
             list to what applies to them (flex + the products that cover them). */}
@@ -1162,8 +1341,35 @@ export function PortalNewClaimPage() {
             >
               <Paperclip className="size-4" /> Attach document (PDF or photo)
             </Button>
-            {files.length > 0 && (
+            {(files.length > 0 || unplacedAutofill.length > 0) && (
               <ul className="space-y-1 pt-1">
+                {unplacedAutofill.map((f, i) => (
+                  <li
+                    key={`autofill-${f.name}-${i}`}
+                    className="flex items-center justify-between rounded-md bg-muted px-2.5 py-1.5 text-xs"
+                  >
+                    <span className="truncate text-foreground">
+                      {f.name}{" "}
+                      <span className="text-muted-foreground">
+                        (from autofill)
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Full removal: never re-place it into a slot AND
+                        // don't attach it on submit.
+                        clearedFiles.current.add(f);
+                        setAutofillDocs((prev) =>
+                          prev.filter((d) => d.file !== f),
+                        );
+                      }}
+                      className="ml-2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
                 {files.map((f, i) => (
                   <li
                     key={`${f.name}-${i}`}
@@ -1210,7 +1416,11 @@ export function PortalNewClaimPage() {
           ) : (
             <Send className="size-4" />
           )}
-          <span className="ml-1.5">Submit claim</span>
+          <span className="ml-1.5">
+            {pendingClaims.length > 0
+              ? `Submit claim ${multiDone + 1} of ${multiDone + 1 + pendingClaims.length}`
+              : "Submit claim"}
+          </span>
         </Button>
       </div>
     </div>

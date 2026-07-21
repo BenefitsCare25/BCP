@@ -67,6 +67,12 @@ _DMY_TEXT_RE = re.compile(r"(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})")  # 27 Jun 20
 _MDY_TEXT_RE = re.compile(r"([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})")  # Jul 1, 2026
 _DMY_NUM_RE = re.compile(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})")  # 27/06/26, 27.06.2026
 
+# Field-label keywords naming the treatment provider.
+_PROVIDER_KEYWORDS = (
+    "clinic", "hospital", "provider", "practice", "medical",
+    "centre", "center", "dental", "surgery",
+)
+
 # Name fields that are NOT the patient — a hospital bill carries several "…Name"
 # fields; only the patient's should drive claimant detection.
 _NON_PATIENT_NAME = (
@@ -543,11 +549,7 @@ def suggest_from_extraction(
     is the client's configured document-type registry (None → defaults)."""
     fields = _fields(document)
 
-    provider, provider_conf = _keyworded(
-        fields,
-        ("clinic", "hospital", "provider", "practice", "medical",
-         "centre", "center", "dental", "surgery"),
-    )
+    provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
     amount, amount_conf = _amount(fields)
     incurred_date, date_conf = _date_field(fields, year)
     invoice_number, invoice_conf = _invoice_number(fields)
@@ -611,6 +613,51 @@ def suggest_from_extraction(
 # ── multi-document intake ─────────────────────────────────────────────────────
 
 
+def _billing_identity(
+    fields: list[dict[str, Any]],
+) -> tuple[str | None, float | None]:
+    """A document's billing identity — normalized invoice number + amount — used
+    to detect distinct invoices. Cheap (no provider/date/diagnosis reads)."""
+    number, _ = _invoice_number(fields)
+    amount, _ = _amount(fields)
+    key = re.sub(r"\s+", "", number).upper() if number else None
+    return key, amount
+
+
+def _doc_reading(
+    fields: list[dict[str, Any]], year: PolicyYear
+) -> tuple[IntakeFields, list[str]]:
+    """One document's OWN field reading (no cross-document merging) plus the
+    field names read below the confidence floor — the basis for prefilling a
+    later invoice's claim and warning on the fields the AI was unsure about
+    (mirrors ``suggest_from_extraction``'s own low-confidence logic)."""
+    provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
+    amount, amount_conf = _amount(fields)
+    incurred_date, date_conf = _date_field(fields, year)
+    invoice_number, invoice_conf = _invoice_number(fields)
+    diagnosis, diag_conf = _keyworded(fields, ("diagnosis", "condition"))
+    out = IntakeFields(
+        provider_name=provider,
+        incurred_date=incurred_date,
+        invoice_number=invoice_number,
+        amount=amount,
+        currency=_currency(fields),
+        diagnosis=diagnosis,
+    )
+    low = [
+        name
+        for name, value, conf in (
+            ("provider_name", provider, provider_conf),
+            ("amount", amount, amount_conf),
+            ("incurred_date", incurred_date, date_conf),
+            ("invoice_number", invoice_number, invoice_conf),
+            ("diagnosis", diagnosis, diag_conf),
+        )
+        if value is not None and conf < _CONFIDENCE_FLOOR
+    ]
+    return out, low
+
+
 def _merge_extractions(
     extractions: list[dict[str, Any]],
     doc_types: Sequence[DocTypeDefinition] | None,
@@ -650,30 +697,107 @@ def build_intake_suggestion(
     year: PolicyYear,
     doc_types: Sequence[DocTypeDefinition] | None = None,
 ) -> ClaimIntakeSuggestionOut:
-    """Turn one-to-three extracted documents into a single set of claim-form
-    suggestions, plus a per-document classification so the form can drop each
-    upload into the required-document slot it fills. Each extraction dict is
-    ``{file_name, document_type, fields}``."""
+    """Turn one-to-three extracted documents into claim-form suggestions, plus a
+    per-document classification so the form can drop each upload into the
+    required-document slot it fills. Each extraction dict is
+    ``{file_name, document_type, fields}``.
+
+    Two upload shapes are distinguished:
+
+    - ONE claim's document set (invoice + itemised bill + discharge summary):
+      the readings are merged, so the amount from the invoice and the diagnosis
+      from the discharge summary both fill the form.
+    - SEVERAL distinct invoices (one visit each): merging would pick one
+      arbitrary amount/date, so instead each invoice ANCHORS its own claim —
+      ``multi_claim=True``, the top-level fields prefill the first invoice's
+      claim, and later anchors carry ``claim_index``/``fields`` for the form's
+      one-claim-per-invoice flow.
+    """
     from app.schemas.claims import IntakeDocument
 
-    documents: list[IntakeDocument] = []
-    for e in extractions:
+    # Per doc: (extraction, classification, its fields, billing key, amount,
+    # upload index). Only the CHEAP billing identity is read here; the full
+    # per-doc reading is deferred to the later anchors that actually use it.
+    # ``upload_index`` is the document's position in the ORIGINAL upload (the
+    # endpoint may skip unreadable files, so it can't be re-derived from order)
+    # — the form joins files to documents on it, robust to duplicate names.
+    per_doc: list[
+        tuple[dict[str, Any], DocTypeDefinition | None, list[dict[str, Any]],
+              str | None, float | None, int]
+    ] = []
+    for i, e in enumerate(extractions):
         efields = [f for f in (e.get("fields") or []) if isinstance(f, dict)]
         defn = classify_document(
             e.get("document_type"), efields, definitions=doc_types
         )
+        key, amount = _billing_identity(efields)
+        per_doc.append((e, defn, efields, key, amount, e.get("upload_index", i)))
+
+    # Claim anchors: the FIRST document to carry a given billing identity (an
+    # invoice number AND an amount). Anchors with DIFFERENT invoice numbers are
+    # different visits — one claim each — while an itemised bill reprinting the
+    # invoice's number stays supporting material for THAT invoice's claim. A
+    # document with no readable number never splits (conservative: a hard-to-
+    # read receipt must not fragment a genuine single-claim set).
+    anchor_idx: list[int] = []
+    number_to_claim: dict[str, int] = {}
+    for i, (_, _, _, key, amount, _) in enumerate(per_doc):
+        if key and amount is not None and key not in number_to_claim:
+            number_to_claim[key] = len(anchor_idx)
+            anchor_idx.append(i)
+    multi = len(anchor_idx) >= 2
+
+    # Attribute every document to a claim by its billing number: a doc whose
+    # number matches an anchor supports THAT anchor's claim; a doc with no
+    # matching number is general material for the first claim. The top-level
+    # suggestion merges only the first claim's documents, so a LATER invoice's
+    # supporting docs (e.g. its itemised bill) can't bleed their amount/date
+    # into the first claim.
+    def _claim_of(key: str | None) -> int:
+        return number_to_claim.get(key, 0) if key else 0
+
+    pool = [e for (e, _, _, key, _, _) in per_doc if _claim_of(key) == 0]
+    merged = _merge_extractions(pool, doc_types)
+    suggestion = suggest_from_extraction(
+        merged, coverage_opts, employee, year, doc_types
+    )
+    suggestion.multi_claim = multi
+
+    # Single-claim mode with documents quoting DIFFERENT amounts: the merge
+    # picked one of them — surface it via the "double-check" hint.
+    if not multi:
+        amounts = {amt for (_, _, _, _, amt, _) in per_doc if amt is not None}
+        if len(amounts) > 1 and "amount" not in suggestion.low_confidence:
+            suggestion.low_confidence.append("amount")
+
+    claim_order = {doc_i: order for order, doc_i in enumerate(anchor_idx)}
+    documents: list[IntakeDocument] = []
+    for i, (e, defn, efields, _, _, upload_index) in enumerate(per_doc):
+        idx = claim_order.get(i) if multi else None
+        # Only a LATER anchor prefills its own claim: ship its own reading (with
+        # the diagnosis resolved against the inferred claim group) plus the
+        # fields the AI was unsure about, so the form can warn on advance. The
+        # first claim always prefills from the top-level merged suggestion, so
+        # its (and every supporting doc's) per-doc fields would go unused.
+        fields: IntakeFields | None = None
+        low: list[str] = []
+        if idx is not None and idx > 0:
+            reading, low = _doc_reading(efields, year)
+            reading.diagnosis = _resolve_diagnosis(
+                reading.diagnosis, suggestion.claim_selection
+            )
+            fields = reading
         documents.append(
             IntakeDocument(
                 file_name=str(e.get("file_name") or "document"),
                 detected_doc_type=defn.display if defn else None,
                 doc_slot=defn.slot_key if defn else None,
+                claim_index=idx,
+                upload_index=upload_index,
+                fields=fields,
+                low_confidence=low,
             )
         )
-
-    merged = _merge_extractions(extractions, doc_types)
-    suggestion = suggest_from_extraction(
-        merged, coverage_opts, employee, year, doc_types
-    )
     suggestion.documents = documents
     # Top-level detected type / slot mirror the primary document (the first
     # that fills a slot) for single-document consumers.

@@ -3,9 +3,11 @@ Employee row via `resolve_member_employee`; a claim id belonging to anyone
 else 404s (same not-403 convention as tenant scoping)."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 
+from anthropic import RateLimitError
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -250,6 +252,49 @@ def build_coverage_options(
 # the amount on the invoice). Kept small to bound AI spend per request.
 MAX_INTAKE_FILES = 3
 
+# Provider burst-throttle recovery: three vision extractions back-to-back can
+# trip a 429 on low-quota accounts, and losing the tail of the set silently
+# degrades multi-invoice detection (the later invoices just ride along as
+# "additional documents"). One short backoff-retry per file recovers a
+# transient burst throttle without turning an interactive request into a long
+# hang — a per-minute quota won't reopen inside any in-request wait, so a
+# longer backoff would just pin the worker (and its DB connection) for nothing.
+# The first file that stays throttled stops the set, so the worst-case added
+# wait is bounded to RETRIES x BACKOFF per request.
+INTAKE_THROTTLE_RETRIES = 1
+INTAKE_THROTTLE_BACKOFF_SECONDS = 8.0
+
+
+async def _extract_with_throttle_retry(
+    db: Session,
+    *,
+    client_id: str,
+    policy_year_id: str,
+    sha256: str,
+    blocks: list[dict],
+    file_name: str,
+):
+    """`ai_gateway.extract_claim_document` with a bounded async backoff on
+    provider throttling (429). Any other error propagates unchanged. The DB
+    session is rolled back before each sleep so the pooled connection is
+    RELEASED during the wait (never held idle / idle-in-transaction)."""
+    for attempt in range(INTAKE_THROTTLE_RETRIES + 1):
+        try:
+            return ai_gateway.extract_claim_document(
+                db,
+                client_id=client_id,
+                policy_year_id=policy_year_id,
+                sha256=sha256,
+                blocks=blocks,
+                file_name=file_name,
+            )
+        except RateLimitError:
+            if attempt >= INTAKE_THROTTLE_RETRIES:
+                raise
+            db.rollback()  # return the connection to the pool during the wait
+            await asyncio.sleep(INTAKE_THROTTLE_BACKOFF_SECONDS)
+    raise AssertionError("unreachable")  # pragma: no cover
+
 
 @options_router.post("/claims/intake", response_model=ClaimIntakeSuggestionOut)
 @limiter.limit("20/minute")
@@ -282,7 +327,7 @@ async def extract_claim_intake(
     year = active_policy_year(db, member.client_id)
 
     extractions: list[dict] = []
-    for upload in files:
+    for upload_index, upload in enumerate(files):
         # Stream to a temp file with the size cap enforced DURING read (never
         # buffer an over-cap upload in memory), then read the bounded bytes back
         # for the vision blocks + hash. saved_upload also enforces the suffix
@@ -301,7 +346,7 @@ async def extract_claim_intake(
 
         sha256 = hashlib.sha256(data).hexdigest()
         try:
-            result = ai_gateway.extract_claim_document(
+            result = await _extract_with_throttle_retry(
                 db,
                 client_id=employee.client_id,
                 policy_year_id=year.id,
@@ -313,9 +358,18 @@ async def extract_claim_intake(
             # Service-wide degradation (no provider / over budget / breaker /
             # parser fault) — stop trying more files.
             break
+        except RateLimitError:
+            # Still throttled after the bounded retry — keep what we already
+            # read; the remaining files stay attachable, just not prefilled.
+            logger.warning(
+                "Claim intake throttled for client %s — continuing with %d of %d documents",
+                employee.client_id, len(extractions), len(files),
+            )
+            db.rollback()
+            break
         except Exception:
-            # Any other provider fault (bad credentials, throttling, network)
-            # must NOT 500 the member — log for ops and stop.
+            # Any other provider fault (bad credentials, network) must NOT 500
+            # the member — log for ops and stop.
             logger.exception(
                 "Claim intake extraction failed for client %s", employee.client_id
             )
@@ -331,6 +385,10 @@ async def extract_claim_intake(
         extractions.append(
             {
                 "file_name": upload.filename or "receipt",
+                # Original upload position — the form joins files to documents on
+                # it; skipped (empty/unreadable) files leave gaps, so it can't be
+                # re-derived from `extractions` order downstream.
+                "upload_index": upload_index,
                 "document_type": result.document.get("document_type"),
                 "fields": result.document.get("fields", []),
             }
