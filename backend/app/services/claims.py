@@ -379,6 +379,15 @@ def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> 
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"You have no {claim.product_code} coverage to claim against.",
             )
+        # Products settled outside the portal (Major Medical, term life,
+        # personal accident, critical illness) aren't member-filed — reject
+        # even a hand-crafted request that bypassed the hidden picker.
+        if not claim_profile_for(claim.product_code).member_claimable:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{claim.product_code} claims aren't submitted through the "
+                "portal — please contact your broker.",
+            )
         if claim.benefit_key:
             items = (line.benefit_schedule or {}).get("items") or []
             names = {str(i.get("name", "")).strip().lower() for i in items if isinstance(i, dict)}

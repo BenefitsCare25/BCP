@@ -163,6 +163,12 @@ class ClaimIntakeProfile:
     category: str = CATEGORY_OTHER
     # Dropdown label for the claim type ("GP", "SP", …); None = product name.
     claim_type_label: str | None = None
+    # Whether members file this benefit as a receipt-reimbursement claim through
+    # the portal. False for products settled outside the claim form — Major
+    # Medical (top-up that pays after GHS, not filed separately) and the
+    # event/lump-sum lines (term life, personal accident, critical illness).
+    # These are hidden from the claim-type picker AND rejected at submit.
+    member_claimable: bool = True
 
 
 _HOSPITAL = ClaimIntakeProfile(
@@ -170,6 +176,15 @@ _HOSPITAL = ClaimIntakeProfile(
     diagnosis_group="hospital",
     diagnosis_required=True,
     category=CATEGORY_INPATIENT,
+)
+# Group Major Medical — same shape as GHS but not member-filed (excluded from
+# the claim form; a member claims hospitalisation under GHS only).
+_MAJOR_MEDICAL = ClaimIntakeProfile(
+    sub_types=GHS_SUB_TYPES,
+    diagnosis_group="hospital",
+    diagnosis_required=True,
+    category=CATEGORY_INPATIENT,
+    member_claimable=False,
 )
 _GP = ClaimIntakeProfile(
     sub_types=GP_SUB_TYPES,
@@ -196,8 +211,8 @@ _DENTAL = ClaimIntakeProfile(
 _PROFILES: dict[str, ClaimIntakeProfile] = {
     "GHS": _HOSPITAL,
     "GHS2": _HOSPITAL,
-    "GMM": _HOSPITAL,
-    "GMM2": _HOSPITAL,
+    "GMM": _MAJOR_MEDICAL,
+    "GMM2": _MAJOR_MEDICAL,
     "IMP": _HOSPITAL,
     "GP": _GP,
     "GCGP": _GP,
@@ -210,7 +225,10 @@ _PROFILES: dict[str, ClaimIntakeProfile] = {
     "MATERNITY": ClaimIntakeProfile(diagnosis_group="maternity"),
 }
 
-_EMPTY = ClaimIntakeProfile()
+# Unknown / unmapped products (term life, personal accident, critical illness,
+# and any product without a claim profile) are not member-filed — hidden from
+# the claim form and rejected at submit.
+_EMPTY = ClaimIntakeProfile(member_claimable=False)
 
 
 def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:

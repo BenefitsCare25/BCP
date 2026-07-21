@@ -137,6 +137,11 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
     insured = []
     for line in statement.coverage:
         profile = claim_profile_for(line.product_code)
+        # Products settled outside the claim form (Major Medical top-up, term
+        # life / personal accident / critical illness) never appear in the
+        # claim-type picker.
+        if not profile.member_claimable:
+            continue
         base_label = (
             profile.claim_type_label or line.product_name or line.product_code
         )

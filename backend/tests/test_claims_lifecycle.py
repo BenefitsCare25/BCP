@@ -108,6 +108,23 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 covers_dependants=False,
                 covered_dependants=[],
             ),
+            # Major Medical + a term-life line: both held by the member but
+            # NOT filed through the portal — must be hidden from the claim
+            # picker and rejected at submit.
+            CoverageLine(
+                product_code="GMM",
+                product_name="Group Major Medical",
+                plan_code="P1",
+                covers_dependants=False,
+                covered_dependants=[],
+            ),
+            CoverageLine(
+                product_code="GTL",
+                product_name="Group Term Life",
+                plan_code="P1",
+                covers_dependants=False,
+                covered_dependants=[],
+            ),
         ],
         dependants=[dep, dep_b] if employee.id == EMP_A else [],
         flex=FlexCoverageLine(
@@ -319,6 +336,11 @@ def test_coverage_options(anon: TestClient):
     res = anon.get("/api/v1/portal/coverage-options", headers=_auth(ACC_A))
     assert res.status_code == 200, res.text
     body = res.json()
+    # Only member-filed products appear — Major Medical (GMM) and the term-life
+    # line (GTL) are held but never offered in the claim picker.
+    codes = [p["product_code"] for p in body["insured"]]
+    assert codes == ["GHS", "GCGP"]
+    assert "GMM" not in codes and "GTL" not in codes
     ghs = body["insured"][0]
     assert ghs["product_code"] == "GHS"
     # Claim-intake profile drives the conditional form fields.
@@ -406,11 +428,22 @@ def test_incurred_date_outside_policy_year_422(anon: TestClient):
 
 
 def test_unknown_product_422(anon: TestClient):
+    # A product the member doesn't hold — absent from the resolved statement.
+    claim = _draft(anon, product_code="GHSX", sub_type=None)
+    assert _upload(anon, claim["id"], PDF + b" ghsx-1").status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 422
+    assert "no GHSX coverage" in res.text
+
+
+def test_non_member_claimable_product_422(anon: TestClient):
+    # GTL (term life) is held but never filed through the portal — it's hidden
+    # from the picker and rejected at submit even if a request bypasses the UI.
     claim = _draft(anon, product_code="GTL", sub_type=None)
     assert _upload(anon, claim["id"], PDF + b" gtl-1").status_code == 200
     res = _submit(anon, claim["id"])
     assert res.status_code == 422
-    assert "no GTL coverage" in res.text
+    assert "aren't submitted through the portal" in res.text
 
 
 def test_non_claimable_flex_category_422(anon: TestClient):
