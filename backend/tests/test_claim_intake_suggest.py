@@ -302,3 +302,131 @@ def test_date_formats_parse(value, expected):
     }
     out = suggest_from_extraction(doc, _coverage([_gp_option()]), _employee(), YEAR)
     assert out.fields.incurred_date == expected
+
+
+# ── Broker document-type registry (screenshots 2026-07-21) ────────────────────
+
+
+def _govt_finalised_invoice():
+    """SGH-style Tax Invoice (Finalised): HRN, admission/discharge dates,
+    government schemes section, Final Bill amount."""
+    return {
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "1", "label": "Patient Name", "value": "John Tan",
+             "field_type": "name", "confidence": 0.95},
+            {"id": "2", "label": "HRN", "value": "2027123456",
+             "field_type": "number", "confidence": 0.9},
+            {"id": "3", "label": "Admission Date", "value": "10 MAR 2027",
+             "field_type": "date", "confidence": 0.9},
+            {"id": "4", "label": "Discharge Date", "value": "14 MAR 2027",
+             "field_type": "date", "confidence": 0.9},
+            {"id": "5", "label": "Invoice Date", "value": "20 MAR 2027",
+             "field_type": "date", "confidence": 0.9},
+            {"id": "6", "label": "MediShield Life Scheme", "value": "-1,200.00",
+             "field_type": "currency", "confidence": 0.85},
+            {"id": "7", "label": "Final Bill", "value": "864.20",
+             "field_type": "currency", "confidence": 0.92},
+            {"id": "8", "label": "Hospital", "value": "Singapore General Hospital",
+             "field_type": "text", "confidence": 0.95},
+        ],
+    }
+
+
+def test_govt_finalised_invoice_full_mapping():
+    out = suggest_from_extraction(
+        _govt_finalised_invoice(), _coverage([_ghs_option()]), _employee(), YEAR
+    )
+    assert out.detected_doc_type == "Tax Invoice (Finalised)"
+    assert out.doc_slot == "finalised_tax_invoice"
+    # "Final Bill" is the claimable amount (MediShield line is an ID-free
+    # currency field but negative-value; Final Bill outranks it at tier 3).
+    assert out.fields.amount == 864.20
+    # HRN is the bill's identifier when no Invoice No exists... here Invoice
+    # Date exists but no Invoice Number field, so HRN fills in.
+    assert out.fields.invoice_number == "2027123456"
+    # Admission date beats the invoice-issue date as the incurred date.
+    assert out.fields.incurred_date == "2027-03-10"
+    # Hospitalisation/Day Surgery sub-type (admission wording).
+    assert out.claim_selection == "insured:GHS:1"
+
+
+def test_private_final_tax_invoice_detected_by_case_number():
+    doc = {
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "1", "label": "Case No", "value": "IP-000888",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "2", "label": "Admission Date", "value": "2027-04-02",
+             "field_type": "date", "confidence": 0.9},
+            {"id": "3", "label": "Final Bill Amount", "value": "12,340.00",
+             "field_type": "currency", "confidence": 0.9},
+        ],
+    }
+    out = suggest_from_extraction(doc, _coverage([_ghs_option()]), _employee(), YEAR)
+    assert out.detected_doc_type == "Final Tax Invoice"
+    # Private final invoice maps to no single slot (summary/itemised pair).
+    assert out.doc_slot is None
+    assert out.fields.amount == 12340.0
+    assert out.fields.invoice_number == "IP-000888"
+    assert out.claim_selection == "insured:GHS:1"
+
+
+def test_discharge_summary_alias_routes_inpatient():
+    doc = {
+        "document_type": "After Visit Summary",
+        "fields": [
+            {"id": "1", "label": "Diagnosis", "value": "Appendicitis",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "2", "label": "Surgery", "value": "Laparoscopic appendectomy",
+             "field_type": "text", "confidence": 0.9},
+        ],
+    }
+    out = suggest_from_extraction(
+        doc, _coverage([_gp_option(), _ghs_option()]), _employee(), YEAR
+    )
+    assert out.detected_doc_type == "Discharge Summary"
+    assert out.doc_slot == "discharge_summary"
+    # Inpatient, narrowed to Hospitalisation/Day Surgery by the surgery wording
+    # — never the GP option a bare free-text type would fall back to.
+    assert out.claim_selection == "insured:GHS:1"
+
+
+def test_day_surgery_centre_routes_inpatient_not_specialist():
+    doc = {
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "1", "label": "Clinic Name", "value": "Novena Surgery Centre",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "2", "label": "Total Amount Payable", "value": "3,200.00",
+             "field_type": "currency", "confidence": 0.9},
+        ],
+    }
+    sp = InsuredClaimOption(
+        product_code="SP",
+        product_name="Group Specialist",
+        category="outpatient",
+        requires_referral=True,
+        claim_types=[ClaimTypeOption(label="SP (Specialist)")],
+    )
+    out = suggest_from_extraction(
+        doc, _coverage([sp, _ghs_option()]), _employee(), YEAR
+    )
+    # "Surgery" in the centre's name must not misroute to the SP claim — the
+    # hospital registry knows Novena Surgery Centre is a (private) inpatient
+    # setting, and the wording narrows to Hospitalisation/Day Surgery.
+    assert out.claim_selection == "insured:GHS:1"
+
+
+def test_identifier_number_fields_never_read_as_amount():
+    doc = {
+        "document_type": "receipt",
+        "fields": [
+            {"id": "1", "label": "Invoice Number", "value": "20270456",
+             "field_type": "number", "confidence": 0.95},
+            {"id": "2", "label": "Total Amount", "value": "58.00",
+             "field_type": "currency", "confidence": 0.9},
+        ],
+    }
+    out = suggest_from_extraction(doc, _coverage([_gp_option()]), _employee(), YEAR)
+    assert out.fields.amount == 58.0  # never the 8-digit invoice number

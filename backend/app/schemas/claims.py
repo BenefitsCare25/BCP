@@ -308,6 +308,12 @@ class ClaimIntakeSuggestionOut(BaseModel):
     available: bool = True
     reason: str | None = None
     document_type: str | None = None
+    # Broker-recognised document type (claim_doc_types registry display name,
+    # e.g. "Discharge Summary", "Tax Invoice (Finalised)") when identified.
+    detected_doc_type: str | None = None
+    # Required-document slot key this upload fills, when unambiguous — the
+    # form places the autofill file into this slot instead of the first.
+    doc_slot: str | None = None
     # Preselected claimant (self / a dependant), when a patient name matched.
     claimant: IntakeClaimant | None = None
     # Encoded claim-type selection (`insured:<code>:<idx>` / `flex:<name>`) when

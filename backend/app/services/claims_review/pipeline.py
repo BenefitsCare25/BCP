@@ -33,7 +33,13 @@ from app.models.claim_ai_review import (
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
 from app.services.claims import claim_documents
-from app.services.claims_review import comparison, extraction, rules, vision_verify
+from app.services.claims_review import (
+    comparison,
+    doc_completeness,
+    extraction,
+    rules,
+    vision_verify,
+)
 from app.services.claims_review.verdict import compute_verdict
 from app.services.member_statement import build_member_statement
 
@@ -175,6 +181,11 @@ def _run_stages(db, claim: Claim, review: ClaimAIReview) -> None:
     # Stage 2 — extraction (cached per document hash).
     extractions, doc_warnings, calls = extraction.extract_documents(db, claim, docs)
     all_calls.extend(calls)
+    # Deterministic key-field completeness per recognised document type
+    # (broker-side warnings only — never blocks or auto-flags the member).
+    doc_warnings = doc_warnings + doc_completeness.doc_completeness_results(
+        claim, extractions
+    )
 
     # Stage 3 — comparison + AI-judged rules + required-documents check.
     ai_review, call_meta = comparison.compare_claim(db, claim, extractions)

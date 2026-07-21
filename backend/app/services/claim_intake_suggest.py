@@ -25,6 +25,7 @@ from app.schemas.claims import (
     IntakeClaimant,
     IntakeFields,
 )
+from app.services.claim_doc_types import classify_document
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     GHS_SUB_TYPES,
@@ -39,6 +40,7 @@ from app.services.roster_attributes import (
     normalize_nric,
     nric_from_attrs,
 )
+from app.services.sg_hospitals import hospital_sector
 
 # Below this the UI flags a field as a guess (matches the extractor's own
 # differentiated-confidence convention).
@@ -151,7 +153,7 @@ def _amount_tier(label: str) -> int:
         "payable" in label
         or "amount due" in label
         or "balance due" in label
-        or ("final" in label and "amount" in label)
+        or ("final" in label and ("amount" in label or "bill" in label))
     ):
         return 3
     if "after" in label and ("total" in label or "amount" in label):
@@ -161,8 +163,18 @@ def _amount_tier(label: str) -> int:
     return 0
 
 
+# Labels marking an IDENTIFIER, not a money amount — a "Case Number" or
+# "Invoice No" field can carry a number field_type and must never be read as
+# the claimed amount.
+_ID_LABEL_RE = re.compile(r"\b(?:no|number|num|ref|reference|hrn|case)\b|#|no\.")
+
+
 def _amount(fields: list[dict[str, Any]]) -> tuple[float | None, float]:
-    nums = [f for f in fields if _ftype(f) in ("currency", "number")]
+    nums = [
+        f for f in fields
+        if _ftype(f) in ("currency", "number")
+        and not _ID_LABEL_RE.search(_label(f))
+    ]
     if not nums:
         return None, 0.0
     for want in (3, 2, 1):
@@ -199,10 +211,13 @@ def _date_field(
     ceiling = min(date.today(), year.end_date)
     in_window = [p for p in parsed if year.start_date <= p[1] <= ceiling]
     pool = in_window or parsed
+    # On an inpatient bill the ADMISSION date is the incurred date — it beats
+    # the invoice-issue date (printed at/after discharge).
     best = max(
         pool,
         key=lambda p: (
-            any(k in _label(p[0]) for k in ("visit", "treatment", "invoice", "service")),
+            any(k in _label(p[0]) for k in ("admission", "visit", "treatment")),
+            any(k in _label(p[0]) for k in ("invoice", "service")),
             _conf(p[0]),
         ),
     )
@@ -225,6 +240,14 @@ def _invoice_number(fields: list[dict[str, Any]]) -> tuple[str | None, float]:
         if any(k in _label(f) for k in ("invoice", "receipt", "bill", "reference"))
         and any(k in _label(f) for k in ("no", "number", "#", "num", "ref"))
     ]
+    if not cands:
+        # Inpatient bills often carry no "Invoice No" — the HRN (hospital
+        # reference number) or Case Number is the bill's identifier.
+        cands = [
+            f for f in fields
+            if "hrn" in _label(f)
+            or ("case" in _label(f) and any(k in _label(f) for k in ("no", "number")))
+        ]
     if not cands:
         return None, 0.0
     best = max(cands, key=_conf)
@@ -324,8 +347,10 @@ def _entry_setting(opt: InsuredClaimOption, sub_type: str | None, label: str) ->
     return "other"
 
 
-def _target_settings(document_type: str | None, text: str) -> set[str]:
-    dt = (document_type or "").lower()
+def _target_settings(
+    document: dict[str, Any], text: str, provider: str | None
+) -> set[str]:
+    dt = (document.get("document_type") or "").lower()
     text = text.lower()
     if "dental" in text or "dentist" in text:
         return {"dental"}
@@ -335,7 +360,21 @@ def _target_settings(document_type: str | None, text: str) -> set[str]:
         return {"tcm"}
     if "referral" in dt:
         return {"specialist"}
+    # Broker document-type registry: an alias title ("After Visit Summary",
+    # "Endoscopy Report") or an invoice with inpatient markers (admission/
+    # discharge/HRN/case/schemes) identifies an inpatient document even when
+    # the free-text type carries no "discharge"/"hospital" wording.
+    if classify_document(
+        dt, _fields(document), sector_hint=hospital_sector(provider)
+    ) is not None:
+        return {"inpatient_hosp", "inpatient_other"}
     if any(k in dt for k in ("discharge", "hospital bill", "medical report")):
+        return {"inpatient_hosp", "inpatient_other"}
+    # A provider in the SG hospital registry (incl. day-surgery centres and
+    # names without a "hospital" token — NCCS, Thomson Medical) is an
+    # inpatient setting; without this, "Novena Surgery Centre" would fall
+    # through to the specialist branch on its "surgery" token.
+    if hospital_sector(provider) is not None:
         return {"inpatient_hosp", "inpatient_other"}
     if "hospital" in text and "clinic" not in text:
         return {"inpatient_hosp", "inpatient_other"}
@@ -394,7 +433,7 @@ def _infer_claim_type(
 
     labels = " ".join(_label(f) + " " + _val(f) for f in _fields(document))
     text = " ".join(filter(None, [document.get("document_type") or "", provider or "", labels]))
-    targets = _target_settings(document.get("document_type"), text)
+    targets = _target_settings(document, text, provider)
     matched = [(v, setting, st) for v, setting, st in entries if setting in targets]
 
     # Inpatient bills match all four GHS sub-types by setting — narrow to the
@@ -470,9 +509,18 @@ def suggest_from_extraction(
         document, coverage_opts, claimant, provider
     )
 
+    # Broker document-type registry: which recognised document this is, and —
+    # when unambiguous — the required-document slot it fills, so the form can
+    # place the upload into the RIGHT slot instead of blindly the first.
+    defn = classify_document(
+        document.get("document_type"), fields, sector_hint=hospital_sector(provider)
+    )
+
     return ClaimIntakeSuggestionOut(
         available=True,
         document_type=document.get("document_type") or None,
+        detected_doc_type=defn.display if defn else None,
+        doc_slot=defn.slot_key if defn else None,
         claimant=claimant,
         claim_selection=selection,
         claim_candidates=candidates,

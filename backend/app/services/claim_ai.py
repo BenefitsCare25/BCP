@@ -64,7 +64,10 @@ include the field with a low confidence score.
 
 Document type identification — use one of these exact names when the document \
 matches: {doc_types}. If it clearly matches none, describe it freely (e.g. \
-"boarding pass", "unknown").
+"boarding pass", "unknown"). Hospitals title the same documents differently — \
+an "After Visit Summary", "Clinical Discharge Summary", or endoscopy report \
+is a "discharge summary"; a "Final Tax Invoice" or "Tax Invoice (Finalised)" \
+from a hospital is a "tax invoice".
 
 Field rules:
 - label: descriptive human-readable name (e.g. "Total Amount", "Visit Date", \

@@ -346,6 +346,10 @@ export interface ClaimIntakeSuggestion {
   available: boolean;
   reason: string | null;
   document_type: string | null;
+  /** Broker-recognised document type (e.g. "Discharge Summary"), if any. */
+  detected_doc_type: string | null;
+  /** Required-document slot key this upload fills, when unambiguous. */
+  doc_slot: string | null;
   claimant: {
     kind: "self" | "dependant";
     dependant_id: string | null;

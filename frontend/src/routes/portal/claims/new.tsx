@@ -179,6 +179,9 @@ export function PortalNewClaimPage() {
   // Document-driven autofill: the receipt the member uploaded to prefill the
   // form — reused as the claim's primary evidence so they don't upload twice.
   const [autofillFile, setAutofillFile] = useState<File | null>(null);
+  // The required-document slot the AI identified the receipt as filling
+  // (e.g. a discharge summary → the discharge_summary slot); null = unknown.
+  const [autofillSlot, setAutofillSlot] = useState<string | null>(null);
   const [autofillNote, setAutofillNote] = useState<string | null>(null);
   const [lowConfidence, setLowConfidence] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -310,17 +313,21 @@ export function PortalNewClaimPage() {
     }
   }, [visitType, referralMode, referralLetters.data]);
 
-  // The autofill receipt fills the first required-document slot once a claim
-  // type is chosen — so it counts as the claim's evidence and validation sees
-  // it (idempotent: it never overwrites a slot the member already filled).
+  // The autofill receipt fills a required-document slot once a claim type is
+  // chosen — the slot the AI identified it as (discharge summary → the
+  // discharge_summary slot), else the first — so it counts as the claim's
+  // evidence and validation sees it (idempotent: it never overwrites a slot
+  // the member already filled).
   useEffect(() => {
     if (!autofillFile || autofillCleared.current || docSlots.length === 0) return;
-    const first = docSlots[0];
+    const target =
+      (autofillSlot && docSlots.find((s) => s.key === autofillSlot)) ||
+      docSlots[0];
     setSlotFiles((prev) =>
-      prev[first.key] ? prev : { ...prev, [first.key]: autofillFile },
+      prev[target.key] ? prev : { ...prev, [target.key]: autofillFile },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autofillFile, docSlotKey]);
+  }, [autofillFile, autofillSlot, docSlotKey]);
 
   // Hospitalisation: map the extracted provider to a registry hospital (or the
   // "Other" free-text path) once the type resolves the picker into view.
@@ -382,6 +389,7 @@ export function PortalNewClaimPage() {
   // first (it filters the claim-type list), then the type, then the fields.
   const applySuggestion = (s: ClaimIntakeSuggestion, file: File) => {
     setAutofillFile(file);
+    setAutofillSlot(s.available ? (s.doc_slot ?? null) : null);
     if (!s.available) {
       setLowConfidence([]);
       setAutofillNote(
@@ -434,6 +442,7 @@ export function PortalNewClaimPage() {
     } catch (err) {
       // Extraction failed — keep the file as evidence, just no prefill.
       setAutofillFile(file);
+      setAutofillSlot(null);
       setLowConfidence([]);
       setAutofillNote(
         "We couldn't read this file for autofill — fill in the claim and it'll still be attached.",

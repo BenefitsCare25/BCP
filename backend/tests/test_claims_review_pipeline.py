@@ -604,3 +604,110 @@ def test_required_documents_referral_from_profile_not_name():
     # Referral family isn't duplicated when the keyword branch already has it.
     docs = required_documents_for("Group Clinical Specialist", None, requires_referral=True)
     assert sum("referral" in d.lower() for d in docs) == 1
+
+
+# ── Document-type registry + key-field completeness (claim_doc_types) ─────────
+
+
+def _ext(document_type, labels, file_name="doc.pdf"):
+    return {
+        "file_name": file_name,
+        "document_type": document_type,
+        "fields": [
+            {"id": str(i), "label": lab, "value": "x", "field_type": "text",
+             "confidence": 0.9}
+            for i, lab in enumerate(labels, start=1)
+        ],
+    }
+
+
+def _inpatient_claim(provider: str) -> Claim:
+    return Claim(
+        client_id="c1", policy_year_id="py1", employee_id="e1",
+        claim_kind="insured", product_code="GHS",
+        claim_type="Hospitalisation/Day Surgery/Other Inpatient Treatment",
+        sub_type="Hospitalisation/Day Surgery/Other Inpatient Treatment",
+        provider_name=provider, incurred_date=date(2027, 3, 1),
+        amount_claimed=1000.0, currency="SGD", status="submitted",
+    )
+
+
+def test_doc_completeness_discharge_summary_alias_and_missing_fields():
+    from app.services.claims_review.doc_completeness import doc_completeness_results
+
+    claim = _inpatient_claim("Gleneagles Hospital")
+    # "After Visit Summary" alias, showing a diagnosis but no surgery/procedure.
+    results = doc_completeness_results(
+        claim, [_ext("After Visit Summary", ["Patient Name", "Diagnosis"])]
+    )
+    warn = [r for r in results if r["status"] == "warning"]
+    assert len(warn) == 1
+    assert "Discharge Summary" in warn[0]["evidence"]
+    assert "Surgery" in warn[0]["evidence"]
+
+    # Complete copy → pass.
+    results = doc_completeness_results(
+        claim,
+        [_ext("Clinical Discharge Summary", ["Diagnosis", "Surgery Performed"])],
+    )
+    assert [r["status"] for r in results] == ["pass"]
+
+
+def test_doc_completeness_private_final_tax_invoice():
+    from app.services.claims_review.doc_completeness import doc_completeness_results
+
+    claim = _inpatient_claim("Mount Alvernia Hospital")
+    # Complete private final tax invoice.
+    results = doc_completeness_results(
+        claim,
+        [_ext("tax invoice", [
+            "Case Number", "Admission Date", "Discharge Date",
+            "Final Bill", "HRN",
+        ])],
+    )
+    assert [r["status"] for r in results] == ["pass"]
+
+    # Missing HRN + Final Bill → one warning naming both.
+    results = doc_completeness_results(
+        claim,
+        [_ext("tax invoice", ["Case Number", "Admission Date", "Discharge Date"])],
+    )
+    assert [r["status"] for r in results] == ["warning"]
+    assert "Final Bill" in results[0]["evidence"]
+    assert "HRN" in results[0]["evidence"]
+
+
+def test_doc_completeness_govt_finalised_invoice_and_sector_cross_check():
+    from app.services.claims_review.doc_completeness import doc_completeness_results
+
+    # Government bill (Schemes marker) on a government-hospital claim → pass.
+    govt_labels = [
+        "Admission Date", "Discharge Date", "MediShield Life Scheme", "HRN",
+    ]
+    claim = _inpatient_claim("Singapore General Hospital")
+    results = doc_completeness_results(claim, [_ext("tax invoice", govt_labels)])
+    assert [r["status"] for r in results] == ["pass"]
+
+    # Same government-format bill on a PRIVATE-hospital claim → sector warning.
+    claim = _inpatient_claim("Raffles Hospital")
+    results = doc_completeness_results(claim, [_ext("tax invoice", govt_labels)])
+    statuses = {r["rule"]: r["status"] for r in results}
+    assert statuses["Invoice format matches the hospital's sector."] == "warning"
+
+
+def test_doc_completeness_ignores_plain_outpatient_receipt():
+    from app.services.claims_review.doc_completeness import doc_completeness_results
+
+    claim = Claim(
+        client_id="c1", policy_year_id="py1", employee_id="e1",
+        claim_kind="insured", product_code="GP", claim_type="GP",
+        provider_name="Raffles Medical Clinic", incurred_date=date(2027, 3, 1),
+        amount_claimed=45.0, currency="SGD", status="submitted",
+    )
+    # An unlisted clinic's plain tax invoice — no inpatient markers, no sector
+    # hint → never classified, never warned about.
+    results = doc_completeness_results(
+        claim,
+        [_ext("tax invoice", ["Clinic Name", "Total Amount", "Invoice No"])],
+    )
+    assert results == []
