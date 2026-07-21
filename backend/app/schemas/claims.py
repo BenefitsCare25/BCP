@@ -16,6 +16,9 @@ class _Base(BaseModel):
 class StoredDocumentOut(_Base):
     id: str
     file_name: str
+    # Which required-document slot this upload fills (claim_intake.DOC_SLOT
+    # keys); None = untagged/additional document.
+    doc_type: str | None = None
     mime_type: str | None = None
     size_bytes: int
     sha256: str
@@ -35,6 +38,8 @@ class ClaimCreateIn(BaseModel):
     claim_type: str = Field(min_length=1, max_length=64)
     # Required for GHS-family products; validated against the intake profile.
     sub_type: str | None = Field(default=None, max_length=64)
+    # Specialist claims: "first" | "follow_up" (drives the referral rule).
+    visit_type: str | None = Field(default=None, max_length=16)
     incurred_date: date
     provider_name: str = Field(min_length=2, max_length=255)
     invoice_number: str = Field(min_length=1, max_length=128)
@@ -57,6 +62,7 @@ class ClaimOut(_Base):
     flex_category_name: str | None = None
     claim_type: str
     sub_type: str | None = None
+    visit_type: str | None = None
     incurred_date: date
     provider_name: str | None = None
     invoice_number: str | None = None
@@ -193,11 +199,28 @@ class UtilizationOut(BaseModel):
 # ── Coverage options (drives the member claim-form picker) ────────────────────
 
 
+# A required-document upload slot on the claim form.
+class DocSlotOut(BaseModel):
+    key: str
+    label: str
+
+
+class HospitalOut(BaseModel):
+    name: str
+    sector: str  # govt | private
+
+
 # One entry in the claim-type dropdown. The sub-type is folded into the
 # selection (inpatient setting / GP rider), never a second picker.
 class ClaimTypeOption(BaseModel):
     label: str
     sub_type: str | None = None
+    # Required-document slots for this claim type. When the requirement
+    # depends on the hospital (Hospitalisation/Day Surgery), `doc_slots` is
+    # the unlisted-hospital default and `doc_slots_by_sector` carries the
+    # govt/private sets keyed by `HospitalOut.sector`.
+    doc_slots: list[DocSlotOut] = Field(default_factory=list)
+    doc_slots_by_sector: dict[str, list[DocSlotOut]] | None = None
 
 
 class InsuredClaimOption(BaseModel):
@@ -231,6 +254,8 @@ class FlexClaimOptions(BaseModel):
     wallet_amount: float | None = None
     flex_balance: float | None = None
     categories: list[FlexClaimCategoryOption] = Field(default_factory=list)
+    # Required-document slots for flex claims (the generic invoice/receipt).
+    doc_slots: list[DocSlotOut] = Field(default_factory=list)
 
 
 class CoverageOptionsOut(BaseModel):
@@ -241,6 +266,9 @@ class CoverageOptionsOut(BaseModel):
     dependants: list[dict] = Field(default_factory=list)  # {id, name, relationship}
     # Single source of truth for the currency picker (claim_intake.py).
     currencies: list[str] = Field(default_factory=list)
+    # Hospital picker for inpatient claims (sg_hospitals.py) — sector drives
+    # the document requirements.
+    hospitals: list[HospitalOut] = Field(default_factory=list)
 
 
 class DiagnosisOut(BaseModel):

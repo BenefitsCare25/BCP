@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Claim, Dependant, Employee
 from app.services import ai_gateway
-from app.services.claim_intake import claim_profile_for
+from app.services.claim_intake import claim_profile_for, required_doc_slots
 from app.services.claims_review.field_maps import (
     AI_RULES,
     FIELD_MAPS,
@@ -37,6 +37,8 @@ def compare_claim(
         claim_fields.setdefault("product_code", claim.product_code)
     if claim.sub_type:
         claim_fields.setdefault("sub_type", claim.sub_type)
+    if claim.visit_type:  # SP claims: first vs follow-up visit
+        claim_fields.setdefault("visit_type", claim.visit_type)
     if claim.benefit_key:  # legacy claims created before the Benefit field was removed
         claim_fields.setdefault("benefit_key", claim.benefit_key)
     if claim.flex_category_name:
@@ -58,11 +60,18 @@ def compare_claim(
         claim_fields["claimant_name"] = employee.employee_name
 
     # The referral requirement is a per-product profile fact, not something to
-    # infer from the free-text claim_type / display name.
+    # infer from the free-text claim_type / display name — and the document
+    # families come from the claim's resolved slots (hospital-sector aware).
     required_docs = required_documents_for(
         claim.claim_type,
         claim.sub_type,
         requires_referral=claim_profile_for(claim.product_code).requires_referral,
+        slot_keys=required_doc_slots(
+            claim.product_code,
+            claim.sub_type,
+            claim.provider_name,
+            claim_kind=claim.claim_kind,
+        ),
     )
     result = ai_gateway.review_claim(
         db,

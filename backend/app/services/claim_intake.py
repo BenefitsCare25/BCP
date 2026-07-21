@@ -22,11 +22,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
 from app.models.stored_document import DOC_ENTITY_REFERRAL
+from app.services.sg_hospitals import SECTOR_GOVT, hospital_sector
 
 # Currencies a member may incur a bill in — single source of truth, exposed
 # to the frontend via /portal/coverage-options.
@@ -70,6 +72,34 @@ _SUB_TYPE_ROW_KEYWORDS: dict[str, tuple[str, ...]] = {
 CATEGORY_OUTPATIENT = "outpatient"
 CATEGORY_INPATIENT = "inpatient"
 CATEGORY_OTHER = "other"
+
+# Specialist visit types — a first visit must attach a referral letter; a
+# follow-up reuses the member's latest letter on file (auto-linked), and only
+# prompts for one when nothing is on file.
+VISIT_FIRST = "first"
+VISIT_FOLLOW_UP = "follow_up"
+VISIT_TYPES: tuple[str, ...] = (VISIT_FIRST, VISIT_FOLLOW_UP)
+
+# Required-document slot keys. Uploads are tagged with the slot they fill
+# (`stored_documents.doc_type`); submit blocks until every required slot for
+# the claim is filled. The generic invoice/receipt slot is satisfied by ANY
+# attached document (tagged or not) so legacy drafts and API clients keep
+# working; the specific slots require a matching tag.
+DOC_INVOICE_RECEIPT = "invoice_receipt"
+DOC_SP_INVOICE = "sp_invoice"
+DOC_FINALISED_TAX_INVOICE = "finalised_tax_invoice"
+DOC_SUMMARY_TAX_INVOICE = "summary_tax_invoice"
+DOC_ITEMISED_TAX_INVOICE = "itemised_tax_invoice"
+DOC_DISCHARGE_SUMMARY = "discharge_summary"
+
+DOC_SLOT_LABELS: dict[str, str] = {
+    DOC_INVOICE_RECEIPT: "Invoice or receipt",
+    DOC_SP_INVOICE: "SP invoice or GRH/private hospital invoice",
+    DOC_FINALISED_TAX_INVOICE: "Finalised tax invoice",
+    DOC_SUMMARY_TAX_INVOICE: "Summary tax invoice",
+    DOC_ITEMISED_TAX_INVOICE: "Itemised tax invoice",
+    DOC_DISCHARGE_SUMMARY: "Discharge summary",
+}
 
 
 def normalize_sub_type(sub_type: str | None) -> str | None:
@@ -187,6 +217,123 @@ def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
     return _PROFILES.get((product_code or "").strip().upper(), _EMPTY)
 
 
+# The inpatient sub-type whose documents depend on the hospital sector.
+SUB_TYPE_HOSPITALISATION = GHS_SUB_TYPES[1]
+
+# Hospitalisation/Day Surgery document sets by hospital sector — also exposed
+# through /portal/coverage-options so the form can switch slots as the member
+# picks the hospital. Unlisted/overseas hospitals get the private set (the
+# stricter default; the broker can waive at review).
+HOSPITALISATION_SLOTS_BY_SECTOR: dict[str, list[str]] = {
+    "govt": [DOC_FINALISED_TAX_INVOICE],
+    "private": [
+        DOC_SUMMARY_TAX_INVOICE,
+        DOC_ITEMISED_TAX_INVOICE,
+        DOC_DISCHARGE_SUMMARY,
+    ],
+}
+
+
+def required_doc_slots(
+    product_code: str | None,
+    sub_type: str | None,
+    provider_name: str | None = None,
+    *,
+    claim_kind: str = CLAIM_KIND_INSURED,
+) -> list[str]:
+    """Required-document slot keys for a claim (broker-specified 2026-07-21).
+
+    - Outpatient / flex / everything else → invoice or receipt.
+    - SP → the SP-or-hospital invoice (the referral letter rides the separate
+      referral mechanism, not a document slot).
+    - Inpatient Hospitalisation/Day Surgery → by hospital sector: government
+      (GRH) needs a Finalised Tax Invoice; private — and unlisted/overseas,
+      the stricter default the broker can waive at review — needs Summary +
+      Itemised Tax Invoices + Discharge Summary.
+    """
+    if claim_kind != CLAIM_KIND_INSURED:
+        return [DOC_INVOICE_RECEIPT]
+    profile = claim_profile_for(product_code)
+    if profile.requires_referral:
+        return [DOC_SP_INVOICE]
+    if (
+        profile.category == CATEGORY_INPATIENT
+        and normalize_sub_type(sub_type) == SUB_TYPE_HOSPITALISATION
+    ):
+        sector = hospital_sector(provider_name)
+        key = "govt" if sector == SECTOR_GOVT else "private"
+        return list(HOSPITALISATION_SLOTS_BY_SECTOR[key])
+    return [DOC_INVOICE_RECEIPT]
+
+
+def assert_documents_satisfy_slots(
+    slot_keys: list[str], documents: list[StoredDocument]
+) -> None:
+    """Submit-time check that every required slot is filled. The generic
+    invoice/receipt slot accepts any attached document (legacy drafts and
+    API clients don't tag); the specific slots need a matching `doc_type`."""
+    tagged = {d.doc_type for d in documents if d.doc_type}
+    missing: list[str] = []
+    for key in slot_keys:
+        if key == DOC_INVOICE_RECEIPT:
+            if not documents:
+                missing.append(key)
+        elif key not in tagged:
+            missing.append(key)
+    if missing:
+        labels = ", ".join(DOC_SLOT_LABELS[k] for k in missing)
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Missing required documents: {labels}.",
+        )
+
+
+def latest_referral_letter(db: Session, employee: Employee) -> StoredDocument | None:
+    return db.execute(
+        select(StoredDocument)
+        .where(
+            StoredDocument.entity_type == DOC_ENTITY_REFERRAL,
+            StoredDocument.entity_id == employee.id,
+        )
+        .order_by(StoredDocument.created_at.desc())
+        .limit(1)
+    ).scalars().first()
+
+
+def resolve_sp_referral(
+    db: Session,
+    employee: Employee,
+    *,
+    visit_type: str | None,
+    referral_document_id: str | None,
+) -> str | None:
+    """The referral letter a specialist claim rides on. First visits must name
+    one; follow-ups auto-link the member's latest letter on file and only
+    422 when the system can't track any."""
+    if visit_type not in VISIT_TYPES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Specialist claims must state whether this is a first visit or a "
+            "follow-up visit.",
+        )
+    if referral_document_id:
+        return referral_document_id
+    if visit_type == VISIT_FOLLOW_UP:
+        letter = latest_referral_letter(db, employee)
+        if letter is not None:
+            return letter.id
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "We couldn't find a referral letter on file for your follow-up "
+            "visit — attach the referral letter for this treatment.",
+        )
+    raise HTTPException(
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "Specialist first visits need a referral letter — attach one or pick "
+        "a previously uploaded letter.",
+    )
+
+
 def assert_intake_valid(
     db: Session,
     employee: Employee,
@@ -198,6 +345,7 @@ def assert_intake_valid(
     referral_document_id: str | None,
     referral_not_applicable: bool,
     currency: str,
+    visit_type: str | None = None,
 ) -> None:
     """Profile-driven form validation. 422 with a member-readable message so
     the wrong claim type / missing sub-type / missing referral can't be
@@ -240,17 +388,33 @@ def assert_intake_valid(
         )
 
     if profile.requires_referral:
-        if referral_document_id is None and not referral_not_applicable:
+        # 2026-07-21: the "not applicable" declaration was removed for SP —
+        # the visit type decides instead. First visits must name a letter;
+        # follow-ups auto-link the latest on file (resolve_sp_referral runs
+        # before this validation, so a valid claim arrives with one set).
+        if visit_type not in VISIT_TYPES:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Specialist claims need a referral letter — attach one, pick a "
-                "previously uploaded letter, or mark it not applicable.",
+                "Specialist claims must state whether this is a first visit "
+                "or a follow-up visit.",
             )
-    elif referral_document_id is not None:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"{product_code} claims do not take a referral letter.",
-        )
+        if referral_document_id is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Specialist claims need a referral letter — attach one or "
+                "pick a previously uploaded letter.",
+            )
+    else:
+        if referral_document_id is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{product_code} claims do not take a referral letter.",
+            )
+        if visit_type is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{product_code} claims do not take a visit type.",
+            )
 
     if referral_document_id is not None:
         doc = db.get(StoredDocument, referral_document_id)

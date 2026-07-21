@@ -99,17 +99,38 @@ REQUIRED_DOCUMENTS: list[tuple[tuple[str, ...], list[str]]] = [
 ]
 
 
+# Required-document slot key (claim_intake.required_doc_slots) → the document
+# family the AI review verifies. Phrased generously — the review matches
+# semantically, so "final bill" satisfies the finalised-tax-invoice family.
+SLOT_DOC_FAMILIES: dict[str, str] = {
+    "invoice_receipt": "receipt or tax invoice",
+    "sp_invoice": "specialist clinic or hospital invoice",
+    "finalised_tax_invoice": "finalised tax invoice or final hospital bill",
+    "summary_tax_invoice": "summary tax invoice or hospital bill summary",
+    "itemised_tax_invoice": "itemised tax invoice or detailed hospital bill",
+    "discharge_summary": "discharge summary or medical report",
+}
+
+
 def required_documents_for(
-    claim_type: str, sub_type: str | None = None, *, requires_referral: bool = False
+    claim_type: str,
+    sub_type: str | None = None,
+    *,
+    requires_referral: bool = False,
+    slot_keys: list[str] | None = None,
 ) -> list[str]:
-    """Required document families for a claim. The GHS sub-type is consulted
-    first, then the claim_type keyword fallback. ``requires_referral`` is the
-    authoritative per-product signal from the intake profile (never the
-    free-text claim_type / display name): when set, the referral-letter family
-    is guaranteed present so the AI doc-check verifies it regardless of how the
-    product happens to be named."""
+    """Required document families for a claim. When the caller supplies the
+    claim's resolved document slots (``slot_keys``, from
+    `claim_intake.required_doc_slots`) those are authoritative; otherwise the
+    GHS sub-type is consulted first, then the claim_type keyword fallback.
+    ``requires_referral`` is the authoritative per-product signal from the
+    intake profile (never the free-text claim_type / display name): when set,
+    the referral-letter family is guaranteed present so the AI doc-check
+    verifies it regardless of how the product happens to be named."""
     sub = (sub_type or "").strip().lower()
-    if sub in _SUB_TYPE_REQUIRED_DOCS:
+    if slot_keys:
+        docs = [SLOT_DOC_FAMILIES[k] for k in slot_keys if k in SLOT_DOC_FAMILIES]
+    elif sub in _SUB_TYPE_REQUIRED_DOCS:
         docs = list(_SUB_TYPE_REQUIRED_DOCS[sub])
     else:
         docs = None

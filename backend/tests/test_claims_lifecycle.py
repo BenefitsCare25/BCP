@@ -255,7 +255,9 @@ def _draft(
         "claim_kind": "insured",
         "product_code": "GHS",
         "claim_type": "Group Hospital & Surgical",
-        "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
+        # Emergency = the generic invoice/receipt document slot; the
+        # hospitalisation sub-type (sector-specific slots) has its own tests.
+        "sub_type": "Emergency Accidental Outpatient Treatment",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
         "invoice_number": "INV-00123",
@@ -269,10 +271,17 @@ def _draft(
     return res.json()
 
 
-def _upload(anon: TestClient, claim_id: str, content: bytes = PDF, account: str = ACC_A):
+def _upload(
+    anon: TestClient,
+    claim_id: str,
+    content: bytes = PDF,
+    account: str = ACC_A,
+    doc_type: str | None = None,
+):
     return anon.post(
         f"/api/v1/portal/claims/{claim_id}/documents",
         files={"file": ("receipt.pdf", content, "application/pdf")},
+        data={"doc_type": doc_type} if doc_type else {},
         headers=_auth(account),
     )
 
@@ -334,6 +343,29 @@ def test_coverage_options(anon: TestClient):
         "TCM (Traditional Chinese Medicine)",
     ]
     assert gp["claim_types"][0]["sub_type"] is None
+    # Document slots: GP is the generic invoice/receipt; the hospitalisation
+    # entry defaults to the private set and carries both sector sets for the
+    # hospital picker; other inpatient sub-types stay generic.
+    assert [s["key"] for s in gp["claim_types"][0]["doc_slots"]] == ["invoice_receipt"]
+    hosp = ghs["claim_types"][1]
+    assert hosp["sub_type"] == "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+    assert [s["key"] for s in hosp["doc_slots"]] == [
+        "summary_tax_invoice",
+        "itemised_tax_invoice",
+        "discharge_summary",
+    ]
+    assert [s["key"] for s in hosp["doc_slots_by_sector"]["govt"]] == [
+        "finalised_tax_invoice"
+    ]
+    emergency = ghs["claim_types"][2]
+    assert [s["key"] for s in emergency["doc_slots"]] == ["invoice_receipt"]
+    assert emergency["doc_slots_by_sector"] is None
+    # Hospital registry rides along for the picker.
+    sectors = {h["sector"] for h in body["hospitals"]}
+    assert sectors == {"govt", "private"}
+    assert {"name": "Singapore General Hospital", "sector": "govt"} in body["hospitals"]
+    assert {"name": "Raffles Hospital", "sector": "private"} in body["hospitals"]
+    assert [s["key"] for s in body["flex"]["doc_slots"]] == ["invoice_receipt"]
     assert "SGD" in body["currencies"]
     assert body["flex"]["categories"] == [
         {"name": "Dental", "sub_limit": 500.0, "note": None}
@@ -403,7 +435,7 @@ def _draft_res(anon: TestClient, account: str = ACC_A, **overrides):
         "claim_kind": "insured",
         "product_code": "GHS",
         "claim_type": "Group Hospital & Surgical",
-        "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
+        "sub_type": "Emergency Accidental Outpatient Treatment",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
         "invoice_number": "INV-00123",
@@ -505,6 +537,69 @@ def test_physio_without_plan_row_422(anon: TestClient):
     assert "does not include" in res.text
 
 
+HOSP_SUB = "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+
+
+def test_govt_hospitalisation_needs_finalised_tax_invoice(anon: TestClient):
+    claim = _draft(
+        anon, sub_type=HOSP_SUB, provider_name="Singapore General Hospital"
+    )
+    # An untagged receipt doesn't satisfy the finalised-tax-invoice slot …
+    assert _upload(anon, claim["id"], PDF + b" grh-1").status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 422
+    assert "Finalised tax invoice" in res.text
+    # … a tagged one does.
+    assert (
+        _upload(
+            anon, claim["id"], PDF + b" grh-2", doc_type="finalised_tax_invoice"
+        ).status_code
+        == 200
+    )
+    assert _submit(anon, claim["id"]).status_code == 200
+
+
+def test_private_hospitalisation_needs_full_document_set(anon: TestClient):
+    claim = _draft(anon, sub_type=HOSP_SUB, provider_name="Gleneagles Hospital")
+    assert (
+        _upload(
+            anon, claim["id"], PDF + b" pvt-1", doc_type="summary_tax_invoice"
+        ).status_code
+        == 200
+    )
+    assert (
+        _upload(
+            anon, claim["id"], PDF + b" pvt-2", doc_type="itemised_tax_invoice"
+        ).status_code
+        == 200
+    )
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 422
+    assert "Discharge summary" in res.text
+    assert (
+        _upload(
+            anon, claim["id"], PDF + b" pvt-3", doc_type="discharge_summary"
+        ).status_code
+        == 200
+    )
+    assert _submit(anon, claim["id"]).status_code == 200
+
+
+def test_unlisted_hospital_gets_private_document_set(anon: TestClient):
+    # Unlisted/overseas hospitals default to the stricter private set.
+    claim = _draft(anon, sub_type=HOSP_SUB, provider_name="Bangkok Hospital")
+    assert _upload(anon, claim["id"], PDF + b" ovs-1").status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 422
+    assert "Summary tax invoice" in res.text
+
+
+def test_unknown_doc_type_tag_422(anon: TestClient):
+    claim = _draft(anon)
+    res = _upload(anon, claim["id"], PDF + b" tag-1", doc_type="mystery_doc")
+    assert res.status_code == 422
+
+
 def test_plain_gp_claim_needs_no_sub_type(anon: TestClient):
     claim = _draft(
         anon,
@@ -518,22 +613,58 @@ def test_plain_gp_claim_needs_no_sub_type(anon: TestClient):
     assert _submit(anon, claim["id"]).status_code == 200
 
 
-def test_specialist_requires_referral_422(anon: TestClient):
+def test_specialist_requires_visit_type_422(anon: TestClient):
     res = _draft_res(
         anon, product_code="GCSP", claim_type="Group Clinical Specialist",
         sub_type=None,
     )
     assert res.status_code == 422
+    assert "first visit" in res.text.lower()
+
+
+def test_specialist_first_visit_requires_referral_422(anon: TestClient):
+    # "Not applicable" was removed for SP (2026-07-21) — a first visit must
+    # name a referral letter even when the member declares N/A.
+    res = _draft_res(
+        anon, product_code="GCSP", claim_type="Group Clinical Specialist",
+        sub_type=None, visit_type="first", referral_not_applicable=True,
+    )
+    assert res.status_code == 422
     assert "referral" in res.text.lower()
 
 
-def test_specialist_referral_not_applicable_ok(anon: TestClient):
+def test_specialist_follow_up_auto_links_latest_letter(anon: TestClient):
+    older = _upload_referral(anon, b" ref-old")
+    newer = _upload_referral(anon, b" ref-new")
     res = _draft_res(
         anon, product_code="GCSP", claim_type="Group Clinical Specialist",
-        sub_type=None, referral_not_applicable=True,
+        sub_type=None, visit_type="follow_up",
     )
     assert res.status_code == 201, res.text
-    assert res.json()["referral_not_applicable"] is True
+    body = res.json()
+    assert body["visit_type"] == "follow_up"
+    # A letter on file is linked automatically without the member naming one.
+    # (Both letters land in the same second here, so created_at can tie —
+    # asserting the exact winner would test SQLite timestamp resolution.)
+    assert body["referral_document"]["id"] in {older["id"], newer["id"]}
+
+
+def test_specialist_follow_up_without_letter_on_file_422(anon: TestClient):
+    # Carol has never uploaded a referral letter — the system can't track one,
+    # so the follow-up claim prompts for it.
+    res = _draft_res(
+        anon, account=ACC_C, product_code="GCSP",
+        claim_type="Group Clinical Specialist",
+        sub_type=None, visit_type="follow_up",
+    )
+    assert res.status_code == 422
+    assert "referral letter on file" in res.text.lower()
+
+
+def test_visit_type_on_non_specialist_product_422(anon: TestClient):
+    res = _draft_res(anon, visit_type="first")
+    assert res.status_code == 422
+    assert "visit type" in res.text.lower()
 
 
 def test_referral_on_non_specialist_product_422(anon: TestClient):
@@ -560,7 +691,7 @@ def test_referral_letter_upload_and_reuse(anon: TestClient):
 
     res = _draft_res(
         anon, product_code="GCSP", claim_type="Group Clinical Specialist",
-        sub_type=None, referral_document_id=letter["id"],
+        sub_type=None, visit_type="first", referral_document_id=letter["id"],
     )
     assert res.status_code == 201, res.text
     body = res.json()
@@ -570,7 +701,8 @@ def test_referral_letter_upload_and_reuse(anon: TestClient):
     # letters are member-level and never trip the duplicate-receipt check).
     res2 = _draft_res(
         anon, product_code="GCSP", claim_type="Group Clinical Specialist",
-        sub_type=None, referral_document_id=letter["id"], invoice_number="INV-2",
+        sub_type=None, visit_type="first", referral_document_id=letter["id"],
+        invoice_number="INV-2",
     )
     assert res2.status_code == 201, res2.text
 
@@ -589,7 +721,7 @@ def test_referral_letter_delete_in_use_409(anon: TestClient):
     letter = _upload_referral(anon, b" ref-inuse")
     claim = _draft_res(
         anon, product_code="GCSP", claim_type="Group Clinical Specialist",
-        sub_type=None, referral_document_id=letter["id"],
+        sub_type=None, visit_type="first", referral_document_id=letter["id"],
     )
     assert claim.status_code == 201, claim.text
     res = anon.delete(
@@ -618,7 +750,7 @@ def test_referral_letter_member_isolation(anon: TestClient):
     res = _draft_res(
         anon, account=ACC_C, product_code="GCSP",
         claim_type="Group Clinical Specialist", sub_type=None,
-        referral_document_id=letter["id"],
+        visit_type="first", referral_document_id=letter["id"],
     )
     assert res.status_code == 404
 
@@ -683,7 +815,7 @@ def test_broker_sees_referral_and_claimant(anon: TestClient, broker: TestClient)
     letter = _upload_referral(anon, b" ref-broker")
     res = _draft_res(
         anon, product_code="GCSP", claim_type="Group Clinical Specialist",
-        sub_type=None, referral_document_id=letter["id"],
+        sub_type=None, visit_type="first", referral_document_id=letter["id"],
     )
     assert res.status_code == 201, res.text
     claim_id = res.json()["id"]
@@ -753,7 +885,7 @@ def test_claim_for_someone_elses_dependant_404(anon: TestClient):
             "claim_kind": "insured",
             "product_code": "GHS",
             "claim_type": "Group Hospital & Surgical",
-            "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
+            "sub_type": "Emergency Accidental Outpatient Treatment",
             "incurred_date": "2027-06-15",
             "provider_name": "Raffles Medical",
             "invoice_number": "INV-00123",

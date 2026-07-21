@@ -8,6 +8,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -28,7 +29,11 @@ from app.core.portal_auth import (
 from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import Claim, ClaimAIReview, StoredDocument
-from app.models.claim import CLAIM_STATUS_AI_REVIEW_PENDING, MEMBER_EDITABLE_STATUSES
+from app.models.claim import (
+    CLAIM_KIND_FLEX,
+    CLAIM_STATUS_AI_REVIEW_PENDING,
+    MEMBER_EDITABLE_STATUSES,
+)
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import (
     ClaimCreateIn,
@@ -38,16 +43,22 @@ from app.schemas.claims import (
     CoverageOptionsOut,
     DiagnosisOut,
     DiagnosisSearchOut,
+    DocSlotOut,
     FlexClaimCategoryOption,
     FlexClaimOptions,
+    HospitalOut,
     InsuredClaimOption,
     StoredDocumentOut,
 )
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     CATEGORY_INPATIENT,
+    DOC_SLOT_LABELS,
+    HOSPITALISATION_SLOTS_BY_SECTOR,
+    SUB_TYPE_HOSPITALISATION,
     benefit_row_for_sub_type,
     claim_profile_for,
+    required_doc_slots,
 )
 from app.services.claims import (
     attach_document,
@@ -60,6 +71,7 @@ from app.services.claims import (
 from app.services.claims_review.pipeline import run_review
 from app.services.member_statement import build_member_statement
 from app.services.sg_diagnoses import search_diagnoses
+from app.services.sg_hospitals import hospital_directory
 
 router = APIRouter(
     prefix="/portal/claims",
@@ -95,6 +107,30 @@ def coverage_options(
     return build_coverage_options(statement, year)
 
 
+def _slots(keys: list[str]) -> list[DocSlotOut]:
+    return [DocSlotOut(key=k, label=DOC_SLOT_LABELS[k]) for k in keys]
+
+
+def _claim_type_option(
+    line, label: str, sub_type: str | None
+) -> ClaimTypeOption:
+    """One dropdown entry with its required-document slots. The default slots
+    assume no/unlisted hospital; the Hospitalisation/Day Surgery entry also
+    carries the per-sector sets so the form can switch when the member picks
+    a listed hospital."""
+    by_sector = (
+        {k: _slots(v) for k, v in HOSPITALISATION_SLOTS_BY_SECTOR.items()}
+        if sub_type == SUB_TYPE_HOSPITALISATION
+        else None
+    )
+    return ClaimTypeOption(
+        label=label,
+        sub_type=sub_type,
+        doc_slots=_slots(required_doc_slots(line.product_code, sub_type)),
+        doc_slots_by_sector=by_sector,
+    )
+
+
 def build_coverage_options(statement, year) -> CoverageOptionsOut:
     """Shared by the live portal endpoint above and the broker employee-view
     preview (`portal_preview.py`) so the two can never drift."""
@@ -109,13 +145,13 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
         # only when the member's schedule actually carries a matching row.
         if profile.category == CATEGORY_INPATIENT:
             claim_types = [
-                ClaimTypeOption(label=s, sub_type=s) for s in profile.sub_types
+                _claim_type_option(line, s, s) for s in profile.sub_types
             ]
         else:
-            claim_types = [ClaimTypeOption(label=base_label, sub_type=None)]
+            claim_types = [_claim_type_option(line, base_label, None)]
             if not profile.sub_type_required:
                 claim_types.extend(
-                    ClaimTypeOption(label=s, sub_type=s)
+                    _claim_type_option(line, s, s)
                     for s in profile.sub_types
                     if benefit_row_for_sub_type(line.benefit_schedule, s)
                 )
@@ -149,6 +185,9 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
                 for c in statement.flex.benefit_categories
                 if c.claimable
             ],
+            doc_slots=_slots(
+                required_doc_slots(None, None, claim_kind=CLAIM_KIND_FLEX)
+            ),
         )
 
     return CoverageOptionsOut(
@@ -161,6 +200,7 @@ def build_coverage_options(statement, year) -> CoverageOptionsOut:
             for d in statement.dependants
         ],
         currencies=list(ALLOWED_CURRENCIES),
+        hospitals=[HospitalOut(**h) for h in hospital_directory()],
     )
 
 
@@ -338,6 +378,7 @@ async def upload_my_claim_document(
     request: Request,
     claim_id: str,
     file: UploadFile = File(...),
+    doc_type: str | None = Form(default=None),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> StoredDocumentOut:
@@ -348,6 +389,13 @@ async def upload_my_claim_document(
             status.HTTP_409_CONFLICT,
             "Documents can only be added while the claim is editable.",
         )
+    # The slot tag must be a known slot key — the submit-time requirement
+    # check trusts these values.
+    if doc_type is not None and doc_type not in DOC_SLOT_LABELS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"'{doc_type}' is not a recognised document type.",
+        )
     doc = await attach_document(
         db,
         client_id=claim.client_id,
@@ -356,10 +404,11 @@ async def upload_my_claim_document(
         entity_id=claim.id,
         file=file,
         uploaded_by_member_id=member.member_account_id,
+        doc_type=doc_type,
     )
     write_member_audit(
         db, member, "claim.document_added", "claim", claim.id,
-        after={"file_name": doc.file_name, "sha256": doc.sha256},
+        after={"file_name": doc.file_name, "sha256": doc.sha256, "doc_type": doc.doc_type},
         employee_id=employee.id,
     )
     db.commit()

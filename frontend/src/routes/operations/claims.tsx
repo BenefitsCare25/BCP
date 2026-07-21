@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, RefreshCw } from "lucide-react";
 import {
+  DOC_TYPE_LABELS,
   downloadClaimDocument,
   useBrokerClaimDetail,
   useBrokerClaims,
@@ -546,6 +547,11 @@ export function ClaimsQueuePage() {
                         >
                           <span className="truncate">
                             {d.file_name}
+                            {d.doc_type && DOC_TYPE_LABELS[d.doc_type] && (
+                              <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                {DOC_TYPE_LABELS[d.doc_type]}
+                              </span>
+                            )}
                             <span className="text-[11px] text-muted-foreground ml-2">
                               {(d.size_bytes / 1024).toFixed(0)} KB
                             </span>

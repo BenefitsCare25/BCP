@@ -201,6 +201,8 @@ export function useSubmitMyEnrollment() {
 export interface PortalClaimDocument {
   id: string;
   file_name: string;
+  /** Required-document slot this upload fills; null = additional document. */
+  doc_type: string | null;
   mime_type: string | null;
   size_bytes: number;
   sha256: string;
@@ -215,6 +217,7 @@ export interface PortalClaim {
   flex_category_name: string | null;
   claim_type: string;
   sub_type: string | null;
+  visit_type: string | null;
   referral_document_id: string | null;
   referral_document: PortalClaimDocument | null;
   referral_not_applicable: boolean;
@@ -250,6 +253,7 @@ export interface ClaimCreateInput {
   flex_category_name?: string | null;
   claim_type: string;
   sub_type?: string | null;
+  visit_type?: string | null;
   incurred_date: string;
   provider_name: string;
   invoice_number: string;
@@ -262,10 +266,20 @@ export interface ClaimCreateInput {
   referral_not_applicable?: boolean;
 }
 
+/** A required-document upload slot on the claim form. */
+export interface DocSlot {
+  key: string;
+  label: string;
+}
+
 /** One claim-type dropdown entry — the sub-type rides in the selection. */
 export interface ClaimTypeOption {
   label: string;
   sub_type: string | null;
+  /** Required-document slots (unlisted-hospital default for inpatient). */
+  doc_slots: DocSlot[];
+  /** Hospitalisation/Day Surgery only: govt/private slot sets. */
+  doc_slots_by_sector: Record<string, DocSlot[]> | null;
 }
 
 export interface InsuredClaimOption {
@@ -295,9 +309,11 @@ export interface CoverageOptions {
     wallet_amount: number | null;
     flex_balance: number | null;
     categories: { name: string; sub_limit: number | null; note: string | null }[];
+    doc_slots: DocSlot[];
   } | null;
   dependants: { id: string; name: string | null; relationship: string | null }[];
   currencies: string[];
+  hospitals: { name: string; sector: "govt" | "private" }[];
 }
 
 export interface DiagnosisOption {
@@ -348,9 +364,10 @@ export function useCreateClaim() {
 
 export function useUploadClaimDocument() {
   return useMutation({
-    mutationFn: (input: { claimId: string; file: File }) => {
+    mutationFn: (input: { claimId: string; file: File; docType?: string }) => {
       const fd = new FormData();
       fd.append("file", input.file);
+      if (input.docType) fd.append("doc_type", input.docType);
       return portalApi.upload<PortalClaimDocument>(
         `/portal/claims/${input.claimId}/documents`,
         fd,

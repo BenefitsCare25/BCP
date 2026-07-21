@@ -5,9 +5,21 @@ import { isNotFoundError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type { Utilization } from "@/types";
 
+/** Display labels for document-slot tags (claim_intake.DOC_SLOT_LABELS). */
+export const DOC_TYPE_LABELS: Record<string, string> = {
+  invoice_receipt: "Invoice/receipt",
+  sp_invoice: "SP/hospital invoice",
+  finalised_tax_invoice: "Finalised tax invoice",
+  summary_tax_invoice: "Summary tax invoice",
+  itemised_tax_invoice: "Itemised tax invoice",
+  discharge_summary: "Discharge summary",
+};
+
 export interface StoredDocumentMeta {
   id: string;
   file_name: string;
+  /** Required-document slot this upload fills; null = additional document. */
+  doc_type: string | null;
   mime_type: string | null;
   size_bytes: number;
   sha256: string;

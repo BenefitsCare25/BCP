@@ -498,7 +498,7 @@ def test_submit_dispatches_pipeline_and_broker_sees_verdict(broker: TestClient):
             "claim_kind": "insured",
             "product_code": "GHS",
             "claim_type": "Group Hospital & Surgical",
-            "sub_type": "Hospitalisation/Day Surgery/Other Inpatient Treatment",
+            "sub_type": "Emergency Accidental Outpatient Treatment",
             "incurred_date": "2028-06-15",
             "provider_name": "Raffles Medical",
             "invoice_number": "INV-00123",

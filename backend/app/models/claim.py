@@ -155,6 +155,10 @@ class Claim(Base, TimestampMixin):
     claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
     # GHS-family claims name a sub-claim type (see claim_intake.GHS_SUB_TYPES).
     sub_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Specialist claims: "first" or "follow_up" (claim_intake.VISIT_TYPES) —
+    # drives the referral-letter requirement (first visit must attach one;
+    # follow-up reuses the latest letter on file).
+    visit_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # Specialist claims: the member-level referral letter this claim rides on
     # (stored_documents row with entity_type="referral"). Plain string, not an
     # FK — referral letters are member-owned and never cascade with the claim.

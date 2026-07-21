@@ -13,15 +13,19 @@
  *   Who is this claim for?  (Myself / a dependant — only when they have one)
  *     → Claim type          (one grouped dropdown, filtered to the claimant)
  *       → conditional intake fields from the product's claim profile:
- *         specialist → referral letter (upload / reuse / not applicable);
- *         medical types → searchable diagnosis (curated ICD-10 catalog,
- *         "Other" free text).
+ *         specialist → first/follow-up visit + referral letter (a follow-up
+ *         auto-links the latest letter on file; no "not applicable" escape);
+ *         hospitalisation → hospital picker (govt/private sector switches the
+ *         required documents); medical types → searchable diagnosis (curated
+ *         ICD-10 catalog, "Other" free text).
+ *       → required documents  (one labeled, tagged upload per slot from
+ *         `claim_types[].doc_slots`; submit blocks until each is filled)
  *
  * A dependant sees the flex categories PLUS the insured products that cover
  * them (GHS/GMM/GD); products that don't extend to dependants are hidden. The
  * claim is created as a draft, receipts attach, and submit runs the backend
  * validations (intake profile, coverage/eligibility, in-period, duplicates). */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, Loader2, Paperclip, Send, X } from "lucide-react";
 import { toast } from "sonner";
@@ -58,6 +62,9 @@ const FLEX_PREFIX = "flex:";
 
 const MAX_REMARKS = 500;
 
+// Sentinel for an unlisted/overseas hospital — frees the provider text input.
+const OTHER_HOSPITAL = "__other__";
+
 const GROUP_LABELS = {
   outpatient: "Outpatient",
   inpatient: "Inpatient",
@@ -72,7 +79,7 @@ interface TypeEntry {
   product: InsuredClaimOption;
 }
 
-type ReferralMode = "" | "upload" | "existing" | "na";
+type ReferralMode = "" | "upload" | "existing";
 
 const selectClass =
   "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring disabled:cursor-not-allowed disabled:opacity-60";
@@ -108,6 +115,10 @@ export function PortalNewClaimPage() {
   const [selection, setSelection] = useState("");
   const [incurredDate, setIncurredDate] = useState("");
   const [provider, setProvider] = useState("");
+  // Hospitalisation claims: hospital picked from the registry ("" = not yet,
+  // OTHER_HOSPITAL = unlisted → free-text provider input).
+  const [hospital, setHospital] = useState("");
+  const [visitType, setVisitType] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("SGD");
@@ -116,6 +127,8 @@ export function PortalNewClaimPage() {
   const [referralMode, setReferralMode] = useState<ReferralMode>("");
   const [referralFile, setReferralFile] = useState<File | null>(null);
   const [referralExistingId, setReferralExistingId] = useState("");
+  // One file per required-document slot (keyed by slot key) + optional extras.
+  const [slotFiles, setSlotFiles] = useState<Record<string, File | null>>({});
   const [files, setFiles] = useState<File[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +162,27 @@ export function PortalNewClaimPage() {
   const selectedClaimType =
     selectedProduct?.claim_types[claimTypeIndex] ?? null;
   const subType = selectedClaimType?.sub_type ?? null;
+
+  // Hospitalisation/Day Surgery: the provider is a hospital picked from the
+  // registry, and its sector (govt/private) decides the document slots.
+  // Unlisted ("Other") hospitals get the default (private) set.
+  const hospitals = options.data?.hospitals ?? [];
+  const isHospitalisation = !!selectedClaimType?.doc_slots_by_sector;
+  const hospitalSector = isHospitalisation
+    ? (hospitals.find((h) => h.name === hospital)?.sector ?? null)
+    : null;
+  const effectiveProvider =
+    isHospitalisation && hospital && hospital !== OTHER_HOSPITAL
+      ? hospital
+      : provider;
+  const docSlots =
+    effectiveKind === "flex"
+      ? (flex?.doc_slots ?? [])
+      : isHospitalisation && hospitalSector
+        ? (selectedClaimType?.doc_slots_by_sector?.[hospitalSector] ??
+          selectedClaimType?.doc_slots ??
+          [])
+        : (selectedClaimType?.doc_slots ?? []);
 
   // Insured products offered for the current claimant: everything for the
   // member; for a dependant, only products that actually cover them.
@@ -204,6 +238,22 @@ export function PortalNewClaimPage() {
   const showDiagnosisPicker =
     effectiveKind === "insured" && (selectedProduct?.diagnosis_group ?? null) !== null;
 
+  // Follow-up visits reuse the member's latest referral letter on file —
+  // auto-select it once the letters load; the member can still change it.
+  useEffect(() => {
+    if (
+      visitType === "follow_up" &&
+      !referralMode &&
+      (referralLetters.data?.length ?? 0) > 0
+    ) {
+      const latest = [...(referralLetters.data ?? [])].sort((a, b) =>
+        b.created_at.localeCompare(a.created_at),
+      )[0];
+      setReferralMode("existing");
+      setReferralExistingId(latest.id);
+    }
+  }, [visitType, referralMode, referralLetters.data]);
+
   if (options.isLoading) return <Skeleton className="h-64 w-full" />;
   if (options.isError || !options.data || (!hasInsured && !hasFlex)) {
     return (
@@ -223,6 +273,9 @@ export function PortalNewClaimPage() {
   // Fields that depend on the chosen claim type — reset when the type changes.
   const resetTypeFields = () => {
     setDiagnosis("");
+    setVisitType("");
+    setHospital("");
+    setSlotFiles({});
     setReferralMode("");
     setReferralFile(null);
     setReferralExistingId("");
@@ -273,7 +326,15 @@ export function PortalNewClaimPage() {
           "Select the diagnosis (choose 'Other' if it isn't listed).";
       }
       if (needsReferral) {
-        if (!referralMode) errs.referral = "Choose how to provide the referral letter.";
+        if (!visitType) {
+          errs.visit_type = "Tell us whether this is a first or follow-up visit.";
+        }
+        if (!referralMode) {
+          errs.referral =
+            visitType === "follow_up"
+              ? "We couldn't find a referral letter on file — attach one."
+              : "Attach or select the referral letter.";
+        }
         if (referralMode === "upload" && !referralFile) {
           errs.referral = "Attach the referral letter.";
         }
@@ -289,7 +350,15 @@ export function PortalNewClaimPage() {
     } else if (incurredDate > today) {
       errs.incurred_date = "The incurred date can't be in the future.";
     }
-    if (provider.trim().length < 2) errs.provider = "Enter the clinic or provider name.";
+    if (isHospitalisation) {
+      if (!hospital) {
+        errs.provider = "Select the hospital.";
+      } else if (hospital === OTHER_HOSPITAL && provider.trim().length < 2) {
+        errs.provider = "Enter the hospital name.";
+      }
+    } else if (provider.trim().length < 2) {
+      errs.provider = "Enter the clinic or provider name.";
+    }
     if (!invoiceNumber.trim()) errs.invoice = "Enter the invoice or receipt number.";
     const amt = Number(amount);
     if (!(amt > 0)) {
@@ -297,7 +366,11 @@ export function PortalNewClaimPage() {
     } else if (amt > 1_000_000) {
       errs.amount = "Amount looks too large — check the receipt.";
     }
-    if (files.length === 0) errs.files = "Attach at least one receipt.";
+    for (const slot of docSlots) {
+      if (!slotFiles[slot.key]) {
+        errs[`slot_${slot.key}`] = `Attach the ${slot.label.toLowerCase()}.`;
+      }
+    }
     return errs;
   };
 
@@ -337,8 +410,9 @@ export function PortalNewClaimPage() {
             ? flexCategory
             : selectedClaimType?.label || productCode,
         sub_type: effectiveKind === "insured" ? subType : null,
+        visit_type: needsReferral && visitType ? visitType : null,
         incurred_date: incurredDate,
-        provider_name: provider.trim(),
+        provider_name: effectiveProvider.trim(),
         invoice_number: invoiceNumber.trim(),
         diagnosis: diagnosis.trim() || null,
         remarks: remarks.trim() || null,
@@ -346,9 +420,21 @@ export function PortalNewClaimPage() {
         currency: effectiveCurrency,
         dependant_id: dependantId || null,
         referral_document_id: referralDocumentId,
-        referral_not_applicable: needsReferral && referralMode === "na",
+        referral_not_applicable: false,
       });
       claimId = claim.id;
+      // Required documents first, tagged with the slot they fill; any
+      // additional documents ride along untagged.
+      for (const slot of docSlots) {
+        const file = slotFiles[slot.key];
+        if (file) {
+          await uploadDoc.mutateAsync({
+            claimId: claim.id,
+            file,
+            docType: slot.key,
+          });
+        }
+      }
       for (const file of files) {
         await uploadDoc.mutateAsync({ claimId: claim.id, file });
       }
@@ -392,9 +478,9 @@ export function PortalNewClaimPage() {
         <div>
           <h2 className="text-sm font-semibold text-foreground">Submit a claim</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Attach at least one receipt. Claims must be incurred within your
-            policy year ({yearStart} to {yearEnd}); your broker reviews every
-            claim before it's approved.
+            Attach the required documents for your claim type. Claims must be
+            incurred within your policy year ({yearStart} to {yearEnd}); your
+            broker reviews every claim before it's approved.
           </p>
         </div>
 
@@ -463,6 +549,32 @@ export function PortalNewClaimPage() {
           <FieldError msg={fieldErrors.claim_type} />
         </div>
 
+        {/* Specialist claims: first vs follow-up visit decides the referral
+            rule (first must attach a letter; follow-up reuses the latest on
+            file, prompting only when none is tracked). */}
+        {needsReferral && (
+          <div className="space-y-1.5">
+            <Label>
+              Is this a first visit or follow-up? <span className="text-error">*</span>
+            </Label>
+            <select
+              className={selectClass}
+              value={visitType}
+              onChange={(e) => {
+                setVisitType(e.target.value);
+                setReferralMode("");
+                setReferralFile(null);
+                setReferralExistingId("");
+              }}
+            >
+              <option value="">Select an option</option>
+              <option value="first">First visit</option>
+              <option value="follow_up">Follow-up visit</option>
+            </select>
+            <FieldError msg={fieldErrors.visit_type} />
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="claim-date">
@@ -480,14 +592,54 @@ export function PortalNewClaimPage() {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="claim-provider">
-              Provider / clinic <span className="text-error">*</span>
+              {isHospitalisation ? "Hospital" : "Provider / clinic"}{" "}
+              <span className="text-error">*</span>
             </Label>
-            <Input
-              id="claim-provider"
-              placeholder="e.g. Raffles Medical"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-            />
+            {isHospitalisation ? (
+              <>
+                <select
+                  id="claim-provider"
+                  className={selectClass}
+                  value={hospital}
+                  onChange={(e) => setHospital(e.target.value)}
+                >
+                  <option value="">Select the hospital</option>
+                  <optgroup label="Government / Restructured">
+                    {hospitals
+                      .filter((h) => h.sector === "govt")
+                      .map((h) => (
+                        <option key={h.name} value={h.name}>
+                          {h.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                  <optgroup label="Private">
+                    {hospitals
+                      .filter((h) => h.sector === "private")
+                      .map((h) => (
+                        <option key={h.name} value={h.name}>
+                          {h.name}
+                        </option>
+                      ))}
+                  </optgroup>
+                  <option value={OTHER_HOSPITAL}>Other / overseas hospital</option>
+                </select>
+                {hospital === OTHER_HOSPITAL && (
+                  <Input
+                    placeholder="Hospital name"
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value)}
+                  />
+                )}
+              </>
+            ) : (
+              <Input
+                id="claim-provider"
+                placeholder="e.g. Raffles Medical"
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+              />
+            )}
             <FieldError msg={fieldErrors.provider} />
           </div>
           <div className="space-y-1.5">
@@ -573,12 +725,22 @@ export function PortalNewClaimPage() {
           </div>
         )}
 
-        {/* Specialist claims: referral letter (upload / reuse / N/A). */}
-        {needsReferral && (
+        {/* Specialist claims: referral letter (upload / reuse). A follow-up
+            visit auto-selects the latest letter on file; when none is tracked
+            the member is prompted to attach one. */}
+        {needsReferral && visitType && (
           <div className="space-y-1.5">
             <Label>
               Upload or select referral letter <span className="text-error">*</span>
             </Label>
+            {visitType === "follow_up" &&
+              (referralLetters.data?.length ?? 0) === 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-warn">
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                  We couldn't find a referral letter on file for you — please
+                  attach the referral letter for this treatment.
+                </p>
+              )}
             <select
               className={selectClass}
               value={referralMode}
@@ -596,7 +758,6 @@ export function PortalNewClaimPage() {
               >
                 Select existing referral letter
               </option>
-              <option value="na">Not applicable</option>
             </select>
             {referralMode === "upload" && (
               <div>
@@ -632,57 +793,100 @@ export function PortalNewClaimPage() {
                 ))}
               </select>
             )}
-            {referralMode === "na" && (
-              <p className="text-xs text-muted-foreground">
-                Your broker will confirm the visit didn't need a referral.
-              </p>
-            )}
             <FieldError msg={fieldErrors.referral} />
           </div>
         )}
 
-        <div className="space-y-1.5">
-          <Label>
-            Invoice &amp; receipt / supporting documents{" "}
-            <span className="text-error">*</span>
-          </Label>
-          <input
-            ref={fileInput}
-            type="file"
-            accept={ACCEPT}
-            multiple
-            className="hidden"
-            onChange={(e) => pickFiles(e.target.files)}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => fileInput.current?.click()}
-          >
-            <Paperclip className="size-4" /> Attach receipt (PDF or photo)
-          </Button>
-          {files.length > 0 && (
-            <ul className="space-y-1 pt-1">
-              {files.map((f, i) => (
-                <li
-                  key={`${f.name}-${i}`}
-                  className="flex items-center justify-between rounded-md bg-muted px-2.5 py-1.5 text-xs"
-                >
-                  <span className="truncate text-foreground">{f.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
-                    className="ml-2 text-muted-foreground hover:text-foreground"
+        {/* Required documents — one labeled upload per slot; the slots follow
+            the claim type (and, for hospitalisation, the hospital's sector). */}
+        {docSlots.length > 0 && (
+          <div className="space-y-2">
+            <Label>
+              Required documents <span className="text-error">*</span>
+            </Label>
+            {docSlots.map((slot) => (
+              <div key={slot.key} className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted">
+                    <Paperclip className="size-3.5 shrink-0" />
+                    <span className="truncate">
+                      {slotFiles[slot.key]?.name ?? `${slot.label} (PDF or photo)`}
+                    </span>
+                    <input
+                      type="file"
+                      accept={ACCEPT}
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        e.target.value = "";
+                        if (!f) return;
+                        if (f.size > MAX_BYTES) {
+                          toast.error(`${f.name} exceeds 15 MB`);
+                          return;
+                        }
+                        setSlotFiles((prev) => ({ ...prev, [slot.key]: f }));
+                      }}
+                    />
+                  </label>
+                  {slotFiles[slot.key] && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSlotFiles((prev) => ({ ...prev, [slot.key]: null }))
+                      }
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                </div>
+                <FieldError msg={fieldErrors[`slot_${slot.key}`]} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Anything else the member wants the broker to see. */}
+        {effectiveKind && (
+          <div className="space-y-1.5">
+            <Label>Additional documents (optional)</Label>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={ACCEPT}
+              multiple
+              className="hidden"
+              onChange={(e) => pickFiles(e.target.files)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => fileInput.current?.click()}
+            >
+              <Paperclip className="size-4" /> Attach document (PDF or photo)
+            </Button>
+            {files.length > 0 && (
+              <ul className="space-y-1 pt-1">
+                {files.map((f, i) => (
+                  <li
+                    key={`${f.name}-${i}`}
+                    className="flex items-center justify-between rounded-md bg-muted px-2.5 py-1.5 text-xs"
                   >
-                    <X className="size-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <FieldError msg={fieldErrors.files} />
-        </div>
+                    <span className="truncate text-foreground">{f.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
+                      className="ml-2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">

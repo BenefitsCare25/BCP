@@ -31,6 +31,9 @@ class StoredDocument(Base, TimestampMixin):
     entity_type: Mapped[str] = mapped_column(String(16), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Which required-document slot a claim upload fills (claim_intake.DOC_SLOT
+    # keys, e.g. "itemised_tax_invoice"); NULL = untagged/additional document.
+    doc_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

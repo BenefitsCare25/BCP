@@ -33,9 +33,13 @@ from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, StoredDocumentOut
 from app.services.claim_intake import (
     GP_SUB_TYPES,
+    assert_documents_satisfy_slots,
     assert_intake_valid,
     benefit_row_for_sub_type,
+    claim_profile_for,
     normalize_sub_type,
+    required_doc_slots,
+    resolve_sp_referral,
 )
 from app.services.flex_membership import flex_effective_window
 from app.services.member_statement import build_member_statement
@@ -193,6 +197,20 @@ def create_claim(
     # Canonical sub-type label (folds pre-rename values from stale clients).
     sub_type = normalize_sub_type(body.sub_type)
 
+    # Specialist claims: resolve the referral letter from the visit type
+    # (first → must name one; follow-up → auto-link the latest on file).
+    referral_document_id = body.referral_document_id
+    if (
+        body.claim_kind == CLAIM_KIND_INSURED
+        and claim_profile_for(body.product_code).requires_referral
+    ):
+        referral_document_id = resolve_sp_referral(
+            db,
+            employee,
+            visit_type=body.visit_type,
+            referral_document_id=referral_document_id,
+        )
+
     # Profile-driven intake rules (sub-type / diagnosis / referral / currency).
     assert_intake_valid(
         db,
@@ -201,9 +219,10 @@ def create_claim(
         product_code=body.product_code,
         sub_type=sub_type,
         diagnosis=body.diagnosis,
-        referral_document_id=body.referral_document_id,
+        referral_document_id=referral_document_id,
         referral_not_applicable=body.referral_not_applicable,
         currency=body.currency,
+        visit_type=body.visit_type,
     )
 
     claim = Claim(
@@ -216,6 +235,7 @@ def create_claim(
         flex_category_name=body.flex_category_name,
         claim_type=body.claim_type,
         sub_type=sub_type,
+        visit_type=body.visit_type,
         incurred_date=body.incurred_date,
         provider_name=body.provider_name,
         invoice_number=body.invoice_number,
@@ -223,7 +243,7 @@ def create_claim(
         remarks=body.remarks,
         amount_claimed=body.amount_claimed,
         currency=body.currency.upper(),
-        referral_document_id=body.referral_document_id,
+        referral_document_id=referral_document_id,
         submitted_by_member_id=submitted_by_member_id,
         # Snapshot of the member-entered form — the AI review compares the
         # uploaded documents against exactly what was claimed at the time.
@@ -231,6 +251,7 @@ def create_claim(
         form_fields={
             "claim_type": body.claim_type,
             "sub_type": sub_type,
+            "visit_type": body.visit_type,
             "incurred_date": body.incurred_date.isoformat(),
             "provider_name": body.provider_name,
             "invoice_number": body.invoice_number,
@@ -255,6 +276,7 @@ async def attach_document(
     file: UploadFile,
     uploaded_by_member_id: str | None = None,
     uploaded_by_user_id: str | None = None,
+    doc_type: str | None = None,
 ) -> StoredDocument:
     """Persist an uploaded document to retained storage + metadata row.
     Does NOT commit — the caller owns the transaction."""
@@ -279,6 +301,7 @@ async def attach_document(
         entity_type=entity_type,
         entity_id=entity_id,
         file_name=file.filename or f"document{suffix}",
+        doc_type=doc_type,
         mime_type=_sniff_mime(head, suffix),
         size_bytes=blob.size_bytes,
         sha256=blob.sha256,
@@ -483,8 +506,20 @@ def submit_claim(
 
     # Re-run the intake rules at submit so a draft created before a rule (or
     # profile) change can't slip through with missing sub-type/referral. A
-    # draft holding a pre-rename sub-type label is folded onto the current one.
+    # draft holding a pre-rename sub-type label is folded onto the current one,
+    # and a specialist draft re-resolves its referral letter (a follow-up may
+    # have gained a letter on file since the draft was created).
     claim.sub_type = normalize_sub_type(claim.sub_type)
+    if (
+        claim.claim_kind == CLAIM_KIND_INSURED
+        and claim_profile_for(claim.product_code).requires_referral
+    ):
+        claim.referral_document_id = resolve_sp_referral(
+            db,
+            employee,
+            visit_type=claim.visit_type,
+            referral_document_id=claim.referral_document_id,
+        )
     assert_intake_valid(
         db,
         employee,
@@ -497,10 +532,22 @@ def submit_claim(
             (claim.form_fields or {}).get("referral_not_applicable")
         ),
         currency=claim.currency,
+        visit_type=claim.visit_type,
     )
     statement = build_member_statement(db, employee)
     _apply_gp_rider_benefit_key(statement, claim)
     _assert_coverage_claimable(statement, claim)
+    # Every required document slot must be filled (tagged uploads); the
+    # generic invoice/receipt slot accepts any attached document.
+    assert_documents_satisfy_slots(
+        required_doc_slots(
+            claim.product_code,
+            claim.sub_type,
+            claim.provider_name,
+            claim_kind=claim.claim_kind,
+        ),
+        claim_documents(db, claim),
+    )
     _assert_no_duplicate_receipt(db, claim)
 
     claim.status = CLAIM_STATUS_SUBMITTED
