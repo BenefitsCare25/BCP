@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
-from anthropic import AuthenticationError, PermissionDeniedError
+from anthropic import AuthenticationError, PermissionDeniedError, RateLimitError
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
@@ -291,6 +291,13 @@ def _run_cached_ai_call(
         raise
     except (AuthenticationError, PermissionDeniedError):
         logger.warning("AI provider rejected credentials for client %s", client_id)
+        raise
+    except RateLimitError:
+        # Provider throttling (HTTP 429) is transient backpressure, not an
+        # outage — re-raise so the caller degrades, but DON'T trip the breaker.
+        # Tripping it here would take every AI feature down for the whole
+        # cooldown on a low-quota account that throttles intermittently.
+        logger.warning("AI provider throttled request for client %s (429)", client_id)
         raise
     except Exception:
         # Genuine provider/network failure — trip the breaker.
