@@ -300,6 +300,15 @@ class IntakeFields(BaseModel):
     diagnosis: str | None = None
 
 
+class IntakeDocument(BaseModel):
+    """One uploaded document in an autofill set, with its recognised type and
+    the required-document slot it fills (when unambiguous)."""
+
+    file_name: str
+    detected_doc_type: str | None = None
+    doc_slot: str | None = None
+
+
 class ClaimIntakeSuggestionOut(BaseModel):
     """What the AI read off an uploaded receipt, mapped to claim-form fields.
     Every value is a SUGGESTION — the member confirms/edits before submit."""
@@ -309,11 +318,14 @@ class ClaimIntakeSuggestionOut(BaseModel):
     reason: str | None = None
     document_type: str | None = None
     # Broker-recognised document type (claim_doc_types registry display name,
-    # e.g. "Discharge Summary", "Tax Invoice (Finalised)") when identified.
+    # e.g. "Discharge Summary", "Tax Invoice (Finalised)") when identified —
+    # mirrors the primary document (first that fills a slot).
     detected_doc_type: str | None = None
-    # Required-document slot key this upload fills, when unambiguous — the
-    # form places the autofill file into this slot instead of the first.
+    # Required-document slot key the primary upload fills, when unambiguous.
     doc_slot: str | None = None
+    # Per-document classification for the whole uploaded set (up to 3) — the
+    # form drops each file into the slot it fills.
+    documents: list[IntakeDocument] = Field(default_factory=list)
     # Preselected claimant (self / a dependant), when a patient name matched.
     claimant: IntakeClaimant | None = None
     # Encoded claim-type selection (`insured:<code>:<idx>` / `flex:<name>`) when
@@ -332,10 +344,13 @@ class ClaimIntakeSuggestionOut(BaseModel):
 
 class ClaimDocKeyField(BaseModel):
     """One completeness-check field. ``keywords`` are the label-match tokens;
-    empty → the field matches on its own name."""
+    empty → the field matches on its own name. ``optional`` fields are checked
+    but their absence is never a completeness warning (e.g. Surgery on a
+    non-surgical discharge summary)."""
 
     name: str = Field(min_length=1, max_length=64)
     keywords: list[str] = Field(default_factory=list, max_length=16)
+    optional: bool = False
 
 
 class ClaimDocTypeIn(BaseModel):

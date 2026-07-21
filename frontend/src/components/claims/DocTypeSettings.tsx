@@ -17,6 +17,7 @@ import { useState } from "react";
 import { Loader2, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
+  DOC_TYPE_LABELS,
   useClaimDocTypes,
   useCreateClaimDocType,
   useDeleteClaimDocType,
@@ -43,6 +44,9 @@ const SECTOR_LABELS: Record<string, string> = {
   govt: "Government hospital",
   private: "Private hospital",
 };
+
+const selectClass =
+  "h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-ring disabled:opacity-50";
 
 function toInput(t: ClaimDocType): ClaimDocTypeInput {
   return {
@@ -141,11 +145,19 @@ function ChipRow({
   );
 }
 
-function DocTypeCard({ docType }: { docType: ClaimDocType }) {
+function DocTypeCard({
+  docType,
+  fetching,
+}: {
+  docType: ClaimDocType;
+  fetching: boolean;
+}) {
   const update = useUpdateClaimDocType();
   const del = useDeleteClaimDocType();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const busy = update.isPending || del.isPending;
+  // `fetching` (the list refetching after a save) is part of busy so a rapid
+  // second edit can't be built on stale data and overwrite the first.
+  const busy = update.isPending || del.isPending || fetching;
 
   const save = (patch: Partial<ClaimDocTypeInput>) => {
     update.mutate(
@@ -190,10 +202,15 @@ function DocTypeCard({ docType }: { docType: ClaimDocType }) {
       <ChipRow
         label="Key fields (for completeness check)"
         hint="a genuine copy always shows these"
-        chips={docType.key_fields.map((f) => f.name)}
+        chips={docType.key_fields.map(
+          (f) => f.name + (f.optional ? " (optional)" : ""),
+        )}
         chipTitle={(_, i) => {
-          const kws = docType.key_fields[i]?.keywords ?? [];
-          return kws.length ? `Matches: ${kws.join(", ")}` : undefined;
+          const f = docType.key_fields[i];
+          const parts = [];
+          if (f?.keywords.length) parts.push(`Matches: ${f.keywords.join(", ")}`);
+          if (f?.optional) parts.push("Optional — absence is not warned");
+          return parts.length ? parts.join(". ") : undefined;
         }}
         placeholder="Add key field"
         disabled={busy}
@@ -206,6 +223,45 @@ function DocTypeCard({ docType }: { docType: ClaimDocType }) {
           save({ key_fields: docType.key_fields.filter((_, j) => j !== i) })
         }
       />
+
+      {/* Hospital sector + the required-document slot this type fills — a
+          sectored invoice type is classified govt/private, and the slot drives
+          where an autofilled upload of this type lands on the claim form. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          Hospital sector
+          <select
+            className={selectClass}
+            disabled={busy}
+            value={docType.sector ?? ""}
+            onChange={(e) =>
+              save({
+                sector: (e.target.value || null) as "govt" | "private" | null,
+              })
+            }
+          >
+            <option value="">Any / not a hospital bill</option>
+            <option value="govt">Government hospital</option>
+            <option value="private">Private hospital</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          Fills document slot
+          <select
+            className={selectClass}
+            disabled={busy}
+            value={docType.slot_key ?? ""}
+            onChange={(e) => save({ slot_key: e.target.value || null })}
+          >
+            <option value="">None</option>
+            {Object.entries(DOC_TYPE_LABELS).map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <AlertDialog
         open={confirmDelete}
@@ -291,7 +347,7 @@ export function DocTypeSettings() {
         ) : (
           <>
             {(docTypes.data ?? []).map((t) => (
-              <DocTypeCard key={t.id} docType={t} />
+              <DocTypeCard key={t.id} docType={t} fetching={docTypes.isFetching} />
             ))}
             {adding ? (
               <div className="flex items-center gap-2">

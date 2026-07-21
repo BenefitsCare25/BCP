@@ -632,20 +632,28 @@ def _inpatient_claim(provider: str) -> Claim:
     )
 
 
-def test_doc_completeness_discharge_summary_alias_and_missing_fields():
+def test_doc_completeness_discharge_summary_optional_surgery():
     from app.services.claims_review.doc_completeness import doc_completeness_results
 
     claim = _inpatient_claim("Gleneagles Hospital")
-    # "After Visit Summary" alias, showing a diagnosis but no surgery/procedure.
+    # "After Visit Summary" alias, showing a diagnosis but no surgery — a
+    # non-surgical (medical) admission. Surgery is OPTIONAL, so this is a
+    # complete document and must NOT warn.
     results = doc_completeness_results(
         claim, [_ext("After Visit Summary", ["Patient Name", "Diagnosis"])]
     )
+    assert [r["status"] for r in results] == ["pass"]
+
+    # Missing the REQUIRED Diagnosis field → warning.
+    results = doc_completeness_results(
+        claim, [_ext("After Visit Summary", ["Patient Name", "Ward"])]
+    )
     warn = [r for r in results if r["status"] == "warning"]
     assert len(warn) == 1
-    assert "Discharge Summary" in warn[0]["evidence"]
-    assert "Surgery" in warn[0]["evidence"]
+    assert "Diagnosis" in warn[0]["evidence"]
+    assert "Surgery" not in warn[0]["evidence"]  # optional, never flagged
 
-    # Complete copy → pass.
+    # Complete copy with surgery → pass.
     results = doc_completeness_results(
         claim,
         [_ext("Clinical Discharge Summary", ["Diagnosis", "Surgery Performed"])],
@@ -799,3 +807,42 @@ def test_custom_config_drives_classification_and_completeness(broker: TestClient
         assert missing_key_fields(defn, fields) == []
     finally:
         broker.post("/api/v1/claim-doc-types/reset")
+
+
+def test_doc_type_slug_collision_creates_distinct_types(broker: TestClient):
+    broker.post("/api/v1/claim-doc-types/reset")
+    a = broker.post("/api/v1/claim-doc-types", json={
+        "display": "Referral Memo", "aliases": [], "key_fields": [],
+    })
+    assert a.status_code == 201
+    # Distinct display that slugifies identically must still be creatable
+    # (unique key derived by suffixing), NOT a false 409.
+    b = broker.post("/api/v1/claim-doc-types", json={
+        "display": "Referral-Memo", "aliases": [], "key_fields": [],
+    })
+    assert b.status_code == 201
+    assert a.json()["key"] != b.json()["key"]
+    # A true duplicate DISPLAY (case-insensitive) still 409s.
+    dup = broker.post("/api/v1/claim-doc-types", json={
+        "display": "referral memo", "aliases": [], "key_fields": [],
+    })
+    assert dup.status_code == 409
+    broker.post("/api/v1/claim-doc-types/reset")
+
+
+def test_doc_type_optional_key_field_round_trips(broker: TestClient):
+    rows = broker.post("/api/v1/claim-doc-types/reset").json()
+    discharge = next(r for r in rows if r["key"] == "discharge_summary")
+    surgery = next(f for f in discharge["key_fields"] if f["name"] == "Surgery")
+    # The seeded Surgery field is optional and survives an edit round-trip.
+    assert surgery["optional"] is True
+    res = broker.put(f"/api/v1/claim-doc-types/{discharge['id']}", json={
+        "display": discharge["display"],
+        "aliases": discharge["aliases"],
+        "key_fields": discharge["key_fields"],
+        "sector": discharge["sector"],
+        "slot_key": discharge["slot_key"],
+    })
+    assert res.status_code == 200
+    surgery2 = next(f for f in res.json()["key_fields"] if f["name"] == "Surgery")
+    assert surgery2["optional"] is True

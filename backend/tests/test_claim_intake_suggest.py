@@ -127,7 +127,10 @@ def test_field_mapping_from_receipt():
     assert out.fields.incurred_date == "2027-03-15"
     assert out.fields.provider_name == "Raffles Medical Clinic"
     assert out.fields.invoice_number == "INV-123"
-    assert out.fields.diagnosis == "Acute URTI"
+    # A free-text reading that doesn't match a catalog entry rides behind the
+    # "Other: " prefix (the backend now owns this so the form can select a
+    # matched catalog label directly).
+    assert out.fields.diagnosis == "Other: Acute URTI"
     assert out.low_confidence == []
 
 
@@ -430,3 +433,117 @@ def test_identifier_number_fields_never_read_as_amount():
     }
     out = suggest_from_extraction(doc, _coverage([_gp_option()]), _employee(), YEAR)
     assert out.fields.amount == 58.0  # never the 8-digit invoice number
+
+
+def test_amount_field_with_case_token_still_read():
+    # A currency field labeled "Total Case Amount" names a real amount (tier 1)
+    # and must NOT be excluded just because the label contains "case".
+    doc = {
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "1", "label": "Case No", "value": "IP-77",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "2", "label": "Total Case Amount", "value": "4,210.00",
+             "field_type": "currency", "confidence": 0.9},
+            {"id": "3", "label": "Admission Date", "value": "2027-05-01",
+             "field_type": "date", "confidence": 0.9},
+        ],
+    }
+    out = suggest_from_extraction(doc, _coverage([_ghs_option()]), _employee(), YEAR)
+    assert out.fields.amount == 4210.0
+
+
+def test_diagnosis_matches_catalog_entry_and_selects_it():
+    # "Appendicitis" is an exact hospital-catalog label → the form selects it
+    # (no "Other:" prefix). Requires the GHS claim type to resolve so the group
+    # is "hospital".
+    doc = {
+        "document_type": "discharge summary",
+        "fields": [
+            {"id": "1", "label": "Diagnosis", "value": "Acute Appendicitis",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "2", "label": "Surgery", "value": "Appendectomy",
+             "field_type": "text", "confidence": 0.9},
+        ],
+    }
+    out = suggest_from_extraction(doc, _coverage([_ghs_option()]), _employee(), YEAR)
+    assert out.claim_selection == "insured:GHS:1"
+    assert out.fields.diagnosis == "Appendicitis"  # catalog label, not "Other:"
+
+
+def test_diagnosis_without_catalog_match_falls_to_other():
+    doc = _receipt_document()
+    doc["fields"][5]["value"] = "Some unlisted rare condition xyz"
+    out = suggest_from_extraction(doc, _coverage([_gp_option()]), _employee(), YEAR)
+    assert out.fields.diagnosis == "Other: Some unlisted rare condition xyz"
+
+
+def test_build_intake_suggestion_merges_invoice_and_discharge_summary():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    # A real 2-document set: the invoice carries the amount/date, the discharge
+    # summary carries the diagnosis. The merged suggestion has BOTH, and each
+    # document is classified to its slot.
+    invoice = {
+        "file_name": "invoice.pdf",
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "1", "label": "Admission Date", "value": "2027-05-10",
+             "field_type": "date", "confidence": 0.9},
+            {"id": "2", "label": "Final Bill", "value": "8,400.00",
+             "field_type": "currency", "confidence": 0.9},
+            {"id": "3", "label": "MediShield Life Scheme", "value": "-2,000.00",
+             "field_type": "currency", "confidence": 0.85},
+            {"id": "4", "label": "HRN", "value": "202755", "field_type": "number",
+             "confidence": 0.9},
+        ],
+    }
+    discharge = {
+        "file_name": "discharge.pdf",
+        "document_type": "After Visit Summary",
+        "fields": [
+            {"id": "1", "label": "Diagnosis", "value": "Appendicitis",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "2", "label": "Surgery", "value": "Laparoscopic appendectomy",
+             "field_type": "text", "confidence": 0.9},
+        ],
+    }
+    out = build_intake_suggestion(
+        [invoice, discharge], _coverage([_ghs_option()]), _employee(), YEAR
+    )
+    assert out.available is True
+    assert out.fields.amount == 8400.0            # from the invoice
+    assert out.fields.incurred_date == "2027-05-10"
+    assert out.fields.diagnosis == "Appendicitis"  # from the discharge summary
+    assert out.claim_selection == "insured:GHS:1"
+    # Per-document classification for slot placement.
+    by_name = {d.file_name: d for d in out.documents}
+    assert by_name["invoice.pdf"].detected_doc_type == "Tax Invoice (Finalised)"
+    assert by_name["invoice.pdf"].doc_slot == "finalised_tax_invoice"
+    assert by_name["discharge.pdf"].detected_doc_type == "Discharge Summary"
+    assert by_name["discharge.pdf"].doc_slot == "discharge_summary"
+
+
+def test_custom_sector_neutral_type_does_not_shadow_invoice():
+    from app.services.claim_doc_types import (
+        DEFAULT_DOC_TYPES,
+        DocTypeDefinition,
+        KeyField,
+        classify_document,
+    )
+
+    # A broker's custom sector-neutral type sharing the "tax invoice" alias must
+    # not shadow the govt/private classification when the doc is an inpatient
+    # bill (has admission/schemes markers).
+    custom = DocTypeDefinition(
+        key="custom_note", display="Custom Note",
+        aliases=("tax invoice", "note"), key_fields=(KeyField("X", ("x",)),),
+        sector=None,
+    )
+    defs = (*DEFAULT_DOC_TYPES, custom)
+    fields = [
+        {"label": "Admission Date", "value": "x"},
+        {"label": "MediShield Life Scheme", "value": "y"},
+    ]
+    defn = classify_document("tax invoice", fields, definitions=defs)
+    assert defn is not None and defn.key == "finalised_tax_invoice"

@@ -33,6 +33,7 @@ from app.services.claim_intake import (
     SUB_TYPE_HOSPITALISATION,
     SUB_TYPE_PHYSIO,
     SUB_TYPE_TCM,
+    claim_profile_for,
 )
 from app.services.matching_engine import jaccard, tokenize
 from app.services.roster_attributes import (
@@ -41,7 +42,12 @@ from app.services.roster_attributes import (
     normalize_nric,
     nric_from_attrs,
 )
+from app.services.sg_diagnoses import search_diagnoses
 from app.services.sg_hospitals import hospital_sector
+
+# The claim form stores an unlisted diagnosis behind this prefix (mirrors the
+# frontend DiagnosisPicker + claim_intake.effective_diagnosis).
+_OTHER_PREFIX = "Other: "
 
 # Below this the UI flags a field as a guess (matches the extractor's own
 # differentiated-confidence convention).
@@ -171,10 +177,14 @@ _ID_LABEL_RE = re.compile(r"\b(?:no|number|num|ref|reference|hrn|case)\b|#|no\."
 
 
 def _amount(fields: list[dict[str, Any]]) -> tuple[float | None, float]:
+    # Exclude a field only when it looks like a pure IDENTIFIER — an ID token in
+    # the label AND no amount signal. A field that names a real amount (tier > 0)
+    # is kept even if the label also contains "case"/"no" etc. ("Total Case
+    # Amount", "Amount Due No. 3"), so the guard can't drop a genuine total.
     nums = [
         f for f in fields
         if _ftype(f) in ("currency", "number")
-        and not _ID_LABEL_RE.search(_label(f))
+        and (_amount_tier(_label(f)) > 0 or not _ID_LABEL_RE.search(_label(f)))
     ]
     if not nums:
         return None, 0.0
@@ -469,6 +479,56 @@ def _infer_claim_type(
     return None, values
 
 
+def _diagnosis_group_for(selection: str | None) -> str | None:
+    """The diagnosis catalog group for a resolved insured claim selection
+    (`insured:<code>:<idx>`), or None for flex / unresolved."""
+    if not selection or not selection.startswith("insured:"):
+        return None
+    parts = selection.split(":")
+    if len(parts) < 2:
+        return None
+    return claim_profile_for(parts[1]).diagnosis_group
+
+
+def _resolve_diagnosis(raw: str | None, selection: str | None) -> str | None:
+    """Map an extracted free-text diagnosis onto the claim form's diagnosis
+    value. When it matches a catalog entry for the claim's group the exact
+    catalog label is returned (so the form SELECTS it); otherwise it rides
+    behind the ``Other: `` prefix as free text.
+
+    Conservative matching: an exact (case-insensitive) label match wins;
+    otherwise a catalog label whose tokens are fully contained in the reading
+    ("Acute Appendicitis" → "Appendicitis") matches only when the label
+    accounts for at least half of the reading's words — so a generic label
+    ("Fever") can't hijack a specific reading."""
+    if not raw:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    raw_tokens = tokenize(text)
+    if not raw_tokens:
+        return _OTHER_PREFIX + text
+    group = _diagnosis_group_for(selection)
+    # Whole group (search with no query returns every entry in the group).
+    catalog = search_diagnoses(group, "", limit=1000)
+    for hit in catalog:
+        if hit.label.strip().lower() == text.lower():
+            return hit.label
+    best: str | None = None
+    best_cover = 0
+    for hit in catalog:
+        lab_tokens = tokenize(hit.label)
+        if not lab_tokens or not (lab_tokens <= raw_tokens):
+            continue
+        # The label must cover ≥ half the reading's words to count as a match.
+        if len(lab_tokens) * 2 >= len(raw_tokens) and len(lab_tokens) > best_cover:
+            best, best_cover = hit.label, len(lab_tokens)
+    if best is not None:
+        return best
+    return _OTHER_PREFIX + text
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 
@@ -519,6 +579,12 @@ def suggest_from_extraction(
         document, coverage_opts, claimant, provider, doc_types
     )
 
+    # Resolve the diagnosis against the catalog for the (now-known) claim group
+    # so the form can SELECT a listed condition instead of always falling to
+    # free text — the whole reason a diagnosis reads back empty when only a
+    # bill (no diagnosis) was uploaded.
+    out_fields.diagnosis = _resolve_diagnosis(diagnosis, selection)
+
     # Broker document-type registry: which recognised document this is, and —
     # when unambiguous — the required-document slot it fills, so the form can
     # place the upload into the RIGHT slot instead of blindly the first.
@@ -540,3 +606,79 @@ def suggest_from_extraction(
         fields=out_fields,
         low_confidence=low,
     )
+
+
+# ── multi-document intake ─────────────────────────────────────────────────────
+
+
+def _merge_extractions(
+    extractions: list[dict[str, Any]],
+    doc_types: Sequence[DocTypeDefinition] | None,
+) -> dict[str, Any]:
+    """Fold up to three extracted documents into ONE virtual document for field
+    mapping: the fields are concatenated (so the amount from the invoice and the
+    diagnosis from the discharge summary are both visible), and the
+    ``document_type`` is taken from the first document that classifies to a
+    recognised inpatient type — so the merged reading routes to the inpatient
+    setting even when another page is a plain receipt."""
+    all_fields = [
+        f
+        for e in extractions
+        for f in (e.get("fields") or [])
+        if isinstance(f, dict)
+    ]
+    primary_type = ""
+    for e in extractions:
+        efields = [f for f in (e.get("fields") or []) if isinstance(f, dict)]
+        if classify_document(
+            e.get("document_type"), efields, definitions=doc_types
+        ) is not None:
+            primary_type = str(e.get("document_type") or "")
+            break
+    if not primary_type:
+        primary_type = next(
+            (str(e.get("document_type")) for e in extractions if e.get("document_type")),
+            "",
+        )
+    return {"document_type": primary_type, "fields": all_fields}
+
+
+def build_intake_suggestion(
+    extractions: list[dict[str, Any]],
+    coverage_opts: CoverageOptionsOut,
+    employee: Employee,
+    year: PolicyYear,
+    doc_types: Sequence[DocTypeDefinition] | None = None,
+) -> ClaimIntakeSuggestionOut:
+    """Turn one-to-three extracted documents into a single set of claim-form
+    suggestions, plus a per-document classification so the form can drop each
+    upload into the required-document slot it fills. Each extraction dict is
+    ``{file_name, document_type, fields}``."""
+    from app.schemas.claims import IntakeDocument
+
+    documents: list[IntakeDocument] = []
+    for e in extractions:
+        efields = [f for f in (e.get("fields") or []) if isinstance(f, dict)]
+        defn = classify_document(
+            e.get("document_type"), efields, definitions=doc_types
+        )
+        documents.append(
+            IntakeDocument(
+                file_name=str(e.get("file_name") or "document"),
+                detected_doc_type=defn.display if defn else None,
+                doc_slot=defn.slot_key if defn else None,
+            )
+        )
+
+    merged = _merge_extractions(extractions, doc_types)
+    suggestion = suggest_from_extraction(
+        merged, coverage_opts, employee, year, doc_types
+    )
+    suggestion.documents = documents
+    # Top-level detected type / slot mirror the primary document (the first
+    # that fills a slot) for single-document consumers.
+    primary = next((d for d in documents if d.doc_slot), documents[0] if documents else None)
+    if primary is not None:
+        suggestion.detected_doc_type = primary.detected_doc_type
+        suggestion.doc_slot = primary.doc_slot
+    return suggestion

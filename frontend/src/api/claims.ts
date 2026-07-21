@@ -252,6 +252,9 @@ export async function downloadClaimDocument(
 export interface ClaimDocKeyField {
   name: string;
   keywords: string[];
+  /** Optional fields are checked but never warned on when absent (e.g. Surgery
+   *  on a non-surgical discharge summary). */
+  optional?: boolean;
 }
 
 export interface ClaimDocType {

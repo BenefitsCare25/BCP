@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -40,7 +41,9 @@ def _out(row: ClaimDocType) -> ClaimDocTypeOut:
         display=row.display,
         aliases=[str(a) for a in (row.aliases or []) if str(a).strip()],
         key_fields=[
-            ClaimDocKeyField(name=kf.name, keywords=list(kf.tokens))
+            ClaimDocKeyField(
+                name=kf.name, keywords=list(kf.tokens), optional=kf.optional
+            )
             for kf in d.key_fields
         ],
         sector=d.sector,
@@ -85,6 +88,7 @@ def _payload(body: ClaimDocTypeIn) -> dict:
             {
                 "name": kf.name.strip(),
                 "keywords": [k.strip() for k in kf.keywords if k.strip()],
+                "optional": kf.optional,
             }
             for kf in body.key_fields
             if kf.name.strip()
@@ -94,17 +98,29 @@ def _payload(body: ClaimDocTypeIn) -> dict:
     }
 
 
+def _ensure_seeded(db: Session, client_id: str) -> list[ClaimDocType]:
+    """Return the client's rows, seeding the defaults on first read. Tolerates a
+    concurrent first-read: if another request seeds the same client between our
+    empty check and commit, the unique constraint trips — we roll back and read
+    the rows the other request created instead of 500ing."""
+    rows = client_doc_type_rows(db, client_id)
+    if rows:
+        return rows
+    seed_default_doc_types(db, client_id)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    return client_doc_type_rows(db, client_id)
+
+
 @router.get("", response_model=list[ClaimDocTypeOut])
 def list_claim_doc_types(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ClaimDocTypeOut]:
     client_id = require_client_id(user)
-    rows = client_doc_type_rows(db, client_id)
-    if not rows:
-        rows = seed_default_doc_types(db, client_id)
-        db.commit()
-    return [_out(r) for r in rows]
+    return [_out(r) for r in _ensure_seeded(db, client_id)]
 
 
 @router.post("", response_model=ClaimDocTypeOut, status_code=status.HTTP_201_CREATED)
@@ -116,13 +132,16 @@ def create_claim_doc_type(
     client_id = require_client_id(user)
     _validate_slot_key(body.slot_key)
     data = _payload(body)
-    key = _SLUG_RE.sub("_", data["display"].lower()).strip("_")[:64]
-    if not key:
+    base = _SLUG_RE.sub("_", data["display"].lower()).strip("_")[:64]
+    if not base:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Enter a document type name."
         )
-    existing = {r.key for r in client_doc_type_rows(db, client_id)}
-    if key in existing:
+    existing = client_doc_type_rows(db, client_id)
+    # A true duplicate is the same DISPLAY (case-insensitive), not merely the
+    # same slug — "Referral Memo" and "Referral-Memo" are distinct types that
+    # happen to slugify alike, so they must both be creatable.
+    if any(r.display.strip().lower() == data["display"].lower() for r in existing):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={
@@ -130,6 +149,14 @@ def create_claim_doc_type(
                 "message": f'A document type named "{data["display"]}" already exists.',
             },
         )
+    # Derive a unique key: suffix -2/-3… when the slug is already taken.
+    taken = {r.key for r in existing}
+    key = base
+    n = 2
+    while key in taken:
+        suffix = f"_{n}"
+        key = f"{base[: 64 - len(suffix)]}{suffix}"
+        n += 1
     row = ClaimDocType(client_id=client_id, key=key, **data)
     db.add(row)
     db.flush()

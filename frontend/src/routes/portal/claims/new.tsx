@@ -56,9 +56,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { InfoHint } from "@/components/ui/tooltip";
 
 const ACCEPT = ".pdf,.png,.jpg,.jpeg";
 const MAX_BYTES = 15 * 1024 * 1024;
+// How many documents the member may upload for AI autofill in one go — the full
+// set for one claim (e.g. tax invoice + itemised bill + discharge summary).
+// Must match the backend MAX_INTAKE_FILES.
+const MAX_AUTOFILL_FILES = 3;
 
 // Fallback only — the live list rides on /portal/coverage-options so the
 // backend's ALLOWED_CURRENCIES stays the single source of truth.
@@ -176,20 +181,21 @@ export function PortalNewClaimPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Document-driven autofill: the receipt the member uploaded to prefill the
-  // form — reused as the claim's primary evidence so they don't upload twice.
-  const [autofillFile, setAutofillFile] = useState<File | null>(null);
-  // The required-document slot the AI identified the receipt as filling
-  // (e.g. a discharge summary → the discharge_summary slot); null = unknown.
-  const [autofillSlot, setAutofillSlot] = useState<string | null>(null);
+  // Document-driven autofill: the document set (up to 3) the member uploaded to
+  // prefill the form — each reused as the claim's evidence in the slot the AI
+  // identified it as, so they don't upload twice. `slot` is the required-doc
+  // slot key the AI matched the file to (null = unknown → first free slot).
+  const [autofillDocs, setAutofillDocs] = useState<
+    { file: File; slot: string | null }[]
+  >([]);
   const [autofillNote, setAutofillNote] = useState<string | null>(null);
   const [lowConfidence, setLowConfidence] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
   const referralInput = useRef<HTMLInputElement>(null);
   const autofillInput = useRef<HTMLInputElement>(null);
-  // Set once the member removes the autofill receipt from a slot, so the
-  // auto-place effect stops re-adding it on later claim-type changes.
-  const autofillCleared = useRef(false);
+  // Autofill files the member has manually removed from a slot — the auto-place
+  // effect must not re-add them on a later claim-type change.
+  const clearedFiles = useRef<Set<File>>(new Set());
 
   // Kind + identifiers + sub-type are DERIVED from the single selection.
   const effectiveKind: "insured" | "flex" | null = selection.startsWith(
@@ -313,32 +319,43 @@ export function PortalNewClaimPage() {
     }
   }, [visitType, referralMode, referralLetters.data]);
 
-  // The autofill receipt fills a required-document slot once a claim type is
-  // chosen — the slot the AI identified it as (discharge summary → the
-  // discharge_summary slot), else the first — so it counts as the claim's
-  // evidence and validation sees it (idempotent: it never overwrites a slot
-  // the member already filled).
+  // Each autofill document fills a required-document slot once a claim type is
+  // chosen — the slot the AI matched it to (discharge summary → the
+  // discharge_summary slot), else the first free slot — so they count as the
+  // claim's evidence and validation sees them (idempotent: never overwrites a
+  // slot the member already filled, and skips files they've removed).
   useEffect(() => {
-    if (!autofillFile || autofillCleared.current || docSlots.length === 0) return;
-    const target =
-      (autofillSlot && docSlots.find((s) => s.key === autofillSlot)) ||
-      docSlots[0];
-    setSlotFiles((prev) =>
-      prev[target.key] ? prev : { ...prev, [target.key]: autofillFile },
-    );
+    if (autofillDocs.length === 0 || docSlots.length === 0) return;
+    setSlotFiles((prev) => {
+      const next = { ...prev };
+      const placed = new Set(Object.values(next));
+      let changed = false;
+      for (const { file, slot } of autofillDocs) {
+        if (clearedFiles.current.has(file) || placed.has(file)) continue;
+        const matched = slot && docSlots.find((s) => s.key === slot)?.key;
+        const target = matched || docSlots.find((s) => !next[s.key])?.key;
+        if (target && !next[target]) {
+          next[target] = file;
+          placed.add(file);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autofillFile, autofillSlot, docSlotKey]);
+  }, [autofillDocs, docSlotKey]);
 
   // Hospitalisation: map the extracted provider to a registry hospital (or the
   // "Other" free-text path) once the type resolves the picker into view.
   useEffect(() => {
-    if (!autofillFile || !isHospitalisation || hospital || !provider) return;
+    if (autofillDocs.length === 0 || !isHospitalisation || hospital || !provider)
+      return;
     const match = hospitals.find(
       (h) => normHospital(h.name) === normHospital(provider),
     );
     setHospital(match ? match.name : OTHER_HOSPITAL);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autofillFile, isHospitalisation, hospital, provider]);
+  }, [autofillDocs, isHospitalisation, hospital, provider]);
 
   if (options.isLoading) return <Skeleton className="h-64 w-full" />;
   if (options.isError || !options.data || (!hasInsured && !hasFlex)) {
@@ -385,11 +402,17 @@ export function PortalNewClaimPage() {
     setCurrency("SGD");
   };
 
-  // Apply the AI reading of the receipt to the form. Order matters: claimant
-  // first (it filters the claim-type list), then the type, then the fields.
-  const applySuggestion = (s: ClaimIntakeSuggestion, file: File) => {
-    setAutofillFile(file);
-    setAutofillSlot(s.available ? (s.doc_slot ?? null) : null);
+  // Apply the AI reading of the document set to the form. Order matters:
+  // claimant first (it filters the claim-type list), then the type, then the
+  // fields. Each uploaded file is paired with the slot the AI matched it to.
+  const applySuggestion = (s: ClaimIntakeSuggestion, files: File[]) => {
+    // Map each file to its detected slot (by file name, as returned).
+    const slotByName = new Map(
+      (s.documents ?? []).map((d) => [d.file_name, d.doc_slot]),
+    );
+    setAutofillDocs(
+      files.map((file) => ({ file, slot: slotByName.get(file.name) ?? null })),
+    );
     if (!s.available) {
       setLowConfidence([]);
       setAutofillNote(
@@ -414,14 +437,12 @@ export function PortalNewClaimPage() {
     if (f.invoice_number) setInvoiceNumber(f.invoice_number);
     if (f.amount != null) setAmount(String(f.amount));
     if (f.currency && insuredPick) setCurrency(f.currency);
-    if (f.diagnosis) {
-      setDiagnosis(
-        f.diagnosis.startsWith("Other:") ? f.diagnosis : `Other: ${f.diagnosis}`,
-      );
-    }
+    // The backend returns the diagnosis in its final form — a catalog label to
+    // select, or "Other: <text>" free text — so set it directly.
+    if (f.diagnosis) setDiagnosis(f.diagnosis);
     setLowConfidence(s.low_confidence);
     const parts = [
-      "We filled in what we could read from your receipt — please check everything before submitting.",
+      "We filled in what we could read from your documents — please check everything before submitting.",
     ];
     if (!s.claim_selection && s.claim_candidates.length > 0) {
       parts.push("Confirm the claim type below.");
@@ -430,22 +451,29 @@ export function PortalNewClaimPage() {
     setAutofillNote(parts.join(" "));
   };
 
-  const runAutofill = async (file: File) => {
-    if (file.size > MAX_BYTES) {
-      toast.error(`${file.name} exceeds 15 MB`);
-      return;
+  const runAutofill = async (picked: File[]) => {
+    const files = picked.slice(0, MAX_AUTOFILL_FILES);
+    if (picked.length > MAX_AUTOFILL_FILES) {
+      toast.error(`Upload at most ${MAX_AUTOFILL_FILES} documents to autofill.`);
     }
-    autofillCleared.current = false; // a fresh receipt — allow auto-placement
+    const withinSize = files.filter((f) => {
+      if (f.size > MAX_BYTES) {
+        toast.error(`${f.name} exceeds 15 MB`);
+        return false;
+      }
+      return true;
+    });
+    if (withinSize.length === 0) return;
+    clearedFiles.current = new Set(); // a fresh set — allow auto-placement
     try {
-      const suggestion = await extractIntake.mutateAsync(file);
-      applySuggestion(suggestion, file);
+      const suggestion = await extractIntake.mutateAsync(withinSize);
+      applySuggestion(suggestion, withinSize);
     } catch (err) {
-      // Extraction failed — keep the file as evidence, just no prefill.
-      setAutofillFile(file);
-      setAutofillSlot(null);
+      // Extraction failed — keep the files as evidence, just no prefill.
+      setAutofillDocs(withinSize.map((file) => ({ file, slot: null })));
       setLowConfidence([]);
       setAutofillNote(
-        "We couldn't read this file for autofill — fill in the claim and it'll still be attached.",
+        "We couldn't read these files for autofill — fill in the claim and they'll still be attached.",
       );
       toast.error(formatError(err));
     }
@@ -592,15 +620,14 @@ export function PortalNewClaimPage() {
           });
         }
       }
-      // The autofill receipt is evidence — attach it if the member replaced it
-      // in every slot / it isn't already among the additional documents.
+      // Each autofill document is evidence — attach any not already placed in a
+      // slot (and not among the additional documents) as an untagged extra.
+      const slotted = Object.values(slotFiles);
       const extras = [...files];
-      if (
-        autofillFile &&
-        !Object.values(slotFiles).includes(autofillFile) &&
-        !extras.includes(autofillFile)
-      ) {
-        extras.push(autofillFile);
+      for (const { file } of autofillDocs) {
+        if (!slotted.includes(file) && !extras.includes(file)) {
+          extras.push(file);
+        }
       }
       for (const file of extras) {
         await uploadDoc.mutateAsync({ claimId: claim.id, file });
@@ -651,25 +678,33 @@ export function PortalNewClaimPage() {
           </p>
         </div>
 
-        {/* Autofill from receipt — the AI reads the upload and prefills the
-            form; everything stays editable and the file becomes the evidence. */}
+        {/* Autofill from documents — the AI reads the upload(s) and prefills
+            the form; everything stays editable and the files become evidence. */}
         <div className="space-y-2 rounded-md border border-dashed border-border bg-muted/40 p-3">
           <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Sparkles className="size-3.5" /> Autofill from your receipt
+            <Sparkles className="size-3.5" /> Autofill from your documents
+            <InfoHint label="How to upload for best autofill">
+              Upload the complete set for this claim together (for example a tax
+              invoice, itemised bill and discharge summary) — up to{" "}
+              {MAX_AUTOFILL_FILES}. Keep every page of a document in ONE file;
+              uploading single pages separately makes the reading less accurate.
+            </InfoHint>
           </div>
           <p className="text-xs text-muted-foreground">
-            Upload the receipt and we'll read it to fill in the claim for you.
-            You can edit everything before submitting.
+            Upload the full document set (up to {MAX_AUTOFILL_FILES}) and we'll
+            read them to fill in the claim for you. You can edit everything
+            before submitting.
           </p>
           <input
             ref={autofillInput}
             type="file"
             accept={ACCEPT}
+            multiple
             className="hidden"
             onChange={(e) => {
-              const f = e.target.files?.[0] ?? null;
+              const picked = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (f) void runAutofill(f);
+              if (picked.length) void runAutofill(picked);
             }}
           />
           <Button
@@ -685,9 +720,24 @@ export function PortalNewClaimPage() {
               <Paperclip className="size-4" />
             )}
             <span className="ml-1.5 truncate">
-              {autofillFile ? autofillFile.name : "Upload receipt to autofill"}
+              {autofillDocs.length > 0
+                ? `${autofillDocs.length} document${autofillDocs.length === 1 ? "" : "s"} uploaded`
+                : "Upload documents to autofill"}
             </span>
           </Button>
+          {autofillDocs.length > 0 && (
+            <ul className="space-y-1">
+              {autofillDocs.map(({ file }, i) => (
+                <li
+                  key={`${file.name}-${i}`}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                >
+                  <Paperclip className="size-3 shrink-0" />
+                  <span className="truncate">{file.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {autofillNote && (
             <div className="flex items-start gap-1.5 rounded-md bg-background px-2.5 py-2 text-xs text-foreground">
               <Sparkles className="mt-0.5 size-3.5 shrink-0 text-accent" />
@@ -1069,8 +1119,14 @@ export function PortalNewClaimPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (slotFiles[slot.key] === autofillFile) {
-                          autofillCleared.current = true;
+                        const current = slotFiles[slot.key];
+                        // If this was an autofilled document, remember the
+                        // removal so the auto-place effect won't re-add it.
+                        if (
+                          current &&
+                          autofillDocs.some((d) => d.file === current)
+                        ) {
+                          clearedFiles.current.add(current);
                         }
                         setSlotFiles((prev) => ({ ...prev, [slot.key]: null }));
                       }}

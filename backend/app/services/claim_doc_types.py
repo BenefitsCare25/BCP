@@ -48,10 +48,16 @@ DOC_FINAL_TAX_INVOICE = "final_tax_invoice"
 class KeyField:
     """One completeness-check field: present when any extracted field's
     label (or value, for section-style fields like Schemes) contains one of
-    the match tokens."""
+    the match tokens.
+
+    ``optional`` fields are shown to the broker and checked, but their absence
+    is NOT a completeness warning — a genuine copy of the document does not
+    ALWAYS carry them (e.g. a discharge summary for a non-surgical admission
+    has no surgery/procedure). Only a missing REQUIRED field is flagged."""
 
     name: str
     tokens: tuple[str, ...]
+    optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,7 +84,10 @@ DISCHARGE_SUMMARY = DocTypeDefinition(
     ),
     key_fields=(
         KeyField("Diagnosis", ("diagnosis", "condition")),
-        KeyField("Surgery", ("surgery", "operation", "procedure")),
+        # A non-surgical admission (medical observation, IV antibiotics) has no
+        # surgery — expected, not a completeness gap. Optional so it never
+        # false-warns.
+        KeyField("Surgery", ("surgery", "operation", "procedure"), optional=True),
     ),
     slot_key=DOC_DISCHARGE_SUMMARY,
 )
@@ -164,7 +173,7 @@ def definition_from_row(row: ClaimDocType) -> DocTypeDefinition:
             for t in (kf.get("keywords") or [])
             if isinstance(t, str) and t.strip()
         ) or (_norm(name),)
-        key_fields.append(KeyField(name, tokens))
+        key_fields.append(KeyField(name, tokens, optional=bool(kf.get("optional"))))
     sector = row.sector if row.sector in (SECTOR_GOVT, SECTOR_PRIVATE) else None
     return DocTypeDefinition(
         key=row.key,
@@ -209,7 +218,7 @@ def seed_default_doc_types(db: Session, client_id: str) -> list[ClaimDocType]:
             display=d.display,
             aliases=list(d.aliases),
             key_fields=[
-                {"name": kf.name, "keywords": list(kf.tokens)}
+                {"name": kf.name, "keywords": list(kf.tokens), "optional": kf.optional}
                 for kf in d.key_fields
             ],
             sector=d.sector,
@@ -256,38 +265,45 @@ def classify_document(
     dt = _norm(document_type or "")
     if not dt:
         return None
-    # Sector-neutral types match on the title alone.
+    labels = _label_text(fields)
+
+    # Sectored invoice types are MORE SPECIFIC than a generic sector-neutral
+    # type that merely shares the "invoice"/"tax invoice" title — so when the
+    # document actually looks like an inpatient bill (marker fields present, or
+    # the claim's hospital sector is known), resolve those FIRST. This stops a
+    # broker's custom sector-neutral type from shadowing the govt/private
+    # classification just by carrying the same alias.
+    sectored = [d for d in defs if d.sector is not None and dt in d.aliases]
+    if sectored and (any(m in labels for m in _INPATIENT_MARKERS) or sector_hint is not None):
+        def _by_sector(sector: str) -> DocTypeDefinition | None:
+            return next((d for d in sectored if d.sector == sector), None)
+
+        if any(m in labels for m in _GOVT_MARKERS):
+            return _by_sector(SECTOR_GOVT)
+        if any(m in labels for m in _PRIVATE_MARKERS):
+            return _by_sector(SECTOR_PRIVATE)
+        if sector_hint in (SECTOR_GOVT, SECTOR_PRIVATE):
+            return _by_sector(sector_hint)
+        # Markers present but sector genuinely ambiguous — fall through to a
+        # sector-neutral match rather than guessing govt vs private.
+
+    # Sector-neutral types (discharge summary, custom types) match on title.
     for d in defs:
         if d.sector is None and dt in d.aliases:
             return d
-
-    sectored = [d for d in defs if d.sector is not None and dt in d.aliases]
-    if not sectored:
-        return None
-    labels = _label_text(fields)
-    if not any(m in labels for m in _INPATIENT_MARKERS) and sector_hint is None:
-        return None  # a plain outpatient receipt also says "tax invoice"
-
-    def _by_sector(sector: str) -> DocTypeDefinition | None:
-        return next((d for d in sectored if d.sector == sector), None)
-
-    if any(m in labels for m in _GOVT_MARKERS):
-        return _by_sector(SECTOR_GOVT)
-    if any(m in labels for m in _PRIVATE_MARKERS):
-        return _by_sector(SECTOR_PRIVATE)
-    if sector_hint in (SECTOR_GOVT, SECTOR_PRIVATE):
-        return _by_sector(sector_hint)
     return None
 
 
 def missing_key_fields(
     definition: DocTypeDefinition, fields: list[dict[str, Any]]
 ) -> list[str]:
-    """Key fields a genuine copy of this document carries but the extraction
-    doesn't show — completeness signal for the broker, never a member block."""
+    """REQUIRED key fields a genuine copy of this document always carries but
+    the extraction doesn't show — completeness signal for the broker, never a
+    member block. Optional key fields (e.g. Surgery on a medical admission) are
+    excluded so a legitimately-complete document is not flagged."""
     hays = _haystacks(fields)
     return [
         kf.name
         for kf in definition.key_fields
-        if not any(t in h for t in kf.tokens for h in hays)
+        if not kf.optional and not any(t in h for t in kf.tokens for h in hays)
     ]

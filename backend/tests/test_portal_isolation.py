@@ -233,7 +233,7 @@ def test_claim_intake_scoped_to_own_member(anon: TestClient, monkeypatch):
     monkeypatch.setattr(
         "app.services.ai_gateway.extract_claim_document", _unavailable
     )
-    files = {"file": ("receipt.png", _png_bytes(), "image/png")}
+    files = [("files", ("receipt.png", _png_bytes(), "image/png"))]
     res = anon.post(
         "/api/v1/portal/claims/intake", headers=_auth(ACC_ALICE), files=files
     )
@@ -241,10 +241,68 @@ def test_claim_intake_scoped_to_own_member(anon: TestClient, monkeypatch):
     assert res.json()["available"] is False
 
 
+def test_claim_intake_accepts_up_to_three_and_merges(anon: TestClient, monkeypatch):
+    """Two documents (invoice + discharge summary) are extracted and merged: the
+    amount comes from the invoice, the diagnosis from the discharge summary, and
+    each document is classified for its slot. AI extraction is stubbed."""
+    from app.services.ai_gateway import ClaimExtractionResult
+
+    by_name = {
+        "invoice.png": {
+            "document_type": "tax invoice",
+            "fields": [
+                {"id": "1", "label": "Admission Date", "value": "2026-06-27",
+                 "field_type": "date", "confidence": 0.9},
+                {"id": "2", "label": "Final Bill", "value": "165.83",
+                 "field_type": "currency", "confidence": 0.9},
+                {"id": "3", "label": "MediShield Life Scheme", "value": "-50.00",
+                 "field_type": "currency", "confidence": 0.9},
+            ],
+        },
+        "discharge.png": {
+            "document_type": "After Visit Summary",
+            "fields": [
+                {"id": "1", "label": "Diagnosis", "value": "Appendicitis",
+                 "field_type": "text", "confidence": 0.9},
+            ],
+        },
+    }
+
+    def _extract(db, *, client_id, policy_year_id, sha256, blocks, file_name):
+        return ClaimExtractionResult(document=by_name[file_name], cache_hit=False, metadata={})
+
+    monkeypatch.setattr("app.services.ai_gateway.extract_claim_document", _extract)
+    files = [
+        ("files", ("invoice.png", _png_bytes(), "image/png")),
+        ("files", ("discharge.png", _png_bytes(), "image/png")),
+    ]
+    res = anon.post(
+        "/api/v1/portal/claims/intake", headers=_auth(ACC_ALICE), files=files
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert body["fields"]["amount"] == 165.83
+    assert body["fields"]["diagnosis"] == "Appendicitis"
+    slots = {d["file_name"]: d["doc_slot"] for d in body["documents"]}
+    assert slots["invoice.png"] == "finalised_tax_invoice"
+    assert slots["discharge.png"] == "discharge_summary"
+
+
+def test_claim_intake_rejects_more_than_three(anon: TestClient):
+    files = [
+        ("files", (f"f{i}.png", _png_bytes(), "image/png")) for i in range(4)
+    ]
+    res = anon.post(
+        "/api/v1/portal/claims/intake", headers=_auth(ACC_ALICE), files=files
+    )
+    assert res.status_code == 422
+
+
 def test_claim_intake_requires_active_year(anon: TestClient):
     """A member with no active policy year (client B) gets 404, not another
     tenant's context."""
-    files = {"file": ("receipt.png", _png_bytes(), "image/png")}
+    files = [("files", ("receipt.png", _png_bytes(), "image/png"))]
     res = anon.post(
         "/api/v1/portal/claims/intake",
         headers=_auth(ACC_BOB_B, CLIENT_B_ID),

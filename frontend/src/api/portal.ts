@@ -346,10 +346,17 @@ export interface ClaimIntakeSuggestion {
   available: boolean;
   reason: string | null;
   document_type: string | null;
-  /** Broker-recognised document type (e.g. "Discharge Summary"), if any. */
+  /** Broker-recognised document type (e.g. "Discharge Summary"), if any —
+   *  mirrors the primary document. */
   detected_doc_type: string | null;
-  /** Required-document slot key this upload fills, when unambiguous. */
+  /** Required-document slot key the primary upload fills, when unambiguous. */
   doc_slot: string | null;
+  /** Per-document classification for the whole uploaded set (up to 3). */
+  documents: {
+    file_name: string;
+    detected_doc_type: string | null;
+    doc_slot: string | null;
+  }[];
   claimant: {
     kind: "self" | "dependant";
     dependant_id: string | null;
@@ -372,9 +379,9 @@ export interface ClaimIntakeSuggestion {
 
 export function useExtractClaimIntake() {
   return useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: (files: File[]) => {
       const fd = new FormData();
-      fd.append("file", file);
+      for (const file of files) fd.append("files", file);
       return portalApi.upload<ClaimIntakeSuggestion>("/portal/claims/intake", fd);
     },
     meta: { localErrorHandling: true },

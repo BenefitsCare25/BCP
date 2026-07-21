@@ -71,7 +71,7 @@ from app.services.claim_intake import (
     claim_profile_for,
     required_doc_slots,
 )
-from app.services.claim_intake_suggest import suggest_from_extraction
+from app.services.claim_intake_suggest import build_intake_suggestion
 from app.services.claims import (
     attach_document,
     claim_to_out,
@@ -244,87 +244,108 @@ def build_coverage_options(
     )
 
 
+# How many documents one autofill request may carry — a member can upload the
+# full set for one claim (e.g. tax invoice + itemised bill + discharge summary)
+# so the AI reads across all of them (the diagnosis is on the discharge summary,
+# the amount on the invoice). Kept small to bound AI spend per request.
+MAX_INTAKE_FILES = 3
+
+
 @options_router.post("/claims/intake", response_model=ClaimIntakeSuggestionOut)
 @limiter.limit("20/minute")
 async def extract_claim_intake(
     request: Request,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimIntakeSuggestionOut:
-    """Read an uploaded receipt and return claim-form field SUGGESTIONS.
+    """Read up to three uploaded claim documents and return field SUGGESTIONS.
 
-    Runs the same AI extraction the post-submit review uses (cache key = the
-    document's SHA-256), so this warms the cache and the later review re-extract
-    is a free hit. Nothing is persisted here (no Claim, no StoredDocument) — the
-    member reviews/edits the prefill and the real upload happens on submit. When
-    the AI is unavailable (not configured / over budget / breaker open / parse
-    fault) it degrades to `available=False` and the form stays manual.
+    Each document is extracted with the SAME AI call the post-submit review uses
+    (cache key = the document's SHA-256), so this warms the cache and the later
+    review re-extract is a free hit. Readings are merged so the amount from an
+    invoice and the diagnosis from a discharge summary both fill the form, and
+    each document is classified so the form can drop it into the right required-
+    document slot. Nothing is persisted (no Claim, no StoredDocument) beyond an
+    audit — the member reviews/edits before submit. When the AI is unavailable
+    it degrades to `available=False` and the form stays manual.
     """
+    if not files:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No file uploaded.")
+    if len(files) > MAX_INTAKE_FILES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Upload at most {MAX_INTAKE_FILES} documents at a time.",
+        )
+
     employee = resolve_member_employee(db, member)
     year = active_policy_year(db, member.client_id)
 
-    # Stream to a temp file with the size cap enforced DURING read (never buffer
-    # an over-cap upload in memory), then read the bounded bytes back for the
-    # vision blocks + hash. saved_upload also enforces the suffix allowlist.
-    async with saved_upload(
-        file, set(DOCUMENT_SUFFIXES), max_bytes=MAX_DOCUMENT_BYTES
-    ) as tmp_path:
-        data = tmp_path.read_bytes()
-        suffix = tmp_path.suffix.lower()
-    if not data:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "The file is empty.")
+    extractions: list[dict] = []
+    for upload in files:
+        # Stream to a temp file with the size cap enforced DURING read (never
+        # buffer an over-cap upload in memory), then read the bounded bytes back
+        # for the vision blocks + hash. saved_upload also enforces the suffix
+        # allowlist.
+        async with saved_upload(
+            upload, set(DOCUMENT_SUFFIXES), max_bytes=MAX_DOCUMENT_BYTES
+        ) as tmp_path:
+            data = tmp_path.read_bytes()
+            suffix = tmp_path.suffix.lower()
+        if not data:
+            continue  # skip an empty file rather than failing the whole set
+        try:
+            blocks = vision_blocks_for_document(data, suffix)
+        except DocImageError:
+            continue  # unreadable page — skip, keep the rest of the set
 
-    try:
-        blocks = vision_blocks_for_document(data, suffix)
-    except DocImageError as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "We couldn't read this file — try a clearer photo or PDF.",
-        ) from exc
+        sha256 = hashlib.sha256(data).hexdigest()
+        try:
+            result = ai_gateway.extract_claim_document(
+                db,
+                client_id=employee.client_id,
+                policy_year_id=year.id,
+                sha256=sha256,
+                blocks=blocks,
+                file_name=upload.filename or "receipt",
+            )
+        except (AINotConfiguredError, AIBudgetExceededError, CircuitOpenError, AIParseError):
+            # Service-wide degradation (no provider / over budget / breaker /
+            # parser fault) — stop trying more files.
+            break
+        except Exception:
+            # Any other provider fault (bad credentials, throttling, network)
+            # must NOT 500 the member — log for ops and stop.
+            logger.exception(
+                "Claim intake extraction failed for client %s", employee.client_id
+            )
+            db.rollback()
+            break
 
-    sha256 = hashlib.sha256(data).hexdigest()
-    try:
-        result = ai_gateway.extract_claim_document(
-            db,
-            client_id=employee.client_id,
-            policy_year_id=year.id,
-            sha256=sha256,
-            blocks=blocks,
-            file_name=file.filename or "receipt",
+        write_member_audit(
+            db, member, "claim.intake_extracted", "employee", employee.id,
+            after={"sha256": sha256, "cache_hit": result.cache_hit},
+            employee_id=employee.id,
         )
-    except (AINotConfiguredError, AIBudgetExceededError, CircuitOpenError, AIParseError):
-        # Expected degradations (no provider / over budget / breaker open / our
-        # parser fault) — the member fills the form manually.
+        db.commit()  # commit each success so a later failure can't roll it back
+        extractions.append(
+            {
+                "file_name": upload.filename or "receipt",
+                "document_type": result.document.get("document_type"),
+                "fields": result.document.get("fields", []),
+            }
+        )
+
+    if not extractions:
         return ClaimIntakeSuggestionOut(
             available=False,
-            reason="Autofill is unavailable right now — please fill in the claim.",
+            reason="We couldn't read these documents automatically — please fill in the claim.",
         )
-    except Exception:
-        # Any other provider fault (bad credentials, throttling, network,
-        # unsupported document) must NOT 500 the member — degrade to manual and
-        # log the real error for the broker/ops to act on (e.g. fix the tenant's
-        # AI credentials on the AI Setting page).
-        logger.exception(
-            "Claim intake extraction failed for client %s", employee.client_id
-        )
-        db.rollback()
-        return ClaimIntakeSuggestionOut(
-            available=False,
-            reason="We couldn't read this document automatically — please fill in the claim.",
-        )
-
-    write_member_audit(
-        db, member, "claim.intake_extracted", "employee", employee.id,
-        after={"sha256": sha256, "cache_hit": result.cache_hit},
-        employee_id=employee.id,
-    )
-    db.commit()
 
     statement = build_member_statement(db, employee)
     coverage_opts = build_coverage_options(db, statement, employee, year)
-    return suggest_from_extraction(
-        result.document,
+    return build_intake_suggestion(
+        extractions,
         coverage_opts,
         employee,
         year,
