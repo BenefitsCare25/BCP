@@ -1019,6 +1019,56 @@ def test_needs_info_roundtrip(anon: TestClient, broker: TestClient):
     assert res.json()["status"] == "ai_review_pending"
 
 
+def test_claim_out_exposes_required_doc_slots(anon: TestClient):
+    # The claim payload carries the slots it must fill, so the draft/needs_info
+    # detail page can render tagged uploads that match what submit enforces.
+    claim = _draft(anon, sub_type=HOSP_SUB, provider_name="Gleneagles Hospital")
+    detail = anon.get(
+        f"/api/v1/portal/claims/{claim['id']}", headers=_auth(ACC_A)
+    )
+    keys = [s["key"] for s in detail.json()["required_doc_slots"]]
+    assert keys == ["summary_tax_invoice", "itemised_tax_invoice", "discharge_summary"]
+
+
+def test_needs_info_resubmit_with_slot_documents(
+    anon: TestClient, broker: TestClient
+):
+    # A private-hospitalisation claim goes to needs_info; the member must be
+    # able to attach the tagged slot documents and resubmit (the untagged
+    # add-receipt path alone can't satisfy the specific slots).
+    claim = _draft(anon, sub_type=HOSP_SUB, provider_name="Gleneagles Hospital")
+    for key, marker in (
+        ("summary_tax_invoice", b" sum"),
+        ("itemised_tax_invoice", b" item"),
+        ("discharge_summary", b" disch"),
+    ):
+        assert _upload(anon, claim["id"], PDF + marker, doc_type=key).status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+
+    res = broker.post(
+        f"/api/v1/claims/{claim['id']}/decision",
+        json={"action": "needs_info", "note": "Re-send a clearer discharge summary"},
+    )
+    assert res.status_code == 200
+
+    # Adding an UNTAGGED replacement doesn't newly satisfy any specific slot,
+    # but the originally tagged slot docs persist, so resubmit still succeeds.
+    assert _upload(anon, claim["id"], PDF + b" extra").status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+
+    # And a tagged replacement fills the slot for a claim that was missing it.
+    fresh = _draft(anon, sub_type=HOSP_SUB, provider_name="Singapore General Hospital")
+    assert _upload(anon, fresh["id"], PDF + b" grh").status_code == 200  # untagged
+    assert _submit(anon, fresh["id"]).status_code == 422  # needs finalised tax invoice
+    assert (
+        _upload(
+            anon, fresh["id"], PDF + b" grh2", doc_type="finalised_tax_invoice"
+        ).status_code
+        == 200
+    )
+    assert _submit(anon, fresh["id"]).status_code == 200
+
+
 def test_broker_document_download(anon: TestClient, broker: TestClient):
     claim_id = _submitted_claim(anon, b" download-1")
     detail = broker.get(f"/api/v1/claims/{claim_id}")

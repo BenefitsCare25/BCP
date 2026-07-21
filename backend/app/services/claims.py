@@ -30,8 +30,9 @@ from app.models.claim import (
 from app.models.policy_year import PolicyYearStatus
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
-from app.schemas.claims import ClaimCreateIn, ClaimOut, StoredDocumentOut
+from app.schemas.claims import ClaimCreateIn, ClaimOut, DocSlotOut, StoredDocumentOut
 from app.services.claim_intake import (
+    DOC_SLOT_LABELS,
     GP_SUB_TYPES,
     assert_documents_satisfy_slots,
     assert_intake_valid,
@@ -118,6 +119,18 @@ def populate_claim_out(
     out.referral_not_applicable = bool(
         (claim.form_fields or {}).get("referral_not_applicable")
     )
+    # The document slots this claim must fill (resolved from its own fields, so
+    # a needs_info/draft edit surface can render tagged uploads that match what
+    # submit enforces). Same helper the coverage-options form uses.
+    out.required_doc_slots = [
+        DocSlotOut(key=k, label=DOC_SLOT_LABELS[k])
+        for k in required_doc_slots(
+            claim.product_code,
+            claim.sub_type,
+            claim.provider_name,
+            claim_kind=claim.claim_kind,
+        )
+    ]
     if claim.dependant_id:
         out.dependant_name = (
             dep_names.get(claim.dependant_id)
@@ -422,10 +435,13 @@ def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> 
         )
 
 
-def _assert_no_duplicate_receipt(db: Session, claim: Claim) -> None:
+def _assert_no_duplicate_receipt(
+    db: Session, claim: Claim, documents: list[StoredDocument] | None = None
+) -> None:
     """A receipt already attached to another LIVE claim of this client is a
-    resubmission signal → structured 409 the UI can explain."""
-    docs = claim_documents(db, claim)
+    resubmission signal → structured 409 the UI can explain. ``documents`` may
+    be passed by a caller that already loaded them to avoid a second query."""
+    docs = documents if documents is not None else claim_documents(db, claim)
     if not docs:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -506,10 +522,13 @@ def submit_claim(
 
     # Re-run the intake rules at submit so a draft created before a rule (or
     # profile) change can't slip through with missing sub-type/referral. A
-    # draft holding a pre-rename sub-type label is folded onto the current one,
-    # and a specialist draft re-resolves its referral letter (a follow-up may
-    # have gained a letter on file since the draft was created).
+    # draft holding a pre-rename sub-type label is folded onto the current one.
     claim.sub_type = normalize_sub_type(claim.sub_type)
+    # Re-validate the specialist referral at submit: a legacy draft that used
+    # the removed "not applicable" escape (visit_type=None, no referral) is
+    # caught here, and a follow-up draft that still has no referral_document_id
+    # gets the latest letter on file linked. A draft that already names a
+    # letter keeps it (the member's explicit choice at draft time).
     if (
         claim.claim_kind == CLAIM_KIND_INSURED
         and claim_profile_for(claim.product_code).requires_referral
@@ -538,7 +557,9 @@ def submit_claim(
     _apply_gp_rider_benefit_key(statement, claim)
     _assert_coverage_claimable(statement, claim)
     # Every required document slot must be filled (tagged uploads); the
-    # generic invoice/receipt slot accepts any attached document.
+    # generic invoice/receipt slot accepts any attached document. Load the
+    # documents once and share with the duplicate-receipt check.
+    documents = claim_documents(db, claim)
     assert_documents_satisfy_slots(
         required_doc_slots(
             claim.product_code,
@@ -546,9 +567,9 @@ def submit_claim(
             claim.provider_name,
             claim_kind=claim.claim_kind,
         ),
-        claim_documents(db, claim),
+        documents,
     )
-    _assert_no_duplicate_receipt(db, claim)
+    _assert_no_duplicate_receipt(db, claim, documents)
 
     claim.status = CLAIM_STATUS_SUBMITTED
     claim.submitted_at = datetime.now(UTC)

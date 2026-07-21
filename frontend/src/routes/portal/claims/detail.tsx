@@ -2,7 +2,7 @@
  * info was requested. */
 import { useRef } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Loader2, Paperclip, Send } from "lucide-react";
+import { ArrowLeft, Check, Loader2, Paperclip, Send } from "lucide-react";
 import { toast } from "sonner";
 import {
   usePortalClaim,
@@ -17,6 +17,12 @@ import { formatError, isNotFoundError } from "@/lib/errors";
 import { fmtAmount } from "@/lib/format";
 
 const ACCEPT = ".pdf,.png,.jpg,.jpeg";
+const MAX_BYTES = 15 * 1024 * 1024;
+
+// The generic invoice/receipt slot is satisfied by ANY attached document
+// (mirrors the backend `assert_documents_satisfy_slots`); specific slots need
+// a document tagged with the matching key.
+const GENERIC_SLOT = "invoice_receipt";
 
 export function PortalClaimDetailPage() {
   const { claimId } = useParams({ strict: false }) as { claimId: string };
@@ -38,17 +44,28 @@ export function PortalClaimDetailPage() {
 
   const data = claim.data;
   const editable = data.status === "draft" || data.status === "needs_info";
+  const slots = data.required_doc_slots ?? [];
 
-  const addReceipt = async (files: FileList | null) => {
-    if (!files?.[0]) return;
+  // A slot is satisfied when a matching tagged document exists; the generic
+  // invoice/receipt slot accepts any attached document.
+  const slotSatisfied = (key: string) =>
+    key === GENERIC_SLOT
+      ? data.documents.length > 0
+      : data.documents.some((d) => d.doc_type === key);
+  const allSlotsSatisfied = slots.every((s) => slotSatisfied(s.key));
+
+  const addDocument = async (file: File | undefined, docType?: string) => {
+    if (!file) return;
+    if (file.size > MAX_BYTES) {
+      toast.error(`${file.name} exceeds 15 MB`);
+      return;
+    }
     try {
-      await uploadDoc.mutateAsync({ claimId: data.id, file: files[0] });
+      await uploadDoc.mutateAsync({ claimId: data.id, file, docType });
       await claim.refetch();
-      toast.success("Receipt added");
+      toast.success("Document added");
     } catch (err) {
       toast.error(formatError(err));
-    } finally {
-      if (fileInput.current) fileInput.current.value = "";
     }
   };
 
@@ -162,64 +179,111 @@ export function PortalClaimDetailPage() {
 
         <div>
           <div className="text-xs font-medium text-foreground mb-1.5">
-            Receipts ({data.documents.length})
+            Documents ({data.documents.length})
           </div>
-          <ul className="space-y-1">
-            {data.documents.map((doc) => (
-              <li
-                key={doc.id}
-                className="rounded-md bg-muted px-2.5 py-1.5 text-xs text-foreground"
-              >
-                {doc.file_name}
-                <span className="ml-2 text-muted-foreground">
-                  {(doc.size_bytes / 1024).toFixed(0)} KB
-                </span>
-              </li>
-            ))}
-          </ul>
-          {editable && (
-            <>
-              <input
-                ref={fileInput}
-                type="file"
-                accept={ACCEPT}
-                className="hidden"
-                onChange={(e) => void addReceipt(e.target.files)}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-2"
-                disabled={uploadDoc.isPending}
-                onClick={() => fileInput.current?.click()}
-              >
-                {uploadDoc.isPending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Paperclip className="size-4" />
-                )}
-                Add receipt
-              </Button>
-            </>
+          {data.documents.length > 0 && (
+            <ul className="space-y-1">
+              {data.documents.map((doc) => (
+                <li
+                  key={doc.id}
+                  className="rounded-md bg-muted px-2.5 py-1.5 text-xs text-foreground"
+                >
+                  {doc.file_name}
+                  <span className="ml-2 text-muted-foreground">
+                    {(doc.size_bytes / 1024).toFixed(0)} KB
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 
+        {/* Required documents — one labeled, tagged upload per slot the claim
+            must fill (so a needs_info resubmission can satisfy every slot the
+            backend enforces). The generic invoice/receipt slot is met by any
+            attached document. */}
+        {editable && slots.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-foreground">
+              Required documents
+            </div>
+            {slots.map((slot) => {
+              const done = slotSatisfied(slot.key);
+              return (
+                <div
+                  key={slot.key}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="flex items-center gap-1.5 text-xs text-foreground">
+                    {done && <Check className="size-3.5 text-good shrink-0" />}
+                    {slot.label}
+                  </span>
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted">
+                    <Paperclip className="size-3.5 shrink-0" />
+                    {done ? "Replace" : "Attach"}
+                    <input
+                      type="file"
+                      accept={ACCEPT}
+                      className="hidden"
+                      disabled={uploadDoc.isPending}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        void addDocument(
+                          f,
+                          slot.key === GENERIC_SLOT ? undefined : slot.key,
+                        );
+                      }}
+                    />
+                  </label>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {editable && (
-          <Button
-            className="w-full"
-            disabled={submitClaim.isPending || data.documents.length === 0}
-            onClick={() => void resubmit()}
-          >
-            {submitClaim.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Send className="size-4" />
-            )}
-            <span className="ml-1.5">
-              {data.status === "needs_info" ? "Resubmit claim" : "Submit claim"}
-            </span>
-          </Button>
+          <div className="space-y-2">
+            <input
+              ref={fileInput}
+              type="file"
+              accept={ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (fileInput.current) fileInput.current.value = "";
+                void addDocument(f);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={uploadDoc.isPending}
+              onClick={() => fileInput.current?.click()}
+            >
+              {uploadDoc.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Paperclip className="size-4" />
+              )}
+              Add another document
+            </Button>
+            <Button
+              className="w-full"
+              disabled={submitClaim.isPending || !allSlotsSatisfied}
+              onClick={() => void resubmit()}
+            >
+              {submitClaim.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Send className="size-4" />
+              )}
+              <span className="ml-1.5">
+                {data.status === "needs_info" ? "Resubmit claim" : "Submit claim"}
+              </span>
+            </Button>
+          </div>
         )}
       </div>
     </div>

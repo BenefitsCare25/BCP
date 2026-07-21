@@ -13,6 +13,12 @@ class _Base(BaseModel):
 # ── Documents ─────────────────────────────────────────────────────────────────
 
 
+# A required-document upload slot on the claim form / claim detail.
+class DocSlotOut(BaseModel):
+    key: str
+    label: str
+
+
 class StoredDocumentOut(_Base):
     id: str
     file_name: str
@@ -85,6 +91,10 @@ class ClaimOut(_Base):
     decision_notes: str | None = None
     created_at: datetime
     documents: list[StoredDocumentOut] = Field(default_factory=list)
+    # Required-document slots this claim must fill at submit (resolved from the
+    # claim's own product/sub-type/hospital) — drives the tagged-upload UI on
+    # the draft/needs_info detail page so resubmission can satisfy every slot.
+    required_doc_slots: list[DocSlotOut] = Field(default_factory=list)
 
 
 class ClaimList(BaseModel):
@@ -197,12 +207,6 @@ class UtilizationOut(BaseModel):
 
 
 # ── Coverage options (drives the member claim-form picker) ────────────────────
-
-
-# A required-document upload slot on the claim form.
-class DocSlotOut(BaseModel):
-    key: str
-    label: str
 
 
 class HospitalOut(BaseModel):

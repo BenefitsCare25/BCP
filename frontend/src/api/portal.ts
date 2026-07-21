@@ -238,6 +238,8 @@ export interface PortalClaim {
   decision_notes: string | null;
   created_at: string;
   documents: PortalClaimDocument[];
+  /** Slots this claim must fill at submit — drives the tagged-upload UI. */
+  required_doc_slots: DocSlot[];
 }
 
 export interface PortalClaimList {

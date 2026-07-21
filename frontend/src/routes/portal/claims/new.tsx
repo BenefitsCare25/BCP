@@ -65,6 +65,29 @@ const MAX_REMARKS = 500;
 // Sentinel for an unlisted/overseas hospital — frees the provider text input.
 const OTHER_HOSPITAL = "__other__";
 
+// Classify a hospital name into its sector, mirroring the backend
+// `sg_hospitals.hospital_sector` (collapse whitespace, lowercase, fold curly
+// apostrophes and the " and " spelling) so the form and the submit check can't
+// disagree about which documents a hospitalisation claim requires. Returns
+// null for an unlisted/overseas name (the caller falls back to the private
+// default).
+function normHospital(s: string): string {
+  return s
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/’/g, "'")
+    .replace(/ and /g, " & ");
+}
+
+function sectorForHospital(
+  hospitals: { name: string; sector: "govt" | "private" }[],
+  name: string,
+): "govt" | "private" | null {
+  const n = normHospital(name);
+  return hospitals.find((h) => normHospital(h.name) === n)?.sector ?? null;
+}
+
 const GROUP_LABELS = {
   outpatient: "Outpatient",
   inpatient: "Inpatient",
@@ -164,17 +187,20 @@ export function PortalNewClaimPage() {
   const subType = selectedClaimType?.sub_type ?? null;
 
   // Hospitalisation/Day Surgery: the provider is a hospital picked from the
-  // registry, and its sector (govt/private) decides the document slots.
-  // Unlisted ("Other") hospitals get the default (private) set.
+  // registry, and its sector (govt/private) decides the document slots. An
+  // "Other" hospital is classified by the typed name — mirroring the backend
+  // `hospital_sector`, so a member who types a listed hospital into the free
+  // text still gets that hospital's sector (and the form/backend can't
+  // disagree about which documents are required). Unlisted → the private set.
   const hospitals = options.data?.hospitals ?? [];
   const isHospitalisation = !!selectedClaimType?.doc_slots_by_sector;
-  const hospitalSector = isHospitalisation
-    ? (hospitals.find((h) => h.name === hospital)?.sector ?? null)
-    : null;
   const effectiveProvider =
     isHospitalisation && hospital && hospital !== OTHER_HOSPITAL
       ? hospital
       : provider;
+  const hospitalSector = isHospitalisation
+    ? sectorForHospital(hospitals, effectiveProvider)
+    : null;
   const docSlots =
     effectiveKind === "flex"
       ? (flex?.doc_slots ?? [])
@@ -328,10 +354,15 @@ export function PortalNewClaimPage() {
       if (needsReferral) {
         if (!visitType) {
           errs.visit_type = "Tell us whether this is a first or follow-up visit.";
-        }
-        if (!referralMode) {
+        } else if (referralLetters.isLoading) {
+          // Letters still loading — the follow-up auto-link hasn't run yet, so
+          // don't accuse the member of having none on file. Ask them to wait.
+          errs.referral = "Loading your referral letters — try again in a moment.";
+        } else if (!referralMode) {
+          // Only claim "none on file" once the query has resolved empty.
+          const noneOnFile = (referralLetters.data?.length ?? 0) === 0;
           errs.referral =
-            visitType === "follow_up"
+            visitType === "follow_up" && noneOnFile
               ? "We couldn't find a referral letter on file — attach one."
               : "Attach or select the referral letter.";
         }
