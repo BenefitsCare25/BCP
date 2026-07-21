@@ -246,3 +246,76 @@ export async function downloadClaimDocument(
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
+
+/** Broker-configurable claim document-type registry (aliases + key fields).
+ * Per-client rows, lazily seeded from the backend defaults on first read. */
+export interface ClaimDocKeyField {
+  name: string;
+  keywords: string[];
+}
+
+export interface ClaimDocType {
+  id: string;
+  key: string;
+  display: string;
+  aliases: string[];
+  key_fields: ClaimDocKeyField[];
+  sector: "govt" | "private" | null;
+  slot_key: string | null;
+  /** Seeded from the backend defaults (still editable). */
+  is_default: boolean;
+}
+
+export interface ClaimDocTypeInput {
+  display: string;
+  aliases: string[];
+  key_fields: ClaimDocKeyField[];
+  sector: "govt" | "private" | null;
+  slot_key: string | null;
+}
+
+export function useClaimDocTypes() {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-doc-types", cid],
+    queryFn: () => api.get<ClaimDocType[]>("/claim-doc-types"),
+  });
+}
+
+export function useCreateClaimDocType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ClaimDocTypeInput) =>
+      api.post<ClaimDocType>("/claim-doc-types", input),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useUpdateClaimDocType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...input }: ClaimDocTypeInput & { id: string }) =>
+      api.put<ClaimDocType>(`/claim-doc-types/${id}`, input),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDeleteClaimDocType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/claim-doc-types/${id}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useResetClaimDocTypes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<ClaimDocType[]>("/claim-doc-types/reset", {}),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    meta: { localErrorHandling: true },
+  });
+}

@@ -5,6 +5,7 @@ from app.models.bulk_plan_update import BulkPlanUpdate
 from app.models.category import Category
 from app.models.claim import Claim
 from app.models.claim_ai_review import ClaimAIReview
+from app.models.claim_doc_type import ClaimDocType
 from app.models.client import BrokerFirm, Client
 from app.models.client_ai_config import ClientAIConfig
 from app.models.dependant import Dependant
@@ -42,6 +43,7 @@ __all__ = [
     "Category",
     "Claim",
     "ClaimAIReview",
+    "ClaimDocType",
     "Client",
     "ClientAIConfig",
     "Dependant",

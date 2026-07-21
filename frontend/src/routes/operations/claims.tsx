@@ -43,6 +43,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
+import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
 import { InfoHint } from "@/components/ui/tooltip";
 import { PageGuide } from "@/components/ui/page-guide";
 import { formatError } from "@/lib/errors";
@@ -689,6 +690,8 @@ export function ClaimsQueuePage() {
         loading={decide.isPending}
         onConfirm={confirmDecision}
       />
+
+      <DocTypeSettings />
 
       <PageGuide
         purpose="Review member-submitted claims. Each submission runs through an AI pipeline (document extraction → field comparison → rule checks → selective vision verification) that orders this queue; the broker always makes the final decision."

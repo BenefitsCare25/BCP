@@ -33,6 +33,7 @@ from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     Category,
+    ClaimDocType,
     Client,
     Dependant,
     Employee,
@@ -235,6 +236,18 @@ def _setup_db():
             )
         )
 
+        # A claim document-type row owned by client B (registry isolation).
+        session.add(
+            ClaimDocType(
+                id=DOCTYPE_B,
+                client_id=CLIENT_B_ID,
+                key="client_b_doc",
+                display="Client B Document",
+                aliases=["client b document"],
+                key_fields=[{"name": "Secret Field", "keywords": []}],
+            )
+        )
+
         session.commit()
 
     yield
@@ -284,6 +297,7 @@ ENROLL_B = "00000000-0000-0000-0000-0000000000b9"
 PANEL_B = "00000000-0000-0000-0000-0000000000ba"
 INSURER_B = "00000000-0000-0000-0000-0000000000bc"
 ALIAS_B = "00000000-0000-0000-0000-0000000000bd"
+DOCTYPE_B = "00000000-0000-0000-0000-0000000000be"
 CARD_B = "00000000-0000-0000-0000-0000000000bb"
 # Any assignment id — the guard rejects at the policy year first.
 CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
@@ -1346,4 +1360,26 @@ def test_entity_alias_update_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_entity_alias_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/entity-aliases/{ALIAS_B}")
+    assert res.status_code == 404
+
+
+def test_claim_doc_types_list_excludes_other_tenant(client_as_a: TestClient) -> None:
+    """The registry is per-client (lazy-seeded defaults) — client B's custom
+    rows must never appear in client A's list."""
+    rows = client_as_a.get("/api/v1/claim-doc-types").json()
+    assert all(r["id"] != DOCTYPE_B for r in rows)
+    # Client A got its own seeded defaults.
+    assert {r["key"] for r in rows} >= {"discharge_summary", "finalised_tax_invoice"}
+
+
+def test_claim_doc_type_update_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.put(
+        f"/api/v1/claim-doc-types/{DOCTYPE_B}",
+        json={"display": "Hijacked", "aliases": [], "key_fields": []},
+    )
+    assert res.status_code == 404
+
+
+def test_claim_doc_type_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/claim-doc-types/{DOCTYPE_B}")
     assert res.status_code == 404

@@ -60,6 +60,7 @@ from app.services import ai_gateway
 from app.services.ai_breaker import CircuitOpenError
 from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError
+from app.services.claim_doc_types import resolve_doc_types
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     CATEGORY_INPATIENT,
@@ -322,7 +323,13 @@ async def extract_claim_intake(
 
     statement = build_member_statement(db, employee)
     coverage_opts = build_coverage_options(db, statement, employee, year)
-    return suggest_from_extraction(result.document, coverage_opts, employee, year)
+    return suggest_from_extraction(
+        result.document,
+        coverage_opts,
+        employee,
+        year,
+        doc_types=resolve_doc_types(db, employee.client_id),
+    )
 
 
 @options_router.get("/claim-diagnoses", response_model=DiagnosisSearchOut)

@@ -14,6 +14,7 @@ functions, no I/O, so the mapping is unit-testable in isolation.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
@@ -25,7 +26,7 @@ from app.schemas.claims import (
     IntakeClaimant,
     IntakeFields,
 )
-from app.services.claim_doc_types import classify_document
+from app.services.claim_doc_types import DocTypeDefinition, classify_document
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     GHS_SUB_TYPES,
@@ -348,7 +349,10 @@ def _entry_setting(opt: InsuredClaimOption, sub_type: str | None, label: str) ->
 
 
 def _target_settings(
-    document: dict[str, Any], text: str, provider: str | None
+    document: dict[str, Any],
+    text: str,
+    provider: str | None,
+    doc_types: Sequence[DocTypeDefinition] | None,
 ) -> set[str]:
     dt = (document.get("document_type") or "").lower()
     text = text.lower()
@@ -365,7 +369,10 @@ def _target_settings(
     # discharge/HRN/case/schemes) identifies an inpatient document even when
     # the free-text type carries no "discharge"/"hospital" wording.
     if classify_document(
-        dt, _fields(document), sector_hint=hospital_sector(provider)
+        dt,
+        _fields(document),
+        definitions=doc_types,
+        sector_hint=hospital_sector(provider),
     ) is not None:
         return {"inpatient_hosp", "inpatient_other"}
     if any(k in dt for k in ("discharge", "hospital bill", "medical report")):
@@ -411,6 +418,7 @@ def _infer_claim_type(
     coverage_opts: CoverageOptionsOut,
     claimant: IntakeClaimant | None,
     provider: str | None,
+    doc_types: Sequence[DocTypeDefinition] | None,
 ) -> tuple[str | None, list[str]]:
     # Insured products offered for the resolved claimant (mirror the form's
     # claimant filter); default to all when the claimant is unknown.
@@ -433,7 +441,7 @@ def _infer_claim_type(
 
     labels = " ".join(_label(f) + " " + _val(f) for f in _fields(document))
     text = " ".join(filter(None, [document.get("document_type") or "", provider or "", labels]))
-    targets = _target_settings(document, text, provider)
+    targets = _target_settings(document, text, provider, doc_types)
     matched = [(v, setting, st) for v, setting, st in entries if setting in targets]
 
     # Inpatient bills match all four GHS sub-types by setting — narrow to the
@@ -469,8 +477,10 @@ def suggest_from_extraction(
     coverage_opts: CoverageOptionsOut,
     employee: Employee,
     year: PolicyYear,
+    doc_types: Sequence[DocTypeDefinition] | None = None,
 ) -> ClaimIntakeSuggestionOut:
-    """Turn one extracted document into claim-form suggestions."""
+    """Turn one extracted document into claim-form suggestions. ``doc_types``
+    is the client's configured document-type registry (None → defaults)."""
     fields = _fields(document)
 
     provider, provider_conf = _keyworded(
@@ -506,14 +516,17 @@ def suggest_from_extraction(
 
     claimant = _detect_claimant(fields, employee, coverage_opts.dependants)
     selection, candidates = _infer_claim_type(
-        document, coverage_opts, claimant, provider
+        document, coverage_opts, claimant, provider, doc_types
     )
 
     # Broker document-type registry: which recognised document this is, and —
     # when unambiguous — the required-document slot it fills, so the form can
     # place the upload into the RIGHT slot instead of blindly the first.
     defn = classify_document(
-        document.get("document_type"), fields, sector_hint=hospital_sector(provider)
+        document.get("document_type"),
+        fields,
+        definitions=doc_types,
+        sector_hint=hospital_sector(provider),
     )
 
     return ClaimIntakeSuggestionOut(

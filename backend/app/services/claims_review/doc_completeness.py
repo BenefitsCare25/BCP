@@ -13,10 +13,15 @@ computation (fails only) is untouched; the broker sees it in the queue.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from app.models import Claim
-from app.services.claim_doc_types import classify_document, missing_key_fields
+from app.services.claim_doc_types import (
+    DocTypeDefinition,
+    classify_document,
+    missing_key_fields,
+)
 from app.services.sg_hospitals import hospital_sector
 
 
@@ -30,14 +35,19 @@ def _result(rule: str, status: str, evidence: str) -> dict[str, Any]:
 
 
 def doc_completeness_results(
-    claim: Claim, extractions: list[dict[str, Any]]
+    claim: Claim,
+    extractions: list[dict[str, Any]],
+    definitions: Sequence[DocTypeDefinition] | None = None,
 ) -> list[dict[str, Any]]:
     sector = hospital_sector(claim.provider_name)
     results: list[dict[str, Any]] = []
     for ext in extractions:
         fields = [f for f in (ext.get("fields") or []) if isinstance(f, dict)]
         defn = classify_document(
-            ext.get("document_type"), fields, sector_hint=sector
+            ext.get("document_type"),
+            fields,
+            definitions=definitions,
+            sector_hint=sector,
         )
         if defn is None:
             continue

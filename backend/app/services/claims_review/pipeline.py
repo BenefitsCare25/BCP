@@ -32,6 +32,7 @@ from app.models.claim_ai_review import (
 )
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
+from app.services.claim_doc_types import resolve_doc_types
 from app.services.claims import claim_documents
 from app.services.claims_review import (
     comparison,
@@ -183,8 +184,10 @@ def _run_stages(db, claim: Claim, review: ClaimAIReview) -> None:
     all_calls.extend(calls)
     # Deterministic key-field completeness per recognised document type
     # (broker-side warnings only — never blocks or auto-flags the member).
+    # Definitions come from the client's configured registry (defaults when
+    # none stored).
     doc_warnings = doc_warnings + doc_completeness.doc_completeness_results(
-        claim, extractions
+        claim, extractions, resolve_doc_types(db, claim.client_id)
     )
 
     # Stage 3 — comparison + AI-judged rules + required-documents check.

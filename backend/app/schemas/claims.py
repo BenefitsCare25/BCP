@@ -327,6 +327,38 @@ class ClaimIntakeSuggestionOut(BaseModel):
     low_confidence: list[str] = Field(default_factory=list)
 
 
+# ── Claim document types (broker-configurable registry) ───────────────────────
+
+
+class ClaimDocKeyField(BaseModel):
+    """One completeness-check field. ``keywords`` are the label-match tokens;
+    empty → the field matches on its own name."""
+
+    name: str = Field(min_length=1, max_length=64)
+    keywords: list[str] = Field(default_factory=list, max_length=16)
+
+
+class ClaimDocTypeIn(BaseModel):
+    display: str = Field(min_length=1, max_length=128)
+    aliases: list[str] = Field(default_factory=list, max_length=32)
+    key_fields: list[ClaimDocKeyField] = Field(default_factory=list, max_length=32)
+    sector: str | None = Field(default=None, pattern="^(govt|private)$")
+    slot_key: str | None = Field(default=None, max_length=64)
+
+
+class ClaimDocTypeOut(BaseModel):
+    id: str
+    key: str
+    display: str
+    aliases: list[str] = Field(default_factory=list)
+    key_fields: list[ClaimDocKeyField] = Field(default_factory=list)
+    sector: str | None = None
+    slot_key: str | None = None
+    # True for a row seeded from the in-code defaults (key match) — the UI
+    # labels these; they're still fully editable.
+    is_default: bool = False
+
+
 class DiagnosisOut(BaseModel):
     label: str
     icd10: str | None = None
