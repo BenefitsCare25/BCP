@@ -54,11 +54,16 @@ import type { AIConfig, AIProvider } from "@/types";
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
+const DEFAULT_BEDROCK_REGION = "ap-southeast-1";
+
 interface Draft {
   provider: AIProvider;
+  // For bedrock, `endpoint` holds the AWS region and `model` the inference
+  // profile id; `api_key` holds the AWS secret access key.
   endpoint: string;
   model: string;
   api_key: string;
+  aws_access_key_id: string;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -66,14 +71,23 @@ const EMPTY_DRAFT: Draft = {
   endpoint: "",
   model: "",
   api_key: "",
+  aws_access_key_id: "",
 };
 
 function fromConfig(config: AIConfig): Draft {
+  const stored = config.endpoint ?? "";
+  const isBedrock = config.provider === "bedrock";
   return {
     provider: config.provider,
-    endpoint: config.endpoint ?? "",
+    // A bedrock "endpoint" is the AWS region — never repopulate a stale URL
+    // (e.g. a Foundry endpoint left in the field) into the region box.
+    endpoint:
+      isBedrock && (stored === "" || looksLikeUrl(stored))
+        ? DEFAULT_BEDROCK_REGION
+        : stored,
     model: config.model ?? "",
     api_key: "",
+    aws_access_key_id: "",
   };
 }
 
@@ -83,10 +97,29 @@ function isValidFoundryEndpoint(url: string): boolean {
   return trimmed.includes("/anthropic") || trimmed.includes("/api/projects/");
 }
 
+// A "global.*" profile can route out of the Singapore/APAC boundary — the
+// backend refuses it in prod, so we steer users away from it in the UI too.
+function isGlobalProfile(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("global.");
+}
+
+// The AWS region field is a plain region code (ap-southeast-1) — catch a URL
+// pasted in by mistake (e.g. a stale Foundry endpoint carried over).
+function looksLikeUrl(value: string): boolean {
+  return value.includes("://") || value.includes("/");
+}
+
 function isValidDraft(draft: Draft): boolean {
   if (draft.provider === "azure_foundry") {
     if (!draft.endpoint.trim()) return false;
     if (!isValidFoundryEndpoint(draft.endpoint)) return false;
+  }
+  if (draft.provider === "bedrock") {
+    if (!draft.endpoint.trim()) return false; // region
+    if (looksLikeUrl(draft.endpoint)) return false; // a region, not a URL
+    if (!draft.model.trim()) return false; // inference profile id
+    if (isGlobalProfile(draft.model)) return false;
+    if (!draft.aws_access_key_id.trim()) return false;
   }
   return draft.api_key.length >= 8;
 }
@@ -129,13 +162,23 @@ export function AIProviderPage() {
   };
   const sourceBadge = SOURCE_BADGES[source] ?? SOURCE_BADGES.none;
 
+  const endpointForSave = () => {
+    // azure_foundry: the endpoint URL. bedrock: the AWS region. anthropic: n/a.
+    if (draft.provider === "azure_foundry") return draft.endpoint.trim();
+    if (draft.provider === "bedrock")
+      return draft.endpoint.trim() || DEFAULT_BEDROCK_REGION;
+    return null;
+  };
+
   const submit = async () => {
     try {
       await put.mutateAsync({
         provider: draft.provider,
-        endpoint: draft.provider === "azure_foundry" ? draft.endpoint.trim() : null,
+        endpoint: endpointForSave(),
         model: draft.model.trim() || null,
         api_key: draft.api_key,
+        aws_access_key_id:
+          draft.provider === "bedrock" ? draft.aws_access_key_id.trim() : null,
       });
       toast.success(config ? "AI provider updated" : "AI provider saved");
       setOpen(false);
@@ -150,12 +193,13 @@ export function AIProviderPage() {
         open
           ? {
               provider: draft.provider,
-              endpoint:
-                draft.provider === "azure_foundry"
-                  ? draft.endpoint.trim() || null
-                  : null,
+              endpoint: endpointForSave(),
               model: draft.model.trim() || null,
               api_key: draft.api_key || null,
+              aws_access_key_id:
+                draft.provider === "bedrock"
+                  ? draft.aws_access_key_id.trim() || null
+                  : null,
             }
           : undefined,
       );
@@ -203,16 +247,34 @@ export function AIProviderPage() {
                 </FieldLabel>
                 <Select
                   value={draft.provider}
-                  onValueChange={(v) =>
-                    setDraft({ ...draft, provider: v as AIProvider })
-                  }
+                  onValueChange={(v) => {
+                    const next = v as AIProvider;
+                    setDraft((d) => ({
+                      ...d,
+                      provider: next,
+                      // `endpoint` and `model` mean different things per provider
+                      // (Foundry URL vs AWS region; deployment name vs model id
+                      // vs inference profile), so reset them on a real switch to
+                      // avoid carrying a stale value into the wrong field.
+                      endpoint:
+                        next === d.provider
+                          ? d.endpoint
+                          : next === "bedrock"
+                            ? DEFAULT_BEDROCK_REGION
+                            : "",
+                      model: next === d.provider ? d.model : "",
+                    }));
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="azure_foundry">
-                      Azure AI Foundry (recommended for prod)
+                      Azure AI Foundry
+                    </SelectItem>
+                    <SelectItem value="bedrock">
+                      AWS Bedrock — Claude, Singapore (data-resident)
                     </SelectItem>
                     <SelectItem value="anthropic">
                       Anthropic (direct)
@@ -257,40 +319,107 @@ export function AIProviderPage() {
                   )}
                 </div>
               )}
-              <div className="flex flex-col gap-1.5">
-                <FieldLabel
-                  hint={
-                    draft.provider === "azure_foundry" ? (
-                      <>
-                        Must match your Azure AI Foundry{" "}
-                        <strong>deployment name</strong> exactly (not the
-                        Anthropic model ID). Find it under your project →
-                        Deployments. Leave blank to use the default{" "}
-                        <code>{DEFAULT_MODEL}</code>.
-                      </>
-                    ) : (
-                      <>
-                        Anthropic model ID. Leave blank to use{" "}
-                        <code>{DEFAULT_MODEL}</code>.
-                      </>
-                    )
-                  }
-                >
-                  {draft.provider === "azure_foundry"
-                    ? "Deployment name"
-                    : "Model (optional)"}
-                </FieldLabel>
-                <Input
-                  value={draft.model}
-                  onChange={(e) =>
-                    setDraft({ ...draft, model: e.target.value })
-                  }
-                  placeholder={DEFAULT_MODEL}
-                />
-              </div>
+              {draft.provider === "bedrock" && (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <FieldLabel hint="The AWS region of your Bedrock resource. Keep this in Singapore (ap-southeast-1) so claim data stays in-region.">
+                      AWS region
+                    </FieldLabel>
+                    <Input
+                      value={draft.endpoint}
+                      onChange={(e) =>
+                        setDraft({ ...draft, endpoint: e.target.value })
+                      }
+                      placeholder={DEFAULT_BEDROCK_REGION}
+                      className={
+                        draft.endpoint && looksLikeUrl(draft.endpoint)
+                          ? "border-error focus-visible:ring-error"
+                          : ""
+                      }
+                    />
+                    {draft.endpoint && looksLikeUrl(draft.endpoint) && (
+                      <p className="text-xs text-error">
+                        This should be an AWS region like{" "}
+                        <code>ap-southeast-1</code> — not a URL.
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <FieldLabel hint="The Bedrock inference-profile id from the console (Infer → Inference profiles). Use an apac.* profile — never global.* (it can route data out of Singapore).">
+                      Inference profile ID
+                    </FieldLabel>
+                    <Input
+                      value={draft.model}
+                      onChange={(e) =>
+                        setDraft({ ...draft, model: e.target.value })
+                      }
+                      placeholder="apac.anthropic.claude-3-5-sonnet-20241022-v2:0"
+                      className={
+                        draft.model && isGlobalProfile(draft.model)
+                          ? "border-error focus-visible:ring-error"
+                          : ""
+                      }
+                    />
+                    {draft.model && isGlobalProfile(draft.model) && (
+                      <p className="text-xs text-error">
+                        A <code>global.*</code> profile can process data outside
+                        Singapore. Use an <code>apac.*</code> profile.
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <FieldLabel hint="The IAM access key ID (e.g. AKIA…). Stored encrypted alongside the secret; never returned to the browser.">
+                      AWS access key ID
+                    </FieldLabel>
+                    <Input
+                      value={draft.aws_access_key_id}
+                      onChange={(e) =>
+                        setDraft({ ...draft, aws_access_key_id: e.target.value })
+                      }
+                      placeholder="AKIA…"
+                      autoComplete="off"
+                    />
+                  </div>
+                </>
+              )}
+              {draft.provider !== "bedrock" && (
+                <div className="flex flex-col gap-1.5">
+                  <FieldLabel
+                    hint={
+                      draft.provider === "azure_foundry" ? (
+                        <>
+                          Must match your Azure AI Foundry{" "}
+                          <strong>deployment name</strong> exactly (not the
+                          Anthropic model ID). Find it under your project →
+                          Deployments. Leave blank to use the default{" "}
+                          <code>{DEFAULT_MODEL}</code>.
+                        </>
+                      ) : (
+                        <>
+                          Anthropic model ID. Leave blank to use{" "}
+                          <code>{DEFAULT_MODEL}</code>.
+                        </>
+                      )
+                    }
+                  >
+                    {draft.provider === "azure_foundry"
+                      ? "Deployment name"
+                      : "Model (optional)"}
+                  </FieldLabel>
+                  <Input
+                    value={draft.model}
+                    onChange={(e) =>
+                      setDraft({ ...draft, model: e.target.value })
+                    }
+                    placeholder={DEFAULT_MODEL}
+                  />
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 <FieldLabel hint="Encrypted with Fernet (AES-128-CBC + HMAC) and never returned in any API response.">
-                  API key
+                  {draft.provider === "bedrock"
+                    ? "AWS secret access key"
+                    : "API key"}
                 </FieldLabel>
                 <Input
                   type="password"
@@ -301,7 +430,9 @@ export function AIProviderPage() {
                   placeholder={
                     config
                       ? `Stored: ${config.key_masked} — paste a new key to replace`
-                      : "sk-ant-... or Azure access key"
+                      : draft.provider === "bedrock"
+                        ? "AWS secret access key"
+                        : "sk-ant-... or Azure access key"
                   }
                   autoComplete="off"
                 />
@@ -365,14 +496,15 @@ export function AIProviderPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Field label="Provider" value={config.provider} />
               <Field
-                label="Model"
+                label={config.provider === "bedrock" ? "Inference profile" : "Model"}
                 value={config.model ?? DEFAULT_MODEL}
                 muted={!config.model}
                 hint={!config.model ? "(default)" : undefined}
+                className={config.provider === "bedrock" ? "font-mono text-xs" : undefined}
               />
               {config.endpoint && (
                 <Field
-                  label="Endpoint"
+                  label={config.provider === "bedrock" ? "AWS region" : "Endpoint"}
                   value={config.endpoint}
                   className="md:col-span-2 font-mono text-xs"
                 />

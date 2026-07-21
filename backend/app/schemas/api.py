@@ -829,7 +829,7 @@ class AuditLogPage(BaseModel):
 
 # ── BYOK AI provider config ──────────────────────────────────────────────────
 
-AIProviderStr = Literal["azure_foundry", "anthropic"]
+AIProviderStr = Literal["azure_foundry", "anthropic", "bedrock"]
 
 
 class AIConfigOut(_Base):
@@ -856,7 +856,10 @@ class AIConfigUpsert(BaseModel):
     provider: AIProviderStr
     endpoint: str | None = None
     model: str | None = Field(default=None, max_length=128)
+    # For provider="bedrock" this is the AWS *secret* access key; access_key_id
+    # rides its own field. For the others it's the provider API key.
     api_key: str = Field(min_length=8, max_length=4096)
+    aws_access_key_id: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def _check_endpoint(self) -> AIConfigUpsert:
@@ -868,6 +871,16 @@ class AIConfigUpsert(BaseModel):
             from app.core.ai_config import normalize_foundry_endpoint
 
             normalize_foundry_endpoint(self.endpoint)
+        if self.provider == "bedrock":
+            if not (self.model or "").strip():
+                raise ValueError(
+                    "model (the Bedrock inference-profile id) is required for "
+                    "provider='bedrock'"
+                )
+            if not (self.aws_access_key_id or "").strip():
+                raise ValueError(
+                    "aws_access_key_id is required for provider='bedrock'"
+                )
         return self
 
 
@@ -878,6 +891,7 @@ class AIConfigTestPayload(BaseModel):
     endpoint: str | None = None
     model: str | None = Field(default=None, max_length=128)
     api_key: str | None = Field(default=None, min_length=8, max_length=4096)
+    aws_access_key_id: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def _check_endpoint(self) -> AIConfigTestPayload:

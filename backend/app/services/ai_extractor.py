@@ -8,7 +8,7 @@ consumers don't branch.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from anthropic import Anthropic
 from anthropic.types import ToolUseBlock
@@ -16,6 +16,9 @@ from anthropic.types import ToolUseBlock
 from app.core.ai_config import AIConfig, load_ai_config
 from app.schemas.api import AttributeSchemaOut
 from app.schemas.rule import RuleEnvelope
+
+if TYPE_CHECKING:
+    from anthropic import AnthropicBedrock
 
 # Provider call timeout. Default Anthropic SDK timeout is 600s, which is
 # longer than any FastAPI request budget — bound it explicitly.
@@ -88,12 +91,39 @@ TOOL_SCHEMA = {
 }
 
 
-def _build_anthropic_client(cfg: AIConfig, *, timeout: float) -> Anthropic:
-    """Construct the Anthropic client from a tenant/env AI config.
+def _build_anthropic_client(
+    cfg: AIConfig, *, timeout: float
+) -> Anthropic | AnthropicBedrock:
+    """Construct the model client from a tenant/env AI config.
 
     Single source of truth for client construction so a change (proxy, default
     header, retry policy) lands in one place for every extractor call.
+
+    ``provider="bedrock"`` returns an ``AnthropicBedrock`` client authenticated
+    via the standard AWS credential chain (env vars / shared profile / role) and
+    pinned to ``cfg.aws_region``; ``base_url``/``api_key`` are unused there. All
+    clients expose the same ``.messages.create(...)`` surface, so callers don't
+    branch.
     """
+    if cfg.provider == "bedrock":
+        try:
+            from anthropic import AnthropicBedrock
+        except ImportError as exc:  # pragma: no cover - dep present in prod image
+            raise RuntimeError(
+                "INSPRO_AI_PROVIDER=bedrock requires the AWS extra: "
+                "uv add 'anthropic[bedrock]'."
+            ) from exc
+        bedrock_kwargs: dict[str, Any] = {
+            "aws_region": cfg.aws_region,
+            "timeout": timeout,
+            "max_retries": _PROVIDER_MAX_RETRIES,
+        }
+        # BYOK: pass the tenant's explicit AWS keys. Env mode leaves these unset
+        # and the client falls back to the standard AWS credential chain.
+        if cfg.aws_access_key_id and cfg.api_key:
+            bedrock_kwargs["aws_access_key"] = cfg.aws_access_key_id
+            bedrock_kwargs["aws_secret_key"] = cfg.api_key
+        return AnthropicBedrock(**bedrock_kwargs)
     client_kwargs: dict[str, Any] = {
         "api_key": cfg.api_key,
         "timeout": timeout,
