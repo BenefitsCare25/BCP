@@ -6,7 +6,8 @@ Phase 3 — these endpoints are its data layer and already usable directly.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from io import BytesIO
 
 from fastapi import (
     APIRouter,
@@ -49,6 +50,7 @@ from app.services.claims import (
     populate_claim_out,
     prefetch_claim_relations,
 )
+from app.services.claims_register import build_claims_register_workbook
 from app.services.claims_review.pipeline import run_review
 from app.services.utilization import remaining_for_claim
 
@@ -130,6 +132,39 @@ def list_claims(
             _broker_out(db, claim, employee, referral_docs=referral_docs, dep_names=dep_names)
             for claim, employee in rows
         ],
+    )
+
+
+@router.get("/register")
+@limiter.limit("20/minute")
+def download_claims_register(
+    request: Request,
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Claims register (.xlsx) — every claim in the policy year, one per row."""
+    py = assert_policy_year_for_user(policy_year_id, user, db)
+    wb = build_claims_register_workbook(db, py)
+    write_audit(
+        db, user, action="export", entity_type="claims_register",
+        entity_id=policy_year_id, after={"report": "claims-register"},
+    )
+    db.commit()
+    buf = BytesIO()
+    wb.save(buf)
+    return Response(
+        content=buf.getvalue(),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="claims-register-'
+                f'{date.today():%Y%m%d}.xlsx"'
+            )
+        },
     )
 
 

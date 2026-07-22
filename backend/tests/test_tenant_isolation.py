@@ -368,6 +368,11 @@ def test_reports_quotation_slip_cross_tenant_404(client_as_a: TestClient) -> Non
     assert res.status_code == 404
 
 
+def test_claims_register_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/claims/register?policy_year_id={PY_B}")
+    assert res.status_code == 404
+
+
 def test_reports_readiness_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/readiness")
     assert res.status_code == 404

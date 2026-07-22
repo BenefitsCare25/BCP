@@ -104,8 +104,8 @@ export const COMPANY_NAV: NavGroup[] = [
       },
       {
         label: "Reports Center",
-        to: "/operations/reports",
-        title: "Reports",
+        to: "/reports",
+        title: "Reports Center",
         icon: BarChart3,
       },
     ],

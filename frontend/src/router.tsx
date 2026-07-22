@@ -429,9 +429,23 @@ const opsClaimsRoute = createRoute({
   component: ClaimsQueuePage,
 });
 
-const opsReportsRoute = createRoute({
+// Reports Center moved to a top-level company-scoped route with team tabs.
+// Keep the old operations path as a redirect so bookmarks don't 404.
+const opsReportsRedirect = createRoute({
   getParentRoute: () => opsLayoutRoute,
   path: "/reports",
+  beforeLoad: () => {
+    throw redirect({ to: "/reports", search: { tab: "pa" } });
+  },
+  component: () => null,
+});
+
+const reportsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/reports",
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: typeof search.tab === "string" ? search.tab : undefined,
+  }),
   component: ReportsPage,
 });
 
@@ -503,6 +517,7 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     homeRoute,
     dashboardRoute,
+    reportsRoute,
     schemaLayoutRoute.addChildren([
       schemaIndexRoute,
       schemaAttributesRedirect,
@@ -522,7 +537,7 @@ const routeTree = rootRoute.addChildren([
       opsBenefitStatementRedirect,
       opsEmployeeViewRedirect,
       opsClaimsRoute,
-      opsReportsRoute,
+      opsReportsRedirect,
       opsUnderwritingRoute,
       opsActivationsRoute,
     ]),
