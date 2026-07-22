@@ -168,7 +168,16 @@ def delete_stored_document(db: Session, doc: StoredDocument) -> None:
     try:
         get_storage().delete(doc.storage_path)
     except Exception:
-        logger.warning("Failed to delete blob %s", doc.storage_path)
+        # The blob delete failed but we still drop the row so the caller's flow
+        # (claim/dependant deletion) isn't blocked by a transient storage
+        # outage. That orphans a PII-bearing blob with no DB anchor, so log at
+        # ERROR with enough context (doc id, client, path) for an ops
+        # storage-vs-DB reconciliation sweep to find it later.
+        logger.error(
+            "Orphaned stored-document blob after failed delete: "
+            "doc_id=%s client_id=%s path=%s",
+            doc.id, doc.client_id, doc.storage_path, exc_info=True,
+        )
     db.delete(doc)
 
 
@@ -339,7 +348,13 @@ def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
         try:
             storage.delete(doc.storage_path)
         except Exception:
-            logger.warning("Failed to delete blob %s", doc.storage_path)
+            # See delete_stored_document: keep the flow moving but log at ERROR
+            # so an orphaned PII blob is discoverable for reconciliation.
+            logger.error(
+                "Orphaned stored-document blob after failed delete: "
+                "doc_id=%s client_id=%s path=%s",
+                doc.id, doc.client_id, doc.storage_path, exc_info=True,
+            )
         db.delete(doc)
 
 

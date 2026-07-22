@@ -8,9 +8,11 @@ broker can see.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
+from anthropic import RateLimitError
 from sqlalchemy.orm import Session
 
 from app.core.storage import get_storage
@@ -19,6 +21,41 @@ from app.services import ai_gateway
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 
 logger = logging.getLogger(__name__)
+
+# Provider burst-throttle recovery, mirroring the interactive intake path
+# (portal_claims._extract_with_throttle_retry). Without it, a transient 429 on
+# the 2nd/3rd document of a multi-doc claim propagates out of the whole review
+# and dumps the claim back to manual review, discarding the AI spend already
+# incurred on earlier documents. This runs in the background review task (sync,
+# its own session), so a short blocking sleep is acceptable — and unlike the
+# request path we deliberately DON'T roll back here: run_review sets the firm
+# search_path once on its session, and releasing the connection mid-run could
+# hand back a pool connection scoped to a different (or public) schema.
+_THROTTLE_RETRIES = 1
+_THROTTLE_BACKOFF_SECONDS = 8.0
+
+
+def _extract_with_throttle_retry(db: Session, claim: Claim, doc: StoredDocument, blocks):
+    """`ai_gateway.extract_claim_document` with one bounded backoff on 429."""
+    for attempt in range(_THROTTLE_RETRIES + 1):
+        try:
+            return ai_gateway.extract_claim_document(
+                db,
+                client_id=claim.client_id,
+                policy_year_id=claim.policy_year_id,
+                sha256=doc.sha256,
+                blocks=blocks,
+                file_name=doc.file_name,
+            )
+        except RateLimitError:
+            if attempt >= _THROTTLE_RETRIES:
+                raise
+            logger.warning(
+                "Claim %s: throttled extracting doc %s — retrying in %ss",
+                claim.id, doc.id, _THROTTLE_BACKOFF_SECONDS,
+            )
+            time.sleep(_THROTTLE_BACKOFF_SECONDS)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def extract_documents(
@@ -57,14 +94,7 @@ def extract_documents(
             )
             continue
 
-        result = ai_gateway.extract_claim_document(
-            db,
-            client_id=claim.client_id,
-            policy_year_id=claim.policy_year_id,
-            sha256=doc.sha256,
-            blocks=blocks,
-            file_name=doc.file_name,
-        )
+        result = _extract_with_throttle_retry(db, claim, doc, blocks)
         call_metadata.append(result.metadata)
         extractions.append(
             {

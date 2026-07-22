@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 
 MAX_VISION_CHECKS = 4
 
-_VERIFIABLE_STATUSES = frozenset({"MISMATCH", "UNCERTAIN"})
+# MISSING_IN_PDF (claim states a value, no document showed it) is verifiable
+# too: a value the text pass missed may still be legible to vision. If vision
+# CONFIRMS, the comparison flips to MATCH; if it can't, the field stays
+# MISSING_IN_PDF and the verdict flags it (see verdict.py) — evidence for a
+# vision-checked field is never assumed present just because confidence is high.
+_VERIFIABLE_STATUSES = frozenset({"MISMATCH", "UNCERTAIN", "MISSING_IN_PDF"})
 _VISION_FIELDS = frozenset(
     m["portal_field"] for m in FIELD_MAPS if m.get("verify_with_vision")
 )
