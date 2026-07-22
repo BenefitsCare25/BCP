@@ -101,7 +101,7 @@ def run_review(claim_id: str, review_id: str, broker_firm_id: str | None) -> Non
             return
 
         try:
-            _run_stages(db, claim, review)
+            _run_stages(db, claim, review, broker_firm_id)
         except AINotConfiguredError as exc:
             review.status = REVIEW_STATUS_ERROR
             review.error_detail = str(exc)
@@ -144,7 +144,9 @@ def run_review(claim_id: str, review_id: str, broker_firm_id: str | None) -> Non
         db.close()
 
 
-def _run_stages(db, claim: Claim, review: ClaimAIReview) -> None:
+def _run_stages(
+    db, claim: Claim, review: ClaimAIReview, broker_firm_id: str | None = None
+) -> None:
     employee = db.get(Employee, claim.employee_id)
     if employee is None:
         raise RuntimeError(f"Employee {claim.employee_id} not found for claim {claim.id}")
@@ -180,7 +182,9 @@ def _run_stages(db, claim: Claim, review: ClaimAIReview) -> None:
     all_calls: list[dict[str, Any]] = []
 
     # Stage 2 — extraction (cached per document hash).
-    extractions, doc_warnings, calls = extraction.extract_documents(db, claim, docs)
+    extractions, doc_warnings, calls = extraction.extract_documents(
+        db, claim, docs, broker_firm_id
+    )
     all_calls.extend(calls)
     # Deterministic key-field completeness per recognised document type
     # (broker-side warnings only — never blocks or auto-flags the member).

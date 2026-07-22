@@ -59,6 +59,13 @@ FIELD_MAPS: list[dict[str, Any]] = [
     },
 ]
 
+# Fields worth a selective vision re-check (amount, date, provider). Single
+# source of truth — both the vision pass (which statuses it re-checks) and the
+# verdict (which MISSING_IN_PDF fields it flags) derive from this.
+VISION_FIELDS = frozenset(
+    m["portal_field"] for m in FIELD_MAPS if m.get("verify_with_vision")
+)
+
 # Claim-type keyword → required document families. The GHS sub-claim type is
 # consulted FIRST (it states the treatment setting precisely — "Pre and Post
 # Hospitalisation" must not demand a discharge summary just because the

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.storage import get_storage
 from app.models import Claim, StoredDocument
 from app.services import ai_gateway
-from app.services.claims_review.field_maps import FIELD_MAPS
+from app.services.claims_review.field_maps import VISION_FIELDS
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 
 logger = logging.getLogger(__name__)
@@ -30,9 +30,14 @@ MAX_VISION_CHECKS = 4
 # MISSING_IN_PDF and the verdict flags it (see verdict.py) — evidence for a
 # vision-checked field is never assumed present just because confidence is high.
 _VERIFIABLE_STATUSES = frozenset({"MISMATCH", "UNCERTAIN", "MISSING_IN_PDF"})
-_VISION_FIELDS = frozenset(
-    m["portal_field"] for m in FIELD_MAPS if m.get("verify_with_vision")
-)
+_VISION_FIELDS = VISION_FIELDS
+
+# MISMATCH/UNCERTAIN comparisons get the shared MAX_VISION_CHECKS budget FIRST:
+# a vision recheck can flip a false MISMATCH back to MATCH (clearing a flag),
+# whereas a MISSING_IN_PDF that can't be confirmed only stays flagged either
+# way. Checking missing-value fields last keeps them from starving the
+# mismatch rechecks (which is what a limited budget must protect).
+_STATUS_PRIORITY = {"MISMATCH": 0, "UNCERTAIN": 0, "MISSING_IN_PDF": 1}
 
 
 def _question(comparison: dict[str, Any]) -> str:
@@ -58,7 +63,10 @@ def run_vision_checks(
     call_metadata: list[dict[str, Any]] = []
     calls = 0
 
-    for comparison in updated:
+    # Stable sort so mismatch/uncertain rechecks claim the budget before
+    # missing-value rechecks; mutations still land on the `updated` dicts.
+    ordered = sorted(updated, key=lambda c: _STATUS_PRIORITY.get(c.get("status"), 0))
+    for comparison in ordered:
         if calls >= MAX_VISION_CHECKS:
             break
         if comparison.get("status") not in _VERIFIABLE_STATUSES:

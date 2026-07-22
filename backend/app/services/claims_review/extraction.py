@@ -16,6 +16,7 @@ from anthropic import RateLimitError
 from sqlalchemy.orm import Session
 
 from app.core.storage import get_storage
+from app.db.tenancy import set_search_path
 from app.models import Claim, StoredDocument
 from app.services import ai_gateway
 from app.services.doc_images import DocImageError, vision_blocks_for_document
@@ -27,16 +28,26 @@ logger = logging.getLogger(__name__)
 # the 2nd/3rd document of a multi-doc claim propagates out of the whole review
 # and dumps the claim back to manual review, discarding the AI spend already
 # incurred on earlier documents. This runs in the background review task (sync,
-# its own session), so a short blocking sleep is acceptable — and unlike the
-# request path we deliberately DON'T roll back here: run_review sets the firm
-# search_path once on its session, and releasing the connection mid-run could
-# hand back a pool connection scoped to a different (or public) schema.
+# its own session), so a short blocking sleep is acceptable.
 _THROTTLE_RETRIES = 1
 _THROTTLE_BACKOFF_SECONDS = 8.0
 
 
-def _extract_with_throttle_retry(db: Session, claim: Claim, doc: StoredDocument, blocks):
-    """`ai_gateway.extract_claim_document` with one bounded backoff on 429."""
+def _extract_with_throttle_retry(
+    db: Session,
+    claim: Claim,
+    doc: StoredDocument,
+    blocks,
+    broker_firm_id: str | None,
+):
+    """`ai_gateway.extract_claim_document` with one bounded backoff on 429.
+
+    Before sleeping we COMMIT (persisting earlier documents' spend rows and
+    releasing the pooled connection, so it isn't held idle-in-transaction for
+    the whole backoff), then re-assert the firm ``search_path`` afterwards — the
+    committed session may check out a fresh connection whose path would
+    otherwise default to ``public`` on Postgres.
+    """
     for attempt in range(_THROTTLE_RETRIES + 1):
         try:
             return ai_gateway.extract_claim_document(
@@ -54,7 +65,9 @@ def _extract_with_throttle_retry(db: Session, claim: Claim, doc: StoredDocument,
                 "Claim %s: throttled extracting doc %s — retrying in %ss",
                 claim.id, doc.id, _THROTTLE_BACKOFF_SECONDS,
             )
+            db.commit()  # release the connection during the wait, keep spend
             time.sleep(_THROTTLE_BACKOFF_SECONDS)
+            set_search_path(db, broker_firm_id)  # restore firm schema (no-op on SQLite)
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -62,6 +75,7 @@ def extract_documents(
     db: Session,
     claim: Claim,
     docs: list[StoredDocument],
+    broker_firm_id: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract every document's fields.
 
@@ -94,7 +108,7 @@ def extract_documents(
             )
             continue
 
-        result = _extract_with_throttle_retry(db, claim, doc, blocks)
+        result = _extract_with_throttle_retry(db, claim, doc, blocks, broker_firm_id)
         call_metadata.append(result.metadata)
         extractions.append(
             {

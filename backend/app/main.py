@@ -78,16 +78,17 @@ def _allowed_origins() -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
-@asynccontextmanager
-async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def _startup_recovery() -> None:
     # Recover claims left in `ai_review_pending` by an interrupted background
     # review (a deploy IS a restart, so this fires exactly when strandings
-    # happen). Never raises. Runs on real server startup only — TestClient(app)
-    # without a `with` block doesn't enter the lifespan, so tests are unaffected.
+    # happen). Run off the event loop (to_thread) so a slow cross-schema sweep
+    # can't delay readiness. Never raises.
+    import asyncio
+
     from app.services.claims_review.recovery import recover_stranded_reviews
 
     try:
-        recovered = recover_stranded_reviews()
+        recovered = await asyncio.to_thread(recover_stranded_reviews)
         if recovered:
             logger.warning(
                 "Startup: reverted %s stranded claim review(s) to manual review",
@@ -95,6 +96,19 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             )
     except Exception:  # pragma: no cover - belt-and-braces; the sweep is self-guarding
         logger.exception("Startup stranded-review recovery raised")
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    import asyncio
+
+    # Skip under pytest: the sweep is a production-startup concern and must
+    # never revert a claim a test set up in ai_review_pending (a test entering
+    # the lifespan via `with TestClient(app)` would otherwise trigger it).
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        # Fire-and-forget so startup (and readiness) never waits on the sweep;
+        # keep a reference so the task isn't garbage-collected mid-run.
+        app.state.recovery_task = asyncio.create_task(_startup_recovery())
     yield
 
 

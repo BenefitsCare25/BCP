@@ -54,11 +54,18 @@ def _reset_search_path(dbapi_connection, _connection_record) -> None:
         # Isolation doesn't depend on this (set_search_path runs per request),
         # but a connection that can't reset is unhealthy — evict it from the
         # pool rather than handing it back (possibly still on a firm schema).
+        # invalidate() is wrapped: it may itself fail on an already-broken
+        # connection, and an exception must not escape the checkin event.
         logging.getLogger(__name__).warning(
             "Failed to reset search_path on pool checkin; invalidating connection",
             exc_info=True,
         )
-        _connection_record.invalidate()
+        try:
+            _connection_record.invalidate()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to invalidate connection on checkin", exc_info=True
+            )
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
