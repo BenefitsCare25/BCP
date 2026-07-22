@@ -115,7 +115,12 @@ export interface CompanySummary {
   member_count: number;
   dependant_count: number;
   claims_to_review: number;
+  dependants_pending: number;
+  employees_unmatched: number;
+  matching_stale: boolean;
+  underwriting_pending: number;
   enrollment_open: boolean;
+  enrollment_closes_at: string | null;
 }
 
 export interface FirmTotals {
@@ -123,6 +128,9 @@ export interface FirmTotals {
   member_count: number;
   dependant_count: number;
   claims_to_review: number;
+  dependants_pending: number;
+  employees_unmatched: number;
+  underwriting_pending: number;
   windows_open: number;
 }
 

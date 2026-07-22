@@ -9,6 +9,8 @@ import {
   Plus,
   ReceiptText,
   Search,
+  ShieldQuestion,
+  UserPlus,
   Users,
 } from "lucide-react";
 import {
@@ -22,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Kpi } from "@/components/ui/kpi";
 import { cn } from "@/lib/cn";
+import { companyAttention, daysUntil } from "@/lib/attention";
 import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import { toast } from "sonner";
@@ -68,7 +71,7 @@ export function HomePage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Kpi label="Companies" value={data.firm.company_count} icon={Building2} />
         <Kpi label="Members" value={data.firm.member_count} icon={Users} />
         <Kpi
@@ -76,6 +79,18 @@ export function HomePage() {
           value={data.firm.claims_to_review}
           icon={ReceiptText}
           tone={data.firm.claims_to_review > 0 ? "warn" : "default"}
+        />
+        <Kpi
+          label="Dependant approvals"
+          value={data.firm.dependants_pending}
+          icon={UserPlus}
+          tone={data.firm.dependants_pending > 0 ? "warn" : "default"}
+        />
+        <Kpi
+          label="U/W pending"
+          value={data.firm.underwriting_pending}
+          icon={ShieldQuestion}
+          tone={data.firm.underwriting_pending > 0 ? "warn" : "default"}
         />
         <Kpi
           label="Windows open"
@@ -136,34 +151,57 @@ export function HomePage() {
   );
 }
 
-type Attention = {
+type FirmAttention = {
   key: string;
   company: string;
   message: string;
   tone: "warn" | "error";
 };
 
-function buildAttention(companies: CompanySummary[]): Attention[] {
-  const out: Attention[] = [];
+// Flatten every company's attention items into one firm-wide list, error-tone
+// first (a missing benefit year outranks operational backlog), capped so the
+// panel stays a glance not a wall.
+function buildAttention(companies: CompanySummary[]): FirmAttention[] {
+  const out: FirmAttention[] = [];
   for (const c of companies) {
-    if (c.claims_to_review > 0) {
+    for (const a of companyAttention(c)) {
       out.push({
-        key: `${c.id}-claims`,
+        key: `${c.id}-${a.key}`,
         company: c.name,
-        message: `${c.claims_to_review} claim${c.claims_to_review === 1 ? "" : "s"} to review`,
-        tone: "warn",
-      });
-    }
-    if (!c.current_year) {
-      out.push({
-        key: `${c.id}-year`,
-        company: c.name,
-        message: "no current benefit year set",
-        tone: "error",
+        message: a.short,
+        tone: a.tone,
       });
     }
   }
-  return out.slice(0, 6);
+  out.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "error" ? -1 : 1));
+  return out.slice(0, 8);
+}
+
+// "Enrollment open" gains urgency when it's about to close — show the countdown
+// instead of the neutral open badge inside the last week.
+function enrollBadge(c: CompanySummary) {
+  if (!c.enrollment_closes_at) return null;
+  const days = daysUntil(c.enrollment_closes_at);
+  if (days > 7) return null;
+  return (
+    <Badge variant="warn">
+      {days <= 0 ? "Closes today" : `Closes in ${days}d`}
+    </Badge>
+  );
+}
+
+// A company is "all clear" only when it has a current year and no outstanding
+// operational signal — otherwise a warn badge already tells the real story.
+function allClear(c: CompanySummary): boolean {
+  return (
+    !!c.current_year &&
+    c.claims_to_review === 0 &&
+    c.employees_unmatched === 0 &&
+    c.dependants_pending === 0 &&
+    c.underwriting_pending === 0 &&
+    !c.enrollment_open &&
+    !c.matching_stale
+  );
 }
 
 function CompanyCard({ company }: { company: CompanySummary }) {
@@ -209,17 +247,35 @@ function CompanyCard({ company }: { company: CompanySummary }) {
           </span>
           members
         </span>
+        <span className="flex items-center gap-1 text-muted-foreground">
+          <UserPlus className="size-3.5" />
+          <span className="tabular-nums text-foreground">
+            {company.dependant_count}
+          </span>
+          dependants
+        </span>
       </div>
 
       <div className="mt-3 flex min-h-[24px] flex-wrap items-center gap-1.5">
         {company.claims_to_review > 0 && (
           <Badge variant="warn">{company.claims_to_review} claims</Badge>
         )}
-        {company.enrollment_open && <Badge variant="info">Enrollment open</Badge>}
+        {company.employees_unmatched > 0 && (
+          <Badge variant="warn">{company.employees_unmatched} unmatched</Badge>
+        )}
+        {company.dependants_pending > 0 && (
+          <Badge variant="warn">{company.dependants_pending} to approve</Badge>
+        )}
+        {company.underwriting_pending > 0 && (
+          <Badge variant="warn">{company.underwriting_pending} U/W</Badge>
+        )}
+        {company.matching_stale && <Badge variant="warn">Matching stale</Badge>}
+        {company.enrollment_open &&
+          (enrollBadge(company) ?? (
+            <Badge variant="info">Enrollment open</Badge>
+          ))}
         {!company.current_year && <Badge variant="error">No year</Badge>}
-        {company.claims_to_review === 0 &&
-          !company.enrollment_open &&
-          company.current_year && <Badge variant="good">All clear</Badge>}
+        {allClear(company) && <Badge variant="good">All clear</Badge>}
       </div>
 
       <div className="mt-3 flex items-center gap-1 text-sm font-medium text-primary">

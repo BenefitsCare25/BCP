@@ -1,21 +1,22 @@
 import { useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import {
+  Activity,
   CalendarClock,
   Loader2,
   ReceiptText,
+  ShieldQuestion,
+  UserCheck,
   UserPlus,
   Users,
 } from "lucide-react";
-import {
-  type CompanySummary,
-  useDashboardSummary,
-  useMe,
-} from "@/api/hooks";
+import { useAuditLog, useDashboardSummary, useMe } from "@/api/hooks";
+import type { AuditLogEntry } from "@/types";
 import { COMPANY_NAV } from "@/components/shell/nav";
 import { Badge } from "@/components/ui/badge";
 import { Kpi } from "@/components/ui/kpi";
 import { cn } from "@/lib/cn";
+import { companyAttention, daysUntil, parseServerDate } from "@/lib/attention";
 import { useSession } from "@/stores/session";
 
 export function CompanyDashboardPage() {
@@ -52,7 +53,7 @@ export function CompanyDashboardPage() {
     );
   }
 
-  const attention = buildAttention(company);
+  const attention = companyAttention(company);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -65,7 +66,7 @@ export function CompanyDashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Kpi label="Members" value={company.member_count} icon={Users} />
         <Kpi label="Dependants" value={company.dependant_count} icon={UserPlus} />
         <Kpi
@@ -74,16 +75,39 @@ export function CompanyDashboardPage() {
           icon={ReceiptText}
           tone={company.claims_to_review > 0 ? "warn" : "default"}
         />
-        <div className="rounded-lg border border-border bg-card p-4">
+        <Kpi
+          label="Unmatched members"
+          value={company.employees_unmatched}
+          icon={UserCheck}
+          tone={company.employees_unmatched > 0 ? "warn" : "default"}
+        />
+        <Kpi
+          label="Dependant approvals"
+          value={company.dependants_pending}
+          icon={UserPlus}
+          tone={company.dependants_pending > 0 ? "warn" : "default"}
+        />
+        <Kpi
+          label="U/W pending"
+          value={company.underwriting_pending}
+          icon={ShieldQuestion}
+          tone={company.underwriting_pending > 0 ? "warn" : "default"}
+        />
+        <div className="col-span-2 rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <CalendarClock className="size-3.5" />
             Enrollment
           </div>
-          <div className="mt-2">
+          <div className="mt-2 flex items-center gap-2">
             {company.enrollment_open ? (
               <Badge variant="info">Window open</Badge>
             ) : (
               <Badge variant="default">Closed</Badge>
+            )}
+            {company.enrollment_open && company.enrollment_closes_at && (
+              <span className="text-xs text-muted-foreground">
+                {closesLabel(company.enrollment_closes_at)}
+              </span>
             )}
           </div>
         </div>
@@ -107,6 +131,7 @@ export function CompanyDashboardPage() {
                 {a.to && (
                   <Link
                     to={a.to}
+                    search={a.search}
                     className="text-xs font-medium text-primary hover:underline"
                   >
                     Go →
@@ -118,64 +143,112 @@ export function CompanyDashboardPage() {
         </div>
       )}
 
-      <div>
-        <h2 className="mb-2 text-sm font-semibold text-foreground">Jump to</h2>
-        <div className="space-y-4">
-          {COMPANY_NAV.map((group) => (
-            <div key={group.key}>
-              <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                {group.label}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_20rem]">
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">Jump to</h2>
+          <div className="space-y-4">
+            {COMPANY_NAV.map((group) => (
+              <div key={group.key}>
+                <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  {group.label}
+                </div>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={item.to}
+                        to={item.to}
+                        className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground/80 transition-colors hover:border-border-strong hover:bg-sidebar-hover hover:text-foreground"
+                      >
+                        <Icon
+                          className="size-4 shrink-0 text-muted-foreground"
+                          strokeWidth={1.75}
+                        />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  return (
-                    <Link
-                      key={item.to}
-                      to={item.to}
-                      className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground/80 transition-colors hover:border-border-strong hover:bg-sidebar-hover hover:text-foreground"
-                    >
-                      <Icon
-                        className="size-4 shrink-0 text-muted-foreground"
-                        strokeWidth={1.75}
-                      />
-                      <span className="truncate">{item.label}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
+
+        <RecentActivity />
       </div>
     </div>
   );
 }
 
-type Attention = {
-  key: string;
-  message: string;
-  tone: "warn" | "error";
-  to?: string;
-};
+function closesLabel(iso: string): string {
+  const days = daysUntil(iso);
+  if (days <= 0) return "closes today";
+  if (days === 1) return "closes tomorrow";
+  if (days <= 14) return `closes in ${days} days`;
+  return `closes ${parseServerDate(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  })}`;
+}
 
-function buildAttention(company: CompanySummary): Attention[] {
-  const out: Attention[] = [];
-  if (company.claims_to_review > 0) {
-    out.push({
-      key: "claims",
-      message: `${company.claims_to_review} claim${company.claims_to_review === 1 ? "" : "s"} awaiting review`,
-      tone: "warn",
-      to: "/operations/claims",
-    });
-  }
-  if (!company.current_year) {
-    out.push({
-      key: "year",
-      message: "No current benefit year — set one in Company & Benefits",
-      tone: "error",
-      to: "/configuration",
-    });
-  }
-  return out;
+// Company-scoped audit feed (the /audit-log endpoint filters to the active
+// client). A lightweight "what changed lately" panel beside the jump links.
+function RecentActivity() {
+  const { data, isLoading } = useAuditLog();
+  const items = (data?.items ?? []).slice(0, 10);
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground">
+        <Activity className="size-4 text-muted-foreground" strokeWidth={1.75} />
+        Recent activity
+      </div>
+      {isLoading ? (
+        <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" /> Loading…
+        </div>
+      ) : items.length === 0 ? (
+        <div className="py-4 text-xs text-muted-foreground">
+          No recent activity.
+        </div>
+      ) : (
+        <ul className="space-y-2.5">
+          {items.map((e) => (
+            <li key={e.id} className="text-xs">
+              <div className="text-foreground/80">{describe(e)}</div>
+              <div className="text-muted-foreground/70">{relTime(e.created_at)}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Turn "run_matching" / "override_match" into "Run matching", "Override match".
+function humanize(s: string): string {
+  const t = s.replace(/_/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+function describe(e: AuditLogEntry): string {
+  const entity = e.entity_type.replace(/_/g, " ");
+  return `${humanize(e.action)} · ${entity}`;
+}
+
+function relTime(iso: string): string {
+  const then = parseServerDate(iso);
+  const diff = Date.now() - then.getTime();
+  const mins = Math.round(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return then.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
 }
