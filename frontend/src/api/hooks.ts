@@ -101,6 +101,49 @@ export function useMe() {
   });
 }
 
+// ── Firm Home dashboard ────────────────────────────────────────────────────
+export interface CompanyYear {
+  id: string;
+  year: number;
+  status: string;
+}
+
+export interface CompanySummary {
+  id: string;
+  name: string;
+  current_year: CompanyYear | null;
+  member_count: number;
+  dependant_count: number;
+  claims_to_review: number;
+  enrollment_open: boolean;
+}
+
+export interface FirmTotals {
+  company_count: number;
+  member_count: number;
+  dependant_count: number;
+  claims_to_review: number;
+  windows_open: number;
+}
+
+export interface DashboardSummary {
+  firm: FirmTotals;
+  companies: CompanySummary[];
+}
+
+/**
+ * Firm-level roll-up powering the Home page. Scoped server-side to the caller's
+ * accessible clients (same firm boundary as everything else), so it's NOT keyed
+ * by the active client — it aggregates across companies regardless of selection.
+ */
+export function useDashboardSummary() {
+  return useQuery({
+    queryKey: ["dashboard-summary"],
+    queryFn: () => api.get<DashboardSummary>("/dashboard/summary"),
+    staleTime: 30_000,
+  });
+}
+
 export function useEmployeeAttributes() {
   const cid = useActiveClientId();
   return useQuery({
@@ -921,6 +964,7 @@ export function useCreateClient() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] }); // switcher's accessible clients
+      qc.invalidateQueries({ queryKey: ["dashboard-summary"] }); // Home grid
     },
   });
 }
@@ -933,6 +977,7 @@ export function usePatchClient() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-summary"] });
     },
   });
 }
@@ -944,6 +989,7 @@ export function useDeleteClient() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] }); // switcher's accessible clients
+      qc.invalidateQueries({ queryKey: ["dashboard-summary"] }); // Home grid
     },
   });
 }

@@ -1,15 +1,48 @@
+import { useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Layers, ListChecks } from "lucide-react";
+import { ChevronDown, Home, Layers, ListChecks } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMe } from "@/api/hooks";
-import { ADMIN_GROUP, NAV_GROUPS } from "./nav";
+import { COMPANY_NAV, FIRM_NAV, type NavGroup, type NavItem } from "./nav";
+
+const COLLAPSE_KEY = "inspro.nav.collapsed";
+
+function readCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
 
 export function Sidebar() {
   const router = useRouterState();
   const path = router.location.pathname;
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
-  const nav = canAdmin ? [...NAV_GROUPS, ADMIN_GROUP] : NAV_GROUPS;
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+  const toggle = (key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      try {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
+      } catch {
+        /* private mode / quota — collapse state is non-critical */
+      }
+      return next;
+    });
+  };
+
+  // Firm admin surface is broker-admin only; drop it from the firm zone for
+  // everyone else (the page itself also gates, this just hides the link).
+  const firmItems = FIRM_NAV.items.filter(
+    (i) => i.to !== "/admin" || canAdmin,
+  );
+
   return (
     <aside className="w-60 shrink-0 border-r border-border bg-sidebar h-full flex flex-col">
       <div className="h-14 px-5 flex items-center border-b border-border">
@@ -19,48 +52,30 @@ export function Sidebar() {
           className="max-h-9 w-auto"
         />
       </div>
-      <nav className="flex-1 p-3 overflow-y-auto space-y-5">
-        {nav.map((group) => {
-          const Icon = group.icon;
-          const active =
-            path.startsWith(group.base) ||
-            group.items.some(
-              (item) => path === item.to || path.startsWith(`${item.to}/`),
-            );
-          return (
-            <div key={group.base}>
-              <div
-                className={cn(
-                  "flex items-center gap-2 px-2 py-1.5 text-xs uppercase tracking-wider font-medium",
-                  active ? "text-foreground" : "text-muted-foreground",
-                )}
-              >
-                <Icon className="size-3.5" />
-                {group.label}
-              </div>
-              <ul className="space-y-0.5">
-                {group.items.map((item) => {
-                  const isActive = path === item.to;
-                  return (
-                    <li key={item.to}>
-                      <Link
-                        to={item.to}
-                        className={cn(
-                          "block w-full text-left rounded-md px-3 py-1.5 text-sm transition-colors",
-                          isActive
-                            ? "bg-sidebar-active text-sidebar-active-foreground font-medium"
-                            : "text-sidebar-foreground hover:bg-sidebar-hover",
-                        )}
-                      >
-                        {item.label}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          );
-        })}
+      <nav className="flex-1 p-3 overflow-y-auto space-y-1">
+        <HomeLink active={path === "/home"} />
+
+        {COMPANY_NAV.map((group) => (
+          <Group
+            key={group.key}
+            group={group}
+            path={path}
+            open={!collapsed.has(group.key)}
+            onToggle={() => toggle(group.key)}
+          />
+        ))}
+
+        <div className="pt-3">
+          <div className="px-2.5 pb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-muted-foreground/70">
+            <Layers className="size-3" />
+            Firm · all companies
+          </div>
+          <ul className="space-y-0.5">
+            {firmItems.map((item) => (
+              <ItemLink key={item.to} item={item} active={path === item.to} />
+            ))}
+          </ul>
+        </div>
       </nav>
       <div className="p-3 border-t border-border text-xs text-muted-foreground space-y-1">
         <div className="flex items-center gap-2">
@@ -73,5 +88,96 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+function HomeLink({ active }: { active: boolean }) {
+  return (
+    <Link
+      to="/home"
+      className={cn(
+        "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium tracking-tight transition-colors",
+        active
+          ? "bg-sidebar-active text-sidebar-active-foreground"
+          : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground",
+      )}
+    >
+      <Home className="size-[18px] shrink-0" strokeWidth={1.75} />
+      Home
+    </Link>
+  );
+}
+
+function Group({
+  group,
+  path,
+  open,
+  onToggle,
+}: {
+  group: NavGroup;
+  path: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const Icon = group.icon;
+  const active = group.items.some((item) => path === item.to);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={cn(
+          "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium tracking-tight transition-colors hover:bg-sidebar-hover",
+          active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
+        <span className="flex-1 text-left">{group.label}</span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
+            open ? "" : "-rotate-90",
+          )}
+          strokeWidth={2}
+        />
+      </button>
+      {open && (
+        <ul className="mt-0.5 space-y-0.5">
+          {group.items.map((item) => (
+            <ItemLink key={item.to} item={item} active={path === item.to} indent />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ItemLink({
+  item,
+  active,
+  indent,
+}: {
+  item: NavItem;
+  active: boolean;
+  indent?: boolean;
+}) {
+  const Icon = item.icon;
+  return (
+    <li>
+      <Link
+        to={item.to}
+        className={cn(
+          "flex items-center gap-2.5 rounded-md py-1.5 pr-2.5 text-sm transition-colors",
+          indent ? "pl-4" : "pl-2.5",
+          active
+            ? "bg-sidebar-active text-sidebar-active-foreground font-medium"
+            : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground",
+        )}
+      >
+        <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
+        <span className="truncate">{item.label}</span>
+      </Link>
+    </li>
   );
 }

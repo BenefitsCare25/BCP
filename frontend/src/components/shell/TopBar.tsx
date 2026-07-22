@@ -2,7 +2,6 @@ import { useEffect } from "react";
 import { usePolicyYears } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { AccountMenu } from "./AccountMenu";
-import { ClientSwitcher } from "./ClientSwitcher";
 
 export function TopBar({ title }: { title: string }) {
   const { data: years = [], isSuccess } = usePolicyYears();
@@ -27,8 +26,6 @@ export function TopBar({ title }: { title: string }) {
     <header className="h-14 border-b border-border bg-card px-6 flex items-center justify-between shrink-0">
       <h1 className="text-base font-semibold text-foreground">{title}</h1>
       <div className="flex items-center gap-3">
-        <ClientSwitcher />
-        <div className="h-5 w-px bg-border" />
         <AccountMenu />
       </div>
     </header>

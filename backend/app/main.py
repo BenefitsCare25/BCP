@@ -23,6 +23,7 @@ from app.api.v1 import (
     categories,
     claim_doc_types,
     claims,
+    dashboard,
     dependants,
     employees,
     enrollment_windows,
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     api_prefix = "/api/v1"
     api_routers = (
         adc.router,
+        dashboard.router,
         policy_years.router,
         recommendations.router,
         schemas_api.router,

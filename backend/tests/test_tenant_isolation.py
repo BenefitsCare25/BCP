@@ -1383,3 +1383,32 @@ def test_claim_doc_type_update_cross_tenant_404(client_as_a: TestClient) -> None
 def test_claim_doc_type_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/claim-doc-types/{DOCTYPE_B}")
     assert res.status_code == 404
+
+
+def test_dashboard_summary_excludes_other_firm(client_as_a: TestClient) -> None:
+    """The firm Home roll-up is scoped to `accessible_clients` (the broker-firm
+    boundary). A company in a DIFFERENT firm must never appear, even though its
+    rows share the single SQLite schema in tests."""
+    from app.models import BrokerFirm
+
+    other_firm_id = "00000000-0000-0000-0000-0000000000f0"
+    other_client_id = "00000000-0000-0000-0000-0000000000f1"
+    with SessionLocal() as session:
+        if session.get(BrokerFirm, other_firm_id) is None:
+            session.add(BrokerFirm(id=other_firm_id, name="Rival Brokers"))
+            session.add(
+                Client(
+                    id=other_client_id,
+                    name="Rival-firm client",
+                    broker_firm_id=other_firm_id,
+                )
+            )
+            session.commit()
+
+    body = client_as_a.get("/api/v1/dashboard/summary").json()
+    ids = {c["id"] for c in body["companies"]}
+    # A's own firm companies are present; the rival firm's client is not.
+    assert DEMO_CLIENT_ID in ids
+    assert CLIENT_B_ID in ids
+    assert other_client_id not in ids
+    assert body["firm"]["company_count"] == len(body["companies"])

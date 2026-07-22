@@ -101,6 +101,11 @@ const SignInPage = lazyRouteComponent(
   () => import("@/routes/auth/sign-in"),
   "SignInPage",
 );
+const HomePage = lazyRouteComponent(() => import("@/routes/home"), "HomePage");
+const CompanyDashboardPage = lazyRouteComponent(
+  () => import("@/routes/dashboard"),
+  "CompanyDashboardPage",
+);
 
 // Routes that are reachable without being signed in. Everything else goes
 // through the AppShell which requires an active MSAL account when Entra is
@@ -254,9 +259,21 @@ const indexRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/configuration" });
+    throw redirect({ to: "/home" });
   },
   component: () => null,
+});
+
+const homeRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/home",
+  component: HomePage,
+});
+
+const dashboardRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/dashboard",
+  component: CompanyDashboardPage,
 });
 
 const schemaLayoutRoute = createRoute({
@@ -484,6 +501,8 @@ const routeTree = rootRoute.addChildren([
   ]),
   appLayoutRoute.addChildren([
     indexRoute,
+    homeRoute,
+    dashboardRoute,
     schemaLayoutRoute.addChildren([
       schemaIndexRoute,
       schemaAttributesRedirect,
