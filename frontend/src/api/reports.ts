@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { useSession } from "@/stores/session";
 
 export interface ReportReadiness {
   insurers: string[];
@@ -11,8 +12,11 @@ export interface ReportReadiness {
 }
 
 export function useReportReadiness(policyYearId: string | null) {
+  // Scope the key by active client so a tenant switch reads a fresh cache
+  // (matches every other tenant-scoped hook in the app).
+  const cid = useSession((s) => s.activeClientId);
   return useQuery({
-    queryKey: ["report-readiness", policyYearId],
+    queryKey: ["report-readiness", policyYearId, cid],
     queryFn: () =>
       api.get<ReportReadiness>(
         `/policy-years/${policyYearId}/reports/readiness`,

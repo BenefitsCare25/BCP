@@ -55,9 +55,14 @@ function CompanyContext() {
   const onChange = (id: string) => {
     if (id === selected) return;
     setActiveClient(id);
-    // Cached data is scoped to the previous company — drop it so every active
-    // query refetches against the newly selected tenant.
-    qc.invalidateQueries();
+    // Cached data is scoped to the previous company — EVICT it (don't
+    // invalidate). invalidateQueries() would synchronously refetch the
+    // still-mounted, previous-tenant-keyed queries, whose queryFn closes over
+    // the old policy-year id but reads the just-switched tenant header at fetch
+    // time → a cross-tenant request that 404s ("Policy year not found").
+    // removeQueries drops the entries with no in-place refetch; the new render
+    // re-keys every query to the new client and fetches fresh.
+    qc.removeQueries();
   };
 
   const activeName =

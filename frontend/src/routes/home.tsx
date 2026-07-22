@@ -211,7 +211,9 @@ function CompanyCard({ company }: { company: CompanySummary }) {
 
   const enter = () => {
     setActiveClient(company.id);
-    qc.invalidateQueries();
+    // Evict the previous tenant's cache (not invalidate — that would refetch
+    // previous-tenant-keyed queries in-place with the new header → 404).
+    qc.removeQueries();
     navigate({ to: "/dashboard" });
   };
 

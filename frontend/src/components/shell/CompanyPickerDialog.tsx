@@ -41,8 +41,10 @@ export function CompanyPickerDialog() {
   const pick = (id: string) => {
     setActiveClient(id);
     // Data behind the overlay is scoped to the (previously none/other) client —
-    // drop caches so the now-visible page fetches against the chosen tenant.
-    qc.invalidateQueries();
+    // EVICT it so the now-visible page fetches against the chosen tenant. Not
+    // invalidateQueries(): that would refetch previous-tenant-keyed queries
+    // in-place with the just-switched header → a cross-tenant 404.
+    qc.removeQueries();
   };
 
   return (

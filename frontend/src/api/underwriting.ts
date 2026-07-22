@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { useSession } from "@/stores/session";
 
 export interface UnderwritingCase {
   id: string;
@@ -24,8 +25,12 @@ export interface UnderwritingQueue {
 }
 
 export function useUnderwritingQueue(policyYearId: string | null) {
+  // Scope the key by active client so a tenant switch reads a fresh cache. The
+  // mutations below invalidate by the ["underwriting", policyYearId] prefix,
+  // which still matches this longer key.
+  const cid = useSession((s) => s.activeClientId);
   return useQuery({
-    queryKey: ["underwriting", policyYearId],
+    queryKey: ["underwriting", policyYearId, cid],
     queryFn: () =>
       api.get<UnderwritingQueue>(
         `/policy-years/${policyYearId}/underwriting/cases`,
