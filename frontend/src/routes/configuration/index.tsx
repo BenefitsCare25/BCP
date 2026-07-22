@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearch } from "@tanstack/react-router";
 import {
   useAuditLog,
   useCategoriesGrouped,
@@ -59,7 +60,14 @@ export function ConfigurationPage() {
   );
   const { data: schema = [] } = useEmployeeAttributes();
   const { data: audit } = useAuditLog();
-  const [tab, setTab] = useState<InsuranceLine>("medical");
+  // Initial line tab is deep-linkable via ?tab= (e.g. the Reports Center "Flex
+  // Coverage" card links to ?tab=flex); unknown values fall back to medical.
+  const search = useSearch({ strict: false }) as { tab?: string };
+  const [tab, setTab] = useState<InsuranceLine>(
+    INSURANCE_LINES.includes(search.tab as InsuranceLine)
+      ? (search.tab as InsuranceLine)
+      : "medical",
+  );
   const [selected, setSelected] = useState<Category | null>(null);
   // Switching the viewed year closes any open category editor — the panel edits
   // a category from the previously-viewed year and must not linger over another

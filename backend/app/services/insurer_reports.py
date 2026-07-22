@@ -171,6 +171,15 @@ def _bold_header(ws: Worksheet) -> None:
         cell.font = Font(bold=True)
 
 
+# Public aliases — these workbook helpers are the shared reports toolkit (also
+# used by claims_register / insurer_listings / member_listing_template). Exposed
+# without the leading underscore so other report modules don't reach into
+# module-private names.
+naive = _naive
+autosize = _autosize
+bold_header = _bold_header
+
+
 # Spreadsheet formula-injection guard. openpyxl stores any string starting with
 # = + - @ (or a leading control char) as a live formula, so a roster value like
 # ``=HYPERLINK(...)`` or ``=cmd|...`` would execute in the insurer's Excel when

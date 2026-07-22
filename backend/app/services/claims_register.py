@@ -1,10 +1,12 @@
 """Broker-facing claims register (.xlsx) — one row per claim for a policy year.
 
 The claims-team analogue of the insurer listings in ``insurer_reports.py``:
-a flat export of every claim (all statuses) with claimant, coverage line,
-amounts and decision, for reconciliation against the insurer's claims ledger.
-Reuses the injection-safe / formatting helpers so the workbook style matches
-the other reports.
+a flat export of submitted claims with claimant, coverage line, amounts and
+decision, for reconciliation against the insurer's claims ledger. Never-
+submitted drafts are excluded (member work-in-progress, not real claims); the
+broker-internal ``decision_notes`` is deliberately omitted so the workbook is
+safe to share with the insurer. Reuses the injection-safe / formatting helpers
+so the workbook style matches the other reports.
 """
 from __future__ import annotations
 
@@ -13,13 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Claim, Employee, PolicyYear
-from app.models.claim import CLAIM_KIND_FLEX
+from app.models.claim import CLAIM_KIND_FLEX, CLAIM_STATUS_DRAFT
 from app.services.claims import prefetch_claim_relations
 from app.services.insurer_reports import (
-    _autosize,
-    _bold_header,
-    _naive,
     append_safe,
+    autosize,
+    bold_header,
+    naive,
 )
 
 CLAIMS_REGISTER_HEADER = [
@@ -40,7 +42,6 @@ CLAIMS_REGISTER_HEADER = [
     "Amount Approved",
     "Submitted On",
     "Decided On",
-    "Decision Notes",
 ]
 
 
@@ -51,12 +52,15 @@ def _status_label(status: str) -> str:
 def build_claims_register_workbook(
     db: Session, policy_year: PolicyYear
 ) -> Workbook:
-    """One row per claim in the year, newest submission first."""
+    """One row per submitted claim in the year, newest submission first."""
     rows = list(
         db.execute(
             select(Claim, Employee)
             .join(Employee, Claim.employee_id == Employee.id)
-            .where(Claim.policy_year_id == policy_year.id)
+            .where(
+                Claim.policy_year_id == policy_year.id,
+                Claim.status != CLAIM_STATUS_DRAFT,
+            )
             .order_by(
                 Claim.submitted_at.desc().nullslast(),
                 Claim.created_at.desc(),
@@ -70,7 +74,7 @@ def build_claims_register_workbook(
     ws = wb.active
     ws.title = "Claims"
     ws.append(CLAIMS_REGISTER_HEADER)
-    _bold_header(ws)
+    bold_header(ws)
 
     for claim, employee in rows:
         is_flex = claim.claim_kind == CLAIM_KIND_FLEX
@@ -83,7 +87,7 @@ def build_claims_register_workbook(
             claim.flex_category_name if is_flex else claim.product_code
         ) or ""
         append_safe(ws, [
-            claim.id[:8],
+            claim.id,
             _status_label(claim.status),
             employee.staff_id,
             employee.employee_name or "",
@@ -98,10 +102,9 @@ def build_claims_register_workbook(
             claim.currency,
             claim.amount_claimed,
             claim.amount_approved,
-            _naive(claim.submitted_at),
-            _naive(claim.decided_at),
-            claim.decision_notes or "",
+            naive(claim.submitted_at),
+            naive(claim.decided_at),
         ])
 
-    _autosize(ws)
+    autosize(ws)
     return wb

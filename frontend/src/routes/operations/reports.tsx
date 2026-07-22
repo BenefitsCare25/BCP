@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { useReportReadiness } from "@/api/reports";
+import { useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 
 // Reports Center — every downloadable/reviewable report, grouped by the team
@@ -167,17 +168,29 @@ function CrReports({ policyYearId }: { policyYearId: string }) {
 }
 
 /* ── Policy Admin — roster, coverage & insurer submissions ───────────── */
-function PaReports({ policyYearId }: { policyYearId: string }) {
+// Insurer + NRIC selections are held by ReportsPage so switching to another
+// team tab (which unmounts this one) doesn't discard the broker's choice.
+function PaReports({
+  policyYearId,
+  nric,
+  setNric,
+  insurer,
+  setInsurer,
+}: {
+  policyYearId: string;
+  nric: NricMode;
+  setNric: (v: NricMode) => void;
+  insurer: string;
+  setInsurer: (v: string) => void;
+}) {
   const { data: readiness, isError } = useReportReadiness(policyYearId);
-  const [nric, setNric] = useState<NricMode>("masked");
-  const [insurer, setInsurer] = useState<string>("");
 
   const insurers = readiness?.insurers ?? [];
   useEffect(() => {
     if (insurers.length && !insurers.includes(insurer)) {
       setInsurer(insurers[0]);
     }
-  }, [insurers, insurer]);
+  }, [insurers, insurer, setInsurer]);
 
   const maskedParam = nric === "full" ? "&masked=false" : "";
   const listingReady = insurers.length > 0 && Boolean(insurer);
@@ -294,7 +307,11 @@ function PaReports({ policyYearId }: { policyYearId: string }) {
           title="Flex Coverage"
           description="Flexible-benefit reconciliation — who is left out of a tier and every wallet balance. Open the flex overview to export."
         >
-          <OpenLink to="/configuration" label="Open flex overview" />
+          <OpenLink
+            to="/configuration"
+            search={{ tab: "flex" }}
+            label="Open flex overview"
+          />
         </ReportCard>
       </CardGrid>
     </div>
@@ -333,6 +350,9 @@ function ClaimsReports({ policyYearId }: { policyYearId: string }) {
 
 /* ── IT / Firm — audit, spend & access (interactive surfaces) ────────── */
 function ItReports() {
+  const { data: me } = useMe();
+  const canAdmin =
+    me?.role === "broker_admin" || me?.role === "system_admin";
   return (
     <CardGrid>
       <ReportCard
@@ -347,15 +367,17 @@ function ItReports() {
         title="AI Spend"
         description="Token usage and cost for AI extraction and claim review, with the circuit-breaker status."
       >
-        <OpenLink to="/schema" label="Open AI usage" />
+        <OpenLink to="/configuration/ai-provider" label="Open AI usage" />
       </ReportCard>
-      <ReportCard
-        icon={UserCog}
-        title="Access &amp; Companies"
-        description="Users, roles and company access across the firm — invite, disable and manage grants."
-      >
-        <OpenLink to="/admin" label="Open access admin" />
-      </ReportCard>
+      {canAdmin && (
+        <ReportCard
+          icon={UserCog}
+          title="Access &amp; Companies"
+          description="Users, roles and company access across the firm — invite, disable and manage grants."
+        >
+          <OpenLink to="/admin" label="Open access admin" />
+        </ReportCard>
+      )}
     </CardGrid>
   );
 }
@@ -365,6 +387,10 @@ export function ReportsPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string };
   const tab: TeamKey = isTeam(search.tab) ? search.tab : "pa";
+  // Held here (not in PaReports) so the choice survives a tab switch, which
+  // unmounts the inactive tab's content.
+  const [nric, setNric] = useState<NricMode>("masked");
+  const [insurer, setInsurer] = useState<string>("");
 
   return (
     <div className="space-y-5">
@@ -391,7 +417,13 @@ export function ReportsPage() {
         </TabsContent>
         <TabsContent value="pa">
           {policyYearId ? (
-            <PaReports policyYearId={policyYearId} />
+            <PaReports
+              policyYearId={policyYearId}
+              nric={nric}
+              setNric={setNric}
+              insurer={insurer}
+              setInsurer={setInsurer}
+            />
           ) : (
             <NoYearNotice />
           )}

@@ -316,6 +316,10 @@ const configLayoutRoute = createRoute({
 const configIndexRoute = createRoute({
   getParentRoute: () => configLayoutRoute,
   path: "/",
+  // `tab` is optional deep-link state (?tab=flex) — return it as an optional
+  // key so navigations to /configuration without a tab aren't forced to pass one.
+  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
+    typeof search.tab === "string" ? { tab: search.tab } : {},
   component: ConfigurationPage,
 });
 
