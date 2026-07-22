@@ -47,9 +47,10 @@ function CompanyContext() {
   const qc = useQueryClient();
 
   const clients = me?.accessible_clients ?? [];
-  const selected = activeClientId ?? me?.active_client_id ?? null;
-  // The stale/unset self-heal lives in AppShell.useActiveClientSync so it runs
-  // on every page, not just here.
+  // Under the hard gate, "chosen" == activeClientId only — no server-default
+  // fallback (that would show a company the user never picked). The stale/unset
+  // self-heal + single-company auto-enter live in AppShell.useActiveClientSync.
+  const selected = activeClientId;
 
   const onChange = (id: string) => {
     if (id === selected) return;
