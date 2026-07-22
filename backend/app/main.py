@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -76,6 +78,26 @@ def _allowed_origins() -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Recover claims left in `ai_review_pending` by an interrupted background
+    # review (a deploy IS a restart, so this fires exactly when strandings
+    # happen). Never raises. Runs on real server startup only — TestClient(app)
+    # without a `with` block doesn't enter the lifespan, so tests are unaffected.
+    from app.services.claims_review.recovery import recover_stranded_reviews
+
+    try:
+        recovered = recover_stranded_reviews()
+        if recovered:
+            logger.warning(
+                "Startup: reverted %s stranded claim review(s) to manual review",
+                recovered,
+            )
+    except Exception:  # pragma: no cover - belt-and-braces; the sweep is self-guarding
+        logger.exception("Startup stranded-review recovery raised")
+    yield
+
+
 def create_app() -> FastAPI:
     install_log_filter()
     configure_telemetry()
@@ -92,6 +114,7 @@ def create_app() -> FastAPI:
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
         openapi_url="/openapi.json" if docs_enabled else None,
+        lifespan=_lifespan,
     )
 
     # Starlette runs middleware in reverse-add order; RequestIDMiddleware

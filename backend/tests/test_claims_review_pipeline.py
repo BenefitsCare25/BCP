@@ -846,3 +846,40 @@ def test_doc_type_optional_key_field_round_trips(broker: TestClient):
     assert res.status_code == 200
     surgery2 = next(f for f in res.json()["key_fields"] if f["name"] == "Surgery")
     assert surgery2["optional"] is True
+
+
+def test_recover_stranded_reviews_reverts_interrupted_run() -> None:
+    """A claim stuck in ai_review_pending with a still-pending review (its
+    background task died mid-flight) is reverted to submitted; a claim whose
+    latest review already completed is left untouched."""
+    from app.models.claim_ai_review import (
+        REVIEW_STATUS_COMPLETE,
+        REVIEW_STATUS_ERROR,
+    )
+    from app.services.claims_review.recovery import recover_stranded_reviews
+
+    stranded_id, stranded_review_id = _mk_claim(status=CLAIM_STATUS_AI_REVIEW_PENDING)
+
+    # A claim in ai_review_pending whose latest review already completed is a
+    # different inconsistency the sweep must NOT touch.
+    complete_id, complete_review_id = _mk_claim(status=CLAIM_STATUS_AI_REVIEW_PENDING)
+    with SessionLocal() as s:
+        rev = s.get(ClaimAIReview, complete_review_id)
+        rev.status = REVIEW_STATUS_COMPLETE
+        s.commit()
+
+    recovered = recover_stranded_reviews()
+    assert recovered >= 1
+
+    with SessionLocal() as s:
+        stranded = s.get(Claim, stranded_id)
+        assert stranded.status == CLAIM_STATUS_SUBMITTED
+        assert s.get(ClaimAIReview, stranded_review_id).status == REVIEW_STATUS_ERROR
+
+        # The completed-review claim is left as-is.
+        assert s.get(Claim, complete_id).status == CLAIM_STATUS_AI_REVIEW_PENDING
+        assert s.get(ClaimAIReview, complete_review_id).status == REVIEW_STATUS_COMPLETE
+
+    # Idempotent: a second sweep finds nothing new to revert (the first run
+    # already moved every stranded claim to submitted).
+    assert recover_stranded_reviews() == 0

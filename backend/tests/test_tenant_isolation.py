@@ -37,6 +37,7 @@ from app.models import (  # noqa: E402
     Client,
     Dependant,
     Employee,
+    EmployeeAttributeSchema,
     Enrollment,
     EnrollmentWindow,
     EntityAlias,
@@ -248,6 +249,26 @@ def _setup_db():
             )
         )
 
+        # A product + employee-attribute owned by client B (schemas CRUD
+        # isolation — load_editable_global 404s on another tenant's row).
+        session.add(
+            Product(
+                id=PRODUCT_B_OWNED,
+                client_id=CLIENT_B_ID,
+                code="BPROD",
+                display_name="Client B product",
+            )
+        )
+        session.add(
+            EmployeeAttributeSchema(
+                id=ATTR_B,
+                client_id=CLIENT_B_ID,
+                attribute_id="client_b_attr",
+                display_name="Client B attribute",
+                data_type="text",
+            )
+        )
+
         session.commit()
 
     yield
@@ -301,6 +322,8 @@ DOCTYPE_B = "00000000-0000-0000-0000-0000000000be"
 CARD_B = "00000000-0000-0000-0000-0000000000bb"
 # Any assignment id — the guard rejects at the policy year first.
 CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
+PRODUCT_B_OWNED = "00000000-0000-0000-0000-0000000000bf"
+ATTR_B = "00000000-0000-0000-0000-0000000000c1"
 
 
 # ── PolicyYear ──────────────────────────────────────────────────────────────
@@ -1417,3 +1440,75 @@ def test_dashboard_summary_excludes_other_firm(client_as_a: TestClient) -> None:
     assert CLIENT_B_ID in ids
     assert other_client_id not in ids
     assert body["firm"]["company_count"] == len(body["companies"])
+
+
+# ── Slip / roster ingest write paths (cross-tenant policy_year_id) ──────────
+def test_placement_slip_parse_cross_tenant_404(client_as_a: TestClient) -> None:
+    # The tenant guard runs before the workbook is read, so a dummy file is fine.
+    res = client_as_a.post(
+        "/api/v1/placement-slips/parse",
+        files={"file": ("slip.xlsx", b"not-a-real-workbook", "application/octet-stream")},
+        data={"policy_year_id": PY_B},
+    )
+    assert res.status_code == 404
+
+
+def test_employees_upload_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        "/api/v1/employees/upload",
+        files={"file": ("roster.xlsx", b"x", "application/octet-stream")},
+        data={"policy_year_id": PY_B},
+    )
+    assert res.status_code == 404
+
+
+def test_dependants_upload_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        "/api/v1/dependants/upload",
+        files={"file": ("deps.xlsx", b"x", "application/octet-stream")},
+        data={"policy_year_id": PY_B},
+    )
+    assert res.status_code == 404
+
+
+def test_dependants_auto_match_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/dependants/auto-match?policy_year_id={PY_B}"
+    )
+    assert res.status_code == 404
+
+
+# ── Match override (cross-tenant employee_id) ───────────────────────────────
+def test_match_override_cross_tenant_404(client_as_a: TestClient) -> None:
+    # load_employee proves tenant ownership; EMP_B belongs to tenant B → 404.
+    res = client_as_a.post(
+        f"/api/v1/match-results/employees/{EMP_B}/override", json={}
+    )
+    assert res.status_code == 404
+
+
+# ── Schemas CRUD (cross-tenant catalog rows → load_editable_global 404) ─────
+def test_schemas_product_patch_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.patch(
+        f"/api/v1/schemas/products/{PRODUCT_B_OWNED}",
+        json={"display_name": "hijacked"},
+    )
+    assert res.status_code == 404
+
+
+def test_schemas_product_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/schemas/products/{PRODUCT_B_OWNED}")
+    assert res.status_code == 404
+
+
+def test_schemas_attribute_patch_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.patch(
+        f"/api/v1/schemas/employee-attributes/{ATTR_B}",
+        json={"display_name": "hijacked"},
+    )
+    assert res.status_code == 404
+
+
+def test_schemas_attribute_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/schemas/employee-attributes/{ATTR_B}")
+    assert res.status_code == 404
