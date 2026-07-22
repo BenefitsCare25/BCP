@@ -28,8 +28,11 @@ import {
   useCreateAttribute,
   useDeleteAttribute,
   useEmployeeAttributes,
+  useMe,
   useUpdateAttribute,
+  type CatalogScope,
 } from "@/api/hooks";
+import { ScopeToggle } from "@/components/schema/ScopeToggle";
 import { formatError } from "@/lib/errors";
 import { PageGuide } from "@/components/ui/page-guide";
 import type { AttributeSchema } from "@/types";
@@ -76,12 +79,21 @@ export function SchemaAttributesPage({
   onOpenChange: (open: boolean) => void;
 }) {
   const { data: attrs = [], isLoading } = useEmployeeAttributes();
+  const { data: me } = useMe();
+  const isAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
   const create = useCreateAttribute();
   const update = useUpdateAttribute();
   const remove = useDeleteAttribute();
+  const [scope, setScope] = useState<CatalogScope>("company");
   const [editing, setEditing] = useState<AttributeSchema | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [deleting, setDeleting] = useState<AttributeSchema | null>(null);
+
+  // "Firm library" shows only the shared (client_id NULL) rows; "This company"
+  // shows the effective set (its own rows + inherited firm-library defaults).
+  const visible =
+    scope === "firm" ? attrs.filter((a) => a.client_id === null) : attrs;
+  const firmWriteBlocked = scope === "firm" && !isAdmin;
 
   const onSheetOpenChange = (next: boolean) => {
     onOpenChange(next);
@@ -121,13 +133,16 @@ export function SchemaAttributesPage({
         toast.success(`Updated ${draft.display_name}`);
       } else {
         await create.mutateAsync({
-          attribute_id: draft.attribute_id,
-          display_name: draft.display_name,
-          data_type: draft.data_type,
-          enum_values: enumValues,
-          is_required: draft.is_required,
-          is_pii: draft.is_pii,
-          description: draft.description || null,
+          payload: {
+            attribute_id: draft.attribute_id,
+            display_name: draft.display_name,
+            data_type: draft.data_type,
+            enum_values: enumValues,
+            is_required: draft.is_required,
+            is_pii: draft.is_pii,
+            description: draft.description || null,
+          },
+          scope,
         });
         toast.success(`Added ${draft.display_name}`);
       }
@@ -144,18 +159,30 @@ export function SchemaAttributesPage({
             <SheetHeader>
               <div className="flex items-center gap-1.5">
                 <SheetTitle>
-                  {editing ? "Edit attribute" : "Add client attribute"}
+                  {editing
+                    ? "Edit attribute"
+                    : scope === "firm"
+                      ? "Add firm-library attribute"
+                      : "Add company attribute"}
                 </SheetTitle>
                 <InfoHint>
                   {editing
                     ? editing.client_id === null
-                      ? "Editing a global default — changes apply to all clients."
-                      : "Updates this attribute for the current client only."
-                    : "Adds an attribute scoped to the current client."}
+                      ? "Editing a firm-library default — changes apply to every company."
+                      : "Updates this attribute for the current company only."
+                    : scope === "firm"
+                      ? "Adds a shared default visible to every company (admin-only)."
+                      : "Adds an attribute scoped to the current company."}
                 </InfoHint>
               </div>
             </SheetHeader>
             <SheetBody className="space-y-4">
+              {!editing && firmWriteBlocked && (
+                <p className="rounded-md border border-warn/40 bg-warn-soft px-2.5 py-2 text-sm text-warn">
+                  Only firm admins can add firm-library defaults. Switch to “This
+                  company” to add an attribute for the current company.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <Field
                   label="Attribute ID"
@@ -256,6 +283,7 @@ export function SchemaAttributesPage({
                 disabled={
                   !draft.attribute_id ||
                   !draft.display_name ||
+                  (!editing && firmWriteBlocked) ||
                   create.isPending ||
                   update.isPending
                 }
@@ -266,15 +294,29 @@ export function SchemaAttributesPage({
           </SheetContent>
         </Sheet>
 
+      <ScopeToggle
+        scope={scope}
+        onScopeChange={setScope}
+        canWriteFirm={isAdmin}
+      />
+
       <Card>
         <CardContent className="pt-6">
           {isLoading ? (
             <SkeletonTable rows={6} columns={5} />
+          ) : visible.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              {scope === "firm"
+                ? "No firm-library attributes yet."
+                : "No attributes yet."}
+            </p>
           ) : (
             <AttributeSchemaEditor
-              attributes={attrs}
+              attributes={visible}
               onEdit={beginEdit}
               onDelete={setDeleting}
+              // Firm-library defaults are shared across companies — admin-only.
+              lockRow={(a) => a.client_id === null && !isAdmin}
             />
           )}
         </CardContent>

@@ -250,3 +250,39 @@ def test_remove_product_drops_client_row_and_coverage(client: TestClient) -> Non
         client.delete(f"/api/v1/policy-years/{PY_D}/products/FLEXWALLET").status_code
         == 204
     )
+
+
+def test_create_product_firm_scope_creates_global_row(client: TestClient) -> None:
+    # scope=firm as a broker_admin lands a shared firm-library row (client_id NULL)
+    # visible to every company.
+    res = client.post(
+        "/api/v1/schemas/products?scope=firm",
+        json={"code": "FIRMLIB", "display_name": "Firm Library Product"},
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["client_id"] is None
+    with SessionLocal() as db:
+        row = db.query(Product).filter(Product.code == "FIRMLIB").one()
+        assert row.client_id is None
+
+
+def test_create_product_firm_scope_requires_admin() -> None:
+    # A writer that isn't a firm admin (client_hr passes require_write_access but
+    # not the global-write gate) can't add firm-library rows.
+    def _hr() -> CurrentUser:
+        return CurrentUser(
+            user_id="00000000-0000-0000-0000-0000000000de",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id=CLIENT_D_ID,
+            role="client_hr",
+        )
+
+    app.dependency_overrides[get_current_user] = _hr
+    try:
+        res = TestClient(app).post(
+            "/api/v1/schemas/products?scope=firm",
+            json={"code": "NOPE", "display_name": "Nope"},
+        )
+        assert res.status_code == 403, res.text
+    finally:
+        app.dependency_overrides[get_current_user] = _user_d

@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarCheck,
   ClipboardCheck,
+  Cog,
   ReceiptText,
   Settings2,
   SlidersHorizontal,
@@ -115,6 +116,12 @@ export const COMPANY_NAV: NavGroup[] = [
     icon: Settings2,
     key: "settings",
     items: [
+      {
+        label: "Company settings",
+        to: "/configuration/settings",
+        title: "Company settings",
+        icon: Cog,
+      },
       {
         label: "AI Setting",
         to: "/configuration/ai-provider",

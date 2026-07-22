@@ -119,6 +119,15 @@ def user_owns(user: CurrentUser, client_id: str | None) -> bool:
     return client_id is not None and client_id == user.client_id
 
 
+def can_write_global(user: CurrentUser) -> bool:
+    """True when the user may create/edit firm-library (global) catalog rows.
+
+    Firm-library rows (client_id NULL) apply to every company, so writing them
+    is a firm-admin act — mirrors the edit gate in `load_editable_global`.
+    """
+    return user.role in (ROLE_SYSTEM_ADMIN, "broker_admin")
+
+
 def tenant_or_global(column, client_id: str | None):
     """SQLAlchemy predicate for "global (NULL client_id) OR this tenant".
 
@@ -144,7 +153,7 @@ def load_editable_global(
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found")
     if row.client_id is None:
-        if user.role not in (ROLE_SYSTEM_ADMIN, "broker_admin"):
+        if not can_write_global(user):
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults"
             )

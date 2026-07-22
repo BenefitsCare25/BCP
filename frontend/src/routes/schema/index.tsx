@@ -4,7 +4,6 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SchemaAttributesPage } from "./attributes";
-import { SchemaEntityAliasesPage } from "./entity-aliases";
 import { SchemaInsurersPage } from "./insurers";
 import { SchemaProductsPage } from "./products";
 
@@ -25,12 +24,6 @@ const TABS = [
     Panel: SchemaProductsPage,
   },
   { key: "insurers", label: "Insurers", addLabel: "Add insurer", Panel: SchemaInsurersPage },
-  {
-    key: "entity-aliases",
-    label: "Entity aliases",
-    addLabel: "Add alias",
-    Panel: SchemaEntityAliasesPage,
-  },
 ] as const;
 
 type SchemaTab = (typeof TABS)[number]["key"];

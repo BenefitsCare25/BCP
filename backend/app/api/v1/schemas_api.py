@@ -1,6 +1,8 @@
 """Layer 2 schema endpoints — employee attributes + products."""
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
+    can_write_global,
     load_editable_global,
     require_client_id,
     tenant_or_global,
@@ -27,6 +30,26 @@ from app.services.form_profiles import infer_profile
 from app.services.matching_engine import insured_names
 
 router = APIRouter(tags=["schemas"])
+
+# Where a create lands: "company" = the caller's active client (default);
+# "firm" = a shared firm-library default (client_id NULL) visible to every
+# company, which only firm admins may write.
+CatalogScope = Literal["company", "firm"]
+
+
+def _resolve_create_client_id(scope: CatalogScope, user: CurrentUser) -> str | None:
+    """The client_id a create should target for the requested scope.
+
+    "firm" → NULL (firm library), admins only. "company" → the active client.
+    """
+    if scope == "firm":
+        if not can_write_global(user):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Only admins can add firm-library defaults.",
+            )
+        return None
+    return require_client_id(user)
 
 # ProductPatch fields that live in product_metadata (classification overrides
 # + insurer-report display code), not as Product columns.
@@ -95,14 +118,17 @@ def list_employee_attributes(
 )
 def create_employee_attribute(
     payload: AttributeSchemaCreate,
+    scope: CatalogScope = "company",
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EmployeeAttributeSchema:
-    client_id = require_client_id(user)
+    client_id = _resolve_create_client_id(scope, user)
     existing = (
         db.execute(
             select(EmployeeAttributeSchema).where(
-                EmployeeAttributeSchema.client_id == client_id,
+                EmployeeAttributeSchema.client_id.is_(None)
+                if client_id is None
+                else EmployeeAttributeSchema.client_id == client_id,
                 EmployeeAttributeSchema.attribute_id == payload.attribute_id,
             )
         )
@@ -110,9 +136,10 @@ def create_employee_attribute(
         .one_or_none()
     )
     if existing:
+        where = "the firm library" if client_id is None else "this company"
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Attribute {payload.attribute_id!r} already exists for this client",
+            f"Attribute {payload.attribute_id!r} already exists in {where}",
         )
     row = EmployeeAttributeSchema(client_id=client_id, **payload.model_dump())
     db.add(row)
@@ -216,19 +243,24 @@ def list_products(
 )
 def create_product(
     payload: ProductCreate,
+    scope: CatalogScope = "company",
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProductOut:
-    client_id = require_client_id(user)
+    client_id = _resolve_create_client_id(scope, user)
     existing = db.execute(
         select(Product).where(
-            Product.client_id == client_id, Product.code == payload.code
+            Product.client_id.is_(None)
+            if client_id is None
+            else Product.client_id == client_id,
+            Product.code == payload.code,
         )
     ).scalar_one_or_none()
     if existing is not None:
+        where = "the firm library" if client_id is None else "this company"
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Product {payload.code!r} already exists for this client.",
+            f"Product {payload.code!r} already exists in {where}.",
         )
     # Mostly str values; `entities` is a token list (see ProductCreate).
     metadata: dict[str, object] = {}

@@ -29,6 +29,10 @@ const ConfigurationPage = lazyRouteComponent(
   () => import("@/routes/configuration/index"),
   "ConfigurationPage",
 );
+const CompanySettingsPage = lazyRouteComponent(
+  () => import("@/routes/configuration/settings"),
+  "CompanySettingsPage",
+);
 const PanelClinicsPage = lazyRouteComponent(
   () => import("@/routes/configuration/panel-clinics"),
   "PanelClinicsPage",
@@ -323,6 +327,16 @@ const configIndexRoute = createRoute({
   component: ConfigurationPage,
 });
 
+const configSettingsRoute = createRoute({
+  getParentRoute: () => configLayoutRoute,
+  path: "/settings",
+  // Tab is optional deep-link state (?tab=aliases); return it optional so bare
+  // /configuration/settings navigations aren't forced to pass one.
+  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
+    typeof search.tab === "string" ? { tab: search.tab } : {},
+  component: CompanySettingsPage,
+});
+
 const configAIProviderRoute = createRoute({
   getParentRoute: () => configLayoutRoute,
   path: "/ai-provider",
@@ -529,6 +543,7 @@ const routeTree = rootRoute.addChildren([
     ]),
     configLayoutRoute.addChildren([
       configIndexRoute,
+      configSettingsRoute,
       configAIProviderRoute,
       configPanelClinicsRoute,
     ]),

@@ -4,8 +4,10 @@ import { toast } from "sonner";
 import {
   useCreateProduct,
   useDeleteProduct,
+  useMe,
   useProducts,
   useUpdateProduct,
+  type CatalogScope,
   type ProductPayload,
 } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -14,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Globe } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { ScopeToggle } from "@/components/schema/ScopeToggle";
 import { Field, InfoHint } from "@/components/ui/tooltip";
 import {
   Select,
@@ -84,12 +87,21 @@ export function SchemaProductsPage({
   onOpenChange: (open: boolean) => void;
 }) {
   const { data: products = [], isLoading } = useProducts();
+  const { data: me } = useMe();
+  const isAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
   const create = useCreateProduct();
   const update = useUpdateProduct();
   const remove = useDeleteProduct();
+  const [scope, setScope] = useState<CatalogScope>("company");
   const [editing, setEditing] = useState<Product | null>(null);
   const [draft, setDraft] = useState<ProductPayload>(EMPTY_DRAFT);
   const [deleting, setDeleting] = useState<Product | null>(null);
+
+  // "Firm library" shows only the shared (client_id NULL) rows; "This company"
+  // shows the effective set the company uses (its own rows + inherited globals).
+  const visible =
+    scope === "firm" ? products.filter((p) => p.client_id === null) : products;
+  const firmWriteBlocked = scope === "firm" && !isAdmin;
 
   const onSheetOpenChange = (next: boolean) => {
     onOpenChange(next);
@@ -116,7 +128,7 @@ export function SchemaProductsPage({
         await update.mutateAsync({ id: editing.id, patch: payload });
         toast.success(`Updated ${payload.display_name}`);
       } else {
-        await create.mutateAsync(payload);
+        await create.mutateAsync({ payload, scope });
         toast.success(`Added ${payload.display_name}`);
       }
       onOpenChange(false);
@@ -132,18 +144,30 @@ export function SchemaProductsPage({
             <SheetHeader>
               <div className="flex items-center gap-1.5">
                 <SheetTitle>
-                  {editing ? "Edit product" : "Add client product"}
+                  {editing
+                    ? "Edit product"
+                    : scope === "firm"
+                      ? "Add firm-library product"
+                      : "Add company product"}
                 </SheetTitle>
                 <InfoHint>
                   {editing
                     ? editing.client_id === null
-                      ? "Editing a global default — changes apply to all clients."
-                      : "Updates this product for the current client only."
-                    : "Adds a product scoped to the current client."}
+                      ? "Editing a firm-library default — changes apply to every company."
+                      : "Updates this product for the current company only."
+                    : scope === "firm"
+                      ? "Adds a shared default visible to every company (admin-only)."
+                      : "Adds a product scoped to the current company."}
                 </InfoHint>
               </div>
             </SheetHeader>
             <SheetBody className="space-y-4">
+              {!editing && firmWriteBlocked && (
+                <p className="rounded-md border border-warn/40 bg-warn-soft px-2.5 py-2 text-sm text-warn">
+                  Only firm admins can add firm-library defaults. Switch to “This
+                  company” to add a product for the current company.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <Field
                   label="Code"
@@ -256,6 +280,7 @@ export function SchemaProductsPage({
                 disabled={
                   !draft.code ||
                   !draft.display_name ||
+                  (!editing && firmWriteBlocked) ||
                   create.isPending ||
                   update.isPending
                 }
@@ -266,10 +291,22 @@ export function SchemaProductsPage({
           </SheetContent>
         </Sheet>
 
+      <ScopeToggle
+        scope={scope}
+        onScopeChange={setScope}
+        canWriteFirm={isAdmin}
+      />
+
       <Card>
         <CardContent className="pt-6">
           {isLoading ? (
             <SkeletonTable rows={5} columns={6} />
+          ) : visible.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              {scope === "firm"
+                ? "No firm-library products yet."
+                : "No products yet."}
+            </p>
           ) : (
             <Table>
               <TableHeader>
@@ -284,8 +321,11 @@ export function SchemaProductsPage({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((p) => {
+                {visible.map((p) => {
                   const isGlobal = p.client_id === null;
+                  // Firm-library rows are shared across every company, so only
+                  // admins may edit/delete them (mirrors the backend gate).
+                  const locked = isGlobal && !isAdmin;
                   return (
                     <TableRow key={p.id}>
                       <TableCell>
@@ -315,10 +355,10 @@ export function SchemaProductsPage({
                       <TableCell>
                         {isGlobal ? (
                           <Badge variant="default" className="gap-1">
-                            <Globe className="size-3" /> Global
+                            <Globe className="size-3" /> Firm library
                           </Badge>
                         ) : (
-                          <Badge variant="default">Client-specific</Badge>
+                          <Badge variant="default">Company</Badge>
                         )}
                       </TableCell>
                       <TableCell>
@@ -326,6 +366,12 @@ export function SchemaProductsPage({
                           <Button
                             variant="ghost"
                             size="icon-sm"
+                            disabled={locked}
+                            title={
+                              locked
+                                ? "Firm-library defaults are admin-only"
+                                : undefined
+                            }
                             onClick={() => beginEdit(p)}
                             aria-label="Edit product"
                           >
@@ -334,6 +380,12 @@ export function SchemaProductsPage({
                           <Button
                             variant="ghost"
                             size="icon-sm"
+                            disabled={locked}
+                            title={
+                              locked
+                                ? "Firm-library defaults are admin-only"
+                                : undefined
+                            }
                             onClick={() => setDeleting(p)}
                             aria-label="Delete product"
                             className="text-error hover:text-error"

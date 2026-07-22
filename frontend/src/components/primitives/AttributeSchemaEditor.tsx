@@ -16,9 +16,17 @@ interface Props {
   attributes: AttributeSchema[];
   onEdit?: (attr: AttributeSchema) => void;
   onDelete?: (attr: AttributeSchema) => void;
+  // When it returns true, the row's edit/delete actions are disabled (e.g. a
+  // firm-library default the current user isn't allowed to modify).
+  lockRow?: (attr: AttributeSchema) => boolean;
 }
 
-export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
+export function AttributeSchemaEditor({
+  attributes,
+  onEdit,
+  onDelete,
+  lockRow,
+}: Props) {
   const hasActions = Boolean(onEdit || onDelete);
   return (
     <Table>
@@ -35,6 +43,7 @@ export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
       <TableBody>
         {attributes.map((attr) => {
           const isGlobal = attr.client_id === null;
+          const locked = lockRow?.(attr) ?? false;
           return (
             <TableRow key={attr.id}>
               <TableCell>
@@ -86,10 +95,10 @@ export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
               <TableCell>
                 {isGlobal ? (
                   <Badge variant="default" className="gap-1">
-                    <Globe className="size-3" /> Global default
+                    <Globe className="size-3" /> Firm library
                   </Badge>
                 ) : (
-                  <Badge variant="default">Client-specific</Badge>
+                  <Badge variant="default">Company</Badge>
                 )}
               </TableCell>
               {hasActions && (
@@ -99,6 +108,10 @@ export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        disabled={locked}
+                        title={
+                          locked ? "Firm-library defaults are admin-only" : undefined
+                        }
                         onClick={() => onEdit(attr)}
                         aria-label="Edit attribute"
                       >
@@ -109,6 +122,10 @@ export function AttributeSchemaEditor({ attributes, onEdit, onDelete }: Props) {
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        disabled={locked}
+                        title={
+                          locked ? "Firm-library defaults are admin-only" : undefined
+                        }
                         onClick={() => onDelete(attr)}
                         aria-label="Delete attribute"
                         className="text-error hover:text-error"

@@ -665,11 +665,27 @@ export interface AttributePayload {
   description?: string | null;
 }
 
+// Where a catalog create lands. "company" (default) = the active client;
+// "firm" = a shared firm-library default (client_id NULL), admins only.
+export type CatalogScope = "company" | "firm";
+
 export function useCreateAttribute() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: AttributePayload) =>
-      api.post<AttributeSchema>("/schemas/employee-attributes", payload),
+    // Accept either a bare payload (defaults to company scope, keeping existing
+    // callers working) or an explicit { payload, scope }.
+    mutationFn: (
+      input:
+        | AttributePayload
+        | { payload: AttributePayload; scope: CatalogScope },
+    ) => {
+      const payload = "payload" in input ? input.payload : input;
+      const scope: CatalogScope = "payload" in input ? input.scope : "company";
+      return api.post<AttributeSchema>(
+        `/schemas/employee-attributes?scope=${scope}`,
+        payload,
+      );
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schemas", "employee-attributes"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
@@ -765,8 +781,15 @@ export interface ProductPayload {
 export function useCreateProduct() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ProductPayload) =>
-      api.post<Product>("/schemas/products", payload),
+    // Bare payload → company scope (existing callers); { payload, scope } to
+    // target the firm library.
+    mutationFn: (
+      input: ProductPayload | { payload: ProductPayload; scope: CatalogScope },
+    ) => {
+      const payload = "payload" in input ? input.payload : input;
+      const scope: CatalogScope = "payload" in input ? input.scope : "company";
+      return api.post<Product>(`/schemas/products?scope=${scope}`, payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       // The new code becomes configurable immediately in its line's setup panel.
