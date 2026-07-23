@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { useMe } from "@/api/hooks";
@@ -45,6 +45,13 @@ export function AppShell() {
   const { data: me } = useMe();
   const activeClientId = useSession((s) => s.activeClientId);
 
+  // Mobile nav drawer state (lg+ shows the sidebar statically). Close on every
+  // navigation so tapping a link dismisses the drawer.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [path]);
+
   const title =
     EXTRA_TITLES[path] ??
     PAGE_TITLES[path] ??
@@ -64,9 +71,9 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
-      <Sidebar />
+      <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
-        <TopBar title={title} />
+        <TopBar title={title} onMenuClick={() => setMobileNavOpen(true)} />
         <ContextBar />
         <main className="flex-1 overflow-y-auto p-5">
           {gate === "loading" ? (

@@ -16,7 +16,13 @@ function readCollapsed(): Set<string> {
   }
 }
 
-export function Sidebar() {
+export function Sidebar({
+  mobileOpen = false,
+  onClose,
+}: {
+  mobileOpen?: boolean;
+  onClose?: () => void;
+}) {
   const router = useRouterState();
   const path = router.location.pathname;
   const { data: me } = useMe();
@@ -44,7 +50,23 @@ export function Sidebar() {
   );
 
   return (
-    <aside className="w-60 shrink-0 border-r border-border bg-sidebar h-full flex flex-col">
+    <>
+      {/* Scrim behind the drawer on mobile; static sidebar has no scrim (lg+). */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={cn(
+          "w-60 shrink-0 border-r border-border bg-sidebar flex flex-col",
+          "fixed inset-y-0 left-0 z-50 h-full transition-transform duration-200",
+          "lg:static lg:z-auto lg:translate-x-0",
+          mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+        )}
+      >
       <div className="h-14 px-5 flex items-center border-b border-border">
         <img
           src="/inspro-logo.png"
@@ -87,7 +109,8 @@ export function Sidebar() {
           Singapore region
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 

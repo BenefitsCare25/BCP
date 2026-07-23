@@ -55,7 +55,7 @@ export function PortalShell() {
             </Button>
           </div>
         </div>
-        <nav className="mx-auto flex max-w-4xl gap-1 px-4 pb-2">
+        <nav className="mx-auto flex max-w-4xl gap-1 overflow-x-auto px-4 pb-2">
           {NAV.map((item) => {
             const active = location.pathname.startsWith(item.to);
             // Pulse the enrollment tab while a window is open so members
@@ -67,7 +67,7 @@ export function PortalShell() {
                 key={item.to}
                 to={item.to}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
                   active
                     ? "bg-sidebar-active text-sidebar-active-foreground font-medium"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground",

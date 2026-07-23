@@ -347,7 +347,7 @@ export function ClaimsQueuePage() {
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
                   <div>
                     <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                       Member
@@ -488,6 +488,7 @@ export function ClaimsQueuePage() {
                           <Button
                             size="sm"
                             variant="ghost"
+                            aria-label={`Download ${d.file_name}`}
                             onClick={async () => {
                               try {
                                 await downloadClaimDocument(selected.id, d);

@@ -33,16 +33,32 @@ TableBody.displayName = "TableBody";
 export const TableRow = React.forwardRef<
   HTMLTableRowElement,
   React.HTMLAttributes<HTMLTableRowElement>
->(({ className, ...props }, ref) => (
-  <tr
-    ref={ref}
-    className={cn(
-      "border-b border-border transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
-      className,
-    )}
-    {...props}
-  />
-));
+>(({ className, onClick, onKeyDown, tabIndex, ...props }, ref) => {
+  // A row with an onClick is an interactive control: make it keyboard-operable
+  // (Enter/Space) and focusable so it isn't a mouse-only affordance (WCAG 2.1.1).
+  const interactive = onClick != null;
+  return (
+    <tr
+      ref={ref}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        onKeyDown?.(e);
+        if (interactive && !e.defaultPrevented && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.currentTarget.click();
+        }
+      }}
+      tabIndex={interactive ? (tabIndex ?? 0) : tabIndex}
+      className={cn(
+        "border-b border-border transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+        interactive &&
+          "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 TableRow.displayName = "TableRow";
 
 export const TableHead = React.forwardRef<
