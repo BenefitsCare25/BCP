@@ -99,7 +99,7 @@ export function AdminPage() {
   }
 
   return (
-    <div className="space-y-5 max-w-5xl">
+    <div className="space-y-5">
       {isSystemAdmin && <BrokerFirmsCard />}
       <ClientsCard />
       <UsersCard meRole={me?.role ?? "broker_viewer"} />

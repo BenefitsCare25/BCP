@@ -84,7 +84,7 @@ export function SchemaEntityAliasesPage({
   };
 
   return (
-    <div className="space-y-4 max-w-7xl">
+    <div className="space-y-4">
       <Sheet open={open} onOpenChange={onSheetOpenChange}>
         <SheetContent side="right">
           <SheetHeader>

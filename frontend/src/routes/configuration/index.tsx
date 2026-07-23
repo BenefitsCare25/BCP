@@ -131,7 +131,7 @@ export function ConfigurationPage() {
   );
 
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="space-y-5">
       {/* Benefit-year management applies to the insured configuration; Flex is a
           separate module, so it doesn't carry the benefit-years section. Year
           management stays interactive even while viewing a read-only year. */}

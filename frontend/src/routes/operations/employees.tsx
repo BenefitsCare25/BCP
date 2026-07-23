@@ -157,7 +157,7 @@ export function EmployeesPage() {
   const employeesTotal = matchData?.employees_total ?? 0;
 
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="space-y-5">
       <RosterTabActions>
         <ReportDownloadButton
           path={`/employees/coverage-report/export?policy_year_id=${policyYearId}`}

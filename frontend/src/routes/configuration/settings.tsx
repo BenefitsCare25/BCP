@@ -112,7 +112,7 @@ export function CompanySettingsPage() {
   const [aliasAddOpen, setAliasAddOpen] = useState(false);
 
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="space-y-5">
       <div>
         <h1 className="text-lg font-semibold text-foreground">
           Company settings

@@ -56,7 +56,7 @@ export function CompanyDashboardPage() {
   const attention = companyAttention(company);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-foreground">{company.name}</h1>
         <p className="text-sm text-muted-foreground">

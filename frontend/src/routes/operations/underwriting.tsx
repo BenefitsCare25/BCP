@@ -182,7 +182,7 @@ export function UnderwritingPage() {
   };
 
   return (
-    <div className="space-y-5 max-w-6xl">
+    <div className="space-y-5">
       <PageGuide
         purpose="Members (and covered dependants) whose eligible sum insured exceeds a product's free cover limit need the insurer's medical underwriting. Record the insurer's decisions here — insurer listings report the excess as Pending U/W until decided."
         connections={[

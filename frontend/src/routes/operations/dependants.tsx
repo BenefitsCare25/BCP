@@ -105,7 +105,7 @@ export function DependantsPage() {
   const pages = Math.ceil(total / PAGE_SIZE);
 
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="space-y-5">
       <DependantApprovals policyYearId={policyYearId} />
 
       <UploadRoster

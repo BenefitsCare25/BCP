@@ -171,7 +171,7 @@ export function AIProviderPage() {
   };
 
   return (
-    <div className="space-y-4 max-w-7xl">
+    <div className="space-y-4">
       {/* Controlled drawer — opened by the Configure button inside the Current
           configuration card below (no visible trigger here). */}
       <Sheet open={open} onOpenChange={onSheetOpenChange}>
