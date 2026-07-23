@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 class SourceKind(str, enum.Enum):
     manual = "manual"  # human typed it
     system_generated = "system_generated"  # deterministic parser / rule generator
-    ai_extracted = "ai_extracted"  # LLM (Azure Foundry)
+    ai_extracted = "ai_extracted"  # LLM (Google Vertex / Gemini)
     csv_import = "csv_import"  # bulk-imported from a structured file
 
 

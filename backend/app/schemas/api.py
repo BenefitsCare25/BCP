@@ -1,6 +1,7 @@
 """Pydantic request/response models for the API."""
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from typing import Any, Literal
 
@@ -829,7 +830,7 @@ class AuditLogPage(BaseModel):
 
 # ── BYOK AI provider config ──────────────────────────────────────────────────
 
-AIProviderStr = Literal["azure_foundry", "anthropic", "bedrock"]
+AIProviderStr = Literal["vertex"]
 
 
 class AIConfigOut(_Base):
@@ -852,35 +853,38 @@ class AIConfigOut(_Base):
         return "••••" + self.key_fingerprint[-4:]
 
 
+def _looks_like_service_account(api_key: str) -> bool:
+    """A Vertex BYOK key is the service-account JSON — parse-check the markers."""
+    try:
+        data = json.loads(api_key)
+    except (ValueError, TypeError):
+        return False
+    return (
+        isinstance(data, dict)
+        and data.get("type") == "service_account"
+        and bool(data.get("private_key"))
+        and bool(data.get("client_email"))
+    )
+
+
 class AIConfigUpsert(BaseModel):
-    provider: AIProviderStr
+    # provider is always "vertex" (Gemini) — the only supported provider.
+    provider: AIProviderStr = "vertex"
+    # endpoint = the GCP location; model = the Gemini model id.
     endpoint: str | None = None
     model: str | None = Field(default=None, max_length=128)
-    # For provider="bedrock" this is the AWS *secret* access key; access_key_id
-    # rides its own field. For the others it's the provider API key.
-    api_key: str = Field(min_length=8, max_length=4096)
-    aws_access_key_id: str | None = Field(default=None, max_length=128)
+    # The service-account JSON key (hence the larger max_length).
+    api_key: str = Field(min_length=8, max_length=8192)
 
     @model_validator(mode="after")
     def _check_endpoint(self) -> AIConfigUpsert:
-        if self.provider == "azure_foundry" and not (self.endpoint or "").strip():
-            raise ValueError("endpoint is required for provider='azure_foundry'")
         if self.endpoint and len(self.endpoint) > 512:
             raise ValueError("endpoint must be ≤ 512 chars")
-        if self.provider == "azure_foundry" and self.endpoint:
-            from app.core.ai_config import normalize_foundry_endpoint
-
-            normalize_foundry_endpoint(self.endpoint)
-        if self.provider == "bedrock":
-            if not (self.model or "").strip():
-                raise ValueError(
-                    "model (the Bedrock inference-profile id) is required for "
-                    "provider='bedrock'"
-                )
-            if not (self.aws_access_key_id or "").strip():
-                raise ValueError(
-                    "aws_access_key_id is required for provider='bedrock'"
-                )
+        if not _looks_like_service_account(self.api_key):
+            raise ValueError(
+                "api_key for provider='vertex' must be the service-account JSON "
+                "key (with type='service_account', private_key and client_email)."
+            )
         return self
 
 
@@ -890,17 +894,12 @@ class AIConfigTestPayload(BaseModel):
     provider: AIProviderStr | None = None
     endpoint: str | None = None
     model: str | None = Field(default=None, max_length=128)
-    api_key: str | None = Field(default=None, min_length=8, max_length=4096)
-    aws_access_key_id: str | None = Field(default=None, max_length=128)
+    api_key: str | None = Field(default=None, min_length=8, max_length=8192)
 
     @model_validator(mode="after")
     def _check_endpoint(self) -> AIConfigTestPayload:
         if self.endpoint and len(self.endpoint) > 512:
             raise ValueError("endpoint must be at most 512 chars")
-        if self.provider == "azure_foundry" and self.endpoint:
-            from app.core.ai_config import normalize_foundry_endpoint
-
-            normalize_foundry_endpoint(self.endpoint)
         return self
 
 
@@ -908,3 +907,34 @@ class AIConfigTestResult(BaseModel):
     ok: bool
     error: str | None
     latency_ms: int
+
+
+class AIBudgetUpdate(BaseModel):
+    """Set the tenant's monthly AI token budget. 0 = unlimited (tracking only).
+
+    Capped at 1e9 to catch fat-finger entries; that's ~$300k/month of Gemini,
+    far beyond any real budget, so it never blocks a legitimate limit.
+    """
+
+    monthly_token_budget: int = Field(ge=0, le=1_000_000_000)
+
+
+# ── Platform-wide AI limits (system-admin; shared key/quota across all firms) ──
+_PLATFORM_TOKEN_MAX = 1_000_000_000_000  # 1e12 — fat-finger guard, not a real cap
+_PLATFORM_CONCURRENCY_MAX = 512  # far above any sane per-process worker count
+
+
+class PlatformAISettingsOut(BaseModel):
+    """Effective platform AI limits currently in force (0 = disabled)."""
+
+    platform_monthly_token_cap: int
+    default_monthly_token_budget: int
+    max_concurrent_calls: int
+
+
+class PlatformAISettingsUpdate(BaseModel):
+    """Set the platform-wide AI limits. 0 on any field = that limit disabled."""
+
+    platform_monthly_token_cap: int = Field(ge=0, le=_PLATFORM_TOKEN_MAX)
+    default_monthly_token_budget: int = Field(ge=0, le=_PLATFORM_TOKEN_MAX)
+    max_concurrent_calls: int = Field(ge=0, le=_PLATFORM_CONCURRENCY_MAX)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Secrets (postgresAdminPassword, azureFoundryApiKey, containerImage, entraTenantId, entraClientId, acrLoginServer) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml.",
+  "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
   "parameters": {
     "env": { "value": "staging" },
     "location": { "value": "southeastasia" },
@@ -13,7 +13,6 @@
     "postgresGeoRedundantBackup": { "value": false },
     "redisSku": { "value": "Basic" },
     "redisCapacity": { "value": 0 },
-    "corsOrigins": { "value": "https://inspro-staging.azurewebsites.net" },
-    "azureFoundryEndpoint": { "value": "https://inspro-foundry.services.ai.azure.com/anthropic/" }
+    "corsOrigins": { "value": "https://inspro-staging.azurewebsites.net" }
   }
 }

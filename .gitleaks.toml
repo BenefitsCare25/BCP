@@ -4,8 +4,11 @@
 useDefault = true
 
 [allowlist]
-description = "Public Azure built-in RBAC role-definition GUIDs (identical in every tenant, documented by Microsoft — not credentials). Referenced by infra/bicep to grant managed-identity roles."
+description = "Provably-non-secret values: public Azure built-in RBAC role GUIDs (documented by Microsoft, referenced by infra/bicep), and synthetic test-fixture PEM keys whose body is a 1–6 char placeholder (never a real key)."
 regexes = [
   # "Key Vault Secrets User" — https://learn.microsoft.com/azure/role-based-access-control/built-in-roles
   '''4633458b-17de-408a-b874-0445c86b69e6''',
+  # Fake service-account keys in tests (e.g. body "AAA"/"BBB"/"x"). A real PEM
+  # key body is hundreds of base64 chars, so this can never match one.
+  '''-----BEGIN PRIVATE KEY-----\\n\w{1,6}\\n-----END PRIVATE KEY-----''',
 ]

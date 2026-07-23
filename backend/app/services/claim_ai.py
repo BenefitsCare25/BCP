@@ -20,7 +20,7 @@ from typing import Any
 from anthropic.types import ToolUseBlock
 
 from app.core.ai_config import AIConfig
-from app.services.ai_extractor import AIParseError, _build_anthropic_client
+from app.services.ai_extractor import AIParseError, _build_ai_client
 
 _EXTRACT_MAX_TOKENS = 8192
 _EXTRACT_TIMEOUT_SECONDS = 120.0
@@ -128,7 +128,7 @@ def extract_claim_document_via_ai(
     ``doc_images.vision_blocks_for_document``). Returns ``(payload, metadata)``
     where payload has ``document_type`` and ``fields``.
     """
-    client = _build_anthropic_client(cfg, timeout=_EXTRACT_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_EXTRACT_TIMEOUT_SECONDS)
     content: list[dict[str, Any]] = list(blocks)
     content.append(
         {
@@ -348,7 +348,7 @@ def review_claim_via_ai(
     cfg: AIConfig,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Compare the claim form against extracted document fields + judge rules."""
-    client = _build_anthropic_client(cfg, timeout=_REVIEW_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_REVIEW_TIMEOUT_SECONDS)
     prompt = build_claim_review_prompt(
         claim_fields, documents, field_maps, ai_rules, required_documents
     )
@@ -423,7 +423,7 @@ def verify_claim_concern_via_ai(
     cfg: AIConfig,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Re-check a single comparison concern against the source document."""
-    client = _build_anthropic_client(cfg, timeout=_VERIFY_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_VERIFY_TIMEOUT_SECONDS)
     content: list[dict[str, Any]] = list(blocks)
     content.append({"type": "text", "text": question})
     response = client.messages.create(

@@ -629,6 +629,74 @@ def build_dependant_listing(
     return wb
 
 
+def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict:
+    """Compact per-member fingerprint of an insurer's employee + dependant
+    listing, for the movement (adds/deletions/changes) diff between report
+    versions. Reuses the listing's own membership + coverage resolution
+    (``report_employees`` + ``_employee_coverage`` + ``member_id_for_insurer``)
+    so it can never drift from the generated report.
+
+    Keyed by the Employee/Dependant row id — unique (no staff_id/NRIC collision)
+    and stable within a policy year, so the movement diff tracks a person across
+    renames, NRIC corrections, and member-id changes (all in-place edits) rather
+    than reading a correction as a delete + add.
+    """
+    blocks = insurer_product_blocks(db, py, insurer)
+    employees = report_employees(db, py)
+    coverage, deps_by_emp = _employee_coverage(db, py, employees, blocks)
+    code_by_pid = {b.product.id: b.report_code for b in blocks}
+
+    members: list[dict] = []
+    for emp in employees:
+        cov = coverage.get(emp.id, {})
+        if not cov:
+            continue  # not covered by this insurer's products → off this listing
+        cov_sig = {
+            code_by_pid[pid]: {
+                "plan": c.plan_label or c.basis_display or "covered",
+                "grouping": c.grouping,
+            }
+            for pid, c in cov.items()
+        }
+        covered_dep_ids: set[str] = set()
+        for c in cov.values():
+            covered_dep_ids.update(c.covered_dependant_ids or [])
+        members.append({
+            "key": f"emp:{emp.id}",
+            "role": "employee",
+            "staff_id": emp.staff_id,
+            "name": emp.employee_name or "",
+            "member_id": member_id_for_insurer(emp.attribute_values, insurer),
+            "status": emp.status,
+            "terminated_effective": (
+                emp.terminated_effective.isoformat()
+                if emp.terminated_effective else None
+            ),
+            "coverage": cov_sig,
+        })
+        for dep in deps_by_emp.get(emp.id, []):
+            if dep.id not in covered_dep_ids:
+                continue
+            dattrs = dep.attribute_values or {}
+            rel = classify_relationship(first_value(dattrs, REL_KEYS))
+            dep_name = first_value(dattrs, ("dependant_name", "name")) or ""
+            members.append({
+                "key": f"dep:{dep.id}",
+                "role": "dependant",
+                "staff_id": emp.staff_id,
+                "name": dep_name,
+                "member_id": member_id_for_insurer(dattrs, insurer),
+                "relationship": rel,
+                "status": dep.status,
+                "terminated_effective": (
+                    dep.terminated_effective.isoformat()
+                    if dep.terminated_effective else None
+                ),
+                "coverage": {"sponsor_staff_id": emp.staff_id},
+            })
+    return {"insurer": insurer.strip().lower(), "members": members}
+
+
 def eligible_amounts(
     db: Session, py: PolicyYear
 ) -> dict[tuple[str, str, bool], float]:

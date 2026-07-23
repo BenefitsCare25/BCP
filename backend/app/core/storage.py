@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 DOCUMENT_SUFFIXES: frozenset[str] = frozenset({".pdf", ".png", ".jpg", ".jpeg"})
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 
+# Retained report versions (Reports Center) — generated spreadsheets/docs, not
+# PII uploads, so they get their own allowlist + a larger ceiling (a full-roster
+# insurer listing can exceed the 15MB document cap).
+REPORT_SUFFIXES: frozenset[str] = frozenset({".xlsx", ".docx"})
+MAX_REPORT_BYTES = 50 * 1024 * 1024
+
 _CHUNK = 1024 * 1024
 
 

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { FileUp, GitCompareArrows, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -57,6 +58,7 @@ function OpRow({ op, children }: { op: AdcOp; children?: React.ReactNode }) {
 }
 
 export function AdcCard({ policyYearId }: Props) {
+  const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<AdcPreview | null>(null);
@@ -87,6 +89,18 @@ export function AdcCard({ policyYearId }: Props) {
           );
           if (r.flex_errors.length) {
             toast.warning(r.flex_errors.join(" "));
+          }
+          if (r.added || r.deleted) {
+            toast.info(
+              "Roster changed — save updated insurer listing versions.",
+              {
+                action: {
+                  label: "Open Reports",
+                  onClick: () =>
+                    navigate({ to: "/reports", search: { tab: "pa" } }),
+                },
+              },
+            );
           }
           setPreview(null);
           setFile(null);

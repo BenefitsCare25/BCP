@@ -280,7 +280,15 @@ async def _extract_with_throttle_retry(
     RELEASED during the wait (never held idle / idle-in-transaction)."""
     for attempt in range(INTAKE_THROTTLE_RETRIES + 1):
         try:
-            return ai_gateway.extract_claim_document(
+            # Offload the BLOCKING provider call to a worker thread. This handler
+            # is `async def`, so calling the sync gateway inline would freeze the
+            # whole event loop for the multi-second AI call and serialize every
+            # concurrent upload through one worker. The awaiting coroutine never
+            # touches `db` while the thread runs, so the single Session is only
+            # ever used by one thread at a time. (The in-gateway concurrency
+            # limiter then bounds how many such threads run at once.)
+            return await asyncio.to_thread(
+                ai_gateway.extract_claim_document,
                 db,
                 client_id=client_id,
                 policy_year_id=policy_year_id,

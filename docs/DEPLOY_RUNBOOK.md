@@ -22,7 +22,10 @@ az keyvault create \
 # 3. Seed the shared secrets
 az keyvault secret set --vault-name inspro-shared-kv --name postgres-admin-password-staging --value "$(openssl rand -base64 32)"
 az keyvault secret set --vault-name inspro-shared-kv --name postgres-admin-password-prod    --value "$(openssl rand -base64 32)"
-az keyvault secret set --vault-name inspro-shared-kv --name azure-foundry-api-key            --value "<paste-from-foundry-portal>"
+# AI provider is per-tenant BYOK (entered on the frontend, stored encrypted) —
+# no AI provider secret goes here. BYOK decryption needs INSPRO_AI_KEY_ENCRYPTION_KEY
+# on App Service (Fernet key); generate with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # 4. Create the container registry
 az acr create --name insproacr --resource-group rg-inspro-shared --sku Basic --admin-enabled true

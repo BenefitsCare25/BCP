@@ -15,6 +15,7 @@ import {
   useAIConfig,
   useAIStatus,
   useDeleteAIConfig,
+  useMe,
   usePutAIConfig,
   useTestAIConfig,
 } from "@/api/hooks";
@@ -30,13 +31,6 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Sheet,
   SheetBody,
   SheetClose,
@@ -44,88 +38,65 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-  SheetTrigger,
 } from "@/components/ui/sheet";
 import { FieldLabel, InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
 import { AIUsageTile } from "@/components/schema/AIUsageTile";
+import { PlatformAILimitsCard } from "@/components/configuration/PlatformAILimitsCard";
 import { PageGuide } from "@/components/ui/page-guide";
-import type { AIConfig, AIProvider } from "@/types";
+import type { AIConfig } from "@/types";
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
-
-const DEFAULT_BEDROCK_REGION = "ap-southeast-1";
+// Vertex/Gemini is the sole provider (AWS Bedrock + Anthropic were removed).
+const DEFAULT_VERTEX_LOCATION = "asia-southeast1";
+const DEFAULT_VERTEX_MODEL = "gemini-2.5-flash";
 
 interface Draft {
-  provider: AIProvider;
-  // For bedrock, `endpoint` holds the AWS region and `model` the inference
-  // profile id; `api_key` holds the AWS secret access key.
+  // endpoint = GCP location; api_key = the service-account JSON key.
   endpoint: string;
   model: string;
   api_key: string;
-  aws_access_key_id: string;
 }
 
 const EMPTY_DRAFT: Draft = {
-  provider: "azure_foundry",
-  endpoint: "",
+  endpoint: DEFAULT_VERTEX_LOCATION,
   model: "",
   api_key: "",
-  aws_access_key_id: "",
 };
 
 function fromConfig(config: AIConfig): Draft {
-  const stored = config.endpoint ?? "";
-  const isBedrock = config.provider === "bedrock";
   return {
-    provider: config.provider,
-    // A bedrock "endpoint" is the AWS region — never repopulate a stale URL
-    // (e.g. a Foundry endpoint left in the field) into the region box.
-    endpoint:
-      isBedrock && (stored === "" || looksLikeUrl(stored))
-        ? DEFAULT_BEDROCK_REGION
-        : stored,
+    endpoint: config.endpoint ?? DEFAULT_VERTEX_LOCATION,
     model: config.model ?? "",
     api_key: "",
-    aws_access_key_id: "",
   };
 }
 
-function isValidFoundryEndpoint(url: string): boolean {
-  // Accept both URL formats — backend normalises both to .../anthropic/
-  const trimmed = url.trim().toLowerCase();
-  return trimmed.includes("/anthropic") || trimmed.includes("/api/projects/");
-}
-
-// A "global.*" profile can route out of the Singapore/APAC boundary — the
-// backend refuses it in prod, so we steer users away from it in the UI too.
-function isGlobalProfile(model: string): boolean {
-  return model.trim().toLowerCase().startsWith("global.");
-}
-
-// The AWS region field is a plain region code (ap-southeast-1) — catch a URL
-// pasted in by mistake (e.g. a stale Foundry endpoint carried over).
-function looksLikeUrl(value: string): boolean {
-  return value.includes("://") || value.includes("/");
+// A Vertex BYOK key is the service-account JSON file — sanity-check the markers
+// so we don't send an obviously-wrong value (an API key, a truncated paste).
+function isValidServiceAccountJson(value: string): boolean {
+  try {
+    const data = JSON.parse(value) as Record<string, unknown>;
+    return (
+      data.type === "service_account" &&
+      typeof data.private_key === "string" &&
+      typeof data.client_email === "string" &&
+      typeof data.project_id === "string" &&
+      data.project_id.length > 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isValidDraft(draft: Draft): boolean {
-  if (draft.provider === "azure_foundry") {
-    if (!draft.endpoint.trim()) return false;
-    if (!isValidFoundryEndpoint(draft.endpoint)) return false;
-  }
-  if (draft.provider === "bedrock") {
-    if (!draft.endpoint.trim()) return false; // region
-    if (looksLikeUrl(draft.endpoint)) return false; // a region, not a URL
-    if (!draft.model.trim()) return false; // inference profile id
-    if (isGlobalProfile(draft.model)) return false;
-    if (!draft.aws_access_key_id.trim()) return false;
-  }
-  return draft.api_key.length >= 8;
+  if (!draft.endpoint.trim()) return false; // GCP location
+  return isValidServiceAccountJson(draft.api_key); // SA JSON is the key
 }
 
 export function AIProviderPage() {
-  const { data: config, isLoading } = useAIConfig();
+  const { data: me } = useMe();
+  const isSystemAdmin = me?.role === "system_admin";
+  const { data: config, isLoading } = useAIConfig(!isSystemAdmin);
   const { data: status } = useAIStatus();
   const put = usePutAIConfig();
   const remove = useDeleteAIConfig();
@@ -162,23 +133,13 @@ export function AIProviderPage() {
   };
   const sourceBadge = SOURCE_BADGES[source] ?? SOURCE_BADGES.none;
 
-  const endpointForSave = () => {
-    // azure_foundry: the endpoint URL. bedrock: the AWS region. anthropic: n/a.
-    if (draft.provider === "azure_foundry") return draft.endpoint.trim();
-    if (draft.provider === "bedrock")
-      return draft.endpoint.trim() || DEFAULT_BEDROCK_REGION;
-    return null;
-  };
-
   const submit = async () => {
     try {
       await put.mutateAsync({
-        provider: draft.provider,
-        endpoint: endpointForSave(),
+        provider: "vertex",
+        endpoint: draft.endpoint.trim() || DEFAULT_VERTEX_LOCATION,
         model: draft.model.trim() || null,
         api_key: draft.api_key,
-        aws_access_key_id:
-          draft.provider === "bedrock" ? draft.aws_access_key_id.trim() : null,
       });
       toast.success(config ? "AI provider updated" : "AI provider saved");
       setOpen(false);
@@ -192,14 +153,10 @@ export function AIProviderPage() {
       const result = await test.mutateAsync(
         open
           ? {
-              provider: draft.provider,
-              endpoint: endpointForSave(),
+              provider: "vertex",
+              endpoint: draft.endpoint.trim() || DEFAULT_VERTEX_LOCATION,
               model: draft.model.trim() || null,
               api_key: draft.api_key || null,
-              aws_access_key_id:
-                draft.provider === "bedrock"
-                  ? draft.aws_access_key_id.trim() || null
-                  : null,
             }
           : undefined,
       );
@@ -215,227 +172,80 @@ export function AIProviderPage() {
 
   return (
     <div className="space-y-4 max-w-7xl">
-      <div className="flex justify-end">
-        <Sheet open={open} onOpenChange={onSheetOpenChange}>
-          <SheetTrigger asChild>
-            <Button>
-              {config ? (
-                <>
-                  <Pencil className="size-4" /> Update
-                </>
-              ) : (
-                <>
-                  <KeyRound className="size-4" /> Configure
-                </>
-              )}
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="right">
+      {/* Controlled drawer — opened by the Configure button inside the Current
+          configuration card below (no visible trigger here). */}
+      <Sheet open={open} onOpenChange={onSheetOpenChange}>
+        <SheetContent side="right">
             <SheetHeader>
               <SheetTitle className="flex items-center gap-1.5">
                 {config ? "Update AI provider" : "Configure AI provider"}
                 <InfoHint>
-                  The API key is encrypted at rest. Other fields are stored in
-                  plain text.
+                  The service-account key is encrypted at rest. Other fields are
+                  stored in plain text.
                 </InfoHint>
               </SheetTitle>
             </SheetHeader>
             <SheetBody className="space-y-4">
-              <div className="flex flex-col gap-1.5">
-                <FieldLabel hint="Azure AI Foundry routes calls through your Azure resource (recommended for prod); Anthropic calls the API directly.">
-                  Provider
-                </FieldLabel>
-                <Select
-                  value={draft.provider}
-                  onValueChange={(v) => {
-                    const next = v as AIProvider;
-                    setDraft((d) => ({
-                      ...d,
-                      provider: next,
-                      // `endpoint` and `model` mean different things per provider
-                      // (Foundry URL vs AWS region; deployment name vs model id
-                      // vs inference profile), so reset them on a real switch to
-                      // avoid carrying a stale value into the wrong field.
-                      endpoint:
-                        next === d.provider
-                          ? d.endpoint
-                          : next === "bedrock"
-                            ? DEFAULT_BEDROCK_REGION
-                            : "",
-                      model: next === d.provider ? d.model : "",
-                    }));
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="azure_foundry">
-                      Azure AI Foundry
-                    </SelectItem>
-                    <SelectItem value="bedrock">
-                      AWS Bedrock — Claude, Singapore (data-resident)
-                    </SelectItem>
-                    <SelectItem value="anthropic">
-                      Anthropic (direct)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                Provider: <span className="font-medium text-foreground">Google Vertex — Gemini</span>,
+                Singapore (data-resident). This is the only supported provider.
               </div>
-              {draft.provider === "azure_foundry" && (
-                <div className="flex flex-col gap-1.5">
-                  <FieldLabel
-                    hint={
-                      <>
-                        Accepts either format — resource endpoint{" "}
-                        <code>…/anthropic/</code> or project URL{" "}
-                        <code>…/api/projects/&lt;id&gt;</code>. The backend
-                        resolves both to the Anthropic-compatible path
-                        automatically.
-                      </>
-                    }
-                  >
-                    Endpoint URL
-                  </FieldLabel>
-                  <Input
-                    value={draft.endpoint}
-                    onChange={(e) =>
-                      setDraft({ ...draft, endpoint: e.target.value })
-                    }
-                    placeholder="https://<resource>.services.ai.azure.com/anthropic/"
-                    className={
-                      draft.endpoint && !isValidFoundryEndpoint(draft.endpoint)
-                        ? "border-error focus-visible:ring-error"
-                        : ""
-                    }
-                  />
-                  {draft.endpoint && !isValidFoundryEndpoint(draft.endpoint) && (
-                    <p className="text-xs text-error">
-                      Paste either the resource endpoint ending in{" "}
-                      <code>/anthropic/</code> or your project URL{" "}
-                      <code>.../api/projects/&lt;id&gt;</code> — both are
-                      accepted.
-                    </p>
-                  )}
-                </div>
-              )}
-              {draft.provider === "bedrock" && (
-                <>
-                  <div className="flex flex-col gap-1.5">
-                    <FieldLabel hint="The AWS region of your Bedrock resource. Keep this in Singapore (ap-southeast-1) so claim data stays in-region.">
-                      AWS region
-                    </FieldLabel>
-                    <Input
-                      value={draft.endpoint}
-                      onChange={(e) =>
-                        setDraft({ ...draft, endpoint: e.target.value })
-                      }
-                      placeholder={DEFAULT_BEDROCK_REGION}
-                      className={
-                        draft.endpoint && looksLikeUrl(draft.endpoint)
-                          ? "border-error focus-visible:ring-error"
-                          : ""
-                      }
-                    />
-                    {draft.endpoint && looksLikeUrl(draft.endpoint) && (
-                      <p className="text-xs text-error">
-                        This should be an AWS region like{" "}
-                        <code>ap-southeast-1</code> — not a URL.
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <FieldLabel hint="The Bedrock inference-profile id from the console (Infer → Inference profiles). Use an apac.* profile — never global.* (it can route data out of Singapore).">
-                      Inference profile ID
-                    </FieldLabel>
-                    <Input
-                      value={draft.model}
-                      onChange={(e) =>
-                        setDraft({ ...draft, model: e.target.value })
-                      }
-                      placeholder="apac.anthropic.claude-3-5-sonnet-20241022-v2:0"
-                      className={
-                        draft.model && isGlobalProfile(draft.model)
-                          ? "border-error focus-visible:ring-error"
-                          : ""
-                      }
-                    />
-                    {draft.model && isGlobalProfile(draft.model) && (
-                      <p className="text-xs text-error">
-                        A <code>global.*</code> profile can process data outside
-                        Singapore. Use an <code>apac.*</code> profile.
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <FieldLabel hint="The IAM access key ID (e.g. AKIA…). Stored encrypted alongside the secret; never returned to the browser.">
-                      AWS access key ID
-                    </FieldLabel>
-                    <Input
-                      value={draft.aws_access_key_id}
-                      onChange={(e) =>
-                        setDraft({ ...draft, aws_access_key_id: e.target.value })
-                      }
-                      placeholder="AKIA…"
-                      autoComplete="off"
-                    />
-                  </div>
-                </>
-              )}
-              {draft.provider !== "bedrock" && (
-                <div className="flex flex-col gap-1.5">
-                  <FieldLabel
-                    hint={
-                      draft.provider === "azure_foundry" ? (
-                        <>
-                          Must match your Azure AI Foundry{" "}
-                          <strong>deployment name</strong> exactly (not the
-                          Anthropic model ID). Find it under your project →
-                          Deployments. Leave blank to use the default{" "}
-                          <code>{DEFAULT_MODEL}</code>.
-                        </>
-                      ) : (
-                        <>
-                          Anthropic model ID. Leave blank to use{" "}
-                          <code>{DEFAULT_MODEL}</code>.
-                        </>
-                      )
-                    }
-                  >
-                    {draft.provider === "azure_foundry"
-                      ? "Deployment name"
-                      : "Model (optional)"}
-                  </FieldLabel>
-                  <Input
-                    value={draft.model}
-                    onChange={(e) =>
-                      setDraft({ ...draft, model: e.target.value })
-                    }
-                    placeholder={DEFAULT_MODEL}
-                  />
-                </div>
-              )}
               <div className="flex flex-col gap-1.5">
-                <FieldLabel hint="Encrypted with Fernet (AES-128-CBC + HMAC) and never returned in any API response.">
-                  {draft.provider === "bedrock"
-                    ? "AWS secret access key"
-                    : "API key"}
+                <FieldLabel hint="The Vertex AI location. Keep this in Singapore (asia-southeast1) so claim data stays in-region — the backend refuses other regions in prod.">
+                  GCP location
                 </FieldLabel>
                 <Input
-                  type="password"
+                  value={draft.endpoint}
+                  onChange={(e) =>
+                    setDraft({ ...draft, endpoint: e.target.value })
+                  }
+                  placeholder={DEFAULT_VERTEX_LOCATION}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <FieldLabel
+                  hint={
+                    <>
+                      The Gemini model id. Leave blank to use{" "}
+                      <code>{DEFAULT_VERTEX_MODEL}</code>.
+                    </>
+                  }
+                >
+                  Gemini model (optional)
+                </FieldLabel>
+                <Input
+                  value={draft.model}
+                  onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  placeholder={DEFAULT_VERTEX_MODEL}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <FieldLabel hint="The full service-account JSON key file for a service account with the Vertex AI User role. Encrypted at rest; the project id is read from it. Never returned to the browser.">
+                  Service account JSON key
+                </FieldLabel>
+                <textarea
                   value={draft.api_key}
                   onChange={(e) =>
                     setDraft({ ...draft, api_key: e.target.value })
                   }
                   placeholder={
                     config
-                      ? `Stored: ${config.key_masked} — paste a new key to replace`
-                      : draft.provider === "bedrock"
-                        ? "AWS secret access key"
-                        : "sk-ant-... or Azure access key"
+                      ? `Stored: ${config.key_masked} — paste a new key file to replace`
+                      : '{ "type": "service_account", "project_id": "inspro-ai", … }'
                   }
+                  rows={6}
                   autoComplete="off"
+                  spellCheck={false}
+                  className="flex w-full rounded-md border border-input bg-card px-3 py-2 font-mono text-xs text-foreground shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:border-ring"
                 />
+                {draft.api_key.trim() !== "" &&
+                  !isValidServiceAccountJson(draft.api_key) && (
+                    <p className="text-xs text-error">
+                      This must be the full service-account JSON key (with{" "}
+                      <code>type</code>, <code>project_id</code>,{" "}
+                      <code>private_key</code> and <code>client_email</code>).
+                    </p>
+                  )}
               </div>
               <Button
                 variant="outline"
@@ -445,8 +255,8 @@ export function AIProviderPage() {
                   draft.api_key
                     ? undefined
                     : config
-                      ? "Re-enter the API key to test — the stored key is never returned to the browser"
-                      : "Enter an API key to test"
+                      ? "Re-paste the key to test — the stored key is never returned to the browser"
+                      : "Paste a service-account key to test"
                 }
                 className="w-full justify-center"
               >
@@ -470,11 +280,12 @@ export function AIProviderPage() {
                 Save
               </Button>
             </SheetFooter>
-          </SheetContent>
-        </Sheet>
-      </div>
+        </SheetContent>
+      </Sheet>
 
       <AIUsageTile />
+
+      {isSystemAdmin && <PlatformAILimitsCard />}
 
       <Card>
         <CardHeader>
@@ -489,28 +300,36 @@ export function AIProviderPage() {
             {sourceBadge}
           </div>
         </CardHeader>
-        <CardContent>
-          {isLoading ? (
+        <CardContent className="space-y-4">
+          {isSystemAdmin ? (
+            <div className="text-sm text-muted-foreground p-5 text-center border border-dashed border-border rounded-md">
+              Per-company AI keys (BYOK) are managed by each company's broker
+              admin. As system-admin you manage the shared{" "}
+              <span className="font-medium text-foreground">
+                Platform AI limits
+              </span>{" "}
+              above.
+            </div>
+          ) : isLoading ? (
             <div className="text-sm text-muted-foreground">Loading…</div>
           ) : config ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Field label="Provider" value={config.provider} />
               <Field
-                label={config.provider === "bedrock" ? "Inference profile" : "Model"}
-                value={config.model ?? DEFAULT_MODEL}
+                label="Model"
+                value={config.model ?? DEFAULT_VERTEX_MODEL}
                 muted={!config.model}
                 hint={!config.model ? "(default)" : undefined}
-                className={config.provider === "bedrock" ? "font-mono text-xs" : undefined}
               />
               {config.endpoint && (
                 <Field
-                  label={config.provider === "bedrock" ? "AWS region" : "Endpoint"}
+                  label="GCP location"
                   value={config.endpoint}
                   className="md:col-span-2 font-mono text-xs"
                 />
               )}
               <Field
-                label="API key"
+                label="Service account"
                 value={config.key_masked}
                 hint={`fp ${config.key_fingerprint}`}
               />
@@ -534,9 +353,11 @@ export function AIProviderPage() {
             <div className="text-sm text-muted-foreground p-5 text-center border border-dashed border-border rounded-md">
               {source === "env" ? (
                 <>
-                  No BYOK configured — the platform's shared{" "}
-                  <code>AZURE_FOUNDRY_API_KEY</code> is in use. Configure your
-                  own key to track spend separately and use a different model.
+                  No BYOK configured — the platform's shared Vertex credentials
+                  (<code>INSPRO_AI_PROVIDER=vertex</code> +{" "}
+                  <code>VERTEX_PROJECT</code> / Google ADC) are in use. Configure
+                  your own key to track spend separately and use a different
+                  project.
                 </>
               ) : (
                 <>
@@ -544,6 +365,21 @@ export function AIProviderPage() {
                   features will be disabled until a key is set.
                 </>
               )}
+            </div>
+          )}
+          {!isSystemAdmin && (
+            <div className="flex justify-end">
+              <Button onClick={() => setOpen(true)}>
+                {config ? (
+                  <>
+                    <Pencil className="size-4" /> Update
+                  </>
+                ) : (
+                  <>
+                    <KeyRound className="size-4" /> Configure
+                  </>
+                )}
+              </Button>
             </div>
           )}
         </CardContent>
@@ -577,7 +413,7 @@ export function AIProviderPage() {
       )}
 
       <PageGuide
-        purpose="Configure the AI backend for rule suggestion and roster profiling. Use platform credentials or bring your own key (BYOK) for Azure AI Foundry or Anthropic direct."
+        purpose="Configure the Google Vertex (Gemini) AI backend for rule suggestion, roster profiling and claims review. Use platform credentials or bring your own key (BYOK) — a Vertex service-account JSON."
         connections={[
           { label: "→ Roster profiling", description: "AI profiling uses this provider to analyze roster columns" },
           { label: "→ AI review queue", description: "AI-suggested matching rules are generated via this provider" },

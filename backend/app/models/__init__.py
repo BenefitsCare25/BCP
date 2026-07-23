@@ -25,10 +25,12 @@ from app.models.panel_card import PanelCard, PolicyYearCard
 from app.models.panel_clinic import PanelClinic, PanelListing, PolicyYearPanel
 from app.models.placement_slip import PlacementSlipRow
 from app.models.plan import Plan
+from app.models.platform_ai_settings import PlatformAISetting, PlatformAIUsage
 from app.models.policy_year import PolicyYear
 from app.models.product import PlanAttributeSchema, Product
 from app.models.product_setup import ProductSetup
 from app.models.product_term import ProductTerm
+from app.models.report_version import ReportVersion
 from app.models.schema_def import EmployeeAttributeSchema
 from app.models.slip_template_profile import SlipTemplateProfile
 from app.models.stored_document import StoredDocument
@@ -68,12 +70,15 @@ __all__ = [
     "PlacementSlipRow",
     "Plan",
     "PlanAttributeSchema",
+    "PlatformAISetting",
+    "PlatformAIUsage",
     "PolicyYear",
     "PolicyYearCard",
     "PolicyYearPanel",
     "Product",
     "ProductSetup",
     "ProductTerm",
+    "ReportVersion",
     "SlipTemplateProfile",
     "StoredDocument",
     "UnderwritingCase",

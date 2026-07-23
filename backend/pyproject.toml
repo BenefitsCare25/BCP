@@ -22,9 +22,16 @@ dependencies = [
     "python-docx>=1.1.2",
     "sqlalchemy>=2.0.36",
     "alembic>=1.14.0",
-    # [bedrock] extra pulls boto3 so provider="bedrock" can reach Claude in the
-    # ap-southeast-1 (Singapore) region via the AWS credential chain.
-    "anthropic[bedrock]>=0.39.0",
+    # anthropic is kept for its SDK types only — ToolUseBlock + the exception
+    # taxonomy the gateway's breaker ladder and the Vertex adapter reuse. No
+    # Anthropic/Bedrock client is instantiated (Vertex/Gemini is the sole
+    # provider), so the [bedrock] extra (boto3) is intentionally NOT pulled.
+    "anthropic>=0.39.0",
+    # Vertex AI (Gemini) provider — google-genai reaches Gemini 2.5 Flash in
+    # asia-southeast1 (Singapore, data-resident). google-auth builds the service
+    # account credentials from a stored BYOK key; both lazily imported.
+    "google-genai>=1.0.0",
+    "google-auth>=2.35.0",
     "psycopg[binary]>=3.2.0",
     "redis>=5.2.0",
     "cachetools>=5.5.0",

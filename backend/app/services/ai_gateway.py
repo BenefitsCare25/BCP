@@ -5,9 +5,11 @@ accounting, breaker semantics, and budget enforcement live in one place.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,7 +21,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.ai_config import load_ai_config
-from app.models import AISpendLog, Client
+from app.models import AISpendLog, Client, PlatformAIUsage
 from app.schemas.api import AttributeSchemaOut
 from app.schemas.rule import RuleEnvelope
 from app.services.ai_breaker import CircuitOpenError, get_breaker
@@ -40,8 +42,23 @@ from app.services.claim_ai import (
     review_claim_via_ai,
     verify_claim_concern_via_ai,
 )
+from app.services.platform_ai_settings import (
+    PlatformAILimits,
+    resolve_platform_ai_limits,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r (expected float); ignoring", name, raw)
+        return default
 
 
 PROMPT_VERSION = "rule_generation/v1"
@@ -63,7 +80,7 @@ CLAIM_VERIFY_PROMPT_VERSION = "claim_verify/v1"
 # (but indicative) cost.
 _PRICE_TABLE: dict[str, tuple[float, float]] = {
     # (input_per_million_usd, output_per_million_usd)
-    # New sequential names (Azure Foundry deployment names use these)
+    # New sequential model names
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-opus-4-7": (15.0, 75.0),
     "claude-haiku-4-5": (1.0, 5.0),
@@ -73,12 +90,32 @@ _PRICE_TABLE: dict[str, tuple[float, float]] = {
     "claude-opus-4-20250514": (15.0, 75.0),
     "claude-opus-4-7-20251214": (15.0, 75.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
+    # Google Gemini (Vertex) — standard-tier list price, $/million tokens.
+    # These are ~10x cheaper than Claude; without them a Gemini call would fall
+    # through to _DEFAULT_PRICE (Claude Sonnet) and overstate spend ~10x.
+    # gemini-2.5-pro is tiered (>200k prompt costs more); the ≤200k tier is used.
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-pro": (1.25, 10.0),
 }
 _DEFAULT_PRICE: tuple[float, float] = (3.0, 15.0)
 
 
 class AIBudgetExceededError(RuntimeError):
     """Raised when the client's monthly token budget would be exceeded."""
+
+
+class AIPlatformBudgetExceededError(AIBudgetExceededError):
+    """Raised when the platform-wide monthly token cap would be exceeded.
+
+    Distinct from ``AIBudgetExceededError`` (one tenant over its own budget):
+    every tenant shares one provider key/quota, so this means the SHARED
+    upstream quota is at risk. It should page an operator, not merely tell one
+    company to raise its budget. Subclasses ``AIBudgetExceededError`` so every
+    existing ``except AIBudgetExceededError`` handler (429 responses, claims
+    intake degradation, review-pipeline fallback-to-manual) treats it the same;
+    catch this class first where the two need to be distinguished.
+    """
 
 
 @dataclass(frozen=True)
@@ -165,24 +202,116 @@ def month_to_date_tokens(db: Session, client_id: str) -> int:
     return int(total or 0)
 
 
-def _check_budget(db: Session, client_id: str) -> None:
-    """Raises AIBudgetExceededError if the client is at or over budget.
+def _current_year_month() -> str:
+    return datetime.now(tz=UTC).strftime("%Y-%m")
 
-    Single-process check; under concurrent calls two requests can both
-    pass and both spend. Mitigations: budget is a soft cap (slight over-run
-    on bursts is acceptable), per-endpoint rate limits in the router bound
-    concurrency, and breaker stops repeated requests when provider stalls.
-    For a hard cap, an `UPDATE clients SET tokens=tokens-N WHERE tokens>=N`
-    pattern in a future migration would make this atomic.
+
+def record_platform_usage(db: Session, tokens: int) -> None:
+    """Add ``tokens`` to the shared cross-firm counter for the current month.
+
+    A single dialect-aware UPSERT (atomic per statement — no flush/rollback
+    dance inside ``_record_spend``). Writes to the ``public`` control table from
+    whatever firm session made the call, so the total spans every firm. Called
+    only for non-cache spend; ``tokens <= 0`` is a no-op.
+    """
+    if tokens <= 0:
+        return
+    table = PlatformAIUsage.__table__
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as _upsert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as _upsert
+    stmt = _upsert(table).values(year_month=_current_year_month(), total_tokens=tokens)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["year_month"],
+        set_={"total_tokens": table.c.total_tokens + tokens},
+    )
+    db.execute(stmt)
+
+
+def platform_month_to_date_tokens(db: Session) -> int:
+    """Month-to-date non-cache tokens across ALL firms/clients (shared quota).
+
+    Reads the ``platform_ai_usage`` counter (a public control table) rather than
+    summing ``AISpendLog`` — on Postgres that table is firm-schema-scoped, so a
+    ``search_path``-bound SUM would only see the active firm. See
+    ``models/platform_ai_settings.py::PlatformAIUsage``.
+    """
+    row = db.get(PlatformAIUsage, _current_year_month())
+    return int(row.total_tokens) if row else 0
+
+
+def _effective_tenant_budget(client: Client | None, default_budget: int) -> int:
+    """A tenant's cap: its explicit budget, else the fleet-wide default.
+
+    ``ai_monthly_token_budget`` of 0 historically meant "unlimited". With a
+    shared key that's a liability, so a fleet default (from the platform AI
+    settings) applies to any tenant that hasn't set its own. An explicit
+    per-tenant budget always wins.
+    """
+    explicit = client.ai_monthly_token_budget if client else 0
+    if explicit and explicit > 0:
+        return explicit
+    return default_budget
+
+
+def _maybe_budget_alert(scope: str, used: int, cap: int) -> None:
+    """Log a WARNING once usage crosses the alert threshold of a cap.
+
+    App-level early warning so an operator can act before the hard cap trips.
+    A real deploy wires this WARNING to Cloud Monitoring / an alert policy;
+    threshold is ``INSPRO_AI_BUDGET_ALERT_THRESHOLD`` (fraction, default 0.8).
+    """
+    if cap <= 0:
+        return
+    threshold = _env_float("INSPRO_AI_BUDGET_ALERT_THRESHOLD", 0.8)
+    if threshold <= 0 or used < cap * threshold:
+        return
+    logger.warning(
+        "AI token budget alert: %s at %.0f%% (%d / %d tokens this month)",
+        scope, (used / cap) * 100, used, cap,
+    )
+
+
+def _check_budget(db: Session, client_id: str, limits: PlatformAILimits) -> None:
+    """Raises when the tenant OR the platform-wide monthly token cap is hit.
+
+    Two soft caps, both checked before a live provider call:
+
+    - **Per tenant** — the client's ``ai_monthly_token_budget`` (or the fleet
+      default): attributes spend and stops one company overspending.
+    - **Platform-wide** — the shared cross-firm counter vs the configured cap,
+      because every tenant shares one provider key/quota. Without it, one busy
+      company can exhaust the shared upstream quota for everyone.
+
+    ``limits`` is resolved once by the caller (DB row → env → default). Single-
+    process check; under concurrent calls two requests can both pass and both
+    spend (soft cap — slight over-run on bursts is acceptable, and the
+    concurrency limiter + per-endpoint rate limits bound how far it can drift).
+    For a hard cap, an atomic ``UPDATE ... WHERE tokens >= N`` would be needed.
     """
     client = db.get(Client, client_id)
-    budget = client.ai_monthly_token_budget if client else 0
-    mtd = month_to_date_tokens(db, client_id)
-    if budget > 0 and mtd >= budget:
-        raise AIBudgetExceededError(
-            f"Client AI budget reached ({mtd} / {budget} tokens this month). "
-            "Increase the budget in Schema settings or wait until next month."
-        )
+    budget = _effective_tenant_budget(client, limits.default_monthly_token_budget)
+    if budget > 0:
+        mtd = month_to_date_tokens(db, client_id)
+        if mtd >= budget:
+            raise AIBudgetExceededError(
+                f"Client AI budget reached ({mtd} / {budget} tokens this month). "
+                "Increase the budget in Schema settings or wait until next month."
+            )
+        _maybe_budget_alert(f"client {client_id}", mtd, budget)
+
+    platform_cap = limits.platform_monthly_token_cap
+    if platform_cap > 0:
+        ptd = platform_month_to_date_tokens(db)
+        if ptd >= platform_cap:
+            raise AIPlatformBudgetExceededError(
+                f"Platform-wide AI token cap reached ({ptd} / {platform_cap} "
+                "tokens this month across all clients). Raise the platform AI "
+                "token cap or wait until next month."
+            )
+        _maybe_budget_alert("platform", ptd, platform_cap)
 
 
 _PRICE_ENV_TRANS = str.maketrans("-.", "__")
@@ -242,6 +371,34 @@ def _record_spend(
             cache_hit=cache_hit,
         )
     )
+    # Feed the shared cross-firm counter (public) so the platform cap sees spend
+    # from every firm, not just the one whose schema this session is bound to.
+    if not cache_hit:
+        record_platform_usage(db, input_tokens + output_tokens)
+
+
+_concurrency_state: dict[str, Any] = {"limit": None, "sem": None}
+_concurrency_lock = threading.Lock()
+
+
+def _acquire_ai_slot(limit: int) -> Any:
+    """Context manager bounding concurrent LIVE provider calls, in-process.
+
+    ``limit`` (0/unset = unbounded) caps how many Gemini calls run at once, so a
+    burst (e.g. 100 members submitting at 9am, each firing extraction + review)
+    applies backpressure instead of racing the thread pool and tripping provider
+    429s. Per-process: with N App Service instances the effective cap is
+    limit * N — size accordingly. A retuned limit rebuilds the semaphore; any
+    in-flight holders drain against the old one, which is fine for a soft
+    concurrency guard.
+    """
+    if limit <= 0:
+        return contextlib.nullcontext()
+    with _concurrency_lock:
+        if _concurrency_state["limit"] != limit:
+            _concurrency_state["limit"] = limit
+            _concurrency_state["sem"] = threading.BoundedSemaphore(limit)
+        return _concurrency_state["sem"]
 
 
 def _run_cached_ai_call(
@@ -275,12 +432,19 @@ def _run_cached_ai_call(
         )
         return on_hit(cached)
 
-    _check_budget(db, client_id)
+    # Resolve platform limits once (DB row → env → default) and reuse for both
+    # the budget check and the concurrency slot.
+    limits = resolve_platform_ai_limits(db)
+    _check_budget(db, client_id, limits)
 
     breaker = get_breaker()
     breaker.before_call()
     try:
-        payload, metadata, result = invoke()
+        # Bound concurrent live calls (backpressure) so a burst can't stampede
+        # the shared provider quota. Blocks here until a slot frees; the breaker
+        # holds no resource while waiting.
+        with _acquire_ai_slot(limits.max_concurrent_calls):
+            payload, metadata, result = invoke()
     except CircuitOpenError:
         raise
     except AINotConfiguredError:
@@ -329,8 +493,9 @@ def generate_rule_for_category(
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Either configure a tenant key on "
-            "/schema/ai-provider, or set AZURE_FOUNDRY_ENDPOINT + AZURE_FOUNDRY_API_KEY."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     cache_key = make_key(
@@ -380,8 +545,9 @@ def propose_derivation_for_roster(
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Either configure a tenant key on "
-            "/schema/ai-provider, or set AZURE_FOUNDRY_ENDPOINT + AZURE_FOUNDRY_API_KEY."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     cache_key = make_key(
@@ -438,8 +604,9 @@ def recommend_schema_for_slip(
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Either configure a tenant key on "
-            "/schema/ai-provider, or set AZURE_FOUNDRY_ENDPOINT + AZURE_FOUNDRY_API_KEY."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     cache_key = make_key(
@@ -513,8 +680,9 @@ def extract_flex_scheme(
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Configure a tenant key on "
-            "/schema/ai-provider, or set AZURE_FOUNDRY_* env vars."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     cache_key = make_key(
@@ -569,8 +737,9 @@ def extract_product_structure_for_slip(
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Configure a tenant key on "
-            "/schema/ai-provider, or set AZURE_FOUNDRY_* env vars."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     cache_key = make_key(
@@ -608,8 +777,9 @@ def _require_ai_config(db: Session, client_id: str) -> Any:
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Configure a tenant key on "
-            "/schema/ai-provider, or set AZURE_FOUNDRY_* env vars."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
     return cfg
 

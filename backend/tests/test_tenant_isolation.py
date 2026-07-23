@@ -401,6 +401,73 @@ def test_reports_readiness_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+# ── Report versions ──────────────────────────────────────────────────────────
+REPORT_VERSION_B = "00000000-0000-0000-0000-0000000000bd"
+
+
+def _ensure_report_version_b() -> None:
+    """Idempotently create a report version owned by client B."""
+    from app.models import ReportVersion
+
+    with SessionLocal() as s:
+        if s.get(ReportVersion, REPORT_VERSION_B) is None:
+            s.add(
+                ReportVersion(
+                    id=REPORT_VERSION_B,
+                    client_id=CLIENT_B_ID,
+                    policy_year_id=PY_B,
+                    report_type="employee_listing",
+                    scope_key="testsure",
+                    version_no=1,
+                    mode="versioned",
+                    params={"insurer": "TestSure", "masked": True},
+                    summary={},
+                    file_name="employee-listing-v1.xlsx",
+                    mime_type="application/octet-stream",
+                    size_bytes=1,
+                    sha256="0" * 64,
+                    storage_path="nofirm/b/report_version/x/y.xlsx",
+                )
+            )
+            s.commit()
+
+
+def test_report_versions_create_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/report-versions",
+        json={"report_type": "placement_slip"},
+    )
+    assert res.status_code == 404
+
+
+def test_report_versions_list_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(
+        f"/api/v1/policy-years/{PY_B}/report-versions",
+        params={"report_type": "placement_slip"},
+    )
+    assert res.status_code == 404
+
+
+def test_report_versions_status_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(
+        f"/api/v1/policy-years/{PY_B}/report-versions/status",
+        params={"report_type": "placement_slip"},
+    )
+    assert res.status_code == 404
+
+
+def test_report_version_download_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_report_version_b()
+    res = client_as_a.get(f"/api/v1/report-versions/{REPORT_VERSION_B}/download")
+    assert res.status_code == 404
+
+
+def test_report_version_movement_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_report_version_b()
+    res = client_as_a.get(f"/api/v1/report-versions/{REPORT_VERSION_B}/movement")
+    assert res.status_code == 404
+
+
 def test_reports_member_listing_template_cross_tenant_404(
     client_as_a: TestClient,
 ) -> None:

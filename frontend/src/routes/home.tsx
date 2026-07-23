@@ -6,33 +6,22 @@ import {
   Building2,
   CalendarClock,
   Loader2,
-  Plus,
   ReceiptText,
   Search,
   ShieldQuestion,
   UserPlus,
   Users,
 } from "lucide-react";
-import {
-  type CompanySummary,
-  useCreateClient,
-  useDashboardSummary,
-  useMe,
-} from "@/api/hooks";
+import { type CompanySummary, useDashboardSummary } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Kpi } from "@/components/ui/kpi";
 import { cn } from "@/lib/cn";
 import { companyAttention, daysUntil } from "@/lib/attention";
-import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
-import { toast } from "sonner";
 
 export function HomePage() {
   const { data, isLoading, isError } = useDashboardSummary();
-  const { data: me } = useMe();
-  const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
   const [q, setQ] = useState("");
 
   const companies = data?.companies ?? [];
@@ -124,29 +113,17 @@ export function HomePage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-3">
-        <div className="relative w-64">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search companies…"
-            className="pl-8"
-          />
-        </div>
-        {canAdmin && <AddCompany />}
+      <div className="relative w-full sm:w-72">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search companies…"
+          className="pl-8"
+        />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {filtered.map((c) => (
-          <CompanyCard key={c.id} company={c} />
-        ))}
-        {filtered.length === 0 && (
-          <div className="col-span-full rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No companies match “{q}”.
-          </div>
-        )}
-      </div>
+      <CompanyTable companies={filtered} query={q} />
     </div>
   );
 }
@@ -204,7 +181,49 @@ function allClear(c: CompanySummary): boolean {
   );
 }
 
-function CompanyCard({ company }: { company: CompanySummary }) {
+// A scannable roster rather than a card wall: one dense row per company reads
+// the same at 4 companies or 400, and it stays sortable/filterable by eye.
+function CompanyTable({
+  companies,
+  query,
+}: {
+  companies: CompanySummary[];
+  query: string;
+}) {
+  if (companies.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+        {query
+          ? `No companies match “${query}”.`
+          : "No companies yet. Add one from Company settings."}
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-border">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium text-muted-foreground">
+            <th className="px-4 py-2.5">Company</th>
+            <th className="px-4 py-2.5">Benefit year</th>
+            <th className="px-4 py-2.5 text-right">Members</th>
+            <th className="px-4 py-2.5 text-right">Dependants</th>
+            <th className="px-4 py-2.5">Status</th>
+            <th className="w-10 px-4 py-2.5" />
+          </tr>
+        </thead>
+        <tbody>
+          {companies.map((c) => (
+            <CompanyRow key={c.id} company={c} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CompanyRow({ company }: { company: CompanySummary }) {
   const navigate = useNavigate();
   const setActiveClient = useSession((s) => s.setActiveClient);
   const qc = useQueryClient();
@@ -220,118 +239,62 @@ function CompanyCard({ company }: { company: CompanySummary }) {
   const initial = company.name.trim().charAt(0).toUpperCase() || "?";
 
   return (
-    <button
-      type="button"
+    <tr
       onClick={enter}
-      className="group flex flex-col rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-border-strong hover:bg-sidebar-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      className="group cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-sidebar-hover"
     >
-      <div className="flex items-center gap-3">
-        <div className="flex size-9 items-center justify-center rounded-md bg-accent text-sm font-semibold text-accent-foreground">
-          {initial}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-medium text-foreground">
-            {company.name}
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent text-xs font-semibold text-accent-foreground">
+            {initial}
           </div>
-          <div className="text-xs text-muted-foreground">
-            {company.current_year
-              ? `${company.current_year.year} · Current`
-              : "No current year"}
-          </div>
+          <span className="font-medium text-foreground">{company.name}</span>
         </div>
-      </div>
-
-      <div className="mt-3 flex items-center gap-4 text-sm">
-        <span className="flex items-center gap-1 text-muted-foreground">
-          <Users className="size-3.5" />
-          <span className="tabular-nums text-foreground">
-            {company.member_count}
+      </td>
+      <td className="px-4 py-3 text-muted-foreground">
+        {company.current_year ? (
+          <span className="text-foreground">
+            {company.current_year.year}
+            <span className="text-muted-foreground"> · Current</span>
           </span>
-          members
-        </span>
-        <span className="flex items-center gap-1 text-muted-foreground">
-          <UserPlus className="size-3.5" />
-          <span className="tabular-nums text-foreground">
-            {company.dependant_count}
-          </span>
-          dependants
-        </span>
-      </div>
-
-      <div className="mt-3 flex min-h-[24px] flex-wrap items-center gap-1.5">
-        {company.claims_to_review > 0 && (
-          <Badge variant="warn">{company.claims_to_review} claims</Badge>
-        )}
-        {company.employees_unmatched > 0 && (
-          <Badge variant="warn">{company.employees_unmatched} unmatched</Badge>
-        )}
-        {company.dependants_pending > 0 && (
-          <Badge variant="warn">{company.dependants_pending} to approve</Badge>
-        )}
-        {company.underwriting_pending > 0 && (
-          <Badge variant="warn">{company.underwriting_pending} U/W</Badge>
-        )}
-        {company.matching_stale && <Badge variant="warn">Matching stale</Badge>}
-        {company.enrollment_open &&
-          (enrollBadge(company) ?? (
-            <Badge variant="info">Enrollment open</Badge>
-          ))}
-        {!company.current_year && <Badge variant="error">No year</Badge>}
-        {allClear(company) && <Badge variant="good">All clear</Badge>}
-      </div>
-
-      <div className="mt-3 flex items-center gap-1 text-sm font-medium text-primary">
-        Open
-        <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-      </div>
-    </button>
-  );
-}
-
-function AddCompany() {
-  const create = useCreateClient();
-  const [name, setName] = useState("");
-  const [open, setOpen] = useState(false);
-
-  const onCreate = async () => {
-    if (!name.trim()) return;
-    try {
-      await create.mutateAsync(name.trim());
-      toast.success("Company created");
-      setName("");
-      setOpen(false);
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  if (!open) {
-    return (
-      <Button variant="outline" onClick={() => setOpen(true)}>
-        <Plus className="size-4" /> Add company
-      </Button>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <Input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && onCreate()}
-        placeholder="Company name"
-        className="w-56"
-      />
-      <Button onClick={onCreate} disabled={create.isPending || !name.trim()}>
-        {create.isPending ? (
-          <Loader2 className="size-4 animate-spin" />
         ) : (
-          "Create"
+          <span className="text-muted-foreground">No current year</span>
         )}
-      </Button>
-      <Button variant="ghost" onClick={() => setOpen(false)}>
-        Cancel
-      </Button>
-    </div>
+      </td>
+      <td className="px-4 py-3 text-right tabular-nums text-foreground">
+        {company.member_count}
+      </td>
+      <td className="px-4 py-3 text-right tabular-nums text-foreground">
+        {company.dependant_count}
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {company.claims_to_review > 0 && (
+            <Badge variant="warn">{company.claims_to_review} claims</Badge>
+          )}
+          {company.employees_unmatched > 0 && (
+            <Badge variant="warn">{company.employees_unmatched} unmatched</Badge>
+          )}
+          {company.dependants_pending > 0 && (
+            <Badge variant="warn">{company.dependants_pending} to approve</Badge>
+          )}
+          {company.underwriting_pending > 0 && (
+            <Badge variant="warn">{company.underwriting_pending} U/W</Badge>
+          )}
+          {company.matching_stale && (
+            <Badge variant="warn">Matching stale</Badge>
+          )}
+          {company.enrollment_open &&
+            (enrollBadge(company) ?? (
+              <Badge variant="info">Enrollment open</Badge>
+            ))}
+          {!company.current_year && <Badge variant="error">No year</Badge>}
+          {allClear(company) && <Badge variant="good">All clear</Badge>}
+        </div>
+      </td>
+      <td className="px-4 py-3 text-right">
+        <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+      </td>
+    </tr>
   );
 }

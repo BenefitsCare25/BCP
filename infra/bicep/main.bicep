@@ -6,7 +6,6 @@
 //     --template-file main.bicep \
 //     --parameters @parameters.staging.json \
 //     --parameters postgresAdminPassword=<from-kv> \
-//                  azureFoundryApiKey=<from-kv> \
 //                  entraTenantId=<github-secret> \
 //                  entraClientId=<github-secret> \
 //                  containerImage=<acr>.azurecr.io/inspro-api:<sha>
@@ -66,12 +65,9 @@ param entraClientId string
 @description('CORS origins (comma-separated).')
 param corsOrigins string
 
-@description('Azure AI Foundry endpoint URL.')
-param azureFoundryEndpoint string
-
-@secure()
-@description('Azure AI Foundry API key (from KV secret).')
-param azureFoundryApiKey string
+// Claims AI provider is configured per-tenant via the frontend BYOK page
+// (client_ai_configs, encrypted), NOT via deployment env vars — so no AI
+// provider params are declared here.
 
 @description('Fully-qualified container image, e.g. insproacr.azurecr.io/inspro-api:<sha>. The CI must build+push the image before passing this in.')
 param containerImage string
@@ -245,14 +241,6 @@ resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview'
   }
 }
 
-resource kvSecretFoundryKey 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
-  parent: kv
-  name: 'azure-foundry-api-key'
-  properties: {
-    value: azureFoundryApiKey
-  }
-}
-
 resource kvSecretPortalJwt 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
   parent: kv
   name: 'portal-jwt-secret'
@@ -319,8 +307,6 @@ var commonAppSettings = [
   { name: 'INSPRO_CORS_ORIGINS', value: corsOrigins }
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
   { name: 'INSPRO_REDIS_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretRedisUrl.name})' }
-  { name: 'AZURE_FOUNDRY_ENDPOINT', value: azureFoundryEndpoint }
-  { name: 'AZURE_FOUNDRY_API_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretFoundryKey.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   // Portal OTP mail. Fail-closed: the app refuses to boot in prod on "log"
   // mode; with smtp unconfigured it boots and each send fails VISIBLY

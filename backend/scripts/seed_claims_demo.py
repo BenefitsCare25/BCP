@@ -535,8 +535,9 @@ def seed_claims_demo() -> None:
                      "evidence": "1 document(s), no hash reuse across live claims."},
                 ],
                 error_detail=(
-                    "AI provider not configured. Configure a tenant key on "
-                    "/schema/ai-provider, or set AZURE_FOUNDRY_* env vars."
+                    "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
+                    "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or "
+                    "configure a tenant BYOK key on the AI provider settings page."
                 ),
             )
         )

@@ -8,7 +8,7 @@ and Azure Portal read/write on the Inspro subscription.
 - **Backend** — FastAPI + SQLAlchemy on Azure App Service (Linux, Python 3.12).
 - **Database** — Azure Database for PostgreSQL Flexible Server (Singapore region).
 - **Cache** — Azure Cache for Redis (Singapore region). In-memory fallback if unreachable.
-- **AI provider** — Azure AI Foundry exposing Anthropic Claude Sonnet.
+- **AI provider** — AWS Bedrock (Anthropic Claude Sonnet, Singapore/APAC-resident), configured per-tenant via the frontend BYOK page.
 - **Secrets** — Azure Key Vault, accessed via App Service managed identity.
 - **Observability** — Application Insights + Log Analytics workspace.
 - **Frontend** — React/Vite/Tailwind built into `dist/`, served by the App Service alongside the API.

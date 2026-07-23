@@ -1,29 +1,24 @@
-"""AI-driven rule generation via Azure AI Foundry (or direct Anthropic).
+"""AI-driven rule generation via Google Vertex AI (Gemini).
 
 Routes a category description and the available employee attribute schema
-through Claude, forcing structured output via a tool call. Returns the same
+through Gemini, forcing structured output via a tool call. Returns the same
 RuleEnvelope shape that the deterministic generator emits, so downstream
 consumers don't branch.
 """
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from anthropic import Anthropic
 from anthropic.types import ToolUseBlock
 
 from app.core.ai_config import AIConfig, load_ai_config
 from app.schemas.api import AttributeSchemaOut
 from app.schemas.rule import RuleEnvelope
 
-if TYPE_CHECKING:
-    from anthropic import AnthropicBedrock
-
-# Provider call timeout. Default Anthropic SDK timeout is 600s, which is
-# longer than any FastAPI request budget — bound it explicitly.
+# Provider call timeout — bound it explicitly so an AI call can't outlast any
+# FastAPI request budget.
 _PROVIDER_TIMEOUT_SECONDS = 30.0
-_PROVIDER_MAX_RETRIES = 2
 
 # Roster profiling emits one rule per target attribute (often a dozen+), so it
 # needs a larger output budget and more wall-clock than single-rule generation.
@@ -91,47 +86,21 @@ TOOL_SCHEMA = {
 }
 
 
-def _build_anthropic_client(
-    cfg: AIConfig, *, timeout: float
-) -> Anthropic | AnthropicBedrock:
+def _build_ai_client(cfg: AIConfig, *, timeout: float) -> Any:
     """Construct the model client from a tenant/env AI config.
 
-    Single source of truth for client construction so a change (proxy, default
-    header, retry policy) lands in one place for every extractor call.
-
-    ``provider="bedrock"`` returns an ``AnthropicBedrock`` client authenticated
-    via the standard AWS credential chain (env vars / shared profile / role) and
-    pinned to ``cfg.aws_region``; ``base_url``/``api_key`` are unused there. All
-    clients expose the same ``.messages.create(...)`` surface, so callers don't
-    branch.
+    Vertex/Gemini is the only provider: returns the ``vertex_gemini`` adapter,
+    which presents the Anthropic ``.messages.create(...)`` surface over
+    google-genai so callers don't branch on provider.
     """
-    if cfg.provider == "bedrock":
-        try:
-            from anthropic import AnthropicBedrock
-        except ImportError as exc:  # pragma: no cover - dep present in prod image
-            raise RuntimeError(
-                "INSPRO_AI_PROVIDER=bedrock requires the AWS extra: "
-                "uv add 'anthropic[bedrock]'."
-            ) from exc
-        bedrock_kwargs: dict[str, Any] = {
-            "aws_region": cfg.aws_region,
-            "timeout": timeout,
-            "max_retries": _PROVIDER_MAX_RETRIES,
-        }
-        # BYOK: pass the tenant's explicit AWS keys. Env mode leaves these unset
-        # and the client falls back to the standard AWS credential chain.
-        if cfg.aws_access_key_id and cfg.api_key:
-            bedrock_kwargs["aws_access_key"] = cfg.aws_access_key_id
-            bedrock_kwargs["aws_secret_key"] = cfg.api_key
-        return AnthropicBedrock(**bedrock_kwargs)
-    client_kwargs: dict[str, Any] = {
-        "api_key": cfg.api_key,
-        "timeout": timeout,
-        "max_retries": _PROVIDER_MAX_RETRIES,
-    }
-    if cfg.base_url:
-        client_kwargs["base_url"] = cfg.base_url
-    return Anthropic(**client_kwargs)
+    if cfg.provider != "vertex":
+        raise AINotConfiguredError(
+            f"Unsupported AI provider {cfg.provider!r}; only 'vertex' (Gemini) "
+            "is supported."
+        )
+    from app.services.vertex_gemini import build_gemini_client
+
+    return build_gemini_client(cfg, timeout=timeout)
 
 
 class AINotConfiguredError(RuntimeError):
@@ -183,11 +152,12 @@ def generate_rule_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set AZURE_FOUNDRY_ENDPOINT + "
-            "AZURE_FOUNDRY_API_KEY (or ANTHROPIC_API_KEY)."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
+            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
+            "a tenant BYOK key on the AI provider settings page."
         )
 
-    client = _build_anthropic_client(cfg, timeout=_PROVIDER_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_PROVIDER_TIMEOUT_SECONDS)
 
     response = client.messages.create(
         model=cfg.model,
@@ -362,11 +332,12 @@ def propose_derivation_rules_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set AZURE_FOUNDRY_ENDPOINT + "
-            "AZURE_FOUNDRY_API_KEY (or ANTHROPIC_API_KEY)."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
+            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
+            "a tenant BYOK key on the AI provider settings page."
         )
 
-    client = _build_anthropic_client(cfg, timeout=_DERIVATION_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_DERIVATION_TIMEOUT_SECONDS)
 
     response = client.messages.create(
         model=cfg.model,
@@ -563,11 +534,12 @@ def recommend_schema_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set AZURE_FOUNDRY_ENDPOINT + "
-            "AZURE_FOUNDRY_API_KEY (or ANTHROPIC_API_KEY)."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
+            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
+            "a tenant BYOK key on the AI provider settings page."
         )
 
-    client = _build_anthropic_client(cfg, timeout=_RECOMMEND_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_RECOMMEND_TIMEOUT_SECONDS)
 
     response = client.messages.create(
         model=cfg.model,
@@ -770,11 +742,12 @@ def extract_slip_structure_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set AZURE_FOUNDRY_ENDPOINT + "
-            "AZURE_FOUNDRY_API_KEY (or ANTHROPIC_API_KEY)."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
+            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
+            "a tenant BYOK key on the AI provider settings page."
         )
 
-    client = _build_anthropic_client(cfg, timeout=_SLIP_EXTRACT_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_SLIP_EXTRACT_TIMEOUT_SECONDS)
 
     prompt = (
         f"Product code: {product_code}\n\n"
@@ -1101,11 +1074,12 @@ def extract_flex_scheme_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set AZURE_FOUNDRY_ENDPOINT + "
-            "AZURE_FOUNDRY_API_KEY (or ANTHROPIC_API_KEY)."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
+            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
+            "a tenant BYOK key on the AI provider settings page."
         )
 
-    client = _build_anthropic_client(cfg, timeout=_FLEX_EXTRACT_TIMEOUT_SECONDS)
+    client = _build_ai_client(cfg, timeout=_FLEX_EXTRACT_TIMEOUT_SECONDS)
 
     content: list[dict[str, Any]] = []
     for img in images[:_FLEX_MAX_IMAGES]:

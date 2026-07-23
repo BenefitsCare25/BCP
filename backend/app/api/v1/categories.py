@@ -416,7 +416,7 @@ def ai_suggest_rule(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Category:
-    """Route a single category through Claude (Azure Foundry or Anthropic)
+    """Route a single category through Gemini (Google Vertex)
     and store the generated rule. Source becomes `ai_extracted`, status
     stays `needs_review` so admin must confirm before activation.
     """

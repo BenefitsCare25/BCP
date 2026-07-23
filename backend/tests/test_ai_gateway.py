@@ -10,21 +10,31 @@ import pytest
 TEST_DB = Path(__file__).parent / "_test_ai_gateway.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 # Force the gateway to think AI is configured during tests.
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-fake-key")
+os.environ.setdefault("INSPRO_AI_PROVIDER", "vertex")
+os.environ.setdefault("VERTEX_PROJECT", "test-project")
 
 from sqlalchemy import select  # noqa: E402
 
 from app.core.auth import DEMO_CLIENT_ID  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
-from app.models import AISpendLog, Client  # noqa: E402
+from app.models import (  # noqa: E402
+    AISpendLog,
+    Client,
+    PlatformAISetting,
+)
+from app.models.platform_ai_settings import SINGLETON_ID  # noqa: E402
 from app.schemas.api import AttributeSchemaOut  # noqa: E402
 from app.schemas.rule import RuleEnvelope  # noqa: E402
 from app.services import ai_breaker, ai_cache  # noqa: E402
 from app.services.ai_gateway import (  # noqa: E402
     AIBudgetExceededError,
+    AIPlatformBudgetExceededError,
+    _acquire_ai_slot,
     generate_rule_for_category,
     month_to_date_tokens,
+    platform_month_to_date_tokens,
+    record_platform_usage,
 )
 from scripts.seed_demo import seed  # noqa: E402
 
@@ -169,6 +179,151 @@ def test_budget_exceeded_blocks_call() -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _add_spend(db, tokens: int) -> None:
+    db.add(
+        AISpendLog(
+            client_id=DEMO_CLIENT_ID,
+            policy_year_id=None,
+            operation="ai_suggest_rule",
+            model="claude-test",
+            input_tokens=tokens,
+            output_tokens=0,
+            cost_estimate_usd=0.0,
+            cache_hit=False,
+        )
+    )
+    db.commit()
+
+
+def test_platform_usage_counter_accumulates() -> None:
+    """record_platform_usage bumps the shared counter; MTD reads it back."""
+    db = SessionLocal()
+    try:
+        before = platform_month_to_date_tokens(db)
+        record_platform_usage(db, 40)
+        record_platform_usage(db, 60)
+        db.commit()
+        assert platform_month_to_date_tokens(db) == before + 100
+        record_platform_usage(db, 0)  # no-op
+        db.commit()
+        assert platform_month_to_date_tokens(db) == before + 100
+    finally:
+        db.close()
+
+
+def test_platform_cap_blocks_call_via_env(monkeypatch) -> None:
+    """The platform-wide cap trips even when the tenant is under its own budget."""
+    db = SessionLocal()
+    try:
+        client = db.get(Client, DEMO_CLIENT_ID)
+        client.ai_monthly_token_budget = 1_000_000  # tenant well under
+        record_platform_usage(db, 500)
+        db.commit()
+        current = platform_month_to_date_tokens(db)
+        assert current > 0
+        # Cap at the current platform total → the next call is at/over the cap.
+        monkeypatch.setenv("INSPRO_AI_PLATFORM_MONTHLY_TOKEN_CAP", str(current))
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as m:
+            with pytest.raises(AIPlatformBudgetExceededError):
+                generate_rule_for_category(
+                    db,
+                    client_id=DEMO_CLIENT_ID,
+                    policy_year_id=None,
+                    description="Unique description for platform cap env test",
+                    schema=_schema(),
+                )
+        assert m.call_count == 0  # blocked before the provider call
+        client.ai_monthly_token_budget = 100_000
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_platform_cap_from_db_row_overrides_env(monkeypatch) -> None:
+    """A stored platform cap is honored (and wins over env), proving DB source."""
+    db = SessionLocal()
+    try:
+        client = db.get(Client, DEMO_CLIENT_ID)
+        client.ai_monthly_token_budget = 1_000_000
+        current = platform_month_to_date_tokens(db)
+        # Env says "huge" (no block); the DB row says "already at cap" → block.
+        monkeypatch.setenv(
+            "INSPRO_AI_PLATFORM_MONTHLY_TOKEN_CAP", str(current + 10_000_000)
+        )
+        row = PlatformAISetting(
+            id=SINGLETON_ID, platform_monthly_token_cap=max(current, 1)
+        )
+        db.add(row)
+        db.commit()
+        try:
+            with patch(
+                "app.services.ai_gateway.generate_rule_via_ai",
+                return_value=_fake_envelope_meta(),
+            ):
+                with pytest.raises(AIPlatformBudgetExceededError):
+                    generate_rule_for_category(
+                        db,
+                        client_id=DEMO_CLIENT_ID,
+                        policy_year_id=None,
+                        description="Unique description for platform cap db test",
+                        schema=_schema(),
+                    )
+        finally:
+            db.delete(db.get(PlatformAISetting, SINGLETON_ID))
+            client.ai_monthly_token_budget = 100_000
+            db.commit()
+    finally:
+        db.close()
+
+
+def test_platform_error_is_budget_error_subclass() -> None:
+    """Existing `except AIBudgetExceededError` handlers must catch the platform one."""
+    assert issubclass(AIPlatformBudgetExceededError, AIBudgetExceededError)
+
+
+def test_default_budget_applies_when_client_zero(monkeypatch) -> None:
+    """A zero tenant budget falls back to the fleet-wide default cap."""
+    db = SessionLocal()
+    try:
+        client = db.get(Client, DEMO_CLIENT_ID)
+        client.ai_monthly_token_budget = 0  # "unlimited" historically
+        db.commit()
+        _add_spend(db, 25)
+        mtd = month_to_date_tokens(db, DEMO_CLIENT_ID)
+        assert mtd > 0
+        monkeypatch.setenv("INSPRO_AI_DEFAULT_MONTHLY_TOKEN_BUDGET", str(mtd))
+        with pytest.raises(AIBudgetExceededError):
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Unique description for default budget test",
+                schema=_schema(),
+            )
+        client.ai_monthly_token_budget = 100_000
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_concurrency_slot_bounds_and_defaults() -> None:
+    """limit<=0 → no-op context; limit>0 → a bounded semaphore of that size."""
+    import contextlib
+
+    assert isinstance(_acquire_ai_slot(0), contextlib.nullcontext)
+
+    sem = _acquire_ai_slot(2)
+    assert _acquire_ai_slot(2) is sem  # cached for the same limit
+    assert sem.acquire(blocking=False) is True
+    assert sem.acquire(blocking=False) is True
+    assert sem.acquire(blocking=False) is False  # third blocked → backpressure
+    sem.release()
+    sem.release()
 
 
 def test_provider_failure_increments_breaker() -> None:

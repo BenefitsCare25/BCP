@@ -178,8 +178,8 @@ function EditForm({
               disabled={!aiStatus?.configured || aiSuggest.isPending || coversAll}
               title={
                 aiStatus?.configured
-                  ? "Ask Claude (via Azure Foundry) to generate a rule from the raw description"
-                  : "AI not configured — set AZURE_FOUNDRY_ENDPOINT + AZURE_FOUNDRY_API_KEY"
+                  ? "Ask Claude to generate a rule from the raw description"
+                  : "AI not configured — set up an AI provider in settings"
               }
             >
               {aiSuggest.isPending ? (

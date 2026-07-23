@@ -446,12 +446,16 @@ export function useAIStatus() {
 
 export interface AISpendSummary {
   month_to_date_tokens: number;
+  month_to_date_input_tokens: number;
+  month_to_date_output_tokens: number;
   month_to_date_cost_usd: number;
   monthly_token_budget: number;
   by_operation: {
     operation: string;
     calls: number;
     tokens: number;
+    input_tokens: number;
+    output_tokens: number;
     cost_usd: number;
   }[];
   recent: {
@@ -471,6 +475,50 @@ export function useAISpend() {
     queryKey: ["ai-spend", "summary", cid],
     queryFn: () => api.get<AISpendSummary>("/ai-spend/summary"),
     staleTime: 30_000,
+  });
+}
+
+export function useSetAIBudget() {
+  const qc = useQueryClient();
+  const cid = useActiveClientId();
+  return useMutation({
+    mutationFn: (monthly_token_budget: number) =>
+      api.put<{ monthly_token_budget: number }>("/ai-spend/budget", {
+        monthly_token_budget,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ai-spend", "summary", cid] });
+      qc.invalidateQueries({ queryKey: ["system", "ai-status", cid] });
+    },
+  });
+}
+
+export interface PlatformAISettings {
+  platform_monthly_token_cap: number;
+  default_monthly_token_budget: number;
+  max_concurrent_calls: number;
+}
+
+// Platform-wide (system-admin only) — spans every company on the shared key,
+// so the query key is NOT client-scoped.
+export function usePlatformAISettings(enabled = true) {
+  return useQuery({
+    queryKey: ["platform-ai-settings"],
+    queryFn: () => api.get<PlatformAISettings>("/platform-ai-settings"),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export function useSetPlatformAISettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PlatformAISettings) =>
+      api.put<PlatformAISettings>("/platform-ai-settings", payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
+      qc.invalidateQueries({ queryKey: ["ai-spend", "summary"] });
+    },
   });
 }
 
@@ -1079,9 +1127,11 @@ export function useRevokeInvitation() {
   });
 }
 
-export function useAIConfig() {
+export function useAIConfig(enabled = true) {
   // Scoped by the active client: BYOK config is per-tenant, and a user with
   // access to multiple clients switches between them via the client header.
+  // `enabled=false` for system_admin — /ai-config is broker_admin-only and
+  // would 403 (BYOK is a per-company broker surface, not a platform one).
   const cid = useActiveClientId();
   return useQuery({
     queryKey: ["ai-config", cid],
@@ -1089,6 +1139,7 @@ export function useAIConfig() {
       const data = await api.get<AIConfig | undefined>("/ai-config");
       return data ?? null;
     },
+    enabled,
     staleTime: 30_000,
   });
 }

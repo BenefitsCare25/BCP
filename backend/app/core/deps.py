@@ -27,6 +27,7 @@ from app.models import (
     PlacementSlipRow,
     Plan,
     PolicyYear,
+    ReportVersion,
 )
 
 logger = logging.getLogger(__name__)
@@ -304,6 +305,20 @@ def load_claim(
     if not user_owns(user, c.client_id):
         raise _deny_cross_tenant(user, "Claim", claim_id)
     return c
+
+
+def load_report_version(
+    version_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ReportVersion:
+    """Load a ReportVersion, proving tenant ownership via its client_id."""
+    rv = db.get(ReportVersion, version_id)
+    if rv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report version not found")
+    if not user_owns(user, rv.client_id):
+        raise _deny_cross_tenant(user, "Report version", version_id)
+    return rv
 
 
 def load_panel_listing(

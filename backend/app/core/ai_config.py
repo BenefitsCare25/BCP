@@ -1,21 +1,15 @@
-"""AI provider configuration.
+"""AI provider configuration — Google Vertex AI (Gemini), Singapore-resident.
 
-Two resolution sources in priority order:
+Vertex/Gemini is the ONLY provider (AWS Bedrock and direct Anthropic were
+removed). Two resolution sources, in priority order:
 
 1. Per-tenant BYOK row in ``client_ai_configs`` (when ``db`` + ``client_id``
-   are passed) — encrypted at rest, decrypted just-in-time.
-2. Process-wide env vars — original behaviour.
-
-Azure AI Foundry exposes Claude via an Anthropic-compatible endpoint, so we
-use the standard Anthropic SDK with a custom ``base_url``. To configure via
-env, set:
-
-    AZURE_FOUNDRY_ENDPOINT  e.g. https://<resource>.services.ai.azure.com/anthropic/
-    AZURE_FOUNDRY_API_KEY   Azure access key
-    AZURE_FOUNDRY_MODEL     defaults to "claude-sonnet-4-6"
-
-If those are unset, the system falls back to direct Anthropic credentials
-(ANTHROPIC_API_KEY + ANTHROPIC_MODEL) for local development.
+   are passed) — the service-account JSON encrypted at rest, decrypted
+   just-in-time.
+2. Process-wide env vars: ``INSPRO_AI_PROVIDER=vertex`` (or just a present
+   ``VERTEX_PROJECT``) + ``VERTEX_LOCATION`` / ``VERTEX_MODEL``; credentials via
+   the standard Google ADC chain (``GOOGLE_APPLICATION_CREDENTIALS`` / workload
+   identity).
 
 For per-tenant BYOK, call ``load_ai_config(db, client_id)`` from a request
 handler — the BYOK row (if any) takes precedence over env.
@@ -27,205 +21,139 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Literal
-from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
-
-DEFAULT_MODEL = "claude-sonnet-4-6"
 
 logger = logging.getLogger(__name__)
 
 AISource = Literal["byok", "env", "none"]
-AZURE_FOUNDRY_HOST_SUFFIX = ".services.ai.azure.com"
 
-# Bedrock residency guard. The whole point of moving claims AI to Bedrock is to
-# keep PII in the Singapore/APAC boundary, so a "global.*" inference profile
-# (which can route to any geography, incl. the US) is refused in prod. Callers
-# invoke from this region; an "apac.*" profile keeps processing within APAC.
-DEFAULT_BEDROCK_REGION = "ap-southeast-1"
-APPROVED_BEDROCK_REGIONS = frozenset({"ap-southeast-1"})
+# Vertex (Gemini) residency guard. Keep claims PII in Singapore: the "global"
+# Vertex location routes to any geography, so it's refused in prod;
+# asia-southeast1 is the Singapore region.
+DEFAULT_VERTEX_LOCATION = "asia-southeast1"
+DEFAULT_VERTEX_MODEL = "gemini-2.5-flash"
+APPROVED_VERTEX_LOCATIONS = frozenset({"asia-southeast1"})
 
 
 @dataclass(frozen=True)
 class AIConfig:
+    # api_key carries the service-account JSON in BYOK mode; empty in env mode
+    # (Google ADC supplies credentials). gcp_project + gcp_location pin the
+    # Vertex project/region. base_url is unused (kept for a stable shape).
     api_key: str
     model: str
     base_url: str | None
-    provider: str  # "azure_foundry" | "anthropic" | "bedrock"
+    provider: str  # always "vertex"
     source: AISource = "env"
-    # For provider="bedrock" only (ignored otherwise). aws_region pins the
-    # Bedrock region. In env mode both stay None and auth falls to the standard
-    # AWS credential chain; in BYOK mode aws_access_key_id + api_key(=secret)
-    # carry the tenant's explicit credentials.
-    aws_region: str | None = None
-    aws_access_key_id: str | None = None
-
-
-def normalize_foundry_endpoint(url: str) -> str:
-    """Resolve to the Anthropic-compatible base URL.
-
-    Handles two Azure AI Foundry URL formats:
-    1. Resource-level:  https://<r>.services.ai.azure.com/anthropic/
-    2. Project-level:   https://<r>.services.ai.azure.com/api/projects/<id>
-       → auto-appends /anthropic/ so the Anthropic SDK reaches the right path.
-
-    Also strips /v1/messages if the user pasted the full messages URL.
-    """
-    parsed = urlsplit(url.strip())
-    hostname = (parsed.hostname or "").lower().rstrip(".")
-    if (
-        parsed.scheme.lower() != "https"
-        or not hostname.endswith(AZURE_FOUNDRY_HOST_SUFFIX)
-        or hostname == AZURE_FOUNDRY_HOST_SUFFIX.removeprefix(".")
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.port not in (None, 443)
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError(
-            "endpoint must be an HTTPS Azure AI Foundry URL under "
-            "*.services.ai.azure.com"
-        )
-    path = parsed.path.replace("/v1/messages/", "/").replace("/v1/messages", "").rstrip("/")
-    url = f"https://{hostname}{path}"
-    # Project URL: .../api/projects/<id> — append /anthropic
-    if "/api/projects/" in url and "/anthropic" not in url:
-        url = url + "/anthropic"
-    return url + "/"
+    gcp_project: str | None = None
+    gcp_location: str | None = None
 
 
 def _prod_env() -> bool:
     return os.environ.get("INSPRO_ENV", "dev").strip().lower() in ("prod", "production")
 
 
-def assert_bedrock_residency(model: str, region: str) -> None:
-    """Fail-closed in prod on a config that could send claims PII out of region.
+def assert_vertex_residency(location: str) -> None:
+    """Fail-closed in prod on a Vertex location that could leave Singapore.
 
-    A ``global.*`` Bedrock inference profile can process in any geography
-    (including the US) — the exact gap Bedrock was chosen to close — so prod
-    refuses to build such a config. Dev/staging only warns, so local runs work.
+    The Vertex ``global`` location (and any non-approved region) can process
+    outside Singapore — refused in prod, warned in dev/staging.
     """
-    is_global = model.lower().startswith("global.")
-    region_ok = region in APPROVED_BEDROCK_REGIONS
+    loc = (location or "").strip().lower()
+    location_ok = loc in APPROVED_VERTEX_LOCATIONS
     if _prod_env():
-        if is_global:
+        if not location_ok:
             raise RuntimeError(
-                "AWS_BEDROCK_MODEL is a 'global.*' inference profile, which can "
-                "process data outside Singapore. Use a single-region or 'apac.*' "
-                "profile in production."
-            )
-        if not region_ok:
-            raise RuntimeError(
-                f"AWS_BEDROCK_REGION={region!r} is not an approved residency "
-                f"region {sorted(APPROVED_BEDROCK_REGIONS)}."
+                f"VERTEX_LOCATION={location!r} is not an approved residency "
+                f"region {sorted(APPROVED_VERTEX_LOCATIONS)}. Gemini claims "
+                "review must run in asia-southeast1 (Singapore)."
             )
         return
-    if is_global:
+    if not location_ok:
         logger.warning(
-            "AWS_BEDROCK_MODEL is a 'global.*' profile — data may leave "
-            "Singapore. Dev/staging only."
-        )
-    if not region_ok:
-        logger.warning(
-            "AWS_BEDROCK_REGION=%s is outside the approved residency region. "
-            "Dev/staging only.",
-            region,
+            "VERTEX_LOCATION=%s is outside the approved residency region "
+            "(asia-southeast1). Dev/staging only.",
+            location,
         )
 
 
-def _load_bedrock_from_env() -> AIConfig | None:
-    """AWS Bedrock provider — Claude in the Singapore/APAC boundary, per-token.
+def _load_vertex_from_env() -> AIConfig | None:
+    """Google Vertex AI (Gemini) — Singapore data-resident, per-token.
 
-    Auth is the standard AWS credential chain (env vars / shared profile / role),
-    handled by the ``AnthropicBedrock`` client, so no key is stored here.
-    ``AWS_BEDROCK_MODEL`` is the Bedrock inference-profile id
-    (e.g. ``apac.anthropic.claude-sonnet-4-5-20250929-v1:0``).
+    Credentials come from the standard Google ADC chain (the google-genai client
+    resolves ``GOOGLE_APPLICATION_CREDENTIALS`` / workload identity), so no key
+    is stored here — ``api_key`` stays empty. ``VERTEX_PROJECT`` is required.
     """
-    region = os.environ.get("AWS_BEDROCK_REGION", "").strip() or DEFAULT_BEDROCK_REGION
-    model = os.environ.get("AWS_BEDROCK_MODEL", "").strip()
-    if not model:
-        logger.error(
-            "INSPRO_AI_PROVIDER=bedrock but AWS_BEDROCK_MODEL is unset "
-            "(the Bedrock inference-profile id)."
-        )
+    project = os.environ.get("VERTEX_PROJECT", "").strip()
+    location = os.environ.get("VERTEX_LOCATION", "").strip() or DEFAULT_VERTEX_LOCATION
+    model = os.environ.get("VERTEX_MODEL", "").strip() or DEFAULT_VERTEX_MODEL
+    if not project:
+        logger.error("INSPRO_AI_PROVIDER=vertex but VERTEX_PROJECT is unset.")
         return None
-    assert_bedrock_residency(model, region)
+    assert_vertex_residency(location)
     return AIConfig(
         api_key="",
         model=model,
         base_url=None,
-        provider="bedrock",
-        aws_region=region,
+        provider="vertex",
+        gcp_project=project,
+        gcp_location=location,
         source="env",
     )
 
 
 def _load_from_env() -> AIConfig | None:
-    if os.environ.get("INSPRO_AI_PROVIDER", "").strip().lower() == "bedrock":
-        return _load_bedrock_from_env()
-    foundry_endpoint = os.environ.get("AZURE_FOUNDRY_ENDPOINT", "").strip()
-    foundry_key = os.environ.get("AZURE_FOUNDRY_API_KEY", "").strip()
-    if foundry_endpoint and foundry_key:
-        try:
-            base_url = normalize_foundry_endpoint(foundry_endpoint)
-        except ValueError:
-            logger.error("AZURE_FOUNDRY_ENDPOINT is not an approved Azure Foundry URL")
-            return None
-        return AIConfig(
-            api_key=foundry_key,
-            model=os.environ.get("AZURE_FOUNDRY_MODEL", DEFAULT_MODEL).strip(),
-            base_url=base_url,
-            provider="azure_foundry",
-            source="env",
-        )
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if anthropic_key:
-        return AIConfig(
-            api_key=anthropic_key,
-            model=os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL).strip(),
-            base_url=None,
-            provider="anthropic",
-            source="env",
-        )
+    """Env-backed Vertex config. Resolves when the provider is explicitly
+    ``vertex`` OR a ``VERTEX_PROJECT`` is present (so local dev needn't set the
+    flag). Any other provider value is unsupported and yields None."""
+    provider = os.environ.get("INSPRO_AI_PROVIDER", "").strip().lower()
+    if provider == "vertex" or os.environ.get("VERTEX_PROJECT", "").strip():
+        return _load_vertex_from_env()
     return None
 
 
-def pack_bedrock_secret(access_key_id: str, secret_access_key: str) -> str:
-    """Serialize the AWS credential pair for encrypted storage in a BYOK row."""
+def pack_vertex_secret(project_id: str, service_account_json: str) -> str:
+    """Serialize the Vertex project + service-account JSON for encrypted storage.
+
+    The service-account key is itself JSON; we wrap it with the target project
+    id (which may differ from the SA's home project) so the BYOK row carries
+    both. Stored in the row's encrypted secret.
+    """
     return json.dumps(
-        {"access_key_id": access_key_id, "secret_access_key": secret_access_key}
+        {"project_id": project_id, "service_account": service_account_json}
     )
 
 
-def _byok_bedrock(row: object, secret_blob: str, client_id: str) -> AIConfig | None:
-    """Build a Bedrock AIConfig from a decrypted BYOK row.
+def _byok_vertex(row: object, secret_blob: str, client_id: str) -> AIConfig | None:
+    """Build a Vertex AIConfig from a decrypted BYOK row.
 
-    ``row.endpoint`` holds the region, ``row.model`` the inference-profile id,
-    and the decrypted ``secret_blob`` is the JSON credential pair packed by
-    ``pack_bedrock_secret``. Malformed rows fall through to env rather than
-    500-ing the AI surface.
+    ``row.endpoint`` holds the location, ``row.model`` the Gemini model id, and
+    the decrypted ``secret_blob`` is the JSON packed by ``pack_vertex_secret``
+    ({project_id, service_account}). ``api_key`` carries the service-account
+    JSON string; the adapter builds google-auth credentials from it. Malformed
+    rows fall through to env rather than 500-ing the AI surface.
     """
-    region = (getattr(row, "endpoint", None) or "").strip() or DEFAULT_BEDROCK_REGION
-    profile = (getattr(row, "model", None) or "").strip()
-    if not profile:
-        logger.warning("BYOK bedrock row for client %s missing model", client_id)
-        return None
+    location = (getattr(row, "endpoint", None) or "").strip() or DEFAULT_VERTEX_LOCATION
+    model = (getattr(row, "model", None) or "").strip() or DEFAULT_VERTEX_MODEL
     try:
-        creds = json.loads(secret_blob)
-        access_key_id = str(creds["access_key_id"])
-        secret = str(creds["secret_access_key"])
+        packed = json.loads(secret_blob)
+        project_id = str(packed["project_id"])
+        service_account_json = str(packed["service_account"])
     except (ValueError, KeyError, TypeError):
-        logger.warning("BYOK bedrock row for client %s has malformed creds", client_id)
+        logger.warning("BYOK vertex row for client %s has malformed creds", client_id)
         return None
-    assert_bedrock_residency(profile, region)
+    if not project_id:
+        logger.warning("BYOK vertex row for client %s missing project_id", client_id)
+        return None
+    assert_vertex_residency(location)
     return AIConfig(
-        api_key=secret,
-        model=profile,
+        api_key=service_account_json,
+        model=model,
         base_url=None,
-        provider="bedrock",
-        aws_region=region,
-        aws_access_key_id=access_key_id,
+        provider="vertex",
+        gcp_project=project_id,
+        gcp_location=location,
         source="byok",
     )
 
@@ -254,32 +182,16 @@ def _load_byok(db: Session, client_id: str) -> AIConfig | None:
         )
         return None
 
-    model = (row.model or DEFAULT_MODEL).strip()
-    if row.provider == "bedrock":
-        return _byok_bedrock(row, api_key, client_id)
-    if row.provider == "azure_foundry":
-        if not row.endpoint:
-            logger.warning("BYOK row for client %s missing endpoint", client_id)
-            return None
-        try:
-            base_url = normalize_foundry_endpoint(row.endpoint)
-        except ValueError:
-            logger.warning("BYOK row for client %s has an unapproved endpoint", client_id)
-            return None
-        return AIConfig(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            provider="azure_foundry",
-            source="byok",
-        )
-    return AIConfig(
-        api_key=api_key,
-        model=model,
-        base_url=None,
-        provider="anthropic",
-        source="byok",
+    if row.provider == "vertex":
+        return _byok_vertex(row, api_key, client_id)
+    # Unrecognised / legacy provider (bedrock, anthropic, azure_foundry) — don't
+    # guess; fall through to env rather than treat it as vertex.
+    logger.warning(
+        "BYOK row for client %s has unsupported provider %r — ignoring",
+        client_id,
+        row.provider,
     )
+    return None
 
 
 def load_ai_config(

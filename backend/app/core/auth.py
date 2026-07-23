@@ -13,6 +13,7 @@ both modes, so swapping is a config change — no code change needed.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, get_args
@@ -60,12 +61,21 @@ DEMO_BROKER_FIRM_ID = "00000000-0000-0000-0000-000000000010"
 DEMO_CLIENT_ID = "00000000-0000-0000-0000-000000000020"
 
 
+def _mock_role() -> Role:
+    """Dev-only: let `INSPRO_MOCK_ROLE` pick the mock user's role so role-gated
+    surfaces (e.g. the system-admin platform-AI settings) can be exercised
+    locally. Only ever consulted in mock auth mode; unknown values fall back to
+    broker_admin."""
+    raw = os.environ.get("INSPRO_MOCK_ROLE", "").strip()
+    return raw if raw in VALID_ROLES else "broker_admin"  # type: ignore[return-value]
+
+
 def _mock_user() -> CurrentUser:
     return CurrentUser(
         user_id=DEMO_USER_ID,
         broker_firm_id=DEMO_BROKER_FIRM_ID,
         client_id=DEMO_CLIENT_ID,
-        role="broker_admin",
+        role=_mock_role(),
     )
 
 
@@ -73,7 +83,7 @@ def _mock_principal() -> Principal:
     return Principal(
         user_id=DEMO_USER_ID,
         broker_firm_id=DEMO_BROKER_FIRM_ID,
-        role="broker_admin",
+        role=_mock_role(),
     )
 
 

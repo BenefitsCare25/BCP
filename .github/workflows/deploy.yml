@@ -133,7 +133,6 @@ jobs:
               entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
               entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
               postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
-              azureFoundryApiKey="${{ secrets.AZURE_FOUNDRY_API_KEY }}" \
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ needs.build.outputs.image }}" \
@@ -149,7 +148,6 @@ jobs:
               entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
               entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
               postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
-              azureFoundryApiKey="${{ secrets.AZURE_FOUNDRY_API_KEY }}" \
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ needs.build.outputs.image }}" \
@@ -208,7 +206,6 @@ jobs:
               entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
               entraClientId="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
               postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}" \
-              azureFoundryApiKey="${{ secrets.AZURE_FOUNDRY_API_KEY }}" \
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ needs.build.outputs.image }}" \

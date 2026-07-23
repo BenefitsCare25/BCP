@@ -10,7 +10,8 @@ import pytest
 TEST_DB = Path(__file__).parent / "_test_ai_gateway_claims.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 # Force the gateway to think AI is configured during tests.
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-fake-key")
+os.environ.setdefault("INSPRO_AI_PROVIDER", "vertex")
+os.environ.setdefault("VERTEX_PROJECT", "test-project")
 
 from sqlalchemy import select  # noqa: E402
 

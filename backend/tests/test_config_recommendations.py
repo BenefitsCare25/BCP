@@ -20,7 +20,8 @@ import pytest
 
 TEST_DB = Path(__file__).parent / "_test_config_recommendations.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-fake-key")
+os.environ.setdefault("INSPRO_AI_PROVIDER", "vertex")
+os.environ.setdefault("VERTEX_PROJECT", "test-project")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402

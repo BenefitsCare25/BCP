@@ -232,8 +232,9 @@ the storage root. Bicep provisions the storage account + `documents` container
 
 Setup: `cd backend && ./scripts/dev.ps1` and `cd frontend && pnpm dev`, then
 open http://localhost:5173. For Phase 3's live AI review you also need an AI
-provider configured (`AZURE_FOUNDRY_ENDPOINT` + `AZURE_FOUNDRY_API_KEY`, or
-`ANTHROPIC_API_KEY`, or a tenant BYOK key on `/configuration/ai-provider`) —
+provider configured (a tenant BYOK AWS Bedrock key on
+`/configuration/ai-provider`, or `INSPRO_AI_PROVIDER=bedrock` / `ANTHROPIC_API_KEY`
+env for local dev) —
 without one the pipeline degrades gracefully (see step 3c).
 
 **Shortcut — seed everything at once:**

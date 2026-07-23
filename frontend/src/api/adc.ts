@@ -47,6 +47,8 @@ export function useAdcApply() {
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+      // A roster movement makes the last-saved insurer listings stale.
+      qc.invalidateQueries({ queryKey: ["report-version-status"] });
     },
   });
 }

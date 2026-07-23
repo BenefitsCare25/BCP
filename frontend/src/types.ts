@@ -689,12 +689,12 @@ export interface AdcApplyResult {
   flex_errors: string[];
 }
 
-export type AIProvider = "azure_foundry" | "anthropic" | "bedrock";
+// Vertex/Gemini is the sole provider (AWS Bedrock + Anthropic were removed).
+export type AIProvider = "vertex";
 
 export interface AIConfig {
   provider: AIProvider;
-  // For bedrock, `endpoint` carries the AWS region and `model` the inference-
-  // profile id.
+  // `endpoint` is the GCP location; `model` is the Gemini model id.
   endpoint: string | null;
   model: string | null;
   key_masked: string;
@@ -704,12 +704,11 @@ export interface AIConfig {
 }
 
 export interface AIConfigUpsert {
-  provider: AIProvider;
+  provider?: AIProvider;
+  // `endpoint` = GCP location; `api_key` = the service-account JSON key.
   endpoint?: string | null;
   model?: string | null;
-  // For bedrock, `api_key` is the AWS secret access key.
   api_key: string;
-  aws_access_key_id?: string | null;
 }
 
 export interface AIConfigTestPayload {
@@ -717,7 +716,6 @@ export interface AIConfigTestPayload {
   endpoint?: string | null;
   model?: string | null;
   api_key?: string | null;
-  aws_access_key_id?: string | null;
 }
 
 export interface AIConfigTestResult {

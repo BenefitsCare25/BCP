@@ -1,6 +1,7 @@
 """BYOK /ai-config endpoint — encryption, redaction, tenant isolation, role gate."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -26,7 +27,23 @@ from scripts.seed_demo import seed  # noqa: E402
 
 CLIENT_B_ID = "00000000-0000-0000-0000-0000000000c0"
 
-REAL_KEY = "sk-ant-real-secret-1234567890abcdef"
+# Vertex BYOK key = a service-account JSON.
+REAL_KEY = json.dumps(
+    {
+        "type": "service_account",
+        "project_id": "inspro-test",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\n",
+        "client_email": "svc@inspro-test.iam.gserviceaccount.com",
+    }
+)
+OTHER_KEY = json.dumps(
+    {
+        "type": "service_account",
+        "project_id": "inspro-test-b",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nBBB\n-----END PRIVATE KEY-----\n",
+        "client_email": "svc@inspro-test-b.iam.gserviceaccount.com",
+    }
+)
 
 
 def _admin_a() -> CurrentUser:
@@ -80,6 +97,28 @@ def _setup_db():
     engine.dispose()
     if TEST_DB.exists():
         TEST_DB.unlink()
+
+
+@pytest.fixture(autouse=True)
+def _restore_budgets():
+    """Reset tenant budgets after each test.
+
+    Test modules bind the shared engine at import time, so a mutated budget
+    here would leak into later modules' spend/budget tests (e.g. the gateway
+    suite assumes DEMO's default budget). Snapshot + restore keeps them clean.
+    """
+    from app.models.client import DEFAULT_AI_MONTHLY_TOKEN_BUDGET
+
+    yield
+    db = SessionLocal()
+    try:
+        for cid in (DEMO_CLIENT_ID, CLIENT_B_ID):
+            client = db.get(Client, cid)
+            if client is not None:
+                client.ai_monthly_token_budget = DEFAULT_AI_MONTHLY_TOKEN_BUDGET
+        db.commit()
+    finally:
+        db.close()
 
 
 class AsUser:
@@ -149,15 +188,17 @@ def test_put_then_get_roundtrip(client_as_admin_a: AsUser) -> None:
     res = client_as_admin_a.put(
         "/api/v1/ai-config",
         json={
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-20250514",
+            "provider": "vertex",
+            "endpoint": "asia-southeast1",
+            "model": "gemini-2.5-flash",
             "api_key": REAL_KEY,
         },
     )
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["provider"] == "anthropic"
-    assert body["model"] == "claude-sonnet-4-20250514"
+    assert body["provider"] == "vertex"
+    assert body["model"] == "gemini-2.5-flash"
+    assert body["endpoint"] == "asia-southeast1"
     # Masked tail is derived from the fingerprint, not the plaintext key, so
     # the value is stable across reads without ever decrypting.
     assert body["key_masked"].endswith(body["key_fingerprint"][-4:])
@@ -175,7 +216,7 @@ def test_put_then_get_roundtrip(client_as_admin_a: AsUser) -> None:
 def test_db_stores_ciphertext_not_plaintext(client_as_admin_a: AsUser) -> None:
     client_as_admin_a.put(
         "/api/v1/ai-config",
-        json={"provider": "anthropic", "api_key": REAL_KEY},
+        json={"provider": "vertex", "api_key": REAL_KEY},
     )
     db = SessionLocal()
     try:
@@ -185,18 +226,13 @@ def test_db_stores_ciphertext_not_plaintext(client_as_admin_a: AsUser) -> None:
             .one()
         )
         assert REAL_KEY.encode() not in row.encrypted_api_key
-        assert decrypt_secret(row.encrypted_api_key) == REAL_KEY
+        # Vertex packs {project_id, service_account} into the encrypted secret;
+        # the raw SA JSON is the service_account half.
+        packed = json.loads(decrypt_secret(row.encrypted_api_key))
+        assert packed["service_account"] == REAL_KEY
+        assert packed["project_id"] == "inspro-test"
     finally:
         db.close()
-
-
-def test_azure_foundry_requires_endpoint(client_as_admin_a: AsUser) -> None:
-    res = client_as_admin_a.put(
-        "/api/v1/ai-config",
-        json={"provider": "azure_foundry", "api_key": REAL_KEY},
-    )
-    assert res.status_code == 422
-    assert "endpoint" in res.text.lower()
 
 
 def test_tenant_isolation(
@@ -205,17 +241,16 @@ def test_tenant_isolation(
 ) -> None:
     client_as_admin_a.put(
         "/api/v1/ai-config",
-        json={"provider": "anthropic", "api_key": REAL_KEY},
+        json={"provider": "vertex", "api_key": REAL_KEY},
     )
     # Client B sees no config.
     res_b = client_as_admin_b.get("/api/v1/ai-config")
     assert res_b.status_code == 204
 
     # Client B writes their own — different fingerprint.
-    other_key = "sk-ant-other-tenant-9999abcdef"
     client_as_admin_b.put(
         "/api/v1/ai-config",
-        json={"provider": "anthropic", "api_key": other_key},
+        json={"provider": "vertex", "api_key": OTHER_KEY},
     )
     fp_a = client_as_admin_a.get("/api/v1/ai-config").json()["key_fingerprint"]
     fp_b = client_as_admin_b.get("/api/v1/ai-config").json()["key_fingerprint"]
@@ -225,7 +260,7 @@ def test_tenant_isolation(
 def test_delete_clears_row(client_as_admin_a: AsUser) -> None:
     client_as_admin_a.put(
         "/api/v1/ai-config",
-        json={"provider": "anthropic", "api_key": REAL_KEY},
+        json={"provider": "vertex", "api_key": REAL_KEY},
     )
     res = client_as_admin_a.delete("/api/v1/ai-config")
     assert res.status_code == 204
@@ -237,7 +272,7 @@ def test_role_gate_blocks_viewer(client_as_viewer_a: AsUser) -> None:
     assert res.status_code == 403
     res2 = client_as_viewer_a.put(
         "/api/v1/ai-config",
-        json={"provider": "anthropic", "api_key": REAL_KEY},
+        json={"provider": "vertex", "api_key": REAL_KEY},
     )
     assert res2.status_code == 403
 
@@ -245,7 +280,7 @@ def test_role_gate_blocks_viewer(client_as_viewer_a: AsUser) -> None:
 def test_audit_log_never_contains_raw_key(client_as_admin_a: AsUser) -> None:
     client_as_admin_a.put(
         "/api/v1/ai-config",
-        json={"provider": "anthropic", "api_key": REAL_KEY},
+        json={"provider": "vertex", "api_key": REAL_KEY},
     )
     db = SessionLocal()
     try:
@@ -273,7 +308,7 @@ def test_audit_log_never_contains_raw_key(client_as_admin_a: AsUser) -> None:
 def test_load_ai_config_byok_takes_precedence() -> None:
     """When BYOK is set, ``load_ai_config(db, client_id)`` returns BYOK
     regardless of env vars."""
-    from app.core.ai_config import load_ai_config
+    from app.core.ai_config import load_ai_config, pack_vertex_secret
     from app.core.crypto import encrypt_secret
     from app.core.crypto import fingerprint as _fp
 
@@ -281,10 +316,11 @@ def test_load_ai_config_byok_takes_precedence() -> None:
     try:
         row = ClientAIConfig(
             client_id=DEMO_CLIENT_ID,
-            provider="anthropic",
-            model="byok-model",
-            encrypted_api_key=encrypt_secret("byok-key"),
-            key_fingerprint=_fp("byok-key"),
+            provider="vertex",
+            endpoint="asia-southeast1",
+            model="gemini-2.5-flash",
+            encrypted_api_key=encrypt_secret(pack_vertex_secret("proj-x", REAL_KEY)),
+            key_fingerprint=_fp(REAL_KEY),
         )
         db.add(row)
         db.commit()
@@ -292,11 +328,124 @@ def test_load_ai_config_byok_takes_precedence() -> None:
         cfg = load_ai_config(db, DEMO_CLIENT_ID)
         assert cfg is not None
         assert cfg.source == "byok"
-        assert cfg.api_key == "byok-key"
-        assert cfg.model == "byok-model"
+        assert cfg.provider == "vertex"
+        assert cfg.gcp_project == "proj-x"
+        assert cfg.gcp_location == "asia-southeast1"
+        assert cfg.api_key == REAL_KEY
+        assert cfg.model == "gemini-2.5-flash"
 
         # Without tenant context, falls back to env.
         env_cfg = load_ai_config()
         assert env_cfg is None or env_cfg.source == "env"
     finally:
         db.close()
+
+
+# ── Monthly AI budget endpoint ────────────────────────────────────────────────
+
+
+def test_set_budget_updates_and_unlimited():
+    admin = AsUser(_admin_a)
+    # Set a concrete limit.
+    r = admin.put("/api/v1/ai-spend/budget", json={"monthly_token_budget": 5_000_000})
+    assert r.status_code == 200
+    assert r.json()["monthly_token_budget"] == 5_000_000
+
+    summary = admin.get("/api/v1/ai-spend/summary")
+    assert summary.status_code == 200
+    assert summary.json()["monthly_token_budget"] == 5_000_000
+
+    # 0 = unlimited.
+    r = admin.put("/api/v1/ai-spend/budget", json={"monthly_token_budget": 0})
+    assert r.status_code == 200
+    assert r.json()["monthly_token_budget"] == 0
+
+    db = SessionLocal()
+    try:
+        assert db.get(Client, DEMO_CLIENT_ID).ai_monthly_token_budget == 0
+    finally:
+        db.close()
+
+
+def test_set_budget_requires_broker_admin():
+    r = AsUser(_viewer_a).put(
+        "/api/v1/ai-spend/budget", json={"monthly_token_budget": 1000}
+    )
+    assert r.status_code == 403
+
+
+def test_set_budget_rejects_negative():
+    r = AsUser(_admin_a).put(
+        "/api/v1/ai-spend/budget", json={"monthly_token_budget": -5}
+    )
+    assert r.status_code == 422
+
+
+def test_set_budget_is_tenant_scoped():
+    # Admin B setting their budget must not touch tenant A's.
+    AsUser(_admin_a).put("/api/v1/ai-spend/budget", json={"monthly_token_budget": 111})
+    AsUser(_admin_b).put("/api/v1/ai-spend/budget", json={"monthly_token_budget": 222})
+    db = SessionLocal()
+    try:
+        assert db.get(Client, DEMO_CLIENT_ID).ai_monthly_token_budget == 111
+        assert db.get(Client, CLIENT_B_ID).ai_monthly_token_budget == 222
+    finally:
+        db.close()
+
+
+def test_gemini_pricing_is_accurate():
+    from app.services.ai_gateway import _estimate_cost_usd, _price_for
+
+    assert _price_for("gemini-2.5-flash") == (0.30, 2.50)
+    # ~30k in + 6k out per claim → ~$0.024 (guide: ~$0.03), NOT the Claude
+    # default of ~$0.18 the model would fall through to without the entry.
+    cost = _estimate_cost_usd("gemini-2.5-flash", 30_000, 6_000)
+    assert abs(cost - 0.024) < 0.001
+
+
+def test_summary_reports_input_output_split():
+    from app.models import AISpendLog
+
+    # NOTE: test modules bind the shared engine at import time, so a leftover
+    # spend row here pollutes later gateway spend-count tests. This test both
+    # sets up and tears down its own DEMO_CLIENT_ID rows.
+    db = SessionLocal()
+    try:
+        db.query(AISpendLog).filter(AISpendLog.client_id == DEMO_CLIENT_ID).delete(
+            synchronize_session=False
+        )
+        db.add(
+            AISpendLog(
+                client_id=DEMO_CLIENT_ID,
+                operation="ai_claim_extract",
+                model="gemini-2.5-flash",
+                input_tokens=1024,
+                output_tokens=2856,
+                cost_estimate_usd=0.0074,
+                cache_hit=False,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        body = AsUser(_admin_a).get("/api/v1/ai-spend/summary").json()
+        assert body["month_to_date_input_tokens"] == 1024
+        assert body["month_to_date_output_tokens"] == 2856
+        assert body["month_to_date_tokens"] == 3880
+        op = next(
+            o for o in body["by_operation"] if o["operation"] == "ai_claim_extract"
+        )
+        assert op["input_tokens"] == 1024
+        assert op["output_tokens"] == 2856
+        assert op["tokens"] == 3880
+    finally:
+        db = SessionLocal()
+        try:
+            db.query(AISpendLog).filter(
+                AISpendLog.client_id == DEMO_CLIENT_ID
+            ).delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()

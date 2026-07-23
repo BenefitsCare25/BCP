@@ -42,6 +42,10 @@ CONTROL_TABLES: frozenset[str] = frozenset(
         # Portal member identity: must authenticate before a firm is known.
         "member_accounts",
         "member_otp_codes",
+        # Platform-wide AI limits + shared-quota usage counter: global, spanning
+        # all firms/clients, so they must live in public (not per-firm schemas).
+        "platform_ai_settings",
+        "platform_ai_usage",
     }
 )
 
