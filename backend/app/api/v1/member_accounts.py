@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from app.core import passwords as PW
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.credentials import credential_version
+from app.core.breach_check import is_breached
+from app.core.credentials import credential_version, next_rotation_deadline
 from app.core.deps import (
     assert_policy_year_for_user,
     load_employee,
@@ -257,12 +258,22 @@ def member_set_password_direct(
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
     if not ok:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, reason)
+    # Same breach gate the member-facing portal set-password enforces, so the
+    # broker can't seed a known-breached credential the member never could.
+    if policy.breach_check_enabled and is_breached(body.password):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This password has appeared in a known data breach — choose another.",
+        )
     from datetime import UTC, datetime
 
     if not account.system_login_id:
         account.system_login_id = _unique_member_login_id(db, account.client_id)
     account.password_hash = PW.hash_password(body.password)
     account.password_updated_at = datetime.now(UTC)
+    account.must_rotate_after = next_rotation_deadline(
+        policy.password_rotation_days, account.password_updated_at
+    )
     account.failed_attempts = 0
     account.locked_until = None
     if account.status == MEMBER_STATUS_INVITED:

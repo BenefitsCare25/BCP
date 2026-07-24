@@ -43,16 +43,12 @@ Backend suite **1236 passing**; the ticked flows are browser-verified on
 | Broker HR-account management (create / reset / regenerate-id / disable + policy) | ✅ verified |
 | Employee portal → username + password (email / member ID / staff ID) + optional TOTP | ✅ verified |
 | Portal sign-in + set-password (frontend) | ✅ verified |
-| Member provisioning API (system-id, set-password link, direct set, email-less create) | ✅ API only |
-| Member MFA enrol API (`/portal/auth/mfa/enroll/*`, `/security-status`) | ✅ API only |
-
-**Remaining to build (backend done + tested, frontend pending):**
-1. **Broker member-provisioning UI** — show `system_login_id` + "set-password link"
-   / "set password" on the member-accounts list.
-2. **Portal 2FA enrol page** for members — mirror `routes/hr/security.tsx`.
+| Broker member-credential UI (username, set-password link, direct set, regenerate-id) | ✅ verified |
+| Member MFA enrol page + portal force-enrol nudge (`routes/portal/security.tsx`) | ✅ verified |
+| Auth policy ENFORCEMENT (MFA on reset, forced rotation, idle timeout, breach on direct-set) | ✅ verified |
 
 **Human-only, you apply (per the §9 compliance split):**
-3. Wildcard DNS + wildcard TLS + Front Door routing for `*.hr.<domain>` /
+1. Wildcard DNS + wildcard TLS + Front Door routing for `*.hr.<domain>` /
    `*.portal.<domain>`; set each client's `slug`. Prod secret plumbing reuses the
    existing Bicep/Key-Vault pattern.
 

@@ -50,9 +50,11 @@ export function useHrMfa() {
 }
 
 export function useHrSetPassword() {
+  // May return a full session OR an `mfa_required` challenge when the company
+  // has 2FA on and this user is enrolled — a reset link never skips MFA.
   return useMutation({
     mutationFn: (body: { token: string; password: string }) =>
-      hrApi.postPublic<HrTokenResult>("/hr/auth/set-password", body),
+      hrApi.postPublic<HrLoginResult>("/hr/auth/set-password", body),
   });
 }
 

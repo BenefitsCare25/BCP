@@ -98,17 +98,22 @@ def rotate_session(
     token: str,
     *,
     absolute_hours: int,
+    idle_minutes: int | None = None,
     ip: str | None = None,
     user_agent: str | None = None,
     subdomain: str | None = None,
 ) -> RotationResult:
     """Validate a refresh token and issue its successor.
 
-    - Unknown/expired token → (None, reuse=False).
+    - Unknown / expired / idle-timed-out token → (None, reuse=False).
     - Already-rotated or revoked token → REUSE: revoke the family, (None, True).
     - Valid, live token → mark it rotated, issue a child, (child, False).
 
-    Does NOT commit — the caller does.
+    `idle_minutes` (when set) enforces an inactivity window: a refresh token
+    minted more than that many minutes ago is dead. Each rotation mints a fresh
+    child, so the presented token's age since minting is the time since the last
+    refresh — the client refreshes on access-token expiry, so this measures
+    idleness at the access-token cadence. Does NOT commit — the caller does.
     """
     from app.models import AuthSession  # lazy
 
@@ -130,6 +135,16 @@ def rotate_session(
 
     if expires is not None and expires <= now:
         return RotationResult(None, False)
+
+    if idle_minutes and idle_minutes > 0:
+        issued = row.issued_at
+        if issued is not None:
+            if issued.tzinfo is None:
+                issued = issued.replace(tzinfo=UTC)
+            if issued + timedelta(minutes=idle_minutes) <= now:
+                # Idle too long — kill this session (caller clears the cookie).
+                row.revoked_at = now
+                return RotationResult(None, False)
 
     row.rotated_at = now
     child = issue_session(

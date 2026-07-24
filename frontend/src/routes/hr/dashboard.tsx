@@ -37,9 +37,15 @@ const MODULES = [
 
 export function HrDashboardPage() {
   const me = useHrSession((s) => s.me);
-  const mfaNeeded = useHrSession((s) => s.mfaEnrollmentRequired);
+  const loginFlag = useHrSession((s) => s.mfaEnrollmentRequired);
   const { data } = useHrMe();
   const identity = data ?? me;
+  // The login flag is the immediate signal; fall back to the live identity
+  // (2FA available but not yet confirmed) so the nudge survives a token refresh,
+  // which re-seeds the session without the flag.
+  const mfaNeeded =
+    loginFlag ||
+    (!!identity?.mfa_available && identity?.mfa_status !== "confirmed");
 
   return (
     <div className="space-y-8">

@@ -76,7 +76,7 @@ export interface MemberTokenResult {
 }
 
 export interface MemberChallengeResult {
-  status: "mfa_required";
+  status: "mfa_required" | "password_reset_required";
   challenge_token: string;
 }
 
@@ -110,10 +110,14 @@ export function useMemberMfa() {
 
 export function useMemberSetPassword() {
   const setSession = usePortalSession((s) => s.setSession);
+  // May return a full session OR an `mfa_required` challenge (2FA on + enrolled)
+  // — a reset link never skips MFA. The caller drives the follow-up step.
   return useMutation({
     mutationFn: (input: { token: string; password: string }) =>
-      portalApi.postPublic<MemberTokenResult>("/portal/auth/set-password", input),
-    onSuccess: (out) => setSession(out.token, out.expires_at, out.member),
+      portalApi.postPublic<MemberLoginResult>("/portal/auth/set-password", input),
+    onSuccess: (out) => {
+      if (isMemberToken(out)) setSession(out.token, out.expires_at, out.member);
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -122,6 +126,60 @@ export function usePortalMe() {
   return useQuery({
     queryKey: ["portal", "me"],
     queryFn: () => portalApi.get<PortalMe>("/portal/me"),
+  });
+}
+
+// ── Member two-factor (self-service TOTP) ──
+export interface MemberSecurityStatus {
+  /** "none" | "pending" | "confirmed". */
+  mfa_status: string;
+  /** Whether the company has enabled 2FA for the employee portal. */
+  mfa_available: boolean;
+}
+
+export interface MemberMfaStart {
+  secret: string;
+  otpauth_uri: string;
+}
+
+export function useMemberSecurityStatus() {
+  return useQuery({
+    queryKey: ["portal", "security-status"],
+    queryFn: () =>
+      portalApi.get<MemberSecurityStatus>("/portal/auth/security-status"),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useMemberMfaEnrollStart() {
+  return useMutation({
+    mutationFn: () =>
+      portalApi.post<MemberMfaStart>("/portal/auth/mfa/enroll/start", {}),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useMemberMfaEnrollConfirm() {
+  return useMutation({
+    mutationFn: (code: string) =>
+      portalApi.post<{ status: string; recovery_codes: string[] }>(
+        "/portal/auth/mfa/enroll/confirm",
+        { code },
+      ),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useMemberMfaDisable() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (password: string) =>
+      portalApi.post<{ status: string }>("/portal/auth/mfa/disable", {
+        password,
+      }),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["portal", "security-status"] }),
+    meta: { localErrorHandling: true },
   });
 }
 

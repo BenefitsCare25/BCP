@@ -39,6 +39,31 @@ def reset_failures(cred) -> None:
     cred.locked_until = None
 
 
+def next_rotation_deadline(
+    rotation_days: int | None, updated_at: datetime
+) -> datetime | None:
+    """Forced-rotation deadline for a password set at `updated_at`, or None when
+    the tenant hasn't configured rotation. Every set-password path calls this so
+    `must_rotate_after` actually reflects `password_rotation_days`."""
+    if not rotation_days or rotation_days <= 0:
+        return None
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
+    return updated_at + timedelta(days=rotation_days)
+
+
+def rotation_due(cred, now: datetime | None = None) -> bool:
+    """True when a configured forced-rotation deadline has passed. NULL
+    `must_rotate_after` (no rotation policy) is never due."""
+    deadline = getattr(cred, "must_rotate_after", None)
+    if deadline is None:
+        return False
+    now = now or datetime.now(UTC)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=UTC)
+    return deadline <= now
+
+
 def credential_version(cred) -> int:
     """Monotonic stamp that makes set-password tokens single-use: the password's
     last-update time in MICROSECONDS (second granularity would collide when a

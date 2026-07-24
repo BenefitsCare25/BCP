@@ -232,3 +232,60 @@ def test_portal_mfa_enrol_and_login(api: TestClient):
     )
     assert step2.status_code == 200, step2.text
     assert step2.json()["token"]
+
+
+def _account_id(api: TestClient) -> str:
+    return api.get("/api/v1/member-accounts").json()["items"][0]["id"]
+
+
+def test_broker_direct_set_password_enforces_breach_check(api, monkeypatch):
+    """The broker-direct path must apply the same HIBP gate as the portal."""
+    import app.api.v1.member_accounts as MA
+
+    monkeypatch.setattr(MA, "is_breached", lambda pw: True)
+    with SessionLocal() as s:
+        s.get(ClientAuthPolicy, DEMO_CLIENT_ID).breach_check_enabled = True
+        s.commit()
+    try:
+        res = api.post(
+            f"/api/v1/member-accounts/{_account_id(api)}/set-password",
+            json={"password": "Zx9!qL2m@Vw8Tr-notbreached-but-forced"},
+        )
+        assert res.status_code == 422, res.text
+        assert "breach" in res.text.lower()
+    finally:
+        with SessionLocal() as s:
+            s.get(ClientAuthPolicy, DEMO_CLIENT_ID).breach_check_enabled = False
+            s.commit()
+
+
+def test_member_forced_rotation_challenges(api):
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import MemberAccount
+
+    with SessionLocal() as s:
+        s.get(ClientAuthPolicy, DEMO_CLIENT_ID).password_rotation_days = 30
+        s.commit()
+    account_id = _account_id(api)
+    # Broker-direct set-password now stamps a rotation deadline.
+    api.post(
+        f"/api/v1/member-accounts/{account_id}/set-password",
+        json={"password": STRONG_PW},
+    )
+    with SessionLocal() as s:
+        acct = s.get(MemberAccount, account_id)
+        assert acct.must_rotate_after is not None
+        acct.must_rotate_after = datetime.now(UTC) - timedelta(days=1)
+        s.commit()
+
+    login = api.post(
+        "/api/v1/portal/auth/login",
+        json={"identifier": "S-900", "password": STRONG_PW},
+        headers=_tenant(),
+    ).json()
+    assert login["status"] == "password_reset_required"
+    assert login.get("challenge_token")
+    with SessionLocal() as s:
+        s.get(ClientAuthPolicy, DEMO_CLIENT_ID).password_rotation_days = None
+        s.commit()

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
-import { useMemberSetPassword } from "@/api/portal";
+import { isMemberToken, useMemberMfa, useMemberSetPassword } from "@/api/portal";
 import { formatError } from "@/lib/errors";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
@@ -26,18 +26,24 @@ function strength(pw: string): { label: string; ok: boolean } {
 export function PortalSetPasswordPage() {
   const navigate = useNavigate();
   const setPw = useMemberSetPassword();
+  const mfa = useMemberMfa();
 
   const token = useMemo(
     () => new URLSearchParams(window.location.search).get("token") ?? "",
     [],
   );
+  const [step, setStep] = useState<"password" | "mfa">("password");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [code, setCode] = useState("");
+  const [challenge, setChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const st = strength(password);
   const match = password.length > 0 && password === confirm;
   const canSubmit = st.ok && match && !!token;
+
+  const finish = () => void navigate({ to: "/portal/coverage" });
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,11 +55,71 @@ export function PortalSetPasswordPage() {
     setPw.mutate(
       { token, password },
       {
-        onSuccess: () => void navigate({ to: "/portal/coverage" }),
+        onSuccess: (out) => {
+          if (isMemberToken(out)) {
+            finish();
+          } else {
+            // 2FA is required — verify the TOTP code before the session lands.
+            setChallenge(out.challenge_token);
+            setStep("mfa");
+          }
+        },
         onError: (err) => setError(formatError(err)),
       },
     );
   };
+
+  const submitMfa = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    mfa.mutate(
+      { challenge_token: challenge, code: code.trim() },
+      {
+        onSuccess: finish,
+        onError: (err) => setError(formatError(err)),
+      },
+    );
+  };
+
+  if (step === "mfa") {
+    return (
+      <AuthScene
+        eyebrow="Employee benefits portal"
+        title="Two-factor authentication"
+        subtitle="Enter the 6-digit code from your authenticator app to finish."
+      >
+        <form onSubmit={submitMfa} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="portal-setpw-totp"
+              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              Authentication code
+            </Label>
+            <Input
+              id="portal-setpw-totp"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="123456"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              autoFocus
+              className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
+            />
+          </div>
+          {error && <p className="text-sm text-error">{error}</p>}
+          <Button
+            type="submit"
+            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            disabled={mfa.isPending || code.length < 6}
+          >
+            {mfa.isPending ? "Verifying…" : "Verify & sign in"}
+          </Button>
+        </form>
+      </AuthScene>
+    );
+  }
 
   return (
     <AuthScene

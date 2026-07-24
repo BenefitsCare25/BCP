@@ -234,15 +234,11 @@ def login(
     if PW.needs_rehash(cred.password_hash):
         cred.password_hash = PW.hash_password(body.password)
 
-    # Forced rotation.
-    rotate_after = cred.must_rotate_after
-    if rotate_after is not None:
-        if rotate_after.tzinfo is None:
-            rotate_after = rotate_after.replace(tzinfo=UTC)
-        if rotate_after <= now:
-            token = HR.issue_set_password_token(user.id, HR.credential_version(cred))
-            db.commit()
-            return LoginChallengeOut(status="password_reset_required", challenge_token=token)
+    # Forced rotation — the password is past its configured rotation deadline.
+    if HR.rotation_due(cred, now):
+        token = HR.issue_set_password_token(user.id, HR.credential_version(cred))
+        db.commit()
+        return LoginChallengeOut(status="password_reset_required", challenge_token=token)
 
     # MFA — challenge only when the company has 2FA enabled AND this user has
     # actually enrolled (enrolment is self-service + optional).
@@ -259,7 +255,12 @@ def login(
         db.commit()
         return LoginChallengeOut(status="mfa_required", challenge_token=challenge)
 
-    return _issue_login(db, response, request, user, tenant)
+    # 2FA is on but this user hasn't enrolled — issue the session yet flag that
+    # enrolment is required, so the shell forces set-up before real work.
+    return _issue_login(
+        db, response, request, user, tenant,
+        mfa_enrollment_required=policy.mfa_hr_enabled and not enrolled,
+    )
 
 
 # ── MFA step ───────────────────────────────────────────────────────────────────
@@ -377,6 +378,7 @@ def refresh(
     policy = HR.get_auth_policy(db, tenant.client_id)
     result = SESS.rotate_session(
         db, token, absolute_hours=policy.session_absolute_hours,
+        idle_minutes=policy.session_idle_minutes,
         ip=_client_ip(request), user_agent=_ua(request),
         subdomain=request.headers.get("host"),
     )
@@ -442,7 +444,7 @@ def logout(
 
 
 # ── Set / reset password ───────────────────────────────────────────────────────
-@router.post("/set-password", response_model=TokenOut)
+@router.post("/set-password")
 @limiter.limit("10/minute")
 def set_password(
     request: Request,
@@ -493,7 +495,10 @@ def set_password(
 
     cred.password_hash = PW.hash_password(body.password)
     cred.password_updated_at = datetime.now(UTC)
-    cred.must_rotate_after = None
+    # Start the next rotation clock from this reset (None when no policy).
+    cred.must_rotate_after = HR.next_rotation_deadline(
+        policy.password_rotation_days, cred.password_updated_at
+    )
     HR.reset_failures(cred)
     if user.status == USER_STATUS_INVITED:
         user.status = USER_STATUS_ACTIVE
@@ -504,8 +509,26 @@ def set_password(
         ip=_client_ip(request), user_agent=_ua(request),
         subdomain=request.headers.get("host"),
     )
+
+    # A reset link must NOT be a way around the enrolled second factor: if 2FA is
+    # on and this user has confirmed TOTP, hand back an MFA challenge instead of a
+    # full session — identical to the login path.
+    enrolled = HR.user_has_confirmed_mfa(db, user.id)
+    if policy.mfa_hr_enabled and enrolled:
+        challenge = HR.issue_mfa_challenge_token(user.id, tenant.client_id)
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_MFA_CHALLENGE, outcome=EV.OUTCOME_SUCCESS, surface="hr",
+            subject_type=SUBJECT_USER, subject_id=user.id, client_id=tenant.client_id,
+            broker_firm_id=tenant.broker_firm_id, ip=_client_ip(request),
+            user_agent=_ua(request), subdomain=request.headers.get("host"),
+        )
+        db.commit()
+        return LoginChallengeOut(status="mfa_required", challenge_token=challenge)
     # commit happens inside _issue_login
-    return _issue_login(db, response, request, user, tenant)
+    return _issue_login(
+        db, response, request, user, tenant,
+        mfa_enrollment_required=policy.mfa_hr_enabled and not enrolled,
+    )
 
 
 # ── Me ─────────────────────────────────────────────────────────────────────────

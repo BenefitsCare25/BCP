@@ -33,6 +33,7 @@ from app.core.portal_auth import (
     get_current_member,
     hash_otp_code,
     issue_member_mfa_challenge_token,
+    issue_member_set_password_token,
     issue_member_token,
     require_portal_tenant,
     resolve_member_credential,
@@ -259,6 +260,18 @@ def member_login(
         account.password_hash = PW.hash_password(body.password)
 
     policy = get_auth_policy(db, tenant.client_id)
+
+    # Forced rotation — the member proved the current password, so hand them a
+    # self-serve set-password token rather than locking them out.
+    if CRED.rotation_due(account):
+        token = issue_member_set_password_token(
+            account.id, CRED.credential_version(account)
+        )
+        db.commit()
+        return MemberChallengeOut(
+            status="password_reset_required", challenge_token=token
+        )
+
     if policy.mfa_portal_enabled and mfa.has_confirmed(db, SUBJECT_MEMBER, account.id):
         challenge = issue_member_mfa_challenge_token(account.id, tenant.client_id)
         db.commit()
@@ -297,7 +310,7 @@ def member_mfa(
     return _issue_member_login(db, request, account, tenant.client_id)
 
 
-@router.post("/set-password", response_model=OtpVerifyOut)
+@router.post("/set-password")
 @limiter.limit("10/minute")
 def member_set_password(
     request: Request,
@@ -326,7 +339,10 @@ def member_set_password(
         )
     account.password_hash = PW.hash_password(body.password)
     account.password_updated_at = datetime.now(UTC)
-    account.must_rotate_after = None
+    # Restart the rotation clock from this reset (None when no policy).
+    account.must_rotate_after = CRED.next_rotation_deadline(
+        policy.password_rotation_days, account.password_updated_at
+    )
     CRED.reset_failures(account)
     EV.write_auth_event(
         db, event_type=EV.EVENT_PASSWORD_RESET_COMPLETE, outcome=EV.OUTCOME_SUCCESS,
@@ -334,6 +350,11 @@ def member_set_password(
         client_id=tenant.client_id, ip=_client_ip(request),
         subdomain=request.headers.get("host"),
     )
+    # A reset link must not bypass the enrolled second factor.
+    if policy.mfa_portal_enabled and mfa.has_confirmed(db, SUBJECT_MEMBER, account.id):
+        challenge = issue_member_mfa_challenge_token(account.id, tenant.client_id)
+        db.commit()
+        return MemberChallengeOut(challenge_token=challenge)
     return _issue_member_login(db, request, account, tenant.client_id)
 
 

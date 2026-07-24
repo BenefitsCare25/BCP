@@ -1,8 +1,8 @@
 /** Slim member-facing shell — top nav, no ClientSwitcher / policy-year picker
  * (a member is pinned to one client and the active policy year server-side). */
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { LogOut, ShieldCheck } from "lucide-react";
-import { usePortalMe } from "@/api/portal";
+import { LogOut, ShieldAlert, ShieldCheck } from "lucide-react";
+import { usePortalMe, useMemberSecurityStatus } from "@/api/portal";
 import { usePortalSession } from "@/stores/portalSession";
 import { formatPolicyRange } from "@/lib/policy-year";
 import { cn } from "@/lib/cn";
@@ -24,6 +24,13 @@ export function PortalShell() {
   const member = usePortalSession((s) => s.member);
   const clearSession = usePortalSession((s) => s.clearSession);
   const { data: me } = usePortalMe();
+  const { data: security } = useMemberSecurityStatus();
+
+  // Company turned 2FA on but this member hasn't finished enrolling.
+  const mustEnrollMfa =
+    !!security?.mfa_available &&
+    security.mfa_status !== "confirmed" &&
+    location.pathname !== "/portal/security";
 
   const signOut = () => {
     clearSession();
@@ -49,6 +56,12 @@ export function PortalShell() {
             <span className="hidden text-xs text-muted-foreground sm:inline">
               {member?.display_name || member?.email}
             </span>
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/portal/security" title="Security">
+                <ShieldCheck className="size-4" />
+                <span className="ml-1 hidden sm:inline">Security</span>
+              </Link>
+            </Button>
             <Button variant="ghost" size="sm" onClick={signOut}>
               <LogOut className="size-4" />
               <span className="ml-1">Sign out</span>
@@ -86,6 +99,23 @@ export function PortalShell() {
         </nav>
       </header>
       <main className="mx-auto max-w-4xl px-4 py-6">
+        {mustEnrollMfa && (
+          <Link
+            to="/portal/security"
+            className="mb-6 flex items-start gap-3 rounded-lg border border-warn/40 bg-warn/5 p-4 transition-colors hover:bg-warn/10"
+          >
+            <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warn" />
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                Two-factor authentication required
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Your company requires two-factor authentication. Set it up now to
+                secure your account.
+              </p>
+            </div>
+          </Link>
+        )}
         <Outlet />
       </main>
     </div>

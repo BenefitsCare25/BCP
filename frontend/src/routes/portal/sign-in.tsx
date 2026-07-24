@@ -33,6 +33,10 @@ export function PortalSignInPage() {
         onSuccess: (out) => {
           if (isMemberToken(out)) {
             finish();
+          } else if (out.status === "password_reset_required") {
+            window.location.assign(
+              `/portal/set-password?token=${encodeURIComponent(out.challenge_token)}`,
+            );
           } else {
             setChallenge(out.challenge_token);
             setStep("mfa");

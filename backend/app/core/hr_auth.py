@@ -69,6 +69,8 @@ is_locked = _credentials.is_locked
 register_failure = _credentials.register_failure
 reset_failures = _credentials.reset_failures
 credential_version = _credentials.credential_version
+next_rotation_deadline = _credentials.next_rotation_deadline
+rotation_due = _credentials.rotation_due
 
 
 def _derive_key(settings: Settings, label: bytes) -> str:

@@ -363,3 +363,175 @@ def test_mfa_enrollment_login_recovery_and_disable(api: TestClient):
         headers=_tenant(),
     )
     assert after.json()["status"] == "authenticated"
+
+
+def _set_policy(api: TestClient, **fields) -> None:
+    r = api.put(
+        f"/api/v1/hr-admin/clients/{DEMO_CLIENT_ID}/auth-policy", json=fields
+    )
+    assert r.status_code == 200, r.text
+
+
+# ── Enforcement fixes: MFA on reset, forced rotation, idle timeout, enrol flag ──
+def test_set_password_does_not_bypass_mfa(api: TestClient):
+    """A reset link must not be a way around an enrolled second factor."""
+    _set_policy(api, breach_check_enabled=False, mfa_hr_enabled=True)
+    acct = api.post(
+        "/api/v1/hr-admin/accounts",
+        json={"client_id": DEMO_CLIENT_ID, "email": "hr.resetmfa@democo.test"},
+    ).json()
+    sp = api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": acct["set_password_token"], "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    token = sp.json()["access_token"]
+    auth = {**_bearer(token), **_tenant()}
+
+    # Enrol TOTP for this user.
+    secret = api.post("/api/v1/hr/auth/mfa/enroll/start", headers=auth).json()["secret"]
+    api.post(
+        "/api/v1/hr/auth/mfa/enroll/confirm",
+        json={"code": _code(secret)},
+        headers=auth,
+    )
+
+    # Broker issues a reset; redeeming it must CHALLENGE, not hand back a session.
+    reset = api.post(
+        f"/api/v1/hr-admin/accounts/{acct['user_id']}/reset-password"
+    ).json()
+    redeem = api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": reset["set_password_token"], "password": NEW_PW},
+        headers=_tenant(),
+    )
+    assert redeem.status_code == 200, redeem.text
+    body = redeem.json()
+    assert body["status"] == "mfa_required"
+    assert "access_token" not in body
+    assert body.get("challenge_token")
+
+    # The TOTP step then completes the sign-in.
+    done = api.post(
+        "/api/v1/hr/auth/mfa",
+        json={"challenge_token": body["challenge_token"], "code": _code(secret, 1)},
+        headers=_tenant(),
+    )
+    assert done.status_code == 200, done.text
+    assert done.json()["status"] == "authenticated"
+    _set_policy(api, mfa_hr_enabled=False)
+
+
+def test_login_flags_enrollment_required_when_mfa_on_but_unenrolled(api: TestClient):
+    _set_policy(api, breach_check_enabled=False, mfa_hr_enabled=True)
+    acct = api.post(
+        "/api/v1/hr-admin/accounts",
+        json={"client_id": DEMO_CLIENT_ID, "email": "hr.enrol@democo.test"},
+    ).json()
+    sp = api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": acct["set_password_token"], "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    # Set-password succeeds with a session, but signals enrolment is required.
+    assert sp.json()["status"] == "authenticated"
+    assert sp.json()["mfa_enrollment_required"] is True
+
+    login = api.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": "hr.enrol@democo.test", "password": STRONG_PW},
+        headers=_tenant(),
+    ).json()
+    assert login["status"] == "authenticated"
+    assert login["mfa_enrollment_required"] is True
+    _set_policy(api, mfa_hr_enabled=False)
+
+
+def test_forced_rotation_sets_deadline_and_challenges(api: TestClient):
+    from app.models import AuthCredential
+
+    _set_policy(api, breach_check_enabled=False, mfa_hr_enabled=False,
+                password_rotation_days=30)
+    acct = api.post(
+        "/api/v1/hr-admin/accounts",
+        json={"client_id": DEMO_CLIENT_ID, "email": "hr.rotate@democo.test"},
+    ).json()
+    uid = acct["user_id"]
+    api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": acct["set_password_token"], "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    # A rotation deadline was written (not left NULL).
+    with SessionLocal() as s:
+        cred = s.query(AuthCredential).filter(AuthCredential.user_id == uid).one()
+        assert cred.must_rotate_after is not None
+        from datetime import UTC, datetime, timedelta
+
+        cred.must_rotate_after = datetime.now(UTC) - timedelta(days=1)  # overdue
+        s.commit()
+
+    # Login now demands a reset instead of a session.
+    login = api.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": "hr.rotate@democo.test", "password": STRONG_PW},
+        headers=_tenant(),
+    ).json()
+    assert login["status"] == "password_reset_required"
+
+    # Redeeming clears the overdue deadline; login works again.
+    done = api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": login["challenge_token"], "password": NEW_PW},
+        headers=_tenant(),
+    )
+    assert done.json()["status"] == "authenticated"
+    ok = api.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": "hr.rotate@democo.test", "password": NEW_PW},
+        headers=_tenant(),
+    )
+    assert ok.json()["status"] == "authenticated"
+    _set_policy(api, password_rotation_days=None)
+
+
+def test_idle_timeout_kills_refresh(api: TestClient):
+    from datetime import UTC, datetime, timedelta
+
+    from app.models import AuthSession
+
+    _set_policy(api, breach_check_enabled=False, mfa_hr_enabled=False,
+                session_idle_minutes=5)
+    acct = api.post(
+        "/api/v1/hr-admin/accounts",
+        json={"client_id": DEMO_CLIENT_ID, "email": "hr.idle@democo.test"},
+    ).json()
+    uid = acct["user_id"]
+    api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": acct["set_password_token"], "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    client = TestClient(app)
+    login = client.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": "hr.idle@democo.test", "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    assert login.status_code == 200
+
+    # Backdate the live session past the idle window.
+    with SessionLocal() as s:
+        rows = (
+            s.query(AuthSession)
+            .filter(AuthSession.subject_id == uid, AuthSession.revoked_at.is_(None))
+            .all()
+        )
+        assert rows
+        for r in rows:
+            r.issued_at = datetime.now(UTC) - timedelta(minutes=10)
+        s.commit()
+
+    stale = client.post("/api/v1/hr/auth/refresh", headers=_tenant())
+    assert stale.status_code == 401
+    _set_policy(api, session_idle_minutes=30)
