@@ -76,6 +76,10 @@ param containerImage string
 @secure()
 param portalJwtSecret string
 
+@description('Fernet master key that decrypts per-tenant BYOK AI keys (client_ai_configs). Vertex/Gemini BYOK is the sole AI path in prod, so without this every decrypt fails and AI silently falls closed. Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"')
+@secure()
+param aiKeyEncryptionKey string
+
 @description('ACR registry hostname for the webapp to pull from, e.g. insproacr.azurecr.io.')
 param acrLoginServer string
 
@@ -249,6 +253,14 @@ resource kvSecretPortalJwt 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview
   }
 }
 
+resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+  parent: kv
+  name: 'ai-key-encryption-key'
+  properties: {
+    value: aiKeyEncryptionKey
+  }
+}
+
 // ── Retained document storage (claim receipts, dependant proofs — PII) ──────
 // Private blob container; the app reads/writes via managed identity
 // (INSPRO_STORAGE_MODE=azure + INSPRO_STORAGE_ACCOUNT_URL, no keys in config).
@@ -308,6 +320,7 @@ var commonAppSettings = [
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
   { name: 'INSPRO_REDIS_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretRedisUrl.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
+  { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
   // Portal OTP mail. Fail-closed: the app refuses to boot in prod on "log"
   // mode; with smtp unconfigured it boots and each send fails VISIBLY
   // (mail_sent=false on invite responses) instead of leaking codes to logs.

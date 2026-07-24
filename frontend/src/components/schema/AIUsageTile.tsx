@@ -10,7 +10,7 @@ import {
   ZapOff,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useAIStatus, useAISpend, useSetAIBudget } from "@/api/hooks";
+import { useAIStatus, useAISpend, useMe, useSetAIBudget } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,9 +42,14 @@ function pct(used: number, total: number): number {
 export function AIUsageTile() {
   const { data: status } = useAIStatus();
   const { data: spend } = useAISpend();
+  const { data: me } = useMe();
   const setBudget = useSetAIBudget();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  // The per-tenant budget PUT is broker_admin-only (system_admin is excluded by
+  // design — it manages the platform-wide caps instead, and broker_viewer is
+  // read-only), so only show the editor to broker_admin.
+  const canEditBudget = me?.role === "broker_admin";
 
   if (!status) return null;
   if (!status.configured) {
@@ -164,7 +169,7 @@ export function AIUsageTile() {
                 <AlertTriangle className="size-4" /> {percent}% of budget
               </div>
             )}
-            {!editing && (
+            {!editing && canEditBudget && (
               <Button
                 variant="outline"
                 size="sm"

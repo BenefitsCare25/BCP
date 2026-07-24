@@ -202,11 +202,14 @@ def create_version(
     report_type: str,
     params: dict,
     label: str | None = None,
-) -> tuple[ReportVersion, bool]:
+) -> tuple[ReportVersion, bool, str | None]:
     """Generate the report, retain the bytes, and record a version row. Returns
-    ``(version, created)`` — ``created`` is False when the content is identical
-    to the latest version (no-op guard), in which case the existing version is
-    returned unchanged.
+    ``(version, created, superseded_blob_path)`` — ``created`` is False when the
+    content is identical to the latest version (no-op guard), in which case the
+    existing version is returned unchanged. ``superseded_blob_path`` is the
+    storage path of a latest-mode predecessor whose ROW was deleted in this
+    transaction; the CALLER must physically delete that blob only AFTER it
+    commits (deleting earlier would orphan a still-referenced file on rollback).
 
     Versioned reports append a new ``version_no``; latest-mode reports supersede
     the prior row + blob. Caller owns the audit write + commit.
@@ -234,7 +237,7 @@ def create_version(
     # reports need the bytes to fingerprint.
     manifest_sig = _listing_signature(manifest, masked) if manifest is not None else None
     if manifest_sig is not None and manifest_sig == prior_hash:
-        return prior, False
+        return prior, False, None
 
     blob_bytes = build_report_bytes(db, py, report_type, params)
     if len(blob_bytes) > MAX_REPORT_BYTES:
@@ -244,7 +247,7 @@ def create_version(
 
     content_hash = manifest_sig or _content_signature(spec, blob_bytes)
     if content_hash is not None and content_hash == prior_hash:
-        return prior, False
+        return prior, False, None
 
     next_no = (prior.version_no + 1) if prior else 1
     version_id = new_uuid()
@@ -265,10 +268,15 @@ def create_version(
     )
     saved = get_storage().save(BytesIO(blob_bytes), path)
 
-    # Latest-mode keeps a single retained copy: drop the prior blob + row.
+    # Latest-mode keeps a single retained copy: drop the prior ROW now (same
+    # transaction, so a failed commit restores it), but hand its blob path back
+    # to the caller to delete only AFTER commit. Deleting the blob here would
+    # physically remove a still-referenced file if the caller's commit fails.
+    superseded_path: str | None = None
     if spec.mode == MODE_LATEST and prior is not None:
-        get_storage().delete(prior.storage_path)
+        superseded_path = prior.storage_path
         db.delete(prior)
+        db.flush()
 
     summary = _summary(spec, manifest, params)
     if content_hash is not None:
@@ -294,7 +302,7 @@ def create_version(
     )
     db.add(rv)
     db.flush()
-    return rv, True
+    return rv, True, superseded_path
 
 
 def load_version_blob(rv: ReportVersion) -> bytes:

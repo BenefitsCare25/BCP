@@ -9,7 +9,7 @@ Run this before any deploy that touches prod (staging is freely re-deployable).
 - [ ] `uv run alembic upgrade head` — succeeds against a fresh DB (staging)
 - [ ] No `INSPRO_AUTH_MODE=mock` in prod env vars
 - [ ] `INSPRO_AI_KEY_ENCRYPTION_KEY` set on App Service (decrypts per-tenant BYOK AI keys) — without it all BYOK-configured AI silently fails closed
-- [ ] Each active company has an AWS Bedrock BYOK key configured on `/configuration/ai-provider` (apac.* profile, `ap-southeast-1`) — otherwise that company's AI review degrades to manual
+- [ ] Each active company has a Google Vertex AI (Gemini) BYOK key configured on `/configuration/ai-provider` (service-account JSON, `asia-southeast1`) — otherwise that company's AI review degrades to manual
 - [ ] `INSPRO_DATABASE_URL` references the prod Postgres (verify region = Singapore)
 - [ ] `INSPRO_REDIS_URL` references the prod Redis (or unset to force in-memory fallback — acceptable for single-instance)
 - [ ] `INSPRO_CORS_ORIGINS` lists only the prod frontend origin(s)

@@ -520,7 +520,6 @@ def build_dependant_listing(
 ) -> Workbook:
     blocks = insurer_product_blocks(db, py, insurer)
     employees = report_employees(db, py)
-    emp_by_id = {e.id: e for e in employees}
     coverage, deps_by_emp = _employee_coverage(db, py, employees, blocks)
     cases = load_cases(db, py.id)
     fcl_by_product = free_cover_limits(db, py.id)
@@ -606,10 +605,7 @@ def build_dependant_listing(
                 first_value(dattrs, ("entity",)) or "",
                 emp.staff_id,
                 emp.employee_name or "",
-                _ident(
-                    emp_by_id[emp.id].attribute_values or {},
-                    EMPLOYEE_ID_KEYS, masked,
-                ),
+                _ident(emp.attribute_values or {}, EMPLOYEE_ID_KEYS, masked),
                 first_value(dattrs, ("dependant_name", "name")) or "",
                 _ident(dattrs, DEPENDANT_ID_KEYS, masked),
                 first_value(dattrs, ("relationship", "relation")) or "",

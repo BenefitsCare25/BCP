@@ -166,6 +166,8 @@ def _load_byok(db: Session, client_id: str) -> AIConfig | None:
     is corrupt.
     """
     # Imported lazily so the auth-mode boot path doesn't need SQLAlchemy.
+    from cryptography.fernet import InvalidToken
+
     from app.core.crypto import MasterKeyError, decrypt_secret
     from app.models.client_ai_config import ClientAIConfig
 
@@ -174,7 +176,11 @@ def _load_byok(db: Session, client_id: str) -> AIConfig | None:
         return None
     try:
         api_key = decrypt_secret(row.encrypted_api_key)
-    except (MasterKeyError, ValueError, Exception) as exc:
+    # Expected decrypt failures only: missing/rotated master key (MasterKeyError),
+    # corrupt ciphertext (InvalidToken), non-UTF8 plaintext (UnicodeDecodeError ⊂
+    # ValueError). A programming error (AttributeError/TypeError) must NOT be
+    # swallowed as "fall back to env" — let it surface.
+    except (MasterKeyError, InvalidToken, ValueError) as exc:
         logger.exception(
             "BYOK decrypt failed for client %s — falling back to env: %s",
             client_id,

@@ -134,6 +134,7 @@ jobs:
               entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
               postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
+              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_STAGING }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ needs.build.outputs.image }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
@@ -149,6 +150,7 @@ jobs:
               entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
               postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
+              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_STAGING }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ needs.build.outputs.image }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
@@ -207,6 +209,7 @@ jobs:
               entraClientId="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
               postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}" \
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
+              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ needs.build.outputs.image }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"

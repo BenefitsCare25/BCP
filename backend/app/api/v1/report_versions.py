@@ -7,6 +7,8 @@ and ``services/report_registry.py``.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -20,6 +22,7 @@ from app.core.deps import (
     user_owns,
 )
 from app.core.rate_limit import limiter
+from app.core.storage import get_storage
 from app.db.session import get_db
 from app.models.report_version import ReportVersion
 from app.services.insurer_listings import configured_insurers_for_year
@@ -34,6 +37,8 @@ from app.services.report_versions import (
     report_status,
     version_out,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/policy-years/{policy_year_id}/report-versions", tags=["reports"]
@@ -119,7 +124,9 @@ def create_report_version(
         )
 
     try:
-        rv, created = create_version(db, user, py, body.report_type, params, body.label)
+        rv, created, superseded_path = create_version(
+            db, user, py, body.report_type, params, body.label
+        )
     except ReportTooLargeError as exc:
         raise HTTPException(
             status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)
@@ -136,6 +143,16 @@ def create_report_version(
         )
         db.commit()
         db.refresh(rv)
+        # Only now that the new row is committed is it safe to remove the
+        # superseded latest-mode blob. A failure here leaves an orphan file
+        # (harmless — the DB no longer references it), never a dangling row.
+        if superseded_path:
+            try:
+                get_storage().delete(superseded_path)
+            except Exception:
+                logger.warning(
+                    "Failed to delete superseded report blob %s", superseded_path
+                )
     return {**version_out(rv), "unchanged": not created}
 
 
