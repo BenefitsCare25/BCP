@@ -2,9 +2,10 @@
  * ?email=&code= and auto-verify). No passwords, no MSAL. */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Mail, ShieldCheck } from "lucide-react";
+import { Mail } from "lucide-react";
 import { useRequestOtp, useVerifyOtp } from "@/api/portal";
 import { formatError } from "@/lib/errors";
+import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -79,24 +80,26 @@ export function PortalSignInPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-5">
-        <div className="mb-5 flex items-center gap-2">
-          <ShieldCheck className="size-6 text-primary" />
-          <div>
-            <h1 className="text-base font-semibold text-foreground">
-              My Benefits Portal
-            </h1>
-            <p className="text-xs text-muted-foreground">
-              Sign in with your work email
-            </p>
-          </div>
-        </div>
-
-        {step === "email" ? (
-          <form onSubmit={submitEmail} className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="portal-email">Work email</Label>
+    <AuthScene
+      eyebrow="Employee benefits portal"
+      title={step === "email" ? "Sign in" : "Check your email"}
+      subtitle={
+        step === "email"
+          ? "Sign in to access your benefits, claims and coverage."
+          : "Enter the 6-digit code we just sent you."
+      }
+    >
+      {step === "email" ? (
+        <form onSubmit={submitEmail} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="portal-email"
+              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              Work email
+            </Label>
+            <div className="relative">
+              <Mail className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
               <Input
                 id="portal-email"
                 type="email"
@@ -105,57 +108,66 @@ export function PortalSignInPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 autoFocus
+                className="h-12 pl-11"
               />
             </div>
-            {error && <p className="text-xs text-error">{error}</p>}
-            <Button type="submit" className="w-full" disabled={requestOtp.isPending}>
-              <Mail className="size-4" />
-              <span className="ml-1.5">
-                {requestOtp.isPending ? "Sending…" : "Email me a sign-in code"}
-              </span>
-            </Button>
-          </form>
-        ) : (
-          <form onSubmit={submitCode} className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              If <span className="font-medium text-foreground">{email}</span> has
-              portal access, a 6-digit code is on its way. Enter it below.
-            </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="portal-code">Sign-in code</Label>
-              <Input
-                id="portal-code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                placeholder="123456"
-                maxLength={6}
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-                autoFocus
-              />
-            </div>
-            {error && <p className="text-xs text-error">{error}</p>}
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={verifyOtp.isPending || code.length < 6}
+          </div>
+          {error && <p className="text-sm text-error">{error}</p>}
+          <Button
+            type="submit"
+            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            disabled={requestOtp.isPending}
+          >
+            <Mail className="size-[18px]" />
+            {requestOtp.isPending ? "Sending…" : "Email me a sign-in code"}
+          </Button>
+        </form>
+      ) : (
+        <form onSubmit={submitCode} className="space-y-4">
+          <p className="text-center text-sm text-muted-foreground">
+            If <span className="font-medium text-foreground">{email}</span> has
+            portal access, a 6-digit code is on its way.
+          </p>
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="portal-code"
+              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              {verifyOtp.isPending ? "Verifying…" : "Sign in"}
-            </Button>
-            <button
-              type="button"
-              className="w-full text-center text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => {
-                setStep("email");
-                setCode("");
-                setError(null);
-              }}
-            >
-              Use a different email
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
+              Sign-in code
+            </Label>
+            <Input
+              id="portal-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder="123456"
+              maxLength={6}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              autoFocus
+              className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
+            />
+          </div>
+          {error && <p className="text-sm text-error">{error}</p>}
+          <Button
+            type="submit"
+            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            disabled={verifyOtp.isPending || code.length < 6}
+          >
+            {verifyOtp.isPending ? "Verifying…" : "Sign in"}
+          </Button>
+          <button
+            type="button"
+            className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => {
+              setStep("email");
+              setCode("");
+              setError(null);
+            }}
+          >
+            Use a different email
+          </button>
+        </form>
+      )}
+    </AuthScene>
   );
 }

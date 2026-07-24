@@ -49,6 +49,15 @@
   --color-sidebar-active: #fce9ea;
   --color-sidebar-active-foreground: #9b1520;
 
+  /* Brand red, deepened for immersive surfaces (the sign-in scene). Derived
+     from --color-primary (#c11a2b); used only where a rich branded panel is
+     intended, never for data screens. */
+  --color-brand-200: #f4a6ad;
+  --color-brand-500: #d21f31;
+  --color-brand-600: #b5182a;
+  --color-brand-800: #6b0f19;
+  --color-brand-950: #360910;
+
   --radius-sm: 0.375rem;
   --radius: 0.5rem;
   --radius-md: 0.625rem;
@@ -101,5 +110,71 @@
 @layer components {
   .focus-ring {
     @apply outline-none ring-2 ring-ring/40 ring-offset-2 ring-offset-background;
+  }
+}
+
+/* ─── Sign-in surface ──────────────────────────────────────────────────────
+   Clean, platform-styled auth for both broker + member. Motion is deliberately
+   minimal: one soft entrance and a slow float on the panel's card, both removed
+   under reduced motion. Every color derives from theme tokens (house rule: no
+   hardcoded colors) via color-mix so shadow/wash tints track the theme. */
+
+/* Clean, near-white showcase surface for the right-hand panel — a whisper of
+   neutral depth only, no brand fill. Tokens only. */
+.signin-panel {
+  background:
+    radial-gradient(120% 110% at 82% 0%, var(--color-card), transparent 60%),
+    radial-gradient(120% 120% at 0% 100%, var(--color-muted), transparent 58%),
+    var(--color-background);
+}
+
+/* One gentle entrance; stagger via inline animation-delay. */
+.signin-in {
+  opacity: 0;
+  animation: signin-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes signin-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Slow float on the panel's focal card (its own element, so it never fights
+   the tilt/entrance transforms on the wrappers). */
+.signin-float {
+  animation: signin-float 7s ease-in-out infinite;
+}
+@keyframes signin-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* Soft neutral elevations for the clean white look — tinted from foreground so
+   no raw color reaches the JSX and shadows stay grey, not warm. */
+.signin-shadow-frame {
+  box-shadow: 0 30px 70px -40px color-mix(in srgb, var(--color-foreground) 24%, transparent);
+}
+.signin-shadow-card {
+  box-shadow: 0 16px 38px -18px color-mix(in srgb, var(--color-foreground) 20%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signin-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .signin-float {
+    animation: none;
   }
 }

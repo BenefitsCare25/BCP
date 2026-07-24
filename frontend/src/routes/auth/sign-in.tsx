@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AuthScene } from "@/components/auth/AuthScene";
 import { ENTRA_ENABLED, signIn } from "@/auth/msal";
 import { formatError } from "@/lib/errors";
 
@@ -28,28 +29,28 @@ export function SignInPage() {
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-background">
-      <div className="flex w-[360px] flex-col items-center gap-4 rounded-xl border border-border bg-card p-8 text-center shadow-sm">
-        <div className="text-lg font-semibold text-foreground">Inspro</div>
-        <p className="text-sm text-muted-foreground">
-          {ENTRA_ENABLED
-            ? "Sign in with your Microsoft work account to continue."
-            : "Authentication is not configured for this build."}
+    <AuthScene
+      eyebrow="Broker workspace"
+      title="Sign in"
+      subtitle={
+        ENTRA_ENABLED
+          ? "Sign in with your Microsoft work account."
+          : "Authentication is not configured for this build."
+      }
+    >
+      <Button
+        onClick={() => void handleSignIn()}
+        disabled={!ENTRA_ENABLED || submitting}
+        className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+      >
+        <LogIn className="size-[18px]" />
+        {submitting ? "Redirecting…" : "Sign in with Microsoft"}
+      </Button>
+      {error && (
+        <p className="mt-3 text-center text-sm text-error">
+          Sign-in failed: {error} — try again.
         </p>
-        <Button
-          onClick={() => void handleSignIn()}
-          disabled={!ENTRA_ENABLED || submitting}
-          className="w-full"
-        >
-          <LogIn className="size-4" />
-          {submitting ? "Redirecting…" : "Sign in with Microsoft"}
-        </Button>
-        {error && (
-          <p className="text-xs text-error">
-            Sign-in failed: {error} — try again.
-          </p>
-        )}
-      </div>
-    </div>
+      )}
+    </AuthScene>
   );
 }
