@@ -68,6 +68,56 @@ export function useVerifyOtp() {
   });
 }
 
+// ── Credential login (username + password) ──
+export interface MemberTokenResult {
+  token: string;
+  expires_at: string;
+  member: PortalMember;
+}
+
+export interface MemberChallengeResult {
+  status: "mfa_required";
+  challenge_token: string;
+}
+
+export type MemberLoginResult = MemberTokenResult | MemberChallengeResult;
+
+export function isMemberToken(r: MemberLoginResult): r is MemberTokenResult {
+  return "token" in r;
+}
+
+export function useMemberLogin() {
+  const setSession = usePortalSession((s) => s.setSession);
+  return useMutation({
+    mutationFn: (input: { identifier: string; password: string }) =>
+      portalApi.postPublic<MemberLoginResult>("/portal/auth/login", input),
+    onSuccess: (out) => {
+      if (isMemberToken(out)) setSession(out.token, out.expires_at, out.member);
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useMemberMfa() {
+  const setSession = usePortalSession((s) => s.setSession);
+  return useMutation({
+    mutationFn: (input: { challenge_token: string; code: string }) =>
+      portalApi.postPublic<MemberTokenResult>("/portal/auth/mfa", input),
+    onSuccess: (out) => setSession(out.token, out.expires_at, out.member),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useMemberSetPassword() {
+  const setSession = usePortalSession((s) => s.setSession);
+  return useMutation({
+    mutationFn: (input: { token: string; password: string }) =>
+      portalApi.postPublic<MemberTokenResult>("/portal/auth/set-password", input),
+    onSuccess: (out) => setSession(out.token, out.expires_at, out.member),
+    meta: { localErrorHandling: true },
+  });
+}
+
 export function usePortalMe() {
   return useQuery({
     queryKey: ["portal", "me"],

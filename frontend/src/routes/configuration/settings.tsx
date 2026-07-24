@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { InfoHint } from "@/components/ui/tooltip";
 import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
 import { CompaniesSettingsCard } from "@/components/configuration/CompaniesSettingsCard";
+import { HrAdminSettings } from "@/components/settings/HrAdminSettings";
 import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
 import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 import { formatError } from "@/lib/errors";
@@ -27,7 +28,13 @@ import { formatError } from "@/lib/errors";
 // the Claims review queue), the leave policy (moved off the enrollment window
 // form), and entity-matching aliases (moved out of the firm-wide Schema page,
 // where they were the only company-scoped tab).
-const SETTINGS_TABS = ["claims", "enrollment", "aliases", "companies"] as const;
+const SETTINGS_TABS = [
+  "claims",
+  "enrollment",
+  "aliases",
+  "hr",
+  "companies",
+] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const isTab = (v: string | undefined): v is SettingsTab =>
   SETTINGS_TABS.includes(v as SettingsTab);
@@ -105,24 +112,15 @@ export function CompanySettingsPage() {
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
   const requested: SettingsTab = isTab(search.tab) ? search.tab : "claims";
-  // The Companies tab is admin-only; fall back to Claims if a viewer deep-links it.
-  const tab: SettingsTab =
-    requested === "companies" && !canAdmin ? "claims" : requested;
+  // The Companies + HR tabs are admin-only (firm-admin `/hr-admin` endpoints);
+  // fall back to Claims if a viewer deep-links one.
+  const adminOnly = requested === "companies" || requested === "hr";
+  const tab: SettingsTab = adminOnly && !canAdmin ? "claims" : requested;
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const [aliasAddOpen, setAliasAddOpen] = useState(false);
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">
-          Company settings
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Standing configuration for the active company — claims behaviour,
-          leave policy, and entity-matching aliases.
-        </p>
-      </div>
-
       <Tabs
         value={tab}
         onValueChange={(v) =>
@@ -133,6 +131,7 @@ export function CompanySettingsPage() {
           <TabsTrigger value="claims">Claims</TabsTrigger>
           <TabsTrigger value="enrollment">Enrollment</TabsTrigger>
           <TabsTrigger value="aliases">Entity aliases</TabsTrigger>
+          {canAdmin && <TabsTrigger value="hr">HR access</TabsTrigger>}
           {canAdmin && <TabsTrigger value="companies">Companies</TabsTrigger>}
         </TabsList>
 
@@ -173,6 +172,12 @@ export function CompanySettingsPage() {
             onOpenChange={setAliasAddOpen}
           />
         </TabsContent>
+
+        {canAdmin && (
+          <TabsContent value="hr">
+            <HrAdminSettings />
+          </TabsContent>
+        )}
 
         {canAdmin && (
           <TabsContent value="companies">

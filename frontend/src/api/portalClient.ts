@@ -5,9 +5,14 @@
  * A 401 clears the session and sends the member back to the portal sign-in.
  */
 import { errorFromText, parseErrorText } from "@/lib/errors";
+import { currentPortalTenantSlug } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+
+function tenantHeader(): Record<string, string> {
+  return { "X-Inspro-Tenant-Slug": currentPortalTenantSlug() };
+}
 
 export class PortalUnauthorizedError extends Error {
   constructor(message = "Portal session expired") {
@@ -34,6 +39,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...tenantHeader(),
       ...authHeader(),
       ...init.headers,
     },
@@ -84,11 +90,11 @@ export const portalApi = {
   postPublic: async <T>(path: string, body: unknown): Promise<T> => {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...tenantHeader() },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(parseErrorText(await res.text(), res.statusText));
+      throw errorFromText(res.status, await res.text(), res.statusText);
     }
     return (await res.json()) as T;
   },

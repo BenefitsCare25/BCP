@@ -14,6 +14,8 @@ import {
 import { ENTRA_ENABLED, getActiveAccount } from "@/auth/msal";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
+import { HrShell } from "@/components/hr/HrShell";
+import { hasValidHrSession } from "@/stores/hrSession";
 
 // Each page is split into its own chunk; the initial bundle ships only the
 // shell + router + the heavy infra (MSAL, react-query, tanstack-router).
@@ -73,6 +75,10 @@ const PortalSignInPage = lazyRouteComponent(
   () => import("@/routes/portal/sign-in"),
   "PortalSignInPage",
 );
+const PortalSetPasswordPage = lazyRouteComponent(
+  () => import("@/routes/portal/set-password"),
+  "PortalSetPasswordPage",
+);
 const PortalCoveragePage = lazyRouteComponent(
   () => import("@/routes/portal/coverage"),
   "PortalCoveragePage",
@@ -100,6 +106,22 @@ const PortalNewClaimPage = lazyRouteComponent(
 const PortalClaimDetailPage = lazyRouteComponent(
   () => import("@/routes/portal/claims/detail"),
   "PortalClaimDetailPage",
+);
+const HrSignInPage = lazyRouteComponent(
+  () => import("@/routes/hr/sign-in"),
+  "HrSignInPage",
+);
+const HrSetPasswordPage = lazyRouteComponent(
+  () => import("@/routes/hr/set-password"),
+  "HrSetPasswordPage",
+);
+const HrDashboardPage = lazyRouteComponent(
+  () => import("@/routes/hr/dashboard"),
+  "HrDashboardPage",
+);
+const HrSecurityPage = lazyRouteComponent(
+  () => import("@/routes/hr/security"),
+  "HrSecurityPage",
 );
 const SignInPage = lazyRouteComponent(
   () => import("@/routes/auth/sign-in"),
@@ -150,6 +172,69 @@ const portalSignInRoute = createRoute({
     }
   },
   component: PortalSignInPage,
+});
+
+const portalSetPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/portal/set-password",
+  component: PortalSetPasswordPage,
+});
+
+// ── HR admin — a sibling surface with its OWN credential auth (HR access
+// token + rotating refresh cookie, not MSAL). Tenant is pinned by subdomain.
+const hrSignInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/hr/sign-in",
+  beforeLoad: () => {
+    if (hasValidHrSession()) {
+      throw redirect({ to: "/hr/dashboard" });
+    }
+  },
+  component: HrSignInPage,
+});
+
+const hrSetPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/hr/set-password",
+  component: HrSetPasswordPage,
+});
+
+const hrLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: "hr-shell",
+  beforeLoad: ({ location }) => {
+    if (
+      location.pathname === "/hr/sign-in" ||
+      location.pathname === "/hr/set-password"
+    ) {
+      return;
+    }
+    if (!hasValidHrSession()) {
+      throw redirect({ to: "/hr/sign-in" });
+    }
+  },
+  component: HrShell,
+});
+
+const hrIndexRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr",
+  beforeLoad: () => {
+    throw redirect({ to: "/hr/dashboard" });
+  },
+  component: () => null,
+});
+
+const hrDashboardRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/dashboard",
+  component: HrDashboardPage,
+});
+
+const hrSecurityRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/security",
+  component: HrSecurityPage,
 });
 
 const portalLayoutRoute = createRoute({
@@ -517,7 +602,11 @@ const adminRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   authCallbackRoute,
   signInRoute,
+  hrSignInRoute,
+  hrSetPasswordRoute,
+  hrLayoutRoute.addChildren([hrIndexRoute, hrDashboardRoute, hrSecurityRoute]),
   portalSignInRoute,
+  portalSetPasswordRoute,
   portalLayoutRoute.addChildren([
     portalIndexRoute,
     portalCoverageRoute,

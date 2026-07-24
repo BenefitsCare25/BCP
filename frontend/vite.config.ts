@@ -12,6 +12,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Allow per-tenant subdomains in dev: `{slug}.hr.localhost:5173` /
+    // `{slug}.portal.localhost:5173` (Chrome resolves *.localhost → 127.0.0.1),
+    // so the multi-tenant subdomain is visible locally, not just in prod.
+    allowedHosts: [".localhost"],
     proxy: {
       "/api": {
         target: "http://localhost:8000",

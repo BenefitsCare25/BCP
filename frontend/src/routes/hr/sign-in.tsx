@@ -1,19 +1,20 @@
-/** Employee-portal sign-in: username (email / member ID / employee ID) +
- * password, with an optional two-factor step. */
+/** HR credential sign-in: email OR HR ID + password, with an optional TOTP
+ * step. Lives on `{slug}.hr.<base>`; the subdomain scopes the tenant. */
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { KeyRound, Lock, User } from "lucide-react";
-import { isMemberToken, useMemberLogin, useMemberMfa } from "@/api/portal";
+import { KeyRound, Lock } from "lucide-react";
+import { adoptSession, isTokenResult, useHrLogin, useHrMfa } from "@/api/hr";
 import { formatError } from "@/lib/errors";
 import { AuthScene } from "@/components/auth/AuthScene";
+import { IdentifierField } from "@/components/auth/IdentifierField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function PortalSignInPage() {
+export function HrSignInPage() {
   const navigate = useNavigate();
-  const login = useMemberLogin();
-  const mfa = useMemberMfa();
+  const login = useHrLogin();
+  const mfa = useHrMfa();
 
   const [step, setStep] = useState<"credentials" | "mfa">("credentials");
   const [identifier, setIdentifier] = useState("");
@@ -22,7 +23,7 @@ export function PortalSignInPage() {
   const [challenge, setChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const finish = () => void navigate({ to: "/portal/coverage" });
+  const finish = () => void navigate({ to: "/hr/dashboard" });
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,16 +31,21 @@ export function PortalSignInPage() {
     login.mutate(
       { identifier: identifier.trim(), password },
       {
-        onSuccess: (out) => {
-          if (isMemberToken(out)) {
+        onSuccess: (data) => {
+          if (isTokenResult(data)) {
+            adoptSession(data);
             finish();
-          } else {
-            setChallenge(out.challenge_token);
+          } else if (data.status === "mfa_required") {
+            setChallenge(data.challenge_token);
             setStep("mfa");
+          } else if (data.status === "password_reset_required") {
+            window.location.assign(
+              `/hr/set-password?token=${encodeURIComponent(data.challenge_token)}`,
+            );
           }
         },
         onError: () =>
-          setError("Those details weren't recognised. Check and try again."),
+          setError("Those credentials weren't recognised. Check and try again."),
       },
     );
   };
@@ -50,7 +56,10 @@ export function PortalSignInPage() {
     mfa.mutate(
       { challenge_token: challenge, code: code.trim() },
       {
-        onSuccess: finish,
+        onSuccess: (data) => {
+          adoptSession(data);
+          finish();
+        },
         onError: (err) => setError(formatError(err)),
       },
     );
@@ -58,41 +67,20 @@ export function PortalSignInPage() {
 
   return (
     <AuthScene
-      eyebrow="Employee benefits portal"
+      eyebrow="HR administration"
       title={step === "credentials" ? "Sign in" : "Two-factor authentication"}
       subtitle={
         step === "credentials"
-          ? "Sign in to access your benefits, claims and coverage."
+          ? "Manage your company's employees, policies and claims."
           : "Enter the 6-digit code from your authenticator app."
       }
     >
       {step === "credentials" ? (
         <form onSubmit={submitCredentials} className="space-y-4">
+          <IdentifierField value={identifier} onChange={setIdentifier} autoFocus />
           <div className="space-y-1.5">
             <Label
-              htmlFor="portal-identifier"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Email, member ID or employee ID
-            </Label>
-            <div className="relative">
-              <User className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="portal-identifier"
-                type="text"
-                autoComplete="username"
-                spellCheck={false}
-                placeholder="you@company.com  or  EM-7Q2M8K"
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                autoFocus
-                className="h-12 pl-11"
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="portal-password"
+              htmlFor="hr-password"
               className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Password
@@ -100,7 +88,7 @@ export function PortalSignInPage() {
             <div className="relative">
               <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
               <Input
-                id="portal-password"
+                id="hr-password"
                 type="password"
                 autoComplete="current-password"
                 placeholder="••••••••••••"
@@ -124,13 +112,13 @@ export function PortalSignInPage() {
         <form onSubmit={submitMfa} className="space-y-4">
           <div className="space-y-1.5">
             <Label
-              htmlFor="portal-totp"
+              htmlFor="hr-totp"
               className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Authentication code
             </Label>
             <Input
-              id="portal-totp"
+              id="hr-totp"
               inputMode="numeric"
               autoComplete="one-time-code"
               placeholder="123456"
