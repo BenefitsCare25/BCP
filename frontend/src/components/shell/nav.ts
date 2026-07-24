@@ -6,7 +6,9 @@ import {
   CalendarCheck,
   ClipboardCheck,
   Cog,
+  Layers,
   ReceiptText,
+  Scale,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -94,7 +96,7 @@ export const COMPANY_NAV: NavGroup[] = [
   },
   {
     label: "Claims",
-    icon: ReceiptText,
+    icon: Scale,
     key: "claims",
     items: [
       {
@@ -136,7 +138,7 @@ export const COMPANY_NAV: NavGroup[] = [
 // Sidebar; Schema & Reference is visible to everyone.
 export const FIRM_NAV: NavGroup = {
   label: "Firm",
-  icon: Building2,
+  icon: Layers,
   key: "firm",
   items: [
     {

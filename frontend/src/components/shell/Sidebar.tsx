@@ -1,20 +1,8 @@
-import { useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChevronDown, Home, Layers, ListChecks } from "lucide-react";
+import { Home } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMe } from "@/api/hooks";
 import { COMPANY_NAV, FIRM_NAV, type NavGroup, type NavItem } from "./nav";
-
-const COLLAPSE_KEY = "inspro.nav.collapsed";
-
-function readCollapsed(): Set<string> {
-  try {
-    const raw = localStorage.getItem(COLLAPSE_KEY);
-    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
-  } catch {
-    return new Set();
-  }
-}
 
 export function Sidebar({
   mobileOpen = false,
@@ -28,26 +16,9 @@ export function Sidebar({
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
-  const toggle = (key: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      try {
-        localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...next]));
-      } catch {
-        /* private mode / quota — collapse state is non-critical */
-      }
-      return next;
-    });
-  };
-
   // Firm admin surface is broker-admin only; drop it from the firm zone for
   // everyone else (the page itself also gates, this just hides the link).
-  const firmItems = FIRM_NAV.items.filter(
-    (i) => i.to !== "/admin" || canAdmin,
-  );
+  const firmItems = FIRM_NAV.items.filter((i) => i.to !== "/admin" || canAdmin);
 
   return (
     <>
@@ -61,54 +32,40 @@ export function Sidebar({
       )}
       <aside
         className={cn(
-          "w-60 shrink-0 border-r border-border bg-sidebar flex flex-col",
+          "w-64 shrink-0 border-r border-border flex flex-col",
+          "bg-gradient-to-b from-sidebar via-sidebar to-muted/40",
           "fixed inset-y-0 left-0 z-50 h-full transition-transform duration-200",
           "lg:static lg:z-auto lg:translate-x-0",
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         )}
       >
-      <div className="h-14 px-5 flex items-center border-b border-border">
-        <img
-          src="/inspro-logo.png"
-          alt="Inspro Insurance Brokers"
-          className="max-h-9 w-auto"
-        />
-      </div>
-      <nav className="flex-1 p-3 overflow-y-auto space-y-1">
-        <HomeLink active={path === "/home"} />
-
-        {COMPANY_NAV.map((group) => (
-          <Group
-            key={group.key}
-            group={group}
-            path={path}
-            open={!collapsed.has(group.key)}
-            onToggle={() => toggle(group.key)}
+        <div className="h-14 px-5 flex items-center border-b border-border">
+          <img
+            src="/inspro-logo.png"
+            alt="Inspro Insurance Brokers"
+            className="max-h-8 w-auto"
           />
-        ))}
+        </div>
 
-        <div className="pt-3">
-          <div className="px-2.5 pb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-muted-foreground/70">
-            <Layers className="size-3" />
-            Firm · all companies
+        <nav className="flex-1 px-3 py-4 overflow-y-auto">
+          <HomeLink active={path === "/home"} />
+
+          {COMPANY_NAV.map((group) => (
+            <Section key={group.key} group={group} path={path} />
+          ))}
+
+          {/* Firm-wide zone — a distinct tinted surface so an all-companies
+              action can never read as a per-company one. */}
+          <div className="mt-6 rounded-xl bg-muted/60 p-2">
+            <SectionLabel group={FIRM_NAV} active={false} />
+            <ul className="mt-1 space-y-0.5">
+              {firmItems.map((item) => (
+                <ItemLink key={item.to} item={item} active={path === item.to} />
+              ))}
+            </ul>
           </div>
-          <ul className="space-y-0.5">
-            {firmItems.map((item) => (
-              <ItemLink key={item.to} item={item} active={path === item.to} />
-            ))}
-          </ul>
-        </div>
-      </nav>
-      <div className="p-3 border-t border-border text-xs text-muted-foreground space-y-1">
-        <div className="flex items-center gap-2">
-          <ListChecks className="size-3.5" />
-          Spike v0 — SQLite-backed
-        </div>
-        <div className="flex items-center gap-2">
-          <Layers className="size-3.5" />
-          Singapore region
-        </div>
-      </div>
+        </nav>
+
       </aside>
     </>
   );
@@ -119,88 +76,90 @@ function HomeLink({ active }: { active: boolean }) {
     <Link
       to="/home"
       className={cn(
-        "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium tracking-tight transition-colors",
+        "group/item relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium tracking-tight transition-all duration-150",
         active
           ? "bg-sidebar-active text-sidebar-active-foreground"
-          : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground",
+          : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground motion-safe:hover:translate-x-0.5",
       )}
     >
-      <Home className="size-[18px] shrink-0" strokeWidth={1.75} />
-      Home
+      <Home
+        className={cn(
+          "size-[18px] shrink-0 transition-colors",
+          active
+            ? "text-primary"
+            : "text-muted-foreground group-hover/item:text-foreground",
+        )}
+        strokeWidth={1.75}
+      />
+      <span className="flex-1">Home</span>
+      {active && <ActiveDot />}
     </Link>
   );
 }
 
-function Group({
-  group,
-  path,
-  open,
-  onToggle,
-}: {
-  group: NavGroup;
-  path: string;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const Icon = group.icon;
+function Section({ group, path }: { group: NavGroup; path: string }) {
   const active = group.items.some((item) => path === item.to);
   return (
-    <div>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className={cn(
-          "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium tracking-tight transition-colors hover:bg-sidebar-hover",
-          active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
-        <span className="flex-1 text-left">{group.label}</span>
-        <ChevronDown
-          className={cn(
-            "size-4 shrink-0 text-muted-foreground/70 transition-transform duration-200",
-            open ? "" : "-rotate-90",
-          )}
-          strokeWidth={2}
-        />
-      </button>
-      {open && (
-        <ul className="mt-0.5 space-y-0.5">
-          {group.items.map((item) => (
-            <ItemLink key={item.to} item={item} active={path === item.to} indent />
-          ))}
-        </ul>
-      )}
+    <div className="mt-6 first:mt-5">
+      <SectionLabel group={group} active={active} />
+      <ul className="mt-1 space-y-0.5">
+        {group.items.map((item) => (
+          <ItemLink key={item.to} item={item} active={path === item.to} />
+        ))}
+      </ul>
     </div>
   );
 }
 
-function ItemLink({
-  item,
-  active,
-  indent,
-}: {
-  item: NavItem;
-  active: boolean;
-  indent?: boolean;
-}) {
+function SectionLabel({ group, active }: { group: NavGroup; active: boolean }) {
+  return (
+    <div className="mb-0.5 px-3">
+      <span
+        className={cn(
+          "text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors",
+          active ? "text-foreground/70" : "text-subtle",
+        )}
+      >
+        {group.label}
+      </span>
+    </div>
+  );
+}
+
+function ItemLink({ item, active }: { item: NavItem; active: boolean }) {
   const Icon = item.icon;
   return (
     <li>
       <Link
         to={item.to}
         className={cn(
-          "flex items-center gap-2.5 rounded-md py-1.5 pr-2.5 text-sm transition-colors",
-          indent ? "pl-4" : "pl-2.5",
+          "group/item relative flex items-center gap-3 rounded-lg py-2 pl-3 pr-2.5 text-sm transition-all duration-150",
           active
-            ? "bg-sidebar-active text-sidebar-active-foreground font-medium"
-            : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground",
+            ? "bg-sidebar-active text-sidebar-active-foreground font-semibold"
+            : "text-foreground/75 hover:bg-sidebar-hover hover:text-foreground motion-safe:hover:translate-x-0.5",
         )}
       >
-        <Icon className="size-[18px] shrink-0" strokeWidth={1.75} />
-        <span className="truncate">{item.label}</span>
+        <Icon
+          className={cn(
+            "size-[18px] shrink-0 transition-colors",
+            active
+              ? "text-primary"
+              : "text-muted-foreground group-hover/item:text-foreground",
+          )}
+          strokeWidth={1.75}
+        />
+        <span className="flex-1 truncate">{item.label}</span>
+        {active && <ActiveDot />}
       </Link>
     </li>
+  );
+}
+
+function ActiveDot() {
+  return (
+    <span
+      className="size-1.5 shrink-0 rounded-full bg-primary"
+      aria-hidden="true"
+    />
   );
 }
