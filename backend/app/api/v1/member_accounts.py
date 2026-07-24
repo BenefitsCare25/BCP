@@ -10,17 +10,25 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import passwords as PW
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
+from app.core.credentials import credential_version
 from app.core.deps import (
     assert_policy_year_for_user,
     load_employee,
     require_client_id,
     user_owns,
+)
+from app.core.hr_auth import get_auth_policy
+from app.core.portal_auth import (
+    generate_member_login_id,
+    issue_member_set_password_token,
 )
 from app.core.rate_limit import limiter
 from app.db.session import get_db
@@ -64,8 +72,26 @@ def _validated_email(raw: str) -> str:
     return email
 
 
+def _unique_member_login_id(db: Session, client_id: str) -> str:
+    for _ in range(6):
+        candidate = generate_member_login_id()
+        exists = (
+            db.query(MemberAccount.id)
+            .filter(
+                MemberAccount.client_id == client_id,
+                MemberAccount.system_login_id == candidate,
+            )
+            .first()
+        )
+        if not exists:
+            return candidate
+    raise HTTPException(
+        status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not allocate a member id."
+    )
+
+
 def _create_account(
-    db: Session, employee: Employee, email: str, invited_by: str
+    db: Session, employee: Employee, email: str | None, invited_by: str
 ) -> MemberAccount:
     account = MemberAccount(
         client_id=employee.client_id,
@@ -74,6 +100,7 @@ def _create_account(
         display_name=employee.employee_name,
         status=MEMBER_STATUS_INVITED,
         invited_by=invited_by,
+        system_login_id=_unique_member_login_id(db, employee.client_id),
     )
     db.add(account)
     db.flush()
@@ -116,10 +143,26 @@ def create_member_account(
 ) -> MemberAccountOut:
     raw_email = body.email or first_value(employee.attribute_values or {}, EMAIL_KEYS)
     if not raw_email:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "No email on the roster for this employee — provide one explicitly.",
-        )
+        # Email-less employee: create the account with a system login id + a
+        # set-password token (no OTP — they sign in with username + password).
+        try:
+            account = _create_account(db, employee, None, user.user_id)
+            token = issue_member_set_password_token(account.id, credential_version(account))
+            write_audit(
+                db, user, "member_account.invited", "member_account", account.id,
+                after={"staff_id": employee.staff_id, "emailless": True},
+                employee_id=employee.id,
+            )
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "A portal account already exists for this staff ID.",
+            ) from None
+        out = MemberAccountOut.model_validate(account)
+        out.set_password_token = token
+        return out
     email = _validated_email(raw_email)
 
     try:
@@ -166,6 +209,82 @@ def resend_invite(
     out = MemberAccountOut.model_validate(account)
     out.mail_sent = mail_sent
     return out
+
+
+class MemberSetPasswordIn(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+@router.post(
+    "/member-accounts/{account_id}/password-setup", response_model=MemberAccountOut
+)
+def member_password_setup(
+    account_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MemberAccountOut:
+    """Allocate a system login id (if missing) and mint a single-use
+    set-password token the member redeems on the portal. For members WITH an
+    email you can send this link; for email-less members, hand it over."""
+    account = _load_account(account_id, user, db)
+    if account.status == MEMBER_STATUS_DISABLED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Account is disabled.")
+    if not account.system_login_id:
+        account.system_login_id = _unique_member_login_id(db, account.client_id)
+    token = issue_member_set_password_token(account.id, credential_version(account))
+    write_audit(db, user, "member_account.password_setup", "member_account", account.id)
+    db.commit()
+    out = MemberAccountOut.model_validate(account)
+    out.set_password_token = token
+    return out
+
+
+@router.post(
+    "/member-accounts/{account_id}/set-password", response_model=MemberAccountOut
+)
+def member_set_password_direct(
+    account_id: str,
+    body: MemberSetPasswordIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MemberAccountOut:
+    """Broker sets a member's password directly (email-less members). The
+    member changes it later from the portal if they wish."""
+    account = _load_account(account_id, user, db)
+    if account.status == MEMBER_STATUS_DISABLED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Account is disabled.")
+    policy = get_auth_policy(db, account.client_id)
+    ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
+    if not ok:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, reason)
+    from datetime import UTC, datetime
+
+    if not account.system_login_id:
+        account.system_login_id = _unique_member_login_id(db, account.client_id)
+    account.password_hash = PW.hash_password(body.password)
+    account.password_updated_at = datetime.now(UTC)
+    account.failed_attempts = 0
+    account.locked_until = None
+    if account.status == MEMBER_STATUS_INVITED:
+        account.status = MEMBER_STATUS_ACTIVE
+    write_audit(db, user, "member_account.password_set", "member_account", account.id)
+    db.commit()
+    return MemberAccountOut.model_validate(account)
+
+
+@router.post(
+    "/member-accounts/{account_id}/regenerate-login-id", response_model=MemberAccountOut
+)
+def member_regenerate_login_id(
+    account_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> MemberAccountOut:
+    account = _load_account(account_id, user, db)
+    account.system_login_id = _unique_member_login_id(db, account.client_id)
+    write_audit(db, user, "member_account.login_id_regenerated", "member_account", account.id)
+    db.commit()
+    return MemberAccountOut.model_validate(account)
 
 
 @router.patch("/member-accounts/{account_id}", response_model=MemberAccountOut)

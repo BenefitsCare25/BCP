@@ -35,6 +35,9 @@ class Settings:
     portal_token_ttl_hours: int = 12
     mail_mode: MailMode = "log"
     frontend_origin: str = "http://localhost:5173"
+    # Apex domain for tenant-per-subdomain routing. `{slug}.portal.<base_domain>`
+    # and `{slug}.hr.<base_domain>` resolve the tenant from the Host header.
+    base_domain: str = "inspro.sg"
     # ── Retained document storage (claim receipts, dependant proofs) ──
     storage_mode: StorageMode = "local"
     storage_dir: str = ""
@@ -236,6 +239,11 @@ def get_settings() -> Settings:
         frontend_origin=os.environ.get(
             "INSPRO_FRONTEND_ORIGIN", "http://localhost:5173"
         ).strip().rstrip("/"),
+        base_domain=os.environ.get("INSPRO_BASE_DOMAIN", "inspro.sg")
+        .strip()
+        .lower()
+        .strip(".")
+        or "inspro.sg",
         storage_mode=_resolve_storage_mode(env),
         storage_dir=os.environ.get("INSPRO_STORAGE_DIR", "").strip(),
         storage_container=os.environ.get(

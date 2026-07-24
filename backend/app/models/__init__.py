@@ -1,6 +1,13 @@
 """SQLAlchemy models — re-export for Alembic autogenerate."""
 from app.models.ai_spend import AISpendLog
 from app.models.audit_log import AuditLog
+from app.models.auth import (
+    AuthCredential,
+    AuthEvent,
+    AuthMfa,
+    AuthSession,
+    ClientAuthPolicy,
+)
 from app.models.bulk_plan_update import BulkPlanUpdate
 from app.models.category import Category
 from app.models.claim import Claim
@@ -40,6 +47,10 @@ from app.models.user import User, UserClientAccess
 __all__ = [
     "AISpendLog",
     "AuditLog",
+    "AuthCredential",
+    "AuthEvent",
+    "AuthMfa",
+    "AuthSession",
     "BrokerFirm",
     "BulkPlanUpdate",
     "Category",
@@ -48,6 +59,7 @@ __all__ = [
     "ClaimDocType",
     "Client",
     "ClientAIConfig",
+    "ClientAuthPolicy",
     "Dependant",
     "Employee",
     "EmployeeAttributeSchema",

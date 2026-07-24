@@ -48,6 +48,7 @@ dependencies = [
     "azure-storage-blob>=12.19.0",
     "azure-identity>=1.17.0",
     "python-dotenv>=1.0.0",
+    "argon2-cffi>=25.1.0",
 ]
 
 [dependency-groups]

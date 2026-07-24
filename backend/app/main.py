@@ -33,6 +33,8 @@ from app.api.v1 import (
     entity_aliases,
     flex_pricing,
     flex_schemes,
+    hr_admin,
+    hr_auth,
     insurers,
     leave_policies,
     matches,
@@ -68,6 +70,7 @@ from app.core.rate_limit import RateLimitExceeded, limiter
 from app.core.request_context import RequestIDMiddleware, install_log_filter
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.telemetry import configure_telemetry
+from app.core.tenancy_host import TenantMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +159,7 @@ def create_app() -> FastAPI:
         max_age=600,
     )
     app.add_middleware(SlowAPIMiddleware)
+    app.add_middleware(TenantMiddleware, base_domain=get_settings().base_domain)
     app.add_middleware(RequestIDMiddleware)
 
     api_prefix = "/api/v1"
@@ -204,6 +208,7 @@ def create_app() -> FastAPI:
         platform_ai_settings.router,
         session.router,
         admin.router,
+        hr_admin.router,
     )
     for api_router in api_routers:
         app.include_router(
@@ -218,6 +223,9 @@ def create_app() -> FastAPI:
     # own abuse guards); `portal` authenticates via its router-level
     # `get_current_member` dependency.
     app.include_router(portal_auth.router, prefix=api_prefix)
+    # HR credential-login surface — public auth, its own tenant + lockout guards
+    # (mirrors portal_auth: registered OUTSIDE the broker require_write_access gate).
+    app.include_router(hr_auth.router, prefix=api_prefix)
     app.include_router(portal.router, prefix=api_prefix)
     app.include_router(portal_claims.router, prefix=api_prefix)
     app.include_router(portal_claims.options_router, prefix=api_prefix)

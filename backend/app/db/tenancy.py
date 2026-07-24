@@ -42,6 +42,13 @@ CONTROL_TABLES: frozenset[str] = frozenset(
         # Portal member identity: must authenticate before a firm is known.
         "member_accounts",
         "member_otp_codes",
+        # Local-credential auth (HR) + surface-agnostic MFA/session/event/policy:
+        # authentication resolves before a firm schema is known.
+        "auth_credentials",
+        "auth_mfa",
+        "auth_sessions",
+        "auth_events",
+        "client_auth_policy",
         # Platform-wide AI limits + shared-quota usage counter: global, spanning
         # all firms/clients, so they must live in public (not per-firm schemas).
         "platform_ai_settings",

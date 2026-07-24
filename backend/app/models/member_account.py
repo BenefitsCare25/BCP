@@ -29,13 +29,18 @@ class MemberAccount(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("client_id", "email", name="uq_member_accounts_client_email"),
         UniqueConstraint("client_id", "staff_id", name="uq_member_accounts_client_staff"),
+        UniqueConstraint(
+            "client_id", "system_login_id", name="uq_member_accounts_client_system_id"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    # Email is nullable: not every employee has one (they sign in with a
+    # system-generated or staff id instead).
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     staff_id: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
@@ -46,6 +51,26 @@ class MemberAccount(Base, TimestampMixin):
     last_sign_in_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # ── Credential login (username + Argon2id password) ──
+    # Broker-generated alternate username (e.g. "EM-7Q2M8K"); unique per client.
+    system_login_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    password_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    must_rotate_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    failed_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    @property
+    def has_password(self) -> bool:
+        return self.password_hash is not None
 
 
 class MemberOtpCode(Base, TimestampMixin):

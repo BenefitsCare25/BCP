@@ -33,6 +33,7 @@ from scripts.seed_demo import seed  # noqa: E402
 PY_ACTIVE = "00000000-0000-0000-0000-00000000pa01"
 EMP_ALICE = "00000000-0000-0000-0000-00000000pa02"
 EMP_NO_EMAIL = "00000000-0000-0000-0000-00000000pa03"
+EMP_NO_EMAIL_2 = "00000000-0000-0000-0000-00000000pa04"
 ALICE_EMAIL = "alice@acme.test"
 
 
@@ -86,6 +87,19 @@ def _setup_db():
                 policy_year_id=PY_ACTIVE,
                 staff_id="S-101",
                 employee_name="Bob No-Email",
+                attribute_values={"grade": 8},
+                derived_attribute_values={},
+                source="csv_import",
+                status="active",
+            )
+        )
+        session.add(
+            Employee(
+                id=EMP_NO_EMAIL_2,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=PY_ACTIVE,
+                staff_id="S-777",
+                employee_name="Bea No-Email",
                 attribute_values={"grade": 8},
                 derived_attribute_values={},
                 source="csv_import",
@@ -183,14 +197,23 @@ def test_invite_then_otp_sign_in_flow(broker_client: TestClient, anon_client: Te
     assert me_body["flex_eligible"] is False
 
 
-def test_create_account_without_roster_email_400(broker_client: TestClient):
+def test_create_account_without_roster_email_creates_password_member(
+    broker_client: TestClient,
+):
+    # No email → an email-less password member (system login id + set-password
+    # token), not a 400. They sign in with username + password.
     res = broker_client.post(f"/api/v1/employees/{EMP_NO_EMAIL}/member-account", json={})
-    assert res.status_code == 400
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["email"] is None
+    assert body["system_login_id"] and body["system_login_id"].startswith("EM-")
+    assert body["set_password_token"]
+    assert body["has_password"] is False
 
 
 def test_create_account_explicit_email_override(broker_client: TestClient):
     res = broker_client.post(
-        f"/api/v1/employees/{EMP_NO_EMAIL}/member-account",
+        f"/api/v1/employees/{EMP_NO_EMAIL_2}/member-account",
         json={"email": "Bob@Acme.Test"},
     )
     assert res.status_code == 201

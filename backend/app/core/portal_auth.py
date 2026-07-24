@@ -19,14 +19,23 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import secrets
+import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.settings import get_settings
+from app.core.settings import Settings, get_settings
+from app.core.tenancy_host import (
+    SURFACE_PORTAL,
+    HostInfo,
+    TenantContext,
+    normalize_slug,
+    resolve_tenant_context,
+)
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 
@@ -44,7 +53,7 @@ class CurrentMember:
     member_account_id: str
     client_id: str
     broker_firm_id: str | None
-    email: str
+    email: str | None
     staff_id: str
     display_name: str | None = None
 
@@ -72,6 +81,117 @@ def issue_member_token(member_account_id: str, client_id: str) -> tuple[str, dat
         algorithm=_JWT_ALGORITHM,
     )
     return token, expires_at
+
+
+_TOKEN_TYPE_SET_PW = "member_set_pw"
+_TOKEN_TYPE_MFA = "member_mfa"
+_SET_PW_LABEL = b"inspro-member-set-password-v1"
+_MFA_LABEL = b"inspro-member-mfa-challenge-v1"
+SET_PW_TTL_HOURS = 72
+MFA_CHALLENGE_TTL_MINUTES = 5
+_ID_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def _derive_key(label: bytes, settings: Settings | None = None) -> str:
+    settings = settings or get_settings()
+    return hmac.new(settings.portal_jwt_secret.encode(), label, "sha256").hexdigest()
+
+
+def generate_member_login_id() -> str:
+    """Opaque, non-guessable member login id (e.g. "EM-7Q2M8K"). NEVER an NRIC."""
+    body = "".join(secrets.choice(_ID_ALPHABET) for _ in range(6))
+    return f"EM-{body}"
+
+
+def issue_member_set_password_token(member_account_id: str, version: int) -> str:
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": member_account_id,
+            "v": version,
+            "typ": _TOKEN_TYPE_SET_PW,
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(hours=SET_PW_TTL_HOURS)).timestamp()),
+        },
+        _derive_key(_SET_PW_LABEL),
+        algorithm=_JWT_ALGORITHM,
+    )
+
+
+def verify_member_set_password_token(token: str) -> tuple[str, int]:
+    claims = jwt.decode(
+        token, _derive_key(_SET_PW_LABEL), algorithms=[_JWT_ALGORITHM],
+        options={"require": ["sub", "exp"]},
+    )
+    if claims.get("typ") != _TOKEN_TYPE_SET_PW:
+        raise jwt.InvalidTokenError("wrong token type")
+    return str(claims["sub"]), int(claims.get("v", 0))
+
+
+def issue_member_mfa_challenge_token(member_account_id: str, client_id: str) -> str:
+    now = datetime.now(UTC)
+    return jwt.encode(
+        {
+            "sub": member_account_id,
+            "cid": client_id,
+            "typ": _TOKEN_TYPE_MFA,
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(minutes=MFA_CHALLENGE_TTL_MINUTES)).timestamp()),
+        },
+        _derive_key(_MFA_LABEL),
+        algorithm=_JWT_ALGORITHM,
+    )
+
+
+def verify_member_mfa_challenge_token(token: str) -> tuple[str, str]:
+    claims = jwt.decode(
+        token, _derive_key(_MFA_LABEL), algorithms=[_JWT_ALGORITHM],
+        options={"require": ["sub", "exp"]},
+    )
+    if claims.get("typ") != _TOKEN_TYPE_MFA:
+        raise jwt.InvalidTokenError("wrong token type")
+    return str(claims["sub"]), str(claims.get("cid", ""))
+
+
+def resolve_member_credential(db: Session, client_id: str, identifier: str):
+    """Locate a member account by username WITHIN a client, accepting any of the
+    three identifier forms (email / system id / staff id) — the broker's chosen
+    source drives the UI label, but a member can present whichever they have."""
+    from app.models import MemberAccount
+    from app.models.member_account import MEMBER_STATUS_DISABLED
+
+    identifier = identifier.strip()
+    base = db.query(MemberAccount).filter(
+        MemberAccount.client_id == client_id,
+        MemberAccount.status != MEMBER_STATUS_DISABLED,
+    )
+    if "@" in identifier:
+        return base.filter(MemberAccount.email == identifier.lower()).one_or_none()
+    account = base.filter(
+        MemberAccount.system_login_id == identifier.upper()
+    ).one_or_none()
+    if account is not None:
+        return account
+    return base.filter(MemberAccount.staff_id == identifier).one_or_none()
+
+
+def require_portal_tenant(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_inspro_tenant_slug: str | None = Header(default=None),
+) -> TenantContext:
+    """The portal subdomain's tenant, or 400. Non-prod accepts an
+    `X-Inspro-Tenant-Slug` header stand-in (same as the HR surface)."""
+    host_info: HostInfo | None = getattr(request.state, "host_info", None)
+    if host_info is None and x_inspro_tenant_slug and get_settings().env != "prod":
+        host_info = HostInfo(SURFACE_PORTAL, normalize_slug(x_inspro_tenant_slug))
+    ctx = resolve_tenant_context(host_info, db)
+    if ctx is None or ctx.surface != SURFACE_PORTAL:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This request must be made on a company portal subdomain.",
+        )
+    return ctx
 
 
 def _unauthorized(detail: str) -> HTTPException:

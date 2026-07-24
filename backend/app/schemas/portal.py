@@ -31,7 +31,7 @@ class OtpVerifyIn(BaseModel):
 
 class PortalMemberOut(_Base):
     id: str
-    email: str
+    email: str | None = None
     staff_id: str
     display_name: str | None = None
 
@@ -76,16 +76,22 @@ class PortalMe(BaseModel):
 class MemberAccountOut(_Base):
     id: str
     client_id: str
-    email: str
+    email: str | None = None
     staff_id: str
     display_name: str | None = None
     status: str
     invited_by: str | None = None
     last_sign_in_at: datetime | None = None
     created_at: datetime
+    # Broker-generated alternate username; None until allocated.
+    system_login_id: str | None = None
+    # True once the member has set a password (credential login enabled).
+    has_password: bool = False
     # Set by invite/resend responses only (None on plain reads): False means
     # the account exists but the OTP email could not be delivered.
     mail_sent: bool | None = None
+    # Set once by set-password-link responses — deliver to the member.
+    set_password_token: str | None = None
 
 
 class MemberAccountList(BaseModel):
