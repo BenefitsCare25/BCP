@@ -8,6 +8,7 @@ import {
   useCreateBrokerFirm,
   useCreateClient,
   useCreateInvitation,
+  useDashboardSummary,
   useDeleteClient,
   useInvitations,
   useMe,
@@ -38,12 +39,11 @@ import {
 import { formatError } from "@/lib/errors";
 import { toast } from "sonner";
 
-const ASSIGNABLE_ROLES = [
-  "broker_admin",
-  "broker_viewer",
-  "client_admin",
-  "client_hr",
-];
+// Brokerage staff roles only. A company's HR logins (client_admin / client_hr)
+// are provisioned per-company under Company settings → Authentication → HR
+// admins — never from this firm-wide surface — so the two audiences stay
+// cleanly separated.
+const ASSIGNABLE_ROLES = ["broker_admin", "broker_viewer"];
 const CLIENT_ROLES = new Set(["client_admin", "client_hr"]);
 
 function statusVariant(status: string): "good" | "warn" | "error" | "default" {
@@ -161,7 +161,13 @@ function BrokerFirmsCard() {
 
 function ClientsCard() {
   const { data: clients = [] } = useAdminClients();
+  const { data: summary } = useDashboardSummary();
   const create = useCreateClient();
+  // Join the firm roll-up (member counts + current benefit year) onto each
+  // client so this single firm-wide surface shows what the old Companies tab did.
+  const statsById = new Map(
+    (summary?.companies ?? []).map((c) => [c.id, c]),
+  );
   const patch = usePatchClient();
   const del = useDeleteClient();
   const [name, setName] = useState("");
@@ -248,7 +254,23 @@ function ClientsCard() {
                 </>
               ) : (
                 <>
-                  <span className="font-medium">{c.name}</span>
+                  <div className="min-w-0">
+                    <span className="font-medium">{c.name}</span>
+                    {(() => {
+                      const s = statsById.get(c.id);
+                      if (!s) return null;
+                      return (
+                        <div className="text-xs text-muted-foreground">
+                          {s.current_year
+                            ? `${s.current_year.year} · Current`
+                            : "No current year"}
+                          {" · "}
+                          {s.member_count} member
+                          {s.member_count === 1 ? "" : "s"}
+                        </div>
+                      );
+                    })()}
+                  </div>
                   <div className="flex gap-1 shrink-0">
                     <Button
                       size="sm"
@@ -296,7 +318,6 @@ function ClientsCard() {
 
 function UsersCard({ meRole }: { meRole: string }) {
   const { data: users = [] } = useAdminUsers();
-  const { data: clients = [] } = useAdminClients();
   const { data: invites = [] } = useInvitations();
   const invite = useCreateInvitation();
   const patch = usePatchUser();
@@ -304,7 +325,6 @@ function UsersCard({ meRole }: { meRole: string }) {
 
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("broker_viewer");
-  const [clientIds, setClientIds] = useState<string[]>([]);
 
   const roleOptions = meRole === "system_admin"
     ? [...ASSIGNABLE_ROLES, "system_admin"]
@@ -313,14 +333,9 @@ function UsersCard({ meRole }: { meRole: string }) {
   const onInvite = async () => {
     if (!email.trim()) return;
     try {
-      await invite.mutateAsync({
-        email: email.trim(),
-        role,
-        client_ids: CLIENT_ROLES.has(role) ? clientIds : [],
-      });
+      await invite.mutateAsync({ email: email.trim(), role, client_ids: [] });
       toast.success("Invitation sent");
       setEmail("");
-      setClientIds([]);
     } catch (e) {
       toast.error(formatError(e));
     }
@@ -346,6 +361,9 @@ function UsersCard({ meRole }: { meRole: string }) {
   };
 
   const pendingByEmail = new Map(invites.map((i) => [i.email, i]));
+  // Firm-wide user management is brokerage staff only; a company's HR logins
+  // live under Company settings → Authentication, so keep them out of here.
+  const brokerUsers = users.filter((u) => !CLIENT_ROLES.has(u.role));
 
   return (
     <Card>
@@ -376,8 +394,8 @@ function UsersCard({ meRole }: { meRole: string }) {
                 hint={
                   <>
                     system_admin: full platform. broker_admin: manage this firm.
-                    broker_viewer: read-only. client_admin / client_hr: limited
-                    to the clients you grant below.
+                    broker_viewer: read-only. A company's HR logins are managed
+                    under Company settings → Authentication, not here.
                   </>
                 }
               >
@@ -397,50 +415,10 @@ function UsersCard({ meRole }: { meRole: string }) {
               Invite
             </Button>
           </div>
-          {CLIENT_ROLES.has(role) && (
-            <div className="flex flex-col gap-1.5">
-              <FieldLabel
-                hint={
-                  <>
-                    Client roles only see the companies you select here. Broker
-                    roles skip this — they see every client in the firm.
-                  </>
-                }
-              >
-                Grant access to clients
-              </FieldLabel>
-              <div className="flex flex-wrap gap-2">
-                {clients.map((c) => {
-                  const on = clientIds.includes(c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() =>
-                        setClientIds((prev) =>
-                          on ? prev.filter((x) => x !== c.id) : [...prev, c.id],
-                        )
-                      }
-                      className={
-                        on
-                          ? "rounded-full bg-primary text-primary-foreground text-xs px-3 py-1"
-                          : "rounded-full border border-border text-xs px-3 py-1 hover:bg-muted"
-                      }
-                    >
-                      {c.name}
-                    </button>
-                  );
-                })}
-                {clients.length === 0 && (
-                  <span className="text-xs text-muted-foreground">Create a client first.</span>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         <ul className="divide-y divide-border rounded-md border border-border">
-          {users.map((u) => {
+          {brokerUsers.map((u) => {
             const inv = pendingByEmail.get(u.email);
             return (
               <li key={u.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
@@ -485,7 +463,7 @@ function UsersCard({ meRole }: { meRole: string }) {
               </li>
             );
           })}
-          {users.length === 0 && (
+          {brokerUsers.length === 0 && (
             <li className="px-3 py-3 text-sm text-muted-foreground flex items-center gap-2">
               <ShieldAlert className="size-4" /> No users yet.
             </li>

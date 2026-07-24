@@ -20,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -173,7 +172,6 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">{title}</CardTitle>
-          <CardDescription>{who}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-1.5">
@@ -231,14 +229,13 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
 
   return (
     <div className="space-y-4">
-      {signInSection("hr", "HR sign-in", "HR admins")}
-      {signInSection("portal", "Employee sign-in", "Employees")}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {signInSection("hr", "HR sign-in", "HR admins")}
+        {signInSection("portal", "Employee sign-in", "Employees")}
+      </div>
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Password & sessions</CardTitle>
-          <CardDescription>
-            Applies wherever a password is used to sign in.
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="flex items-center justify-between gap-4">
@@ -364,10 +361,6 @@ function AccountsCard({ clientId }: { clientId: string }) {
     <Card>
       <CardHeader>
         <CardTitle className="text-sm">HR admins</CardTitle>
-        <CardDescription>
-          People who manage this company's employees, policies and claims. They
-          sign in with a password on the company's HR subdomain.
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
