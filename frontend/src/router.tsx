@@ -16,6 +16,7 @@ import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
 import { HrShell } from "@/components/hr/HrShell";
 import { hasValidHrSession } from "@/stores/hrSession";
+import { refreshHrSession } from "@/api/hrClient";
 
 // Each page is split into its own chunk; the initial bundle ships only the
 // shell + router + the heavy infra (MSAL, react-query, tanstack-router).
@@ -206,14 +207,17 @@ const hrSetPasswordRoute = createRoute({
 const hrLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "hr-shell",
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
     if (
       location.pathname === "/hr/sign-in" ||
       location.pathname === "/hr/set-password"
     ) {
       return;
     }
-    if (!hasValidHrSession()) {
+    // The access token lives ~10 min; the refresh session ~12h. If the access
+    // token has expired, try a silent refresh against the cookie BEFORE bouncing
+    // to sign-in — otherwise navigation forces a full re-login every 10 minutes.
+    if (!hasValidHrSession() && !(await refreshHrSession())) {
       throw redirect({ to: "/hr/sign-in" });
     }
   },

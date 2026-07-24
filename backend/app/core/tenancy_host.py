@@ -13,12 +13,13 @@ This module is deliberately split into two layers:
   `HostInfo(surface, slug)` on `request.state.host_info` for every request. It
   never rejects, never hits the DB (so `/health` and the broker API on
   `localhost` are untouched).
-- `resolve_tenant_context()` / the `optional_tenant` dependency — does the DB
-  lookup, only for routes that ask for it. A subdomain naming an unknown or
-  disabled tenant 404s; no subdomain at all (dev, direct API on localhost)
-  yields `None`, so existing flows that resolve the client from the token keep
-  working. Enforcement (token.client_id == subdomain tenant) lives in the auth
-  code that depends on this.
+- `resolve_tenant_context()` — does the DB lookup, only for routes that ask for
+  it. A subdomain naming an unknown or disabled tenant 404s; no subdomain at all
+  (dev, direct API on localhost) yields `None`, so existing flows that resolve
+  the client from the token keep working. Enforcement (token.client_id ==
+  subdomain tenant) lives in the surface auth code (e.g. `require_hr_tenant` /
+  `optional_hr_tenant` in `hr_auth`, `require_portal_tenant` in `portal_auth`),
+  which pins the surface so the correct kill-switch flag is checked.
 
 Slug rules (DNS label + reserved list) are enforced wherever a broker sets a
 client's slug.
@@ -28,14 +29,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
-
-from app.core.settings import get_settings
-from app.db.session import get_db
 
 SURFACE_BROKER = "broker"
 SURFACE_HR = "hr"
@@ -166,31 +164,12 @@ def resolve_tenant_context(host_info: HostInfo | None, db: Session) -> TenantCon
     )
 
 
-def optional_tenant(
-    request: Request,
-    db: Session = Depends(get_db),
-    x_inspro_tenant_slug: str | None = Header(default=None),
-) -> TenantContext | None:
-    """FastAPI dependency: the subdomain's tenant if present, else None.
-
-    Reads the parsed `HostInfo` stashed by `TenantMiddleware`. In non-prod,
-    an explicit `X-Inspro-Tenant-Slug` header substitutes for a real subdomain
-    so the portal/HR surfaces are testable on `localhost`; in prod the header
-    is ignored (the subdomain is the only source of truth).
-    """
-    host_info: HostInfo | None = getattr(request.state, "host_info", None)
-    if host_info is None and x_inspro_tenant_slug:
-        if get_settings().env != "prod":
-            surface = getattr(request.state, "dev_surface", SURFACE_PORTAL)
-            host_info = HostInfo(surface, normalize_slug(x_inspro_tenant_slug))
-    return resolve_tenant_context(host_info, db)
-
-
 class TenantMiddleware(BaseHTTPMiddleware):
     """Parse the Host header once per request and stash `HostInfo` on state.
 
-    Pure and DB-free — resolution + rejection happen later in `optional_tenant`
-    for the routes that need a tenant.
+    Pure and DB-free — resolution + rejection happen later in the surface tenant
+    dependencies (`require_hr_tenant` / `optional_hr_tenant` / etc.) for the
+    routes that need a tenant.
     """
 
     def __init__(self, app: ASGIApp, base_domain: str) -> None:

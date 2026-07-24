@@ -48,13 +48,21 @@ def issue_session(
     ip: str | None = None,
     user_agent: str | None = None,
     subdomain: str | None = None,
+    expires_at: datetime | None = None,
 ) -> IssuedSession:
-    """Create a session row and return the raw token. Does NOT commit."""
+    """Create a session row and return the raw token. Does NOT commit.
+
+    `expires_at` pins the absolute expiry; when omitted it's computed from
+    `absolute_hours`. Rotation passes the family's ORIGINAL expiry so the
+    absolute lifetime is anchored at first login and does not slide forward on
+    each refresh.
+    """
     from app.models import AuthSession  # lazy
 
     token = _new_token()
     now = datetime.now(UTC)
-    expires_at = now + timedelta(hours=absolute_hours)
+    if expires_at is None:
+        expires_at = now + timedelta(hours=absolute_hours)
     row = AuthSession(
         subject_type=subject_type,
         subject_id=subject_id,
@@ -154,6 +162,9 @@ def rotate_session(
         client_id=row.client_id,
         broker_firm_id=row.broker_firm_id,
         absolute_hours=absolute_hours,
+        # Carry the family's original absolute expiry forward so the cap is
+        # fixed at first login rather than resetting on every refresh.
+        expires_at=expires,
         family_id=row.family_id,
         parent_id=row.id,
         ip=ip,

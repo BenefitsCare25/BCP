@@ -20,13 +20,7 @@ interface HrSessionState {
   token: string | null;
   expiresAt: string | null;
   me: HrMe | null;
-  mfaEnrollmentRequired: boolean;
-  setSession: (
-    token: string,
-    expiresAt: string,
-    me: HrMe,
-    mfaEnrollmentRequired?: boolean,
-  ) => void;
+  setSession: (token: string, expiresAt: string, me: HrMe) => void;
   clearSession: () => void;
 }
 
@@ -36,11 +30,8 @@ export const useHrSession = create<HrSessionState>()(
       token: null,
       expiresAt: null,
       me: null,
-      mfaEnrollmentRequired: false,
-      setSession: (token, expiresAt, me, mfaEnrollmentRequired = false) =>
-        set({ token, expiresAt, me, mfaEnrollmentRequired }),
-      clearSession: () =>
-        set({ token: null, expiresAt: null, me: null, mfaEnrollmentRequired: false }),
+      setSession: (token, expiresAt, me) => set({ token, expiresAt, me }),
+      clearSession: () => set({ token: null, expiresAt: null, me: null }),
     }),
     // Distinct key from the broker + portal sessions — three surfaces, one
     // browser, must never clobber each other.

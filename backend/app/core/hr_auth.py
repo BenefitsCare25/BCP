@@ -39,7 +39,6 @@ from app.core.tenancy_host import (
     HostInfo,
     TenantContext,
     normalize_slug,
-    optional_tenant,
     resolve_tenant_context,
 )
 from app.db.session import get_db
@@ -339,6 +338,24 @@ def require_hr_tenant(
     return ctx
 
 
+def optional_hr_tenant(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_inspro_tenant_slug: str | None = Header(default=None),
+) -> TenantContext | None:
+    """The HR subdomain's tenant if present, else None (token cid governs).
+
+    Like `require_hr_tenant` but non-fatal — used by `get_current_hr_user`,
+    where a request without a subdomain (dev/localhost direct) is legitimate.
+    Crucially it pins the dev-header surface to HR, so resolution checks
+    `hr_enabled` rather than `portal_enabled`.
+    """
+    host_info: HostInfo | None = getattr(request.state, "host_info", None)
+    if host_info is None and x_inspro_tenant_slug and get_settings().env != "prod":
+        host_info = HostInfo(SURFACE_HR, normalize_slug(x_inspro_tenant_slug))
+    return resolve_tenant_context(host_info, db)
+
+
 # ── Refresh cookie ─────────────────────────────────────────────────────────────
 def set_refresh_cookie(
     response: Response, token: str, expires_at: datetime, settings: Settings | None = None
@@ -367,7 +384,7 @@ def clear_refresh_cookie(response: Response) -> None:
 def get_current_hr_user(
     request: Request,
     authorization: str | None = Header(default=None),
-    tenant: TenantContext | None = Depends(optional_tenant),
+    tenant: TenantContext | None = Depends(optional_hr_tenant),
     db: Session = Depends(get_db),
 ) -> CurrentUser:
     from app.models import User

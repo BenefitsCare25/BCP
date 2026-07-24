@@ -37,15 +37,14 @@ const MODULES = [
 
 export function HrDashboardPage() {
   const me = useHrSession((s) => s.me);
-  const loginFlag = useHrSession((s) => s.mfaEnrollmentRequired);
   const { data } = useHrMe();
   const identity = data ?? me;
-  // The login flag is the immediate signal; fall back to the live identity
-  // (2FA available but not yet confirmed) so the nudge survives a token refresh,
-  // which re-seeds the session without the flag.
-  const mfaNeeded =
-    loginFlag ||
-    (!!identity?.mfa_available && identity?.mfa_status !== "confirmed");
+  // Optional-2FA nudge, derived from the live identity: the company has 2FA
+  // available and this person hasn't confirmed enrolment yet. Deriving it (not
+  // storing a session flag) means it stays correct across token refresh and
+  // updates the instant enrolment completes.
+  const mfaSuggested =
+    !!identity?.mfa_available && identity?.mfa_status !== "confirmed";
 
   return (
     <div className="space-y-8">
@@ -63,17 +62,17 @@ export function HrDashboardPage() {
         )}
       </div>
 
-      {mfaNeeded && (
+      {mfaSuggested && (
         <Card className="border-warn/40 bg-warn/5">
           <CardHeader className="flex-row items-start gap-3 space-y-0">
             <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warn" />
             <div>
               <CardTitle className="text-base">
-                Two-factor authentication required
+                Add two-factor authentication
               </CardTitle>
               <CardDescription>
-                Your company requires two-factor authentication. Set it up now to
-                secure your access.
+                Your company supports two-factor authentication. It's optional,
+                but adding it gives your account an extra layer of security.
               </CardDescription>
               <Button asChild size="sm" className="mt-3">
                 <Link to="/hr/security">Set up two-factor</Link>

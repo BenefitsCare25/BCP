@@ -8,7 +8,6 @@ export interface HrTokenResult {
   status: "authenticated";
   access_token: string;
   expires_at: string;
-  mfa_enrollment_required: boolean;
   me: HrMe;
 }
 
@@ -23,16 +22,13 @@ export function isTokenResult(r: HrLoginResult): r is HrTokenResult {
   return r.status === "authenticated";
 }
 
-/** Persist a token result into the session store. */
+/** Persist a token result into the session store. The MFA-enrolment nudge is
+ * derived from the live identity (`mfa_available` + `mfa_status`), not carried
+ * as a session flag — so it survives token refresh without special handling. */
 export function adoptSession(result: HrTokenResult): void {
   useHrSession
     .getState()
-    .setSession(
-      result.access_token,
-      result.expires_at,
-      result.me,
-      result.mfa_enrollment_required,
-    );
+    .setSession(result.access_token, result.expires_at, result.me);
 }
 
 export function useHrLogin() {

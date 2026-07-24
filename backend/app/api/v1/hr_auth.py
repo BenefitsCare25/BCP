@@ -454,7 +454,7 @@ def set_password(
     db: Session = Depends(get_db),
 ):
     from app.models import AuthCredential, User, UserClientAccess
-    from app.models.user import USER_STATUS_INVITED
+    from app.models.user import USER_STATUS_DISABLED, USER_STATUS_INVITED
 
     try:
         user_id, version = HR.verify_set_password_token(body.token)
@@ -479,6 +479,11 @@ def set_password(
     )
     if user is None or cred is None or grant is None or user.role not in HR.HR_ROLES:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link is not valid.")
+    # A disabled account must not be reactivated via a set-password link.
+    if user.status == USER_STATUS_DISABLED:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Account is disabled — re-enable it first."
+        )
     # Single-use: the token's version must match the credential's current stamp.
     if HR.credential_version(cred) != version:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link already used.")

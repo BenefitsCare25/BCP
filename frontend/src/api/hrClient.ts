@@ -40,8 +40,12 @@ function handleUnauthorized(): never {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
-async function tryRefresh(): Promise<boolean> {
-  // De-dupe concurrent 401s onto a single refresh call.
+/** Attempt one silent HR access-token refresh against the rotating refresh
+ * cookie. Exported so the router guard can refresh on navigation (not just the
+ * API layer on a 401), otherwise an expired 10-min access token bounces the
+ * user to sign-in despite a valid 12h session. Concurrent callers de-dupe onto
+ * a single in-flight request. */
+export async function refreshHrSession(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
@@ -87,7 +91,7 @@ async function request<T>(
     // Never auto-refresh the auth endpoints themselves — a 401 there is an
     // inline credential error, not a session expiry.
     if (!retried && !path.startsWith("/hr/auth/")) {
-      if (await tryRefresh()) return request<T>(path, init, true);
+      if (await refreshHrSession()) return request<T>(path, init, true);
     }
     return handleUnauthorized();
   }

@@ -242,10 +242,7 @@ def member_login(
         )
         db.commit()
         raise HTTPException(status.HTTP_423_LOCKED, "Account temporarily locked. Try again later.")
-    if (
-        not PW.verify_password(account.password_hash, body.password)
-        or account.status == MEMBER_STATUS_DISABLED
-    ):
+    if not PW.verify_password(account.password_hash, body.password):
         CRED.register_failure(account)
         EV.write_auth_event(
             db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_FAIL, surface="portal",
@@ -327,6 +324,12 @@ def member_set_password(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link is not valid.")
     if CRED.credential_version(account) != version:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link already used.")
+    # A disabled account must not be reactivated via a set-password link
+    # (mirrors the broker-side member_password_setup 409).
+    if account.status == MEMBER_STATUS_DISABLED:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Account is disabled — re-enable it first."
+        )
 
     policy = get_auth_policy(db, tenant.client_id)
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
