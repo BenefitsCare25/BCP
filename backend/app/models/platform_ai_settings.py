@@ -22,8 +22,12 @@ class PlatformAISetting(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=SINGLETON_ID)
     # NULL = inherit env fallback; a value (0 allowed = disabled) = explicit.
-    platform_monthly_token_cap: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    default_monthly_token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Token counts are BigInteger: a fleet cap can exceed int32 (2.1B) and the
+    # validator allows up to 1e12 — Integer would overflow on Postgres (int32),
+    # invisibly, since SQLite has no such limit. max_concurrent_calls stays a
+    # small Integer.
+    platform_monthly_token_cap: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    default_monthly_token_budget: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     max_concurrent_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 

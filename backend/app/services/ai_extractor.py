@@ -152,9 +152,9 @@ def generate_rule_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
-            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
-            "a tenant BYOK key on the AI provider settings page."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     client = _build_ai_client(cfg, timeout=_PROVIDER_TIMEOUT_SECONDS)
@@ -332,9 +332,9 @@ def propose_derivation_rules_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
-            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
-            "a tenant BYOK key on the AI provider settings page."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     client = _build_ai_client(cfg, timeout=_DERIVATION_TIMEOUT_SECONDS)
@@ -534,9 +534,9 @@ def recommend_schema_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
-            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
-            "a tenant BYOK key on the AI provider settings page."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     client = _build_ai_client(cfg, timeout=_RECOMMEND_TIMEOUT_SECONDS)
@@ -742,9 +742,9 @@ def extract_slip_structure_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
-            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
-            "a tenant BYOK key on the AI provider settings page."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     client = _build_ai_client(cfg, timeout=_SLIP_EXTRACT_TIMEOUT_SECONDS)
@@ -1074,9 +1074,9 @@ def extract_flex_scheme_via_ai(
     cfg = config or load_ai_config()
     if cfg is None:
         raise AINotConfiguredError(
-            "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
-            "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or configure "
-            "a tenant BYOK key on the AI provider settings page."
+            "AI provider not configured. Set INSPRO_AI_PROVIDER=vertex + "
+            "VERTEX_PROJECT (Google ADC for local dev), or configure a tenant "
+            "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
     client = _build_ai_client(cfg, timeout=_FLEX_EXTRACT_TIMEOUT_SECONDS)

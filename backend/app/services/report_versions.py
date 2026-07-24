@@ -19,7 +19,12 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser
 from app.core.pagination import MAX_LIMIT
-from app.core.storage import MAX_REPORT_BYTES, document_path, get_storage
+from app.core.storage import (
+    MAX_REPORT_BYTES,
+    REPORT_SUFFIXES,
+    document_path,
+    get_storage,
+)
 from app.db.base import new_uuid
 from app.models import (
     Category,
@@ -95,12 +100,13 @@ def _content_signature(spec: ReportSpec, blob_bytes: bytes) -> str | None:
         return None
     try:
         with zipfile.ZipFile(BytesIO(blob_bytes)) as z:
-            if spec.fmt == "docx":
-                # The body is deterministic for identical data; only core.xml
-                # carries the write timestamp.
-                return hashlib.sha256(z.read("word/document.xml")).hexdigest()
-            # xlsx: hash every part except the volatile timestamp, in a stable
-            # order. No workbook re-parse.
+            # Hash every package part except the volatile timestamp, in a stable
+            # order — deterministic for identical data from both openpyxl (xlsx)
+            # and python-docx (docx), with no workbook re-parse. Hashing ALL
+            # parts (not just word/document.xml) is what makes docx correct: a
+            # change confined to a header/footer, embedded numbering/styles, or
+            # an image part still moves the fingerprint, so the no-op guard can't
+            # silently drop a genuinely new version.
             h = hashlib.sha256()
             for name in sorted(z.namelist()):
                 if name in _VOLATILE_OOXML:
@@ -206,6 +212,13 @@ def create_version(
     the prior row + blob. Caller owns the audit write + commit.
     """
     spec = spec_for(report_type)
+    # Enforce the retained-report format allowlist (defense in depth: a report
+    # spec must produce a known document type, never an arbitrary blob).
+    if f".{spec.fmt}" not in REPORT_SUFFIXES:
+        raise ValueError(
+            f"Report format {spec.fmt!r} is not an allowed retained-report type "
+            f"({sorted(REPORT_SUFFIXES)})."
+        )
     scope_key = scope_key_for(spec, params)
     masked = bool(params.get("masked", True))
     prior = latest_version(db, py, report_type, scope_key)
