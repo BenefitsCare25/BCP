@@ -1039,7 +1039,11 @@ export function useAdminClients() {
 export function useCreateClient() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (name: string) => api.post<AdminClient>("/admin/clients", { name }),
+    // broker_firm_id is system_admin-only and optional: the backend falls back
+    // to the sole firm when the platform has exactly one, and rejects an
+    // unqualified create only when there are several to choose between.
+    mutationFn: (body: { name: string; broker_firm_id?: string }) =>
+      api.post<AdminClient>("/admin/clients", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] }); // switcher's accessible clients
@@ -1106,8 +1110,12 @@ export function useInvitations() {
 export function useCreateInvitation() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { email: string; role: string; client_ids?: string[] }) =>
-      api.post<AdminInvitation>("/admin/invitations", body),
+    mutationFn: (body: {
+      email: string;
+      role: string;
+      client_ids?: string[];
+      broker_firm_id?: string; // system_admin only; see useCreateClient
+    }) => api.post<AdminInvitation>("/admin/invitations", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "invitations"] });
       qc.invalidateQueries({ queryKey: ["admin", "users"] });

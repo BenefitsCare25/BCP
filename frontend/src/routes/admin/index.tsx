@@ -101,8 +101,39 @@ export function AdminPage() {
   return (
     <div className="space-y-5">
       {isSystemAdmin && <BrokerFirmsCard />}
-      <ClientsCard />
-      <UsersCard meRole={me?.role ?? "broker_viewer"} />
+      <ClientsCard isSystemAdmin={isSystemAdmin} />
+      <UsersCard meRole={me?.role ?? "broker_viewer"} isSystemAdmin={isSystemAdmin} />
+    </div>
+  );
+}
+
+/** Firm target for a system_admin's create/invite action.
+ *
+ * A broker_admin always acts on their own firm, and a single-firm platform has
+ * exactly one answer (the backend resolves it), so this renders NOTHING in
+ * either case — showing a select with one option is noise. It appears only when
+ * there really are several firms and the choice is the admin's to make. */
+function FirmPicker({
+  firms, value, onChange,
+}: {
+  firms: { id: string; name: string }[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  if (firms.length < 2) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <FieldLabel hint="Which broker firm this belongs to. Shown because you administer more than one.">
+        Broker firm
+      </FieldLabel>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger><SelectValue placeholder="Select a firm" /></SelectTrigger>
+        <SelectContent>
+          {firms.map((f) => (
+            <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -159,8 +190,10 @@ function BrokerFirmsCard() {
   );
 }
 
-function ClientsCard() {
+function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
   const { data: clients = [] } = useAdminClients();
+  const { data: firms = [] } = useBrokerFirms(isSystemAdmin);
+  const [firmId, setFirmId] = useState("");
   const { data: summary } = useDashboardSummary();
   const create = useCreateClient();
   // Join the firm roll-up (member counts + current benefit year) onto each
@@ -180,7 +213,12 @@ function ClientsCard() {
   const onCreate = async () => {
     if (!name.trim()) return;
     try {
-      await create.mutateAsync(name.trim());
+      // Omit broker_firm_id when there is nothing to disambiguate — the backend
+      // resolves the sole firm, and a broker_admin may not name one at all.
+      await create.mutateAsync({
+        name: name.trim(),
+        ...(firmId ? { broker_firm_id: firmId } : {}),
+      });
       toast.success("Client created");
       setName("");
     } catch (e) {
@@ -228,6 +266,7 @@ function ClientsCard() {
             <Label>New client name</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
+          <FirmPicker firms={firms} value={firmId} onChange={setFirmId} />
           <Button onClick={onCreate} disabled={create.isPending || !name.trim()}>
             {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
             Create
@@ -316,9 +355,11 @@ function ClientsCard() {
   );
 }
 
-function UsersCard({ meRole }: { meRole: string }) {
+function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: boolean }) {
   const { data: users = [] } = useAdminUsers();
   const { data: invites = [] } = useInvitations();
+  const { data: firms = [] } = useBrokerFirms(isSystemAdmin);
+  const [firmId, setFirmId] = useState("");
   const invite = useCreateInvitation();
   const patch = usePatchUser();
   const revoke = useRevokeInvitation();
@@ -333,8 +374,16 @@ function UsersCard({ meRole }: { meRole: string }) {
   const onInvite = async () => {
     if (!email.trim()) return;
     try {
-      await invite.mutateAsync({ email: email.trim(), role, client_ids: [] });
-      toast.success("Invitation sent");
+      await invite.mutateAsync({
+        email: email.trim(),
+        role,
+        client_ids: [],
+        ...(firmId ? { broker_firm_id: firmId } : {}),
+      });
+      // Deliberately not "Invitation sent": with SMTP unconfigured nothing is
+      // emailed, and the access grant is what actually matters — first Entra
+      // sign-in matches this row by email, with or without a delivered token.
+      toast.success("User invited — they can now sign in with Microsoft");
       setEmail("");
     } catch (e) {
       toast.error(formatError(e));
@@ -410,6 +459,7 @@ function UsersCard({ meRole }: { meRole: string }) {
                 </SelectContent>
               </Select>
             </div>
+            <FirmPicker firms={firms} value={firmId} onChange={setFirmId} />
             <Button onClick={onInvite} disabled={invite.isPending || !email.trim()}>
               {invite.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
               Invite

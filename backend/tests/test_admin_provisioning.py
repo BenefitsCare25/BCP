@@ -221,3 +221,48 @@ def test_patch_other_firm_user_404(broker: TestClient) -> None:
         f2_user_id = f2_user.id
     res = broker.patch(f"/api/v1/admin/users/{f2_user_id}", json={"status": "disabled"})
     assert res.status_code == 404
+
+
+# ── Firm resolution for system_admin ─────────────────────────────────────────
+# The admin UI sends no broker_firm_id, so a system_admin used to get
+# 400 "must specify broker_firm_id" on every Create company / Invite — the
+# console was unusable for the very role that bootstraps the platform.
+def test_sysadmin_invite_ambiguous_when_several_firms(sysadmin: TestClient) -> None:
+    """With more than one firm there is no unambiguous target, so still refuse."""
+    res = sysadmin.post("/api/v1/admin/invitations",
+                        json={"email": "ambiguous@inspro.test", "role": "broker_viewer"})
+    assert res.status_code == 400
+    assert "broker_firm_id" in res.json()["detail"]
+
+
+def test_resolve_target_firm_sole_firm_fallback() -> None:
+    """Zero / one / many firms, against a DB of exactly known contents.
+
+    Uses its own in-memory engine: the module fixture seeds several firms, which
+    is precisely the case that must NOT resolve.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.api.v1.admin import _resolve_target_firm
+
+    eng = create_engine("sqlite://")
+    Base.metadata.create_all(bind=eng)
+    with sessionmaker(bind=eng)() as s:
+        # No firm at all: "specify a firm" is unactionable advice here.
+        with pytest.raises(HTTPException) as exc:
+            _resolve_target_firm(_system_admin(), None, s)
+        assert "create one first" in str(exc.value.detail)
+
+        s.add(BrokerFirm(id="firm-solo", name="Only Firm"))
+        s.commit()
+        assert _resolve_target_firm(_system_admin(), None, s) == "firm-solo"
+        # An explicit id always wins over the fallback.
+        assert _resolve_target_firm(_system_admin(), "firm-xyz", s) == "firm-xyz"
+
+        s.add(BrokerFirm(id="firm-second", name="Second Firm"))
+        s.commit()
+        with pytest.raises(HTTPException) as exc:
+            _resolve_target_firm(_system_admin(), None, s)
+        assert "must specify" in str(exc.value.detail)

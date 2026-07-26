@@ -46,16 +46,36 @@ _CLIENT_ROLES = frozenset({"client_admin", "client_hr"})
 _INVITE_TTL_DAYS = 14
 
 
-def _resolve_target_firm(user: CurrentUser, requested_firm_id: str | None) -> str:
+def _resolve_target_firm(
+    user: CurrentUser, requested_firm_id: str | None, db: Session | None = None
+) -> str:
     """The firm an admin action targets. broker_admin → own firm; system_admin
-    must name one explicitly."""
+    names one explicitly, or falls back to the sole firm when only one exists."""
     if user.role == "system_admin":
-        if not requested_firm_id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "system_admin must specify broker_firm_id.",
-            )
-        return requested_firm_id
+        if requested_firm_id:
+            return requested_firm_id
+        # A single-firm platform has exactly one answer, so demanding the caller
+        # name it is pure friction — and it made the admin page unusable for a
+        # system_admin, because the UI sends no broker_firm_id: every "Create
+        # company" and "Invite" returned 400. Resolve it here rather than
+        # guessing in the UI. With two or more firms there IS no unambiguous
+        # answer, so still refuse (mirrors _column_id_for_plan in sob_columns).
+        if db is not None:
+            firm_ids = db.execute(select(BrokerFirm.id).limit(2)).scalars().all()
+            if len(firm_ids) == 1:
+                return str(firm_ids[0])
+            if not firm_ids:
+                # Distinct message: "specify a firm" is unactionable advice when
+                # there is no firm to name, and this is the very first thing a
+                # freshly bootstrapped system_admin hits.
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "No broker firm exists yet — create one first.",
+                )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "system_admin must specify broker_firm_id.",
+        )
     # broker_admin
     if requested_firm_id and requested_firm_id != user.broker_firm_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot manage another firm.")
@@ -191,7 +211,7 @@ def create_client(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> ClientOut:
-    firm_id = _resolve_target_firm(user, body.broker_firm_id)
+    firm_id = _resolve_target_firm(user, body.broker_firm_id, db)
     if db.get(BrokerFirm, firm_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Broker firm not found")
     client = Client(name=body.name.strip(), broker_firm_id=firm_id)
@@ -219,7 +239,7 @@ def list_clients(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> list[ClientOut]:
-    firm_id = _resolve_target_firm(user, broker_firm_id)
+    firm_id = _resolve_target_firm(user, broker_firm_id, db)
     clients = db.execute(
         select(Client).where(Client.broker_firm_id == firm_id).order_by(Client.name)
     ).scalars().all()
@@ -333,7 +353,7 @@ def list_users(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> list[UserOut]:
-    firm_id = _resolve_target_firm(user, broker_firm_id)
+    firm_id = _resolve_target_firm(user, broker_firm_id, db)
     users = db.execute(
         select(User).where(User.broker_firm_id == firm_id).order_by(User.email)
     ).scalars().all()
@@ -401,7 +421,7 @@ def create_invitation(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> InvitationOut:
-    firm_id = _resolve_target_firm(user, body.broker_firm_id)
+    firm_id = _resolve_target_firm(user, body.broker_firm_id, db)
     if db.get(BrokerFirm, firm_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Broker firm not found")
     _assert_grantable_role(user, body.role)
@@ -465,7 +485,7 @@ def list_invitations(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> list[InvitationOut]:
-    firm_id = _resolve_target_firm(user, broker_firm_id)
+    firm_id = _resolve_target_firm(user, broker_firm_id, db)
     invites = db.execute(
         select(Invitation).where(
             Invitation.broker_firm_id == firm_id,
