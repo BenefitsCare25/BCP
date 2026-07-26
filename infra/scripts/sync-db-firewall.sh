@@ -36,8 +36,24 @@ if [ -z "$IPS" ]; then
 fi
 
 COUNT=$(echo "$IPS" | wc -l | tr -d ' ')
+DESIRED=$(echo "$IPS" | sed 's/\./-/g' | sed 's/^/app-/' | sort)
+EXISTING=$(az postgres flexible-server firewall-rule list \
+  --resource-group "$RG" --name "$PG" \
+  --query "[?starts_with(name, 'app-')].name" -o tsv 2>/dev/null | tr -d '\r' | sort || true)
+
+# Short-circuit when nothing changed. Azure Postgres applies each firewall rule
+# as its own server update, so re-declaring all ~44 takes ~20 MINUTES and
+# reconfigures the live database — on every single deploy, for no reason. The
+# IPs only change when the App Service plan tier changes, so the common case
+# must cost nothing.
+if [ "$DESIRED" = "$EXISTING" ]; then
+  echo "Firewall already matches the app's ${COUNT} outbound IP(s) — nothing to do."
+  exit 0
+fi
+
 JSON=$(echo "$IPS" | awk 'BEGIN{printf "["} {printf "%s\"%s\"", (NR>1 ? "," : ""), $0} END{printf "]"}')
-echo "Applying ${COUNT} firewall rule(s) to ${PG} in a single deployment…"
+echo "Firewall drift detected — applying ${COUNT} rule(s) to ${PG} in a single deployment…"
+echo "NOTE: this reconfigures the server once per rule and can take ~20 minutes."
 
 az deployment group create \
   --resource-group "$RG" \
@@ -48,15 +64,8 @@ az deployment group create \
 
 # Prune rules from a previous, larger IP set — Incremental mode won't remove
 # them, so a scale-down would otherwise leave addresses allowed that this app
-# no longer uses.
-DESIRED=$(echo "$IPS" | sed 's/\./-/g' | sed 's/^/app-/')
-# `tr -d '\r'`: az emits CRLF on Windows, and a trailing \r both breaks the
-# exact-match below (so a live rule looks stale) and makes the delete call fail
-# validation — which, under `set -e`, aborted the prune entirely.
-EXISTING=$(az postgres flexible-server firewall-rule list \
-  --resource-group "$RG" --name "$PG" \
-  --query "[?starts_with(name, 'app-')].name" -o tsv 2>/dev/null | tr -d '\r' || true)
-
+# no longer uses. Reuses DESIRED/EXISTING computed above (EXISTING is the
+# pre-deployment snapshot, which is exactly the set that may contain strays).
 for name in $EXISTING; do
   if ! echo "$DESIRED" | grep -qx "$name"; then
     echo "Pruning stale rule ${name}"
