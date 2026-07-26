@@ -33,6 +33,15 @@ VDL_FIXTURE = (
     / "VDL - Placement Slips 2026 (as at 13 Apr 2026).xls"
 )
 
+# See test_match_results_endpoint.py: the workbooks are real broker PII and are
+# never committed, and these tests are sequentially dependent on the upload the
+# first one performs. Skipping per-test left the dependents asserting against an
+# empty database, so skip the module instead.
+pytestmark = pytest.mark.skipif(
+    not FIXTURE.exists(),
+    reason=f"Requires uncommitted PII workbook: {FIXTURE.name}",
+)
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _setup_db():

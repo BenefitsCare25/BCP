@@ -31,6 +31,17 @@ FIXTURE = (
     / "STMicroelectronics - Placement Slips 2026_workingfile (1).xls"
 )
 
+# The workbook is real broker PII and is never committed (see
+# tests/fixtures/README.md), so it is absent in CI. These tests are
+# SEQUENTIALLY DEPENDENT — the first seeds categories and inserts the employees
+# every later test asserts on — so a mid-test `pytest.skip` left the rest of the
+# module failing against an empty database rather than skipping. Skip the module
+# as a whole when the fixture isn't there.
+pytestmark = pytest.mark.skipif(
+    not FIXTURE.exists(),
+    reason=f"Requires uncommitted PII workbook: {FIXTURE.name}",
+)
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _setup_db():
