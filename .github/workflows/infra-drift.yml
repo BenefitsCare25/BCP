@@ -1,0 +1,101 @@
+name: Infra drift check
+
+# deploy.yml skips `Apply Bicep` when a push changed no infrastructure, which
+# takes ~3m off a typical release. The cost of that is drift: an app setting or
+# firewall rule changed by hand in the portal would otherwise persist until the
+# next infra commit, which could be months.
+#
+# This re-asserts main.bicep weekly so drift self-corrects within 7 days, and
+# gives a `what-if` preview on demand for checking BEFORE applying.
+
+on:
+  schedule:
+    # 19:00 UTC Sunday = 03:00 Monday in Singapore — outside working hours.
+    - cron: "0 19 * * 0"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "what-if (preview only) or apply"
+        required: true
+        default: what-if
+        type: choice
+        options: [what-if, apply]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  PROD_RG: rg-inspro-prod
+  PROD_APP: inspro-portal
+  REGISTRY: insproacr.azurecr.io
+
+# Never let this collide with a real deploy — both run `az deployment group
+# create` against the same resource group, and ARM rejects concurrent
+# deployments touching the same resources.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Re-assert prod infrastructure
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # CRITICAL: main.bicep requires `containerImage`, and whatever is passed
+      # becomes the running container. Passing a placeholder or a stale tag here
+      # would silently ROLL PRODUCTION BACK to that image. Read the tag the app
+      # is actually serving and feed it straight back, so this deployment is
+      # genuinely a no-op for the container.
+      - name: Read the currently deployed image
+        id: img
+        run: |
+          CURRENT=$(az webapp config show --name "${{ env.PROD_APP }}" \
+            --resource-group "${{ env.PROD_RG }}" --query linuxFxVersion -o tsv | tr -d '\r')
+          IMAGE="${CURRENT#DOCKER|}"
+          if [ -z "$IMAGE" ] || [ "$IMAGE" = "$CURRENT" ]; then
+            echo "::error::Could not parse the running image from linuxFxVersion='${CURRENT}'."
+            exit 1
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Running image: $IMAGE"
+
+      - name: Apply or preview
+        run: |
+          MODE="${{ github.event.inputs.mode || 'apply' }}"
+          if [ "$MODE" = "what-if" ]; then VERB="what-if"; else VERB="create"; fi
+          echo "Running az deployment group $VERB"
+          az deployment group $VERB \
+            --resource-group ${{ env.PROD_RG }} \
+            --template-file infra/bicep/main.bicep \
+            --parameters @infra/bicep/parameters.prod.json \
+            --parameters \
+              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
+              entraClientId="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
+              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}" \
+              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
+              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
+              acrLoginServer="${{ env.REGISTRY }}" \
+              containerImage="${{ steps.img.outputs.image }}" \
+              alertEmail="${{ secrets.ALERT_EMAIL }}"
+
+      # Re-asserting the template can restart the app if anything had drifted,
+      # so prove it came back rather than assuming a green deployment means a
+      # healthy site.
+      - name: Smoke-test prod
+        if: github.event.inputs.mode != 'what-if'
+        run: |
+          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"

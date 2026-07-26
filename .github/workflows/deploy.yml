@@ -49,14 +49,6 @@ jobs:
         working-directory: backend
         run: uv run ruff check app tests scripts
 
-      - name: Backend — mypy (strict)
-        working-directory: backend
-        run: uv run mypy app
-        # mypy strict surfaces a lot on a half-typed codebase. Don't gate
-        # merges on it yet — TODO: flip to required once the type debt is
-        # paid down.
-        continue-on-error: true
-
       - name: Backend — pytest
         working-directory: backend
         run: PYTHONPATH=. uv run pytest
@@ -81,6 +73,36 @@ jobs:
         working-directory: frontend
         run: pnpm build
 
+  # ── Non-gating static checks, deliberately OFF the critical path ───────────
+  # mypy is `continue-on-error` and Bicep validation is re-proved by the actual
+  # `az deployment group create` later, so neither should sit in front of a
+  # release. Kept as a separate job so failures stay visible on the run.
+  static-checks:
+    name: Static checks (non-gating)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install --no-cache-dir uv
+
+      - name: Backend — install (frozen)
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Backend — mypy (strict)
+        working-directory: backend
+        run: uv run mypy app
+        # mypy strict surfaces a lot on a half-typed codebase. Don't gate
+        # merges on it yet — TODO: flip to required once the type debt is
+        # paid down.
+        continue-on-error: true
+
       - name: Validate Bicep
         run: az bicep build --file infra/bicep/main.bicep
 
@@ -90,7 +112,11 @@ jobs:
   # client ID is a build arg and the image is environment-specific.
   build:
     name: Build container
-    needs: test
+    # Deliberately NOT `needs: test`. The image is inert until `deploy-prod`
+    # ships it, and that job DOES gate on the tests — so building in parallel
+    # takes ~90s off every release in exchange for occasionally building an
+    # image for a commit that then fails its tests, which costs a few cheap ACR
+    # minutes and is never deployed.
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -122,7 +148,9 @@ jobs:
   # ── Production ─────────────────────────────────────────────────────────────
   deploy-prod:
     name: Deploy to prod
-    needs: build
+    # Gates on BOTH: `build` only proves an image exists, `test` is the sole
+    # quality gate before a release reaches members (there is no staging).
+    needs: [test, build]
     runs-on: ubuntu-latest
     environment: prod
     # Serialise deploys. Two pushes in quick succession would otherwise run two
@@ -143,7 +171,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Most releases change only application code, yet reconciling all ~20
+      # Azure resources costs ~3m and opening the migration firewall rule costs
+      # another ~1m40s — a full Postgres server update to admit one IP. Skipping
+      # those when nothing relevant changed is the single biggest saving in this
+      # pipeline.
+      #
+      # Uses the compare API rather than `git diff` so it works for a push of any
+      # number of commits without a full-history checkout (which would cost back
+      # what this saves). FAILS OPEN: anything unexpected — a force push, a new
+      # branch, an API error, a manual dispatch — runs the full pipeline. A
+      # deploy that cannot prove a migration is unnecessary must run it.
+      - name: Detect what changed
+        id: changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          INFRA=true
+          MIGRATIONS=true
+          if [ "${{ github.event_name }}" = "push" ] && \
+             [ -n "$BEFORE" ] && \
+             [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if FILES=$(gh api "repos/${{ github.repository }}/compare/${BEFORE}...${{ github.sha }}" \
+                        --paginate --jq '.files[].filename' 2>/dev/null); then
+              # The workflow itself counts as infra: it passes the parameters
+              # that main.bicep is deployed with.
+              echo "$FILES" | grep -qE '^(infra/|\.github/workflows/)' && INFRA=true || INFRA=false
+              echo "$FILES" | grep -q '^backend/alembic/versions/' && MIGRATIONS=true || MIGRATIONS=false
+            fi
+          fi
+          echo "infra=$INFRA" >> "$GITHUB_OUTPUT"
+          echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
+          echo "infra=$INFRA  migrations=$MIGRATIONS"
+
       - name: Azure login (OIDC)
+        id: login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -154,7 +217,37 @@ jobs:
       # higher and this runs on Basic (B2), so a release is a container restart
       # of ~1-2 min. Rollback = re-run `az webapp config container set` with the
       # previous image tag (see docs/DEPLOY_RUNBOOK.md).
+      # main.bicep requires `containerImage`, and whatever it is given becomes
+      # the running container. Feeding it the CURRENT tag rather than the new one
+      # keeps this template from shipping code as a side effect of an
+      # infrastructure change — which used to put the new image live BEFORE
+      # migrations ran, briefly serving new code against the old schema. The
+      # `Deploy image` step below is now the single place a release ships, so the
+      # order is always: infra -> migrate -> code.
+      - name: Read the currently deployed image
+        id: img
+        if: steps.changed.outputs.infra == 'true'
+        run: |
+          NEW="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          CURRENT=$(az webapp config show --name "${{ env.PROD_APP }}" \
+            --resource-group "${{ env.PROD_RG }}" --query linuxFxVersion -o tsv 2>/dev/null | tr -d '\r' || true)
+          IMAGE="${CURRENT#DOCKER|}"
+          # Fall back to the new tag when there is nothing running yet (first
+          # deploy) or the value doesn't parse — better to ship early than to
+          # fail the deployment on a cosmetic read.
+          if [ -z "$IMAGE" ] || [ "$IMAGE" = "$CURRENT" ]; then
+            echo "No parseable running image; using the new tag."
+            IMAGE="$NEW"
+          fi
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Bicep will assert image: $IMAGE"
+
+      # Skipped when no infra changed. `Deploy image` below sets the container
+      # tag in 10s, so the image still ships — this template's only other job on
+      # a code-only release is to re-assert state that is already correct.
+      # Drift is caught by the weekly infra-drift.yml run.
       - name: Apply Bicep to prod (idempotent)
+        if: steps.changed.outputs.infra == 'true'
         run: |
           az deployment group create \
             --resource-group ${{ env.PROD_RG }} \
@@ -167,7 +260,7 @@ jobs:
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
               aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
-              containerImage="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+              containerImage="${{ steps.img.outputs.image }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
 
       # NOTE: there is deliberately no firewall-sync step any more. The app now
@@ -175,12 +268,19 @@ jobs:
       # the Bicep above), so no public IP allowlist has to be maintained. The
       # old sync enumerated ~44 App Service outbound IPs as individual rules,
       # which Azure applies one server-update at a time — ~20 minutes per deploy.
+      # The next four steps are skipped unless this push actually added a
+      # migration. Alembic migrations only ever live in backend/alembic/versions,
+      # so their absence is a reliable signal there is nothing to apply — and
+      # `Allow runner IP` alone costs ~1m40s, because admitting a single IP is a
+      # full Postgres server update.
       - name: Setup Python (for migrate)
+        if: steps.changed.outputs.migrations == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
+        if: steps.changed.outputs.migrations == 'true'
         run: pip install --no-cache-dir uv
 
       # Migrations run from this runner, not from inside the VNet, so the runner
@@ -197,6 +297,7 @@ jobs:
       # every prod release. See modules/ci-firewall-rule.bicep.
       - name: Allow runner IP on Postgres
         id: fw
+        if: steps.changed.outputs.migrations == 'true'
         run: |
           IP=$(curl -fsS https://api.ipify.org)
           echo "::add-mask::$IP"
@@ -213,6 +314,7 @@ jobs:
             --query "properties.provisioningState" -o tsv
 
       - name: Run database migrations + provision tenant schemas
+        if: steps.changed.outputs.migrations == 'true'
         working-directory: backend
         env:
           INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@inspro-prod-pg.postgres.database.azure.com:5432/inspro?sslmode=require
@@ -233,8 +335,13 @@ jobs:
       # It polls: DELETE returns 202 Accepted and Azure drains it in the
       # background, so the rule stays ENFORCED until that completes — treating
       # the accept as "closed" would report a hole as sealed while it is open.
+      # Runs on EVERY deploy, including ones that skipped the migration steps
+      # entirely — it costs one GET (~2s) when there is nothing to revoke, and
+      # that makes it the safety net that catches a rule stranded by an earlier
+      # force-cancelled run. Gated on the login rather than on `fw` so a skipped
+      # migration still gets the sweep, but a failed login doesn't false-alarm.
       - name: Revoke runner IP
-        if: always() && steps.fw.outputs.rule != ''
+        if: always() && steps.login.outcome == 'success'
         run: |
           BASE="https://management.azure.com/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ env.PROD_RG }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ env.PROD_PG }}/firewallRules"
           for name in $(az rest --method get --url "${BASE}?api-version=2024-08-01" \
