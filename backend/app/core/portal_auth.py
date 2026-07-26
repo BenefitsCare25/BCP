@@ -31,9 +31,8 @@ from sqlalchemy.orm import Session
 from app.core.settings import Settings, get_settings
 from app.core.tenancy_host import (
     SURFACE_PORTAL,
-    HostInfo,
     TenantContext,
-    normalize_slug,
+    resolve_host_info,
     resolve_tenant_context,
 )
 from app.db.session import get_db
@@ -191,11 +190,12 @@ def require_portal_tenant(
     db: Session = Depends(get_db),
     x_inspro_tenant_slug: str | None = Header(default=None),
 ) -> TenantContext:
-    """The portal subdomain's tenant, or 400. Non-prod accepts an
-    `X-Inspro-Tenant-Slug` header stand-in (same as the HR surface)."""
-    host_info: HostInfo | None = getattr(request.state, "host_info", None)
-    if host_info is None and x_inspro_tenant_slug and get_settings().env != "prod":
-        host_info = HostInfo(SURFACE_PORTAL, normalize_slug(x_inspro_tenant_slug))
+    """The portal surface's tenant, or 400.
+
+    Normally the `{slug}.portal.<base>` subdomain; a single-host deployment
+    (`INSPRO_TENANT_MODE=header`) or non-prod accepts an `X-Inspro-Tenant-Slug`
+    header stand-in (same as the HR surface)."""
+    host_info = resolve_host_info(request, SURFACE_PORTAL, x_inspro_tenant_slug)
     ctx = resolve_tenant_context(host_info, db)
     if ctx is None or ctx.surface != SURFACE_PORTAL:
         raise HTTPException(

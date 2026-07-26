@@ -423,15 +423,47 @@ _concurrency_lock = threading.Lock()
 _AI_SLOT_WAIT_SECONDS = 20.0
 
 
+def _worker_count() -> int:
+    """Gunicorn workers in this container (see the Dockerfile's WEB_CONCURRENCY)."""
+    raw = os.environ.get("WEB_CONCURRENCY", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 1
+    except ValueError:
+        return 1
+
+
+def _per_process_limit(limit: int) -> int:
+    """Split the configured concurrency limit across this container's workers.
+
+    The limit is a PLATFORM setting — "how many Gemini calls may be in flight at
+    once" against one shared Vertex quota — but the semaphore enforcing it is a
+    `threading.BoundedSemaphore`, which is per-process. Running gunicorn with N
+    workers therefore delivered N x the number an operator typed into the UI:
+    setting 4 on a 4-worker container allowed 16.
+
+    Dividing restores the intent within a container. Two limits remain:
+    - Across App Service instances the effective cap is still `limit *
+      instances` — nothing in-process can see its siblings. A true global cap
+      needs a shared (Redis) token bucket.
+    - When `limit < workers` every worker still floors at 1, so the effective
+      cap equals the worker count. Setting a limit below the worker count is
+      therefore not meaningful — lower WEB_CONCURRENCY instead.
+    """
+    if limit <= 0:
+        return 0
+    return max(1, limit // _worker_count())
+
+
 @contextlib.contextmanager
 def _slot(limit: int, db: Session | None = None) -> Any:
     """Bound concurrent LIVE provider calls, in-process.
 
-    ``limit`` (0/unset = unbounded) caps how many Gemini calls run at once, so a
-    burst (e.g. 100 members submitting at 9am, each firing extraction + review)
-    applies backpressure instead of racing the thread pool and tripping provider
-    429s. Per-process: with N App Service instances the effective cap is
-    limit * N — size accordingly. A retuned limit rebuilds the semaphore; any
+    ``limit`` (0/unset = unbounded) is the PLATFORM-wide cap on how many Gemini
+    calls run at once, so a burst (e.g. 100 members submitting at 9am, each
+    firing extraction + review) applies backpressure instead of racing the
+    thread pool and tripping provider 429s. It is divided across this
+    container's gunicorn workers by `_per_process_limit` — see there for the
+    residual per-instance caveat. A retuned limit rebuilds the semaphore; any
     in-flight holders drain against the old one, which is fine for a soft
     concurrency guard.
 
@@ -442,6 +474,7 @@ def _slot(limit: int, db: Session | None = None) -> Any:
     connection cannot be released without discarding that work, so the bounded
     wait is the only protection there.
     """
+    limit = _per_process_limit(limit)
     if limit <= 0:
         yield
         return

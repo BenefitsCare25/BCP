@@ -7,6 +7,11 @@ import { isMemberToken, useMemberLogin, useMemberMfa } from "@/api/portal";
 import { errorStatus, formatError } from "@/lib/errors";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
+import {
+  CompanyField,
+  commitCompany,
+  useCompanyRequired,
+} from "@/components/auth/CompanyField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,12 +27,20 @@ export function PortalSignInPage() {
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [company, setCompany] = useState("");
+  const companyRequired = useCompanyRequired();
 
   const finish = () => void navigate({ to: "/portal/coverage" });
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    // The tenant must be settled BEFORE the request — the API client reads it
+    // synchronously to build the X-Inspro-Tenant-Slug header.
+    if (companyRequired && !commitCompany(company)) {
+      setError("Enter your company code — it's in your invitation email.");
+      return;
+    }
     login.mutate(
       { identifier: identifier.trim(), password },
       {
@@ -83,6 +96,7 @@ export function PortalSignInPage() {
     >
       {step === "credentials" ? (
         <form onSubmit={submitCredentials} className="space-y-4">
+          <CompanyField id="portal-company" value={company} onChange={setCompany} />
           <div className="space-y-1.5">
             <Label
               htmlFor="portal-identifier"
@@ -129,7 +143,12 @@ export function PortalSignInPage() {
           <Button
             type="submit"
             className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
-            disabled={login.isPending || !identifier.trim() || !password}
+            disabled={
+              login.isPending ||
+              !identifier.trim() ||
+              !password ||
+              (companyRequired && !company.trim())
+            }
           >
             <KeyRound className="size-[18px]" />
             {login.isPending ? "Signing in…" : "Sign in"}

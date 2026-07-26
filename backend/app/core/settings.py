@@ -16,6 +16,7 @@ AuthMode = Literal["mock", "entra"]
 Env = Literal["dev", "staging", "prod"]
 MailMode = Literal["log", "smtp", "acs"]
 StorageMode = Literal["local", "azure"]
+TenantMode = Literal["subdomain", "header"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,15 @@ class Settings:
     # Apex domain for tenant-per-subdomain routing. `{slug}.portal.<base_domain>`
     # and `{slug}.hr.<base_domain>` resolve the tenant from the Host header.
     base_domain: str = "inspro.sg"
+    # How the HR / portal surfaces learn which tenant a request is for.
+    #   "subdomain" (default) — the Host header is the selector. Requires real
+    #     per-tenant DNS + a wildcard cert.
+    #   "header" — single-host deployments (no custom domain, e.g. the App
+    #     Service default `*.azurewebsites.net`, where tenant subdomains cannot
+    #     exist) let the SPA name the tenant via `X-Inspro-Tenant-Slug`.
+    # The header only SELECTS a tenant, it never authorises one: authenticated
+    # paths still require `token.cid == tenant.client_id`.
+    tenant_mode: TenantMode = "subdomain"
     # ── Retained document storage (claim receipts, dependant proofs) ──
     storage_mode: StorageMode = "local"
     storage_dir: str = ""
@@ -57,6 +67,21 @@ def _split_role_map(raw: str) -> dict[str, str]:
         if gid and role:
             out[gid] = role
     return out
+
+
+def _resolve_tenant_mode() -> TenantMode:
+    """Tenant selector for the HR / portal surfaces. Typos are fatal, not silent —
+    falling back to "subdomain" on a single-host deployment would 400 every
+    member sign-in, and falling back to "header" would quietly drop the
+    Host-header binding on a deployment that relies on it."""
+    raw = os.environ.get("INSPRO_TENANT_MODE", "").strip().lower()
+    if raw == "":
+        return "subdomain"
+    if raw not in ("subdomain", "header"):
+        raise RuntimeError(
+            f"INSPRO_TENANT_MODE={raw!r} is invalid — expected 'subdomain' or 'header'."
+        )
+    return raw  # type: ignore[return-value]
 
 
 def _resolve_env() -> Env:
@@ -244,6 +269,7 @@ def get_settings() -> Settings:
         .lower()
         .strip(".")
         or "inspro.sg",
+        tenant_mode=_resolve_tenant_mode(),
         storage_mode=_resolve_storage_mode(env),
         storage_dir=os.environ.get("INSPRO_STORAGE_DIR", "").strip(),
         storage_container=os.environ.get(

@@ -1,5 +1,6 @@
 /** HR credential sign-in: email OR HR ID + password, with an optional TOTP
- * step. Lives on `{slug}.hr.<base>`; the subdomain scopes the tenant. */
+ * step. Lives on `{slug}.hr.<base>`, where the subdomain scopes the tenant; on
+ * a single-host deployment the company field does instead. */
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { KeyRound, Lock } from "lucide-react";
@@ -7,6 +8,11 @@ import { adoptSession, isTokenResult, useHrLogin, useHrMfa } from "@/api/hr";
 import { errorStatus, formatError } from "@/lib/errors";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
+import {
+  CompanyField,
+  commitCompany,
+  useCompanyRequired,
+} from "@/components/auth/CompanyField";
 import { IdentifierField } from "@/components/auth/IdentifierField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,12 +29,20 @@ export function HrSignInPage() {
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [company, setCompany] = useState("");
+  const companyRequired = useCompanyRequired();
 
   const finish = () => void navigate({ to: "/hr/dashboard" });
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    // Settle the tenant BEFORE the request — the API client reads it
+    // synchronously to build the X-Inspro-Tenant-Slug header.
+    if (companyRequired && !commitCompany(company)) {
+      setError("Enter your company code — it's in your invitation email.");
+      return;
+    }
     login.mutate(
       { identifier: identifier.trim(), password },
       {
@@ -87,6 +101,7 @@ export function HrSignInPage() {
     >
       {step === "credentials" ? (
         <form onSubmit={submitCredentials} className="space-y-4">
+          <CompanyField id="hr-company" value={company} onChange={setCompany} />
           <IdentifierField value={identifier} onChange={setIdentifier} autoFocus />
           <div className="space-y-1.5">
             <Label
@@ -112,7 +127,12 @@ export function HrSignInPage() {
           <Button
             type="submit"
             className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
-            disabled={login.isPending || !identifier.trim() || !password}
+            disabled={
+              login.isPending ||
+              !identifier.trim() ||
+              !password ||
+              (companyRequired && !company.trim())
+            }
           >
             <KeyRound className="size-[18px]" />
             {login.isPending ? "Signing in…" : "Sign in"}

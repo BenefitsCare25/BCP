@@ -122,6 +122,43 @@ def parse_host(host: str, base_domain: str) -> HostInfo | None:
     return None
 
 
+def resolve_host_info(
+    request: Request, surface: str, slug_header: str | None
+) -> HostInfo | None:
+    """`HostInfo` for `surface`, falling back to an explicit tenant-slug header.
+
+    A real Host header always wins. The `X-Inspro-Tenant-Slug` fallback applies
+    when the request carries no recognisable platform host, and only when:
+
+    - `INSPRO_TENANT_MODE=header` — a single-host deployment. With no custom
+      domain there are no tenant subdomains to parse (the App Service default
+      `*.azurewebsites.net` cannot have them), so the SPA names the tenant.
+    - or the environment isn't prod — so both surfaces stay testable on
+      localhost, which is the behaviour this helper replaced.
+
+    Security note: the header SELECTS a tenant, it does not authorise one.
+    `get_current_hr_user` still rejects a token whose `cid` doesn't match the
+    resolved tenant, so a forged header only changes which tenant's sign-in is
+    being attempted — exactly what an attacker could already do by choosing a
+    subdomain. What is lost versus subdomain mode is the defence-in-depth of a
+    binding the client cannot pick, so prefer `subdomain` once DNS exists.
+    """
+    host_info: HostInfo | None = getattr(request.state, "host_info", None)
+    if host_info is not None:
+        return host_info
+
+    slug = normalize_slug(slug_header or "")
+    if not slug or not _label_ok(slug):
+        return None
+
+    from app.core.settings import get_settings  # lazy: avoid import cycle
+
+    settings = get_settings()
+    if settings.tenant_mode == "header" or settings.env != "prod":
+        return HostInfo(surface, slug)
+    return None
+
+
 @dataclass(frozen=True)
 class TenantContext:
     """A resolved tenant from a subdomain — the DB row exists and is enabled."""

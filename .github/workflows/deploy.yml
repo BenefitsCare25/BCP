@@ -17,6 +17,12 @@ env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "20"
   PNPM_VERSION: "9"
+  STAGING_RG: rg-inspro-staging
+  STAGING_APP: inspro-staging-api
+  STAGING_PG: inspro-staging-pg
+  PROD_RG: rg-inspro-prod
+  PROD_APP: inspro-portal
+  PROD_PG: inspro-prod-pg
 
 jobs:
   # ── CI gate: runs on every PR + push to main ────────────────────────────────
@@ -77,14 +83,18 @@ jobs:
       - name: Validate Bicep
         run: az bicep build --file infra/bicep/main.bicep
 
-  # ── Build + push container — only on main push or manual ───────────────────
+  # ── Build + push container — one image per environment ─────────────────────
+  # Two images, not one: the SPA is baked into the container (single-host
+  # deployment — see backend/app/core/spa.py) and Vite inlines env at build
+  # time, so the Entra client ID differs per environment.
   build:
-    name: Build container
+    name: Build container (${{ matrix.env }})
     needs: test
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.image.outputs.image }}
+    strategy:
+      matrix:
+        env: [staging, prod]
     steps:
       - uses: actions/checkout@v4
 
@@ -98,14 +108,29 @@ jobs:
       - name: ACR login
         run: az acr login --name $(echo "${{ env.REGISTRY }}" | cut -d. -f1)
 
-      - name: Resolve image tag
-        id: image
-        run: echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Resolve per-env settings
+        id: cfg
+        run: |
+          if [ "${{ matrix.env }}" = "prod" ]; then
+            echo "entra_client_id=${{ secrets.ENTRA_CLIENT_ID_PROD }}" >> "$GITHUB_OUTPUT"
+            echo "origin=https://${{ env.PROD_APP }}.azurewebsites.net" >> "$GITHUB_OUTPUT"
+          else
+            echo "entra_client_id=${{ secrets.ENTRA_CLIENT_ID_STAGING }}" >> "$GITHUB_OUTPUT"
+            echo "origin=https://${{ env.STAGING_APP }}.azurewebsites.net" >> "$GITHUB_OUTPUT"
+          fi
 
+      # Build context is the repo root so the frontend can be built into the
+      # same image as the API.
       - name: Build + push
         run: |
-          docker build -t "${{ steps.image.outputs.image }}" backend
-          docker push "${{ steps.image.outputs.image }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-${{ matrix.env }}"
+          docker build -f backend/Dockerfile -t "$IMAGE" \
+            --build-arg VITE_API_BASE_URL=/api/v1 \
+            --build-arg VITE_TENANT_MODE=header \
+            --build-arg VITE_ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
+            --build-arg VITE_ENTRA_CLIENT_ID="${{ steps.cfg.outputs.entra_client_id }}" \
+            .
+          docker push "$IMAGE"
 
   # ── Staging — Bicep apply + migrate + container deploy ─────────────────────
   deploy-staging:
@@ -123,26 +148,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: What-if deployment (informational)
-        run: |
-          az deployment group what-if \
-            --resource-group rg-inspro-staging \
-            --template-file infra/bicep/main.bicep \
-            --parameters @infra/bicep/parameters.staging.json \
-            --parameters \
-              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
-              entraClientId="${{ secrets.ENTRA_CLIENT_ID_STAGING }}" \
-              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_STAGING }}" \
-              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
-              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_STAGING }}" \
-              acrLoginServer="${{ env.REGISTRY }}" \
-              containerImage="${{ needs.build.outputs.image }}" \
-              alertEmail="${{ secrets.ALERT_EMAIL }}"
-
       - name: Apply Bicep
         run: |
           az deployment group create \
-            --resource-group rg-inspro-staging \
+            --resource-group ${{ env.STAGING_RG }} \
             --template-file infra/bicep/main.bicep \
             --parameters @infra/bicep/parameters.staging.json \
             --parameters \
@@ -152,8 +161,15 @@ jobs:
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_STAGING }}" \
               aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_STAGING }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
-              containerImage="${{ needs.build.outputs.image }}" \
+              containerImage="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-staging" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
+
+      # Postgres only admits this app's outbound IPs — see the script header.
+      - name: Sync DB firewall to App Service outbound IPs
+        run: |
+          chmod +x infra/scripts/sync-db-firewall.sh
+          ./infra/scripts/sync-db-firewall.sh \
+            "${{ env.STAGING_RG }}" "${{ env.STAGING_APP }}" "${{ env.STAGING_PG }}"
 
       - name: Setup Python (for migrate)
         uses: actions/setup-python@v5
@@ -162,6 +178,21 @@ jobs:
 
       - name: Install uv
         run: pip install --no-cache-dir uv
+
+      # Migrations run from this runner, not from the app, so the runner needs
+      # its own temporary hole in the firewall. Removed again in `always()`
+      # below so a failed migration can't leave the DB exposed.
+      - name: Allow runner IP on Postgres
+        id: fw
+        run: |
+          IP=$(curl -fsS https://api.ipify.org)
+          echo "::add-mask::$IP"
+          RULE="ci-runner-${{ github.run_id }}"
+          echo "rule=$RULE" >> "$GITHUB_OUTPUT"
+          az postgres flexible-server firewall-rule create \
+            --resource-group ${{ env.STAGING_RG }} --name ${{ env.STAGING_PG }} \
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" \
+            --only-show-errors >/dev/null
 
       - name: Run database migrations + provision tenant schemas
         working-directory: backend
@@ -174,17 +205,28 @@ jobs:
           # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
           uv run python -m scripts.provision_tenants
 
+      - name: Revoke runner IP
+        if: always() && steps.fw.outputs.rule != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group ${{ env.STAGING_RG }} --name ${{ env.STAGING_PG }} \
+            --rule-name "${{ steps.fw.outputs.rule }}" --yes --only-show-errors || true
+
       - name: Smoke test
         run: |
-          APP_URL=$(az webapp show --name inspro-staging-api --resource-group rg-inspro-staging --query defaultHostName -o tsv)
           # /health is unauthenticated — confirms the container booted, DB
           # config is correct, and gunicorn is responding.
-          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors "https://${APP_URL}/health"
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors \
+            "https://${{ env.STAGING_APP }}.azurewebsites.net/health"
+          # /readiness additionally proves the app can actually reach Postgres
+          # through the new outbound-IP firewall rules.
+          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors \
+            "https://${{ env.STAGING_APP }}.azurewebsites.net/readiness"
 
   # ── Production — manual dispatch only ───────────────────────────────────────
   deploy-prod:
-    name: Deploy to prod (slot swap)
-    needs: deploy-staging
+    name: Deploy to prod
+    needs: [build, deploy-staging]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: prod
@@ -198,10 +240,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Deploys IN PLACE — no slot swap. Deployment slots need Standard tier or
+      # higher and this runs on Basic (B2), so a release is a container restart
+      # of ~1-2 min. Rollback = re-run `az webapp config container set` with the
+      # previous image tag (see docs/DEPLOY_RUNBOOK.md).
       - name: Apply Bicep to prod (idempotent)
         run: |
           az deployment group create \
-            --resource-group rg-inspro-prod \
+            --resource-group ${{ env.PROD_RG }} \
             --template-file infra/bicep/main.bicep \
             --parameters @infra/bicep/parameters.prod.json \
             --parameters \
@@ -211,8 +257,14 @@ jobs:
               portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
               aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
-              containerImage="${{ needs.build.outputs.image }}" \
+              containerImage="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-prod" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
+
+      - name: Sync DB firewall to App Service outbound IPs
+        run: |
+          chmod +x infra/scripts/sync-db-firewall.sh
+          ./infra/scripts/sync-db-firewall.sh \
+            "${{ env.PROD_RG }}" "${{ env.PROD_APP }}" "${{ env.PROD_PG }}"
 
       - name: Setup Python (for migrate)
         uses: actions/setup-python@v5
@@ -222,6 +274,18 @@ jobs:
       - name: Install uv
         run: pip install --no-cache-dir uv
 
+      - name: Allow runner IP on Postgres
+        id: fw
+        run: |
+          IP=$(curl -fsS https://api.ipify.org)
+          echo "::add-mask::$IP"
+          RULE="ci-runner-${{ github.run_id }}"
+          echo "rule=$RULE" >> "$GITHUB_OUTPUT"
+          az postgres flexible-server firewall-rule create \
+            --resource-group ${{ env.PROD_RG }} --name ${{ env.PROD_PG }} \
+            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" \
+            --only-show-errors >/dev/null
+
       - name: Run database migrations + provision tenant schemas
         working-directory: backend
         env:
@@ -229,32 +293,25 @@ jobs:
         run: |
           uv sync --frozen
           uv run alembic upgrade head
-          # alembic only touches `public`; sync each firm schema so additive
-          # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
           uv run python -m scripts.provision_tenants
 
-      - name: Deploy image to staging slot
+      - name: Revoke runner IP
+        if: always() && steps.fw.outputs.rule != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group ${{ env.PROD_RG }} --name ${{ env.PROD_PG }} \
+            --rule-name "${{ steps.fw.outputs.rule }}" --yes --only-show-errors || true
+
+      - name: Deploy image
         run: |
           az webapp config container set \
-            --name inspro-prod-api \
-            --resource-group rg-inspro-prod \
-            --slot staging \
-            --docker-custom-image-name "${{ needs.build.outputs.image }}"
+            --name ${{ env.PROD_APP }} \
+            --resource-group ${{ env.PROD_RG }} \
+            --docker-custom-image-name "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-prod"
 
-      - name: Smoke-test staging slot
+      - name: Smoke-test prod
         run: |
-          SLOT_URL=$(az webapp show --name inspro-prod-api --resource-group rg-inspro-prod --slot staging --query defaultHostName -o tsv)
-          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors "https://${SLOT_URL}/health"
-
-      - name: Slot swap staging → prod
-        run: |
-          az webapp deployment slot swap \
-            --resource-group rg-inspro-prod \
-            --name inspro-prod-api \
-            --slot staging \
-            --target-slot production
-
-      - name: Smoke-test prod after swap
-        run: |
-          PROD_URL=$(az webapp show --name inspro-prod-api --resource-group rg-inspro-prod --query defaultHostName -o tsv)
-          curl -fsS --retry 10 --retry-delay 5 --retry-all-errors "https://${PROD_URL}/health"
+          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"

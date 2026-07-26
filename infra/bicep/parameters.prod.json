@@ -1,18 +1,27 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
+  "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer, portalJwtSecret, aiKeyEncryptionKey) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
+  "_sizing": "B2 (2 vCPU/3.5GB) + Postgres B2s (2 vCore/4GB) + 64GiB (240 IOPS) + Redis Basic C0, sized for ~5 companies / 1000+ employees. Postgres compute scales with a ~2 min restart, so start here and move up on metrics. Keep webConcurrency <= plan vCPUs: it divides the AI concurrency limit and multiplies the DB pool (2 x (3+2) = 10 connections).",
   "parameters": {
     "env": { "value": "prod" },
     "location": { "value": "southeastasia" },
-    "appServicePlanSku": { "value": "P1v3" },
-    "postgresSku": { "value": "Standard_D2ds_v5" },
-    "postgresTier": { "value": "GeneralPurpose" },
+    "siteName": { "value": "inspro-portal" },
+    "appServicePlanSku": { "value": "B2" },
+    "postgresSku": { "value": "Standard_B2s" },
+    "postgresTier": { "value": "Burstable" },
     "postgresAdminUser": { "value": "insproadmin" },
+    "postgresStorageGB": { "value": 64 },
     "postgresBackupRetentionDays": { "value": 35 },
-    "postgresGeoRedundantBackup": { "value": true },
-    "redisSku": { "value": "Standard" },
-    "redisCapacity": { "value": 1 },
-    "corsOrigins": { "value": "https://app.inspro.example" }
+    "postgresGeoRedundantBackup": { "value": false },
+    "postgresHighAvailability": { "value": false },
+    "redisSku": { "value": "Basic" },
+    "redisCapacity": { "value": 0 },
+    "tenantMode": { "value": "header" },
+    "baseDomain": { "value": "" },
+    "webConcurrency": { "value": 2 },
+    "dbPoolSize": { "value": 3 },
+    "dbMaxOverflow": { "value": 2 },
+    "corsOrigins": { "value": "https://inspro-portal.azurewebsites.net" }
   }
 }

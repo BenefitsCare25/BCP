@@ -1,0 +1,39 @@
+# Build context is the REPO ROOT (see backend/Dockerfile), so this file is
+# what keeps the context small — and, more importantly, keeps local PII out of
+# it. `inspro.db` is seeded with real employee data when placement slips are
+# uploaded locally, and `reference/` holds real broker slips. Neither is COPY'd
+# by the Dockerfile, but neither should be handed to the daemon either.
+**/inspro.db
+**/inspro.db-*
+reference/
+**/var/
+**/*.xls
+**/*.xlsx
+
+# Dependencies + build output — reinstalled/rebuilt inside the image. Copying
+# the host's node_modules over the container's would clobber a correct
+# platform-specific install with an incompatible one.
+**/node_modules/
+frontend/dist/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+# `**/` matters: a bare `.mypy_cache/` is root-anchored and leaves
+# backend/.mypy_cache (tens of MB) in the upload.
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+
+# Not needed to build or run the image.
+.git/
+.github/
+.claude/
+docs/
+infra/
+*.md
+!backend/README.md
+.vscode/
+.idea/
+**/.DS_Store
+**/.env
+**/.env.*

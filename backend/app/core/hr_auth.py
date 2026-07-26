@@ -36,9 +36,8 @@ from app.core.auth import CurrentUser
 from app.core.settings import Settings, get_settings
 from app.core.tenancy_host import (
     SURFACE_HR,
-    HostInfo,
     TenantContext,
-    normalize_slug,
+    resolve_host_info,
     resolve_tenant_context,
 )
 from app.db.session import get_db
@@ -324,11 +323,12 @@ def require_hr_tenant(
     db: Session = Depends(get_db),
     x_inspro_tenant_slug: str | None = Header(default=None),
 ) -> TenantContext:
-    """The HR subdomain's tenant, or 400. In non-prod an `X-Inspro-Tenant-Slug`
-    header substitutes for a real subdomain so the surface is testable locally."""
-    host_info: HostInfo | None = getattr(request.state, "host_info", None)
-    if host_info is None and x_inspro_tenant_slug and get_settings().env != "prod":
-        host_info = HostInfo(SURFACE_HR, normalize_slug(x_inspro_tenant_slug))
+    """The HR surface's tenant, or 400.
+
+    Normally the `{slug}.hr.<base>` subdomain. On a single-host deployment
+    (`INSPRO_TENANT_MODE=header`) or in non-prod, an `X-Inspro-Tenant-Slug`
+    header names the tenant instead — see `resolve_host_info`."""
+    host_info = resolve_host_info(request, SURFACE_HR, x_inspro_tenant_slug)
     ctx = resolve_tenant_context(host_info, db)
     if ctx is None or ctx.surface != SURFACE_HR:
         raise HTTPException(
@@ -347,13 +347,12 @@ def optional_hr_tenant(
 
     Like `require_hr_tenant` but non-fatal — used by `get_current_hr_user`,
     where a request without a subdomain (dev/localhost direct) is legitimate.
-    Crucially it pins the dev-header surface to HR, so resolution checks
+    Crucially it pins the header surface to HR, so resolution checks
     `hr_enabled` rather than `portal_enabled`.
     """
-    host_info: HostInfo | None = getattr(request.state, "host_info", None)
-    if host_info is None and x_inspro_tenant_slug and get_settings().env != "prod":
-        host_info = HostInfo(SURFACE_HR, normalize_slug(x_inspro_tenant_slug))
-    return resolve_tenant_context(host_info, db)
+    return resolve_tenant_context(
+        resolve_host_info(request, SURFACE_HR, x_inspro_tenant_slug), db
+    )
 
 
 # ── Refresh cookie ─────────────────────────────────────────────────────────────

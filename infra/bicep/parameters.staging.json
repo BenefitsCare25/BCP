@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
-  "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
+  "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer, portalJwtSecret, aiKeyEncryptionKey) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
+  "_sizing": "Validation environment, deliberately minimal: B1 (1 vCPU, so webConcurrency 1) + Postgres B1ms/32GiB + no Redis. Its job is to prove migrations, firm-schema sync and container boot before prod — not to carry load.",
   "parameters": {
     "env": { "value": "staging" },
     "location": { "value": "southeastasia" },
@@ -9,10 +10,18 @@
     "postgresSku": { "value": "Standard_B1ms" },
     "postgresTier": { "value": "Burstable" },
     "postgresAdminUser": { "value": "insproadmin" },
+    "postgresStorageGB": { "value": 32 },
     "postgresBackupRetentionDays": { "value": 14 },
     "postgresGeoRedundantBackup": { "value": false },
+    "postgresHighAvailability": { "value": false },
+    "deployRedis": { "value": false },
     "redisSku": { "value": "Basic" },
     "redisCapacity": { "value": 0 },
-    "corsOrigins": { "value": "https://inspro-staging.azurewebsites.net" }
+    "tenantMode": { "value": "header" },
+    "baseDomain": { "value": "" },
+    "webConcurrency": { "value": 1 },
+    "dbPoolSize": { "value": 3 },
+    "dbMaxOverflow": { "value": 2 },
+    "corsOrigins": { "value": "https://inspro-staging-api.azurewebsites.net" }
   }
 }

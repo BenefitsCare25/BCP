@@ -441,3 +441,27 @@ def test_month_to_date_excludes_cache_hits() -> None:
         assert mtd < 999
     finally:
         db.close()
+
+
+# ── Concurrency limit is a PLATFORM number, split across gunicorn workers ─────
+# It used to be enforced by a per-process semaphore, so N workers silently
+# allowed N x the configured limit against one shared Vertex quota.
+def test_per_process_limit_divides_across_workers(monkeypatch):
+    from app.services.ai_gateway import _per_process_limit
+
+    monkeypatch.setenv("WEB_CONCURRENCY", "4")
+    assert _per_process_limit(8) == 2
+    assert _per_process_limit(4) == 1
+    # Below the worker count every worker still floors at 1 — documented limit.
+    assert _per_process_limit(2) == 1
+    # 0 stays unbounded rather than becoming a 1-wide bottleneck.
+    assert _per_process_limit(0) == 0
+
+
+def test_per_process_limit_defaults_to_single_worker(monkeypatch):
+    from app.services.ai_gateway import _per_process_limit
+
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    assert _per_process_limit(6) == 6
+    monkeypatch.setenv("WEB_CONCURRENCY", "not-a-number")
+    assert _per_process_limit(6) == 6

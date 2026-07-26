@@ -69,6 +69,7 @@ from app.core.deps import require_write_access
 from app.core.rate_limit import RateLimitExceeded, limiter
 from app.core.request_context import RequestIDMiddleware, install_log_filter
 from app.core.security_headers import SecurityHeadersMiddleware
+from app.core.spa import mount_spa
 from app.core.telemetry import configure_telemetry
 from app.core.tenancy_host import TenantMiddleware
 
@@ -252,6 +253,10 @@ def create_app() -> FastAPI:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ready"}
+
+    # LAST: the SPA catch-all would shadow any route registered after it.
+    # No-op unless a bundle was baked into the image (single-host deploys).
+    mount_spa(app, api_prefix)
 
     return app
 

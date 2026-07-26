@@ -9,6 +9,7 @@ import { ENTRA_ENABLED, getMsal, initializeMsal } from "./auth/msal";
 import { UnauthorizedError } from "./api/client";
 import { PortalUnauthorizedError } from "./api/portalClient";
 import { formatError } from "./lib/errors";
+import { captureTenantSlugFromUrl } from "./lib/tenant";
 import "./styles.css";
 
 function reportError(scope: "query" | "mutation", error: unknown) {
@@ -44,6 +45,11 @@ const queryClient = new QueryClient({
 });
 
 async function bootstrap() {
+  // Single-host deployments carry the tenant as `?company=<slug>` on the entry
+  // link. Consume it before the router renders, so the very first API call
+  // already knows which tenant it is for.
+  captureTenantSlugFromUrl();
+
   // MSAL v3 requires `initialize()` BEFORE any other call. Doing it here
   // (rather than inside a useEffect) ensures the redirect-response from
   // /auth/callback is consumed before the router decides what to render.

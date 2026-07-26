@@ -1,6 +1,41 @@
-# Inspro backend — production container.
-# Multi-stage to keep the final image small.
+# Inspro — production container.
+#
+# Build context is the REPO ROOT (not backend/), because single-host
+# deployments bake the SPA into the same image as the API:
+#     docker build -f backend/Dockerfile -t <image> .
+# The SPA and API must share an origin — the HR refresh cookie is host-only and
+# SameSite=Strict, so a separately-hosted frontend could never refresh a
+# session. See backend/app/core/spa.py.
 
+# ── Frontend build ───────────────────────────────────────────────────────────
+FROM node:20-slim AS frontend
+
+WORKDIR /web
+
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY frontend/ ./
+
+# Vite inlines env at BUILD time, so anything env-specific is a build arg and
+# staging/prod get different images. Entra IDs differ per environment; without
+# them ENTRA_ENABLED is false and the broker surface falls back to mock auth.
+ARG VITE_API_BASE_URL=/api/v1
+ARG VITE_TENANT_MODE=header
+ARG VITE_ENTRA_TENANT_ID=""
+ARG VITE_ENTRA_CLIENT_ID=""
+ARG VITE_TENANT_BASE_DOMAIN=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
+    VITE_TENANT_MODE=$VITE_TENANT_MODE \
+    VITE_ENTRA_TENANT_ID=$VITE_ENTRA_TENANT_ID \
+    VITE_ENTRA_CLIENT_ID=$VITE_ENTRA_CLIENT_ID \
+    VITE_TENANT_BASE_DOMAIN=$VITE_TENANT_BASE_DOMAIN
+
+RUN pnpm build
+
+# ── Python dependency build ──────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -14,7 +49,7 @@ WORKDIR /app
 # Install uv for fast resolution + locked installs.
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock ./
+COPY backend/pyproject.toml backend/uv.lock ./
 
 # Generate a requirements.txt from the lockfile, then install system-wide so
 # the runtime stage can copy /usr/local/lib/python3.12/site-packages cleanly.
@@ -24,6 +59,7 @@ RUN uv export --frozen --no-dev --format requirements-txt > /tmp/requirements.tx
     && uv pip install --system --no-cache --requirement /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
+# ── Runtime ──────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -37,10 +73,13 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # App source.
-COPY app ./app
-COPY alembic ./alembic
-COPY alembic.ini ./alembic.ini
-COPY scripts ./scripts
+COPY backend/app ./app
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/scripts ./scripts
+
+# Built SPA — `app.core.spa` mounts it if present, no-op otherwise.
+COPY --from=frontend /web/dist ./static
 
 # Non-root user.
 RUN useradd --create-home --shell /bin/bash inspro && chown -R inspro:inspro /app
@@ -56,9 +95,20 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # X-Forwarded-For from the App Service load balancer.
 # `--limit-request-line` / `--limit-request-field_size` left at defaults;
 # multipart upload size is capped by FastAPI / saved_upload, not gunicorn.
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", \
-     "--bind", "0.0.0.0:8000", \
-     "--forwarded-allow-ips", "*", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "app.main:app"]
+#
+# Worker count is env-driven (WEB_CONCURRENCY), defaulting to 2 to match a
+# 2-vCPU App Service plan. It was hardcoded to 4, which oversubscribes anything
+# smaller AND silently multiplies two per-process limits: the AI concurrency
+# semaphore and the SQLAlchemy pool. Raise it in lockstep with the plan size.
+#
+# `exec` so gunicorn is PID 1 and actually receives SIGTERM — otherwise the
+# shell swallows it, the container is SIGKILLed, and in-flight background claim
+# reviews are stranded (recoverable via the startup reaper, but needlessly).
+# `--graceful-timeout 60` gives those background reviews a chance to land.
+CMD ["sh", "-c", "exec gunicorn -w ${WEB_CONCURRENCY:-2} -k uvicorn.workers.UvicornWorker \
+     --bind 0.0.0.0:8000 \
+     --forwarded-allow-ips '*' \
+     --graceful-timeout 60 \
+     --access-logfile - \
+     --error-logfile - \
+     app.main:app"]

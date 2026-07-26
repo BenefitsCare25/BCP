@@ -19,11 +19,45 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "inspro.db"
 DATABASE_URL = os.environ.get("INSPRO_DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 _IS_SQLITE = DATABASE_URL.startswith("sqlite")
 
+def _pool_setting(name: str, default: int) -> int:
+    """Read a positive int pool setting, ignoring junk rather than failing boot."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "%s=%r is not an integer — using default %s", name, raw, default
+        )
+        return default
+    if value < 0:
+        logging.getLogger(__name__).warning(
+            "%s=%s is negative — using default %s", name, value, default
+        )
+        return default
+    return value
+
+
 _engine_kwargs: dict = {"pool_pre_ping": True, "echo": False}
 if _IS_SQLITE:
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:
-    _engine_kwargs.update(pool_size=10, max_overflow=20)
+    # Sized PER PROCESS — the real ceiling is
+    #   workers (WEB_CONCURRENCY) x (pool_size + max_overflow) x instances
+    # and it must stay under the server's max_connections. The old 10+20
+    # default meant 120 connections from a single 4-worker instance, which
+    # overruns every small Postgres SKU. Defaults below give 2 x 5 = 10.
+    # Raise together with WEB_CONCURRENCY and the DB tier.
+    _engine_kwargs.update(
+        pool_size=_pool_setting("INSPRO_DB_POOL_SIZE", 3),
+        max_overflow=_pool_setting("INSPRO_DB_MAX_OVERFLOW", 2),
+        # Fail a starved request instead of hanging the worker indefinitely.
+        pool_timeout=_pool_setting("INSPRO_DB_POOL_TIMEOUT", 30),
+        # Recycle below Azure Postgres' idle cutoff so pooled connections
+        # can't be handed out already dead.
+        pool_recycle=_pool_setting("INSPRO_DB_POOL_RECYCLE", 1800),
+    )
 
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 

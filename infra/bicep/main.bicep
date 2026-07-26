@@ -47,14 +47,23 @@ param postgresAdminPassword string
 @description('Postgres backup retention days. Prod overrides to 35.')
 param postgresBackupRetentionDays int = 14
 
-@description('Enable geo-redundant Postgres backups. Recommend true for prod.')
+@description('Enable geo-redundant Postgres backups. NOTE: the paired region for southeastasia is East Asia (Hong Kong), so enabling this copies member/claims data OUT of Singapore. Leave false unless that has been signed off against PDPA.')
 param postgresGeoRedundantBackup bool = false
+
+@description('Postgres data disk size. IOPS is derived from it, NOT from the compute SKU: 32GiB=120, 64GiB=240, 128GiB=500, 256GiB=1100. 32GiB is the throughput floor.')
+param postgresStorageGB int = 32
+
+@description('Enable zone-redundant Postgres HA. Not supported on the Burstable tier, and roughly doubles cost (a standby duplicates compute+storage).')
+param postgresHighAvailability bool = false
 
 @description('Redis SKU.')
 param redisSku string
 
 @description('Redis size.')
 param redisCapacity int
+
+@description('Provision Redis at all. Both consumers degrade gracefully without it — the AI response cache falls back to in-memory and SlowAPI to per-process counters (see app/services/ai_cache.py and app/core/rate_limit.py) — so non-prod can skip the cost. Prod keeps it: per-process rate-limit counters would multiply every limit by the worker count.')
+param deployRedis bool = true
 
 @description('Entra tenant ID.')
 param entraTenantId string
@@ -83,6 +92,28 @@ param aiKeyEncryptionKey string
 @description('ACR registry hostname for the webapp to pull from, e.g. insproacr.azurecr.io.')
 param acrLoginServer string
 
+@description('Resource group holding the shared container registry.')
+param acrResourceGroup string = 'rg-inspro-shared'
+
+@description('Web app / hostname. Defaults to inspro-<env>-api; prod uses inspro-portal so the public URL is inspro-portal.azurewebsites.net.')
+param siteName string = ''
+
+@description('Apex domain for tenant-per-subdomain routing. Empty on single-host deployments (no custom domain).')
+param baseDomain string = ''
+
+@description('How HR/portal requests name their tenant. "subdomain" needs wildcard DNS + a wildcard cert; "header" is for a single shared hostname.')
+@allowed(['subdomain', 'header'])
+param tenantMode string = 'header'
+
+@description('Gunicorn worker processes. Keep at or below the plan vCPU count — it also divides the AI concurrency limit and multiplies the DB pool.')
+param webConcurrency int = 2
+
+@description('SQLAlchemy pool size PER WORKER. Ceiling is workers x (pool + overflow) x instances; keep it under the server max_connections.')
+param dbPoolSize int = 3
+
+@description('SQLAlchemy overflow connections per worker.')
+param dbMaxOverflow int = 2
+
 @description('Notification email for HTTP 5xx alerts (optional).')
 param alertEmail string = ''
 
@@ -108,10 +139,11 @@ param smtpPassword string = ''
 
 var prefix = 'inspro-${env}'
 var isProd = env == 'prod'
+var appName = empty(siteName) ? '${prefix}-api' : siteName
+var acrName = split(acrLoginServer, '.')[0]
 
 // Built-in role IDs (https://learn.microsoft.com/azure/role-based-access-control/built-in-roles).
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
-var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // ── Observability ───────────────────────────────────────────────────────────
@@ -146,7 +178,12 @@ resource kv 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
     // Prod KVs hold DB admin passwords — keep them recoverable for 90 days
     // matching Azure's recommended default.
     softDeleteRetentionInDays: isProd ? 90 : 30
-    enablePurgeProtection: isProd
+    // Must be `true` or ABSENT — Azure rejects an explicit `false` ("cannot be
+    // set to false ... irreversible action"), so `isProd` alone failed every
+    // non-prod deployment. Purge protection is deliberately prod-only: it makes
+    // the vault unrecoverable-by-deletion for the retention window, which is
+    // right for prod secrets but would strand throwaway staging vaults.
+    enablePurgeProtection: isProd ? true : null
   }
 }
 
@@ -163,15 +200,18 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
     administratorLogin: postgresAdminUser
     administratorLoginPassword: postgresAdminPassword
     storage: {
-      storageSizeGB: 32
+      storageSizeGB: postgresStorageGB
       autoGrow: 'Enabled'
     }
     backup: {
       backupRetentionDays: postgresBackupRetentionDays
       geoRedundantBackup: postgresGeoRedundantBackup ? 'Enabled' : 'Disabled'
     }
+    // Explicit param, not `isProd`: ZoneRedundant is unsupported on Burstable,
+    // so hardcoding it by environment made a prod deploy on B-series fail
+    // outright. Scaling up later re-enables it with a parameter flip.
     highAvailability: {
-      mode: isProd ? 'ZoneRedundant' : 'Disabled'
+      mode: postgresHighAvailability ? 'ZoneRedundant' : 'Disabled'
     }
   }
 }
@@ -185,21 +225,29 @@ resource postgresDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08
   }
 }
 
-// TODO(prod): replace the broad AllowAzureServices rule with VNet integration
-// + private endpoint. AllowAzureServices opens the DB to any other Azure
-// customer's outbound IP — it's how App Service reaches Postgres without a
-// VNet but it's not defensible long-term.
-resource postgresFwAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
-  parent: postgres
-  name: 'AllowAzureServices'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
-  }
-}
+// Postgres is reachable ONLY from this app's outbound IPs.
+//
+// The previous `AllowAzureServices` rule (0.0.0.0) opened the database to every
+// Azure customer's outbound range — indefensible for a store of members' health
+// and claims data. `possibleOutboundIpAddresses` is the complete set this app
+// may egress from (the shorter `outboundIpAddresses` is only the current set,
+// which changes on restart and would intermittently lock the app out).
+//
+// Two consequences to know:
+// - Changing the App Service PLAN TIER re-issues these IPs. Re-run the Bicep
+//   after any tier change or the app loses DB access.
+// - CI migrations run from a GitHub runner, not from the app, so deploy.yml
+//   adds a temporary rule for the runner's IP and removes it afterwards.
+// A private endpoint is the better end state; it needs VNet integration, which
+// the Basic App Service tier does not offer.
+// The rules themselves are applied by `infra/scripts/sync-db-firewall.sh`,
+// invoked from deploy.yml after this template runs. They can't live here:
+// `possibleOutboundIpAddresses` is only known once the webapp exists, and Bicep
+// requires loop counts to be resolvable at the start of a deployment (BCP178).
+// The script is idempotent and is the single place that owns these rules.
 
 // ── Redis ────────────────────────────────────────────────────────────────────
-resource redis 'Microsoft.Cache/redis@2024-11-01' = {
+resource redis 'Microsoft.Cache/redis@2024-11-01' = if (deployRedis) {
   name: '${prefix}-redis'
   location: location
   properties: {
@@ -210,11 +258,12 @@ resource redis 'Microsoft.Cache/redis@2024-11-01' = {
     }
     enableNonSslPort: false
     minimumTlsVersion: '1.2'
-    redisConfiguration: {
-      // Enable AOF persistence for prod so a Redis restart doesn't wipe the
-      // AI response cache / SlowAPI counters. Premium-tier-only.
-      'aof-backup-enabled': isProd && redisSku == 'Premium' ? 'true' : 'false'
-    }
+    // AOF persistence keeps the AI response cache / SlowAPI counters across a
+    // Redis restart, but it is Premium-only — and the key must be ABSENT on
+    // lower SKUs, not merely 'false': Azure rejects any value with "requires a
+    // Premium sku to be set". On Basic, a restart therefore clears the cache
+    // (it refills) and the rate-limit counters (they reset).
+    redisConfiguration: redisSku == 'Premium' ? { 'aof-backup-enabled': 'true' } : {}
   }
 }
 
@@ -237,7 +286,7 @@ resource kvSecretDatabaseUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-previ
   }
 }
 
-resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (deployRedis) {
   parent: kv
   name: 'redis-url'
   properties: {
@@ -267,7 +316,12 @@ resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-p
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: replace('${prefix}docs', '-', '')
   location: location
-  sku: { name: isProd ? 'Standard_GRS' : 'Standard_LRS' }
+  // ZRS, not GRS. This container holds claim receipts, referral letters and
+  // dependant proofs — PII. Geo-redundant storage replicates to the paired
+  // region, which for southeastasia is East Asia (Hong Kong), taking the data
+  // out of Singapore. ZRS keeps three copies across Singapore availability
+  // zones instead, and costs less.
+  sku: { name: isProd ? 'Standard_ZRS' : 'Standard_LRS' }
   kind: 'StorageV2'
   properties: {
     minimumTlsVersion: 'TLS1_2'
@@ -317,8 +371,16 @@ var commonAppSettings = [
   { name: 'INSPRO_ENTRA_ISSUER', value: 'https://login.microsoftonline.com/${entraTenantId}/v2.0' }
   { name: 'INSPRO_ENTRA_JWKS_URL', value: 'https://login.microsoftonline.com/${entraTenantId}/discovery/v2.0/keys' }
   { name: 'INSPRO_CORS_ORIGINS', value: corsOrigins }
+  // Tenant routing. On a single host the Host header can't name a tenant, so
+  // the SPA sends X-Inspro-Tenant-Slug instead — see app/core/tenancy_host.py.
+  { name: 'INSPRO_TENANT_MODE', value: tenantMode }
+  { name: 'INSPRO_BASE_DOMAIN', value: baseDomain }
+  // Runtime sizing. WEB_CONCURRENCY also divides the AI concurrency limit and
+  // multiplies the DB pool — change it and the DB tier together.
+  { name: 'WEB_CONCURRENCY', value: string(webConcurrency) }
+  { name: 'INSPRO_DB_POOL_SIZE', value: string(dbPoolSize) }
+  { name: 'INSPRO_DB_MAX_OVERFLOW', value: string(dbMaxOverflow) }
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
-  { name: 'INSPRO_REDIS_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretRedisUrl.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
   // Portal OTP mail. Fail-closed: the app refuses to boot in prod on "log"
@@ -338,8 +400,14 @@ var commonAppSettings = [
   { name: 'OTEL_SERVICE_NAME', value: '${prefix}-api' }
 ]
 
-// Shared site config — used by the primary webapp and (for prod) the
-// 'staging' slot. Container-based deploy with ACR pull via managed identity.
+// Appended only when Redis exists. An unset INSPRO_REDIS_URL is the documented
+// signal for both consumers to fall back to in-memory, whereas a KeyVault
+// reference to a missing secret would surface as an opaque startup failure.
+var redisAppSettings = deployRedis ? [
+  { name: 'INSPRO_REDIS_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=redis-url)' }
+] : []
+
+// Container-based deploy with ACR pull via managed identity.
 var siteConfig = {
   linuxFxVersion: 'DOCKER|${containerImage}'
   acrUseManagedIdentityCreds: true
@@ -347,11 +415,11 @@ var siteConfig = {
   minTlsVersion: '1.2'
   http20Enabled: true
   healthCheckPath: '/health'
-  appSettings: commonAppSettings
+  appSettings: concat(commonAppSettings, redisAppSettings)
 }
 
 resource webapp 'Microsoft.Web/sites@2024-04-01' = {
-  name: '${prefix}-api'
+  name: appName
   location: location
   kind: 'app,linux,container'
   identity: { type: 'SystemAssigned' }
@@ -360,22 +428,21 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
     httpsOnly: true
     siteConfig: union(siteConfig, { alwaysOn: isProd })
   }
+  // The Redis secret name is a literal in `redisAppSettings`, so Bicep infers
+  // no dependency on it. Without this the app is created while Redis is still
+  // provisioning (~15 min), the KeyVault reference resolves to SecretNotFound,
+  // and App Service CACHES that failure — the container then boots with the
+  // literal "@Microsoft.KeyVault(...)" string as its Redis URL and dies in
+  // SlowAPI with "unknown storage scheme".
+  dependsOn: deployRedis ? [kvSecretRedisUrl] : []
 }
 
-// Prod gets a 'staging' deployment slot so the workflow can `slot swap`.
-// Staging env doesn't need a slot — re-deploys can blow away its single instance.
-resource prodStagingSlot 'Microsoft.Web/sites/slots@2024-04-01' = if (isProd) {
-  parent: webapp
-  name: 'staging'
-  location: location
-  kind: 'app,linux,container'
-  identity: { type: 'SystemAssigned' }
-  properties: {
-    serverFarmId: plan.id
-    httpsOnly: true
-    siteConfig: union(siteConfig, { alwaysOn: true })
-  }
-}
+// NOTE: there is deliberately no deployment slot.
+// Deployment slots require Standard tier or higher — Basic offers zero. This
+// deployment runs on Basic (B1 staging / B2 prod), so prod releases are
+// in-place with a short restart, which is an accepted trade-off. Rollback is
+// redeploying the previous image tag rather than swapping a slot. Reintroduce
+// the slot (and the swap steps in deploy.yml) if the plan moves to S1/P0v3+.
 
 // Grant the App Service managed identity Key Vault Secrets User role —
 // required for runtime resolution of @Microsoft.KeyVault(...) references.
@@ -384,16 +451,6 @@ resource kvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   name: guid(kv.id, webapp.id, 'kv-secrets-user')
   properties: {
     principalId: webapp.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
-  }
-}
-
-resource slotKvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isProd) {
-  scope: kv
-  name: guid(kv.id, prodStagingSlot.id, 'kv-secrets-user-slot')
-  properties: {
-    principalId: prodStagingSlot.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
   }
@@ -410,25 +467,17 @@ resource storageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
-resource slotStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (isProd) {
-  scope: storage
-  name: guid(storage.id, prodStagingSlot.id, 'blob-contributor-slot')
-  properties: {
-    principalId: prodStagingSlot.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
-  }
-}
-
-// ACR pull permission for the webapp's managed identity.
-resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  // Scope is left implicit (resource group level) — broader than ideal but the
-  // ACR lives in rg-inspro-shared so a tighter scope requires a multi-RG deploy.
-  name: guid(resourceGroup().id, webapp.id, 'acr-pull')
-  properties: {
+// ACR pull permission, granted ON THE REGISTRY in the shared resource group.
+// Previously this was an inline assignment with no `scope`, so it defaulted to
+// this environment's resource group — which holds no registry. The webapp
+// therefore had no pull rights and the container never started.
+module acrPullGrant 'modules/acr-pull.bicep' = {
+  name: 'acr-pull-${env}'
+  scope: resourceGroup(acrResourceGroup)
+  params: {
+    acrName: acrName
     principalId: webapp.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+    roleNameSeed: appName
   }
 }
 
@@ -519,6 +568,6 @@ resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(
 
 output appServiceUrl string = 'https://${webapp.properties.defaultHostName}'
 output postgresFqdn string = postgres.properties.fullyQualifiedDomainName
-output redisHost string = redis.properties.hostName
+output redisHost string = deployRedis ? redis.properties.hostName : ''
 output keyVaultName string = kv.name
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
