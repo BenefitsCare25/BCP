@@ -32,8 +32,14 @@ export function ColumnManager({
   onLabel,
   onAssign,
 }: Props) {
+  // Mirror of `sob_columns._column_id_for_plan`: a lone column covers the whole
+  // product, so an unlisted plan genuinely belongs to it. With several columns
+  // there is no safe guess — defaulting to the first one showed the broker a
+  // confident assignment the data never made (and the first column is usually
+  // the richest benefit level), hiding the plan that still needs assigning.
   const columnOf = (code: string) =>
-    columns.find((c) => c.plan_codes.includes(code))?.id ?? columns[0]?.id ?? "";
+    columns.find((c) => c.plan_codes.includes(code))?.id ??
+    (columns.length === 1 ? columns[0].id : "");
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3">
       <div className="flex items-center justify-between">
@@ -88,9 +94,13 @@ export function ColumnManager({
               <Select value={columnOf(p.code)} onValueChange={(v) => onAssign(p.code, v)}>
                 <SelectTrigger
                   aria-label={`Column for ${p.label}`}
-                  className="h-7 w-44 text-xs"
+                  className={
+                    columnOf(p.code)
+                      ? "h-7 w-44 text-xs"
+                      : "h-7 w-44 border-warn text-xs"
+                  }
                 >
-                  <SelectValue />
+                  <SelectValue placeholder="Not assigned" />
                 </SelectTrigger>
                 <SelectContent>
                   {columns.map((c) => (

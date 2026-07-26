@@ -89,6 +89,11 @@ const planStub = (p: PlanAnswer): PlanAnswer => ({
   code: p.code,
   label: p.label,
   selected: p.selected,
+  // The slip's own SOB column header. It is shown once at parse time and never
+  // re-derivable (the composite header is fanned out server-side), so dropping
+  // it here would let the first autosave permanently replace the broker's
+  // wording with a synthetic "Plan 1 +3" on any later rebuild of `sob`.
+  source_label: p.source_label ?? null,
 });
 
 // Always return a reconciled, non-empty schedule for the given plan codes.

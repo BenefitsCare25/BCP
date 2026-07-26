@@ -103,6 +103,16 @@ def _confidence(recognized: bool, reconciliation: str) -> float:
     return max(0.0, min(1.0, round(score, 2)))
 
 
+def _fanned_display_name(ref: str) -> str:
+    """Display name for a plan split out of a composite/descriptive schedule.
+
+    Codes are usually bare ("U01" -> "Plan U01"), but some slips carry the word
+    in the code itself (VDL GBT's "Plan A - International / Asia"), which the
+    old unconditional prefix turned into "Plan Plan A - International / Asia".
+    """
+    return ref if ref.strip().lower().startswith("plan") else f"Plan {ref}"
+
+
 def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagnostics]:
     cats = product.categories
     plans = product.plans
@@ -140,7 +150,23 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
         consumed.add(id(cover))
         if cover.code.strip() != ref:  # split a composite / fanned a descriptive plan
             fanned = True
-            emitted.append(replace(cover, code=ref, display_name=f"Plan {ref}"))
+            # Keep the slip header only when it actually NAMES this code. A
+            # composite header does ("PLAN 1/U01/U04/U06" -> U01), but a
+            # descriptive single schedule fanned across unrelated codes does
+            # not: CBRE's GMM has one "Plan 3" header covering categories
+            # 1A/1B/2A/…, and labelling that column "Plan 3" would claim a
+            # coverage split the slip never made.
+            header_codes = {t.lower() for t in split_plan_codes(cover.code)}
+            emitted.append(
+                replace(
+                    cover,
+                    code=ref,
+                    display_name=_fanned_display_name(ref),
+                    source_label=(
+                        cover.source_label if ref.lower() in header_codes else None
+                    ),
+                )
+            )
         else:
             emitted.append(cover)
 

@@ -1068,6 +1068,11 @@ def _extract_plans_from_sheet(
             annual_policy_limit=annual_limit,
             items=tuple(items),
             source_row=sob_idx + 1,
+            # The sheet's own column header, kept verbatim. A composite header
+            # ("PLAN 1/U01/U04/U06") is fanned out into one plan per code
+            # downstream, which rewrites display_name — this is the only place
+            # the broker's original wording survives.
+            source_label=display_name,
         ))
 
     return tuple(plans)

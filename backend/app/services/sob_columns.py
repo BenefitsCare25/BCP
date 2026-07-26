@@ -22,7 +22,10 @@ Mirror of ``frontend/src/lib/sob.ts`` — keep the two in sync.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Sentinel override value marking a per-column exclusion ("Not included in SOB"
 # on a single plan). Stored as a normal value so every read path renders it
@@ -136,6 +139,32 @@ def _plan_vector(items: list[dict[str, Any]]) -> str:
 
 
 def _column_label(members: list[dict[str, Any]], only_column: bool) -> str:
+    """Name a column after the slip's own SOB header when the plans carry one.
+
+    A composite header ("PLAN 1/U01/U04/U06") names several plan codes at once,
+    and those codes are fanned out into one plan each — so a column usually
+    regroups exactly the plans of one header and can print it verbatim. That is
+    what the broker sees on the slip, so it beats the synthetic "Plan 1 +3"
+    summary, which silently drops which codes the column actually covers.
+
+    Value-identical headers can merge into one column (CDL's GMM prices PLAN 3
+    and PLAN 4 the same), so join the DISTINCT headers rather than assuming one.
+    Plans with no header — descriptive single-schedule sheets, manually-built
+    drafts — fall back to the previous summary form.
+    """
+    # EVERY member must be named by a header, else the label would advertise a
+    # code set narrower than the column really covers (VDL's GCSP groups a B3
+    # that its "Plan B2, B1, B, A1, A" header never mentions).
+    labels: list[str] = []
+    for m in members:
+        src = str(m.get("source_label") or "").strip()
+        if not src:
+            labels = []
+            break
+        if src not in labels:
+            labels.append(src)
+    if labels:
+        return " + ".join(labels)
     if len(members) == 1:
         m = members[0]
         return str(m.get("label") or m.get("code") or "")
@@ -278,11 +307,22 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _column_id_for_plan(sob: dict[str, Any], plan_code: str) -> str | None:
+    """The column carrying this plan's values, or None when it maps to none.
+
+    A SINGLE column covers the whole product by construction ("All plans"), so
+    an unlisted code resolves to it unambiguously. With SEVERAL columns there is
+    no safe guess: falling back to ``columns[0]`` handed the plan the FIRST
+    column's schedule, which on a graded product is the richest one (CDL GHS
+    col0 is 1-bed private / 22k in-patient). That silently OVER-STATES a
+    member's cover and hides the mapping gap that caused it — VDL's GCGP has a
+    real category code ("B3") with no schedule column. Report None instead and
+    let the caller surface it.
+    """
     columns = sob.get("columns") or []
     for col in columns:
         if plan_code in (col.get("plan_codes") or []):
             return col.get("id")
-    return columns[0].get("id") if columns else None
+    return columns[0].get("id") if len(columns) == 1 else None
 
 
 def resolve_plan_schedule(
@@ -299,6 +339,17 @@ def resolve_plan_schedule(
     if not isinstance(items_in, list):
         return []
     col_id = _column_id_for_plan(sob, plan_code)
+    if col_id is None and (sob.get("columns") or []):
+        # Multi-column schedule with no column for this plan: we genuinely don't
+        # know its values. Emitting an empty schedule is visibly wrong to the
+        # broker; inheriting column 0 would be invisibly wrong to the member.
+        logger.warning(
+            "Plan %r maps to no Schedule-of-Benefits column (available: %r) — "
+            "writing an empty schedule rather than inheriting another plan's.",
+            plan_code,
+            [c.get("plan_codes") for c in (sob.get("columns") or [])],
+        )
+        return []
     out: list[dict[str, Any]] = []
     for it in items_in[:max_items]:
         if not isinstance(it, dict):

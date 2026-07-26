@@ -124,6 +124,20 @@ def _referenced_plan_codes(slip: ProductSlip) -> set[str]:
     return {c for c in codes if c}
 
 
+def _source_labels_by_plan(slip: ProductSlip) -> dict[str, str]:
+    """plan code -> the slip's verbatim SOB column header for it.
+
+    Populated only for per-plan-column layouts; a descriptive single-schedule
+    sheet contributes nothing, so those products keep their generic column
+    labels ("All plans") instead of a meaningless "Schedule of Benefits".
+    """
+    return {
+        _s(p.code): _s(p.source_label)
+        for p in slip.plans
+        if _s(p.code) and _s(p.source_label)
+    }
+
+
 def _norm_key(key: str) -> str:
     """Normalize a sub-item key for matching, so the parser's "(a)" lines up with
     a template's "a"."""
@@ -254,6 +268,7 @@ def _extra_item_numbers(
 def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any]]:
     referenced = _referenced_plan_codes(slip)
     slip_values = _slip_values_by_plan(slip)
+    source_labels = _source_labels_by_plan(slip)
     # Only drive selection from the slip when at least one referenced code
     # actually matches a template plan; otherwise the slip used a different
     # coding scheme and we'd deselect everything, blocking confirm — so fall
@@ -350,6 +365,9 @@ def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any
                 "code": tp.code,
                 "label": tp.label,
                 "selected": selected,
+                # Verbatim slip header (absent for descriptive layouts and for
+                # manually-built drafts); the SOB column label prefers it.
+                "source_label": source_labels.get(tp.code) or None,
                 "benefit_items": items,
             }
         )
@@ -453,7 +471,12 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
     # (selection + label); the grid now lives once in ``sob``.
     sob = sob_from_plan_items(plans)
     plan_stubs = [
-        {"code": p["code"], "label": p["label"], "selected": p["selected"]}
+        {
+            "code": p["code"],
+            "label": p["label"],
+            "selected": p["selected"],
+            "source_label": p.get("source_label"),
+        }
         for p in plans
     ]
     return {

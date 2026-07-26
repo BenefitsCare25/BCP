@@ -71,10 +71,55 @@ def test_resolve_round_trips_each_plan() -> None:
     assert [it["value"] for it in s2] == ["10000", "1 Bed Restr."]
 
 
-def test_unknown_plan_falls_back_to_first_column() -> None:
+def test_unknown_plan_resolves_to_the_sole_column() -> None:
+    # One column covers the whole product, so an unlisted code belongs to it.
+    sob = sob_from_plan_items([_plan("1", "x"), _plan("2", "x")])
+    assert len(sob["columns"]) == 1
+    assert [it["value"] for it in resolve_plan_schedule(sob, "unlisted", 200)] == ["x"]
+
+
+def test_unknown_plan_gets_no_schedule_when_columns_differ() -> None:
+    # With several benefit levels there is no safe guess. Inheriting column 0
+    # handed the plan the RICHEST schedule, silently over-stating cover.
     sob = sob_from_plan_items([_plan("1", "x"), _plan("2", "y")])
-    resolved = resolve_plan_schedule(sob, "does-not-exist", 200)
-    assert [it["value"] for it in resolved] == ["x"]  # first column
+    assert resolve_plan_schedule(sob, "does-not-exist", 200) == []
+
+
+def test_column_label_uses_the_slips_own_header() -> None:
+    # CDL GHS: one composite header names four codes, fanned to a plan each.
+    header = "PLAN 1/U01/U04/U06"
+    plans = [
+        {**_plan(code, "20000"), "source_label": header}
+        for code in ("1", "U01", "U04", "U06")
+    ]
+    plans.append({**_plan("2", "10000"), "source_label": "PLAN 2/D01"})
+    sob = sob_from_plan_items(plans)
+    assert sob["columns"][0]["label"] == header
+    assert sob["columns"][0]["plan_codes"] == ["1", "U01", "U04", "U06"]
+    assert sob["columns"][1]["label"] == "PLAN 2/D01"
+
+
+def test_column_label_joins_headers_that_share_values() -> None:
+    # CDL GMM prices PLAN 3 and PLAN 4 identically, so both headers merge.
+    plans = [
+        {**_plan("3", "15000"), "source_label": "PLAN 3/D02"},
+        {**_plan("4", "15000"), "source_label": "PLAN 4/D03"},
+    ]
+    sob = sob_from_plan_items(plans)
+    assert len(sob["columns"]) == 1
+    assert sob["columns"][0]["label"] == "PLAN 3/D02 + PLAN 4/D03"
+
+
+def test_column_label_ignores_headers_that_miss_a_member() -> None:
+    # VDL GCSP groups a B3 its header never names — claiming the header would
+    # advertise a narrower code set than the column really covers.
+    plans = [
+        {**_plan("B2", "500"), "source_label": "Plan B2, B1"},
+        {**_plan("B1", "500"), "source_label": "Plan B2, B1"},
+        {**_plan("B3", "500")},
+    ]
+    sob = sob_from_plan_items(plans)
+    assert sob["columns"][0]["label"] == "All plans"
 
 
 def test_not_covered_sentinel_is_per_column() -> None:

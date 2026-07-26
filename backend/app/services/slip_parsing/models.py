@@ -102,6 +102,17 @@ class ExtractedPlan:
     annual_policy_limit: str | None = None
     items: tuple[ExtractedBenefitItem, ...] = ()
     source_row: int = 0
+    # The slip's VERBATIM Schedule-of-Benefits column header for this plan
+    # ("PLAN 1/U01/U04/U06"). Set only for per-plan-column layouts — a
+    # descriptive single-schedule sheet has no such header and leaves it None.
+    #
+    # It exists because a composite header names several plan codes at once and
+    # `slip_reconcile` fans it out into one plan per code, rewriting
+    # `display_name` to a synthetic "Plan U01". Without capturing the original
+    # here, the broker-facing SOB column label can never show what the slip
+    # actually said. `dataclasses.replace` carries it through the fan-out for
+    # free, so every derived plan keeps pointing at the header it came from.
+    source_label: str | None = None
 
 
 @dataclass(frozen=True)

@@ -895,6 +895,11 @@ export interface PlanAnswer {
   code: string;
   label: string;
   selected: boolean;
+  // The slip's verbatim Schedule-of-Benefits column header for this plan
+  // ("PLAN 1/U01/U04/U06"). Present only when the sheet had per-plan columns
+  // AND the header names this plan's code; absent on descriptive layouts and
+  // manually-built drafts. Drives the SOB column label — see columnLabel().
+  source_label?: string | null;
   // Legacy per-plan SOB grid. Superseded by SetupAnswers.sob (decoupled benefit
   // columns); retained optional so pre-`sob` drafts still load + migrate. New
   // drafts carry only code/label/selected here.

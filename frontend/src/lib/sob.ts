@@ -127,9 +127,26 @@ function varyingProps(
   );
 }
 
-// Label a column from the plans it covers: the plan label when it owns exactly
-// one, "All plans" when a single column covers everything, else "<first> +N".
+// Label a column from the plans it covers. Mirror of
+// `sob_columns._column_label` — keep the two in sync.
+//
+// A slip header can name several plan codes at once ("PLAN 1/U01/U04/U06"),
+// which are fanned out into one plan each; a column normally regroups exactly
+// those, so it prints the header verbatim rather than the lossy "Plan 1 +3".
+// Every member must carry a header (else the label would under-state what the
+// column covers), and value-identical headers can merge into one column, so
+// join the distinct ones. Without headers, fall back to the old summary.
 function columnLabel(plans: PlanAnswer[], onlyColumn: boolean): string {
+  const labels: string[] = [];
+  for (const p of plans) {
+    const src = (p.source_label ?? "").trim();
+    if (!src) {
+      labels.length = 0;
+      break;
+    }
+    if (!labels.includes(src)) labels.push(src);
+  }
+  if (labels.length) return labels.join(" + ");
   if (plans.length === 1) return plans[0].label || plans[0].code;
   if (onlyColumn) return "All plans";
   const first = plans[0]?.label || plans[0]?.code || "";
@@ -301,9 +318,17 @@ export function unassignedColumns(sob: SobSchedule): SobColumn[] {
 }
 
 /**
- * Ensure the schedule has ≥1 column and every selected plan code is assigned to
- * exactly one column. Orphan codes (basis added after the SOB was built) fall
- * into the first column; codes no longer present are dropped. Idempotent.
+ * Ensure the schedule has ≥1 column and no plan code is assigned to more than
+ * one column; codes no longer present are dropped. Idempotent.
+ *
+ * An orphan code (a basis added after the SOB was built) joins the column ONLY
+ * when there is exactly one — then it unambiguously covers the whole product.
+ * With several benefit levels it stays UNASSIGNED, mirroring
+ * `sob_columns._column_id_for_plan`: dropping orphans into `columns[0]` gave
+ * them the first — usually richest — schedule, and because that guess was
+ * written back into `plan_codes` and autosaved, it silently became the truth
+ * the server then trusted. Unassigned surfaces as "Not assigned" in
+ * ColumnManager for the broker to resolve.
  */
 export function reconcileColumns(
   sob: SobSchedule,
@@ -323,10 +348,8 @@ export function reconcileColumns(
     return { ...c, plan_codes: codes };
   });
   const orphans = planCodes.filter((code) => !assigned.has(code));
-  if (orphans.length) {
-    columns = columns.map((c, i) =>
-      i === 0 ? { ...c, plan_codes: [...c.plan_codes, ...orphans] } : c,
-    );
+  if (orphans.length && columns.length === 1) {
+    columns = [{ ...columns[0], plan_codes: [...columns[0].plan_codes, ...orphans] }];
   }
   return { ...sob, columns };
 }
