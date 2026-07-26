@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { KeyRound, Lock, User } from "lucide-react";
 import { isMemberToken, useMemberLogin, useMemberMfa } from "@/api/portal";
-import { formatError } from "@/lib/errors";
+import { errorStatus, formatError } from "@/lib/errors";
+import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,8 +43,18 @@ export function PortalSignInPage() {
             setStep("mfa");
           }
         },
-        onError: () =>
-          setError("Those details weren't recognised. Check and try again."),
+        // A blanket "not recognised" hid the two states the user MUST see:
+        // 423 (locked out) and 429 (rate limited). Retrying against those just
+        // extends the backoff, so surface the server's own message. 401 keeps
+        // the generic wording — it must not confirm whether an account exists.
+        onError: (err) => {
+          const status = errorStatus(err);
+          setError(
+            status === 423 || status === 429
+              ? formatError(err)
+              : "Those details weren't recognised. Check and try again.",
+          );
+        },
       },
     );
   };
@@ -67,7 +78,7 @@ export function PortalSignInPage() {
       subtitle={
         step === "credentials"
           ? "Sign in to access your benefits, claims and coverage."
-          : "Enter the 6-digit code from your authenticator app."
+          : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
       }
     >
       {step === "credentials" ? (
@@ -135,12 +146,12 @@ export function PortalSignInPage() {
             </Label>
             <Input
               id="portal-totp"
-              inputMode="numeric"
+              inputMode="text"
               autoComplete="one-time-code"
               placeholder="123456"
-              maxLength={6}
+              maxLength={MFA_CODE_MAX_LENGTH}
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              onChange={(e) => setCode(normalizeMfaCode(e.target.value))}
               autoFocus
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
@@ -149,7 +160,7 @@ export function PortalSignInPage() {
           <Button
             type="submit"
             className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
-            disabled={mfa.isPending || code.length < 6}
+            disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify"}
           </Button>

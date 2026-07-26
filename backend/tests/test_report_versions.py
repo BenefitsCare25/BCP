@@ -243,8 +243,9 @@ def test_versioned_flow_and_movement(client: TestClient) -> None:
 
 def test_masked_and_unmasked_are_distinct_versions(client: TestClient) -> None:
     # A masked save and an unmasked save of the SAME membership must NOT collapse
-    # into one version — the dedup signature includes the masking choice, so the
-    # broker can retain both an internal (masked) and an insurer (unmasked) copy.
+    # into one version, so the broker can retain both an internal (masked) and an
+    # insurer (unmasked) copy. The dedup fingerprint is of the rendered BYTES, and
+    # the masked NRIC differs in the cells, so they separate naturally.
     r_masked = _create(client, "dependant_listing", insurer="TestSure", masked=True)
     assert r_masked.status_code == 200, r_masked.text
     v_masked = r_masked.json()
@@ -260,6 +261,41 @@ def test_masked_and_unmasked_are_distinct_versions(client: TestClient) -> None:
     # Re-saving the unmasked one with no change IS a no-op.
     again = _create(client, "dependant_listing", insurer="TestSure", masked=False)
     assert again.json()["unchanged"] is True
+
+
+def test_viewer_cannot_download_a_retained_unmasked_listing(client: TestClient) -> None:
+    """A retained version holds the same PII the live endpoint gates.
+
+    `reports.py` refuses unmasked NRIC/FIN to a `broker_viewer`, but the
+    retained blob was reachable with no such check — so a viewer could pull an
+    unmasked listing a colleague had saved. The POST guard doesn't help: the
+    router sits behind `require_write_access`, so the GET is the only path a
+    viewer can take.
+    """
+    masked_v = _create(client, "employee_listing", insurer="TestSure", masked=True).json()
+    unmasked_v = _create(
+        client, "employee_listing", insurer="TestSure", masked=False
+    ).json()
+
+    def as_viewer() -> CurrentUser:
+        return CurrentUser(
+            user_id="00000000-0000-0000-0000-0000000r20fe",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id=CLIENT_ID, role="broker_viewer",
+        )
+
+    app.dependency_overrides[get_current_user] = as_viewer
+    try:
+        blocked = client.get(f"/api/v1/report-versions/{unmasked_v['id']}/download")
+        assert blocked.status_code == 403, blocked.text
+        # The movement workbook is built from the same listings — gated too.
+        moved = client.get(f"/api/v1/report-versions/{unmasked_v['id']}/movement")
+        assert moved.status_code == 403, moved.text
+        # A masked version stays available to viewers.
+        allowed = client.get(f"/api/v1/report-versions/{masked_v['id']}/download")
+        assert allowed.status_code == 200, allowed.text
+    finally:
+        app.dependency_overrides[get_current_user] = _user
 
 
 # ── Latest-mode supersede ────────────────────────────────────────────────────

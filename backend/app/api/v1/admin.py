@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import VALID_ROLES, CurrentUser
 from app.core.deps import require_firm_admin, require_system_admin
+from app.core.tenancy_host import SlugError
 from app.db.session import engine, get_db
 from app.db.tenancy import provision_firm_schema
 from app.models import BrokerFirm, Client, PolicyYear, User, UserClientAccess
@@ -33,6 +34,7 @@ from app.models.invitation import (
     Invitation,
 )
 from app.models.user import USER_STATUS_ACTIVE, USER_STATUS_DISABLED, USER_STATUS_INVITED
+from app.services.client_slug import assign_slug
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -155,16 +157,23 @@ def list_broker_firms(
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     broker_firm_id: str | None = None  # system_admin only
+    # Optional override; derived from the name when omitted.
+    slug: str | None = Field(default=None, max_length=63)
 
 
 class ClientPatch(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+    slug: str | None = Field(default=None, max_length=63)
 
 
 class ClientOut(BaseModel):
     id: str
     name: str
     broker_firm_id: str
+    # The tenant subdomain label. Surfaced so the broker UI can build absolute
+    # `{slug}.hr.<base>` / `{slug}.portal.<base>` links (set-password links are
+    # sent to people who are NOT on the broker host).
+    slug: str | None = None
 
 
 def _load_firm_client(db: Session, user: CurrentUser, client_id: str) -> Client:
@@ -188,10 +197,20 @@ def create_client(
     client = Client(name=body.name.strip(), broker_firm_id=firm_id)
     db.add(client)
     db.flush()
+    # Always give the tenant a subdomain label: `resolve_tenant_context` looks
+    # tenants up by it, so a NULL slug makes the HR surface and portal
+    # credential login 404 for this company.
+    try:
+        assign_slug(db, client, body.slug)
+    except SlugError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     write_audit(db, user, action="create", entity_type="client", entity_id=client.id,
-                after={"name": client.name, "broker_firm_id": firm_id})
+                after={"name": client.name, "broker_firm_id": firm_id,
+                       "slug": client.slug})
     db.commit()
-    return ClientOut(id=client.id, name=client.name, broker_firm_id=firm_id)
+    return ClientOut(
+        id=client.id, name=client.name, broker_firm_id=firm_id, slug=client.slug
+    )
 
 
 @router.get("/clients", response_model=list[ClientOut])
@@ -205,7 +224,10 @@ def list_clients(
         select(Client).where(Client.broker_firm_id == firm_id).order_by(Client.name)
     ).scalars().all()
     return [
-        ClientOut(id=c.id, name=c.name, broker_firm_id=c.broker_firm_id) for c in clients
+        ClientOut(
+            id=c.id, name=c.name, broker_firm_id=c.broker_firm_id, slug=c.slug
+        )
+        for c in clients
     ]
 
 
@@ -217,12 +239,23 @@ def patch_client(
     db: Session = Depends(get_db),
 ) -> ClientOut:
     client = _load_firm_client(db, user, client_id)
-    before = {"name": client.name}
+    before = {"name": client.name, "slug": client.slug}
     client.name = body.name.strip()
+    # Renaming does NOT move the subdomain — live links and bookmarks would
+    # break. Only an explicit slug changes it; a client that somehow has none
+    # (pre-slug row) gets one derived now.
+    if body.slug or not client.slug:
+        try:
+            assign_slug(db, client, body.slug)
+        except SlugError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     write_audit(db, user, action="update", entity_type="client", entity_id=client.id,
-                before=before, after={"name": client.name})
+                before=before, after={"name": client.name, "slug": client.slug})
     db.commit()
-    return ClientOut(id=client.id, name=client.name, broker_firm_id=client.broker_firm_id)
+    return ClientOut(
+        id=client.id, name=client.name, broker_firm_id=client.broker_firm_id,
+        slug=client.slug,
+    )
 
 
 @router.delete("/clients/{client_id}", status_code=204)

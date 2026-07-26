@@ -14,8 +14,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.v1.reports import assert_masking_allowed
 from app.core.audit import write_audit
-from app.core.auth import ROLE_BROKER_VIEWER, CurrentUser, get_current_user
+from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_for_user,
     load_report_version,
@@ -117,11 +118,7 @@ def create_report_version(
                 status.HTTP_404_NOT_FOUND,
                 f"No products are assigned to insurer {body.insurer!r} for this year.",
             )
-    if not body.masked and user.role == ROLE_BROKER_VIEWER:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Unmasked NRIC/FIN downloads require write access.",
-        )
+    assert_masking_allowed(user, body.masked)
 
     try:
         rv, created, superseded_path = create_version(
@@ -184,6 +181,19 @@ def report_version_status(
     return report_status(db, py, report_type, scope_key)
 
 
+def _assert_version_readable(user: CurrentUser, rv: ReportVersion) -> None:
+    """Apply the live reports' masking rule to a RETAINED version.
+
+    `create_report_version` also checks this, but that check is unreachable —
+    the router sits behind `require_write_access`, so a viewer can never POST.
+    The GET is the only path a `broker_viewer` can take, and a retained listing
+    holds the same unmasked NRIC/FIN the live endpoint refuses them. Read
+    `masked` from the stored params (the exact request that produced the blob);
+    a version predating the field is treated as unmasked, i.e. restricted.
+    """
+    assert_masking_allowed(user, bool((rv.params or {}).get("masked", False)))
+
+
 def _blob_response(rv: ReportVersion, content: bytes) -> Response:
     return Response(
         content=content,
@@ -201,6 +211,7 @@ def download_report_version(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
+    _assert_version_readable(user, rv)
     content = load_version_blob(rv)
     write_audit(
         db, user, action="export", entity_type="report_version", entity_id=rv.id,
@@ -220,6 +231,9 @@ def download_movement(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
+    # The movement workbook is built FROM the retained listings, so it carries
+    # the same identifiers — gate it exactly like the blob download.
+    _assert_version_readable(user, rv)
     spec = _spec_or_404(rv.report_type)
     if not spec.has_movement:
         raise HTTPException(

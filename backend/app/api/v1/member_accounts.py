@@ -55,6 +55,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["member-accounts"])
 
 
+def _tenant_slug(db: Session, client_id: str | None) -> str | None:
+    """The client's subdomain label, for building absolute portal links."""
+    from app.models import Client
+
+    client = db.get(Client, client_id) if client_id else None
+    return client.slug if client else None
+
+
 def _load_account(
     account_id: str, user: CurrentUser, db: Session
 ) -> MemberAccount:
@@ -163,6 +171,7 @@ def create_member_account(
             ) from None
         out = MemberAccountOut.model_validate(account)
         out.set_password_token = token
+        out.tenant_slug = _tenant_slug(db, account.client_id)
         return out
     email = _validated_email(raw_email)
 
@@ -237,6 +246,7 @@ def member_password_setup(
     db.commit()
     out = MemberAccountOut.model_validate(account)
     out.set_password_token = token
+    out.tenant_slug = _tenant_slug(db, account.client_id)
     return out
 
 

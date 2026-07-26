@@ -30,7 +30,8 @@ from app.services import ai_breaker, ai_cache  # noqa: E402
 from app.services.ai_gateway import (  # noqa: E402
     AIBudgetExceededError,
     AIPlatformBudgetExceededError,
-    _acquire_ai_slot,
+    _concurrency_state,
+    _slot,
     generate_rule_for_category,
     month_to_date_tokens,
     platform_month_to_date_tokens,
@@ -312,18 +313,48 @@ def test_default_budget_applies_when_client_zero(monkeypatch) -> None:
 
 
 def test_concurrency_slot_bounds_and_defaults() -> None:
-    """limit<=0 → no-op context; limit>0 → a bounded semaphore of that size."""
-    import contextlib
+    """limit<=0 → unbounded; limit>0 → at most `limit` holders at once."""
+    with _slot(0):  # no-op, and must not raise
+        pass
 
-    assert isinstance(_acquire_ai_slot(0), contextlib.nullcontext)
+    with _slot(2), _slot(2):
+        # Both slots taken; a third caller must not get in.
+        assert (
+            _concurrency_state["sem"].acquire(blocking=False) is False
+        ), "third concurrent call should hit backpressure"
+    # Released on exit, so the next caller proceeds.
+    with _slot(2):
+        pass
 
-    sem = _acquire_ai_slot(2)
-    assert _acquire_ai_slot(2) is sem  # cached for the same limit
-    assert sem.acquire(blocking=False) is True
-    assert sem.acquire(blocking=False) is True
-    assert sem.acquire(blocking=False) is False  # third blocked → backpressure
-    sem.release()
-    sem.release()
+
+def test_concurrency_slot_gives_up_rather_than_pinning_resources(monkeypatch) -> None:
+    """A saturated process must degrade, not queue forever.
+
+    A waiting thread can still hold a pooled DB connection, so an unbounded wait
+    let a burst park every connection and starve unrelated requests. The timeout
+    raises `AICapacityError`, which subclasses `AIBudgetExceededError` so the
+    existing degradation paths already handle it.
+    """
+    import app.services.ai_gateway as G
+
+    monkeypatch.setattr(G, "_AI_SLOT_WAIT_SECONDS", 0.05)
+    with _slot(1):
+        with pytest.raises(AIBudgetExceededError):
+            with _slot(1):
+                pass
+
+
+def test_clean_session_releases_connection_before_queueing() -> None:
+    """The budget check leaves the session clean, so the connection is returned
+    before we block — that is what keeps a burst from exhausting the pool."""
+    db = SessionLocal()
+    try:
+        db.execute(select(Client).limit(1)).all()  # opens a transaction
+        assert db.in_transaction()
+        with _slot(1, db):
+            assert not db.in_transaction(), "connection should be released while queueing"
+    finally:
+        db.close()
 
 
 def test_provider_failure_increments_breaker() -> None:

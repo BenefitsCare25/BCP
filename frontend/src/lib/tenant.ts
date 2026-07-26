@@ -26,3 +26,27 @@ export function currentPortalTenantSlug(): string {
     "demo"
   );
 }
+
+/**
+ * An ABSOLUTE url for a page on a tenant surface.
+ *
+ * Needed because the broker app is served from its own host: a set-password
+ * link generated there points at `{slug}.hr.<base>` / `{slug}.portal.<base>`,
+ * not at the broker origin. Emitting a bare path ("/hr/set-password?token=…")
+ * produced something unclickable when pasted into an email — and the token is
+ * revealed once, so recovering meant re-issuing it.
+ *
+ * `VITE_TENANT_BASE_DOMAIN` is the apex the subdomains hang off (mirrors the
+ * backend's `base_domain`). Without it — local dev, where every surface is on
+ * one origin — fall back to the current origin so the link still works.
+ */
+export function tenantSurfaceUrl(
+  surface: "hr" | "portal",
+  slug: string | null | undefined,
+  path: string,
+): string {
+  const base = (import.meta.env.VITE_TENANT_BASE_DOMAIN as string | undefined)?.trim();
+  if (!base || !slug) return new URL(path, window.location.origin).toString();
+  const protocol = window.location.protocol === "http:" ? "http:" : "https:";
+  return `${protocol}//${slug}.${surface}.${base}${path}`;
+}

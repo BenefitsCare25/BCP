@@ -17,9 +17,11 @@ from datetime import UTC, datetime
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import auth_events as EV
+from app.core import credentials as CRED
 from app.core import hr_auth as HR
 from app.core import passwords as PW
 from app.core import sessions as SESS
@@ -282,14 +284,39 @@ def verify_mfa(
     if cid != tenant.client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
 
+    from app.models import AuthCredential
+
     user = db.get(User, user_id)
     if user is None or user.role not in HR.HR_ROLES or user.status != USER_STATUS_ACTIVE:
         raise _INVALID
+    # The lockout counters live on AuthCredential, not User (the login step uses
+    # the same row).
+    cred = db.execute(
+        select(AuthCredential).where(AuthCredential.user_id == user.id)
+    ).scalar_one_or_none()
+    if cred is None:
+        raise _INVALID
+    # The second factor needs the SAME lockout as the first. Without it the only
+    # brake was per-IP rate limiting, and `verify_user_totp` accepts a +/-1 step
+    # window (three live codes), so an attacker holding a breached password
+    # could grind six digits from rotating IPs for the challenge's whole TTL.
+    if CRED.is_locked(cred):
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOCKOUT, outcome=EV.OUTCOME_BLOCKED, surface="hr",
+            subject_type=SUBJECT_USER, subject_id=user_id, client_id=tenant.client_id,
+            broker_firm_id=tenant.broker_firm_id, ip=_client_ip(request),
+            user_agent=_ua(request), subdomain=request.headers.get("host"),
+        )
+        db.commit()
+        raise HTTPException(
+            status.HTTP_423_LOCKED, "Account temporarily locked. Try again later."
+        )
     # A TOTP code OR a single-use recovery code satisfies the challenge.
     ok = HR.verify_user_totp(db, user_id, body.code) or HR.consume_recovery_code(
         db, user_id, body.code
     )
     if not ok:
+        CRED.register_failure(cred)
         EV.write_auth_event(
             db, event_type=EV.EVENT_MFA_FAIL, outcome=EV.OUTCOME_FAIL, surface="hr",
             subject_type=SUBJECT_USER, subject_id=user_id, client_id=tenant.client_id,
@@ -507,12 +534,18 @@ def set_password(
     HR.reset_failures(cred)
     if user.status == USER_STATUS_INVITED:
         user.status = USER_STATUS_ACTIVE
+    # Changing the password evicts every OTHER live session. Without this a
+    # phished password stayed useful for the full absolute session lifetime —
+    # the attacker's refresh family kept rotating straight through the reset.
+    # The caller's new session is issued below, after this sweep.
+    revoked = SESS.revoke_all_for_subject(db, SUBJECT_USER, user.id)
     EV.write_auth_event(
         db, event_type=EV.EVENT_PASSWORD_RESET_COMPLETE, outcome=EV.OUTCOME_SUCCESS,
         surface="hr", subject_type=SUBJECT_USER, subject_id=user.id,
         client_id=tenant.client_id, broker_firm_id=tenant.broker_firm_id,
         ip=_client_ip(request), user_agent=_ua(request),
         subdomain=request.headers.get("host"),
+        detail={"sessions_revoked": revoked},
     )
 
     # A reset link must NOT be a way around the enrolled second factor: if 2FA is

@@ -92,6 +92,11 @@ class MemberAccountOut(_Base):
     mail_sent: bool | None = None
     # Set once by set-password-link responses — deliver to the member.
     set_password_token: str | None = None
+    # The tenant's subdomain label, so the UI can build an ABSOLUTE
+    # `{tenant_slug}.portal.<base>` link. The broker generating it is on a
+    # different host, so a bare path would be unclickable when pasted into an
+    # email — and the token is shown only once.
+    tenant_slug: str | None = None
 
 
 class MemberAccountList(BaseModel):

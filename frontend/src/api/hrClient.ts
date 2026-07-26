@@ -72,6 +72,16 @@ export async function refreshHrSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
+/** HR auth endpoints reachable WITHOUT a session — a 401 is a credential
+ * error to show inline, never a trigger to refresh. Everything else under
+ * `/hr/auth/` is authenticated and must refresh like any other call. */
+const PUBLIC_AUTH_PATHS = new Set([
+  "/hr/auth/login",
+  "/hr/auth/mfa",
+  "/hr/auth/set-password",
+  "/hr/auth/refresh",
+]);
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -88,9 +98,16 @@ async function request<T>(
     },
   });
   if (res.status === 401) {
-    // Never auto-refresh the auth endpoints themselves — a 401 there is an
+    // Never auto-refresh the UNAUTHENTICATED auth endpoints — a 401 there is an
     // inline credential error, not a session expiry.
-    if (!retried && !path.startsWith("/hr/auth/")) {
+    //
+    // Match those exactly rather than by `/hr/auth/` prefix: the authenticated
+    // calls live under that prefix too (`/hr/auth/me`, the MFA enrol/disable
+    // endpoints), so the prefix test skipped refresh for exactly the requests
+    // that need it — an admin idle past the short access-token TTL was signed
+    // out despite holding a valid refresh cookie. The genuinely public calls
+    // go through `postPublic` and never reach here anyway.
+    if (!retried && !PUBLIC_AUTH_PATHS.has(path)) {
       if (await refreshHrSession()) return request<T>(path, init, true);
     }
     return handleUnauthorized();

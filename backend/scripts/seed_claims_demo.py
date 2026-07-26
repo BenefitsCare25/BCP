@@ -535,9 +535,10 @@ def seed_claims_demo() -> None:
                      "evidence": "1 document(s), no hash reuse across live claims."},
                 ],
                 error_detail=(
-                    "AI provider not configured. Set INSPRO_AI_PROVIDER=bedrock + "
-                    "AWS_BEDROCK_MODEL (or ANTHROPIC_API_KEY for local dev), or "
-                    "configure a tenant BYOK key on the AI provider settings page."
+                    "AI provider not configured. Set VERTEX_PROJECT + "
+                    "VERTEX_LOCATION/_MODEL with Google ADC, or configure a "
+                    "tenant BYOK service-account key on the AI provider "
+                    "settings page."
                 ),
             )
         )

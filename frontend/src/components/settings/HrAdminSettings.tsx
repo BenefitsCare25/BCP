@@ -15,6 +15,7 @@ import {
 } from "@/api/hrAdmin";
 import { useMe } from "@/api/hooks";
 import { formatError } from "@/lib/errors";
+import { tenantSurfaceUrl } from "@/lib/tenant";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,8 +57,15 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 /** One-time reveal of a set-password link after create/reset. */
-function SetPasswordReveal({ token }: { token: string }) {
-  const link = `/hr/set-password?token=${encodeURIComponent(token)}`;
+function SetPasswordReveal({ token, tenantSlug }: { token: string; tenantSlug?: string | null }) {
+  // ABSOLUTE url: the HR surface lives on `{slug}.hr.<base>`, not on the broker
+  // host this page is served from, so a bare path is unclickable once pasted
+  // into an email — and the token is revealed only once.
+  const link = tenantSurfaceUrl(
+    "hr",
+    tenantSlug,
+    `/hr/set-password?token=${encodeURIComponent(token)}`,
+  );
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(link);
@@ -404,7 +412,12 @@ function AccountsCard({ clientId }: { clientId: string }) {
           </Button>
         </div>
 
-        {reveal && <SetPasswordReveal token={reveal.set_password_token} />}
+        {reveal && (
+          <SetPasswordReveal
+            token={reveal.set_password_token}
+            tenantSlug={reveal.tenant_slug}
+          />
+        )}
 
         {isLoading ? (
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">

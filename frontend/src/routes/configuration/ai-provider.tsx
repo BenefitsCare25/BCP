@@ -94,9 +94,13 @@ function isValidDraft(draft: Draft): boolean {
 }
 
 export function AIProviderPage() {
-  const { data: me } = useMe();
+  const { data: me, isPending: meLoading } = useMe();
   const isSystemAdmin = me?.role === "system_admin";
-  const { data: config, isLoading } = useAIConfig(!isSystemAdmin);
+  // Wait for the role before deciding: on a hard reload `me` is briefly
+  // undefined, which read as "not a system admin" and fired /ai-config — a
+  // broker_admin-only endpoint — producing a spurious 403 toast for system
+  // admins every time they landed here directly.
+  const { data: config, isLoading } = useAIConfig(!meLoading && !isSystemAdmin);
   const { data: status } = useAIStatus();
   const put = usePutAIConfig();
   const remove = useDeleteAIConfig();

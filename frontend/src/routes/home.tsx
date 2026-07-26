@@ -16,6 +16,7 @@ import { type CompanySummary, useDashboardSummary } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Kpi } from "@/components/ui/kpi";
+import { TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/cn";
 import { companyAttention, daysUntil } from "@/lib/attention";
 import { useSession } from "@/stores/session";
@@ -239,9 +240,14 @@ function CompanyRow({ company }: { company: CompanySummary }) {
   const initial = company.name.trim().charAt(0).toUpperCase() || "?";
 
   return (
-    <tr
+    // Shared TableRow, not a bare <tr>: it makes an onClick row focusable and
+    // Enter/Space-operable (WCAG 2.1.1). /home is where the active company is
+    // chosen, so a mouse-only row left keyboard users unable to reach ANY
+    // company workspace.
+    <TableRow
       onClick={enter}
-      className="group cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-sidebar-hover"
+      aria-label={`Open ${company.name}`}
+      className="group border-b border-border last:border-0 hover:bg-sidebar-hover"
     >
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
@@ -295,6 +301,6 @@ function CompanyRow({ company }: { company: CompanySummary }) {
       <td className="px-4 py-3 text-right">
         <ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
       </td>
-    </tr>
+    </TableRow>
   );
 }

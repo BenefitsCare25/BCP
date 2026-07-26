@@ -5,6 +5,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { isMemberToken, useMemberMfa, useMemberSetPassword } from "@/api/portal";
 import { formatError } from "@/lib/errors";
+import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,7 +87,7 @@ export function PortalSetPasswordPage() {
       <AuthScene
         eyebrow="Employee benefits portal"
         title="Two-factor authentication"
-        subtitle="Enter the 6-digit code from your authenticator app to finish."
+        subtitle="Enter the 6-digit code from your authenticator app, or one of your recovery codes."
       >
         <form onSubmit={submitMfa} className="space-y-4">
           <div className="space-y-1.5">
@@ -98,12 +99,12 @@ export function PortalSetPasswordPage() {
             </Label>
             <Input
               id="portal-setpw-totp"
-              inputMode="numeric"
+              inputMode="text"
               autoComplete="one-time-code"
               placeholder="123456"
-              maxLength={6}
+              maxLength={MFA_CODE_MAX_LENGTH}
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              onChange={(e) => setCode(normalizeMfaCode(e.target.value))}
               autoFocus
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
@@ -112,7 +113,7 @@ export function PortalSetPasswordPage() {
           <Button
             type="submit"
             className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
-            disabled={mfa.isPending || code.length < 6}
+            disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify & sign in"}
           </Button>

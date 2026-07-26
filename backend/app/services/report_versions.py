@@ -73,12 +73,11 @@ def _manifest_hash(manifest: dict | None) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _listing_signature(manifest: dict, masked: bool) -> str:
-    """Dedup key for the insurer listings: the membership hash plus the masking
-    choice. Masking is part of the signature because the manifest itself carries
-    no NRIC — without it a masked and an unmasked save would collapse into one
-    version and the broker could never retain the unmasked submission."""
-    return f"{_manifest_hash(manifest)}:m{int(masked)}"
+# NOTE: there is deliberately no manifest-based dedup key any more. It hashed
+# only member identity, so it could not see the underwriting/salary-derived
+# columns the listing renders and wrongly reported "unchanged". The masking
+# choice no longer needs encoding either — masked and unmasked bytes differ, so
+# `_content_signature` separates them naturally.
 
 
 # The only OOXML package part openpyxl / python-docx stamp with a write
@@ -171,8 +170,15 @@ def list_versions(
         .order_by(ReportVersion.version_no.desc())
         .limit(MAX_LIMIT)
     )
-    if scope_key is not None:
-        stmt = stmt.where(ReportVersion.scope_key == scope_key)
+    # A None scope_key means "the unscoped series", exactly as `latest_version`
+    # and `previous_version` read it — NOT "every scope". Treating it as no
+    # filter interleaved every insurer's series into one list, so the history
+    # showed repeated version_no values that looked like duplicates.
+    stmt = stmt.where(
+        ReportVersion.scope_key.is_(None)
+        if scope_key is None
+        else ReportVersion.scope_key == scope_key
+    )
     return list(db.execute(stmt).scalars().all())
 
 
@@ -223,7 +229,6 @@ def create_version(
             f"({sorted(REPORT_SUFFIXES)})."
         )
     scope_key = scope_key_for(spec, params)
-    masked = bool(params.get("masked", True))
     prior = latest_version(db, py, report_type, scope_key)
     prior_hash = (prior.summary or {}).get("content_hash") if prior else None
 
@@ -232,20 +237,25 @@ def create_version(
     )
 
     # No-op guard: if nothing changed since the last saved version, don't create
-    # a duplicate (stops "save" spam from piling up identical rows). For listings
-    # the manifest (+ masking) settles it WITHOUT building the workbook; other
-    # reports need the bytes to fingerprint.
-    manifest_sig = _listing_signature(manifest, masked) if manifest is not None else None
-    if manifest_sig is not None and manifest_sig == prior_hash:
-        return prior, False, None
-
+    # a duplicate (stops "save" spam from piling up identical rows).
+    #
+    # This ALWAYS builds the bytes and fingerprints them, including for the
+    # insurer listings. The membership manifest used to short-circuit here
+    # without building the workbook, but it only carries member identity
+    # (staff_id / name / member id / status / plan+grouping) — while
+    # `build_employee_listing` renders ~33 further columns plus per-product
+    # `Eligible / Pending U/W / Last Accepted Sum Insured` derived from
+    # underwriting cases and free-cover limits. So accepting a UW case or
+    # correcting a salary left the manifest identical, the save answered
+    # "unchanged", and the retained record of what was submitted silently
+    # diverged from what the report now produces.
     blob_bytes = build_report_bytes(db, py, report_type, params)
     if len(blob_bytes) > MAX_REPORT_BYTES:
         raise ReportTooLargeError(
             f"Report is {len(blob_bytes)} bytes (max {MAX_REPORT_BYTES})."
         )
 
-    content_hash = manifest_sig or _content_signature(spec, blob_bytes)
+    content_hash = _content_signature(spec, blob_bytes)
     if content_hash is not None and content_hash == prior_hash:
         return prior, False, None
 
@@ -327,19 +337,20 @@ def _max_data_change(db: Session, py: PolicyYear, extra_models=()):
 
 
 def is_stale(db: Session, py: PolicyYear, rv: ReportVersion) -> bool:
-    """True when live data drifted from the retained version, so a new one is
-    due. Cheap ``max(updated_at)`` gate, confirmed for the insurer listings by
-    re-hashing the membership manifest (precise incl. no-net-change edits)."""
+    """True when live data changed after the retained version, so a new one is due.
+
+    Deliberately errs toward "stale". It used to narrow the answer for the
+    insurer listings by re-hashing the membership manifest — but the manifest
+    covers only member identity, not the underwriting- and salary-derived
+    columns the listing renders, so an accepted UW case reported "up to date"
+    for a document that had genuinely changed. A wrong "up to date" on a record
+    of what was submitted to an insurer is the dangerous direction; a wrong
+    "update available" merely offers a save, and `create_version` fingerprints
+    the real bytes and returns `unchanged` if nothing moved.
+    """
     extra = _EXTRA_STALENESS_MODELS.get(rv.report_type, ())
     latest_change = _max_data_change(db, py, extra)
-    if latest_change is None or latest_change <= rv.created_at:
-        return False
-    spec = spec_for(rv.report_type)
-    stored_hash = (rv.summary or {}).get("manifest_hash")
-    if spec.has_movement and stored_hash:
-        current = membership_manifest(db, py, (rv.params or {}).get("insurer") or "")
-        return _manifest_hash(current) != stored_hash
-    return True
+    return latest_change is not None and latest_change > rv.created_at
 
 
 def report_status(

@@ -105,13 +105,22 @@ def request_code(
     return OtpRequestOut(status="sent", debug_code=debug_code)
 
 
-@router.post("/verify", response_model=OtpVerifyOut)
+@router.post("/verify")
 @limiter.limit("10/minute")
 def verify_code(
     request: Request,
     body: OtpVerifyIn,
     db: Session = Depends(get_db),
-) -> OtpVerifyOut:
+):
+    """Verify an emailed sign-in code.
+
+    A correct code proves control of the mailbox — it is the FIRST factor, not a
+    complete sign-in. It therefore ends in the same three outcomes as
+    `/login`: forced rotation, an MFA challenge, or a session. Returning a token
+    straight from here let a member whose company requires 2FA skip the second
+    factor entirely by choosing the emailed-code route (no `response_model`, so
+    the challenge shapes can be returned like `/login` does).
+    """
     email = body.email.strip().lower()
     code_hash = hash_otp_code(body.code.strip())
     now = datetime.now(UTC)
@@ -152,17 +161,26 @@ def verify_code(
             db.commit()
         raise invalid
 
-    if matched.status == MEMBER_STATUS_INVITED:
-        matched.status = MEMBER_STATUS_ACTIVE
-    matched.last_sign_in_at = now
-    db.commit()
+    # The code is already consumed above, so neither challenge below can be
+    # replayed with it.
+    if CRED.rotation_due(matched):
+        token = issue_member_set_password_token(
+            matched.id, CRED.credential_version(matched)
+        )
+        db.commit()
+        return MemberChallengeOut(
+            status="password_reset_required", challenge_token=token
+        )
 
-    token, expires_at = issue_member_token(matched.id, matched.client_id)
-    return OtpVerifyOut(
-        token=token,
-        expires_at=expires_at,
-        member=PortalMemberOut.model_validate(matched),
-    )
+    policy = get_auth_policy(db, matched.client_id)
+    if policy.mfa_portal_enabled and mfa.has_confirmed(
+        db, SUBJECT_MEMBER, matched.id
+    ):
+        challenge = issue_member_mfa_challenge_token(matched.id, matched.client_id)
+        db.commit()
+        return MemberChallengeOut(challenge_token=challenge)
+
+    return _issue_member_login(db, request, matched, matched.client_id)
 
 
 # ── Credential login (username + password) ────────────────────────────────────
@@ -211,7 +229,9 @@ def _issue_member_login(db: Session, request: Request, account: MemberAccount, c
         subject_type=SUBJECT_MEMBER, subject_id=account.id, client_id=client_id,
         ip=_client_ip(request), subdomain=request.headers.get("host"),
     )
-    token, expires_at = issue_member_token(account.id, client_id)
+    token, expires_at = issue_member_token(
+        account.id, client_id, CRED.credential_version(account)
+    )
     db.commit()
     return _member_out(token, expires_at, account)
 
@@ -293,10 +313,24 @@ def member_mfa(
     account = db.get(MemberAccount, member_id)
     if account is None or account.status == MEMBER_STATUS_DISABLED:
         raise _INVALID
+    # Mirror `/login`'s lockout on the second factor too — per-IP limiting alone
+    # let a six-digit code (accepted across a +/-1 step window) be ground out
+    # from rotating IPs for the challenge's whole TTL.
+    if CRED.is_locked(account):
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOCKOUT, outcome=EV.OUTCOME_BLOCKED, surface="portal",
+            subject_type=SUBJECT_MEMBER, subject_id=member_id, client_id=tenant.client_id,
+            ip=_client_ip(request), subdomain=request.headers.get("host"),
+        )
+        db.commit()
+        raise HTTPException(
+            status.HTTP_423_LOCKED, "Account temporarily locked. Try again later."
+        )
     ok = mfa.verify_totp(db, SUBJECT_MEMBER, member_id, body.code) or mfa.consume_recovery_code(
         db, SUBJECT_MEMBER, member_id, body.code
     )
     if not ok:
+        CRED.register_failure(account)
         EV.write_auth_event(
             db, event_type=EV.EVENT_MFA_FAIL, outcome=EV.OUTCOME_FAIL, surface="portal",
             subject_type=SUBJECT_MEMBER, subject_id=member_id, client_id=tenant.client_id,

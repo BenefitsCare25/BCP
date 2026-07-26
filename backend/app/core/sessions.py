@@ -95,6 +95,28 @@ def revoke_family(db: Session, family_id: str) -> None:
     )
 
 
+def revoke_all_for_subject(db: Session, subject_type: str, subject_id: str) -> int:
+    """Revoke every live session a subject holds. Returns the count. No commit.
+
+    Called whenever a password changes. Without it a reset gave no containment:
+    an attacker who had already signed in kept rotating their refresh family for
+    the full absolute lifetime, so the victim's "change my password" did not
+    actually evict them.
+    """
+    from app.models import AuthSession  # lazy
+
+    result = db.execute(
+        update(AuthSession)
+        .where(
+            AuthSession.subject_type == subject_type,
+            AuthSession.subject_id == subject_id,
+            AuthSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC))
+    )
+    return result.rowcount or 0
+
+
 @dataclass(frozen=True)
 class RotationResult:
     session: IssuedSession | None

@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { KeyRound, Lock } from "lucide-react";
 import { adoptSession, isTokenResult, useHrLogin, useHrMfa } from "@/api/hr";
-import { formatError } from "@/lib/errors";
+import { errorStatus, formatError } from "@/lib/errors";
+import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { IdentifierField } from "@/components/auth/IdentifierField";
 import { Button } from "@/components/ui/button";
@@ -44,8 +45,17 @@ export function HrSignInPage() {
             );
           }
         },
-        onError: () =>
-          setError("Those credentials weren't recognised. Check and try again."),
+        // 423 (locked out) and 429 (rate limited) must reach the user —
+        // retrying against either only extends the backoff. 401 stays generic
+        // so it can't confirm whether an account exists.
+        onError: (err) => {
+          const status = errorStatus(err);
+          setError(
+            status === 423 || status === 429
+              ? formatError(err)
+              : "Those credentials weren't recognised. Check and try again.",
+          );
+        },
       },
     );
   };
@@ -72,7 +82,7 @@ export function HrSignInPage() {
       subtitle={
         step === "credentials"
           ? "Manage your company's employees, policies and claims."
-          : "Enter the 6-digit code from your authenticator app."
+          : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
       }
     >
       {step === "credentials" ? (
@@ -119,12 +129,12 @@ export function HrSignInPage() {
             </Label>
             <Input
               id="hr-totp"
-              inputMode="numeric"
+              inputMode="text"
               autoComplete="one-time-code"
               placeholder="123456"
-              maxLength={6}
+              maxLength={MFA_CODE_MAX_LENGTH}
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              onChange={(e) => setCode(normalizeMfaCode(e.target.value))}
               autoFocus
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
@@ -133,7 +143,7 @@ export function HrSignInPage() {
           <Button
             type="submit"
             className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
-            disabled={mfa.isPending || code.length < 6}
+            disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify"}
           </Button>

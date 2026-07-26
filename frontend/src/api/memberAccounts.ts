@@ -23,6 +23,7 @@ export interface MemberAccount {
   /** Set-password-link responses only: a single-use token for the member to
    *  choose their own password on the portal. */
   set_password_token?: string | null;
+  tenant_slug?: string | null;
 }
 
 export interface MemberAccountListResult {

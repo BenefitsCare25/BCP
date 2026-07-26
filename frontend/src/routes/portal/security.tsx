@@ -66,12 +66,11 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
   );
 }
 
-function EnrollFlow({ onEnrolled }: { onEnrolled: () => void }) {
+function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
   const start = useMemberMfaEnrollStart();
   const confirm = useMemberMfaEnrollConfirm();
   const [setup, setSetup] = useState<MemberMfaStart | null>(null);
   const [code, setCode] = useState("");
-  const [recovery, setRecovery] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const begin = () => {
@@ -85,12 +84,12 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: () => void }) {
   const doConfirm = () => {
     setError(null);
     confirm.mutate(code.trim(), {
-      onSuccess: (data) => setRecovery(data.recovery_codes),
+      // Hand the codes UP — they must outlive this component. See the note in
+      // the page component below.
+      onSuccess: (data) => onEnrolled(data.recovery_codes),
       onError: () => setError("That code didn't match — check your app and try again."),
     });
   };
-
-  if (recovery) return <RecoveryCodes codes={recovery} onDone={onEnrolled} />;
 
   if (!setup) {
     return (
@@ -213,6 +212,11 @@ export function PortalSecurityPage() {
   const { data, refetch } = useMemberSecurityStatus();
   const enrolled = data?.mfa_status === "confirmed";
   const available = data?.mfa_available ?? false;
+  // Held HERE, not inside EnrollFlow. Recovery codes are shown exactly once
+  // (stored hashed) and this query refetches on window focus — so alt-tabbing to
+  // a password manager to save them flipped `enrolled`, unmounted EnrollFlow and
+  // destroyed the codes. At page level they survive the refetch.
+  const [recovery, setRecovery] = useState<string[] | null>(null);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -237,10 +241,18 @@ export function PortalSecurityPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {enrolled ? (
+          {recovery ? (
+            <RecoveryCodes
+              codes={recovery}
+              onDone={() => {
+                setRecovery(null);
+                void refetch();
+              }}
+            />
+          ) : enrolled ? (
             <DisablePanel onDisabled={() => void refetch()} />
           ) : available ? (
-            <EnrollFlow onEnrolled={() => void refetch()} />
+            <EnrollFlow onEnrolled={setRecovery} />
           ) : (
             <p className="text-sm text-muted-foreground">
               Your company hasn't enabled two-factor authentication for the

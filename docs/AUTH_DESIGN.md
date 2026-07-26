@@ -27,9 +27,9 @@ can sign in.
 
 ---
 
-## Implementation status (2026-07-24)
+## Implementation status (2026-07-26)
 
-Backend suite **1236 passing**; the ticked flows are browser-verified on
+Backend suite **1251 passing**; the ticked flows are browser-verified on
 `{slug}.hr.localhost:5173` / `{slug}.portal.localhost:5173`.
 
 | Area | Status |
@@ -47,15 +47,44 @@ Backend suite **1236 passing**; the ticked flows are browser-verified on
 | Member MFA enrol page + portal force-enrol nudge (`routes/portal/security.tsx`) | ✅ verified |
 | Auth policy ENFORCEMENT (MFA on reset, forced rotation, idle timeout, breach on direct-set) | ✅ verified |
 
+### Hardening pass (2026-07-26, post code-review)
+
+Fifteen findings from the branch review, all fixed and covered by tests:
+
+| Finding | Resolution |
+|---|---|
+| Email-OTP `/portal/auth/verify` minted a session with **no MFA / no forced-rotation check** — a member whose company required 2FA could skip it by choosing the emailed-code route | OTP is now the FIRST factor only: it ends in rotation challenge / MFA challenge / session, exactly like `/login` |
+| Retained report versions were downloadable by `broker_viewer` **unmasked** (the live endpoints gate this; the create-time check is unreachable behind `require_write_access`) | `_assert_version_readable` wired into `/download` + `/movement`; single shared `assert_masking_allowed` |
+| **No lockout on the second factor** — TOTP accepts a ±1 step window, so codes could be ground from rotating IPs | `is_locked` before / `register_failure` after on both surfaces (HR counters live on `AuthCredential`, not `User`) |
+| A password reset revoked **nothing** — attacker sessions survived for the full absolute lifetime | `sessions.revoke_all_for_subject` on HR set-password + admin reset; member JWTs (stateless) carry a credential-version claim checked per request |
+| `clients.slug` was **never populated** by any endpoint, script or migration, so every `{slug}.hr` / `{slug}.portal` host 404'd | `services/client_slug.py` + create/patch wiring + backfill migration `a3c5e7b9d1f4`; `slug` exposed on `ClientOut` |
+| One-time recovery codes were destroyed by `refetchOnWindowFocus` when the user alt-tabbed to save them | Codes hoisted to page level so they survive the `enrolled` flip |
+| MFA inputs stripped non-digits at `maxLength=6`, so a **recovery code could never be entered** — a lost phone meant permanent lockout | Shared `lib/mfa.ts`; the four sign-in / set-password forms accept both |
+| HR client skipped refresh for all `/hr/auth/*`, but the authenticated calls live there too — 10-min idle logged admins out despite a valid refresh cookie | Exclusion narrowed to the genuinely public endpoints |
+| Set-password links were bare paths (unclickable in email; token shown once) | `tenantSurfaceUrl()` builds absolute `{slug}.hr|portal.<base>` URLs from the new slug |
+| Insurer-listing dedup/staleness keyed on the membership manifest only, missing ~33 rendered columns + underwriting/salary values — a retained submission record could silently diverge | Always fingerprints the rendered bytes; `is_stale` errs toward "stale" |
+| AI concurrency limiter blocked while holding a pooled DB connection, so enabling it exhausted the pool | Bounded wait + releases the connection when the session is clean (it cannot roll back blindly — the review pipeline commits once at the end); new `AICapacityError` |
+| `platform_ai_usage` row lock was held to the caller's commit, serialising every AI spend platform-wide behind one claim review | Own short transaction on Postgres (inline on SQLite, where a second connection deadlocks) |
+| `/home` company rows were mouse-only, so keyboard users could not reach any workspace | Shared keyboard-operable `TableRow`; verified Tab → Enter |
+| `ai-provider` fired a broker-only endpoint before the role resolved (403 toast on reload); sign-in swallowed 423/429; `list_versions` treated `scope_key=None` as "all scopes" | Fixed |
+| Dead Bedrock tooling (`verify_bedrock.py` imported a removed dependency), stale provider message in `seed_claims_demo` | Removed / corrected |
+
+**Residual:** the MFA challenge token stays replayable for its 5-minute TTL —
+lockout now bounds grinding; true single-use needs a `jti` store.
+
 **Human-only, you apply (per the §9 compliance split):**
 1. Wildcard DNS + wildcard TLS + Front Door routing for `*.hr.<domain>` /
-   `*.portal.<domain>`; set each client's `slug`. Prod secret plumbing reuses the
-   existing Bicep/Key-Vault pattern.
+   `*.portal.<domain>`. Client slugs are now auto-assigned (and backfilled), but
+   verify them before DNS goes live — the slug fronts the subdomain. Prod secret
+   plumbing reuses the existing Bicep/Key-Vault pattern.
+2. Set `VITE_TENANT_BASE_DOMAIN` on the frontend build so copied set-password
+   links resolve to the tenant host rather than the broker origin.
 
 **Notes for the reviewer:**
-- New env: `INSPRO_BASE_DOMAIN` (default `inspro.sg`). New deps: `argon2-cffi`
-  (backend), `qrcode.react` (frontend). Migrations head: `f4c6e8a0b2d3`
-  (chain: `d1f3a5c7e9b2` → `e2b4d6f8a0c1` → `f4c6e8a0b2d3`); all apply + roll back.
+- New env: `INSPRO_BASE_DOMAIN` (default `inspro.sg`), `VITE_TENANT_BASE_DOMAIN`
+  (frontend). New deps: `argon2-cffi` (backend), `qrcode.react` (frontend).
+  Migrations head: `a3c5e7b9d1f4` (chain: `d1f3a5c7e9b2` → `e2b4d6f8a0c1` →
+  `f4c6e8a0b2d3` → `a3c5e7b9d1f4`); verified apply-from-scratch on a clean DB.
 - The **dev DB is `create_all`-built** (not migration-tracked) so its
   `alembic_version` is stale — a clean rebuild-from-migrations is advisable but
   independent of this feature.

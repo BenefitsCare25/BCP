@@ -25,6 +25,7 @@ import {
   type MemberAccount,
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
+import { tenantSurfaceUrl } from "@/lib/tenant";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,8 +54,15 @@ function MemberCredentials({ account }: { account: MemberAccount }) {
     try {
       const res = await makeLink.mutateAsync(account.id);
       if (res.set_password_token) {
+        // ABSOLUTE url — the portal lives on `{slug}.portal.<base>`, not on the
+        // broker host, so a bare path is unclickable in an email and the token
+        // is shown only once.
         setLink(
-          `/portal/set-password?token=${encodeURIComponent(res.set_password_token)}`,
+          tenantSurfaceUrl(
+            "portal",
+            res.tenant_slug,
+            `/portal/set-password?token=${encodeURIComponent(res.set_password_token)}`,
+          ),
         );
       }
     } catch (err) {

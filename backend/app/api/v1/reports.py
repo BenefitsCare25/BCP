@@ -43,7 +43,13 @@ _XLSX_MEDIA_TYPE = (
 )
 
 
-def _assert_masking_allowed(user: CurrentUser, masked: bool) -> None:
+def assert_masking_allowed(user: CurrentUser, masked: bool) -> None:
+    """Only write-access roles may pull unmasked NRIC/FIN.
+
+    Public because `report_versions` applies the same rule to a RETAINED blob —
+    the identical PII reached by a different route. Keep it as the single
+    implementation so the live and retained paths cannot drift apart.
+    """
     if not masked and user.role == ROLE_BROKER_VIEWER:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -86,7 +92,7 @@ def download_benefit_selection_report(
 ) -> Response:
     """Benefit-selection status + buy/sell-leave report (.xlsx)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    _assert_masking_allowed(user, masked)
+    assert_masking_allowed(user, masked)
     wb = build_benefit_selection_workbook(
         db, py, masked=masked, window_id=window_id
     )
@@ -122,7 +128,7 @@ def download_member_listing_template(
     PII export.
     """
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    _assert_masking_allowed(user, masked=False)
+    assert_masking_allowed(user, masked=False)
     wb = build_member_listing_template(db, py)
     write_audit(
         db, user, action="export", entity_type="insurer_report",
@@ -206,7 +212,7 @@ def download_employee_listing(
 ) -> Response:
     """Per-insurer employee membership listing (.xlsx, insurer template)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    _assert_masking_allowed(user, masked)
+    assert_masking_allowed(user, masked)
     _require_configured_insurer(db, py, insurer)
     wb = build_employee_listing(db, py, insurer, masked=masked)
     write_audit(
@@ -234,7 +240,7 @@ def download_dependant_listing(
 ) -> Response:
     """Per-insurer dependant listing (.xlsx, insurer template)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    _assert_masking_allowed(user, masked)
+    assert_masking_allowed(user, masked)
     _require_configured_insurer(db, py, insurer)
     wb = build_dependant_listing(db, py, insurer, masked=masked)
     write_audit(

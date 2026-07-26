@@ -118,6 +118,17 @@ class AIPlatformBudgetExceededError(AIBudgetExceededError):
     """
 
 
+class AICapacityError(AIBudgetExceededError):
+    """Raised when no concurrency slot frees up within the wait budget.
+
+    Nothing is over quota — the process is simply saturated. It subclasses
+    ``AIBudgetExceededError`` for the same reason the platform-cap error does:
+    every degradation path (429 responses, intake fallback, review→manual)
+    already handles that type, so a burst degrades gracefully instead of
+    surfacing an unhandled 500.
+    """
+
+
 @dataclass(frozen=True)
 class AICallResult:
     envelope: RuleEnvelope
@@ -227,7 +238,30 @@ def record_platform_usage(db: Session, tokens: int) -> None:
         index_elements=["year_month"],
         set_={"total_tokens": table.c.total_tokens + tokens},
     )
-    db.execute(stmt)
+    if dialect != "postgresql":
+        # SQLite (dev/tests) has no row-level locking and one writer anyway;
+        # opening a second connection here would just deadlock against the
+        # caller's open write transaction.
+        db.execute(stmt)
+        return
+
+    # Postgres: this is ONE row shared by every firm, and the UPSERT holds a
+    # row-exclusive lock until COMMIT. The claim-review pipeline commits once at
+    # the very end, so keeping it on the caller's session made every AI spend on
+    # the platform queue behind whichever review happened to be running — tens of
+    # seconds, across tenants. Bump it in its own short transaction instead.
+    # Committing separately is also the truthful bookkeeping: the provider
+    # already consumed those tokens even if the caller's work later rolls back.
+    from app.db.session import SessionLocal
+
+    with SessionLocal() as counter_db:
+        try:
+            counter_db.execute(stmt)
+            counter_db.commit()
+        except Exception:
+            counter_db.rollback()
+            # Never fail a paid AI call over its own accounting row.
+            logger.exception("Failed to record platform AI usage (%s tokens)", tokens)
 
 
 def platform_month_to_date_tokens(db: Session) -> int:
@@ -381,8 +415,17 @@ _concurrency_state: dict[str, Any] = {"limit": None, "sem": None}
 _concurrency_lock = threading.Lock()
 
 
-def _acquire_ai_slot(limit: int) -> Any:
-    """Context manager bounding concurrent LIVE provider calls, in-process.
+# How long a caller will queue for a slot before giving up. Deliberately well
+# under the connection pool's own checkout timeout: a waiting thread may still
+# be holding a pooled connection (see `_slot`), so an UNBOUNDED wait let a burst
+# park every connection in the pool and starve unrelated HTTP requests —
+# enabling the concurrency limit was itself what caused the outage.
+_AI_SLOT_WAIT_SECONDS = 20.0
+
+
+@contextlib.contextmanager
+def _slot(limit: int, db: Session | None = None) -> Any:
+    """Bound concurrent LIVE provider calls, in-process.
 
     ``limit`` (0/unset = unbounded) caps how many Gemini calls run at once, so a
     burst (e.g. 100 members submitting at 9am, each firing extraction + review)
@@ -391,14 +434,35 @@ def _acquire_ai_slot(limit: int) -> Any:
     limit * N — size accordingly. A retuned limit rebuilds the semaphore; any
     in-flight holders drain against the old one, which is fine for a soft
     concurrency guard.
+
+    Before blocking, release the caller's pooled DB connection when the session
+    has nothing pending — the budget check just read from it, and holding it
+    idle across the wait is what exhausts the pool. When the session IS dirty
+    (the review pipeline accumulates writes and commits once at the end) the
+    connection cannot be released without discarding that work, so the bounded
+    wait is the only protection there.
     """
     if limit <= 0:
-        return contextlib.nullcontext()
+        yield
+        return
     with _concurrency_lock:
         if _concurrency_state["limit"] != limit:
             _concurrency_state["limit"] = limit
             _concurrency_state["sem"] = threading.BoundedSemaphore(limit)
-        return _concurrency_state["sem"]
+        sem = _concurrency_state["sem"]
+
+    if db is not None and not (db.new or db.dirty or db.deleted):
+        # Clean session: returning the connection now is lossless.
+        db.rollback()
+
+    if not sem.acquire(timeout=_AI_SLOT_WAIT_SECONDS):
+        raise AICapacityError(
+            "AI is at capacity right now — please try again in a moment."
+        )
+    try:
+        yield
+    finally:
+        sem.release()
 
 
 def _run_cached_ai_call(
@@ -441,9 +505,10 @@ def _run_cached_ai_call(
     breaker.before_call()
     try:
         # Bound concurrent live calls (backpressure) so a burst can't stampede
-        # the shared provider quota. Blocks here until a slot frees; the breaker
-        # holds no resource while waiting.
-        with _acquire_ai_slot(limits.max_concurrent_calls):
+        # the shared provider quota. Queues here until a slot frees, releasing
+        # the pooled DB connection first where that is lossless, and giving up
+        # after `_AI_SLOT_WAIT_SECONDS` rather than pinning resources forever.
+        with _slot(limits.max_concurrent_calls, db):
             payload, metadata, result = invoke()
     except CircuitOpenError:
         raise

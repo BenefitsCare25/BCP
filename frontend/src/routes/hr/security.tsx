@@ -65,12 +65,11 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
   );
 }
 
-function EnrollFlow({ onEnrolled }: { onEnrolled: () => void }) {
+function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
   const start = useHrMfaEnrollStart();
   const confirm = useHrMfaEnrollConfirm();
   const [setup, setSetup] = useState<MfaStart | null>(null);
   const [code, setCode] = useState("");
-  const [recovery, setRecovery] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const begin = () => {
@@ -84,12 +83,12 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: () => void }) {
   const doConfirm = () => {
     setError(null);
     confirm.mutate(code.trim(), {
-      onSuccess: (data) => setRecovery(data.recovery_codes),
+      // Hand the codes UP: they are shown once and stored hashed, so they must
+      // not live in this component's state — see the note in HrSecurityPage.
+      onSuccess: (data) => onEnrolled(data.recovery_codes),
       onError: () => setError("That code didn't match — check your app and try again."),
     });
   };
-
-  if (recovery) return <RecoveryCodes codes={recovery} onDone={onEnrolled} />;
 
   if (!setup) {
     return (
@@ -209,6 +208,12 @@ export function HrSecurityPage() {
   const { data: me, refetch } = useHrMe();
   const enrolled = me?.mfa_status === "confirmed";
   const available = me?.mfa_available ?? false;
+  // Held HERE, not inside EnrollFlow. Recovery codes are shown exactly once
+  // (stored hashed), and `useHrMe` refetches on window focus — so the moment the
+  // user alt-tabbed to their password manager to save them, `enrolled` flipped
+  // true, EnrollFlow unmounted and the codes were destroyed. At page level they
+  // survive that refetch and are cleared only when the user confirms.
+  const [recovery, setRecovery] = useState<string[] | null>(null);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -235,10 +240,18 @@ export function HrSecurityPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {enrolled ? (
+          {recovery ? (
+            <RecoveryCodes
+              codes={recovery}
+              onDone={() => {
+                setRecovery(null);
+                void refetch();
+              }}
+            />
+          ) : enrolled ? (
             <DisablePanel />
           ) : available ? (
-            <EnrollFlow onEnrolled={() => void refetch()} />
+            <EnrollFlow onEnrolled={setRecovery} />
           ) : (
             <p className="text-sm text-muted-foreground">
               Your company hasn't enabled two-factor authentication for the HR

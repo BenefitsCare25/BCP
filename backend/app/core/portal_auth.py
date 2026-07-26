@@ -65,7 +65,17 @@ def hash_otp_code(code: str) -> str:
     return hmac.new(secret, code.encode(), hashlib.sha256).hexdigest()
 
 
-def issue_member_token(member_account_id: str, client_id: str) -> tuple[str, datetime]:
+def issue_member_token(
+    member_account_id: str, client_id: str, credential_version: int = 0
+) -> tuple[str, datetime]:
+    """Mint a member session token.
+
+    `credential_version` stamps the password generation this token belongs to
+    (`credentials.credential_version`). Member tokens are stateless — there is no
+    `auth_sessions` row to revoke — so this claim is the only way a password
+    change can evict tokens issued before it. `get_current_member` compares it
+    against the account's current value on every request.
+    """
     settings = get_settings()
     now = datetime.now(UTC)
     expires_at = now + timedelta(hours=settings.portal_token_ttl_hours)
@@ -74,6 +84,7 @@ def issue_member_token(member_account_id: str, client_id: str) -> tuple[str, dat
             "sub": member_account_id,
             "client_id": client_id,
             "typ": _TOKEN_TYPE_MEMBER,
+            "cv": credential_version,
             "iat": int(now.timestamp()),
             "exp": int(expires_at.timestamp()),
         },
@@ -230,6 +241,13 @@ def get_current_member(
     if account.client_id != claims.get("client_id"):
         # Token minted before the account moved clients — force re-auth.
         raise _unauthorized("Invalid portal token")
+    # Password change evicts older tokens. Without this a member token stayed
+    # valid for its full TTL after a reset, so resetting a phished password gave
+    # the member no containment at all.
+    from app.core.credentials import credential_version as _cred_version
+
+    if int(claims.get("cv") or 0) != _cred_version(account):
+        raise _unauthorized("Session ended — sign in again")
 
     client = db.get(Client, account.client_id)
     broker_firm_id = client.broker_firm_id if client else None

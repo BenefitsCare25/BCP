@@ -16,12 +16,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import hr_auth as HR
 from app.core import passwords as PW
+from app.core import sessions as SESS
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.deps import require_firm_admin
@@ -98,6 +98,10 @@ class HrAccountOut(BaseModel):
     hr_login_id: str | None
     mfa_enrolled: bool
     last_login_at: datetime | None
+    # The tenant's subdomain label. The set-password link lives on
+    # `{tenant_slug}.hr.<base>`, NOT on the broker host the admin is using, so
+    # the UI needs it to build an absolute (clickable, emailable) URL.
+    tenant_slug: str | None = None
 
 
 class HrAccountCreated(HrAccountOut):
@@ -142,6 +146,7 @@ class AuthPolicyPatch(BaseModel):
 
 
 def _account_out(db: Session, user: User, cred: AuthCredential, client_id: str) -> HrAccountOut:
+    client = db.get(Client, client_id) if client_id else None
     return HrAccountOut(
         user_id=user.id,
         email=user.email,
@@ -152,6 +157,7 @@ def _account_out(db: Session, user: User, cred: AuthCredential, client_id: str) 
         hr_login_id=cred.hr_login_id,
         mfa_enrolled=HR.user_has_confirmed_mfa(db, user.id),
         last_login_at=cred.last_login_at,
+        tenant_slug=client.slug if client else None,
     )
 
 
@@ -263,7 +269,12 @@ def reset_password(
 ) -> HrAccountCreated:
     target, cred = _load_hr_user(db, user, user_id)
     token = HR.issue_set_password_token(target.id, HR.credential_version(cred))
-    write_audit(db, user, action="reset_password", entity_type="hr_account", entity_id=target.id)
+    # An admin reset is a containment action — evict live sessions NOW rather
+    # than whenever the user happens to redeem the link, otherwise an attacker
+    # already signed in keeps their session for its full absolute lifetime.
+    revoked = SESS.revoke_all_for_subject(db, SUBJECT_USER, target.id)
+    write_audit(db, user, action="reset_password", entity_type="hr_account",
+                entity_id=target.id, after={"sessions_revoked": revoked})
     db.commit()
     out = _account_out(db, target, cred, _client_id_for(db, target.id) or "")
     return HrAccountCreated(**out.model_dump(), set_password_token=token)
@@ -275,20 +286,10 @@ def disable_account(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> HrAccountOut:
-    from app.models import AuthSession
-
     target, cred = _load_hr_user(db, user, user_id)
     target.status = USER_STATUS_DISABLED
     # Kill all live sessions so a disable takes effect immediately.
-    db.execute(
-        update(AuthSession)
-        .where(
-            AuthSession.subject_type == SUBJECT_USER,
-            AuthSession.subject_id == target.id,
-            AuthSession.revoked_at.is_(None),
-        )
-        .values(revoked_at=datetime.now(UTC))
-    )
+    SESS.revoke_all_for_subject(db, SUBJECT_USER, target.id)
     write_audit(db, user, action="disable", entity_type="hr_account", entity_id=target.id)
     db.commit()
     return _account_out(db, target, cred, _client_id_for(db, target.id) or "")

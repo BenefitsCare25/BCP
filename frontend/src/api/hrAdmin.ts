@@ -21,6 +21,7 @@ export interface HrAccount {
 export interface HrAccountCreated extends HrAccount {
   /** Single-use set-password token — shown once; deliver to the HR admin. */
   set_password_token: string;
+  tenant_slug?: string | null;
 }
 
 export type LoginSource = "email" | "system_id" | "staff_id";

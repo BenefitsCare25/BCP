@@ -234,6 +234,70 @@ def test_portal_mfa_enrol_and_login(api: TestClient):
     assert step2.json()["token"]
 
 
+def test_otp_verify_does_not_bypass_mfa(api: TestClient):
+    """The emailed code is the FIRST factor, not a whole sign-in.
+
+    Runs after `test_portal_mfa_enrol_and_login`, so the account already has
+    portal 2FA enabled and a confirmed authenticator. A correct OTP must end in
+    an `mfa_required` challenge — returning a member token here let anyone with
+    mailbox access skip the second factor entirely.
+    """
+    from app.models import MemberAccount
+
+    email = "otp-mfa-probe@example.com"
+    with SessionLocal() as s:
+        account = s.get(MemberAccount, _account_id(api))
+        assert account is not None
+        account.email = email
+        s.commit()
+
+    req = api.post("/api/v1/portal/auth/request-code", json={"email": email})
+    assert req.status_code == 202, req.text
+    code = req.json()["debug_code"]
+    assert code, "dev+mock should surface the code for local sign-in"
+
+    res = api.post(
+        "/api/v1/portal/auth/verify", json={"email": email, "code": code}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body.get("status") == "mfa_required", body
+    assert body.get("challenge_token")
+    assert "token" not in body
+
+
+def test_password_change_evicts_existing_member_tokens(api: TestClient):
+    """A reset must actually end other sessions.
+
+    Member tokens are stateless JWTs with no `auth_sessions` row to revoke, so
+    without the credential-version claim a phished password stayed usable for
+    the token's full TTL and the reset gave no containment.
+    """
+    account_id = _account_id(api)
+    with SessionLocal() as s:
+        s.get(ClientAuthPolicy, DEMO_CLIENT_ID).mfa_portal_enabled = False
+        s.commit()
+    api.post(
+        f"/api/v1/member-accounts/{account_id}/set-password",
+        json={"password": STRONG_PW},
+    )
+    login = api.post(
+        "/api/v1/portal/auth/login",
+        json={"identifier": "S-900", "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    token = login.json()["token"]
+    auth = {"Authorization": f"Bearer {token}", **_tenant()}
+    assert api.get("/api/v1/portal/me", headers=auth).status_code == 200
+
+    # Broker resets the password — the old token must stop working.
+    api.post(
+        f"/api/v1/member-accounts/{account_id}/set-password",
+        json={"password": "Qw7#tR4p!Lz2Nk"},
+    )
+    assert api.get("/api/v1/portal/me", headers=auth).status_code == 401
+
+
 def _account_id(api: TestClient) -> str:
     return api.get("/api/v1/member-accounts").json()["items"][0]["id"]
 
