@@ -5,7 +5,6 @@ import {
   useAdminClients,
   useAdminUsers,
   useBrokerFirms,
-  useCreateBrokerFirm,
   useCreateClient,
   useCreateInvitation,
   useDashboardSummary,
@@ -100,7 +99,11 @@ export function AdminPage() {
 
   return (
     <div className="space-y-5">
-      {isSystemAdmin && <BrokerFirmsCard />}
+      {/* No "Broker firms" card, deliberately. Inspro Insurance Broker OWNS this
+          platform rather than being one tenant among many, so the broker firm is
+          internal plumbing (it is what the per-firm Postgres schema keys on) and
+          not a concept anyone administers. The single firm is created once at
+          bootstrap by scripts/create_system_admin.py --firm-name. */}
       <ClientsCard isSystemAdmin={isSystemAdmin} />
       <UsersCard meRole={me?.role ?? "broker_viewer"} isSystemAdmin={isSystemAdmin} />
     </div>
@@ -135,58 +138,6 @@ function FirmPicker({
         </SelectContent>
       </Select>
     </div>
-  );
-}
-
-function BrokerFirmsCard() {
-  const { data: firms = [] } = useBrokerFirms();
-  const create = useCreateBrokerFirm();
-  const [name, setName] = useState("");
-
-  const onCreate = async () => {
-    if (!name.trim()) return;
-    try {
-      await create.mutateAsync(name.trim());
-      toast.success("Broker firm created");
-      setName("");
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-1.5 text-sm">
-          Broker firms
-          <InfoHint>
-            Platform-level. Each firm is a hard-isolated tenant boundary.
-          </InfoHint>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex items-end gap-2">
-          <div className="flex flex-col gap-1.5 flex-1">
-            <Label>New firm name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <Button onClick={onCreate} disabled={create.isPending || !name.trim()}>
-            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Create
-          </Button>
-        </div>
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {firms.map((f) => (
-            <li key={f.id} className="flex items-center justify-between px-3 py-2 text-sm">
-              <span className="font-medium">{f.name}</span>
-              <span className="text-xs text-muted-foreground">
-                {f.client_count} client{f.client_count === 1 ? "" : "s"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </CardContent>
-    </Card>
   );
 }
 

@@ -1012,6 +1012,9 @@ export interface AdminInvitation {
   expires_at: string | null;
 }
 
+/** Firms are internal plumbing on a single-firm platform — the only consumer is
+ *  FirmPicker, which renders nothing unless several somehow exist. There is no
+ *  create-firm UI; bootstrap is scripts/create_system_admin.py --firm-name. */
 export function useBrokerFirms(enabled = true) {
   return useQuery({
     queryKey: ["admin", "broker-firms"],
