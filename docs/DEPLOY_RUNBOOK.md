@@ -102,12 +102,22 @@ Postgres each firm has its own copy in `firm_<id>`, and `set_search_path` never
 falls through to `public`. Seeding before any firm exists writes only to `public`,
 where the app will never look, and the script exits with an error saying so.
 
-1. Create the broker firm (Access & Companies → Broker firms, or
-   `POST /admin/broker-firms`). This calls `provision_firm_schema`, which creates
-   the schema — do NOT insert the firm row directly in SQL, an orphaned firm with
-   no schema 500s every login for it.
-2. Create the client company.
+1. Create the broker firm. **There is no UI for this** — Inspro owns the platform
+   rather than being one tenant among many, so the "Broker firms" card was
+   removed and bootstrap lives in the admin script:
+
+   ```bash
+   cd backend && PYTHONPATH=. uv run python -m scripts.create_system_admin \
+       --email <you>@inspro.com.sg --name "<Your Name>" \
+       --firm-name "Inspro Insurance Broker"
+   ```
+
+   It calls `provision_firm_schema`, which creates the schema before committing
+   the row — do NOT insert the firm directly in SQL, an orphaned firm with no
+   schema 500s every login for it.
+2. Run `scripts/provision_tenants.py` so the firm schema gets its tables.
 3. Run the seed above.
+4. Create the client company (Access & Companies → Client companies).
 
 Do NOT run `scripts/seed_demo.py` against production. It writes the same three
 catalogs, but also creates a demo broker firm, two demo clients, a demo user and

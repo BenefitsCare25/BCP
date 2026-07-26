@@ -370,6 +370,61 @@ def list_users(
     return [_user_out(db, u) for u in users]
 
 
+def _assert_admin_change_is_recoverable(
+    db: Session, actor: CurrentUser, target: User, body: UserPatch
+) -> None:
+    """Refuse edits to a platform admin that no one could undo from the UI.
+
+    Firm-less `system_admin` rows became editable when the user list started
+    showing them, which opened two one-way doors:
+
+    - Demoting one leaves `broker_firm_id` NULL while the role is no longer
+      system_admin, so the row matches neither branch of the list query and
+      DISAPPEARS from every admin surface — unreachable, with no way back.
+    - Disabling the last system_admin is immediately fatal: `auth.py` rejects
+      disabled users, and only a system_admin may grant system_admin, so
+      recovery needs shell access to `scripts/create_system_admin.py`.
+
+    409 rather than 403 — the caller has the right to do this in principle, the
+    platform state is what makes it unsafe.
+    """
+    if target.role != "system_admin":
+        return
+
+    demoting = body.role is not None and body.role != "system_admin"
+    disabling = body.status is not None and body.status == USER_STATUS_DISABLED
+
+    if demoting and not target.broker_firm_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This platform admin belongs to no broker firm, so changing their "
+            "role would strand the account with no way to reach it. Assign them "
+            "to a firm first.",
+        )
+
+    if not (demoting or disabling):
+        return
+
+    if target.id == actor.user_id and disabling:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "You cannot disable your own account."
+        )
+
+    remaining = db.execute(
+        select(func.count(User.id)).where(
+            User.role == "system_admin",
+            User.status == USER_STATUS_ACTIVE,
+            User.id != target.id,
+        )
+    ).scalar_one()
+    if not remaining:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This is the last active system_admin — removing it would lock "
+            "everyone out of platform administration.",
+        )
+
+
 @router.patch("/users/{user_id}", response_model=UserOut)
 def patch_user(
     user_id: str,
@@ -378,6 +433,7 @@ def patch_user(
     db: Session = Depends(get_db),
 ) -> UserOut:
     target = _load_firm_user(db, user, user_id)
+    _assert_admin_change_is_recoverable(db, user, target, body)
     before = {"role": target.role, "status": target.status, "display_name": target.display_name}
     if body.display_name is not None:
         target.display_name = body.display_name.strip() or None

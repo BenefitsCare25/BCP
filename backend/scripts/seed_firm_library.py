@@ -25,11 +25,10 @@ not ``public``.** ``set_search_path`` resolves an unqualified table name to the
 firm schema and Postgres does not fall through, so ``public`` alone leaves every
 dropdown empty while a SQLite dev box looks perfectly fine.
 
-The two catalogs get there by different routes, and mixing them up silently
-doubles the data — see ``seed_all_schemas``. Attributes and products are COPIED
-from ``public`` by ``provision_firm_schema`` (at their canonical ids, so re-runs
-no-op); insurers are seeded per-firm because they are not in that copy list.
-On SQLite there are no schemas and the per-firm step is skipped entirely.
+Each firm schema is brought up to date in two steps, and **the order matters** —
+getting it wrong either doubles the catalogs or leaves edits stranded in
+``public``. See ``seed_all_schemas`` for why. On SQLite there are no schemas and
+the per-firm step is skipped entirely.
 
 A firm must EXIST before it can be seeded — create it with
 ``scripts/create_system_admin.py --firm-name``.
@@ -97,38 +96,65 @@ def _seed_products(db: Session) -> tuple[int, int]:
     return created, updated
 
 
-def seed_library(db: Session) -> None:
-    """Seed all three catalogs into whatever schema `db` currently points at."""
+def _seed_catalogs(db: Session) -> str:
+    """Attributes + products into whatever schema `db` points at. Commits."""
     a_new, a_upd = _seed_attributes(db)
     p_new, p_upd = _seed_products(db)
     db.commit()
-    i_new, i_upd = seed_insurers(db)  # commits internally
-    print(
-        f"    attributes: {a_new} created, {a_upd} updated | "
-        f"products: {p_new} created, {p_upd} updated | "
-        f"insurers: {i_new} created, {i_upd} updated"
+    return (
+        f"attributes: {a_new} created, {a_upd} updated | "
+        f"products: {p_new} created, {p_upd} updated"
     )
+
+
+def _seed_one_schema(firm_id: str | None) -> str:
+    """Seed every catalog into one schema (None = `public`).
+
+    Each step gets its OWN session with the search path re-applied. `db.commit()`
+    returns the connection to the pool, and the checkin listener in
+    app/db/session.py resets `search_path` to `public` — so a single session that
+    commits midway would silently write the rest to the wrong schema.
+    """
+    with SessionLocal() as db:
+        if firm_id:
+            set_search_path(db, firm_id)
+        catalogs = _seed_catalogs(db)
+    with SessionLocal() as db:
+        if firm_id:
+            set_search_path(db, firm_id)
+        i_new, i_upd = seed_insurers(db)
+    return f"{catalogs} | insurers: {i_new} created, {i_upd} updated"
 
 
 def seed_all_schemas(firm_id: str | None = None) -> None:
     """Seed `public`, then propagate into each firm schema on Postgres.
 
-    Attributes and products are NOT seeded directly into firm schemas, even
-    though the app reads them there. `provision_firm_schema` already copies the
-    `client_id IS NULL` rows out of `public` (see app/db/tenancy.py), preserving
-    their ids so its `ON CONFLICT (id) DO NOTHING` makes re-runs a no-op.
-    Seeding them per-firm as well generates a SECOND set of rows with fresh
-    UUIDs, which that conflict clause cannot dedupe — the catalogs silently
-    double, and every dropdown in the app shows each entry twice.
+    ORDER IS LOAD-BEARING: public -> provision_firm_schema -> seed the firm.
 
-    Insurers ARE seeded per-firm, because `insurers` is not in that copy list —
-    seeding only `public` leaves the firm's table empty and Postgres resolves an
-    unqualified `insurers` to the firm schema without falling through, so the
-    insurer dropdown comes up blank.
+    `provision_firm_schema` copies the `client_id IS NULL` rows out of `public`
+    (app/db/tenancy.py) with `ON CONFLICT (id) DO NOTHING`. That has two
+    consequences which together dictate the sequence:
+
+    - Seeding a firm schema BEFORE the copy inserts rows with fresh UUIDs, and
+      the copy then adds public's rows alongside them — the id-based conflict
+      clause cannot see they are the same catalog entry, so every dropdown
+      silently DOUBLES (this happened to prod: 48 attributes, 50 products).
+    - The copy only ever INSERTS. A row it skips is never refreshed, so an
+      edited catalog entry — a renamed product, a corrected derivation_rule —
+      would reach `public` and stop there, while the app reads the firm schema
+      and keeps the stale value.
+
+    Copying first and then seeding resolves both: the copy brings new rows in at
+    their canonical ids, and the seed matches on the NATURAL key (attribute_id /
+    code / name) so it updates those rows in place and inserts nothing.
+
+    Insurers are seeded per-firm for a different reason: `insurers` is not in the
+    copy list at all, so seeding only `public` leaves the firm's table empty and
+    Postgres resolves an unqualified `insurers` to the firm schema without
+    falling through — the insurer dropdown comes up blank.
     """
     print("public schema:")
-    with SessionLocal() as db:
-        seed_library(db)
+    print(f"    {_seed_one_schema(None)}")
 
     if not is_postgres(engine):
         # SQLite has no schemas — the loop below would re-seed the same tables.
@@ -151,18 +177,12 @@ def seed_all_schemas(firm_id: str | None = None) -> None:
         )
 
     for fid in firm_ids:
-        # A fresh session per firm: set_search_path is connection state, so
-        # reusing one session would leave the previous firm's path set.
         print(f"firm {fid}:")
-        # Copies products + attributes from public at their canonical ids.
+        # 1. Copy any NEW catalog rows down from public, at canonical ids.
         provision_firm_schema(engine, fid)
-        with SessionLocal() as db:
-            set_search_path(db, fid)
-            i_new, i_upd = seed_insurers(db)
-        print(
-            f"    attributes + products copied from public | "
-            f"insurers: {i_new} created, {i_upd} updated"
-        )
+        # 2. Then seed, which matches on the natural key — so it refreshes the
+        #    rows the copy skipped and inserts nothing.
+        print(f"    {_seed_one_schema(fid)}")
 
 
 def main() -> None:

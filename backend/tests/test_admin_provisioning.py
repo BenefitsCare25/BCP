@@ -285,6 +285,68 @@ def test_sysadmin_list_includes_firmless_system_admins(sysadmin: TestClient) -> 
 
 
 def test_broker_admin_does_not_see_firmless_system_admins(broker: TestClient) -> None:
-    """Only a system_admin may see accounts outside their own firm."""
+    """Only a system_admin may see accounts outside their own firm.
+
+    Creates its own subject rather than leaning on the preceding test: asserting
+    an email is ABSENT passes vacuously if nothing ever inserted it, so run in
+    isolation this would have proved nothing.
+    """
+    email = "hidden-platform-owner@inspro.test"
+    with SessionLocal() as s:
+        if s.query(User).filter(User.email == email).one_or_none() is None:
+            s.add(User(
+                email=email, display_name=None, broker_firm_id=None,
+                role="system_admin", status="active",
+            ))
+            s.commit()
     emails = {u["email"] for u in broker.get("/api/v1/admin/users").json()}
-    assert "platform-owner@inspro.test" not in emails
+    assert email not in emails
+
+
+# ── Platform-admin guard rails ────────────────────────────────────────────────
+# These rows became editable when the user list started showing them, and both
+# edits below are one-way doors with no UI path back.
+def test_cannot_disable_last_system_admin(sysadmin: TestClient) -> None:
+    with SessionLocal() as s:
+        # Park the other admins as disabled rather than DELETE-ing them: the
+        # guard counts ACTIVE admins, and this module shares one DB across tests,
+        # so deleting rows earlier tests created makes the suite order-dependent.
+        s.query(User).filter(
+            User.role == "system_admin", User.status == "active"
+        ).update({"status": "disabled"})
+        only = User(email="only-admin@inspro.test", display_name=None,
+                    broker_firm_id=None, role="system_admin", status="active")
+        s.add(only)
+        s.commit()
+        only_id = only.id
+    res = sysadmin.patch(f"/api/v1/admin/users/{only_id}", json={"status": "disabled"})
+    assert res.status_code == 409
+    assert "last active system_admin" in res.json()["detail"]
+
+
+def test_cannot_strand_firmless_admin_by_demoting(sysadmin: TestClient) -> None:
+    """Demoting a firm-less admin leaves a row that matches no list query."""
+    with SessionLocal() as s:
+        u = User(email="strandable@inspro.test", display_name=None,
+                 broker_firm_id=None, role="system_admin", status="active")
+        s.add(u)
+        s.commit()
+        uid = u.id
+    res = sysadmin.patch(f"/api/v1/admin/users/{uid}", json={"role": "broker_viewer"})
+    assert res.status_code == 409
+    assert "no broker firm" in res.json()["detail"]
+
+
+def test_admin_change_allowed_when_another_admin_remains(sysadmin: TestClient) -> None:
+    """The guard must not block ordinary administration."""
+    with SessionLocal() as s:
+        keeper = User(email="keeper@inspro.test", display_name=None,
+                      broker_firm_id=None, role="system_admin", status="active")
+        spare = User(email="spare@inspro.test", display_name=None,
+                     broker_firm_id=FIRM2_ID, role="system_admin", status="active")
+        s.add_all([keeper, spare])
+        s.commit()
+        spare_id = spare.id
+    res = sysadmin.patch(f"/api/v1/admin/users/{spare_id}", json={"status": "disabled"})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "disabled"
