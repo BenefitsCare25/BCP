@@ -61,6 +61,10 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
     // Subnets are declared inline rather than as child resources. Azure
     // serialises writes to a VNet, and separate child-resource deployments of
     // two subnets race and intermittently fail with AnotherOperationInProgress.
+    //
+    // The trade-off: this array is AUTHORITATIVE. A subnet added to this VNet
+    // out-of-band (portal, CLI) is deleted by the next deployment, even in
+    // Incremental mode. Add new subnets here, never in the portal.
     subnets: [
       {
         name: 'snet-app'

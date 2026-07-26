@@ -125,6 +125,21 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     environment: prod
+    # Serialise deploys. Two pushes in quick succession would otherwise run two
+    # `alembic upgrade head` processes against the SAME production database at
+    # once, and would race on the single-IP runner firewall rule — one job's
+    # `always()` revoke deleting the rule the other job is still migrating
+    # through.
+    #
+    # Scoped to this job, NOT the workflow: a workflow-level group would also
+    # queue every pull request's `test` run behind unrelated deploys.
+    #
+    # `cancel-in-progress: false` is deliberate. Cancelling mid-deploy could
+    # interrupt a migration or skip the revoke step, leaving the database
+    # firewall open. Queue instead — a deploy is minutes, not hours.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -208,16 +223,40 @@ jobs:
           # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
           uv run python -m scripts.provision_tenants
 
-      # `az rest`, for the same CLI-flag-stability reason as the create above.
-      # A plain DELETE needs no polling — the rule stops being enforced as soon
-      # as Azure accepts the request, and `|| true` keeps a revoke failure from
-      # masking a real migration error in the job result.
+      # Sweeps EVERY ci-runner-* rule, not just this run's. A job that is
+      # force-cancelled or times out can skip this step entirely and strand an
+      # allowlisted public IP on a database holding members' health and claims
+      # data. Deleting the whole family is safe because the job-level
+      # concurrency group means only one deploy is ever in flight.
+      #
+      # `az rest` for the same CLI-flag-stability reason as the create above.
+      # It polls: DELETE returns 202 Accepted and Azure drains it in the
+      # background, so the rule stays ENFORCED until that completes — treating
+      # the accept as "closed" would report a hole as sealed while it is open.
       - name: Revoke runner IP
         if: always() && steps.fw.outputs.rule != ''
         run: |
-          az rest --method delete --url \
-            "https://management.azure.com/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ env.PROD_RG }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ env.PROD_PG }}/firewallRules/${{ steps.fw.outputs.rule }}?api-version=2024-08-01" \
-            --only-show-errors || true
+          BASE="https://management.azure.com/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ env.PROD_RG }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ env.PROD_PG }}/firewallRules"
+          for name in $(az rest --method get --url "${BASE}?api-version=2024-08-01" \
+              --query "value[?starts_with(name,'ci-runner-')].name" -o tsv 2>/dev/null | tr -d '\r' || true); do
+            echo "Revoking ${name}"
+            az rest --method delete --url "${BASE}/${name}?api-version=2024-08-01" --only-show-errors || true
+          done
+          LEFT=unknown
+          for _ in $(seq 1 20); do
+            LEFT=$(az rest --method get --url "${BASE}?api-version=2024-08-01" \
+              --query "length(value[?starts_with(name,'ci-runner-')])" -o tsv 2>/dev/null | tr -d '\r' || echo unknown)
+            [ "$LEFT" = "0" ] && break
+            sleep 10
+          done
+          if [ "$LEFT" = "0" ]; then
+            echo "All ci-runner-* rules revoked."
+          else
+            # Loud but non-fatal. Failing here would mislabel an otherwise
+            # successful deploy, but staying silent would leave the production
+            # database reachable from a public IP with nobody told.
+            echo "::error::${LEFT} ci-runner-* firewall rule(s) may still be open on ${{ env.PROD_PG }} — verify and remove manually."
+          fi
 
       - name: Deploy image
         run: |

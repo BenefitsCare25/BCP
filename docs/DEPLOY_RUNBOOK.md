@@ -135,6 +135,49 @@ create`: that command's `--name` flag means the SERVER on older Azure CLI and th
 RULE on newer ones, which silently broke prod deploys once the runner image
 updated.
 
+### Break-glass: the app cannot reach the database
+
+**There is no longer a public fallback.** Under the old allowlist a DNS or endpoint
+fault still left 44 working public rules; now the private path is the *only* path, so
+anything that breaks it takes the app down with it. Symptoms: `/health` 200 but
+`/readiness` failing, or 5xx alerts with connection errors in App Insights.
+
+Diagnose in this order — each command names the thing that must be true:
+
+```bash
+# 1. Endpoint still there and approved?
+az network private-endpoint show -g rg-inspro-prod -n inspro-prod-pg-pe \
+  --query "privateLinkServiceConnections[0].privateLinkServiceConnectionState.status"
+# 2. A record still in the zone? (empty = the zone group was removed)
+az network private-dns record-set a list -g rg-inspro-prod \
+  -z privatelink.postgres.database.azure.com --query "[].aRecords[0].ipv4Address"
+# 3. Zone still linked to the VNet? (unlinked = app resolves the PUBLIC ip, which
+#    the empty allowlist then rejects — the most likely silent failure)
+az network private-dns link vnet list -g rg-inspro-prod \
+  -z privatelink.postgres.database.azure.com --query "[].virtualNetworkLinkState"
+# 4. App still integrated?
+az webapp show -g rg-inspro-prod -n inspro-portal --query virtualNetworkSubnetId
+```
+
+Re-running `az deployment group create` with `main.bicep` restores 1-4 — it is
+idempotent and this is the normal fix, taking a few minutes.
+
+If the private path cannot be restored quickly, restore service by re-opening the
+public path — the app's outbound IPs still work, they were simply no longer allowlisted:
+
+```bash
+# Emergency only. Re-admits the app's ~44 shared outbound IPs; ~20 min to apply.
+IPS=$(az webapp show --name inspro-portal --resource-group rg-inspro-prod \
+  --query possibleOutboundIpAddresses -o tsv | tr ',' '\n' | sort -u)
+for ip in $IPS; do
+  az deployment group create -g rg-inspro-prod --name "emg-${ip//./-}" \
+    --template-file infra/bicep/modules/ci-firewall-rule.bicep \
+    --parameters postgresName=inspro-prod-pg ruleName="app-${ip//./-}" allowedIp="$ip"
+done
+```
+
+Remove them again with `prune-app-firewall-rules.sh` once the private path is healthy.
+
 ### Migrating off the old outbound-IP allowlist
 
 Superseded design: `sync-db-firewall.sh` declared one `app-<ip>` rule per App

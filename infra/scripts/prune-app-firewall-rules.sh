@@ -65,6 +65,24 @@ for name in "${RULES[@]}"; do
   fi
 done
 
-REMAINING=$(az rest --method get --url "${BASE}?api-version=${API}" \
-  --query "length(value[?starts_with(name, 'app-')])" -o tsv | tr -d '\r')
-echo "Done. app-* rules remaining: ${REMAINING}"
+# A firewall-rule DELETE returns 202 Accepted and Azure drains it in the
+# background, so counting straight after the loop reports rules that are already
+# on their way out — the first run of this script printed "remaining: 21" when
+# every one of the 44 deletes had in fact succeeded. Poll until the count settles
+# instead of reporting a number that is guaranteed to be stale.
+echo "Deletes accepted. Waiting for Azure to drain them…"
+REMAINING=""
+for _ in $(seq 1 40); do
+  REMAINING=$(az rest --method get --url "${BASE}?api-version=${API}" \
+    --query "length(value[?starts_with(name, 'app-')])" -o tsv | tr -d '\r')
+  [ "$REMAINING" = "0" ] && break
+  sleep 15
+done
+
+if [ "$REMAINING" = "0" ]; then
+  echo "Done. All app-* rules removed."
+else
+  echo "WARNING: ${REMAINING} app-* rule(s) still present after 10 minutes." >&2
+  echo "Re-run this script — it only deletes what still exists." >&2
+  exit 1
+fi
