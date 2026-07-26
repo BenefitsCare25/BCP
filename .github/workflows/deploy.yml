@@ -155,13 +155,11 @@ jobs:
               containerImage="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
 
-      # Postgres admits only this app's outbound IPs — see the script header.
-      - name: Sync DB firewall to App Service outbound IPs
-        run: |
-          chmod +x infra/scripts/sync-db-firewall.sh
-          ./infra/scripts/sync-db-firewall.sh \
-            "${{ env.PROD_RG }}" "${{ env.PROD_APP }}" "${{ env.PROD_PG }}"
-
+      # NOTE: there is deliberately no firewall-sync step any more. The app now
+      # reaches Postgres over a private endpoint inside the VNet (provisioned by
+      # the Bicep above), so no public IP allowlist has to be maintained. The
+      # old sync enumerated ~44 App Service outbound IPs as individual rules,
+      # which Azure applies one server-update at a time — ~20 minutes per deploy.
       - name: Setup Python (for migrate)
         uses: actions/setup-python@v5
         with:
@@ -170,9 +168,18 @@ jobs:
       - name: Install uv
         run: pip install --no-cache-dir uv
 
-      # Migrations run from this runner, not from the app, so the runner needs
-      # its own temporary hole in the firewall. Removed again in `always()`
-      # below so a failed migration can't leave the DB exposed.
+      # Migrations run from this runner, not from inside the VNet, so the runner
+      # needs its own temporary hole in the otherwise-empty public allowlist.
+      # Removed again in `always()` below so a failed migration can't leave the
+      # DB exposed.
+      #
+      # Applied as an ARM deployment, NOT `az postgres flexible-server
+      # firewall-rule create`: that command's `--name` flag changed meaning
+      # between CLI versions (server name -> rule name, plus a new required
+      # `--server-name`), and when the runner image picked up the newer CLI this
+      # step began failing with "the following arguments are required:
+      # --server-name/-s" — silently skipping migrations AND the image deploy on
+      # every prod release. See modules/ci-firewall-rule.bicep.
       - name: Allow runner IP on Postgres
         id: fw
         run: |
@@ -180,10 +187,15 @@ jobs:
           echo "::add-mask::$IP"
           RULE="ci-runner-${{ github.run_id }}"
           echo "rule=$RULE" >> "$GITHUB_OUTPUT"
-          az postgres flexible-server firewall-rule create \
-            --resource-group ${{ env.PROD_RG }} --name ${{ env.PROD_PG }} \
-            --rule-name "$RULE" --start-ip-address "$IP" --end-ip-address "$IP" \
-            --only-show-errors >/dev/null
+          az deployment group create \
+            --resource-group ${{ env.PROD_RG }} \
+            --name "ci-fw-${{ github.run_id }}" \
+            --template-file infra/bicep/modules/ci-firewall-rule.bicep \
+            --parameters \
+              postgresName="${{ env.PROD_PG }}" \
+              ruleName="$RULE" \
+              allowedIp="$IP" \
+            --query "properties.provisioningState" -o tsv
 
       - name: Run database migrations + provision tenant schemas
         working-directory: backend
@@ -196,12 +208,16 @@ jobs:
           # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
           uv run python -m scripts.provision_tenants
 
+      # `az rest`, for the same CLI-flag-stability reason as the create above.
+      # A plain DELETE needs no polling — the rule stops being enforced as soon
+      # as Azure accepts the request, and `|| true` keeps a revoke failure from
+      # masking a real migration error in the job result.
       - name: Revoke runner IP
         if: always() && steps.fw.outputs.rule != ''
         run: |
-          az postgres flexible-server firewall-rule delete \
-            --resource-group ${{ env.PROD_RG }} --name ${{ env.PROD_PG }} \
-            --rule-name "${{ steps.fw.outputs.rule }}" --yes --only-show-errors || true
+          az rest --method delete --url \
+            "https://management.azure.com/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ env.PROD_RG }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ env.PROD_PG }}/firewallRules/${{ steps.fw.outputs.rule }}?api-version=2024-08-01" \
+            --only-show-errors || true
 
       - name: Deploy image
         run: |
@@ -213,7 +229,9 @@ jobs:
       - name: Smoke-test prod
         run: |
           # /health proves the container booted; /readiness additionally proves
-          # it can reach Postgres through the outbound-IP firewall rules.
+          # it can reach Postgres — which now means the private endpoint
+          # resolved and the VNet integration is carrying traffic, so this is
+          # the gate that catches a broken private DNS link.
           curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_APP }}.azurewebsites.net/health"
           curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \

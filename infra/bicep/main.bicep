@@ -114,6 +114,9 @@ param dbPoolSize int = 3
 @description('SQLAlchemy overflow connections per worker.')
 param dbMaxOverflow int = 2
 
+@description('Integrate the web app with the VNet so it reaches Postgres over the private endpoint. Setting this to false stops NEW deployments wiring the subnet, but does not tear down existing integration — for a rollback run `az webapp vnet-integration remove` as well, which reverts the app to the public path.')
+param enableVnetIntegration bool = true
+
 @description('Notification email for HTTP 5xx alerts (optional).')
 param alertEmail string = ''
 
@@ -225,26 +228,31 @@ resource postgresDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08
   }
 }
 
-// Postgres is reachable ONLY from this app's outbound IPs.
+// ── Private network path to Postgres ────────────────────────────────────────
+// The app reaches the database over a private endpoint in our own VNet, NOT
+// over the public internet through a firewall allowlist.
 //
-// The previous `AllowAzureServices` rule (0.0.0.0) opened the database to every
-// Azure customer's outbound range — indefensible for a store of members' health
-// and claims data. `possibleOutboundIpAddresses` is the complete set this app
-// may egress from (the shorter `outboundIpAddresses` is only the current set,
-// which changes on restart and would intermittently lock the app out).
+// This replaced `infra/scripts/sync-db-firewall.sh`, which enumerated the App
+// Service's ~44 `possibleOutboundIpAddresses` as individual firewall rules.
+// Azure applies each rule as its own server update, so a full sync took ~20
+// minutes of repeated live-database reconfiguration; the IPs are re-issued on
+// any plan-tier change (silently locking the app out until a re-sync); and they
+// are shared App Service infrastructure addresses, so allowlisting them also
+// admitted other tenants on the same scale unit.
 //
-// Two consequences to know:
-// - Changing the App Service PLAN TIER re-issues these IPs. Re-run the Bicep
-//   after any tier change or the app loses DB access.
-// - CI migrations run from a GitHub runner, not from the app, so deploy.yml
-//   adds a temporary rule for the runner's IP and removes it afterwards.
-// A private endpoint is the better end state; it needs VNet integration, which
-// the Basic App Service tier does not offer.
-// The rules themselves are applied by `infra/scripts/sync-db-firewall.sh`,
-// invoked from deploy.yml after this template runs. They can't live here:
-// `possibleOutboundIpAddresses` is only known once the webapp exists, and Bicep
-// requires loop counts to be resolvable at the start of a deployment (BCP178).
-// The script is idempotent and is the single place that owns these rules.
+// Public network access stays ENABLED on the server but with an EMPTY allowlist,
+// which denies every public client. It is not disabled outright only because CI
+// runs Alembic from a GitHub runner, which opens a single-IP rule for itself and
+// revokes it in an always() step (see deploy.yml). Closing public access fully
+// requires moving migrations inside the VNet — see docs/DEPLOY_RUNBOOK.md.
+module privateNetworking 'modules/private-networking.bicep' = {
+  name: 'private-networking-${env}'
+  params: {
+    prefix: prefix
+    location: location
+    postgresName: postgres.name
+  }
+}
 
 // ── Redis ────────────────────────────────────────────────────────────────────
 resource redis 'Microsoft.Cache/redis@2024-11-01' = if (deployRedis) {
@@ -367,7 +375,14 @@ var commonAppSettings = [
   { name: 'INSPRO_AUTH_MODE', value: 'entra' }
   { name: 'INSPRO_ENTRA_TENANT_ID', value: entraTenantId }
   { name: 'INSPRO_ENTRA_CLIENT_ID', value: entraClientId }
-  { name: 'INSPRO_ENTRA_AUDIENCE', value: 'api://${entraClientId}' }
+  // The BARE client id, not `api://<id>`. The app registration is set to
+  // requestedAccessTokenVersion=2, and a v2 access token carries `aud` = the
+  // client id GUID, whereas a v1 token carries the App ID URI. The two settings
+  // are coupled: v1 pairs `api://<id>` with issuer sts.windows.net/<tid>/, v2
+  // pairs the bare id with login.microsoftonline.com/<tid>/v2.0. Mixing them
+  // fails audience-or-issuer validation, which surfaces as an infinite
+  // sign-in redirect loop (401 -> client.ts calls signIn() -> repeat).
+  { name: 'INSPRO_ENTRA_AUDIENCE', value: entraClientId }
   { name: 'INSPRO_ENTRA_ISSUER', value: 'https://login.microsoftonline.com/${entraTenantId}/v2.0' }
   { name: 'INSPRO_ENTRA_JWKS_URL', value: 'https://login.microsoftonline.com/${entraTenantId}/discovery/v2.0/keys' }
   { name: 'INSPRO_CORS_ORIGINS', value: corsOrigins }
@@ -426,6 +441,19 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    // Regional VNet integration — how the app reaches Postgres privately.
+    // Supported on Basic since the tier restriction was lifted; the old comment
+    // claiming otherwise was stale.
+    //
+    // `vnetRouteAllEnabled` is deliberately LEFT OFF. Only traffic bound for the
+    // VNet's own address space is routed through the integration subnet, which
+    // is all we need (the private endpoint lives there). Turning route-all on
+    // would push every outbound call — Vertex AI, Entra JWKS, SMTP, ACR, Key
+    // Vault, Blob — through the VNet, which then needs a NAT Gateway because
+    // Azure has retired default outbound access for new VNet deployments.
+    // Private DNS still resolves without it: an integrated app inherits the
+    // VNet's DNS configuration, and the zone is linked to that VNet.
+    virtualNetworkSubnetId: enableVnetIntegration ? privateNetworking.outputs.appSubnetId : null
     siteConfig: union(siteConfig, { alwaysOn: isProd })
   }
   // The Redis secret name is a literal in `redisAppSettings`, so Bicep infers

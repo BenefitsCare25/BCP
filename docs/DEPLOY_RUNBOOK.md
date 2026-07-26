@@ -77,6 +77,79 @@ uv run python -m scripts.provision_tenants
 uv run python scripts/seed_demo.py   # optional: demo data only
 ```
 
+Migrations run from a CI runner (or your laptop), which is *outside* the VNet —
+see the note on the temporary firewall rule below.
+
+## Database network access
+
+The app reaches Postgres over a **private endpoint**, not the public internet.
+`infra/bicep/modules/private-networking.bicep` provisions:
+
+- `inspro-<env>-vnet` (`10.20.0.0/16`) with `snet-app` (delegated to
+  `Microsoft.Web/serverFarms`, for regional VNet integration) and `snet-pe`
+- a private endpoint on the Postgres server in `snet-pe`
+- the `privatelink.postgres.database.azure.com` private DNS zone, linked to the
+  VNet, with an A record written automatically by the endpoint's DNS zone group
+
+Once the endpoint exists, Azure rewrites the server's public FQDN into a CNAME to
+`<server>.privatelink.postgres.database.azure.com`. Inside the VNet the linked
+zone resolves that to the private IP; outside it falls through to the public IP.
+So the app needs no firewall rules at all.
+
+`vnetRouteAllEnabled` is deliberately **off** — only VNet-bound traffic uses the
+integration subnet, so Vertex AI, Entra, SMTP, ACR and Blob keep their existing
+egress. Turning it on would require a NAT Gateway, because Azure has retired
+default outbound access for new VNet deployments.
+
+Verify the private path:
+
+```bash
+az network private-endpoint show -g rg-inspro-prod -n inspro-prod-pg-pe \
+  --query "privateLinkServiceConnections[0].privateLinkServiceConnectionState.status"   # Approved
+az network private-dns record-set a list -g rg-inspro-prod \
+  -z privatelink.postgres.database.azure.com --query "[].{n:name,ip:aRecords[0].ipv4Address}"
+az webapp show -g rg-inspro-prod -n inspro-portal --query virtualNetworkSubnetId
+```
+
+**Public access stays enabled with an empty allowlist** (which denies every
+public client) purely so CI can migrate: deploy.yml opens a single-IP rule for
+the runner and revokes it in an `always()` step. Closing public access entirely
+means moving migrations inside the VNet — a container job on `snet-app`, or a
+self-hosted runner — after which `publicNetworkAccess: 'Disabled'` can be set on
+the server. That is the remaining hardening step.
+
+To connect from your laptop (admin/psql), add a temporary rule for your own IP
+and remove it afterwards:
+
+```bash
+IP=$(curl -fsS https://api.ipify.org)
+az deployment group create -g rg-inspro-prod --name my-laptop-rule \
+  --template-file infra/bicep/modules/ci-firewall-rule.bicep \
+  --parameters postgresName=inspro-prod-pg ruleName=laptop-$USER allowedIp="$IP"
+# ... then delete it
+az rest --method delete --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/rg-inspro-prod/providers/Microsoft.DBforPostgreSQL/flexibleServers/inspro-prod-pg/firewallRules/laptop-$USER?api-version=2024-08-01"
+```
+
+Use the Bicep module rather than `az postgres flexible-server firewall-rule
+create`: that command's `--name` flag means the SERVER on older Azure CLI and the
+RULE on newer ones, which silently broke prod deploys once the runner image
+updated.
+
+### Migrating off the old outbound-IP allowlist
+
+Superseded design: `sync-db-firewall.sh` declared one `app-<ip>` rule per App
+Service outbound IP (~44). Azure applies each as its own server update, so a sync
+took ~20 minutes per deploy. After the private endpoint is live and the app is
+healthy, remove the leftovers once:
+
+```bash
+./infra/scripts/prune-app-firewall-rules.sh <subscription-id> rg-inspro-prod inspro-prod-pg
+```
+
+It refuses to run unless an Approved private endpoint exists, deletes
+sequentially (concurrent server updates collide), and is safe to interrupt and
+re-run.
+
 ## Deploy backend
 
 Two paths — pick one:
