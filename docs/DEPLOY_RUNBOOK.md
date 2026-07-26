@@ -80,6 +80,48 @@ uv run python scripts/seed_demo.py   # optional: demo data only
 Migrations run from a CI runner (or your laptop), which is *outside* the VNet —
 see the note on the temporary firewall rule below.
 
+## Seeding a new firm's reference library
+
+A freshly created broker firm has an EMPTY attribute schema, product catalog and
+insurer list, so every dropdown in the app is blank until it is seeded. These are
+the Singapore defaults, not per-deployment data — do not copy them out of a dev
+database (which also holds employee PII); seed them:
+
+```bash
+cd backend && PYTHONPATH=. uv run python scripts/seed_firm_library.py
+# or one firm only:
+cd backend && PYTHONPATH=. uv run python scripts/seed_firm_library.py --firm <firm-id>
+```
+
+24 attributes + 25 products + 20 insurers. Idempotent, so re-run it after any
+change to `SINGAPORE_ATTRIBUTES` / `PRODUCT_CATALOG` / `SG_INSURERS` to pick up
+additions.
+
+**Order matters — the firm must exist first.** These are TENANT tables: on
+Postgres each firm has its own copy in `firm_<id>`, and `set_search_path` never
+falls through to `public`. Seeding before any firm exists writes only to `public`,
+where the app will never look, and the script exits with an error saying so.
+
+1. Create the broker firm (Access & Companies → Broker firms, or
+   `POST /admin/broker-firms`). This calls `provision_firm_schema`, which creates
+   the schema — do NOT insert the firm row directly in SQL, an orphaned firm with
+   no schema 500s every login for it.
+2. Create the client company.
+3. Run the seed above.
+
+Do NOT run `scripts/seed_demo.py` against production. It writes the same three
+catalogs, but also creates a demo broker firm, two demo clients, a demo user and
+a demo policy year.
+
+Running it from a laptop needs a temporary firewall rule and the admin password
+(both covered under "Database network access" below):
+
+```bash
+export INSPRO_DATABASE_URL="postgresql+psycopg://insproadmin:$(az keyvault secret show \
+  --vault-name inspro-prod-kv --name postgres-admin-password --query value -o tsv)\
+@inspro-prod-pg.postgres.database.azure.com:5432/inspro?sslmode=require"
+```
+
 ## Database network access
 
 The app reaches Postgres over a **private endpoint**, not the public internet.
