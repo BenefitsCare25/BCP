@@ -12,4 +12,7 @@ build/
 htmlcov/
 .env
 .env.local
-uv.lock
+# uv.lock IS committed. This is a deployed application, not a library: CI runs
+# `uv sync --frozen` and the Dockerfile COPYs the lockfile, so ignoring it made
+# every clean checkout unbuildable — and without it, prod and dev could resolve
+# different dependency versions.
