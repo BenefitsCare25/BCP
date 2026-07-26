@@ -266,3 +266,25 @@ def test_resolve_target_firm_sole_firm_fallback() -> None:
         with pytest.raises(HTTPException) as exc:
             _resolve_target_firm(_system_admin(), None, s)
         assert "must specify" in str(exc.value.detail)
+
+
+def test_sysadmin_list_includes_firmless_system_admins(sysadmin: TestClient) -> None:
+    """A platform system_admin has no broker firm, so a purely firm-scoped list
+    hid the most privileged accounts on the platform behind "No users yet"."""
+    with SessionLocal() as s:
+        s.add(User(
+            email="platform-owner@inspro.test", display_name=None,
+            broker_firm_id=None, role="system_admin", status="active",
+        ))
+        s.commit()
+    emails = {
+        u["email"]
+        for u in sysadmin.get(f"/api/v1/admin/users?broker_firm_id={FIRM2_ID}").json()
+    }
+    assert "platform-owner@inspro.test" in emails
+
+
+def test_broker_admin_does_not_see_firmless_system_admins(broker: TestClient) -> None:
+    """Only a system_admin may see accounts outside their own firm."""
+    emails = {u["email"] for u in broker.get("/api/v1/admin/users").json()}
+    assert "platform-owner@inspro.test" not in emails

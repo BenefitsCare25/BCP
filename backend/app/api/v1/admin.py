@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -354,8 +354,18 @@ def list_users(
     db: Session = Depends(get_db),
 ) -> list[UserOut]:
     firm_id = _resolve_target_firm(user, broker_firm_id, db)
+    # Platform system_admins have NO broker firm (they operate across firms), so
+    # a purely firm-scoped list rendered "No users yet" while those accounts held
+    # full access to everything — an admin console that hides the most privileged
+    # rows on the platform. Show them to a system_admin, who is the only caller
+    # entitled to see accounts outside their own firm.
+    conditions = [User.broker_firm_id == firm_id]
+    if user.role == "system_admin":
+        conditions.append(
+            (User.broker_firm_id.is_(None)) & (User.role == "system_admin")
+        )
     users = db.execute(
-        select(User).where(User.broker_firm_id == firm_id).order_by(User.email)
+        select(User).where(or_(*conditions)).order_by(User.email)
     ).scalars().all()
     return [_user_out(db, u) for u in users]
 

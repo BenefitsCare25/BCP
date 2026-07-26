@@ -20,15 +20,19 @@ Idempotent and re-runnable — existing rows are refreshed in place, never
 duplicated, so it is safe to run after every schema change to pick up newly
 added attributes or a product rename.
 
-**Postgres: these are TENANT tables, so the library must be seeded into every
-firm schema, not just ``public``.** ``set_search_path`` resolves an unqualified
-table name to ``firm_<id>``, and Postgres never falls through to ``public`` — so
-seeding only ``public`` leaves every dropdown in the app empty while a SQLite dev
-box looks perfectly fine. On SQLite there are no schemas and the per-firm loop is
-a no-op. Same reasoning as scripts/seed_insurers.py, which this reuses.
+**Postgres: these are TENANT tables, so the app reads them from ``firm_<id>``,
+not ``public``.** ``set_search_path`` resolves an unqualified table name to the
+firm schema and Postgres does not fall through, so ``public`` alone leaves every
+dropdown empty while a SQLite dev box looks perfectly fine.
 
-A firm must EXIST before it can be seeded: its schema is created by
-`provision_firm_schema` when the firm is created through /admin/broker-firms.
+The two catalogs get there by different routes, and mixing them up silently
+doubles the data — see ``seed_all_schemas``. Attributes and products are COPIED
+from ``public`` by ``provision_firm_schema`` (at their canonical ids, so re-runs
+no-op); insurers are seeded per-firm because they are not in that copy list.
+On SQLite there are no schemas and the per-firm step is skipped entirely.
+
+A firm must EXIST before it can be seeded — create it with
+``scripts/create_system_admin.py --firm-name``.
 """
 from __future__ import annotations
 
@@ -42,7 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, engine
-from app.db.tenancy import is_postgres, set_search_path
+from app.db.tenancy import is_postgres, provision_firm_schema, set_search_path
 from app.models import BrokerFirm, EmployeeAttributeSchema, Product
 from scripts.seed_demo import PRODUCT_CATALOG, SINGAPORE_ATTRIBUTES
 from scripts.seed_insurers import seed_insurers
@@ -107,7 +111,21 @@ def seed_library(db: Session) -> None:
 
 
 def seed_all_schemas(firm_id: str | None = None) -> None:
-    """Seed `public`, plus each firm schema on Postgres."""
+    """Seed `public`, then propagate into each firm schema on Postgres.
+
+    Attributes and products are NOT seeded directly into firm schemas, even
+    though the app reads them there. `provision_firm_schema` already copies the
+    `client_id IS NULL` rows out of `public` (see app/db/tenancy.py), preserving
+    their ids so its `ON CONFLICT (id) DO NOTHING` makes re-runs a no-op.
+    Seeding them per-firm as well generates a SECOND set of rows with fresh
+    UUIDs, which that conflict clause cannot dedupe — the catalogs silently
+    double, and every dropdown in the app shows each entry twice.
+
+    Insurers ARE seeded per-firm, because `insurers` is not in that copy list —
+    seeding only `public` leaves the firm's table empty and Postgres resolves an
+    unqualified `insurers` to the firm schema without falling through, so the
+    insurer dropdown comes up blank.
+    """
     print("public schema:")
     with SessionLocal() as db:
         seed_library(db)
@@ -126,18 +144,25 @@ def seed_all_schemas(firm_id: str | None = None) -> None:
 
     if not firm_ids:
         raise SystemExit(
-            "No broker firms exist yet — create one first (Access & Companies, "
-            "or POST /admin/broker-firms). The library lives in each firm's "
-            "schema, so there is nowhere to put it until a firm exists."
+            "No broker firms exist yet — create one first with\n"
+            "  scripts/create_system_admin.py --firm-name \"<name>\"\n"
+            "The library lives in each firm's schema, so there is nowhere to "
+            "put it until a firm exists."
         )
 
     for fid in firm_ids:
         # A fresh session per firm: set_search_path is connection state, so
         # reusing one session would leave the previous firm's path set.
         print(f"firm {fid}:")
+        # Copies products + attributes from public at their canonical ids.
+        provision_firm_schema(engine, fid)
         with SessionLocal() as db:
             set_search_path(db, fid)
-            seed_library(db)
+            i_new, i_upd = seed_insurers(db)
+        print(
+            f"    attributes + products copied from public | "
+            f"insurers: {i_new} created, {i_upd} updated"
+        )
 
 
 def main() -> None:
