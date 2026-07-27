@@ -5,6 +5,7 @@ import { useMe, usePolicyYears } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { cn } from "@/lib/cn";
 import { AccountMenu } from "./AccountMenu";
+import { NotificationBell } from "./NotificationBell";
 import { FIRM_NAV } from "./nav";
 
 export function TopBar({
@@ -77,6 +78,7 @@ export function TopBar({
             );
           })}
         </nav>
+        <NotificationBell />
         <div className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
         <AccountMenu />
       </div>

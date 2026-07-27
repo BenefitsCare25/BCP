@@ -157,7 +157,13 @@ def _entra_principal(authorization: str | None, db: Session) -> Principal:
                 logger.warning("Expired invitation rejected for email %s", email)
                 raise HTTPException(
                     status.HTTP_403_FORBIDDEN,
-                    "Invitation has expired. Contact your administrator for a new invitation.",
+                    {
+                        "code": "invitation_expired",
+                        "message": (
+                            "Invitation has expired. Contact your administrator "
+                            "for a new invitation."
+                        ),
+                    },
                 )
             candidate.external_id = oid
             if candidate.status == USER_STATUS_INVITED:
@@ -176,9 +182,16 @@ def _entra_principal(authorization: str | None, db: Session) -> Principal:
 
     if user is None or user.status == USER_STATUS_DISABLED:
         logger.warning("No active Inspro user for Entra oid %s (email %s)", oid, email)
+        # Coded detail, not a bare string: this is the IDENTITY-level 403 (the
+        # person authenticated with Microsoft but no Inspro user row grants them
+        # access), which must end the session — unlike a permission 403 on one
+        # endpoint. The frontend branches on `code`, never on the message.
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "User has no access — contact your administrator.",
+            {
+                "code": "no_access",
+                "message": "User has no access — contact your administrator.",
+            },
         )
 
     role_str = user.role if user.role in VALID_ROLES else ROLE_BROKER_VIEWER

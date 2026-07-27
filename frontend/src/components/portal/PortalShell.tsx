@@ -7,6 +7,7 @@ import { usePortalSession } from "@/stores/portalSession";
 import { formatPolicyRange } from "@/lib/policy-year";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
+import { NotificationBell } from "@/components/shell/NotificationBell";
 
 // Mirrored by the broker preview in components/operations/PortalFrame —
 // change both together.
@@ -62,6 +63,7 @@ export function PortalShell() {
                 <span className="ml-1 hidden sm:inline">Security</span>
               </Link>
             </Button>
+            <NotificationBell />
             <Button variant="ghost" size="sm" onClick={signOut}>
               <LogOut className="size-4" />
               <span className="ml-1">Sign out</span>

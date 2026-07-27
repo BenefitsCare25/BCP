@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { api } from "./client";
+import { fetchMe, meQueryKey } from "./me";
 import { isNotFoundError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type {
@@ -75,28 +76,15 @@ export function usePolicyYears() {
   });
 }
 
-export interface AccessibleClient {
-  id: string;
-  name: string;
-}
-
-export interface MeResponse {
-  user_id: string;
-  email: string | null;
-  display_name: string | null;
-  role: string;
-  broker_firm_id: string | null;
-  active_client_id: string | null;
-  accessible_clients: AccessibleClient[];
-}
+// Identity types + the query key live in api/me.ts so the router guard (which
+// resolves /me before the shell renders) shares them.
+export type { AccessibleClient, MeResponse } from "./me";
 
 export function useMe() {
-  // Keyed by the active client so a switch refetches /me (active_client_id +
-  // any client-dependent fields). The header itself is attached in client.ts.
-  const activeClientId = useSession((s) => s.activeClientId);
+  const activeClientId = useActiveClientId();
   return useQuery({
-    queryKey: ["me", activeClientId],
-    queryFn: () => api.get<MeResponse>("/me"),
+    queryKey: meQueryKey(activeClientId),
+    queryFn: fetchMe,
     staleTime: 60_000,
   });
 }

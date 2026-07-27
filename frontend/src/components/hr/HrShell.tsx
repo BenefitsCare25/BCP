@@ -7,6 +7,7 @@ import { useHrMe } from "@/api/hr";
 import { hrApi } from "@/api/hrClient";
 import { useHrSession } from "@/stores/hrSession";
 import { Button } from "@/components/ui/button";
+import { NotificationBell } from "@/components/shell/NotificationBell";
 
 export function HrShell() {
   const navigate = useNavigate();
@@ -42,6 +43,7 @@ export function HrShell() {
             <span className="hidden text-xs text-muted-foreground sm:inline">
               {me?.display_name || me?.email}
             </span>
+            <NotificationBell />
             <Button variant="ghost" size="sm" onClick={() => void signOut()}>
               <LogOut className="size-4" />
               <span className="ml-1">Sign out</span>

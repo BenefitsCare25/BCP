@@ -5,7 +5,7 @@ import {
   getMsal,
   signIn,
 } from "@/auth/msal";
-import { errorFromText, parseResponseError } from "@/lib/errors";
+import { errorFromText, parseErrorText } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 
 // Re-exported for existing imports; the classes live in lib/errors so the
@@ -25,6 +25,43 @@ export class UnauthorizedError extends Error {
   constructor(message = "Unauthorized") {
     super(message);
     this.name = "UnauthorizedError";
+  }
+}
+
+/** Path of the public "your account isn't provisioned" page. */
+export const NO_ACCESS_PATH = "/no-access";
+
+/** Identity-level 403 codes: the caller authenticated with Microsoft but the
+ * platform grants them nothing. Distinct from a permission 403 on a single
+ * endpoint (e.g. "Only admins can edit global defaults"), which must NOT end
+ * the session — hence the code check rather than a bare status check. */
+const NO_ACCESS_CODES = new Set(["no_access", "invitation_expired"]);
+
+export class NoAccessError extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = "NoAccessError";
+    this.code = code;
+  }
+}
+
+/** The coded detail of an identity-level 403, or null for any other body. */
+function noAccessDetail(text: string): { code: string; message: string } | null {
+  try {
+    const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+    if (!detail || typeof detail !== "object") return null;
+    const { code, message } = detail as { code?: unknown; message?: unknown };
+    if (typeof code !== "string" || !NO_ACCESS_CODES.has(code)) return null;
+    return {
+      code,
+      message:
+        typeof message === "string" && message
+          ? message
+          : "User has no access — contact your administrator.",
+    };
+  } catch {
+    return null; // not JSON — an ordinary 403
   }
 }
 
@@ -50,12 +87,11 @@ export class PeriodMismatchError extends Error {
   }
 }
 
-async function uploadError(res: Response): Promise<Error> {
-  const text = await res.text();
+function uploadError(text: string, statusText: string, status: number): Error {
   try {
     const detail = (JSON.parse(text) as { detail?: unknown }).detail;
     if (
-      res.status === 409 &&
+      status === 409 &&
       detail &&
       typeof detail === "object" &&
       (detail as { code?: unknown }).code === "period_mismatch"
@@ -66,7 +102,7 @@ async function uploadError(res: Response): Promise<Error> {
   } catch {
     // not JSON — fall through to raw text
   }
-  return new Error(text || res.statusText);
+  return new Error(text || statusText);
 }
 
 async function authHeader(): Promise<Record<string, string>> {
@@ -93,8 +129,24 @@ async function handleUnauthorized(): Promise<never> {
   );
 }
 
-async function responseError(res: Response): Promise<Error> {
-  return errorFromText(res.status, await res.text(), res.statusText);
+/**
+ * Single exit for every non-OK response. 401 → sign-in redirect; an
+ * identity-level 403 → `NoAccessError` (the app routes it to the no-access
+ * page and suppresses the toast); anything else → the caller's error shape.
+ * Always throws.
+ */
+async function fail(
+  res: Response,
+  toError: (text: string) => Error = (text) =>
+    errorFromText(res.status, text, res.statusText),
+): Promise<never> {
+  if (res.status === 401) return handleUnauthorized();
+  const text = await res.text();
+  if (res.status === 403) {
+    const denied = noAccessDetail(text);
+    if (denied) throw new NoAccessError(denied.message, denied.code);
+  }
+  throw toError(text);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -108,11 +160,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...init.headers,
     },
   });
-  if (res.status === 401) {
-    return handleUnauthorized();
-  }
   if (!res.ok) {
-    throw await responseError(res);
+    return fail(res);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -133,11 +182,8 @@ export const api = {
     const res = await fetch(`${API_BASE}${path}`, {
       headers: { ...auth, ...tenantHeader() },
     });
-    if (res.status === 401) {
-      return handleUnauthorized();
-    }
     if (!res.ok) {
-      throw new Error(await parseResponseError(res));
+      return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
     }
     return await res.blob();
   },
@@ -147,11 +193,8 @@ export const api = {
     const res = await fetch(`${API_BASE}${path}`, {
       headers: { ...auth, ...tenantHeader() },
     });
-    if (res.status === 401) {
-      return handleUnauthorized();
-    }
     if (!res.ok) {
-      throw new Error(await parseResponseError(res));
+      return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
     }
     return res;
   },
@@ -162,11 +205,8 @@ export const api = {
       body: formData,
       headers: { ...auth, ...tenantHeader() },
     });
-    if (res.status === 401) {
-      return handleUnauthorized();
-    }
     if (!res.ok) {
-      throw await uploadError(res);
+      return fail(res, (text) => uploadError(text, res.statusText, res.status));
     }
     return (await res.json()) as T;
   },

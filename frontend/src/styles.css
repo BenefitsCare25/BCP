@@ -168,6 +168,35 @@
   box-shadow: 0 16px 38px -18px color-mix(in srgb, var(--color-foreground) 20%, transparent);
 }
 
+/* One short shake when a NEW notification arrives. The bell is quieter than a
+   toast, so the badge alone would be easy to miss; repeats of the same message
+   never re-fire it. */
+.notification-pulse {
+  animation: notification-pulse 0.9s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  transform-origin: top center;
+}
+@keyframes notification-pulse {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  15% {
+    transform: rotate(-12deg);
+  }
+  30% {
+    transform: rotate(10deg);
+  }
+  45% {
+    transform: rotate(-7deg);
+  }
+  60% {
+    transform: rotate(5deg);
+  }
+  75% {
+    transform: rotate(-2deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .signin-in {
     animation: none;
@@ -175,6 +204,9 @@
     transform: none;
   }
   .signin-float {
+    animation: none;
+  }
+  .notification-pulse {
     animation: none;
   }
 }

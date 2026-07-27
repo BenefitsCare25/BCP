@@ -1,47 +1,22 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider } from "@tanstack/react-router";
-import { QueryCache, QueryClient, QueryClientProvider, MutationCache } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { MsalProvider } from "@azure/msal-react";
 import { toast, Toaster } from "sonner";
 import { router } from "./router";
 import { ENTRA_ENABLED, getMsal, initializeMsal } from "./auth/msal";
-import { UnauthorizedError } from "./api/client";
-import { PortalUnauthorizedError } from "./api/portalClient";
-import { formatError } from "./lib/errors";
+import { NO_ACCESS_PATH } from "./api/client";
+import { queryClient, setNoAccessHandler } from "./lib/queryClient";
 import { captureTenantSlugFromUrl } from "./lib/tenant";
 import "./styles.css";
 
-function reportError(scope: "query" | "mutation", error: unknown) {
-  // UnauthorizedError is already handled by the API client (a sign-in
-  // redirect is in flight). Don't double-surface it as a toast.
-  if (error instanceof UnauthorizedError) return;
-  if (error instanceof PortalUnauthorizedError) return;
-  console.error(`[${scope}]`, error);
-  toast.error(formatError(error));
-}
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: { staleTime: 30_000, retry: 1 },
-    mutations: { retry: 0 },
-  },
-  queryCache: new QueryCache({
-    onError: (error, query) => {
-      // Queries that render their own error state (e.g. the portal statement's
-      // "no active coverage" empty state) opt out of the global toast via meta.
-      if (query.meta?.localErrorHandling) return;
-      reportError("query", error);
-    },
-  }),
-  mutationCache: new MutationCache({
-    onError: (error, _variables, _context, mutation) => {
-      // Mutations that own their error UX (e.g. a structured-409 dialog on
-      // enrollment submit) opt out of the global toast via meta.
-      if (mutation.meta?.localErrorHandling) return;
-      reportError("mutation", error);
-    },
-  }),
+// A query failing with NoAccessError means the signed-in account isn't
+// provisioned (or was just disabled mid-session). The query client can't
+// import the router, so the navigation is injected here.
+setNoAccessHandler(() => {
+  if (window.location.pathname === NO_ACCESS_PATH) return;
+  void router.navigate({ to: NO_ACCESS_PATH, replace: true });
 });
 
 async function bootstrap() {

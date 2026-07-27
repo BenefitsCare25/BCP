@@ -12,6 +12,8 @@ import {
   NotFoundComponent,
 } from "@/components/shell/ErrorBoundary";
 import { ENTRA_ENABLED, getActiveAccount } from "@/auth/msal";
+import { NO_ACCESS_PATH, NoAccessError } from "@/api/client";
+import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
 import { HrShell } from "@/components/hr/HrShell";
@@ -132,6 +134,10 @@ const SignInPage = lazyRouteComponent(
   () => import("@/routes/auth/sign-in"),
   "SignInPage",
 );
+const NoAccessPage = lazyRouteComponent(
+  () => import("@/routes/auth/no-access"),
+  "NoAccessPage",
+);
 const HomePage = lazyRouteComponent(() => import("@/routes/home"), "HomePage");
 const CompanyDashboardPage = lazyRouteComponent(
   () => import("@/routes/dashboard"),
@@ -141,7 +147,7 @@ const CompanyDashboardPage = lazyRouteComponent(
 // Routes that are reachable without being signed in. Everything else goes
 // through the AppShell which requires an active MSAL account when Entra is
 // enabled.
-const PUBLIC_PATHS = new Set(["/auth/callback", "/sign-in"]);
+const PUBLIC_PATHS = new Set(["/auth/callback", "/sign-in", NO_ACCESS_PATH]);
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -163,6 +169,21 @@ const signInRoute = createRoute({
     }
   },
   component: SignInPage,
+});
+
+// Signed in with Microsoft, but the platform's user list grants nothing. A
+// ROOT-level route (not under the app shell) so it makes no API calls of its
+// own — otherwise showing it would re-trigger the 403 that sent us here.
+const noAccessRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: NO_ACCESS_PATH,
+  beforeLoad: () => {
+    // Nobody signed in at all → the sign-in page is the right destination.
+    if (ENTRA_ENABLED && getActiveAccount() === null) {
+      throw redirect({ to: "/sign-in" });
+    }
+  },
+  component: NoAccessPage,
 });
 
 // ── Employee portal — a sibling surface with its OWN auth (member OTP token,
@@ -345,7 +366,7 @@ const portalClaimDetailRoute = createRoute({
 const appLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "app-shell",
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
     if (!ENTRA_ENABLED) return;
     if (PUBLIC_PATHS.has(location.pathname)) return;
     if (getActiveAccount() === null) {
@@ -353,6 +374,18 @@ const appLayoutRoute = createRoute({
         to: "/sign-in",
         search: { from: location.pathname } as Record<string, string>,
       });
+    }
+    // A Microsoft account is not access. The platform grants access from its
+    // OWN user list, so resolve /me before rendering anything — otherwise an
+    // unprovisioned account lands in the shell and every request 403s.
+    try {
+      await ensureMe();
+    } catch (err) {
+      if (err instanceof NoAccessError) {
+        throw redirect({ to: NO_ACCESS_PATH });
+      }
+      // Backend down / transient: render the app and let the page surface it,
+      // rather than locking out a legitimate user on a blip.
     }
   },
   component: AppShell,
@@ -616,6 +649,7 @@ const adminRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   authCallbackRoute,
   signInRoute,
+  noAccessRoute,
   hrSignInRoute,
   hrSetPasswordRoute,
   hrLayoutRoute.addChildren([hrIndexRoute, hrDashboardRoute, hrSecurityRoute]),

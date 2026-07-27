@@ -162,3 +162,50 @@ def test_resolve_rejects_inaccessible_selection() -> None:
             role="broker_admin", broker_firm_id=DEMO_BROKER_FIRM_ID,
             user_id="x", requested_client_id=CLIENT_OTHER_ID, db=db,
         ) is None
+
+
+# ── Entra: an unprovisioned account is refused, machine-readably ─────────────
+def _entra_403(monkeypatch, claims: dict) -> object:
+    """Run `_entra_principal` in entra mode with a stubbed token verifier and
+    return the raised HTTPException."""
+    from fastapi import HTTPException
+
+    from app.core import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "verify_entra_token", lambda _t, _s: claims)
+    with SessionLocal() as db:
+        with pytest.raises(HTTPException) as exc:
+            auth_mod._entra_principal("Bearer stub-token", db)
+    return exc.value
+
+
+def test_unknown_entra_user_refused_with_no_access_code(monkeypatch) -> None:
+    """A tenant user who isn't on the platform's user list gets a coded 403.
+
+    The frontend routes on `detail.code` (identity-level refusal ends the
+    session) rather than the message, so the code is part of the contract.
+    """
+    err = _entra_403(
+        monkeypatch, {"oid": "oid-not-provisioned", "email": "stranger@inspro.test"}
+    )
+    assert err.status_code == 403
+    assert err.detail["code"] == "no_access"
+
+
+def test_disabled_entra_user_refused(monkeypatch) -> None:
+    with SessionLocal() as db:
+        db.add(
+            User(
+                id="00000000-0000-0000-0000-0000000000d1",
+                email="disabled@inspro.test",
+                display_name="Disabled User",
+                external_id="oid-disabled",
+                broker_firm_id=DEMO_BROKER_FIRM_ID,
+                role="broker_viewer",
+                status="disabled",
+            )
+        )
+        db.commit()
+    err = _entra_403(monkeypatch, {"oid": "oid-disabled", "email": "disabled@inspro.test"})
+    assert err.status_code == 403
+    assert err.detail["code"] == "no_access"
