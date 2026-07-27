@@ -68,7 +68,9 @@ from app.services.roster_attributes import (
 CaseMap = dict[tuple[str, str], UnderwritingCase]
 
 # Cross-year identity key for a life (NRIC-first; see _employee_key/_dep_key).
-LifeKey = tuple
+# Heterogeneous by shape — ("e", nric) vs ("d", emp_key, name, role) — so the
+# element type is `object`; it is only ever compared for equality / hashed.
+LifeKey = tuple[object, ...]
 
 
 def load_cases(db: Session, policy_year_id: str) -> CaseMap:
@@ -434,8 +436,8 @@ def refresh_underwriting_cases(
             db, policy_year, {life.key for life in lives.values()}
         )
         if history.known:
-            for life in lives.values():
-                life.new_life = life.key not in history.present
+            for entry in lives.values():
+                entry.new_life = entry.key not in history.present
     else:
         history = _History(known=False)
     # Subjects this run is allowed to retire a case for. An unscoped run owns

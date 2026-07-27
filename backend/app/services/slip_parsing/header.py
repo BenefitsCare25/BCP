@@ -136,8 +136,12 @@ def _scan_policy_header(rows: list[list[Cell]]) -> _HeaderScan:
     vals["employee_age_limit"] = _normalize_age(_up_to_age(vals["eligibility"]))
     nel_text = _find_nel_text(rows)
     vals["age_limit_no_underwriting"] = _age_from_birthday(nel_text)
-    vals["non_evidence_limit"] = _nel_amount(nel_text)
-    return _HeaderScan(PolicyHeader(**vals), basis_row)
+    # The NEL amount is a float, so it rides as an explicit kwarg rather than
+    # through `vals` — widening that dict would make the `_normalize_age` reads
+    # above unsound.
+    return _HeaderScan(
+        PolicyHeader(**vals, non_evidence_limit=_nel_amount(nel_text)), basis_row
+    )
 
 
 def _find_column_header_row(rows: list[list[Cell]], basis_idx: int) -> int:
