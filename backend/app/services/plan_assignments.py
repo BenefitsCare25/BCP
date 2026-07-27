@@ -35,6 +35,8 @@ def build_plan_assignments(
         pa["basis"] = cat.basis
     if cat.num_employees is not None:
         pa["num_employees"] = cat.num_employees
+    if getattr(cat, "tier_counts", None):
+        pa["tier_counts"] = cat.tier_counts
     if cat.sum_insured is not None:
         pa["sum_insured"] = cat.sum_insured
     if cat.premium_rate is not None:

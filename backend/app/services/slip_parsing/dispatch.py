@@ -30,7 +30,11 @@ from app.services.slip_parsing.rates import (
     _extract_voluntary_rates,
     extract_rate_section,
 )
-from app.services.slip_parsing.walk import _identify_columns, _walk_data_rows
+from app.services.slip_parsing.walk import (
+    _identify_columns,
+    _identify_count_columns,
+    _walk_data_rows,
+)
 
 # A resolver maps a template fingerprint to a stored column-role override (as a
 # plain dict) or None. Injected by the API layer so the pure parser stays
@@ -94,6 +98,9 @@ def _extract_categories_from_sheet(
     cols = _identify_columns(rows[header_idx])
     if cols.category < 0:
         return _SheetResult(header_fields.header, ())
+    # Expand the count column into its per-tier block when the sheet splits it
+    # (and skip that sub-header row during the walk).
+    cols = _identify_count_columns(rows, header_idx, cols)
 
     categories = _walk_data_rows(rows, header_idx, cols, product_code=product_code)
 

@@ -79,6 +79,43 @@ def tier_scheme(scheme_id: str) -> TierScheme:
     return TIER_SCHEMES[scheme_id]
 
 
+def tier_token_map() -> dict[str, str]:
+    """Every header token any product may print above a member count → its
+    canonical tier key (``"SPOUSE"`` → ``SO``). Upper-cased for lookup."""
+    return {
+        token.upper(): key
+        for scheme in TIER_SCHEMES.values()
+        for token, key in scheme.token_map.items()
+    }
+
+
+def tier_scope_map() -> dict[str, str]:
+    """Canonical tier key → ``"composite"`` | ``"dependant"``.
+
+    The distinction is load-bearing wherever counts are read: composite tiers
+    (EO/ES/EC/EF) PARTITION the employees, so they sum to the headcount, while
+    dependant tiers (SO/CO/SC/FO) count dependants alongside it. Adding them
+    together inflates the headcount by the whole dependant population.
+    """
+    return {
+        key: scheme.member_scope
+        for scheme in TIER_SCHEMES.values()
+        for key in scheme.token_map.values()
+    }
+
+
+def tier_order() -> list[str]:
+    """Canonical tier keys in display order: composite tiers, then dependant."""
+    seen: list[str] = []
+    for scheme in sorted(
+        TIER_SCHEMES.values(), key=lambda s: s.member_scope != "composite"
+    ):
+        for key in scheme.token_map.values():
+            if key not in seen:
+                seen.append(key)
+    return seen
+
+
 # ── Product entries ──────────────────────────────────────────────────────────
 
 

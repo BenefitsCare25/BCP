@@ -42,6 +42,37 @@ def first_value(values: dict, keys: tuple[str, ...]) -> str | None:
     return None
 
 
+# A dependant's relationship, read from the roster's own wording. Used to bucket
+# a household into the composite tier vocabulary (EO/ES/EC/EF).
+_SPOUSE_RE = re.compile(r"(?i)spouse|wife|husband|partner|married")
+_CHILD_RE = re.compile(r"(?i)child|son|daughter|kid|dependent child")
+
+
+def family_tier_bucket(dependant_values: object) -> str:
+    """Canonical composite tier for a household: EO / ES / EC / EF.
+
+    Takes an iterable of dependant ``attribute_values`` dicts (not ORM rows) so
+    it stays model-free and can be shared by every surface that reports a
+    member split — the fact-find member tables, the slip export's Basis-of-Cover
+    count block, and anything added later. One implementation means those
+    documents can never disagree about the same household.
+    """
+    has_spouse = has_child = False
+    for values in dependant_values or ():
+        rel = first_value(values or {}, REL_KEYS) or ""
+        if _SPOUSE_RE.search(rel):
+            has_spouse = True
+        elif _CHILD_RE.search(rel):
+            has_child = True
+    if has_spouse and has_child:
+        return "EF"
+    if has_spouse:
+        return "ES"
+    if has_child:
+        return "EC"
+    return "EO"
+
+
 def normalize_nric(raw: object | None) -> str | None:
     """Canonicalize an NRIC/FIN for identity comparison.
 

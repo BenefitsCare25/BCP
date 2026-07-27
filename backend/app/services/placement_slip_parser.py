@@ -78,7 +78,12 @@ from app.services.slip_parsing.text import (
     _safe_float,
     split_plan_codes,
 )
-from app.services.slip_parsing.walk import _Columns, _identify_columns, _walk_data_rows
+from app.services.slip_parsing.walk import (
+    _Columns,
+    _identify_columns,
+    _identify_count_columns,
+    _walk_data_rows,
+)
 
 # Codes the parser will recognize as the "real" product token when a sheet
 # name contains multiple `-`-separated parts. Sourced from the product
@@ -135,6 +140,7 @@ __all__ = [
     "_find_sob_section",
     "_fingerprint_from_parts",
     "_identify_columns",
+    "_identify_count_columns",
     "_int_code",
     "_lower",
     "_non_empty",

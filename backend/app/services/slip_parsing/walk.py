@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
+from app.services import product_registry
 from app.services.excel_reader import Cell
 from app.services.slip_parsing.models import ExtractedCategory
 from app.services.slip_parsing.participation import parse_participation
@@ -30,6 +31,45 @@ class _Columns:
     num_employees: int = -1
     basis: int = -1
     sum_insured: int = -1
+    # The member-count block, resolved from the header (see
+    # ``_identify_count_columns``): one ``(column, tier_key | None)`` per count
+    # cell, where ``tier_key`` is a canonical tier code when the slip splits the
+    # count per tier and None for a single undivided total. Empty = not yet
+    # resolved, and readers fall back to the single ``num_employees`` column.
+    count_tiers: tuple[tuple[int, str | None], ...] = ()
+    # How many rows the column header occupies (2 when a tier sub-header row
+    # sits beneath it) so the data walk starts past it.
+    header_rows: int = 1
+
+
+# Tier vocabulary, derived from the registry so adding a product/tier scheme
+# there is the only change needed — the slip's count block is never matched
+# against a hand-kept list here.
+_TIER_TOKENS = product_registry.tier_token_map()
+_TIER_SCOPE = product_registry.tier_scope_map()
+
+# A sub-header cell that totals its siblings rather than naming a population.
+_TOTAL_LABEL_RE = re.compile(r"^(?:sub[\s-]*)?total\b", re.IGNORECASE)
+
+
+def _tier_for_label(value: Cell) -> tuple[str | None, bool]:
+    """(canonical tier key, is-a-total) for one count sub-header cell.
+
+    Only the leading word is matched, so a slip's own punctuation survives:
+    "Child (ren)" and "Child" both resolve to the child tier. A label naming no
+    known tier is an undivided count column ("Per Member", "Employees").
+    """
+    text = _norm(value)
+    if _TOTAL_LABEL_RE.match(text):
+        return None, True
+    word = re.match(r"[A-Za-z]+", text)
+    return (_TIER_TOKENS.get(word.group(0).upper()) if word else None), False
+
+# A member-count column header, after the leading decoration ("* ") is stripped:
+# "* No. of employees", "* Nos of lives", "* Number" (the medical sheets, whose
+# per-tier split lives in a sub-header row underneath). Anchored so it can't
+# capture an unrelated header that merely mentions a number.
+_COUNT_HEADER_RE = re.compile(r"^(?:no\.?|nos\.?|number|count|headcount|lives)\b")
 
 
 def _identify_columns(header_row: list[Cell]) -> _Columns:
@@ -39,6 +79,12 @@ def _identify_columns(header_row: list[Cell]) -> _Columns:
     'Plan / Region'. The prototype used exact match and silently lost the
     Chubb-GBT sheet on STM; prefix match recovers it without breaking any
     of the standard-header sheets.
+
+    The member-count header is matched on the COUNT WORD alone rather than
+    requiring "employee": the medical sheets (GHS/GCGP/GD) head the column
+    "* Number" and name the population in a sub-header row beneath it, so
+    demanding "employee" silently dropped the headcount for every per-head
+    product — exactly the ones priced off it.
     """
     insured = category = participation = plan = -1
     num_employees = basis = sum_insured = -1
@@ -54,13 +100,139 @@ def _identify_columns(header_row: list[Cell]) -> _Columns:
             participation = c
         elif plan < 0 and h.startswith("plan"):
             plan = c
-        elif num_employees < 0 and ("no." in h or "number" in h) and "employee" in h:
+        elif (
+            num_employees < 0
+            # A count column always sits RIGHT of the category on these
+            # layouts. Requiring that keeps a leading serial-number column
+            # ("No.") from binding the headcount to the row numbers, which the
+            # bare count-word match would otherwise allow.
+            and 0 <= category < c
+            and _COUNT_HEADER_RE.match(h.lstrip("*# ").strip())
+        ):
             num_employees = c
         elif basis < 0 and h.startswith("basis"):
             basis = c
         elif sum_insured < 0 and "sum" in h and ("insured" in h or "assured" in h):
             sum_insured = c
     return _Columns(insured, category, participation, plan, num_employees, basis, sum_insured)
+
+
+class _NotAHeaderRow(Exception):
+    """The row beneath the column header holds data, not sub-labels."""
+
+
+def _identify_count_columns(
+    rows: list[list[Cell]], header_idx: int, cols: _Columns
+) -> _Columns:
+    """Resolve the member-count block, expanding a tier sub-header when present.
+
+    A slip that prices per head prints the count column as a SPAN with the tier
+    vocabulary underneath::
+
+        | Plan | * Number                |
+        |      | EO  | ES  | EC  | EF    |
+
+    so the counts occupy several columns, one per tier. Others print a single
+    undivided count ("* No. of employees", or "* Number" over "Per Member").
+
+    **The label does not mark the block's left edge.** Excel reports a merged
+    span at whichever cell holds the text, which on real slips is often mid-span
+    — CBRE's GHS puts "* Number" at column 10 while EO..EF run 9-12. Scanning
+    rightwards from the label silently dropped the first tier (there, 15 of 51
+    lives on the top row; STM's GEL-GHS lost an EO-only cohort of 2,284
+    entirely). So the block is grown OUTWARDS from the label across contiguous
+    labelled cells, stopping at any column the header row already claimed.
+
+    The sub-header row is only claimed when it looks like labels rather than
+    data — no category/plan text on it, and nothing numeric in the range — so a
+    slip whose first data row simply has a merged (blank) category cell can't be
+    mistaken for a header and swallowed.
+    """
+    if cols.num_employees < 0:
+        return cols
+    single = replace(cols, count_tiers=((cols.num_employees, None),))
+    sub_idx = header_idx + 1
+    if sub_idx >= len(rows):
+        return single
+    sub = rows[sub_idx] or []
+    for anchor in (cols.category, cols.plan, cols.insured):
+        if 0 <= anchor < len(sub) and _non_empty(sub[anchor]):
+            return single
+    anchor = cols.num_employees
+    if anchor >= len(sub) or not _non_empty(sub[anchor]):
+        return single  # no sub-labels under the count header
+    claimed = {
+        c
+        for c in (cols.insured, cols.category, cols.participation, cols.plan,
+                  cols.basis, cols.sum_insured)
+        if c >= 0
+    }
+
+    def _scan(start: int, step: int) -> list[tuple[int, str | None]]:
+        """Walk one direction over contiguous labelled cells."""
+        out: list[tuple[int, str | None]] = []
+        c = start
+        while 0 <= c < len(sub) and c not in claimed and _non_empty(sub[c]):
+            if _safe_float(sub, c) is not None:
+                raise _NotAHeaderRow  # a figure — this is a data row
+            tier, is_total = _tier_for_label(sub[c])
+            # A "Total" cell sums its siblings; carrying it would double-count.
+            if not is_total:
+                out.append((c, tier))
+            c += step
+        return out
+
+    try:
+        left = _scan(anchor - 1, -1)
+        rest = _scan(anchor, 1)
+    except _NotAHeaderRow:
+        return single
+    found = list(reversed(left)) + rest
+    if not found:
+        return single
+    return replace(cols, count_tiers=tuple(found), header_rows=2)
+
+
+def _count_values(
+    row: list[Cell], cols: _Columns
+) -> tuple[int | None, dict[str, int] | None]:
+    """Read the row's member counts: (employee headcount, per-tier split).
+
+    Which columns make up the headcount depends on what the tier means, and
+    getting that wrong inflates the figure the insurer quotes on:
+
+    * **Composite** tiers (EO/ES/EC/EF) PARTITION the employees — each member
+      falls in exactly one — so they sum to the headcount.
+    * **Dependant** tiers (Spouse/Child/…) count dependants BESIDE the
+      employees. Adding them in would count the whole dependant population as
+      staff, so they are recorded in the split and excluded from the total.
+    * An **unlabelled** column is already the undivided headcount ("Per Member",
+      "Employees"), so it is taken as-is rather than added to anything.
+
+    ``num_employees`` therefore stays what every existing reader expects, and
+    the split is carried alongside for the surfaces that price per tier.
+    """
+    specs = cols.count_tiers or ((cols.num_employees, None),)
+    composite = 0.0
+    has_composite = False
+    plain: float | None = None
+    tiers: dict[str, int] = {}
+    for col, tier in specs:
+        value = _safe_float(row, col)
+        if value is None:
+            continue
+        if tier is None:
+            plain = value if plain is None else plain + value
+            continue
+        tiers[tier] = round(value)
+        if _TIER_SCOPE.get(tier) == "composite":
+            composite += value
+            has_composite = True
+    if has_composite:
+        return round(composite), tiers or None
+    if plain is not None:
+        return round(plain), tiers or None
+    return None, tiers or None
 
 
 # A category whose text names a dependant population rather than an employee
@@ -114,8 +286,9 @@ def _realign_category_column(
     claimed = {
         cols.insured, cols.participation, cols.plan,
         cols.num_employees, cols.basis, cols.sum_insured,
+        *(c for c, _ in cols.count_tiers),
     }
-    window = rows[header_idx + 1 : header_idx + 9]
+    window = rows[header_idx + cols.header_rows : header_idx + 8 + cols.header_rows]
 
     def _count(col: int) -> int:
         return sum(1 for r in window if r and col < len(r) and _non_empty(r[col]))
@@ -151,7 +324,7 @@ def _walk_data_rows(
     # continuations that belong to the same plan. Reset at each new insured block.
     last_plan_code = ""
     consec_blank = 0
-    for i in range(header_idx + 1, len(rows)):
+    for i in range(header_idx + cols.header_rows, len(rows)):
         row = rows[i] or []
         text = _row_text(row)
         upper = text.upper()
@@ -227,13 +400,14 @@ def _walk_data_rows(
             ):
                 prev = out[-1]
                 has_basis = 0 <= cols.basis < len(row) and _non_empty(row[cols.basis])
-                row_ne = _safe_float(row, cols.num_employees)
+                row_ne, row_tiers = _count_values(row, cols)
                 out.append(replace(
                     prev,
                     plan_code=plan_str,
                     participation=last_participation,
                     source_row=i + 1,
-                    num_employees=round(row_ne) if row_ne is not None else None,
+                    num_employees=row_ne,
+                    tier_counts=row_tiers,
                     basis=_norm(row[cols.basis]) if has_basis else None,
                     sum_insured=_safe_float(row, cols.sum_insured),
                 ))
@@ -263,7 +437,7 @@ def _walk_data_rows(
 
         # Extract financial columns if present in the row (read before the noise
         # filters so a populated headcount can vouch for a genuine row).
-        ne_val = _safe_float(row, cols.num_employees)
+        ne_val, tier_counts = _count_values(row, cols)
 
         member_scope = _category_member_scope(cat, product_code, last_participation)
 
@@ -303,7 +477,8 @@ def _walk_data_rows(
                 participation=last_participation,
                 plan_code=plan_str,
                 source_row=i + 1,
-                num_employees=round(ne_val) if ne_val is not None else None,
+                num_employees=ne_val,
+                tier_counts=tier_counts,
                 basis=basis_val,
                 sum_insured=si_val,
                 location_scope=parse_participation(last_participation).scope,

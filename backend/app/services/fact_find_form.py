@@ -50,8 +50,8 @@ from app.services.roster_attributes import (
     DOB_KEYS,
     GENDER_KEYS,
     PASS_KEYS,
-    REL_KEYS,
     age_next_birthday_as_of,
+    family_tier_bucket,
     first_value,
     parse_dob,
 )
@@ -103,9 +103,6 @@ PAGE_SECTIONS = ("GTL", "GPA", "GHS", "GCM", "GCGP_GCSP", "GBT")
 # Ceiling on basis-of-cover rows the renderer will clone into one table (runaway
 # guard). Categories beyond this are dropped and flagged in the completeness notes.
 MAX_BASIS_ROWS = 40
-
-_SPOUSE_RE = re.compile(r"(?i)spouse|wife|husband|partner|married")
-_CHILD_RE = re.compile(r"(?i)child|son|daughter|kid|dependent child")
 
 # Generic plan name the slip parser assigns when a product is a single benefit
 # schedule with no named plan columns (e.g. GPA, where tiers differ by sum
@@ -224,20 +221,9 @@ def _is_local_pass(raw: str | None) -> bool:
 
 
 def _family_bucket(deps: list[Dependant]) -> str:
-    has_spouse = has_child = False
-    for d in deps:
-        rel = first_value(d.attribute_values or {}, REL_KEYS) or ""
-        if _SPOUSE_RE.search(rel):
-            has_spouse = True
-        elif _CHILD_RE.search(rel):
-            has_child = True
-    if has_spouse and has_child:
-        return "EF"
-    if has_spouse:
-        return "ES"
-    if has_child:
-        return "EC"
-    return "EO"
+    """Composite tier for this household — the shared implementation, so the
+    fact-find's member tables and the slip export's count block can't disagree."""
+    return family_tier_bucket(d.attribute_values or {} for d in deps)
 
 
 _DESIG_DEP_TAIL_RE = re.compile(r"\s*/.*?(?:dependants?|dependents?).*$", re.IGNORECASE)

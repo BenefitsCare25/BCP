@@ -40,6 +40,11 @@ class ExtractedCategory:
     source_row: int  # 1-indexed for spreadsheet UX
     # Financial data — populated from Basis-of-Cover and Rate sections.
     num_employees: int | None = None
+    # Per-tier member split, when the slip's count column is divided by tier
+    # ("* Number" spanning EO/ES/EC/EF). Canonical tier keys; ``num_employees``
+    # is always the total across it, so readers that don't price per tier are
+    # unaffected. None when the slip states a single undivided count.
+    tier_counts: dict[str, int] | None = None
     basis: str | None = None
     sum_insured: float | None = None
     premium_rate: float | None = None

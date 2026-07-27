@@ -19,7 +19,12 @@ from app.services.slip_parsing.rates import (
     _enrich_with_rates,
     extract_rate_section,
 )
-from app.services.slip_parsing.walk import _Columns, _walk_data_rows
+from app.services.slip_parsing.walk import (
+    _Columns,
+    _identify_columns,
+    _identify_count_columns,
+    _walk_data_rows,
+)
 
 # ── Tier header on the row BELOW "Rate :" (VDL GHS shape) ────────────────────
 
@@ -360,3 +365,110 @@ def test_unknown_code_flags_needs_classification_and_resolver_clears_it(
 def test_parser_shim_exports_full_surface() -> None:
     for name in shim.__all__:
         assert hasattr(shim, name), f"placement_slip_parser is missing {name!r}"
+
+
+# ── Member-count column: single, tier-split, and the sub-header guard ────────
+
+
+def _counts(rows: list[list[Cell]], product_code: str = "GHS"):
+    cols = _identify_count_columns(rows, 0, _identify_columns(rows[0]))
+    return cols, _walk_data_rows(rows, 0, cols, product_code=product_code)
+
+
+def test_count_column_split_by_tier_sub_header() -> None:
+    """The medical sheets head the count column "* Number" and name the
+    population in a sub-header row beneath it. Requiring the word "employee"
+    dropped the headcount for every per-head product — the ones priced off it."""
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "Participation", "", "Plan", "* Number", "", "", ""],
+        ["", "", "", "", "", "", "", "", "EO", "ES", "EC", "EF"],
+        ["", "CDL", "", "SM and above", "", "Compulsory", "", "1", 100, 20, 10, 12],
+        ["", "", "", "Managers", "", "", "", "2", 50, "", "", 8],
+    ]
+    cols, cats = _counts(rows)
+    assert cols.header_rows == 2  # the tier row is a header, never a data row
+    # The total is the sum across the block, so every existing reader that
+    # expects one headcount still gets one.
+    assert [c.num_employees for c in cats] == [142, 58]
+    assert cats[0].tier_counts == {"EO": 100, "ES": 20, "EC": 10, "EF": 12}
+    assert cats[1].tier_counts == {"EO": 50, "EF": 8}
+
+
+def test_count_column_with_unlabelled_sub_header() -> None:
+    """A sub-header that names no tier ("Per Member") is still a header — it
+    must not be walked as data — but yields a single undivided count."""
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "Participation", "", "Plan", "* Number"],
+        ["", "", "", "", "", "", "", "", "Per Member"],
+        ["", "CDL", "", "All Employees", "", "Compulsory", "", "1", 494],
+    ]
+    cols, cats = _counts(rows, product_code="GCGP")
+    assert cols.header_rows == 2
+    assert [c.num_employees for c in cats] == [494]
+    assert cats[0].tier_counts is None
+
+
+def test_data_row_is_never_mistaken_for_a_sub_header() -> None:
+    """A slip whose first data row carries a merged (blank) category cell must
+    not have that row swallowed as a tier sub-header."""
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "Participation", "", "Plan", "*No. of employees"],
+        ["", "CDL", "", "All Employees", "", "Compulsory", "", "1", 42],
+    ]
+    cols, cats = _counts(rows, product_code="GTL")
+    assert cols.header_rows == 1
+    assert [(c.category, c.num_employees) for c in cats] == [("All Employees", 42)]
+
+
+def test_count_block_extends_left_of_a_mid_span_label() -> None:
+    """Excel reports a merged span at whichever cell holds its text, which on
+    real slips is often mid-span (CBRE GHS: "* Number" at col 10, EO..EF at
+    9-12). Scanning only rightwards dropped the leading tier — 15 of 51 lives on
+    that sheet's top row, and an entire EO-only cohort on STM's."""
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "Participation", "", "Plan", "", "* Number", "", ""],
+        ["", "", "", "", "", "", "", "", "EO", "ES", "EC", "EF"],
+        ["", "CBRE", "", "CEO, CFO", "", "Compulsory", "", "1A", 15, 4, 2, 30],
+    ]
+    _cols, cats = _counts(rows)
+    assert cats[0].num_employees == 51
+    assert cats[0].tier_counts == {"EO": 15, "ES": 4, "EC": 2, "EF": 30}
+
+
+def test_dependant_tier_columns_never_inflate_the_headcount() -> None:
+    """Composite tiers PARTITION the employees, so they sum to the headcount;
+    Spouse/Child columns count dependants BESIDE them. Summing the block blindly
+    would report the whole dependant population as staff. The slip's own
+    punctuation ("Child (ren)") must still resolve to the tier."""
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "Participation", "", "Plan", "", "* Number", ""],
+        ["", "", "", "", "", "", "", "", "Employees", "Spouse", "Child (ren)"],
+        ["", "PNG", "", "All Employees", "", "Compulsory", "", "2", 100, 20, 30],
+    ]
+    _cols, cats = _counts(rows, product_code="GCSP")
+    assert cats[0].num_employees == 100
+    assert cats[0].tier_counts == {"SO": 20, "CO": 30}
+
+
+def test_total_sub_header_is_not_double_counted() -> None:
+    """A block printing its own Total alongside the tiers must not add it in."""
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "Participation", "", "Plan", "* Number", "", ""],
+        ["", "", "", "", "", "", "", "", "EO", "EF", "Total"],
+        ["", "X", "", "All Employees", "", "Compulsory", "", "1", 30, 12, 42],
+    ]
+    _cols, cats = _counts(rows)
+    assert cats[0].num_employees == 42
+    assert cats[0].tier_counts == {"EO": 30, "EF": 12}
+
+
+def test_leading_serial_number_column_is_not_the_headcount() -> None:
+    """A count-word header LEFT of the category is a serial/index column; binding
+    the headcount to it would report 1, 2, 3… lives per category."""
+    rows: list[list[Cell]] = [
+        ["No.", "Insured", "", "Category", "", "Participation", "", "Plan", "* No. of employees"],
+        [1, "X", "", "All Employees", "", "Compulsory", "", "1", 42],
+    ]
+    cols, cats = _counts(rows, product_code="GTL")
+    assert cols.num_employees == 8
+    assert [c.num_employees for c in cats] == [42]

@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 # the backfill so the two can't drift on which fields to drop.
 GROUP_RATE_FIELDS: tuple[str, ...] = (
     "num_employees",
+    # The per-tier split of num_employees — meaningless without it, and leaving
+    # it behind would break the invariant that num_employees is always the
+    # total across tier_counts (a voluntary tier would report per-tier heads
+    # while declaring it has no headcount).
+    "tier_counts",
     "sum_insured",
     "premium_rate",
     "annual_premium",

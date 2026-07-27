@@ -442,10 +442,13 @@ def _category_rows(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, An
     is_sum_assured = tpl.basis_model == "sum_assured"
     rows: list[dict[str, Any]] = []
     for cat in slip.categories:
-        # Per-tier headcounts aren't separable from a slip category (it carries a
-        # single num_employees), so tier columns start at zero for the broker to
-        # fill. Per-member / sum-assured products carry the single headcount,
-        # sum insured and basis straight through from the slip.
+        # Tier columns take the slip's own per-tier split when its count column
+        # was divided by tier ("* Number" over EO/ES/EC/EF); a slip stating one
+        # undivided count leaves them at zero for the broker to apportion, since
+        # a single total can't be split without inventing figures. Per-member /
+        # sum-assured products carry the single headcount, sum insured and basis
+        # straight through from the slip.
+        parsed_tiers = cat.tier_counts or {}
         rows.append(
             {
                 "id": _category_id(slip, cat),
@@ -453,7 +456,7 @@ def _category_rows(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, An
                 "category": _s(cat.category),
                 "participation": _s(cat.participation),
                 "plan_code": _s(cat.plan_code),
-                "tiers": {t: 0 for t in tier_codes},
+                "tiers": {t: int(parsed_tiers.get(t, 0)) for t in tier_codes},
                 "num_employees": cat.num_employees or 0,
                 "sum_insured": cat.sum_insured if is_sum_assured else None,
                 "basis": (_s(cat.basis) or None) if is_sum_assured else None,

@@ -8,6 +8,7 @@ SOB plan fold), the ProductTerm coverage override, quotation-mode blanking
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -29,9 +30,12 @@ from app.models import (  # noqa: E402
     AuditLog,
     Category,
     Client,
+    Dependant,
+    Employee,
     Plan,
     PolicyYear,
     Product,
+    ProductSetup,
     ProductTerm,
     User,
 )
@@ -41,6 +45,8 @@ CLIENT_ID = "00000000-0000-0000-0000-00000015e000"
 PY_ID = "00000000-0000-0000-0000-00000015e001"
 GHS_ID = "00000000-0000-0000-0000-00000015e010"
 GTL_ID = "00000000-0000-0000-0000-00000015e011"
+GDN_ID = "00000000-0000-0000-0000-00000015e012"
+GDN_CAT_ID = "00000000-0000-0000-0000-00000015e020"
 USER_ID = "00000000-0000-0000-0000-00000015e0ff"
 
 
@@ -62,6 +68,72 @@ def _sob(item_value: str) -> dict:
             },
         ]
     }
+
+
+def _seed_roster_product(s) -> None:
+    """A product whose figures must come from the roster, not the slip.
+
+    Its category STATES 99 lives at a 50,000 basis (so the stored group sum
+    insured is 4,950,000); four members actually match it, one household per
+    composite tier. Everything the sheet prints for it must follow the roster.
+    A ProductSetup supplies the header/eligibility wording, and a ProductTerm
+    the non-evidence limits.
+    """
+    s.add(Category(
+        id=GDN_CAT_ID, policy_year_id=PY_ID, product_id=GDN_ID, priority=4,
+        display_name="All Employees", raw_description="All Employees",
+        participation_detail={"employee": "compulsory", "raw": "Compulsory"},
+        plan_assignments={
+            "plan_code": "1", "insured": "Slip Co Pte Ltd",
+            "num_employees": 99, "basis": "50000", "sum_insured": 4_950_000.0,
+            "premium_rate": 0.1, "rate_basis": "per_1000_si",
+        },
+    ))
+    s.add(ProductTerm(
+        policy_year_id=PY_ID, product_id=GDN_ID,
+        free_cover_limit=250000.0, nel_age_limit=70,
+    ))
+    s.add(ProductSetup(
+        policy_year_id=PY_ID, product_code="GDN", template_version=1,
+        answers={
+            "header": {
+                "policyholder": "Slip Co Pte Ltd",
+                "address": "1 Raffles Place, Singapore",
+                "business": "Widget Manufacturing",
+                "admin_basis": "Headcount basis",
+            },
+            "eligibility": {
+                "eligibility": "All full time & permanent employees",
+                "eligibility_date": "Upon employment",
+                "last_entry_age": "68",
+                # Not on the slip's own ladder — must still be exported, under
+                # the label the product's template declares for it.
+                "employee_age_limit": "74",
+            },
+        },
+    ))
+    matched = [{"category_id": GDN_CAT_ID, "product_code": "GDN"}]
+    # One household per composite tier, so the count block exercises the whole
+    # ladder: alone (EO), spouse (ES), child (EC), both (EF).
+    household = [
+        ("E1", ()), ("E2", ("Spouse",)), ("E3", ("Child",)),
+        ("E4", ("Spouse", "Child")),
+    ]
+    for i, (staff, _rels) in enumerate(household):
+        s.add(Employee(
+            id=f"00000000-0000-0000-0000-0000001{i}e030",
+            client_id=CLIENT_ID, policy_year_id=PY_ID,
+            staff_id=staff, employee_name=f"Member {staff}",
+            attribute_values={}, matched_categories=matched, status="active",
+        ))
+    s.flush()  # employees must exist before their dependants reference them
+    for i, (_staff, rels) in enumerate(household):
+        for rel in rels:
+            s.add(Dependant(
+                client_id=CLIENT_ID, policy_year_id=PY_ID,
+                employee_id=f"00000000-0000-0000-0000-0000001{i}e030",
+                attribute_values={"relationship": rel}, status="active",
+            ))
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -93,8 +165,15 @@ def _setup_db():
                 id=GTL_ID, client_id=CLIENT_ID, code="GTL",
                 display_name="Group Term Life", insurer="Singlife",
             ),
+            # A product with a live roster behind it — the counts, tier split,
+            # dependants and sum insured on its sheet all come from the roster.
+            Product(
+                id=GDN_ID, client_id=CLIENT_ID, code="GDN",
+                display_name="Group Dental", insurer="AIA", has_dependants=True,
+            ),
         ])
         s.flush()
+        _seed_roster_product(s)
         # GTL renews off-cycle — its sheet must show the term window, not the PY's.
         s.add(ProductTerm(
             policy_year_id=PY_ID, product_id=GTL_ID,
@@ -188,17 +267,27 @@ def _blankish(v) -> bool:
 
 def test_workbook_shape_and_overview(client: TestClient) -> None:
     wb = _download(client)
-    assert wb.sheetnames == ["Overview", "GHS", "GTL", "Unassigned"]
+    assert wb.sheetnames == ["Overview", "GDN", "GHS", "GTL", "Unassigned"]
 
     rows = _cells(wb["Overview"])
     assert rows[0][0] == "Placement Slip — Configured Products"
-    by_code = {r[0]: r for r in rows if r and r[0] in ("GHS", "GTL")}
+    by_code = {r[0]: r for r in rows if r and r[0] in ("GDN", "GHS", "GTL")}
+    # …code, product, insurer, period, categories, plans, members, premium.
+    # No roster matches GHS, so its members fall back to the slip's stated 40;
+    # the premium is the sum of the tier premiums the sheet prints (10k + 2k).
     assert by_code["GHS"][1:] == [
         "Group Hospital & Surgical", "AIA",
-        "01 Jan 2034 to 31 Dec 2034", 1, 2,
+        "01 Jan 2034 to 31 Dec 2034", 1, 2, 40, 12000.0,
     ]
+    # GDN's three matched members win over its stated 99.
+    assert by_code["GDN"][6] == 4
     # Coverage window comes from the ProductTerm override, not the PY span.
     assert by_code["GTL"][3] == "01 Apr 2034 to 31 Mar 2035"
+    # The premium total reconciles with the per-product sheets.
+    total = next(r for r in rows if r and r[0] == "Total")
+    assert total[7] == pytest.approx(
+        sum(r[7] for r in by_code.values() if isinstance(r[7], (int, float)))
+    )
 
 
 def test_header_label_block(client: TestClient) -> None:
@@ -243,6 +332,135 @@ def test_basis_of_cover_and_tiered_rates(client: TestClient) -> None:
 
     total_i = _row_index(rows, "Annual Premium (GST-exclusive) :")
     assert rows[total_i][2] == 12000
+
+
+def test_roster_drives_counts_tiers_and_sum_insured(client: TestClient) -> None:
+    """The roster's answer replaces the slip's stated figures, and the sum
+    insured is recomputed from it so cover and headcount can't disagree."""
+    rows = _cells(_download(client)["GDN"])
+    basis_i = _row_index(rows, "Basis of Cover :")
+    # A dependant-covering product splits its count block by tier, so the header
+    # spans two rows: the block label, then the tier codes beneath it.
+    assert rows[basis_i + 1][5:11] == [
+        "* No. of members", None, None, None, None, "* No. of dependants",
+    ]
+    assert rows[basis_i + 2][5:11] == ["EO", "ES", "EC", "EF", "Total", None]
+    # One household per tier — alone / spouse / child / both — so 4 members and
+    # 4 dependants. The stated 99 lives and 4,950,000 sum insured are BOTH
+    # superseded: 4 members x the 50,000 basis = 200,000.
+    # …EO, ES, EC, EF, total, dependants, basis, sum insured.
+    assert rows[basis_i + 3][5:13] == [1, 1, 1, 1, 4, 4, 50000, 200000]
+    # …and the sheet says where its figures came from. No generated-on date:
+    # report_versions fingerprints the workbook to skip re-saving an unchanged
+    # report, and a date would break that guard every calendar day.
+    note = rows[basis_i + 4][1]
+    assert note.startswith("* Member counts are from the current roster")
+    assert not re.search(r"\d{4}", note)
+
+    # The premium follows the recomputed cover, not the stale one.
+    rate_i = _row_index(rows, "Rate :")
+    assert rows[rate_i + 2][3:6] == [200000, 0.1, 20.0]
+
+
+def test_stated_figures_kept_when_nothing_matches(client: TestClient) -> None:
+    """A category the roster never matched keeps the slip's stated headcount —
+    publishing "0 lives" against a priced cover would be worse — and the
+    footnote says so instead of implying the whole table is live."""
+    rows = _cells(_download(client)["GHS"])
+    basis_i = _row_index(rows, "Basis of Cover :")
+    assert rows[basis_i + 2][5] == 40
+    note = rows[basis_i + 3][1]
+    assert "stated on the placement slip" in note
+
+
+def test_unrebuildable_cover_is_disclosed_not_silently_mixed(
+    client: TestClient,
+) -> None:
+    """A salary-relative basis has no per-member amount, so when a matched
+    member has no salary on file the group cover can't be rebuilt. The live
+    headcount then sits beside the slip's sum insured — two different
+    populations in one row — which the footnote must say out loud."""
+    with SessionLocal() as s:
+        cat = s.get(Category, GDN_CAT_ID)
+        original = dict(cat.plan_assignments)
+        cat.plan_assignments = {
+            **original, "basis": "12 times basic monthly salary",
+        }
+        s.commit()
+    try:
+        rows = _cells(_download(client)["GDN"])
+        basis_i = _row_index(rows, "Basis of Cover :")
+        # The count is live…
+        assert rows[basis_i + 3][9] == 4
+        # …the cover is not, and the sheet says so.
+        assert rows[basis_i + 3][12] == 4_950_000
+        assert "could not be recomputed from the roster" in rows[basis_i + 4][1]
+    finally:
+        with SessionLocal() as s:
+            s.get(Category, GDN_CAT_ID).plan_assignments = original
+            s.commit()
+
+
+def test_header_and_terms_filled_from_configuration(client: TestClient) -> None:
+    """Everything the platform actually stores reaches the sheet: the captured
+    header/eligibility wording, fields beyond the slip's own ladder, and the
+    non-evidence limits."""
+    rows = _cells(_download(client)["GDN"])
+
+    def value_of(label: str):
+        return rows[_row_index(rows, label)][2]
+
+    assert value_of("Policyholder :") == "Slip Co Pte Ltd"
+    assert value_of("Address :") == "1 Raffles Place, Singapore"
+    assert value_of("Business :") == "Widget Manufacturing"
+    assert value_of("Eligibility :") == "All full time & permanent employees"
+    assert value_of("Eligibility Date :") == "Upon employment"
+    assert value_of("Last entry age :") == "68"
+    assert value_of("Type of Administration :") == "Headcount basis"
+    # A captured field the slip's ladder doesn't name still exports, labelled
+    # by the product form rather than dropped.
+    assert value_of("Employee Age Limit :") == "74"
+    # Both NEL gates are configured, so the terms row states them.
+    assert value_of("Non Evidence Limit :") == (
+        "S$250,000; underwriting from age 70 (ANB)"
+    )
+
+
+def test_quotation_rate_table_skips_unpriceable_rows(client: TestClient) -> None:
+    """A voluntary option states the cover a member COULD elect — until someone
+    does there is no sum insured to rate, so it never becomes an empty rate row.
+    The aggregate the insurer quotes against is stated instead."""
+    with SessionLocal() as s:
+        s.add(Category(
+            policy_year_id=PY_ID, product_id=GDN_ID, priority=5,
+            display_name="All Employees (Option 1)",
+            raw_description="All Employees (Option 1)",
+            participation_detail={"employee": "voluntary", "raw": "Voluntary"},
+            plan_assignments={
+                "plan_code": "2", "insured": "Slip Co Pte Ltd",
+                "basis": "80000", "premium_rate": 0.1,
+                "rate_basis": "per_1000_si",
+            },
+        ))
+        s.commit()
+    try:
+        rows = _cells(_download(client, kind="quotation")["GDN"])
+        rate_i = _row_index(rows, "Rate :")
+        categories = [
+            r[2] for r in rows[rate_i + 2:] if r[2] not in (None, "")
+        ]
+        assert "All Employees" in categories
+        assert "All Employees (Option 1)" not in categories
+        # Every rate/premium cell is blank for the quoting insurer, but the
+        # aggregate cover stays — it is what they price against.
+        assert _blankish(rows[rate_i + 2][4])
+        assert rows[rate_i + 2][3] == 200000
+    finally:
+        with SessionLocal() as s:
+            s.query(Category).filter(
+                Category.display_name == "All Employees (Option 1)"
+            ).delete()
+            s.commit()
 
 
 def test_sob_fold_and_plan_details(client: TestClient) -> None:
@@ -303,7 +521,11 @@ def test_flat_premium_rows_reconcile_with_total() -> None:
     derived per-row premiums (equal SI) each show AND count (never blanked)."""
     from openpyxl import Workbook
 
-    from app.services.placement_slip_export import _derived_premium, _write_flat_rates
+    from app.services.slip_export.context import SlipContext
+    from app.services.slip_export.rates import _derived_premium, _write_flat_rates
+
+    with SessionLocal() as s:
+        ctx = SlipContext(policy_year=s.get(PolicyYear, PY_ID), mode="placement")
 
     def cat(pa: dict) -> Category:
         return Category(
@@ -314,11 +536,12 @@ def test_flat_premium_rows_reconcile_with_total() -> None:
     def total_and_shown(cats: list[Category]) -> tuple[float | None, list[float]]:
         ws = Workbook().active
         total = _write_flat_rates(
-            ws, cats, earnings_based=False, with_label=False, blank=False
+            ws, cats, ctx, with_label=False, blank=False, insured_default="",
         )
         shown = [
-            r[5] for r in ws.iter_rows(min_row=2, values_only=True)
-            if isinstance(r[5], (int, float))
+            row[5]
+            for row in ws.iter_rows(min_row=2, values_only=True)
+            if row[2] != "Total" and isinstance(row[5], (int, float))
         ]
         return total, shown
 
@@ -335,8 +558,10 @@ def test_flat_premium_rows_reconcile_with_total() -> None:
     ])
     assert total == 300.0 and sorted(shown) == [100.0, 200.0]
 
+    # The derived premium is rated on the RESOLVED sum insured, so it always
+    # prices off the same headcount the Basis-of-Cover table published.
     assert _derived_premium(
-        {"rate_basis": "per_1000_si", "premium_rate": 0.072, "sum_insured": 4_000_000.0}
+        {"rate_basis": "per_1000_si", "premium_rate": 0.072}, 4_000_000.0
     ) == 288.0
     # Derived premiums are genuine per-row figures: two equal-SI cohorts each
     # print 72 and the total is 144 — rows reconcile with the total.

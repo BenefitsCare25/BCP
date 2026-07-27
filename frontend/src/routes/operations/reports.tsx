@@ -186,7 +186,7 @@ function CrReports({ year }: { year: PolicyYear }) {
       icon: FileSpreadsheet,
       title: "Quotation Slip",
       description:
-        "Placement slip with rates left blank — send to insurers to quote against this year's configured benefits.",
+        "Placement slip with rates left blank — send to insurers to quote against this year's configured benefits. Member counts, tier splits and sums insured come from the current roster.",
       format: ".xlsx",
       action: (
         <ReportVersionActions
@@ -203,7 +203,7 @@ function CrReports({ year }: { year: PolicyYear }) {
       icon: FileSpreadsheet,
       title: "Placement Slip",
       description:
-        "Full placement slip — the priced schedule reproduced from this year's configuration.",
+        "Full placement slip — the priced schedule reproduced from this year's configuration, costed on the current roster.",
       format: ".xlsx",
       action: (
         <ReportVersionActions
