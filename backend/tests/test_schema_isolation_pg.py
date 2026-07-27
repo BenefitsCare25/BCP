@@ -33,8 +33,13 @@ CLI_B = "2222bbbb-2222-2222-2222-222222222222"
 @pytest.fixture(scope="module")
 def pg_engine():
     engine = create_engine(PG_URL)
+    import app.models  # noqa: F401  — registers every table on Base.metadata
     from app.db.base import Base
     from app.db.tenancy import schema_for_firm
+
+    # Without the `app.models` import above, `Base.metadata` is still empty here
+    # (the tests import models inside their own bodies, i.e. after this fixture
+    # runs), so create_all made nothing and every test died on NoSuchTableError.
 
     # Clean slate for the firms under test.
     with engine.begin() as c:
@@ -106,3 +111,48 @@ def test_set_search_path_resets_to_public(pg_engine) -> None:
         assert schema_for_firm(FIRM_A) in s.execute(text("SHOW search_path")).scalar()
         set_search_path(s, None)
         assert schema_for_firm(FIRM_A) not in s.execute(text("SHOW search_path")).scalar()
+
+
+def test_tenant_routing_survives_commit(pg_engine) -> None:
+    """A read AFTER commit must still resolve to the firm schema.
+
+    Regression: `SET search_path` binds to a CONNECTION, but a Session releases
+    its connection at commit() and the pool's checkin hook resets the path to
+    public. Every handler that read back after committing (db.refresh / db.get /
+    a follow-up query — 50+ sites) therefore hit public, where tenant tables are
+    empty: `POST /policy-years` 500'd in prod with "Could not refresh instance".
+    SQLite has no schemas, so the whole suite was blind to it.
+    """
+    from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
+    from app.models import PolicyYear
+    from app.models.policy_year import PolicyYearStatus
+
+    provision_firm_schema(pg_engine, FIRM_A)
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+
+    with Session() as s:
+        set_search_path(s, FIRM_A)
+        py = PolicyYear(
+            client_id=CLI_A,
+            year=2041,
+            start_date=date(2041, 1, 1),
+            end_date=date(2041, 12, 31),
+            status=PolicyYearStatus.draft,
+        )
+        s.add(py)
+        s.commit()
+
+        # The exact failing line from create_policy_year.
+        s.refresh(py)
+        assert py.year == 2041
+
+        # ...and any other post-commit read, by PK or by query.
+        assert s.get(PolicyYear, py.id) is not None
+        assert schema_for_firm(FIRM_A) in s.execute(text("SHOW search_path")).scalar()
+
+    # The row really is in the firm schema, not public.
+    with pg_engine.connect() as c:
+        sa = schema_for_firm(FIRM_A)
+        assert c.execute(
+            text(f"SELECT count(*) FROM \"{sa}\".policy_years WHERE year = 2041")
+        ).scalar() == 1

@@ -62,9 +62,21 @@ else:
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
+def _is_sqlite_connection(dbapi_connection) -> bool:
+    """Whether THIS connection is SQLite, read off the connection itself.
+
+    Both listeners below are registered on the Engine CLASS, so they fire for
+    every engine in the process — not just the app's. Branching on the
+    module-level ``_IS_SQLITE`` (which only describes the configured app URL)
+    therefore sent ``PRAGMA`` to the Postgres engines the gated schema-isolation
+    tests create, making that suite unrunnable.
+    """
+    return type(dbapi_connection).__module__.split(".")[0] == "sqlite3"
+
+
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
-    if _IS_SQLITE:
+    if _is_sqlite_connection(dbapi_connection):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
@@ -77,7 +89,7 @@ def _reset_search_path(dbapi_connection, _connection_record) -> None:
     the pool, so a later request can never inherit a previous request's firm
     schema. Tenant routing (`set_search_path`) re-establishes it per request;
     this is the belt-and-braces reset. No-op on SQLite."""
-    if _IS_SQLITE:
+    if _is_sqlite_connection(dbapi_connection):
         return
     try:
         cursor = dbapi_connection.cursor()

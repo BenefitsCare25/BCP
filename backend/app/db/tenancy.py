@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import MetaData, Table, UniqueConstraint, text
+from sqlalchemy import MetaData, Table, UniqueConstraint, event, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
@@ -235,6 +235,11 @@ def sync_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
     return schema
 
 
+# Where the session's chosen search_path is remembered so it can be re-applied
+# to every LATER transaction on that session (see `_reapply_search_path`).
+_SEARCH_PATH_KEY = "inspro_search_path"
+
+
 def set_search_path(session: Session, firm_id: str | None) -> None:
     """Route a session's tenant-table reads/writes to the firm's schema.
 
@@ -242,11 +247,38 @@ def set_search_path(session: Session, firm_id: str | None) -> None:
     when bound, or back to ``public`` otherwise — so a pooled connection can
     never inherit a previous request's tenant schema. Control tables remain
     resolvable via the trailing ``public``. No-op on SQLite.
+
+    The choice is also STORED on the session, because ``SET search_path`` binds
+    to a *connection* and a session doesn't keep one across transactions — see
+    ``_reapply_search_path``.
     """
     if not is_postgres(session):
         return
     if firm_id is None:
-        session.execute(text("SET search_path TO public"))
+        statement = "SET search_path TO public"
     else:
-        schema = schema_for_firm(firm_id)
-        session.execute(text(f'SET search_path TO "{schema}", public'))
+        statement = f'SET search_path TO "{schema_for_firm(firm_id)}", public'
+    session.info[_SEARCH_PATH_KEY] = statement
+    session.execute(text(statement))
+
+
+@event.listens_for(Session, "after_begin")
+def _reapply_search_path(session: Session, _transaction, connection: Connection) -> None:
+    """Re-establish the firm schema on every new transaction of a session.
+
+    ``SET search_path`` is per-CONNECTION, but a Session releases its connection
+    back to the pool at ``commit()`` — and the pool's checkin hook resets the
+    path to ``public`` (``db/session.py::_reset_search_path``). So any read the
+    handler performs AFTER committing (``db.refresh``, ``db.get``, a follow-up
+    query — 50+ such call sites) ran against ``public``, where tenant tables are
+    empty. On Postgres that surfaced as ``Could not refresh instance`` /
+    silently-missing rows; SQLite has no schemas, so no test could catch it.
+
+    Re-applying here makes the routing survive commit boundaries. Uses the raw
+    connection rather than ``session.execute`` — we are already inside the
+    session's transaction-begin hook and must not re-enter it.
+    """
+    statement = session.info.get(_SEARCH_PATH_KEY)
+    if not statement or connection.dialect.name != "postgresql":
+        return
+    connection.exec_driver_sql(statement)
