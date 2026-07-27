@@ -277,6 +277,17 @@ export function BenefitYearPanel({
               </tr>
             </thead>
             <tbody>
+              {years.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="py-4 text-center text-sm text-muted-foreground"
+                  >
+                    No benefit years yet — use “Add benefit year” to create the
+                    first one.
+                  </td>
+                </tr>
+              )}
               {years.map((py) => {
                 const isCurrent = py.status === "active";
                 const isSelected = py.id === viewingId;

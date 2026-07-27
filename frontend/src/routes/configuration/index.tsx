@@ -107,15 +107,26 @@ export function ConfigurationPage() {
     if (yearsLoading) {
       return <SkeletonTable rows={8} columns={4} />;
     }
+    // The panel must render HERE too, not only below — it owns "Add benefit
+    // year", so returning a bare card left a brand-new company with no way to
+    // create its first year (the rest of the page is gated on having one).
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>No benefit year</CardTitle>
-          <CardDescription>
-            Add a benefit year to begin configuring this client.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <div className="space-y-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>No benefit year</CardTitle>
+            <CardDescription>
+              Add a benefit year below to begin configuring this client. It sets
+              the coverage period that categories, plans and claims all hang off.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+        <BenefitYearPanel
+          years={policyYears}
+          viewingId={policyYearId}
+          onViewYear={setViewingId}
+        />
+      </div>
     );
   }
 
