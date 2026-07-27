@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import {
   usePlatformAISettings,
   useSetPlatformAISettings,
-  type PlatformAISettings,
+  type PlatformAILimits,
 } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { FieldLabel } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
 
-type FieldKey = keyof PlatformAISettings;
+type FieldKey = keyof PlatformAILimits;
 
 interface FieldSpec {
   key: FieldKey;
@@ -85,7 +85,7 @@ export function PlatformAILimitsCard() {
   }, [data]);
 
   const onSave = async () => {
-    const payload = {} as PlatformAISettings;
+    const payload = {} as PlatformAILimits;
     for (const f of FIELDS) {
       const raw = draft[f.key].trim();
       const value = raw === "" ? 0 : Number(raw);

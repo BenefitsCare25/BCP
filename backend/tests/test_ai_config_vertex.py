@@ -13,8 +13,8 @@ import pytest
 from app.core.ai_config import (
     DEFAULT_VERTEX_LOCATION,
     DEFAULT_VERTEX_MODEL,
-    _byok_vertex,
     _load_vertex_from_env,
+    _vertex_from_secret,
     assert_vertex_residency,
     pack_vertex_secret,
 )
@@ -69,20 +69,27 @@ def test_load_vertex_from_env_requires_project(monkeypatch):
     assert _load_vertex_from_env() is None
 
 
-def test_byok_vertex_round_trip():
+@pytest.mark.parametrize("source", ["byok", "platform"])
+def test_vertex_from_secret_round_trip(source):
+    """One builder serves both stored sources; only `source` differs."""
     secret = pack_vertex_secret("inspro-ai", _SA_JSON)
-    row = SimpleNamespace(endpoint="asia-southeast1", model="gemini-2.5-flash")
-    cfg = _byok_vertex(row, secret, "client-1")
+    cfg = _vertex_from_secret(
+        "asia-southeast1", "gemini-2.5-flash", secret, source, "client-1"
+    )
     assert cfg is not None
     assert cfg.gcp_project == "inspro-ai"
     assert cfg.gcp_location == "asia-southeast1"
     assert cfg.api_key == _SA_JSON  # the SA JSON is the credential
-    assert cfg.source == "byok"
+    assert cfg.source == source
 
 
-def test_byok_vertex_malformed_returns_none():
-    row = SimpleNamespace(endpoint="asia-southeast1", model="gemini-2.5-flash")
-    assert _byok_vertex(row, "not-json", "client-1") is None
+def test_vertex_from_secret_malformed_returns_none():
+    assert (
+        _vertex_from_secret(
+            "asia-southeast1", "gemini-2.5-flash", "not-json", "byok", "client-1"
+        )
+        is None
+    )
 
 
 # ── Schema conversion ─────────────────────────────────────────────────────────
@@ -348,3 +355,19 @@ def test_adapter_translates_429_to_ratelimit():
             max_tokens=1,
             messages=[{"role": "user", "content": "ping"}],
         )
+
+
+def test_vertex_from_secret_refuses_non_resident_location_in_prod(monkeypatch):
+    """Fail-closed, but DEGRADE — never raise out of the resolution path.
+
+    The platform key is fleet-wide, so raising here would 500 /system/ai-status
+    and every AI path for every company at once.
+    """
+    monkeypatch.setenv("INSPRO_ENV", "prod")
+    secret = pack_vertex_secret("inspro-ai", _SA_JSON)
+    assert (
+        _vertex_from_secret(
+            "us-central1", "gemini-2.5-flash", secret, "platform", "the platform key"
+        )
+        is None
+    )

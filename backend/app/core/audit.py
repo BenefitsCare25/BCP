@@ -31,7 +31,14 @@ _REDACT_KEYS_EXACT = {
     "id_token",
     # Defense-in-depth: a future handler that dumps `row.__dict__` shouldn't
     # leak the Fernet ciphertext into audit rows even though it's encrypted.
+    # `client_ai_configs` and the `platform_ai_settings` singleton name theirs
+    # differently, so both belong here.
     "encrypted_api_key",
+    "encrypted_service_account",
+    # The CLEARTEXT service-account private key arrives under this name on the
+    # platform-key upsert payload (BYOK's cleartext field is `api_key`, above)
+    # — the one that actually matters if a handler ever audits a request body.
+    "service_account_json",
 }
 _REDACT_PLACEHOLDER = "[redacted]"
 

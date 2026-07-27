@@ -39,3 +39,19 @@ def test_access_token_redacted() -> None:
 def test_non_secret_keys_untouched() -> None:
     payload = {"display_name": "X", "rule": {"and": []}}
     assert _scrub(payload) == payload
+
+
+def test_service_account_fields_redacted() -> None:
+    """Both AI credential surfaces: cleartext SA key and stored ciphertext."""
+    out = _scrub(
+        {
+            "service_account_json": '{"type":"service_account","private_key":"..."}',
+            "encrypted_service_account": "gAAAAAB...",
+            "location": "asia-southeast1",
+        }
+    )
+    assert out == {
+        "service_account_json": "[redacted]",
+        "encrypted_service_account": "[redacted]",
+        "location": "asia-southeast1",
+    }

@@ -415,7 +415,9 @@ export function useConfirmCategory() {
 
 export interface AIStatus {
   configured: boolean;
-  source: "byok" | "env" | "none";
+  // Mirrors `AISource` in core/ai_config.py — resolution order is
+  // byok (this company's own key) → platform (the shared default) → env.
+  source: "byok" | "platform" | "env" | "none";
   model: string | null;
   cache_kind: string;
   breaker_state: "closed" | "open" | "half_open";
@@ -481,10 +483,38 @@ export function useSetAIBudget() {
   });
 }
 
-export interface PlatformAISettings {
+/** Status of the stored platform key — never carries the cleartext. */
+export interface PlatformAICredentials {
+  configured: boolean;
+  provider: string | null;
+  location: string | null;
+  model: string | null;
+  key_fingerprint: string | null;
+  key_masked: string | null;
+  last_validated_at: string | null;
+  last_validation_error: string | null;
+}
+
+export interface PlatformAILimits {
   platform_monthly_token_cap: number;
   default_monthly_token_budget: number;
   max_concurrent_calls: number;
+}
+
+export interface PlatformAISettings extends PlatformAILimits {
+  credentials: PlatformAICredentials;
+}
+
+export interface PlatformAICredentialsUpsert {
+  location?: string | null;
+  model?: string | null;
+  service_account_json: string;
+}
+
+export interface PlatformAICredentialsTestPayload {
+  location?: string | null;
+  model?: string | null;
+  service_account_json?: string | null;
 }
 
 // Platform-wide (system-admin only) — spans every company on the shared key,
@@ -501,11 +531,54 @@ export function usePlatformAISettings(enabled = true) {
 export function useSetPlatformAISettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: PlatformAISettings) =>
+    // Limits only — the platform key has its own endpoint so saving a limit
+    // can never clear it.
+    mutationFn: (payload: PlatformAILimits) =>
       api.put<PlatformAISettings>("/platform-ai-settings", payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
       qc.invalidateQueries({ queryKey: ["ai-spend", "summary"] });
+    },
+  });
+}
+
+// The platform key is the default every company runs on, so a change to it
+// invalidates every surface that reports whether AI is configured.
+function invalidatePlatformKey(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
+  qc.invalidateQueries({ queryKey: ["system", "ai-status"] });
+  qc.invalidateQueries({ queryKey: ["audit-log"] });
+}
+
+export function useSetPlatformAICredentials() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PlatformAICredentialsUpsert) =>
+      api.put<PlatformAISettings>("/platform-ai-settings/credentials", payload),
+    onSuccess: () => invalidatePlatformKey(qc),
+  });
+}
+
+export function useDeletePlatformAICredentials() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.delete<PlatformAISettings>("/platform-ai-settings/credentials"),
+    onSuccess: () => invalidatePlatformKey(qc),
+  });
+}
+
+export function useTestPlatformAICredentials() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PlatformAICredentialsTestPayload | undefined) =>
+      api.post<AIConfigTestResult>(
+        "/platform-ai-settings/credentials/test",
+        payload ?? {},
+      ),
+    onSuccess: () => {
+      // Testing the stored key updates last_validated_at; refresh.
+      qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
     },
   });
 }

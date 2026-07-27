@@ -8,18 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from datetime import UTC, datetime
 from typing import Any
 
-from anthropic import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AuthenticationError,
-    BadRequestError,
-    PermissionDeniedError,
-)
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
@@ -41,16 +32,11 @@ from app.schemas.api import (
     AIConfigTestResult,
     AIConfigUpsert,
 )
+from app.services.vertex_probe import probe_vertex, project_id_from_service_account
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-config", tags=["ai-config"])
-
-_TEST_PROMPT = "ping"
-# Vertex's first call builds google-auth credentials + a fresh HTTP client, so
-# it needs headroom beyond a bare HTTP call.
-_VERTEX_TEST_TIMEOUT_SECONDS = 20.0
-_TEST_MAX_TOKENS = 1
 
 
 def _mask_for_fingerprint(fp: str) -> str:
@@ -219,9 +205,9 @@ def _run_vertex_test(
 
     Vertex keeps the service-account JSON (which carries project_id) as the
     encrypted secret; location rides ``endpoint`` and the Gemini model ``model``.
+    The provider call itself is `services/vertex_probe.py`, shared with the
+    platform-key surface so both validate a key identically.
     """
-    from app.core.ai_config import AIConfig
-
     location = (
         (payload.endpoint if payload else None)
         or (row.endpoint if row else None)
@@ -237,9 +223,8 @@ def _run_vertex_test(
     project_id: str | None = None
     if payload and payload.api_key:
         service_account_json = payload.api_key
-        try:
-            project_id = str(json.loads(payload.api_key)["project_id"])
-        except (ValueError, KeyError, TypeError):
+        project_id = project_id_from_service_account(payload.api_key)
+        if project_id is None:
             return AIConfigTestResult(
                 ok=False,
                 error="Service-account JSON is missing 'project_id'.",
@@ -259,55 +244,13 @@ def _run_vertex_test(
                 latency_ms=0,
             )
 
-    if not project_id or not service_account_json:
-        return AIConfigTestResult(
-            ok=False,
-            error="Enter the GCP location and service-account JSON key to test.",
-            latency_ms=0,
-        )
-    try:
-        assert_vertex_residency(location)
-    except RuntimeError as exc:
-        return AIConfigTestResult(ok=False, error=str(exc), latency_ms=0)
-
-    from app.services.vertex_gemini import build_gemini_client
-
-    cfg = AIConfig(
-        api_key=service_account_json,
+    error, latency_ms, model = probe_vertex(
+        location=location,
         model=model,
-        base_url=None,
-        provider="vertex",
-        gcp_project=project_id,
-        gcp_location=location,
+        service_account_json=service_account_json,
+        project_id=project_id,
         source="byok",
     )
-
-    started = time.perf_counter()
-    error: str | None = None
-    try:
-        client = build_gemini_client(cfg, timeout=_VERTEX_TEST_TIMEOUT_SECONDS)
-        client.messages.create(
-            model=model,
-            max_tokens=_TEST_MAX_TOKENS,
-            messages=[{"role": "user", "content": _TEST_PROMPT}],
-        )
-    except (AuthenticationError, PermissionDeniedError) as exc:
-        error = f"Google credentials rejected: {exc.__class__.__name__}"
-    except BadRequestError as exc:
-        error = f"Bad request: {exc.message if hasattr(exc, 'message') else str(exc)[:200]}"
-    except APITimeoutError:
-        error = f"Vertex did not respond within {int(_VERTEX_TEST_TIMEOUT_SECONDS)}s."
-    except APIConnectionError as exc:
-        error = f"Could not reach Vertex: {str(exc)[:200]}"
-    except APIStatusError as exc:
-        error = f"Vertex returned {exc.status_code}: {str(exc)[:200]}"
-    except RuntimeError as exc:
-        # e.g. google-genai not installed, or credential build failure.
-        error = str(exc)[:200]
-    except Exception as exc:
-        logger.exception("Unexpected error during Vertex BYOK test for client %s", client_id)
-        error = f"Unexpected error: {exc.__class__.__name__}: {str(exc)[:160]}"
-    latency_ms = int((time.perf_counter() - started) * 1000)
 
     is_stored_test = row is not None and (payload is None or payload.api_key is None)
     if is_stored_test and row is not None:

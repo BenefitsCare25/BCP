@@ -1,18 +1,21 @@
 """AI provider configuration — Google Vertex AI (Gemini), Singapore-resident.
 
 Vertex/Gemini is the ONLY provider (AWS Bedrock and direct Anthropic were
-removed). Two resolution sources, in priority order:
+removed). Three resolution sources, in priority order:
 
 1. Per-tenant BYOK row in ``client_ai_configs`` (when ``db`` + ``client_id``
-   are passed) — the service-account JSON encrypted at rest, decrypted
-   just-in-time.
-2. Process-wide env vars: ``INSPRO_AI_PROVIDER=vertex`` (or just a present
+   are passed) — an optional per-company OVERRIDE, encrypted at rest and
+   decrypted just-in-time.
+2. The PLATFORM key on the ``platform_ai_settings`` singleton (when ``db`` is
+   passed) — the global default every company runs on, set by a system admin
+   in the UI. This is the normal way AI is configured.
+3. Process-wide env vars: ``INSPRO_AI_PROVIDER=vertex`` (or just a present
    ``VERTEX_PROJECT``) + ``VERTEX_LOCATION`` / ``VERTEX_MODEL``; credentials via
    the standard Google ADC chain (``GOOGLE_APPLICATION_CREDENTIALS`` / workload
    identity).
 
-For per-tenant BYOK, call ``load_ai_config(db, client_id)`` from a request
-handler — the BYOK row (if any) takes precedence over env.
+Call ``load_ai_config(db, client_id)`` from a request handler so all three are
+consulted; ``load_ai_config(db)`` (no client) skips only the BYOK layer.
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-AISource = Literal["byok", "env", "none"]
+AISource = Literal["byok", "platform", "env", "none"]
 
 # Vertex (Gemini) residency guard. Keep claims PII in Singapore: the "global"
 # Vertex location routes to any geography, so it's refused in prod;
@@ -125,94 +128,154 @@ def pack_vertex_secret(project_id: str, service_account_json: str) -> str:
     )
 
 
-def _byok_vertex(row: object, secret_blob: str, client_id: str) -> AIConfig | None:
-    """Build a Vertex AIConfig from a decrypted BYOK row.
+def _vertex_from_secret(
+    location: str | None,
+    model: str | None,
+    secret_blob: str,
+    source: AISource,
+    label: str,
+) -> AIConfig | None:
+    """Build a Vertex AIConfig from a decrypted stored secret.
 
-    ``row.endpoint`` holds the location, ``row.model`` the Gemini model id, and
-    the decrypted ``secret_blob`` is the JSON packed by ``pack_vertex_secret``
-    ({project_id, service_account}). ``api_key`` carries the service-account
-    JSON string; the adapter builds google-auth credentials from it. Malformed
-    rows fall through to env rather than 500-ing the AI surface.
+    Shared by the BYOK row and the platform singleton — both store the location
+    + Gemini model alongside a ``pack_vertex_secret`` blob ({project_id,
+    service_account}). ``api_key`` carries the service-account JSON string; the
+    adapter builds google-auth credentials from it. A malformed row falls
+    through to the next source rather than 500-ing the AI surface; ``label``
+    only identifies it in the log.
     """
-    location = (getattr(row, "endpoint", None) or "").strip() or DEFAULT_VERTEX_LOCATION
-    model = (getattr(row, "model", None) or "").strip() or DEFAULT_VERTEX_MODEL
+    resolved_location = (location or "").strip() or DEFAULT_VERTEX_LOCATION
+    resolved_model = (model or "").strip() or DEFAULT_VERTEX_MODEL
     try:
         packed = json.loads(secret_blob)
         project_id = str(packed["project_id"])
         service_account_json = str(packed["service_account"])
     except (ValueError, KeyError, TypeError):
-        logger.warning("BYOK vertex row for client %s has malformed creds", client_id)
+        logger.warning("Vertex credentials for %s are malformed", label)
         return None
     if not project_id:
-        logger.warning("BYOK vertex row for client %s missing project_id", client_id)
+        logger.warning("Vertex credentials for %s are missing project_id", label)
         return None
-    assert_vertex_residency(location)
+    try:
+        assert_vertex_residency(resolved_location)
+    except RuntimeError:
+        # An out-of-region row is legal to save outside prod, so prod can
+        # inherit one (a promoted DB, or INSPRO_ENV flipped after the fact).
+        # Refusing it is right — but RAISING here would 500 /system/ai-status
+        # and every AI path for EVERY company, since the platform key is
+        # fleet-wide. Returning None keeps it fail-closed and degradable.
+        logger.exception(
+            "Vertex credentials for %s use non-resident location %r — refusing "
+            "them and falling through to the next AI source",
+            label,
+            resolved_location,
+        )
+        return None
     return AIConfig(
         api_key=service_account_json,
-        model=model,
+        model=resolved_model,
         base_url=None,
         provider="vertex",
         gcp_project=project_id,
-        gcp_location=location,
-        source="byok",
+        gcp_location=resolved_location,
+        source=source,
     )
 
 
-def _load_byok(db: Session, client_id: str) -> AIConfig | None:
-    """Return the tenant's BYOK config, or ``None`` if no row / decrypt fails.
+def _decrypt_or_none(blob: bytes, label: str) -> str | None:
+    """Decrypt a stored secret, logging (not raising) on expected failures.
 
-    Decrypt failures are logged but not raised — falling through to the env
-    fallback is safer than 500-ing the whole AI surface when one tenant's row
-    is corrupt.
+    Expected failures only: missing/rotated master key (MasterKeyError), corrupt
+    ciphertext (InvalidToken), non-UTF8 plaintext (UnicodeDecodeError ⊂
+    ValueError). A programming error (AttributeError/TypeError) must NOT be
+    swallowed as "fall through to the next source" — let it surface.
     """
-    # Imported lazily so the auth-mode boot path doesn't need SQLAlchemy.
     from cryptography.fernet import InvalidToken
 
     from app.core.crypto import MasterKeyError, decrypt_secret
+
+    try:
+        return decrypt_secret(blob)
+    except (MasterKeyError, InvalidToken, ValueError) as exc:
+        logger.exception(
+            "Decrypt failed for %s — falling through to the next AI source: %s",
+            label,
+            exc,
+        )
+        return None
+
+
+def _load_byok(db: Session, client_id: str) -> AIConfig | None:
+    """Return the tenant's BYOK override, or ``None`` if no row / decrypt fails.
+
+    Decrypt failures are logged but not raised — falling through to the
+    platform key is safer than 500-ing the whole AI surface when one tenant's
+    row is corrupt.
+    """
+    # Imported lazily so the auth-mode boot path doesn't need SQLAlchemy.
     from app.models.client_ai_config import ClientAIConfig
 
     row = db.query(ClientAIConfig).filter(ClientAIConfig.client_id == client_id).one_or_none()
     if row is None:
         return None
-    try:
-        api_key = decrypt_secret(row.encrypted_api_key)
-    # Expected decrypt failures only: missing/rotated master key (MasterKeyError),
-    # corrupt ciphertext (InvalidToken), non-UTF8 plaintext (UnicodeDecodeError ⊂
-    # ValueError). A programming error (AttributeError/TypeError) must NOT be
-    # swallowed as "fall back to env" — let it surface.
-    except (MasterKeyError, InvalidToken, ValueError) as exc:
-        logger.exception(
-            "BYOK decrypt failed for client %s — falling back to env: %s",
+    if row.provider != "vertex":
+        # Unrecognised / legacy provider (bedrock, anthropic, azure_foundry) —
+        # don't guess; fall through rather than treat it as vertex.
+        logger.warning(
+            "BYOK row for client %s has unsupported provider %r — ignoring",
             client_id,
-            exc,
+            row.provider,
         )
         return None
+    label = f"BYOK client {client_id}"
+    secret = _decrypt_or_none(row.encrypted_api_key, label)
+    if secret is None:
+        return None
+    return _vertex_from_secret(row.endpoint, row.model, secret, "byok", label)
 
-    if row.provider == "vertex":
-        return _byok_vertex(row, api_key, client_id)
-    # Unrecognised / legacy provider (bedrock, anthropic, azure_foundry) — don't
-    # guess; fall through to env rather than treat it as vertex.
-    logger.warning(
-        "BYOK row for client %s has unsupported provider %r — ignoring",
-        client_id,
-        row.provider,
-    )
-    return None
+
+def _load_platform(db: Session) -> AIConfig | None:
+    """Return the platform-wide key from the ``platform_ai_settings`` singleton.
+
+    This is the DEFAULT every company runs on — a system admin sets it once in
+    the UI. ``None`` when no key is stored (the row may exist carrying only
+    limits), the provider is unsupported, or the secret won't decrypt.
+    """
+    from app.models.platform_ai_settings import SINGLETON_ID, PlatformAISetting
+
+    row = db.get(PlatformAISetting, SINGLETON_ID)
+    if row is None or not row.encrypted_service_account:
+        return None
+    if (row.provider or "vertex") != "vertex":
+        logger.warning(
+            "Platform AI settings have unsupported provider %r — ignoring",
+            row.provider,
+        )
+        return None
+    label = "the platform AI key"
+    secret = _decrypt_or_none(row.encrypted_service_account, label)
+    if secret is None:
+        return None
+    return _vertex_from_secret(row.location, row.model, secret, "platform", label)
 
 
 def load_ai_config(
     db: Session | None = None, client_id: str | None = None
 ) -> AIConfig | None:
-    """Resolve AI provider configuration.
+    """Resolve AI provider configuration: BYOK → platform key → env.
 
-    With ``db`` + ``client_id``, looks up the tenant's BYOK row first; falls
-    through to env on miss/decrypt-failure. Without them (legacy callers,
-    background jobs), returns the env config or ``None``.
+    With ``db`` + ``client_id``, the tenant's BYOK override wins. With ``db``
+    alone (background jobs without a tenant), the platform key is consulted.
+    Without a session at all, only env can resolve.
     """
-    if db is not None and client_id:
-        byok = _load_byok(db, client_id)
-        if byok is not None:
-            return byok
+    if db is not None:
+        if client_id:
+            byok = _load_byok(db, client_id)
+            if byok is not None:
+                return byok
+        platform = _load_platform(db)
+        if platform is not None:
+            return platform
     return _load_from_env()
 
 

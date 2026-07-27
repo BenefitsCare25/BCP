@@ -924,17 +924,70 @@ _PLATFORM_TOKEN_MAX = 1_000_000_000_000  # 1e12 — fat-finger guard, not a real
 _PLATFORM_CONCURRENCY_MAX = 512  # far above any sane per-process worker count
 
 
+class PlatformAICredentialsOut(BaseModel):
+    """Metadata about the stored platform key — never exposes the cleartext.
+
+    `configured` is False when no key is stored, in which case every other
+    field is None and AI falls through to a per-company BYOK row or env.
+    """
+
+    configured: bool
+    provider: AIProviderStr | None = None
+    location: str | None = None
+    model: str | None = None
+    key_fingerprint: str | None = None
+    last_validated_at: datetime | None = None
+    last_validation_error: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def key_masked(self) -> str | None:
+        return "••••" + self.key_fingerprint[-4:] if self.key_fingerprint else None
+
+
 class PlatformAISettingsOut(BaseModel):
-    """Effective platform AI limits currently in force (0 = disabled)."""
+    """Effective platform AI limits in force (0 = disabled) + key status."""
 
     platform_monthly_token_cap: int
     default_monthly_token_budget: int
     max_concurrent_calls: int
+    credentials: PlatformAICredentialsOut
 
 
 class PlatformAISettingsUpdate(BaseModel):
-    """Set the platform-wide AI limits. 0 on any field = that limit disabled."""
+    """Set the platform-wide AI limits. 0 on any field = that limit disabled.
+
+    Limits only — credentials have their own endpoint so saving a limit can
+    never clear the key (and vice versa).
+    """
 
     platform_monthly_token_cap: int = Field(ge=0, le=_PLATFORM_TOKEN_MAX)
     default_monthly_token_budget: int = Field(ge=0, le=_PLATFORM_TOKEN_MAX)
     max_concurrent_calls: int = Field(ge=0, le=_PLATFORM_CONCURRENCY_MAX)
+
+
+class PlatformAICredentialsUpsert(BaseModel):
+    """Set the platform Vertex key — the default every company runs on."""
+
+    provider: AIProviderStr = "vertex"
+    # location = the GCP region; model = the Gemini model id.
+    location: str | None = Field(default=None, max_length=64)
+    model: str | None = Field(default=None, max_length=128)
+    service_account_json: str = Field(min_length=8, max_length=8192)
+
+    @model_validator(mode="after")
+    def _check_key(self) -> PlatformAICredentialsUpsert:
+        if not _looks_like_service_account(self.service_account_json):
+            raise ValueError(
+                "service_account_json must be the Vertex service-account JSON "
+                "key (with type='service_account', private_key and client_email)."
+            )
+        return self
+
+
+class PlatformAICredentialsTestPayload(BaseModel):
+    """Optional draft to test without saving. Falls back to the stored key."""
+
+    location: str | None = Field(default=None, max_length=64)
+    model: str | None = Field(default=None, max_length=128)
+    service_account_json: str | None = Field(default=None, min_length=8, max_length=8192)

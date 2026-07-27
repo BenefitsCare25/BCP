@@ -58,21 +58,22 @@ export function AIUsageTile() {
         <CardHeader>
           <CardTitle>AI usage</CardTitle>
           <CardDescription>
-            AI provider not configured. Either set a tenant key on{" "}
+            AI provider not configured. A system admin sets the platform key on{" "}
             <Link className="underline" to="/configuration/ai-provider">
               Configuration → AI provider
             </Link>{" "}
-            (recommended), or set the platform-wide{" "}
-            <code>INSPRO_AI_PROVIDER=vertex</code> +{" "}
-            <code>VERTEX_PROJECT</code> env vars (Google ADC).
+            and every company runs on it; a company can override it there with
+            its own key.
           </CardDescription>
         </CardHeader>
       </Card>
     );
   }
+  // "env" = server-supplied credentials (Google ADC), the legacy fallback
+  // behind the DB-backed platform key — both read as "not this company's own".
   const sourceBadge =
     status.source === "byok" ? (
-      <Badge variant="good">BYOK</Badge>
+      <Badge variant="good">company key</Badge>
     ) : (
       <Badge variant="info">platform key</Badge>
     );
