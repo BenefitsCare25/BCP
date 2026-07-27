@@ -1,8 +1,11 @@
-"""Underwriting queue — free-cover-limit cases + broker decisions.
+"""Underwriting queue — insurer-grouped reviews + per-product decisions.
 
-OPERATIONAL surface (not activation-locked): cases exist precisely because a
-live year's members exceed a product's free cover limit. Decisions feed the
-insurer listings' "Sum Insured Pending U/W" / "Last Accepted Sum Insured".
+OPERATIONAL surface (not activation-locked): reviews exist precisely because a
+live year's members exceed a product's Non-Evidence Limit (dollar FCL or age
+gate). One review per (life, insurer) carries the broker↔insurer workflow
+status + requirements; its case lines carry per-product decisions. Amounts
+feed the insurer listings' "Sum Insured Pending U/W" / "Last Accepted Sum
+Insured".
 """
 from __future__ import annotations
 
@@ -18,39 +21,90 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import _deny_cross_tenant, assert_policy_year_for_user, user_owns
 from app.core.rate_limit import limiter
 from app.db.session import get_db
-from app.models import Dependant, Employee, Product, UnderwritingCase
-from app.models.underwriting_case import VALID_UW_STATUSES, UnderwritingStatus
-from app.services.roster_attributes import NAME_KEYS, first_value
-from app.services.underwriting import free_cover_limits, refresh_underwriting_cases
+from app.models import (
+    Dependant,
+    Employee,
+    Product,
+    UnderwritingCase,
+    UnderwritingReview,
+)
+from app.models.underwriting_case import (
+    DECIDED_UW_STATUSES,
+    OPEN_REVIEW_STATUSES,
+    VALID_REVIEW_STATUSES,
+    VALID_UW_STATUSES,
+    UnderwritingStatus,
+    normalize_uw_status,
+)
+from app.services.flex_membership import classify_relationship
+from app.services.roster_attributes import (
+    EMPLOYEE_ID_KEYS,
+    NAME_KEYS,
+    REL_KEYS,
+    first_value,
+)
+from app.services.underwriting import (
+    adopt_orphan_cases,
+    refresh_underwriting_cases,
+)
 
 router = APIRouter(tags=["underwriting"])
+
+# Decisions where the insurer said yes — the accepted figure defaults to the
+# full requested SI rather than the guaranteed floor.
+_APPROVED_STATUSES = frozenset(
+    {
+        UnderwritingStatus.approved_standard,
+        UnderwritingStatus.approved_substandard,
+    }
+)
 
 
 class UnderwritingCaseOut(BaseModel):
     id: str
     product_id: str
     product_code: str
-    subject_type: str  # "employee" | "dependant"
-    subject_name: str | None
-    staff_id: str | None
-    eligible_si: float
-    accepted_si: float
+    product_name: str
+    # Requested = the life's eligible SI; guaranteed = auto-covered while the
+    # insurer decides; pending = requested - in force while undecided.
+    requested_si: float
+    guaranteed_si: float
     pending_si: float
-    free_cover_limit: float | None
-    status: str
+    accepted_si: float
+    status: str  # decision vocabulary (pending / approved_standard / …)
     decided_on: date | None
     remarks: str | None
 
 
+class UnderwritingReviewOut(BaseModel):
+    id: str
+    insurer: str
+    subject_type: str  # "employee" | "dependant"
+    subject_name: str | None
+    relationship: str  # "Self" for the member; classified role for dependants
+    staff_id: str | None
+    identification_no: str | None
+    status: str
+    requirements: str | None
+    cases: list[UnderwritingCaseOut]
+
+
 class UnderwritingQueueOut(BaseModel):
     total: int
-    pending: int
-    items: list[UnderwritingCaseOut]
+    open: int
+    pending_amount: float
+    items: list[UnderwritingReviewOut]
+
+
+class UnderwritingReviewIn(BaseModel):
+    status: str | None = None
+    requirements: str | None = Field(default=None, max_length=2000)
 
 
 class UnderwritingDecisionIn(BaseModel):
     status: str
     accepted_si: float | None = Field(default=None, ge=0)
+    guaranteed_si: float | None = Field(default=None, ge=0)
     decided_on: date | None = None
     remarks: str | None = Field(default=None, max_length=1024)
 
@@ -62,29 +116,15 @@ class RefreshOut(BaseModel):
     open_cases: int
 
 
-def _case_out(
-    case: UnderwritingCase,
-    products: dict[str, Product],
-    employees: dict[str, Employee],
-    dependants: dict[str, Dependant],
-    fcl: dict[str, float],
-) -> UnderwritingCaseOut:
-    if case.employee_id:
-        emp = employees.get(case.employee_id)
-        subject_type = "employee"
-        subject_name = emp.employee_name if emp else None
-        staff_id = emp.staff_id if emp else None
-    else:
-        dep = dependants.get(case.dependant_id or "")
-        emp = employees.get(dep.employee_id) if dep and dep.employee_id else None
-        subject_type = "dependant"
-        subject_name = (
-            first_value(dep.attribute_values or {}, NAME_KEYS) if dep else None
-        )
-        staff_id = emp.staff_id if emp else None
+def _case_out(case: UnderwritingCase, products: dict[str, Product]) -> UnderwritingCaseOut:
+    decision = normalize_uw_status(case.status)
+    guaranteed = (
+        case.guaranteed_si if case.guaranteed_si is not None else case.accepted_si
+    )
+    guaranteed = min(max(guaranteed, 0.0), case.eligible_si)
     pending = (
-        max(case.eligible_si - min(case.accepted_si, case.eligible_si), 0.0)
-        if case.status == UnderwritingStatus.pending
+        max(case.eligible_si - guaranteed, 0.0)
+        if decision not in DECIDED_UW_STATUSES
         else 0.0
     )
     product = products.get(case.product_id)
@@ -92,37 +132,91 @@ def _case_out(
         id=case.id,
         product_id=case.product_id,
         product_code=product.code if product else "?",
-        subject_type=subject_type,
-        subject_name=subject_name,
-        staff_id=staff_id,
-        eligible_si=case.eligible_si,
-        accepted_si=case.accepted_si,
+        product_name=product.display_name if product else "Unknown product",
+        requested_si=case.eligible_si,
+        guaranteed_si=guaranteed,
         pending_si=pending,
-        free_cover_limit=fcl.get(case.product_id),
-        status=case.status,
+        accepted_si=min(case.accepted_si, case.eligible_si),
+        status=decision,
         decided_on=case.decided_on,
         remarks=case.remarks,
     )
 
 
+def _review_out(
+    review: UnderwritingReview,
+    lines: list[UnderwritingCase],
+    products: dict[str, Product],
+    employees: dict[str, Employee],
+    dependants: dict[str, Dependant],
+) -> UnderwritingReviewOut:
+    if review.employee_id:
+        emp = employees.get(review.employee_id)
+        subject_type = "employee"
+        subject_name = emp.employee_name if emp else None
+        relationship = "Self"
+        staff_id = emp.staff_id if emp else None
+        ident = (
+            first_value(emp.attribute_values or {}, EMPLOYEE_ID_KEYS) if emp else None
+        )
+    else:
+        dep = dependants.get(review.dependant_id or "")
+        emp = employees.get(dep.employee_id) if dep and dep.employee_id else None
+        subject_type = "dependant"
+        attrs = (dep.attribute_values or {}) if dep else {}
+        subject_name = first_value(attrs, NAME_KEYS)
+        role = classify_relationship(first_value(attrs, REL_KEYS))
+        relationship = (role or "dependant").capitalize()
+        staff_id = emp.staff_id if emp else None
+        ident = first_value(attrs, ("dependant_id_no", "id_no", "nric", "fin"))
+    def _line_order(c: UnderwritingCase) -> str:
+        product = products.get(c.product_id)
+        return product.code if product else "?"
+
+    lines_sorted = sorted(lines, key=_line_order)
+    return UnderwritingReviewOut(
+        id=review.id,
+        insurer=review.insurer,
+        subject_type=subject_type,
+        subject_name=subject_name,
+        relationship=relationship,
+        staff_id=staff_id,
+        identification_no=ident,
+        status=review.status,
+        requirements=review.requirements,
+        cases=[_case_out(c, products) for c in lines_sorted],
+    )
+
+
 def _queue(db: Session, policy_year_id: str) -> UnderwritingQueueOut:
+    reviews = list(
+        db.execute(
+            select(UnderwritingReview)
+            .where(UnderwritingReview.policy_year_id == policy_year_id)
+            .order_by(UnderwritingReview.created_at)
+        ).scalars().all()
+    )
     cases = list(
         db.execute(
             select(UnderwritingCase)
             .where(UnderwritingCase.policy_year_id == policy_year_id)
-            .order_by(UnderwritingCase.status.desc(), UnderwritingCase.created_at)
+            .order_by(UnderwritingCase.created_at)
         ).scalars().all()
     )
+    lines_by_review: dict[str, list[UnderwritingCase]] = {}
+    for c in cases:
+        if c.review_id:
+            lines_by_review.setdefault(c.review_id, []).append(c)
+
+    product_ids = {c.product_id for c in cases}
     products = {
         p.id: p
         for p in db.execute(
-            select(Product).where(
-                Product.id.in_({c.product_id for c in cases})
-            )
+            select(Product).where(Product.id.in_(product_ids))
         ).scalars().all()
-    } if cases else {}
-    emp_ids = {c.employee_id for c in cases if c.employee_id}
-    dep_ids = {c.dependant_id for c in cases if c.dependant_id}
+    } if product_ids else {}
+    emp_ids = {r.employee_id for r in reviews if r.employee_id}
+    dep_ids = {r.dependant_id for r in reviews if r.dependant_id}
     dependants = {
         d.id: d
         for d in db.execute(
@@ -136,11 +230,23 @@ def _queue(db: Session, policy_year_id: str) -> UnderwritingQueueOut:
             select(Employee).where(Employee.id.in_(emp_ids))
         ).scalars().all()
     } if emp_ids else {}
-    fcl = free_cover_limits(db, policy_year_id)
-    items = [_case_out(c, products, employees, dependants, fcl) for c in cases]
+
+    items = [
+        _review_out(r, lines_by_review.get(r.id, []), products, employees, dependants)
+        for r in reviews
+    ]
+    # Open reviews first, then insurer / member name for a stable scan order.
+    items.sort(
+        key=lambda r: (
+            r.status not in OPEN_REVIEW_STATUSES,
+            r.insurer.lower(),
+            (r.subject_name or "").lower(),
+        )
+    )
     return UnderwritingQueueOut(
         total=len(items),
-        pending=sum(1 for i in items if i.status == UnderwritingStatus.pending),
+        open=sum(1 for i in items if i.status in OPEN_REVIEW_STATUSES),
+        pending_amount=sum(c.pending_si for i in items for c in i.cases),
         items=items,
     )
 
@@ -155,6 +261,12 @@ def list_underwriting_cases(
     db: Session = Depends(get_db),
 ) -> UnderwritingQueueOut:
     assert_policy_year_for_user(policy_year_id, user, db)
+    # Lazily adopt pre-review-model rows (same shape as the portal enrollment
+    # GET materializing a missing Enrollment). Without it, cases written before
+    # the insurer-grouped model stay invisible — and undecidable — until some
+    # unrelated action happens to run a full sync. No-op once done.
+    if adopt_orphan_cases(db, policy_year_id):
+        db.commit()
     return _queue(db, policy_year_id)
 
 
@@ -169,9 +281,9 @@ def refresh_cases(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RefreshOut:
-    """Sync cases with resolved coverage vs each product's free cover limit.
+    """Sync reviews with resolved coverage vs each product's Non-Evidence Limit.
 
-    Recomputes the whole roster's coverage and writes/deletes case rows, so it
+    Recomputes the whole roster's coverage and writes/deletes rows, so it
     carries the repo's bulk-write rate limit (10/min) rather than the default.
     """
     py = assert_policy_year_for_user(policy_year_id, user, db)
@@ -193,14 +305,51 @@ def refresh_cases(
 
 
 @router.patch(
-    "/underwriting/cases/{case_id}", response_model=UnderwritingCaseOut
+    "/underwriting/reviews/{review_id}", response_model=UnderwritingReviewOut
+)
+def update_review(
+    review_id: str,
+    body: UnderwritingReviewIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UnderwritingReviewOut:
+    """Case workflow status + requirements notes (the case-level header)."""
+    review = db.get(UnderwritingReview, review_id)
+    if review is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Underwriting case not found")
+    if not user_owns(user, review.client_id):
+        raise _deny_cross_tenant(user, "Underwriting review", review_id)
+    if body.status is not None and body.status not in VALID_REVIEW_STATUSES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"status must be one of {sorted(VALID_REVIEW_STATUSES)}",
+        )
+    before = {"status": review.status, "requirements": review.requirements}
+    if body.status is not None:
+        review.status = body.status
+    if "requirements" in body.model_fields_set:
+        review.requirements = (body.requirements or "").strip() or None
+    review.modified_by = user.user_id
+    db.flush()
+    write_audit(
+        db, user, action="update", entity_type="underwriting_review",
+        entity_id=review.id, before=before,
+        after={"status": review.status, "requirements": review.requirements},
+    )
+    db.commit()
+    return _reload_review_out(db, review)
+
+
+@router.patch(
+    "/underwriting/cases/{case_id}", response_model=UnderwritingReviewOut
 )
 def decide_case(
     case_id: str,
     body: UnderwritingDecisionIn,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> UnderwritingCaseOut:
+) -> UnderwritingReviewOut:
+    """Record the insurer's per-product decision on one case line."""
     case = db.get(UnderwritingCase, case_id)
     if case is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Case not found")
@@ -216,15 +365,38 @@ def decide_case(
     before = {
         "status": case.status,
         "accepted_si": case.accepted_si,
+        "guaranteed_si": case.guaranteed_si,
         "decided_on": case.decided_on.isoformat() if case.decided_on else None,
     }
+    if body.guaranteed_si is not None:
+        case.guaranteed_si = min(body.guaranteed_si, case.eligible_si)
+        case.guaranteed_overridden = True
+    # Legacy lines (pre review model) carried the auto-covered FCL in
+    # accepted_si — fall back to it so a decision can't zero the in-force SI.
+    guaranteed = (
+        case.guaranteed_si if case.guaranteed_si is not None else case.accepted_si
+    )
     case.status = body.status
     if body.accepted_si is not None:
         case.accepted_si = min(body.accepted_si, case.eligible_si)
-    if body.status != UnderwritingStatus.pending:
-        case.decided_on = body.decided_on or date.today()
+    elif body.status in _APPROVED_STATUSES:
+        # An approval with no figure means the insurer took the request as
+        # asked. Defaulting to the GUARANTEED amount instead would be the
+        # dangerous read: the status is "decided", so the listing stops
+        # reporting a pending excess, and the approved excess would silently
+        # vanish from cover.
+        case.accepted_si = case.eligible_si
+    elif body.status in DECIDED_UW_STATUSES:
+        # Excess refused / case closed — the guaranteed amount stays in force.
+        case.accepted_si = min(guaranteed, case.eligible_si)
     else:
-        case.decided_on = None
+        # Undecided (pending / postponed) with no figure: guaranteed in force.
+        case.accepted_si = min(guaranteed, case.eligible_si)
+    case.decided_on = (
+        (body.decided_on or date.today())
+        if body.status in DECIDED_UW_STATUSES
+        else None
+    )
     if body.remarks is not None:
         case.remarks = body.remarks or None
     case.modified_by = user.user_id
@@ -235,15 +407,49 @@ def decide_case(
         after={
             "status": case.status,
             "accepted_si": case.accepted_si,
+            "guaranteed_si": case.guaranteed_si,
             "decided_on": case.decided_on.isoformat() if case.decided_on else None,
         },
     )
     db.commit()
-    queue = _queue(db, case.policy_year_id)
-    out = next((i for i in queue.items if i.id == case.id), None)
-    if out is None:  # defensive: a decided case is never dropped from the queue
+    if case.review_id is None:
+        # Pre-review-model row decided before anything adopted it — group it
+        # now rather than refusing a decision the broker already recorded.
+        adopt_orphan_cases(db, case.policy_year_id)
+        db.commit()
+    review = db.get(UnderwritingReview, case.review_id) if case.review_id else None
+    if review is None:  # defensive: a subject-less row can't form a review
         raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "Decision saved but the case could not be re-read.",
+            status.HTTP_409_CONFLICT,
+            "Decision saved, but the case has no member to group it under.",
         )
-    return out
+    return _reload_review_out(db, review)
+
+
+def _reload_review_out(db: Session, review: UnderwritingReview) -> UnderwritingReviewOut:
+    lines = list(
+        db.execute(
+            select(UnderwritingCase).where(UnderwritingCase.review_id == review.id)
+        ).scalars().all()
+    )
+    products = {
+        p.id: p
+        for p in db.execute(
+            select(Product).where(Product.id.in_({c.product_id for c in lines}))
+        ).scalars().all()
+    } if lines else {}
+    employees: dict[str, Employee] = {}
+    dependants: dict[str, Dependant] = {}
+    if review.employee_id:
+        emp = db.get(Employee, review.employee_id)
+        if emp:
+            employees[emp.id] = emp
+    elif review.dependant_id:
+        dep = db.get(Dependant, review.dependant_id)
+        if dep:
+            dependants[dep.id] = dep
+            if dep.employee_id:
+                emp = db.get(Employee, dep.employee_id)
+                if emp:
+                    employees[emp.id] = emp
+    return _review_out(review, lines, products, employees, dependants)

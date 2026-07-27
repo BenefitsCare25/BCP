@@ -49,7 +49,11 @@ from app.services.insurer_reports import (
     report_employees,
 )
 from app.services.leave_pricing_resolver import leave_sell_eligible
-from app.services.plan_hydration import basis_amount, hydrate_plans
+from app.services.plan_hydration import (
+    basis_amount,
+    hydrate_plans,
+    resolve_basis_amount,
+)
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     EMPLOYEE_ID_KEYS,
@@ -234,7 +238,10 @@ def _employee_coverage(
             if block is None or block.product.id in per_product:
                 continue
             pa, disp, raw = cat_facts.get(mp.category_id or "", ({}, None, None))
-            eligible = basis_amount(pa)
+            # Salary-multiple bases ("36 times basic monthly salary") resolve
+            # against the member's roster salary, so lump-sum SI (and the
+            # underwriting sync reading it) is per-member, not blank.
+            eligible = resolve_basis_amount(pa, emp.attribute_values)
             basis_raw = pa.get("basis")
             if mp.covered_dependant_ids is not None:
                 covered = [
@@ -694,14 +701,25 @@ def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict:
 
 
 def eligible_amounts(
-    db: Session, py: PolicyYear
+    db: Session,
+    py: PolicyYear,
+    only_employee_ids: set[str] | None = None,
 ) -> dict[tuple[str, str, bool], float]:
     """Eligible SI per underwritten life on lump-sum products, for the
-    underwriting sync: {(subject_id, product_id, is_employee): amount}."""
+    underwriting sync: {(subject_id, product_id, is_employee): amount}.
+
+    ``only_employee_ids`` narrows the (expensive) plan hydration to specific
+    households — the per-member underwriting re-sync uses it so confirming one
+    enrollment doesn't rebuild the whole roster's coverage. None = all.
+    """
     blocks = [b for b in product_blocks(db, py) if b.lump_sum]
     if not blocks:
         return {}
     employees = report_employees(db, py)
+    if only_employee_ids is not None:
+        employees = [e for e in employees if e.id in only_employee_ids]
+        if not employees:
+            return {}
     coverage, deps_by_emp = _employee_coverage(db, py, employees, blocks)
     dep_role: dict[str, str | None] = {}
     for deps in deps_by_emp.values():

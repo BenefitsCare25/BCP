@@ -487,6 +487,33 @@ def test_underwriting_refresh_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_underwriting_review_cross_tenant_404(client_as_a: TestClient) -> None:
+    # A review belonging to tenant B must 404 for tenant A (user_owns →
+    # _deny_cross_tenant), indistinguishable from a non-existent id.
+    from app.models import UnderwritingReview
+
+    with SessionLocal() as s:
+        review = UnderwritingReview(
+            client_id=CLIENT_B_ID, policy_year_id=PY_B, insurer="TestSure",
+            employee_id=None, dependant_id=None,
+        )
+        s.add(review)
+        s.commit()
+        review_id = review.id
+    try:
+        res = client_as_a.patch(
+            f"/api/v1/underwriting/reviews/{review_id}",
+            json={"status": "completed"},
+        )
+        assert res.status_code == 404
+    finally:
+        with SessionLocal() as s:
+            row = s.get(UnderwritingReview, review_id)
+            if row is not None:
+                s.delete(row)
+                s.commit()
+
+
 def test_fact_find_form_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/fact-find-form")
     assert res.status_code == 404

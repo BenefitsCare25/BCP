@@ -32,6 +32,7 @@ from app.schemas.enrollment import (
     WindowOpenResult,
 )
 from app.services.enrollment_lifecycle import close_window, open_window
+from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollment-windows"])
 
@@ -186,6 +187,12 @@ def close_enrollment_window(
             status.HTTP_409_CONFLICT, "Only an open window can be closed."
         )
     summary = close_window(db, window, user)
+    # Window close projected every enrollment into overrides — elected upgrades
+    # can cross a product's Non-Evidence Limit, so re-sync underwriting once
+    # for the year in the same transaction (no-op without an NEL).
+    py = db.get(PolicyYear, window.policy_year_id)
+    if py is not None:
+        refresh_underwriting_cases(db, py)
     db.commit()
     return WindowCloseSummary(**summary)
 

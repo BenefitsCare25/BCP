@@ -1432,6 +1432,7 @@ interface ProductTermArgs {
   gstIncluded?: boolean | null;
   gstRate?: number | null;
   freeCoverLimit?: number | null;
+  nelAgeLimit?: number | null;
   policyNumber?: string | null;
 }
 
@@ -1445,6 +1446,7 @@ export function useSetProductTerm(policyYearId: string) {
       gstIncluded,
       gstRate,
       freeCoverLimit,
+      nelAgeLimit,
       policyNumber,
     }: ProductTermArgs) => {
       // Only include keys the caller actually set — the backend applies exactly
@@ -1455,6 +1457,7 @@ export function useSetProductTerm(policyYearId: string) {
       if (gstIncluded !== undefined) body.gst_included = gstIncluded;
       if (gstRate !== undefined) body.gst_rate = gstRate;
       if (freeCoverLimit !== undefined) body.free_cover_limit = freeCoverLimit;
+      if (nelAgeLimit !== undefined) body.nel_age_limit = nelAgeLimit;
       if (policyNumber !== undefined) body.policy_number = policyNumber;
       return api.put<ProductTerm>(
         `/policy-years/${policyYearId}/product-terms/${productId}`,

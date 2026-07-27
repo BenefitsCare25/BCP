@@ -34,6 +34,7 @@ from app.models import (
     EnrollmentElection,
     EnrollmentWindow,
     LeaveElection,
+    PolicyYear,
 )
 from app.models.enrollment import EnrollmentStatus
 from app.schemas.enrollment import (
@@ -55,6 +56,7 @@ from app.services.enrollment_elections import (
 from app.services.enrollment_flex_guard import assert_within_wallet
 from app.services.enrollment_lifecycle import project_enrollment
 from app.services.enrollment_validation import assert_window_accepts_edits
+from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollments"])
 
@@ -210,6 +212,14 @@ def confirm_enrollment(
     # not re-litigated here — only the hard overdraft rule is).
     assert_within_wallet(db, enr, window)
     project_enrollment(db, enr, user)
+    # Projected overrides change effective SI — an elected upgrade can cross a
+    # product's Non-Evidence Limit, so re-sync underwriting in the same
+    # transaction (no-op unless a product carries an NEL). SCOPED to this
+    # member: confirming is a per-member action, and an unscoped sync would
+    # re-hydrate the whole roster (twice, with history) on every click.
+    py = db.get(PolicyYear, enr.policy_year_id)
+    if py is not None:
+        refresh_underwriting_cases(db, py, {enr.employee_id})
     db.commit()
     db.refresh(enr)
     return enrollment_detail(db, enr)

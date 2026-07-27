@@ -70,6 +70,7 @@ from app.services.placement_slip_parser import (
 )
 from app.services.plan_assignments import build_plan_assignments
 from app.services.product_templates import get_template
+from app.services.product_terms import autofill_nel_terms
 from app.services.rule_generator import description_to_rule
 from app.services.slip_reconcile import reconcile_slip
 from app.services.slip_template_memory import make_resolver, save_profile
@@ -513,6 +514,31 @@ async def parse_upload(
                 ))
                 plans_created += 1
 
+    # Auto-fill Non-Evidence-Limit terms from each sheet's footer ("Sum insured
+    # exceeding S$500,000 … or age 69 (age last birthday) requires
+    # underwriting"): FCL dollar amount + no-underwriting age land on the
+    # product's term row, blanks only — a broker's manual entry always wins.
+    # Applies even to setup-confirmed products (NEL is operational config).
+    nel_autofilled = 0
+    for product_slip in parsed.products:
+        header = product_slip.policy_header
+        nel_age_raw = header.age_limit_no_underwriting
+        if header.non_evidence_limit is None and not nel_age_raw:
+            continue
+        product = _find_product(
+            db, product_slip.product_code, product_slip.sheet, products_cache
+        )
+        if product is None:
+            continue
+        try:
+            nel_age = int(nel_age_raw) if nel_age_raw else None
+        except ValueError:
+            nel_age = None
+        if autofill_nel_terms(
+            db, policy_year_id, product.id, header.non_evidence_limit, nel_age
+        ):
+            nel_autofilled += 1
+
     # Flush so the Category/Plan rows just added are queryable when we synthesize
     # a template from them for products without a hand-authored JSON file.
     db.flush()
@@ -533,6 +559,7 @@ async def parse_upload(
         "plans_skipped_no_product": plans_skipped_products,
         "plans_skipped_duplicate": plans_dup_skipped,
         "prefilled_setups": prefilled_setups,
+        "nel_terms_autofilled": nel_autofilled,
         "skipped_sheets": parsed.diagnostics.get("skipped_sheets", []),
         "products_detected": [
             {

@@ -23,7 +23,13 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser
 from app.core.deps import tenant_or_global
-from app.models import Category, Employee, EmployeeAttributeSchema, EntityAlias
+from app.models import (
+    Category,
+    Employee,
+    EmployeeAttributeSchema,
+    EntityAlias,
+    PolicyYear,
+)
 from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
@@ -637,6 +643,20 @@ def match_policy_year(
         if pending_in_batch >= COMMIT_BATCH_SIZE:
             db.flush()
             pending_in_batch = 0
+
+    db.flush()
+
+    # Matching changed who is covered at what SI, so keep underwriting cases in
+    # step in the SAME transaction (slip upload, roster upload, ADC, setup
+    # confirm and manual re-runs all route through here). No-op unless a
+    # product carries a Non-Evidence Limit. Local import: underwriting reads
+    # eligible SI through insurer_listings, which imports this module's alias
+    # helpers.
+    from app.services.underwriting import refresh_underwriting_cases
+
+    policy_year = db.get(PolicyYear, policy_year_id)
+    if policy_year is not None:
+        refresh_underwriting_cases(db, policy_year)
 
     duration_ms = int((time.monotonic() - started) * 1000)
     return MatchSummary(

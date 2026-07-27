@@ -56,6 +56,9 @@ export function CoveragePeriodEditor({
   const [fcl, setFcl] = useState<string>(
     term.free_cover_limit != null ? String(term.free_cover_limit) : "",
   );
+  const [nelAge, setNelAge] = useState<string>(
+    term.nel_age_limit != null ? String(term.nel_age_limit) : "",
+  );
   const setTerm = useSetProductTerm(policyYearId);
   const resetTerm = useResetProductTerm(policyYearId);
   // Reset (DELETE) clears the whole row incl. the activation-locked coverage
@@ -74,7 +77,9 @@ export function CoveragePeriodEditor({
     (gstOpinion === "include" && parsedRate !== term.gst_rate);
   const parsedFcl = fcl.trim() === "" ? null : Number(fcl.replace(/,/g, ""));
   const fclDirty = parsedFcl !== term.free_cover_limit;
-  const dirty = datesDirty || gstDirty || fclDirty;
+  const parsedNelAge = nelAge.trim() === "" ? null : Number(nelAge);
+  const nelAgeDirty = parsedNelAge !== term.nel_age_limit;
+  const dirty = datesDirty || gstDirty || fclDirty || nelAgeDirty;
 
   const datesValid = Boolean(start) && Boolean(end) && end >= start;
   const rateValid =
@@ -83,14 +88,18 @@ export function CoveragePeriodEditor({
     (Number.isFinite(parsedRate) && parsedRate >= 0 && parsedRate <= 100);
   const fclValid =
     parsedFcl === null || (Number.isFinite(parsedFcl) && parsedFcl >= 0);
-  const valid = datesValid && rateValid && fclValid;
+  const nelAgeValid =
+    parsedNelAge === null ||
+    (Number.isInteger(parsedNelAge) && parsedNelAge >= 1 && parsedNelAge <= 120);
+  const valid = datesValid && rateValid && fclValid && nelAgeValid;
   const busy = setTerm.isPending || resetTerm.isPending;
   // The server row exists in some non-default form (dates or a GST opinion).
   const hasOverride =
     !term.is_default ||
     term.gst_included !== null ||
     term.gst_rate != null ||
-    term.free_cover_limit != null;
+    term.free_cover_limit != null ||
+    term.nel_age_limit != null;
 
   const save = async () => {
     try {
@@ -106,6 +115,7 @@ export function CoveragePeriodEditor({
             }
           : {}),
         ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
+        ...(nelAgeDirty ? { nelAgeLimit: parsedNelAge } : {}),
       });
       toast.success(`Updated ${term.code} terms`);
     } catch (err) {
@@ -186,6 +196,27 @@ export function CoveragePeriodEditor({
               onChange={(e) => setFcl(e.target.value)}
               placeholder="No limit"
               aria-label={`${term.code} free cover limit`}
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">NEL age</Label>
+            <InfoHint>
+              Non-Evidence-Limit age (age next birthday). Members at or above
+              it require the insurer's underwriting regardless of sum insured
+              — a new hire has nothing guaranteed; an existing member keeps
+              last year's covered sum. Auto-filled from the placement slip
+              ("age 69 last birthday" → 70). Blank = no age gate.
+            </InfoHint>
+            <Input
+              type="number"
+              min={1}
+              max={120}
+              className="w-[80px]"
+              value={nelAge}
+              onChange={(e) => setNelAge(e.target.value)}
+              placeholder="—"
+              aria-label={`${term.code} NEL age limit`}
             />
           </div>
         </div>

@@ -152,6 +152,7 @@ def clone_policy_year_config(
                 gst_included=t.gst_included,
                 gst_rate=t.gst_rate,
                 free_cover_limit=t.free_cover_limit,
+                nel_age_limit=t.nel_age_limit,
                 policy_number=None,
             )
         )

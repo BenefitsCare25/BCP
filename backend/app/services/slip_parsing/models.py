@@ -25,6 +25,10 @@ class PolicyHeader:
     # "last birthday"/"ALB" add one (age N ALB = age N+1 ANB).
     age_limit_no_underwriting: str | None = None  # from the Non-Evidence Limit row
     employee_age_limit: str | None = None  # "renewable up to age N" in Eligibility
+    # Dollar amount from the Non-Evidence Limit row ("Sum insured exceeding
+    # S$500,000 … requires underwriting" → 500000.0). Auto-fills the product's
+    # free cover limit on upload; None when the sheet states no NEL.
+    non_evidence_limit: float | None = None
 
 
 @dataclass(frozen=True)

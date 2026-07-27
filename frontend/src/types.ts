@@ -176,6 +176,9 @@ export interface ProductTerm {
   gst_rate: number | null;
   // Free cover limit (underwriting): SI auto-accepted without medicals.
   free_cover_limit: number | null;
+  // Non-Evidence-Limit age (ANB): members at/above it require underwriting
+  // regardless of sum insured. Null = no age gate.
+  nel_age_limit: number | null;
   // Insurer-issued policy number for this product's placement.
   policy_number: string | null;
 }

@@ -145,10 +145,14 @@ def get_summary(
         db, Dependant.policy_year_id, Dependant, year_ids,
         Dependant.status == DEPENDANT_STATUS_PENDING,
     )
-    # Members above free-cover limit still awaiting the insurer's U/W decision.
+    # Members above a Non-Evidence Limit still awaiting the insurer's decision.
+    # `postponed` counts too — the insurer deferred, so the excess is still
+    # undecided everywhere else (report_uw_amounts keeps reporting it pending).
     uw_pending = _grouped_count(
         db, UnderwritingCase.policy_year_id, UnderwritingCase, year_ids,
-        UnderwritingCase.status == UnderwritingStatus.pending,
+        UnderwritingCase.status.in_(
+            [UnderwritingStatus.pending, UnderwritingStatus.postponed]
+        ),
     )
 
     unmatched = _unmatched_by_year(db, year_ids)

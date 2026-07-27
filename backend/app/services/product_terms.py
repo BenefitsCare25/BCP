@@ -34,6 +34,8 @@ class ResolvedTerm:
     gst_rate: float | None = None
     # Free cover limit (underwriting) — None = no FCL.
     free_cover_limit: float | None = None
+    # NEL age (ANB) — members at/above it require underwriting. None = no gate.
+    nel_age_limit: int | None = None
     # Insurer-issued policy number — None until the placement is issued.
     policy_number: str | None = None
 
@@ -126,11 +128,53 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
                 gst_included=term.gst_included if term else None,
                 gst_rate=term.gst_rate if term else None,
                 free_cover_limit=term.free_cover_limit if term else None,
+                nel_age_limit=term.nel_age_limit if term else None,
                 policy_number=term.policy_number if term else None,
             )
         )
     out.sort(key=lambda r: (r.code, r.display_name))
     return out
+
+
+def autofill_nel_terms(
+    db: Session,
+    policy_year_id: str,
+    product_id: str,
+    nel_amount: float | None,
+    nel_age: int | None,
+) -> bool:
+    """Write slip-extracted Non-Evidence-Limit values (FCL dollar amount +
+    no-underwriting age) onto the product's term row — filling blanks only,
+    never overwriting a broker's manual entry. Flush-owned by the caller.
+
+    Scraped values are range-checked against the same bounds the API enforces
+    (``ProductTermUpdate``). An out-of-range figure isn't just wrong data: the
+    terms editor gates its single Save button on validity, so one bad autofill
+    would block the broker from saving that product's dates or GST either.
+    """
+    if nel_amount is not None and nel_amount < 0:
+        nel_amount = None
+    if nel_age is not None and not (1 <= nel_age <= 120):
+        nel_age = None
+    if nel_amount is None and nel_age is None:
+        return False
+    term = db.execute(
+        select(ProductTerm).where(
+            ProductTerm.policy_year_id == policy_year_id,
+            ProductTerm.product_id == product_id,
+        )
+    ).scalar_one_or_none()
+    changed = False
+    if term is None:
+        term = ProductTerm(policy_year_id=policy_year_id, product_id=product_id)
+        db.add(term)
+    if nel_amount is not None and term.free_cover_limit is None:
+        term.free_cover_limit = float(nel_amount)
+        changed = True
+    if nel_age is not None and term.nel_age_limit is None:
+        term.nel_age_limit = int(nel_age)
+        changed = True
+    return changed
 
 
 def _envelope_from_pairs(

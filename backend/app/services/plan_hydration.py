@@ -7,6 +7,7 @@ plan traversal (and stay free of an import cycle).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 
 from sqlalchemy import select
@@ -18,7 +19,7 @@ from app.models.product import Product
 from app.schemas.api import MatchedPlan, PlanFinancials, VoluntaryRateBand
 from app.services.coverage_resolver import load_overrides, resolve_plan
 from app.services.product_terms import product_gst_multipliers
-from app.services.roster_attributes import age_from_attrs, band_for_age
+from app.services.roster_attributes import age_from_attrs, band_for_age, first_value
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,84 @@ def basis_amount(pa: dict) -> float | None:
         except ValueError:
             return None
     return None
+
+
+# "36 times basic monthly salary" / "24x basic monthly salary" / "2 X annual
+# salary" — the leading number is the multiple, and the phrase it qualifies is
+# captured with it. Anchoring on the salary phrase matters twice over: a bare
+# "(\d+)\s*(x|times)" latches onto the digits inside a grouped amount ("S$100,000
+# x 2" → "000 x" → multiple 0), and reading "annual" from the WHOLE basis string
+# mis-scales a compound basis ("24 times basic monthly salary or 2 times annual
+# salary" would gross the 24x by 12).
+_SALARY_MULTIPLE = re.compile(
+    r"(?<![\d,.])(\d+(?:\.\d+)?)\s*(?:x|times)\s+([a-z\s']{0,40}?salary)",
+    re.IGNORECASE,
+)
+
+# Roster key spellings for the member's monthly salary (roster_parser maps
+# "Monthly Salary" → "salary"; the others tolerate hand-built rosters).
+SALARY_KEYS: tuple[str, ...] = ("salary", "monthly_salary", "basic_salary")
+
+
+def salary_from_attrs(attribute_values: dict | None) -> float | None:
+    """Monthly salary as a number from a roster ``attribute_values`` blob.
+
+    Roster cells arrive as floats or display strings ("5,500", "S$5,500.00");
+    strip currency/grouping noise before parsing. None when absent/unparseable.
+    """
+    raw = first_value(attribute_values or {}, SALARY_KEYS)
+    if raw is None:
+        return None
+    cleaned = re.sub(r"[^0-9.]", "", raw)
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def salary_multiple(pa: dict) -> tuple[float, bool] | None:
+    """``(multiple, is_annual)`` from an 'N times/x … salary' basis, else None.
+
+    ``is_annual`` is read from the phrase THIS multiple qualifies, not the whole
+    basis string, so a compound basis quoting both a monthly and an annual
+    multiple can't cross-contaminate. A non-positive multiple is rejected: it
+    can only come from a misparse, and returning 0 would publish a $0 sum
+    insured as if it were a real figure.
+    """
+    b = pa.get("basis")
+    if not isinstance(b, str) or "salary" not in b.lower():
+        return None
+    m = _SALARY_MULTIPLE.search(b)
+    if m is None:
+        return None
+    mult = float(m.group(1))
+    if mult <= 0:
+        return None
+    return mult, "annual" in m.group(2).lower()
+
+
+def resolve_basis_amount(pa: dict, attribute_values: dict | None) -> float | None:
+    """Per-member sum assured: a plain-amount basis, else a salary-multiple
+    basis resolved against the member's roster monthly salary.
+
+    An 'annual salary' multiple applies to 12x the monthly figure (rosters
+    store monthly). None when the basis is relative ('50% of GTL'), tiered
+    medical, or the member has no salary on file.
+    """
+    amount = basis_amount(pa)
+    if amount is not None:
+        return amount
+    parsed = salary_multiple(pa)
+    if parsed is None:
+        return None
+    mult, is_annual = parsed
+    salary = salary_from_attrs(attribute_values)
+    if salary is None:
+        return None
+    if is_annual:
+        salary *= 12.0
+    return salary * mult
 
 
 def voluntary_rate_for_age(bands: list | None, age: int | None) -> float | None:

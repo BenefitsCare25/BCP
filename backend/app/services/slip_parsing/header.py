@@ -69,6 +69,20 @@ def _find_nel_text(rows: list[list[Cell]]) -> str | None:
     return None
 
 
+def _nel_amount(text: str | None) -> float | None:
+    """The NEL dollar figure: first S$ amount in the row ("Sum insured
+    exceeding S$500,000 or existing FCL …" → 500000.0)."""
+    if not text:
+        return None
+    m = re.search(r"S?\$\s*([\d,]+(?:\.\d+)?)", str(text))
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+
+
 def _header_value(row: list[Cell], exclude: str) -> str | None:
     """First non-empty cell on a label row that isn't the label itself.
 
@@ -120,7 +134,9 @@ def _scan_policy_header(rows: list[list[Cell]]) -> _HeaderScan:
     # Non-Evidence Limit row.
     vals["last_entry_age"] = _normalize_age(vals["last_entry_age"])
     vals["employee_age_limit"] = _normalize_age(_up_to_age(vals["eligibility"]))
-    vals["age_limit_no_underwriting"] = _age_from_birthday(_find_nel_text(rows))
+    nel_text = _find_nel_text(rows)
+    vals["age_limit_no_underwriting"] = _age_from_birthday(nel_text)
+    vals["non_evidence_limit"] = _nel_amount(nel_text)
     return _HeaderScan(PolicyHeader(**vals), basis_row)
 
 

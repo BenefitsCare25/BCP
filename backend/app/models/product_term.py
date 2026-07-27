@@ -24,7 +24,15 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Float, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, new_uuid
@@ -59,6 +67,10 @@ class ProductTerm(Base, TimestampMixin):
     # Free cover limit: sum insured auto-accepted without medical underwriting.
     # None = no FCL (everything auto-accepted). Drives underwriting-case sync.
     free_cover_limit: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Non-Evidence-Limit age (age NEXT birthday, the repo's canonical age
+    # convention): members at/above this ANB require underwriting regardless of
+    # sum insured ("… or age 69 (age last birthday)" → 70). None = no age gate.
+    nel_age_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Insurer-issued policy number for this product's placement. Operational
     # metadata (issued after activation) — editable on active years, like FCL.
     policy_number: Mapped[str | None] = mapped_column(String(64), nullable=True)

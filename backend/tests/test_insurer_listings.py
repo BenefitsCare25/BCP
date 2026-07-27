@@ -21,6 +21,7 @@ from io import BytesIO  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -36,6 +37,7 @@ from app.models import (  # noqa: E402
     Product,
     ProductTerm,
     UnderwritingCase,
+    UnderwritingReview,
 )
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 
@@ -221,6 +223,7 @@ def _reset_uw():
     yield
     with SessionLocal() as s:
         s.query(UnderwritingCase).delete()
+        s.query(UnderwritingReview).delete()
         s.commit()
 
 
@@ -453,16 +456,24 @@ def test_underwriting_refresh_and_decision_flow(client: TestClient) -> None:
     queue = client.get(
         f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
     ).json()
-    assert queue["total"] == 3 and queue["pending"] == 3
+    # Reviews group by (life, insurer): IL-1 the member, IL-1's spouse, IL-2.
+    assert queue["total"] == 3 and queue["open"] == 3
     by_subject = {
         (i["staff_id"], i["subject_type"]): i for i in queue["items"]
     }
     fam = by_subject[("IL-1", "employee")]
-    assert fam["eligible_si"] == 100000
-    assert fam["accepted_si"] == 50000  # auto-covered at FCL
-    assert fam["pending_si"] == 50000
+    assert fam["insurer"] == "TestSure"
+    assert fam["relationship"] == "Self"
+    assert fam["status"] == "pending_requirements"
+    fam_line = fam["cases"][0]
+    assert fam_line["requested_si"] == 100000
+    assert fam_line["guaranteed_si"] == 50000  # auto-covered at FCL
+    assert fam_line["accepted_si"] == 50000
+    assert fam_line["pending_si"] == 50000
     spouse = by_subject[("IL-1", "dependant")]
-    assert spouse["eligible_si"] == 60000 and spouse["pending_si"] == 10000
+    assert spouse["relationship"] == "Spouse"
+    assert spouse["cases"][0]["requested_si"] == 60000
+    assert spouse["cases"][0]["pending_si"] == 10000
 
     # Listing reflects the pending amounts.
     res = client.get(
@@ -474,11 +485,15 @@ def test_underwriting_refresh_and_decision_flow(client: TestClient) -> None:
 
     # Broker records the insurer's acceptance at 80k.
     res = client.patch(
-        f"/api/v1/underwriting/cases/{fam['id']}",
-        json={"status": "accepted", "accepted_si": 80000, "remarks": "Loaded"},
+        f"/api/v1/underwriting/cases/{fam_line['id']}",
+        json={
+            "status": "approved_standard",
+            "accepted_si": 80000,
+            "remarks": "Loaded",
+        },
     )
     assert res.status_code == 200, res.text
-    assert res.json()["pending_si"] == 0
+    assert res.json()["cases"][0]["pending_si"] == 0
 
     res = client.get(
         f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure"
@@ -486,6 +501,15 @@ def test_underwriting_refresh_and_decision_flow(client: TestClient) -> None:
     rows = {r["Staff ID"]: r for r in _sheet_rows(res.content)}
     assert rows["IL-1"]["TLIF EE Sum Insured Pending U/W"] == 0
     assert rows["IL-1"]["TLIF EE Last Accepted Sum Insured"] == 80000
+
+    # Case workflow status + requirements live on the review.
+    res = client.patch(
+        f"/api/v1/underwriting/reviews/{fam['id']}",
+        json={"status": "pending_insurer", "requirements": "Full medical report"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "pending_insurer"
+    assert res.json()["requirements"] == "Full medical report"
 
     # Re-sync keeps the decided case (no duplicate, nothing reopened).
     res = client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
@@ -495,14 +519,13 @@ def test_underwriting_refresh_and_decision_flow(client: TestClient) -> None:
 def test_fcl_change_resyncs_pending_case(client: TestClient) -> None:
     # A pending case auto-accepts at the FCL; moving the FCL (without any change
     # to eligible SI) must re-sync the auto-accepted amount, not leave it stale.
+    # The product-terms PUT now runs the sync itself — no manual refresh needed.
     client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
     try:
         client.put(
             f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
             json={"free_cover_limit": 70000},
         )
-        res = client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
-        assert res.json()["updated"] >= 1
         queue = client.get(
             f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
         ).json()
@@ -510,13 +533,395 @@ def test_fcl_change_resyncs_pending_case(client: TestClient) -> None:
             i for i in queue["items"]
             if i["staff_id"] == "IL-1" and i["subject_type"] == "employee"
         )
-        assert emp["accepted_si"] == 70000  # re-synced to the new FCL
-        assert emp["pending_si"] == 30000
+        line = emp["cases"][0]
+        assert line["guaranteed_si"] == 70000  # re-synced to the new FCL
+        assert line["accepted_si"] == 70000
+        assert line["pending_si"] == 30000
     finally:
         client.put(
             f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
             json={"free_cover_limit": 50000},
         )
+
+
+def test_age_trigger_new_hire_vs_existing(client: TestClient) -> None:
+    """NEL age gate: a new hire above the age gets guaranteed 0 (whole SI
+    underwritten); an existing life keeps last year's covered SI and only the
+    increase is pending."""
+    from app.models import UnderwritingReview
+
+    PREV_PY = "00000000-0000-0000-0000-0000000i1901"
+    PREV_CAT = "00000000-0000-0000-0000-0000000i1902"
+    PREV_EMP = "00000000-0000-0000-0000-0000000i1903"
+    NEW_EMP = "00000000-0000-0000-0000-0000000i1904"
+    with SessionLocal() as s:
+        # Previous benefit year: IL-2 was covered at 80k on the same product.
+        s.add(PolicyYear(
+            id=PREV_PY, client_id=CLIENT_ID, year=2033,
+            start_date=date(2033, 1, 1), end_date=date(2033, 12, 31),
+            status=PolicyYearStatus.archived,
+        ))
+        s.flush()
+        s.add(Category(
+            id=PREV_CAT, policy_year_id=PREV_PY, product_id=LIF_PROD,
+            display_name="All staff", raw_description="All staff",
+            plan_assignments={"plan_code": "1", "basis": "80000"},
+            source="manual", status="confirmed",
+        ))
+        s.flush()
+        s.add(Employee(
+            id=PREV_EMP, client_id=CLIENT_ID, policy_year_id=PREV_PY,
+            staff_id="IL-2", employee_name="So Lo",
+            attribute_values={"date_of_birth": "1960-06-01"},
+            derived_attribute_values={},
+            matched_categories=[{
+                "category_id": PREV_CAT, "product_code": "TLIF",
+                "method": "rule", "confidence": 1.0,
+            }],
+            source="csv_import", status="active",
+        ))
+        # Current year: IL-2 (existing, ANB 75 at 2034-01-01) + IL-9 (new hire,
+        # same age) both at 100k eligible.
+        emp2 = s.get(Employee, EMP_SOLO)
+        emp2.attribute_values = {
+            **(emp2.attribute_values or {}), "date_of_birth": "1960-06-01",
+        }
+        s.add(Employee(
+            id=NEW_EMP, client_id=CLIENT_ID, policy_year_id=PY_ID,
+            staff_id="IL-9", employee_name="New Hire",
+            attribute_values={"date_of_birth": "1960-06-01"},
+            derived_attribute_values={},
+            matched_categories=[{
+                "category_id": LIF_CAT, "product_code": "TLIF",
+                "method": "rule", "confidence": 1.0,
+            }],
+            source="csv_import", status="active",
+        ))
+        s.commit()
+    try:
+        res = client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"nel_age_limit": 70},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["nel_age_limit"] == 70
+
+        queue = client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()
+        by_subject = {
+            (i["staff_id"], i["subject_type"]): i for i in queue["items"]
+        }
+        # Existing life: guaranteed = last year's covered SI (80k), only the
+        # 20k increase pending.
+        existing = by_subject[("IL-2", "employee")]["cases"][0]
+        assert existing["guaranteed_si"] == 80000
+        assert existing["pending_si"] == 20000
+        # New hire above the age gate: nothing guaranteed, whole SI pending.
+        new_hire = by_subject[("IL-9", "employee")]["cases"][0]
+        assert new_hire["guaranteed_si"] == 0
+        assert new_hire["pending_si"] == 100000
+        # IL-1 (no DOB → age unknown) stays on the plain SI trigger.
+        fam = by_subject[("IL-1", "employee")]["cases"][0]
+        assert fam["guaranteed_si"] == 50000
+    finally:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"nel_age_limit": None},
+        )
+        with SessionLocal() as s:
+            s.query(UnderwritingCase).delete()
+            s.query(UnderwritingReview).delete()
+            for model, oid in (
+                (Employee, NEW_EMP), (Employee, PREV_EMP),
+                (Category, PREV_CAT), (PolicyYear, PREV_PY),
+            ):
+                obj = s.get(model, oid)
+                if obj is not None:
+                    s.delete(obj)
+            emp2 = s.get(Employee, EMP_SOLO)
+            attrs = dict(emp2.attribute_values or {})
+            attrs.pop("date_of_birth", None)
+            emp2.attribute_values = attrs
+            s.commit()
+
+
+def test_salary_multiple_basis_feeds_underwriting(client: TestClient) -> None:
+    """A '24 times basic monthly salary' basis resolves against the roster
+    salary, so salary-based lump-sum products trigger underwriting too."""
+    with SessionLocal() as s:
+        cat = s.get(Category, LIF_CAT)
+        original = dict(cat.plan_assignments or {})
+        cat.plan_assignments = {
+            **original, "basis": "24 times basic monthly salary",
+        }
+        emp = s.get(Employee, EMP_FAMILY)
+        emp.attribute_values = {**(emp.attribute_values or {}), "salary": "5,000"}
+        s.commit()
+    try:
+        client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+        queue = client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()
+        by_subject = {
+            (i["staff_id"], i["subject_type"]): i for i in queue["items"]
+        }
+        # 24 x 5000 = 120k vs FCL 50k → 70k pending.
+        fam = by_subject[("IL-1", "employee")]["cases"][0]
+        assert fam["requested_si"] == 120000
+        assert fam["pending_si"] == 70000
+        # IL-2 has no salary on file → SI unresolvable → no employee case.
+        assert ("IL-2", "employee") not in by_subject
+    finally:
+        with SessionLocal() as s:
+            cat = s.get(Category, LIF_CAT)
+            cat.plan_assignments = original
+            emp = s.get(Employee, EMP_FAMILY)
+            attrs = dict(emp.attribute_values or {})
+            attrs.pop("salary", None)
+            emp.attribute_values = attrs
+            s.commit()
+
+
+def test_nel_autofill_fills_blanks_only() -> None:
+    from app.services.product_terms import autofill_nel_terms
+
+    with SessionLocal() as s:
+        # LIF has FCL 50000 set manually and no age: amount must NOT be
+        # overwritten, age fills in.
+        assert autofill_nel_terms(s, PY_ID, LIF_PROD, 999999.0, 70) is True
+        s.flush()
+        term = s.execute(
+            select(ProductTerm).where(
+                ProductTerm.policy_year_id == PY_ID,
+                ProductTerm.product_id == LIF_PROD,
+            )
+        ).scalar_one()
+        assert term.free_cover_limit == 50000.0
+        assert term.nel_age_limit == 70
+        # A product with no term row gets one created with both values.
+        assert autofill_nel_terms(s, PY_ID, ORP_PROD, 300000.0, 70) is True
+        s.flush()
+        orp = s.execute(
+            select(ProductTerm).where(
+                ProductTerm.policy_year_id == PY_ID,
+                ProductTerm.product_id == ORP_PROD,
+            )
+        ).scalar_one()
+        assert orp.free_cover_limit == 300000.0 and orp.nel_age_limit == 70
+        s.rollback()
+
+
+def test_empty_prior_year_is_not_treated_as_a_cohort_of_new_hires(
+    client: TestClient,
+) -> None:
+    """A prior policy year that carries no roster (config-only, or not yet
+    uploaded) proves nothing about who is new. Trusting it would mark EVERY
+    life a new hire, and the age gate would then underwrite each senior's whole
+    sum insured instead of just the increase."""
+    EMPTY_PY = "00000000-0000-0000-0000-0000000i1801"
+    with SessionLocal() as s:
+        s.add(PolicyYear(
+            id=EMPTY_PY, client_id=CLIENT_ID, year=2033,
+            start_date=date(2033, 1, 1), end_date=date(2033, 12, 31),
+            status=PolicyYearStatus.archived,
+        ))
+        emp = s.get(Employee, EMP_FAMILY)
+        emp.attribute_values = {
+            **(emp.attribute_values or {}), "date_of_birth": "1955-01-01",
+        }
+        s.commit()
+    try:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"nel_age_limit": 70},
+        )
+        review = next(
+            i for i in client.get(
+                f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+            ).json()["items"]
+            if i["staff_id"] == "IL-1" and i["subject_type"] == "employee"
+        )
+        line = review["cases"][0]
+        # Unknown history → the FCL floor, NOT a guaranteed-0 new hire.
+        assert line["guaranteed_si"] == 50000
+        assert line["pending_si"] == 50000
+    finally:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"nel_age_limit": None},
+        )
+        with SessionLocal() as s:
+            emp = s.get(Employee, EMP_FAMILY)
+            attrs = dict(emp.attribute_values or {})
+            attrs.pop("date_of_birth", None)
+            emp.attribute_values = attrs
+            year = s.get(PolicyYear, EMPTY_PY)
+            if year is not None:
+                s.delete(year)
+            s.commit()
+
+
+def test_approval_without_amount_keeps_the_approved_excess(
+    client: TestClient,
+) -> None:
+    """Approving with no explicit figure means the insurer took the request as
+    asked — defaulting to the guaranteed floor would mark the case decided
+    (pending → 0) while silently dropping the approved excess from cover."""
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    review = next(
+        i for i in client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()["items"]
+        if i["staff_id"] == "IL-1" and i["subject_type"] == "employee"
+    )
+    line = review["cases"][0]
+    assert line["guaranteed_si"] == 50000 and line["requested_si"] == 100000
+
+    res = client.patch(
+        f"/api/v1/underwriting/cases/{line['id']}",
+        json={"status": "approved_standard"},
+    )
+    assert res.status_code == 200, res.text
+    out = res.json()["cases"][0]
+    assert out["accepted_si"] == 100000  # the full request, not the floor
+    assert out["pending_si"] == 0
+    rows = {
+        r["Staff ID"]: r for r in _sheet_rows(
+            client.get(
+                f"/api/v1/policy-years/{PY_ID}/reports/employee-listing"
+                "?insurer=TestSure"
+            ).content
+        )
+    }
+    assert rows["IL-1"]["TLIF EE Last Accepted Sum Insured"] == 100000
+
+    # A rejection is the opposite default: the excess is refused, so only the
+    # guaranteed amount stays in force.
+    res = client.patch(
+        f"/api/v1/underwriting/cases/{line['id']}", json={"status": "rejected"}
+    )
+    assert res.json()["cases"][0]["accepted_si"] == 50000
+
+
+def test_sync_keeps_reviews_carrying_broker_notes(client: TestClient) -> None:
+    """Retiring a life's pending lines must not bin the requirements text and
+    workflow position the broker typed — those are cancelled, not deleted."""
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    review = client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()["items"][0]
+    client.patch(
+        f"/api/v1/underwriting/reviews/{review['id']}",
+        json={"status": "pending_insurer", "requirements": "Full medical report"},
+    )
+    try:
+        # Raise the FCL past everyone → every pending line is moot.
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"free_cover_limit": 1_000_000},
+        )
+        queue = client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()
+        kept = next((i for i in queue["items"] if i["id"] == review["id"]), None)
+        assert kept is not None, "a review with broker notes was deleted"
+        assert kept["status"] == "cancelled"
+        assert kept["requirements"] == "Full medical report"
+        assert kept["cases"] == []
+        # Untouched reviews are still cleaned up.
+        assert len(queue["items"]) == 1
+    finally:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"free_cover_limit": 50000},
+        )
+
+
+def test_reset_product_term_clears_underwriting(client: TestClient) -> None:
+    """DELETE drops the row's NEL values, so the cases are moot. Undecided
+    lines hold a guaranteed-SI snapshot, so without a re-sync the listing keeps
+    reporting a pending excess for a product with no limit."""
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    assert client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()["total"] >= 1
+    try:
+        assert client.delete(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}"
+        ).status_code == 204
+        assert client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()["total"] == 0
+        rows = {
+            r["Staff ID"]: r for r in _sheet_rows(
+                client.get(
+                    f"/api/v1/policy-years/{PY_ID}/reports/employee-listing"
+                    "?insurer=TestSure"
+                ).content
+            )
+        }
+        assert rows["IL-1"]["TLIF EE Sum Insured Pending U/W"] == 0
+    finally:
+        client.put(
+            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
+            json={"free_cover_limit": 50000},
+        )
+
+
+def test_scoped_refresh_leaves_other_households_alone() -> None:
+    """A per-member trigger (one enrollment confirm) must not retire cases for
+    members whose coverage it never recomputed."""
+    from app.models import PolicyYear
+    from app.services.underwriting import refresh_underwriting_cases
+
+    with SessionLocal() as s:
+        py = s.get(PolicyYear, PY_ID)
+        refresh_underwriting_cases(s, py)
+        s.commit()
+        before = s.query(UnderwritingCase).count()
+        assert before >= 2
+
+        # Scope to IL-1 only. IL-2's case must survive untouched even though
+        # this run never looked at them.
+        refresh_underwriting_cases(s, py, {EMP_FAMILY})
+        s.commit()
+        assert s.query(UnderwritingCase).count() == before
+        solo = s.query(UnderwritingCase).filter_by(employee_id=EMP_SOLO).one()
+        assert solo.guaranteed_si == 50000
+        s.query(UnderwritingCase).delete()
+        s.query(UnderwritingReview).delete()
+        s.commit()
+
+
+def test_orphan_cases_are_adopted_on_read(client: TestClient) -> None:
+    """Rows written before the review model carry review_id NULL and no data
+    migration backfills them (it can't reach per-firm schemas) — the queue must
+    surface them rather than reporting an empty page over live data."""
+    with SessionLocal() as s:
+        s.add(UnderwritingCase(
+            client_id=CLIENT_ID, policy_year_id=PY_ID, product_id=LIF_PROD,
+            employee_id=EMP_FAMILY, eligible_si=100000.0, accepted_si=50000.0,
+            status="pending",  # legacy row: no review_id, no guaranteed_si
+        ))
+        s.commit()
+    queue = client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()
+    assert queue["total"] == 1
+    review = queue["items"][0]
+    assert review["insurer"] == "TestSure"
+    line = review["cases"][0]
+    # The legacy FCL in accepted_si is read as the guarantee, so the excess is
+    # still reported pending rather than silently vanishing.
+    assert line["guaranteed_si"] == 50000 and line["pending_si"] == 50000
+    # And it is decidable (it used to 409 for having no review).
+    res = client.patch(
+        f"/api/v1/underwriting/cases/{line['id']}",
+        json={"status": "approved_standard", "accepted_si": 90000},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["cases"][0]["accepted_si"] == 90000
 
 
 # ── Readiness ────────────────────────────────────────────────────────────────
@@ -730,44 +1135,84 @@ def test_report_uw_amounts_refresh_independent() -> None:
     assert report_uw_amounts(40000, 50000, None) == (0.0, 40000)
     # A decision wins: accepted figure stands, capped at eligible, nothing pending.
     accepted = UnderwritingCase(
-        accepted_si=80000, eligible_si=100000, status=UnderwritingStatus.accepted,
+        accepted_si=80000, eligible_si=100000,
+        status=UnderwritingStatus.approved_standard,
     )
     assert report_uw_amounts(100000, 50000, accepted) == (0.0, 80000)
     declined = UnderwritingCase(
-        accepted_si=50000, eligible_si=100000, status=UnderwritingStatus.declined,
+        accepted_si=50000, eligible_si=100000, status=UnderwritingStatus.rejected,
     )
     assert report_uw_amounts(100000, 50000, declined) == (0.0, 50000)
+    # Legacy vocabulary (pre review model) still reads as decided.
+    legacy = UnderwritingCase(
+        accepted_si=80000, eligible_si=100000, status=UnderwritingStatus.accepted,
+    )
+    assert report_uw_amounts(100000, 50000, legacy) == (0.0, 80000)
+    # An undecided line with a computed guarantee (age trigger / last covered)
+    # is in force at that guarantee, not the FCL.
+    pending = UnderwritingCase(
+        accepted_si=0.0, guaranteed_si=0.0, eligible_si=100000,
+        status=UnderwritingStatus.pending,
+    )
+    assert report_uw_amounts(100000, 50000, pending) == (100000, 0.0)
+    # Postponed = still awaiting the insurer — excess stays pending.
+    postponed = UnderwritingCase(
+        accepted_si=50000, guaranteed_si=50000, eligible_si=100000,
+        status=UnderwritingStatus.postponed,
+    )
+    assert report_uw_amounts(100000, 50000, postponed) == (50000, 50000)
 
 
 def test_decide_case_validation_and_capping(client: TestClient) -> None:
     client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
-    case_id = client.get(
+    review = client.get(
         f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
-    ).json()["items"][0]["id"]
+    ).json()["items"][0]
+    case_id = review["cases"][0]["id"]
 
-    # Bad status → 422.
-    assert client.patch(
-        f"/api/v1/underwriting/cases/{case_id}", json={"status": "maybe"}
-    ).status_code == 422
+    # Bad status → 422 (legacy vocabulary is not accepted on writes).
+    for bad in ("maybe", "accepted", "declined"):
+        assert client.patch(
+            f"/api/v1/underwriting/cases/{case_id}", json={"status": bad}
+        ).status_code == 422, bad
     # Non-existent case → 404.
     assert client.patch(
-        "/api/v1/underwriting/cases/does-not-exist", json={"status": "accepted"}
+        "/api/v1/underwriting/cases/does-not-exist",
+        json={"status": "approved_standard"},
     ).status_code == 404
     # accepted_si is capped at eligible_si.
     res = client.patch(
         f"/api/v1/underwriting/cases/{case_id}",
-        json={"status": "accepted", "accepted_si": 9_999_999},
+        json={"status": "approved_standard", "accepted_si": 9_999_999},
     )
-    body = res.json()
-    assert body["accepted_si"] == body["eligible_si"]
-    assert body["decided_on"] is not None  # auto-stamped on a decision
-    # Declined → pending 0, decided_on stamped.
+    line = res.json()["cases"][0]
+    assert line["accepted_si"] == line["requested_si"]
+    assert line["decided_on"] is not None  # auto-stamped on a decision
+    # Rejected → excess refused, the guaranteed amount stays in force.
     res = client.patch(
         f"/api/v1/underwriting/cases/{case_id}",
-        json={"status": "declined", "remarks": "excess refused"},
+        json={"status": "rejected", "remarks": "excess refused"},
     )
-    assert res.json()["pending_si"] == 0
-    assert res.json()["status"] == "declined"
+    line = res.json()["cases"][0]
+    assert line["pending_si"] == 0
+    assert line["status"] == "rejected"
+    assert line["accepted_si"] == line["guaranteed_si"]
+    # Postponed = undecided: excess back to pending, decided_on cleared.
+    res = client.patch(
+        f"/api/v1/underwriting/cases/{case_id}", json={"status": "postponed"}
+    )
+    line = res.json()["cases"][0]
+    assert line["pending_si"] == line["requested_si"] - line["guaranteed_si"]
+    assert line["decided_on"] is None
+
+    # Review status validation.
+    assert client.patch(
+        f"/api/v1/underwriting/reviews/{review['id']}", json={"status": "nope"}
+    ).status_code == 422
+    assert client.patch(
+        "/api/v1/underwriting/reviews/does-not-exist",
+        json={"status": "completed"},
+    ).status_code == 404
 
 
 def test_refresh_removes_stale_pending_case(client: TestClient) -> None:
@@ -778,12 +1223,12 @@ def test_refresh_removes_stale_pending_case(client: TestClient) -> None:
     assert before >= 1
     try:
         # Raise FCL above every eligible SI → all pending cases become moot.
+        # The product-terms PUT re-syncs in the same transaction, so the queue
+        # (reviews included) empties without a manual refresh.
         client.put(
             f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}",
             json={"free_cover_limit": 1_000_000},
         )
-        res = client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
-        assert res.json()["removed"] == before
         assert client.get(
             f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
         ).json()["total"] == 0
@@ -851,9 +1296,11 @@ def test_decide_case_cross_tenant_404(client: TestClient) -> None:
     # A case created for this client must not be decidable by a user from
     # another client (user_owns → _deny_cross_tenant → 404).
     client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
-    case_id = client.get(
+    review = client.get(
         f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
-    ).json()["items"][0]["id"]
+    ).json()["items"][0]
+    review_id = review["id"]
+    case_id = review["cases"][0]["id"]
 
     def other() -> CurrentUser:
         return CurrentUser(
@@ -864,7 +1311,13 @@ def test_decide_case_cross_tenant_404(client: TestClient) -> None:
     app.dependency_overrides[get_current_user] = other
     try:
         res = TestClient(app).patch(
-            f"/api/v1/underwriting/cases/{case_id}", json={"status": "accepted"}
+            f"/api/v1/underwriting/cases/{case_id}",
+            json={"status": "approved_standard"},
+        )
+        assert res.status_code == 404
+        res = TestClient(app).patch(
+            f"/api/v1/underwriting/reviews/{review_id}",
+            json={"status": "completed"},
         )
         assert res.status_code == 404
     finally:

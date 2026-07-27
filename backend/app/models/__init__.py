@@ -41,7 +41,7 @@ from app.models.report_version import ReportVersion
 from app.models.schema_def import EmployeeAttributeSchema
 from app.models.slip_template_profile import SlipTemplateProfile
 from app.models.stored_document import StoredDocument
-from app.models.underwriting_case import UnderwritingCase
+from app.models.underwriting_case import UnderwritingCase, UnderwritingReview
 from app.models.user import User, UserClientAccess
 
 __all__ = [
@@ -94,6 +94,7 @@ __all__ = [
     "SlipTemplateProfile",
     "StoredDocument",
     "UnderwritingCase",
+    "UnderwritingReview",
     "User",
     "UserClientAccess",
 ]
