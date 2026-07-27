@@ -58,8 +58,9 @@ Add more `<group_id>:<role>` pairs separated by commas for `broker_admin`,
 Access is granted by the platform's OWN user list, not by Entra. A colleague in
 the same Microsoft tenant who is not in `users` authenticates fine with
 Microsoft and is then refused by the API with a coded
-`403 {"code": "no_access"}` — the SPA sends them to `/no-access` and never
-renders the app shell. So the app is safe by default.
+`403 {"code": "no_access"}` — the SPA signs them back out and returns them to
+`/sign-in?denied=true`, which explains why, and never renders the app shell. So
+the app is safe by default.
 
 Close the outer gate too, so an unprovisioned person can't even reach the
 Microsoft consent screen for this app:
@@ -70,7 +71,7 @@ user/group** and assign only the intended users (or a security group).
 
 With assignment required, an unassigned user gets Microsoft's own
 "You can't access this application" page at sign-in. Without it they get as far
-as the `/no-access` page. Provision people in both places: assign the Entra
+as the refused sign-in page. Provision people in both places: assign the Entra
 group AND invite them under `/admin` (the DB row is what grants role + firm).
 
 ## 5. API permissions (for the SPA)
@@ -135,4 +136,4 @@ emergency mitigation — mock-auth in prod has no access control.
 | 401 "no matching JWK" | JWKS cache stale; restart App Service to refetch, or wait 24h. |
 | 401 "token expired" | Client should refresh via MSAL silently — check the SPA console. |
 | All requests fall back to demo role | `INSPRO_ENTRA_GROUP_ROLE_MAP` not set or group membership not provisioned. |
-| Signs in with Microsoft, lands on "You don't have access yet" | Working as designed — no `users` row for that oid/email. Invite them under `/admin`; see §4a. |
+| Signs in with Microsoft, bounced back to sign-in with "Account no access" | Working as designed — no `users` row for that oid/email. Invite them under `/admin`; see §4a. |

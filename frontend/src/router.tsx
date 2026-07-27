@@ -4,6 +4,7 @@ import {
   createRoute,
   createRouter,
   lazyRouteComponent,
+  isRedirect,
   redirect,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/shell/AppShell";
@@ -11,8 +12,8 @@ import {
   GlobalErrorComponent,
   NotFoundComponent,
 } from "@/components/shell/ErrorBoundary";
-import { ENTRA_ENABLED, getActiveAccount } from "@/auth/msal";
-import { NO_ACCESS_PATH, NoAccessError } from "@/api/client";
+import { ENTRA_ENABLED, clearLocalSession, getActiveAccount } from "@/auth/msal";
+import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
 import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
@@ -134,10 +135,6 @@ const SignInPage = lazyRouteComponent(
   () => import("@/routes/auth/sign-in"),
   "SignInPage",
 );
-const NoAccessPage = lazyRouteComponent(
-  () => import("@/routes/auth/no-access"),
-  "NoAccessPage",
-);
 const HomePage = lazyRouteComponent(() => import("@/routes/home"), "HomePage");
 const CompanyDashboardPage = lazyRouteComponent(
   () => import("@/routes/dashboard"),
@@ -147,7 +144,7 @@ const CompanyDashboardPage = lazyRouteComponent(
 // Routes that are reachable without being signed in. Everything else goes
 // through the AppShell which requires an active MSAL account when Entra is
 // enabled.
-const PUBLIC_PATHS = new Set(["/auth/callback", "/sign-in", NO_ACCESS_PATH]);
+const PUBLIC_PATHS = new Set(["/auth/callback", SIGN_IN_PATH]);
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -161,29 +158,18 @@ const authCallbackRoute = createRoute({
 
 const signInRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/sign-in",
-  beforeLoad: () => {
+  path: SIGN_IN_PATH,
+  beforeLoad: ({ search }) => {
+    // `denied` means we just bounced a refused account here — never bounce it
+    // back, even if clearing the local Microsoft session failed. This is what
+    // makes a redirect loop structurally impossible.
+    if ((search as { denied?: unknown }).denied) return;
     // If we're already signed in, skip the render flash and go straight home.
     if (ENTRA_ENABLED && getActiveAccount() !== null) {
       throw redirect({ to: "/" });
     }
   },
   component: SignInPage,
-});
-
-// Signed in with Microsoft, but the platform's user list grants nothing. A
-// ROOT-level route (not under the app shell) so it makes no API calls of its
-// own — otherwise showing it would re-trigger the 403 that sent us here.
-const noAccessRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: NO_ACCESS_PATH,
-  beforeLoad: () => {
-    // Nobody signed in at all → the sign-in page is the right destination.
-    if (ENTRA_ENABLED && getActiveAccount() === null) {
-      throw redirect({ to: "/sign-in" });
-    }
-  },
-  component: NoAccessPage,
 });
 
 // ── Employee portal — a sibling surface with its OWN auth (member OTP token,
@@ -378,14 +364,21 @@ const appLayoutRoute = createRoute({
     // A Microsoft account is not access. The platform grants access from its
     // OWN user list, so resolve /me before rendering anything — otherwise an
     // unprovisioned account lands in the shell and every request 403s.
+    let denied = false;
     try {
       await ensureMe();
     } catch (err) {
-      if (err instanceof NoAccessError) {
-        throw redirect({ to: NO_ACCESS_PATH });
-      }
+      // `redirect` throws — never swallow another route's redirect here.
+      if (isRedirect(err)) throw err;
+      if (err instanceof NoAccessError) denied = true;
       // Backend down / transient: render the app and let the page surface it,
       // rather than locking out a legitimate user on a blip.
+    }
+    if (denied) {
+      // Drop the local Microsoft session so the sign-in page renders instead of
+      // bouncing them back in, then say why they're there.
+      await clearLocalSession();
+      throw redirect({ to: SIGN_IN_PATH, search: DENIED_SEARCH });
     }
   },
   component: AppShell,
@@ -649,7 +642,6 @@ const adminRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   authCallbackRoute,
   signInRoute,
-  noAccessRoute,
   hrSignInRoute,
   hrSetPasswordRoute,
   hrLayoutRoute.addChildren([hrIndexRoute, hrDashboardRoute, hrSecurityRoute]),

@@ -28,8 +28,23 @@ export class UnauthorizedError extends Error {
   }
 }
 
-/** Path of the public "your account isn't provisioned" page. */
-export const NO_ACCESS_PATH = "/no-access";
+export const SIGN_IN_PATH = "/sign-in";
+
+/** Search flag that makes the sign-in page explain why the user is back on it.
+ * Without it a refused account is silently dumped at the login screen right
+ * after a successful Microsoft sign-in, and just tries again.
+ * Boolean, not "1": the router JSON-encodes search values, so a string would
+ * reach the address bar as the noisy `?denied=%221%22`. */
+export const DENIED_SEARCH = { denied: true } as const;
+
+/** True when the current URL is already the "access refused" sign-in page —
+ * the guard against redirecting to where we already are. */
+export function isDeniedSignInUrl(): boolean {
+  return (
+    window.location.pathname === SIGN_IN_PATH &&
+    new URLSearchParams(window.location.search).has("denied")
+  );
+}
 
 /** Identity-level 403 codes: the caller authenticated with Microsoft but the
  * platform grants them nothing. Distinct from a permission 403 on a single
@@ -131,8 +146,9 @@ async function handleUnauthorized(): Promise<never> {
 
 /**
  * Single exit for every non-OK response. 401 → sign-in redirect; an
- * identity-level 403 → `NoAccessError` (the app routes it to the no-access
- * page and suppresses the toast); anything else → the caller's error shape.
+ * identity-level 403 → `NoAccessError` (the app bounces to the refused
+ * sign-in page and suppresses the notification); anything else → the caller's
+ * error shape.
  * Always throws.
  */
 async function fail(

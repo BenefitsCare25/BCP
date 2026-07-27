@@ -5,18 +5,36 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { MsalProvider } from "@azure/msal-react";
 import { toast, Toaster } from "sonner";
 import { router } from "./router";
-import { ENTRA_ENABLED, getMsal, initializeMsal } from "./auth/msal";
-import { NO_ACCESS_PATH } from "./api/client";
+import {
+  ENTRA_ENABLED,
+  clearLocalSession,
+  getMsal,
+  initializeMsal,
+} from "./auth/msal";
+import { DENIED_SEARCH, SIGN_IN_PATH, isDeniedSignInUrl } from "./api/client";
 import { queryClient, setNoAccessHandler } from "./lib/queryClient";
 import { captureTenantSlugFromUrl } from "./lib/tenant";
 import "./styles.css";
 
 // A query failing with NoAccessError means the signed-in account isn't
 // provisioned (or was just disabled mid-session). The query client can't
-// import the router, so the navigation is injected here.
+// import the router, so the navigation is injected here. Every in-flight query
+// fails at once, so `bouncing` keeps that one event to one bounce.
+let bouncing = false;
 setNoAccessHandler(() => {
-  if (window.location.pathname === NO_ACCESS_PATH) return;
-  void router.navigate({ to: NO_ACCESS_PATH, replace: true });
+  if (bouncing || isDeniedSignInUrl()) return;
+  bouncing = true;
+  void (async () => {
+    // Drop the local Microsoft session first, or the sign-in page's
+    // "already signed in" guard sends them straight back into the app.
+    await clearLocalSession();
+    await router.navigate({
+      to: SIGN_IN_PATH,
+      search: DENIED_SEARCH,
+      replace: true,
+    });
+    bouncing = false;
+  })();
 });
 
 async function bootstrap() {

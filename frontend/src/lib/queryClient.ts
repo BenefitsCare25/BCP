@@ -17,8 +17,8 @@ function reportError(scope: "query" | "mutation", error: unknown) {
   // redirect is in flight). Don't double-surface it as a toast.
   if (error instanceof UnauthorizedError) return;
   if (error instanceof PortalUnauthorizedError) return;
-  // The account isn't provisioned on this platform — the no-access page IS the
-  // message, so don't also log a notification the user can never act on.
+  // The account isn't provisioned on this platform — the sign-in page's own
+  // banner IS the message, so don't also log a notification they can't act on.
   if (error instanceof NoAccessError) {
     onNoAccess?.();
     return;

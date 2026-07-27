@@ -113,10 +113,42 @@ export async function acquireAccessToken(
   }
 }
 
-export async function signIn(): Promise<void> {
+export async function signIn(options?: {
+  /** Force the Microsoft account picker. Used after an access refusal — the
+   * browser still holds a Microsoft session, so the default flow would sign the
+   * SAME rejected account straight back in and the user could never switch. */
+  selectAccount?: boolean;
+}): Promise<void> {
   const msal = await initializeMsal();
   if (!msal) return;
-  await msal.loginRedirect(loginRequest);
+  await msal.loginRedirect(
+    options?.selectAccount
+      ? { ...loginRequest, prompt: "select_account" }
+      : loginRequest,
+  );
+}
+
+/**
+ * Drop the LOCAL Microsoft session (cached tokens + active account) without a
+ * round trip to Microsoft's logout endpoint.
+ *
+ * Used when the platform refuses an authenticated account: we need the sign-in
+ * page's "already signed in" guard to stop bouncing them into the app. A full
+ * `logoutRedirect` would work too, but its post-logout return URL has to be
+ * registered in the Entra app registration — this keeps the fix entirely in
+ * our own code.
+ */
+export async function clearLocalSession(): Promise<void> {
+  const msal = getMsal();
+  if (!msal) return;
+  try {
+    await msal.clearCache();
+  } catch (err) {
+    // Non-fatal: the sign-in page also refuses to bounce when `denied` is set,
+    // so a failed clear can't trap the user in a redirect loop.
+    console.warn("clearCache failed", err);
+  }
+  msal.setActiveAccount(null);
 }
 
 export async function signOut(): Promise<void> {
