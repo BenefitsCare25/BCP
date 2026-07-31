@@ -52,6 +52,7 @@ from app.services.insurer_reports import (
     last_day_of_service,
     naive,
 )
+from app.services.product_insurer import insurer_map
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     DOB_KEYS,
@@ -170,6 +171,7 @@ def build_underwriting_report(
 
     fcl_by_product = free_cover_limits(db, py.id)
     age_by_product = nel_age_limits(db, py.id)
+    insurer_by_product = insurer_map(db, py.id, products.values())
     period = policy_period(py)
     renewal = py.start_date
 
@@ -200,13 +202,15 @@ def build_underwriting_report(
         life_attrs = dattrs if is_dependant else attrs
         product = products.get(case.product_id) if case else None
         meta = (product.product_metadata or {}) if product else {}
-        # The insurer the review is OPENED WITH — the product's current insurer
+        # The insurer the review is OPENED WITH — the year's configured insurer
         # is only a fallback for a line with no review yet. Preferring it over a
         # blank ``review.insurer`` would print an insurer the workflow record
         # isn't filed under, and disagree with the queue screen until the next
         # sync re-keys the review.
         insurer = (
-            review.insurer if review else ((product.insurer or "") if product else "")
+            review.insurer
+            if review
+            else (insurer_by_product.get(product.id, "") if product else "")
         )
         # The roster's own wording, not the classified bucket — this sheet is
         # reconciled against the insurer's file, which quotes what was submitted.

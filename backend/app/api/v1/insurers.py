@@ -28,6 +28,7 @@ from app.core.deps import (
 from app.db.session import get_db
 from app.models import Insurer, PanelCard, PanelListing, Product
 from app.schemas.insurer import InsurerIn, InsurerOut, InsurerPatch
+from app.services.product_insurer import insurers_named_in_setups
 
 router = APIRouter(tags=["insurers"])
 
@@ -50,10 +51,16 @@ def _names_in_use(user: CurrentUser, db: Session) -> set[str]:
     key. Comparison is case-insensitive because that is how the reports module
     groups, so what the UI flags as in-use is what actually feeds a report.
 
-    All three consumers must be covered: a name used only by a panel listing or
-    an e-card is still load-bearing (the card renderer and clinic locator key
-    off it), so reporting it as unused would make the delete dialog lie."""
-    names: set[str] = set()
+    Every consumer must be covered: a name used only by a panel listing or an
+    e-card is still load-bearing (the card renderer and clinic locator key off
+    it), so reporting it as unused would make the delete dialog lie. That now
+    includes the product setups — the per-benefit-year Header & Policy answer is
+    where a placement's insurer lives; the `Product.insurer` column below is
+    only the legacy fallback for rows written before it moved."""
+    names = {
+        name.lower()
+        for name in insurers_named_in_setups(db, user.client_id)
+    }
     for column, client_column in (
         (Product.insurer, Product.client_id),
         (PanelListing.insurer, PanelListing.client_id),

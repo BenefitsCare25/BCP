@@ -23,6 +23,8 @@ export interface Product {
   client_id: string | null;
   code: string;
   display_name: string;
+  /** LEGACY, read-only: pre-existing catalog rows only. The insurer is set per
+   *  benefit year on Company & Benefits → Header & Policy. */
   insurer: string | null;
   participation_model: string;
   has_dependants: boolean;
@@ -93,7 +95,6 @@ export interface AttributeRecommendation {
 export interface ProductRecommendation {
   code: string;
   display_name: string;
-  insurer: string | null;
   participation_model: string;
   has_dependants: boolean;
   is_outpatient: boolean;
@@ -127,7 +128,6 @@ export interface ApplyAttributeItem {
 export interface ApplyProductItem {
   code: string;
   display_name: string;
-  insurer: string | null;
   participation_model: string;
   has_dependants: boolean;
   is_outpatient: boolean;

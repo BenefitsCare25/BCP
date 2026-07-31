@@ -19,6 +19,7 @@ from typing import Any
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.models import PolicyYear, Product, ProductTerm
+from app.services.product_insurer import insurer_from_answers
 from app.services.product_templates import (
     ProductTemplate,
     ensure_standard_header_fields,
@@ -138,7 +139,9 @@ def write_header_block(
         "insured": insured_line or captured.get("insured", ""),
         "period_of_insurance": coverage_window(py, term)
         or captured.get("period_of_insurance", ""),
-        "insurer": "" if quotation else (product.insurer if product else "") or "",
+        # The insurer this benefit year places the product with — the broker's
+        # Header & Policy answer, never a catalog tag (see product_insurer).
+        "insurer": "" if quotation else insurer_from_answers(answers, product),
         "policy_no": "" if quotation else (term.policy_number if term else "") or "",
         # The legal policyholder as captured on the slip; the client record's
         # name is an internal short name ("CDL") and must not go to an insurer.

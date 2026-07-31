@@ -46,6 +46,7 @@ from app.services.coverage_resolver import (
     load_overrides,
     resolve_plan,
 )
+from app.services.product_insurer import insurer_map
 from app.services.roster_attributes import (
     DOB_KEYS,
     GENDER_KEYS,
@@ -288,6 +289,8 @@ class _FormData:
     products: dict[str, Product]
     plans: dict[tuple[str, str], Plan]
     terms: dict[str, ProductTerm]
+    # {product_id: insurer} for THIS year (services/product_insurer.py).
+    insurers: dict[str, str]
     defaults: dict[str, dict[str, tuple[str, str | None]]]
     overrides: dict
     emp_cat_by_product: dict[str, dict[str, str]]
@@ -354,6 +357,7 @@ def _load_form_data(db: Session, policy_year: PolicyYear) -> _FormData:
         products=products,
         plans=plans,
         terms=terms,
+        insurers=insurer_map(db, policy_year.id, products.values()),
         defaults=batch_category_defaults(db, employees),
         overrides=load_overrides(db, policy_year.id, [e.id for e in employees]),
         emp_cat_by_product=emp_cat_by_product,
@@ -423,9 +427,10 @@ def _aggregate(
             product = data.products.get(product_id)
             sec = section(section_code)
             sec.has_dependants = sec.has_dependants or bool(product and product.has_dependants)
-            if product and product.insurer:
-                sec.insurer = product.insurer
-                insurers.add(product.insurer)
+            product_insurer = data.insurers.get(product_id, "")
+            if product_insurer:
+                sec.insurer = product_insurer
+                insurers.add(product_insurer)
             term = data.terms.get(product_id)
             if term:
                 sec.period_from = sec.period_from or _fmt(term.coverage_start)

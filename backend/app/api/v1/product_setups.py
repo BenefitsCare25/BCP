@@ -1283,9 +1283,14 @@ def _upsert_product(
     tpl: ProductTemplate,
     answers: dict[str, Any],
 ) -> Product:
-    """Reuse the client's catalog product for this code, or create one."""
+    """Reuse the client's catalog product for this code, or create one.
+
+    The Header & Policy "Insurer" answer is deliberately NOT copied onto the
+    catalog row: the insurer is a per-benefit-year placement fact, and a catalog
+    row spans every year (and, for firm-library rows, every company). Reports
+    resolve it from the answers instead — see ``services/product_insurer.py``.
+    """
     header = answers.get("header") or {}
-    insurer = header.get("insurer") or None
     # The roster-anchored Entities multi-select — the matching gate for every
     # category of this product. Stored as tokens; absent/empty means no
     # restriction (categories then fall back to their own slip `insured`).
@@ -1300,7 +1305,6 @@ def _upsert_product(
             client_id=client_id,
             code=tpl.code,
             display_name=tpl.display_name,
-            insurer=insurer,
             participation_model=tpl.participation_model,
             has_dependants=tpl.has_dependants,
             is_outpatient=tpl.is_outpatient,
@@ -1317,8 +1321,6 @@ def _upsert_product(
         )
         return product
 
-    if insurer and product.insurer != insurer:
-        product.insurer = insurer
     # Written on every confirm (not just when non-empty) so CLEARING the field
     # actually lifts the restriction rather than silently keeping the old one.
     meta = dict(product.product_metadata or {})

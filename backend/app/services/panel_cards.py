@@ -36,6 +36,7 @@ from app.schemas.panel_card import (
     CardServiceOut,
     MemberCardOut,
 )
+from app.services.product_insurer import insurer_map
 from app.services.roster_attributes import EMAIL_KEYS, first_value
 from app.services.roster_parser import INSURER_MEMBER_ID_KEY
 
@@ -93,7 +94,7 @@ def mask_nric(value: str | None) -> str:
 
 def insurer_member_id(attributes: dict | None, insurer: str | None) -> str:
     """The insurer's own member number off the roster, tolerating casing drift
-    between the roster column header and `Product.insurer`."""
+    between the roster column header and the configured insurer name."""
     ids = (attributes or {}).get(INSURER_MEMBER_ID_KEY) or {}
     if not isinstance(ids, dict) or not ids:
         return ""
@@ -210,12 +211,15 @@ def _cards_for_assignment(
     year: PolicyYear | None,
     client: Client | None,
     member_email: str | None,
+    product_insurer: str,
 ) -> list[MemberCardOut]:
     """The member's card for one product, plus one per covered dependant."""
     placements = _placements(card)
     services = _service_list(assignment.services)
     remarks = {k: v for k, v in (assignment.remarks or {}).items() if v}
-    insurer = product.insurer or card.insurer
+    # The insurer this BENEFIT YEAR places the product with; the card artwork's
+    # own insurer stands in when the product has none configured.
+    insurer = product_insurer or card.insurer
 
     shared = _shared_values(
         assignment, card, product, coverage, term, year, client, remarks
@@ -401,6 +405,9 @@ def build_member_cards(
             )
         )
     }
+    insurers_by_product = insurer_map(
+        db, employee.policy_year_id, products_by_id.values()
+    )
     coverage_by_code = {line.product_code: line for line in statement.coverage}
     year = db.get(PolicyYear, employee.policy_year_id)
     client = db.get(Client, employee.client_id)
@@ -428,6 +435,7 @@ def build_member_cards(
                 year,
                 client,
                 member_email,
+                insurers_by_product.get(product.id, ""),
             )
         )
     return out

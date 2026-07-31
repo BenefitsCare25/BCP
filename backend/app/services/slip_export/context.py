@@ -32,6 +32,7 @@ from app.core.deps import tenant_or_global
 from app.models import Category, Plan, PolicyYear, Product, ProductSetup, ProductTerm
 from app.services.category_member_counts import build_category_member_counts
 from app.services.plan_hydration import basis_amount
+from app.services.product_insurer import insurer_from_answers
 
 Mode = Literal["placement", "quotation"]
 
@@ -94,6 +95,12 @@ class SlipContext:
         if product is None:
             return {}
         return self.answers_by_code.get((product.code or "").upper(), {})
+
+    def insurer_for(self, product: Product | None) -> str:
+        """The insurer this benefit year places the product with — resolved by
+        the one rule in ``services/product_insurer`` (Header & Policy answer,
+        legacy catalog value as fallback), off the answers already loaded."""
+        return insurer_from_answers(self.answers_for(product), product)
 
     def figures_for(self, category: Category) -> CategoryFigures:
         """Resolved figures for a category, computing them if it wasn't loaded.

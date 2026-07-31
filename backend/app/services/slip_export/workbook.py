@@ -187,7 +187,7 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple) -> None:
         overview.append([
             product.code,
             product.display_name,
-            "" if ctx.blank_rates else (product.insurer or ""),
+            "" if ctx.blank_rates else ctx.insurer_for(product),
             coverage_window(py, ctx.terms.get(product.id)),
             len(categories),
             len(ctx.plans_by_product.get(product.id, [])),

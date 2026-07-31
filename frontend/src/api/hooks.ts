@@ -876,7 +876,8 @@ export function useApplyConfig() {
 export interface ProductPayload {
   code: string;
   display_name: string;
-  insurer?: string | null;
+  // No insurer: it is per benefit year (Company & Benefits → Header & Policy),
+  // never a catalog column — see backend services/product_insurer.py.
   participation_model: "standard" | "extended" | "eo_only";
   has_dependants: boolean;
   is_outpatient: boolean;

@@ -300,6 +300,7 @@ function PaReports({
   const { data: readiness, isError } = useReportReadiness(year.id);
 
   const insurers = readiness?.insurers ?? [];
+  const missingInsurer = readiness?.products_without_insurer ?? [];
   useEffect(() => {
     if (insurers.length && !insurers.includes(insurer)) {
       setInsurer(insurers[0]);
@@ -420,11 +421,52 @@ function PaReports({
           Couldn&apos;t load report readiness. Retry, or check your connection.
         </div>
       )}
-      {readiness && insurers.length === 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-warn/40 bg-warn-soft/40 px-3 py-2 text-sm text-warn-foreground">
-          <AlertTriangle className="size-4 shrink-0" />
-          Assign an insurer to each product under Schema &amp; Reference to
-          enable the insurer listings.
+      {/* A product with no insurer is silently absent from EVERY insurer
+          submission, so name the products rather than only warning when none
+          of them has one. The insurer is a per-benefit-year placement fact —
+          it lives on the product's own Header & Policy tab, not in the firm
+          product catalog.
+          Text is `text-warn` (amber), NOT `text-warn-foreground` — that token
+          is white, meant for the SOLID warn background; over `bg-warn-soft` it
+          rendered as unreadable white-on-cream. */}
+      {readiness && missingInsurer.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/40 px-3 py-2 text-sm text-warn">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <p>
+            <span className="font-medium">{missingInsurer.join(", ")}</span>{" "}
+            {missingInsurer.length === 1 ? "has" : "have"} no insurer for this
+            benefit year, so{" "}
+            {insurers.length === 0
+              ? "no insurer listing can be generated"
+              : `${missingInsurer.length === 1 ? "it is" : "they are"} left out of every insurer submission`}
+            . Set it on{" "}
+            <Link
+              to="/configuration"
+              className="font-medium underline underline-offset-2 hover:text-primary"
+            >
+              Company &amp; Benefits
+            </Link>{" "}
+            → the product → Header &amp; Policy.
+          </p>
+        </div>
+      )}
+      {/* Nothing to name and nothing to submit: the year has no products with
+          categories yet. Without this the insurer Select just reads "No
+          insurers configured" and both rows sit disabled, unexplained. */}
+      {readiness && insurers.length === 0 && missingInsurer.length === 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn-soft/40 px-3 py-2 text-sm text-warn">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <p>
+            No products are configured for this benefit year, so there is
+            nothing to submit to an insurer yet. Add them on{" "}
+            <Link
+              to="/configuration"
+              className="font-medium underline underline-offset-2 hover:text-primary"
+            >
+              Company &amp; Benefits
+            </Link>
+            .
+          </p>
         </div>
       )}
 

@@ -278,7 +278,6 @@ def create_product(
         client_id=client_id,
         code=payload.code,
         display_name=payload.display_name,
-        insurer=payload.insurer,
         participation_model=payload.participation_model,
         has_dependants=payload.has_dependants,
         is_outpatient=payload.is_outpatient,

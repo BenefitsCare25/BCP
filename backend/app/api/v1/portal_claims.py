@@ -87,6 +87,7 @@ from app.services.doc_images import DocImageError, vision_blocks_for_document
 from app.services.enrollment_products import resolve_products_by_codes
 from app.services.insurer_listings import member_id_for_insurer
 from app.services.member_statement import build_member_statement
+from app.services.product_insurer import insurer_map
 from app.services.sg_diagnoses import search_diagnoses
 from app.services.sg_hospitals import hospital_directory
 
@@ -166,6 +167,7 @@ def build_coverage_options(
     products_by_code = resolve_products_by_codes(
         db, year, [line.product_code for line in statement.coverage]
     )
+    insurers_by_product = insurer_map(db, year.id, products_by_code.values())
     insured = []
     for line in statement.coverage:
         profile = claim_profile_for(line.product_code)
@@ -193,7 +195,9 @@ def build_coverage_options(
                     if benefit_row_for_sub_type(line.benefit_schedule, s)
                 )
         product = products_by_code.get(line.product_code)
-        insurer = product.insurer if product is not None else None
+        insurer = (
+            insurers_by_product.get(product.id) if product is not None else None
+        )
         member_id = member_id_for_insurer(attrs, insurer)
         insured.append(
             InsuredClaimOption(

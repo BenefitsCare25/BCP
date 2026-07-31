@@ -104,7 +104,7 @@ export function UploadRoster({
 
         {duplicates.length > 0 && (
           <div className="mt-4 rounded-lg border border-warn/40 bg-warn-soft/40 p-3">
-            <div className="mb-2 flex items-center gap-2 text-sm font-medium text-warn-foreground">
+            <div className="mb-2 flex items-center gap-2 text-sm font-medium text-warn">
               <AlertTriangle className="size-4" />
               {duplicates.length} duplicate
               {duplicates.length === 1 ? "" : "s"} skipped — review below
@@ -147,7 +147,7 @@ export function UploadRoster({
 
         {errors.length > 0 && (
           <div className="mt-4 rounded-lg border border-warn/40 bg-warn-soft/40 p-3">
-            <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-warn-foreground">
+            <div className="mb-1.5 flex items-center gap-2 text-sm font-medium text-warn">
               <AlertTriangle className="size-4" />
               {errors.length} warning{errors.length === 1 ? "" : "s"}
             </div>

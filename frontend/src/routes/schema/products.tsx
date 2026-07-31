@@ -45,7 +45,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
-import { InsurerSelect } from "@/components/configuration/InsurerSelect";
 import { PageGuide } from "@/components/ui/page-guide";
 import type { Product } from "@/types";
 
@@ -58,7 +57,6 @@ const PARTICIPATION_MODELS: ProductPayload["participation_model"][] = [
 const EMPTY_DRAFT: ProductPayload = {
   code: "",
   display_name: "",
-  insurer: "",
   participation_model: "standard",
   has_dependants: false,
   is_outpatient: false,
@@ -69,7 +67,6 @@ function toDraft(p: Product): ProductPayload {
   return {
     code: p.code,
     display_name: p.display_name,
-    insurer: p.insurer ?? "",
     participation_model:
       (p.participation_model as ProductPayload["participation_model"]) ??
       "standard",
@@ -120,7 +117,6 @@ export function SchemaProductsPage({
   const submit = async () => {
     const payload: ProductPayload = {
       ...draft,
-      insurer: draft.insurer?.trim() ? draft.insurer.trim() : null,
       report_code: draft.report_code?.trim() ? draft.report_code.trim() : null,
     };
     try {
@@ -192,16 +188,11 @@ export function SchemaProductsPage({
                   />
                 </Field>
               </div>
+              {/* No insurer here. A catalog row spans every benefit year — and
+                  a firm-library row every company — while the insurer belongs
+                  to one placement. It is entered per year on Company &
+                  Benefits → the product → Header & Policy. */}
               <div className="grid grid-cols-2 gap-3">
-                <Field
-                  label="Insurer (optional)"
-                  hint="Underwriting insurer, picked from the Insurers tab. Groups this product's columns into that insurer's membership/billing reports on the Reports page. A name not in the list still saves."
-                >
-                  <InsurerSelect
-                    value={draft.insurer ?? ""}
-                    onChange={(v) => setDraft({ ...draft, insurer: v })}
-                  />
-                </Field>
                 <Field
                   label="Report code (optional)"
                   hint="Column code used on insurer reports when it differs from the internal code (e.g. GCGP reports as GOGP)."
@@ -300,7 +291,7 @@ export function SchemaProductsPage({
       <Card>
         <CardContent className="pt-6">
           {isLoading ? (
-            <SkeletonTable rows={5} columns={6} />
+            <SkeletonTable rows={5} columns={5} />
           ) : visible.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
               {scope === "firm"
@@ -313,7 +304,6 @@ export function SchemaProductsPage({
                 <TableRow>
                   <TableHead>Code</TableHead>
                   <TableHead>Display name</TableHead>
-                  <TableHead>Insurer</TableHead>
                   <TableHead>Participation</TableHead>
                   <TableHead>Features</TableHead>
                   <TableHead>Scope</TableHead>
@@ -335,9 +325,6 @@ export function SchemaProductsPage({
                       </TableCell>
                       <TableCell className="font-medium">
                         {p.display_name}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {p.insurer ?? "—"}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">{p.participation_model}</Badge>

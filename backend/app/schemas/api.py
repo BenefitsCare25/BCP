@@ -90,7 +90,9 @@ class AttributeRecommendation(BaseModel):
 class ProductRecommendation(BaseModel):
     code: str
     display_name: str
-    insurer: str | None = None
+    # No `insurer`: the apply can't store one (the catalog has no such field any
+    # more) and the slip's own answer already reaches the year's setup through
+    # slip_to_setup, so reporting it here only advertised a discarded value.
     participation_model: ParticipationModelStr = "standard"
     has_dependants: bool = False
     is_outpatient: bool = False
@@ -124,7 +126,8 @@ class ApplyAttributeItem(BaseModel):
 class ApplyProductItem(BaseModel):
     code: str
     display_name: str
-    insurer: str | None = None
+    # No `insurer` — a suggestion may report the insurer the slip named, but the
+    # catalog never stores it (services/product_insurer.py).
     participation_model: ParticipationModelStr = "standard"
     has_dependants: bool = False
     is_outpatient: bool = False
@@ -150,6 +153,11 @@ class ProductOut(_Base):
     client_id: str | None
     code: str
     display_name: str
+    # LEGACY, read-only: the insurer is a per-benefit-year placement fact and is
+    # entered on Company & Benefits → Header & Policy (services/
+    # product_insurer.py). This still reports what pre-existing catalog rows
+    # carry — the fallback for a year whose setup has no answer — but nothing
+    # writes it and the catalog UI no longer offers it.
     insurer: str | None = None
     participation_model: str
     has_dependants: bool
@@ -173,7 +181,8 @@ class ProductOut(_Base):
 class ProductCreate(BaseModel):
     code: str
     display_name: str
-    insurer: str | None = None
+    # No `insurer`: it belongs to the placement, not the catalog — set it per
+    # benefit year on Company & Benefits → Header & Policy.
     participation_model: ParticipationModelStr = "standard"
     has_dependants: bool = False
     is_outpatient: bool = False
@@ -190,7 +199,7 @@ class ProductCreate(BaseModel):
 class ProductPatch(BaseModel):
     code: str | None = None
     display_name: str | None = None
-    insurer: str | None = None
+    # No `insurer` — see ProductCreate.
     participation_model: ParticipationModelStr | None = None
     has_dependants: bool | None = None
     is_outpatient: bool | None = None

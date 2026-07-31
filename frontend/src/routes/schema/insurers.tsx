@@ -256,14 +256,14 @@ export function SchemaInsurersPage({
         purpose="The list of insurers available when setting up a product. Each entry records the short name brokers use, the full licensed entity name, and any other spellings seen on placement slips. Seeded with the Singapore market; add your own for anything missing."
         connections={[
           {
-            label: "→ Products catalog",
+            label: "→ Company & Benefits",
             description:
-              "The Insurer field on a product is a dropdown of these names",
+              "The Insurer field on a product's Header & Policy tab is a dropdown of these names",
           },
           {
             label: "→ Reports",
             description:
-              "Insurer reports group products by the insurer name stored on them",
+              "Insurer reports group each benefit year's products by the insurer set on them",
           },
           {
             label: "→ Rosters",

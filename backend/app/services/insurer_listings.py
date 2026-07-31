@@ -1,8 +1,9 @@
 """Per-insurer employee + dependant listing reports.
 
 Column layout mirrors the insurer billing templates: a shared demographic
-block, then per-product blocks grouped by the insurer assigned to each product
-(``Product.insurer``):
+block, then per-product blocks grouped by the insurer this benefit year places
+each product with (``services.product_insurer`` — the Company & Benefits
+Header & Policy answer, NOT a catalog tag):
 
 - lump-sum products (categories carry a numeric per-member basis — GTL/GCI/
   GPA):  Basis of Cover / Eligible SI / SI Pending U/W / Last Accepted SI,
@@ -24,7 +25,6 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.deps import tenant_or_global
 from app.models import (
     Category,
     Dependant,
@@ -54,6 +54,7 @@ from app.services.plan_hydration import (
     hydrate_plans,
     resolve_basis_amount,
 )
+from app.services.product_insurer import insurer_map
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     EMPLOYEE_ID_KEYS,
@@ -86,6 +87,10 @@ class ProductBlock:
     product: Product
     report_code: str
     lump_sum: bool
+    # The insurer underwriting this product IN THIS YEAR (services/
+    # product_insurer.py) — "" when none is configured. Resolved once here so
+    # every consumer of a block groups on the same name.
+    insurer: str = ""
     plans: dict[str, Plan] = field(default_factory=dict)  # by plan code
     role_options: dict[str, list[DepOption]] = field(default_factory=dict)
 
@@ -149,10 +154,14 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
         ).scalars().all()
     )
 
+    insurers = insurer_map(db, py.id, products.values())
     blocks: dict[str, ProductBlock] = {}
     for pid, product in products.items():
         blocks[pid] = ProductBlock(
-            product=product, report_code=_report_code(product), lump_sum=False
+            product=product,
+            report_code=_report_code(product),
+            lump_sum=False,
+            insurer=insurers.get(pid, ""),
         )
     for plan in plans:
         if plan.product_id in blocks:
@@ -404,20 +413,20 @@ def insurer_product_blocks(
     wanted = insurer.strip().lower()
     return [
         b for b in product_blocks(db, py)
-        if (b.product.insurer or "").strip().lower() == wanted
+        if b.insurer.strip().lower() == wanted
     ]
 
 
 def configured_insurers_for_year(db: Session, py: PolicyYear) -> list[str]:
-    rows = db.execute(
-        select(Product.insurer)
-        .where(
-            tenant_or_global(Product.client_id, py.client_id),
-            Product.insurer.isnot(None),
-        )
-        .distinct()
-    ).scalars().all()
-    return sorted({str(v).strip() for v in rows if v and str(v).strip()})
+    """The insurers this year is actually placed with — one per product in the
+    year, resolved by ``product_insurer``.
+
+    Scoped to the year's OWN products, never the whole catalog: firm-library
+    rows are shared with every other company, so reading the catalog offered
+    each company a picker full of insurers it has no policy with (and omitted
+    any insurer whose product carried no catalog tag).
+    """
+    return sorted({b.insurer for b in product_blocks(db, py) if b.insurer})
 
 
 def build_employee_listing(
@@ -751,13 +760,16 @@ def eligible_amounts(
 def build_readiness(db: Session, py: PolicyYear) -> dict:
     """Config gaps the Reports page surfaces before insurer listings run."""
     blocks = product_blocks(db, py)
-    insurers = configured_insurers_for_year(db, py)
+    # Derived from the blocks already in hand, not via
+    # configured_insurers_for_year — that would rebuild them (and re-read every
+    # setup's answers) a second time for the same answer.
+    insurers = sorted({b.insurer for b in blocks if b.insurer})
     employees = report_employees(db, py)
 
     missing_labels = [
         {"product_code": b.report_code, "plan_code": code}
         for b in blocks
-        if not b.lump_sum and b.product.insurer
+        if not b.lump_sum and b.insurer
         for code, plan in sorted(b.plans.items())
         if not plan.report_label
     ]
@@ -771,7 +783,7 @@ def build_readiness(db: Session, py: PolicyYear) -> dict:
     return {
         "insurers": insurers,
         "products_without_insurer": sorted(
-            b.report_code for b in blocks if not b.product.insurer
+            b.report_code for b in blocks if not b.insurer
         ),
         "plans_missing_report_label": missing_labels,
         "employees_missing_nric": sum(

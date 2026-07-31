@@ -32,7 +32,6 @@ import {
   useSetupProducts,
 } from "@/api/hooks";
 import { useRegistry } from "@/api/registry";
-import { InsurerSelect } from "@/components/configuration/InsurerSelect";
 import { LINE_LABELS, isProductAdded, lineForCode } from "@/lib/insuranceLines";
 import { formatError } from "@/lib/errors";
 import type { InsuranceLine } from "@/types";
@@ -57,10 +56,11 @@ const DEFAULT_PROFILE: Record<InsuranceLine, string> = {
   flex: "tiered_medical",
 };
 
+// No insurer here: it is a per-benefit-year placement fact, entered on the
+// product's own Header & Policy tab once the product is added.
 const emptyCustom = (line: InsuranceLine) => ({
   code: "",
   displayName: "",
-  insurer: "",
   formProfile: DEFAULT_PROFILE[line],
   participation: "standard" as "standard" | "extended" | "eo_only",
   hasDependants: false,
@@ -158,7 +158,6 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
       payloads.push({
         code: customCode,
         display_name: custom.displayName.trim(),
-        insurer: custom.insurer.trim() || null,
         participation_model: custom.participation,
         has_dependants: custom.hasDependants,
         is_outpatient: custom.isOutpatient,
@@ -314,16 +313,6 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                       }
                     />
                   </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="ap-insurer">Insurer (optional)</Label>
-                  <InsurerSelect
-                    id="ap-insurer"
-                    placeholder="e.g. Great Eastern"
-                    value={custom.insurer}
-                    onChange={(v) => setCustom((c) => ({ ...c, insurer: v }))}
-                  />
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2">

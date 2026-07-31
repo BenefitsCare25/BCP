@@ -458,7 +458,6 @@ def _build_product_recs(
             ProductRecommendation(
                 code=code,
                 display_name=str(p.get("display_name") or code),
-                insurer=p.get("insurer"),
                 participation_model=participation,  # type: ignore[arg-type]
                 has_dependants=bool(p.get("has_dependants")),
                 is_outpatient=bool(p.get("is_outpatient")),
@@ -589,7 +588,7 @@ def _create_products(
             continue  # idempotent — already in the catalog
         row = Product(
             client_id=client_id, code=item.code, display_name=item.display_name,
-            insurer=item.insurer, participation_model=item.participation_model,
+            participation_model=item.participation_model,
             has_dependants=item.has_dependants, is_outpatient=item.is_outpatient,
             product_metadata={"line": infer_line(item.code)},
         )

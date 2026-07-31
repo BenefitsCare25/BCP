@@ -39,7 +39,6 @@ from app.models import (
     Dependant,
     Employee,
     PolicyYear,
-    Product,
     ProductTerm,
     UnderwritingCase,
     UnderwritingReview,
@@ -55,6 +54,7 @@ from app.models.underwriting_case import (
     normalize_uw_status,
 )
 from app.services.flex_membership import classify_relationship
+from app.services.product_insurer import insurer_map_for_ids
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     NAME_KEYS,
@@ -377,14 +377,9 @@ def adopt_orphan_cases(db: Session, policy_year_id: str) -> int:
     )
     if not orphans:
         return 0
-    insurer_by_product = {
-        p.id: (p.insurer or "").strip()
-        for p in db.execute(
-            select(Product).where(
-                Product.id.in_({c.product_id for c in orphans})
-            )
-        ).scalars()
-    }
+    insurer_by_product = insurer_map_for_ids(
+        db, policy_year_id, {c.product_id for c in orphans}
+    )
     reviews = {
         ((r.employee_id or r.dependant_id or ""), r.insurer): r
         for r in db.execute(
@@ -421,6 +416,48 @@ def adopt_orphan_cases(db: Session, policy_year_id: str) -> int:
         adopted += 1
     db.flush()
     return adopted
+
+
+def _rekey_renamed_insurers(
+    reviews: dict[tuple[str, str], UnderwritingReview],
+    cases: dict[tuple[str, str], UnderwritingCase],
+    insurer_by_product: dict[str, str],
+) -> None:
+    """Follow a product's insurer when it is CORRECTED, rather than orphaning
+    the review filed under the old name.
+
+    A review is keyed ``(life, insurer)``, so a renamed insurer makes the
+    lookup in ``review_for`` miss: a fresh review is minted at
+    ``pending_requirements``, every line is re-pointed to it, and the original
+    — carrying the broker's requirements text and its workflow position
+    (``pending_insurer``, ``pending_hr``, …) — is left with no live lines and
+    cancelled. Same class of silent loss as the FCL case the cleanup pass
+    already guards; here the excess never went away at all.
+
+    Only an UNAMBIGUOUS rename is followed: every one of the review's lines
+    must now resolve to the same single new name, and no other review for that
+    life may already hold it. A review whose products split across insurers, or
+    whose target is taken, falls through to the normal open/cancel path.
+    """
+    lines_by_review: dict[str, list[UnderwritingCase]] = {}
+    for case in cases.values():
+        if case.review_id:
+            lines_by_review.setdefault(case.review_id, []).append(case)
+
+    for key, review in list(reviews.items()):
+        subject, old = key
+        lines = lines_by_review.get(review.id) or []
+        if not lines:
+            continue
+        names = {insurer_by_product.get(c.product_id, "") for c in lines}
+        if len(names) != 1:
+            continue
+        new = names.pop()
+        if new == old or (subject, new) in reviews:
+            continue
+        review.insurer = new
+        del reviews[key]
+        reviews[(subject, new)] = review
 
 
 def refresh_underwriting_cases(
@@ -475,17 +512,11 @@ def refresh_underwriting_cases(
             scoped, _ = _year_lives(db, policy_year, employee_ids)
             in_scope = set(scoped)
 
-    insurer_by_product: dict[str, str] = {}
     product_ids = {pid for (_s, pid, _e) in eligibles} | {
         c.product_id for c in cases.values()
     }
-    if product_ids:
-        insurer_by_product = {
-            p.id: (p.insurer or "").strip()
-            for p in db.execute(
-                select(Product).where(Product.id.in_(product_ids))
-            ).scalars()
-        }
+    insurer_by_product = insurer_map_for_ids(db, policy_year.id, product_ids)
+    _rekey_renamed_insurers(reviews, cases, insurer_by_product)
 
     def review_for(life_subject: str, is_employee: bool, insurer: str) -> UnderwritingReview:
         review = reviews.get((life_subject, insurer))

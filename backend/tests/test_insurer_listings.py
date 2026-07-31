@@ -21,7 +21,7 @@ from io import BytesIO  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -35,6 +35,7 @@ from app.models import (  # noqa: E402
     Plan,
     PolicyYear,
     Product,
+    ProductSetup,
     ProductTerm,
     UnderwritingCase,
     UnderwritingReview,
@@ -838,6 +839,52 @@ def test_sync_keeps_reviews_carrying_broker_notes(client: TestClient) -> None:
         )
 
 
+def test_review_follows_a_corrected_insurer(client: TestClient) -> None:
+    """Correcting a product's insurer must MOVE the review, not orphan it.
+
+    Reviews are keyed (life, insurer), so a renamed insurer used to miss the
+    lookup: a fresh review was minted at pending_requirements, the lines were
+    re-pointed to it, and the original — with the broker's requirements text
+    and its workflow position — was left with no lines and cancelled.
+    """
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    before = client.get(
+        f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+    ).json()["items"]
+    review = before[0]
+    client.patch(
+        f"/api/v1/underwriting/reviews/{review['id']}",
+        json={"status": "pending_insurer", "requirements": "Full medical report"},
+    )
+    with SessionLocal() as s:
+        s.add(ProductSetup(
+            policy_year_id=PY_ID, product_code="TLIF",
+            answers={"header": {"insurer": "RenamedSure"}},
+        ))
+        s.commit()
+    try:
+        client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+        items = client.get(
+            f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+        ).json()["items"]
+        moved = next((i for i in items if i["id"] == review["id"]), None)
+        assert moved is not None, "the review was orphaned by the rename"
+        assert moved["insurer"] == "RenamedSure"
+        assert moved["status"] == "pending_insurer"
+        assert moved["requirements"] == "Full medical report"
+        assert moved["cases"], "its lines should have moved with it"
+        # Renamed in place — no second review minted for the same life.
+        assert len(items) == len(before)
+        assert all(i["insurer"] == "RenamedSure" for i in items)
+    finally:
+        with SessionLocal() as s:
+            s.execute(
+                delete(ProductSetup).where(ProductSetup.policy_year_id == PY_ID)
+            )
+            s.commit()
+        client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+
+
 def test_reset_product_term_clears_underwriting(client: TestClient) -> None:
     """DELETE drops the row's NEL values, so the cases are moot. Undecided
     lines hold a guaranteed-SI snapshot, so without a re-sync the listing keeps
@@ -938,6 +985,164 @@ def test_readiness_reports_config_gaps(client: TestClient) -> None:
     assert body["plans_missing_report_label"] == []
     assert body["employees_missing_member_id"]["TestSure"] == 1  # IL-2
     assert body["employees_missing_nric"] == 1  # IL-2
+
+
+# ── Where the insurer comes from ─────────────────────────────────────────────
+
+
+def test_insurer_comes_from_the_years_setup_not_the_catalog(
+    client: TestClient,
+) -> None:
+    """The Company & Benefits "Insurer" answer wins over the catalog column.
+
+    The catalog row spans every benefit year, so a renewal that moves the
+    placement must not rewrite last year's submissions — and must not need a
+    catalog edit to take effect on this one.
+    """
+    with SessionLocal() as s:
+        s.add(ProductSetup(
+            policy_year_id=PY_ID, product_code="TMD2",
+            answers={"header": {"insurer": "OtherSure"}},
+        ))
+        s.commit()
+    try:
+        body = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/readiness"
+        ).json()
+        assert body["insurers"] == ["OtherSure", "TestSure"]
+        # The medical product now files under OtherSure, and only under it.
+        res = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/employee-listing"
+            "?insurer=OtherSure"
+        )
+        assert res.status_code == 200, res.text
+        assert "TMED Plan/Basis of Cover" in _sheet_rows(res.content)[0]
+        res = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/employee-listing"
+            "?insurer=TestSure"
+        )
+        assert "TMED Plan/Basis of Cover" not in _sheet_rows(res.content)[0]
+    finally:
+        with SessionLocal() as s:
+            s.execute(
+                delete(ProductSetup).where(ProductSetup.policy_year_id == PY_ID)
+            )
+            s.commit()
+
+
+def test_firm_library_insurer_does_not_leak_into_the_picker(
+    client: TestClient,
+) -> None:
+    """A shared (client_id NULL) catalog row is visible to every company, so its
+    legacy insurer must not appear for a year that doesn't place that product."""
+    with SessionLocal() as s:
+        s.add(Product(
+            id="00000000-0000-0000-0000-0000000i1013", client_id=None,
+            code="TSHARED", display_name="Shared", insurer="LibrarySure",
+        ))
+        s.commit()
+    try:
+        body = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/readiness"
+        ).json()
+        assert "LibrarySure" not in body["insurers"]
+    finally:
+        with SessionLocal() as s:
+            s.execute(
+                delete(Product).where(Product.code == "TSHARED")
+            )
+            s.commit()
+
+
+def test_firm_library_legacy_tag_never_becomes_a_companys_insurer(
+    client: TestClient,
+) -> None:
+    """The legacy fallback is company-scoped rows ONLY.
+
+    A firm-library row is shared with every other company, so its tag says
+    nothing about THIS company's placement — honouring it as a fallback would
+    reintroduce the leak (a category linked to a shared product would keep
+    reporting whichever insurer another company's broker typed).
+    """
+    with SessionLocal() as s:
+        s.add(Product(
+            id="00000000-0000-0000-0000-0000000i1014", client_id=None,
+            code="TLEAK", display_name="Leaky", insurer="LibrarySure",
+        ))
+        s.flush()
+        s.add(Category(
+            id="00000000-0000-0000-0000-0000000i1024", policy_year_id=PY_ID,
+            product_id="00000000-0000-0000-0000-0000000i1014",
+            display_name="All staff", raw_description="All staff",
+            plan_assignments={"plan_code": "1"},
+            source="manual", status="confirmed",
+        ))
+        s.commit()
+    try:
+        body = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/readiness"
+        ).json()
+        assert "LibrarySure" not in body["insurers"]
+        # …and the gap is reported, so the broker is told where to set it.
+        assert "TLEAK" in body["products_without_insurer"]
+    finally:
+        with SessionLocal() as s:
+            s.execute(delete(Category).where(
+                Category.id == "00000000-0000-0000-0000-0000000i1024"
+            ))
+            s.execute(delete(Product).where(Product.code == "TLEAK"))
+            s.commit()
+
+
+def test_blank_setup_answer_clears_a_legacy_catalog_insurer(
+    client: TestClient,
+) -> None:
+    """A setup row that EXISTS with a blank answer means "no insurer".
+
+    Nothing can write `Product.insurer` any more, so if a blank answer fell
+    through to it a wrong legacy value would be permanently unclearable.
+    """
+    with SessionLocal() as s:
+        s.add(ProductSetup(
+            policy_year_id=PY_ID, product_code="TMD2",
+            answers={"header": {"insurer": "  "}},
+        ))
+        s.commit()
+    try:
+        body = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/readiness"
+        ).json()
+        assert body["insurers"] == ["TestSure"]  # TLIF only; TMD2 cleared
+        assert "TMED" in body["products_without_insurer"]
+    finally:
+        with SessionLocal() as s:
+            s.execute(
+                delete(ProductSetup).where(ProductSetup.policy_year_id == PY_ID)
+            )
+            s.commit()
+
+
+def test_malformed_setup_answers_do_not_break_reporting(
+    client: TestClient,
+) -> None:
+    """`answers` is unvalidated JSON — a non-dict header must not 500 every
+    surface that resolves an insurer."""
+    with SessionLocal() as s:
+        s.add(ProductSetup(
+            policy_year_id=PY_ID, product_code="TLIF",
+            answers={"header": "not a dict"},
+        ))
+        s.commit()
+    try:
+        res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/readiness")
+        assert res.status_code == 200, res.text
+        assert "TLIF" in res.json()["products_without_insurer"]
+    finally:
+        with SessionLocal() as s:
+            s.execute(
+                delete(ProductSetup).where(ProductSetup.policy_year_id == PY_ID)
+            )
+            s.commit()
 
 
 # ── Member-listing template ──────────────────────────────────────────────────
