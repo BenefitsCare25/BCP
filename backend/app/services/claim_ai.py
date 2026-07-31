@@ -202,6 +202,10 @@ types). pass = compliant; fail = violated (cite specific evidence); warning = \
 possibly violated but ambiguous; not_applicable = the rule doesn't apply.
 - If a rule has an exception clause and the claim satisfies the exception, \
 return pass — never fail a claim for exceeding a requirement.
+- Rules may carry a [CRITICAL], [WARNING] or [INFO] severity prefix. Evaluate \
+every rule identically regardless of severity, and echo each rule's text \
+VERBATIM (including its severity prefix) in rule_results — the platform maps \
+your result back to its configured rule by that exact text.
 
 REQUIRED DOCUMENTS CHECK:
 - Use GENEROUS semantic matching — a "tax invoice" requirement is satisfied by \

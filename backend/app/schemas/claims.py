@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _Base(BaseModel):
@@ -396,6 +397,136 @@ class ClaimDocTypeOut(BaseModel):
 class DiagnosisOut(BaseModel):
     label: str
     icd10: str | None = None
+
+
+# ── Claim review rule setup (per claim type, broker-configurable) ─────────────
+
+
+class ReviewFieldMapModel(BaseModel):
+    """One claim-form ↔ document field pair the AI review compares."""
+
+    portal_field: str = Field(min_length=1, max_length=64)
+    document_field: str = Field(min_length=1, max_length=128)
+    mode: Literal["fuzzy", "exact", "numeric"] = "fuzzy"
+    tolerance: float | None = Field(default=None, ge=0)
+    # Spend an extra AI vision pass on this field when the text comparison
+    # disagrees. Purely a cost/accuracy control.
+    verify_with_vision: bool = False
+    # Flag the claim when it states this field but NO document substantiates
+    # it. Independent of the vision flag on purpose — turning off a vision
+    # re-check must never switch off the unsubstantiated-value guard.
+    require_evidence: bool = False
+
+
+class ReviewAIRuleModel(BaseModel):
+    """One AI-judged business rule. Only a CRITICAL failure can flag the
+    claim; warning/info failures surface to the broker without auto-flagging."""
+
+    id: str | None = Field(default=None, max_length=64)
+    rule: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="general", min_length=1, max_length=64)
+    severity: Literal["critical", "warning", "info"] = "critical"
+
+
+class ClaimReviewConfigIn(BaseModel):
+    claim_kind: Literal["insured", "flex"]
+    # Product code (insured) or flex benefit-category name (flex).
+    claim_key: str = Field(min_length=1, max_length=128)
+    display_label: str = Field(min_length=1, max_length=128)
+    enabled: bool = True
+    # The caps bound review-prompt growth.
+    field_maps: list[ReviewFieldMapModel] = Field(min_length=1, max_length=30)
+    ai_rules: list[ReviewAIRuleModel] = Field(default_factory=list, max_length=60)
+    # Extra document families required ON TOP of the automatic derivation.
+    required_documents: list[str] = Field(default_factory=list, max_length=15)
+
+    @field_validator("claim_key", "display_label")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        # min_length alone accepts "   ", which the API then normalizes to ""
+        # — a row that would be committed and thereafter fail to serialize.
+        # Normalize here so what validates is what gets stored.
+        cleaned = " ".join(v.split())
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class ClaimReviewConfigOut(BaseModel):
+    """Deliberately NOT a subclass of ``ClaimReviewConfigIn``.
+
+    Reading must never fail: a legacy or hand-edited row that violates a
+    write-side constraint has to stay listable (and therefore deletable),
+    not 500 the whole company's config surface. The service's defensive
+    reader (`claim_review_configs.config_from_row`) already drops malformed
+    entries and bounds sizes, so the values here are sane by construction.
+    """
+
+    id: str
+    claim_kind: str
+    claim_key: str
+    display_label: str
+    enabled: bool = True
+    field_maps: list[ReviewFieldMapModel] = Field(default_factory=list)
+    ai_rules: list[ReviewAIRuleModel] = Field(default_factory=list)
+    required_documents: list[str] = Field(default_factory=list)
+
+
+class ReviewDefaultConfigOut(BaseModel):
+    """The in-code default setup — prefills the editor when a claim type is
+    first customized."""
+
+    field_maps: list[ReviewFieldMapModel] = Field(default_factory=list)
+    ai_rules: list[ReviewAIRuleModel] = Field(default_factory=list)
+    required_documents: list[str] = Field(default_factory=list)
+
+
+class ReviewClaimTypeOut(BaseModel):
+    """One claim type of the company (the config scope vocabulary)."""
+
+    claim_kind: Literal["insured", "flex"]
+    claim_key: str
+    display_label: str
+    sub_types: list[str] = Field(default_factory=list)
+
+
+class ReviewScopeOptionsOut(BaseModel):
+    claim_types: list[ReviewClaimTypeOut] = Field(default_factory=list)
+    default_config: ReviewDefaultConfigOut
+
+
+class ReviewPromptPreviewOut(BaseModel):
+    prompt: str
+
+
+class SourceReviewConfigOut(BaseModel):
+    """A configured claim type of ANOTHER company, offered for import."""
+
+    id: str
+    claim_kind: str
+    claim_key: str
+    display_label: str
+    enabled: bool
+    field_map_count: int
+    rule_count: int
+    required_document_count: int
+
+
+class ImportSourceCompanyOut(BaseModel):
+    """A company whose rule setup may be imported from (same broker firm)."""
+
+    id: str
+    name: str
+    configured_count: int
+
+
+class ImportReviewConfigsIn(BaseModel):
+    source_client_id: str = Field(min_length=1, max_length=36)
+    config_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class ImportReviewConfigsOut(BaseModel):
+    imported: list[ClaimReviewConfigOut] = Field(default_factory=list)
 
 
 class DiagnosisSearchOut(BaseModel):

@@ -1,9 +1,12 @@
 """Stage 3 — claim-form ↔ extracted-fields comparison via the AI gateway.
 
 Sends the member's ``form_fields`` snapshot, every document's extracted
-fields, the in-code field maps, AI-judged business rules, and the required
-document families for the claim type. Folds the required-documents check into
-rule results (a missing required document is a failed rule for the verdict).
+fields, the claim type's resolved field maps, severity-tagged AI business
+rules, and the required document families. Folds the required-documents check
+into rule results (a missing required document is a failed rule for the
+verdict). The configuration comes from the claim's per-claim-type review
+config (``services/claim_review_configs.py``) — in-code defaults when the
+company hasn't customized that claim type.
 """
 from __future__ import annotations
 
@@ -14,11 +17,13 @@ from sqlalchemy.orm import Session
 from app.models import Claim, Dependant, Employee
 from app.services import ai_gateway
 from app.services.claim_intake import claim_profile_for, required_doc_slots
-from app.services.claims_review.field_maps import (
-    AI_RULES,
-    FIELD_MAPS,
-    required_documents_for,
+from app.services.claim_review_configs import (
+    ReviewConfig,
+    attribute_rule_results,
+    rendered_rules,
+    resolve_review_config,
 )
+from app.services.claims_review.field_maps import required_documents_for
 from app.services.roster_attributes import NAME_KEYS, REL_KEYS, first_value
 
 
@@ -26,10 +31,12 @@ def compare_claim(
     db: Session,
     claim: Claim,
     extractions: list[dict[str, Any]],
+    config: ReviewConfig | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the comparison call. Returns ``(review, call_metadata)`` where
     review has ``field_comparisons``, ``rule_results`` (AI rules + required-doc
     checks, source="ai"), ``summary`` and ``confidence``."""
+    cfg = config if config is not None else resolve_review_config(db, claim)
     claim_fields = dict(claim.form_fields or {})
     # benefit context helps the model judge the rules.
     claim_fields.setdefault("claim_kind", claim.claim_kind)
@@ -59,9 +66,13 @@ def compare_claim(
     elif employee is not None and employee.employee_name:
         claim_fields["claimant_name"] = employee.employee_name
 
-    # The referral requirement is a per-product profile fact, not something to
-    # infer from the free-text claim_type / display name — and the document
-    # families come from the claim's resolved slots (hospital-sector aware).
+    # The derived families ALWAYS apply: the referral requirement is a
+    # per-product profile fact (never inferred from the free-text claim_type /
+    # display name) and the families come from the claim's resolved slots,
+    # which are hospital-sector AND sub-type aware. A claim type's configured
+    # list ADDS to them — the config is per claim type, so letting it replace
+    # the derivation would apply one setting's document set to every sub-type
+    # and could drop a guaranteed referral check.
     required_docs = required_documents_for(
         claim.claim_type,
         claim.sub_type,
@@ -73,6 +84,11 @@ def compare_claim(
             claim_kind=claim.claim_kind,
         ),
     )
+    seen = {d.strip().lower() for d in required_docs}
+    for extra in cfg.required_documents or ():
+        if extra.strip().lower() not in seen:
+            seen.add(extra.strip().lower())
+            required_docs.append(extra)
     result = ai_gateway.review_claim(
         db,
         client_id=claim.client_id,
@@ -86,13 +102,19 @@ def compare_claim(
             }
             for e in extractions
         ],
-        field_maps=FIELD_MAPS,
-        ai_rules=AI_RULES,
+        field_maps=list(cfg.field_maps),
+        ai_rules=rendered_rules(cfg),
         required_documents=required_docs,
     )
 
+    # Attribute severity/category back onto the AI's echoed rules FIRST —
+    # a failed warning/info rule becomes a "warning" result and never
+    # auto-flags; unmatched failed rules stay "fail" (fail-safe).
     rule_results = [
-        {**r, "source": "ai"} for r in result.review.get("rule_results", [])
+        {**r, "source": "ai"}
+        for r in attribute_rule_results(
+            cfg, list(result.review.get("rule_results", []))
+        )
     ]
     for check in result.review.get("required_documents_check", []):
         found = bool(check.get("found"))

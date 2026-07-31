@@ -1,10 +1,10 @@
 """Stage 5 — the verdict.
 
 ``clean`` iff: no failed rule (deterministic or AI), no remaining MISMATCH
-after vision verification, no vision-checked field left MISSING_IN_PDF (claimed
-but unsubstantiated), no REFUTED vision check, and the review confidence clears
-the threshold. Anything else → ``flagged`` (the broker decides either way — the
-verdict only orders the queue).
+after vision verification, no evidence-required field left MISSING_IN_PDF
+(claimed but unsubstantiated), no REFUTED vision check, and the review
+confidence clears the threshold. Anything else → ``flagged`` (the broker
+decides either way — the verdict only orders the queue).
 """
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from app.services.claims_review.field_maps import VISION_FIELDS
 
 CONFIDENCE_THRESHOLD = 0.5
 
-# For vision-checked fields (amount, date, provider), "the claim states a value
-# but no document shows it" (MISSING_IN_PDF) is a substantiation gap that must
-# FLAG — not something the aggregate confidence score can paper over — once the
-# vision pass has had its chance to confirm it (vision_verify flips a confirmed
-# value back to MATCH first).
+# For evidence-required fields (by default amount, date, provider), "the claim
+# states a value but no document shows it" (MISSING_IN_PDF) is a substantiation
+# gap that must FLAG — not something the aggregate confidence score can paper
+# over — once the vision pass has had its chance to confirm it (vision_verify
+# flips a confirmed value back to MATCH first).
 
 
 def compute_verdict(
@@ -27,8 +27,15 @@ def compute_verdict(
     field_comparisons: list[dict[str, Any]],
     vision_checks: list[dict[str, Any]],
     confidence: float,
+    *,
+    evidence_fields: frozenset[str] | None = None,
 ) -> tuple[str, list[str]]:
-    """Returns ``(verdict, reasons)`` — reasons explain a flagged verdict."""
+    """Returns ``(verdict, reasons)`` — reasons explain a flagged verdict.
+
+    ``evidence_fields`` comes from the claim's resolved review config
+    (``ReviewConfig.evidence_fields``) and is deliberately independent of the
+    vision-spend set; None keeps the in-code defaults."""
+    fields = VISION_FIELDS if evidence_fields is None else evidence_fields
     reasons: list[str] = []
     for r in rule_results:
         if r.get("status") == "fail":
@@ -37,7 +44,7 @@ def compute_verdict(
         status = c.get("status")
         if status == "MISMATCH":
             reasons.append(f"Field mismatch: {c.get('field_name')}")
-        elif status == "MISSING_IN_PDF" and c.get("field_name") in VISION_FIELDS:
+        elif status == "MISSING_IN_PDF" and c.get("field_name") in fields:
             # Claim states this value but no document (incl. vision) substantiates
             # it — flag for a broker rather than auto-verifying on confidence.
             reasons.append(f"Not substantiated by any document: {c.get('field_name')}")

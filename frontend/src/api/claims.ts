@@ -322,3 +322,171 @@ export function useResetClaimDocTypes() {
     meta: { localErrorHandling: true },
   });
 }
+
+/** Per-claim-type AI review rule setup. One config per (claim_kind, claim_key)
+ * — a claim type with no config keeps the backend's built-in defaults. */
+export type ReviewMatchMode = "fuzzy" | "exact" | "numeric";
+export type ReviewSeverity = "critical" | "warning" | "info";
+
+export interface ReviewFieldMap {
+  portal_field: string;
+  document_field: string;
+  mode: ReviewMatchMode;
+  tolerance?: number | null;
+  /** Spend an extra AI vision pass when the text comparison disagrees. */
+  verify_with_vision: boolean;
+  /** Flag the claim when nothing in the documents substantiates this field.
+   *  Independent of the vision flag on purpose. */
+  require_evidence: boolean;
+}
+
+export interface ReviewAIRule {
+  id?: string | null;
+  rule: string;
+  category: string;
+  severity: ReviewSeverity;
+}
+
+export interface ClaimReviewConfigInput {
+  claim_kind: "insured" | "flex";
+  claim_key: string;
+  display_label: string;
+  enabled: boolean;
+  field_maps: ReviewFieldMap[];
+  ai_rules: ReviewAIRule[];
+  required_documents: string[];
+}
+
+export interface ClaimReviewConfig extends ClaimReviewConfigInput {
+  id: string;
+}
+
+export interface ReviewClaimType {
+  claim_kind: "insured" | "flex";
+  claim_key: string;
+  display_label: string;
+  sub_types: string[];
+}
+
+export interface ReviewScopeOptions {
+  claim_types: ReviewClaimType[];
+  default_config: {
+    field_maps: ReviewFieldMap[];
+    ai_rules: ReviewAIRule[];
+    required_documents: string[];
+  };
+}
+
+export interface SourceReviewConfig {
+  id: string;
+  claim_kind: string;
+  claim_key: string;
+  display_label: string;
+  enabled: boolean;
+  field_map_count: number;
+  rule_count: number;
+  required_document_count: number;
+}
+
+export function useClaimReviewConfigs() {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-review-configs", cid],
+    queryFn: () => api.get<ClaimReviewConfig[]>("/claim-review-configs"),
+  });
+}
+
+export function useReviewScopeOptions() {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-review-configs", "options", cid],
+    queryFn: () => api.get<ReviewScopeOptions>("/claim-review-configs/options"),
+  });
+}
+
+export function useCreateClaimReviewConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ClaimReviewConfigInput) =>
+      api.post<ClaimReviewConfig>("/claim-review-configs", input),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useUpdateClaimReviewConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...input }: ClaimReviewConfigInput & { id: string }) =>
+      api.put<ClaimReviewConfig>(`/claim-review-configs/${id}`, input),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDeleteClaimReviewConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/claim-review-configs/${id}`),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Stateless prompt preview of the editor's current state. */
+export function usePreviewReviewPrompt() {
+  return useMutation({
+    mutationFn: (input: ClaimReviewConfigInput) =>
+      api.post<{ prompt: string }>("/claim-review-configs/preview", input),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export interface ImportSourceCompany {
+  id: string;
+  name: string;
+  configured_count: number;
+}
+
+/** Companies this user may import a rule setup FROM. Server-authoritative:
+ *  it returns exactly what /import accepts (same broker firm, never the
+ *  active company), so the picker can't offer a company that would 404. */
+export function useImportSourceCompanies(enabled: boolean) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-review-configs", "sources", cid],
+    queryFn: () =>
+      api.get<ImportSourceCompany[]>("/claim-review-configs/sources"),
+    enabled,
+  });
+}
+
+/** Another company's configured claim types, offered for import. */
+export function useSourceReviewConfigs(sourceClientId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-review-configs", "from", sourceClientId, cid],
+    queryFn: () =>
+      api.get<SourceReviewConfig[]>(
+        `/claim-review-configs/from/${sourceClientId}`,
+      ),
+    enabled: sourceClientId !== null,
+  });
+}
+
+export function useImportReviewConfigs() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { source_client_id: string; config_ids: string[] }) =>
+      api.post<{ imported: ClaimReviewConfig[] }>(
+        "/claim-review-configs/import",
+        input,
+      ),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    meta: { localErrorHandling: true },
+  });
+}

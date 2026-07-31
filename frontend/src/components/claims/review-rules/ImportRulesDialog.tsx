@@ -1,0 +1,221 @@
+/** Duplicate claim-type rule setups from another company.
+ *
+ * Two steps in one dialog: pick a source company, then tick which of its
+ * configured claim types to copy. Each import lands on the MATCHING claim type
+ * here — creating it, or overwriting an existing custom setup (marked).
+ *
+ * The company list comes from the BACKEND (`/claim-review-configs/sources`),
+ * not from `me.accessible_clients`: for a system_admin that list spans every
+ * broker firm, while an import may only read within the active client's firm
+ * (another firm's rows live in another Postgres schema). Deriving it here
+ * would offer companies the import is guaranteed to reject.
+ */
+import { useMemo, useState } from "react";
+import { ArrowLeft, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import {
+  useClaimReviewConfigs,
+  useImportReviewConfigs,
+  useImportSourceCompanies,
+  useSourceReviewConfigs,
+} from "@/api/claims";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { claimTypeKey } from "@/lib/claimTypes";
+import { formatError } from "@/lib/errors";
+
+export function ImportRulesDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const companiesQuery = useImportSourceCompanies(open);
+  const companies = companiesQuery.data ?? [];
+  const source = useSourceReviewConfigs(open ? sourceId : null);
+  const own = useClaimReviewConfigs();
+  const importConfigs = useImportReviewConfigs();
+
+  // Claim types already customized HERE — an import overwrites them.
+  const ownKeys = useMemo(
+    () =>
+      new Set(
+        (own.data ?? []).map((c) => claimTypeKey(c.claim_kind, c.claim_key)),
+      ),
+    [own.data],
+  );
+
+  const close = (next: boolean) => {
+    onOpenChange(next);
+    if (!next) {
+      setSourceId(null);
+      setPicked(new Set());
+    }
+  };
+
+  const toggle = (id: string) => {
+    const next = new Set(picked);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setPicked(next);
+  };
+
+  const runImport = () => {
+    if (!sourceId || picked.size === 0) return;
+    importConfigs.mutate(
+      { source_client_id: sourceId, config_ids: [...picked] },
+      {
+        onSuccess: (r) => {
+          toast.success(
+            `Imported ${r.imported.length} claim type${r.imported.length === 1 ? "" : "s"}`,
+          );
+          close(false);
+        },
+        onError: (e) => toast.error(formatError(e)),
+      },
+    );
+  };
+
+  const sourceName =
+    companies.find((c) => c.id === sourceId)?.name ?? "another company";
+
+  return (
+    <Sheet open={open} onOpenChange={close}>
+      <SheetContent className="sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>Duplicate rules from another company</SheetTitle>
+        </SheetHeader>
+        <SheetBody className="space-y-3">
+          {sourceId === null ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                Pick the company whose claim review setup you want to copy from.
+              </p>
+              {companiesQuery.isLoading ? (
+                <Skeleton className="h-24 w-full" />
+              ) : companiesQuery.isError ? (
+                <p className="text-sm text-error">
+                  {formatError(companiesQuery.error)}
+                </p>
+              ) : companies.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  You have no other companies to copy from.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {companies.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={c.configured_count === 0}
+                      className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-foreground hover:bg-muted focus-ring disabled:opacity-50 disabled:hover:bg-transparent"
+                      onClick={() => setSourceId(c.id)}
+                    >
+                      <span>{c.name}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {c.configured_count === 0
+                          ? "nothing configured"
+                          : `${c.configured_count} claim type${c.configured_count === 1 ? "" : "s"}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setSourceId(null);
+                  setPicked(new Set());
+                }}
+              >
+                <ArrowLeft className="size-3.5" /> Choose a different company
+              </button>
+              {source.isLoading ? (
+                <Skeleton className="h-24 w-full" />
+              ) : source.isError ? (
+                <p className="text-sm text-error">{formatError(source.error)}</p>
+              ) : (source.data ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {sourceName} has no customized claim types to copy.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Select the claim types to copy from {sourceName}. Each one
+                    lands on the matching claim type of this company.
+                  </p>
+                  <div className="space-y-1.5">
+                    {(source.data ?? []).map((cfg) => {
+                      const overwrites = ownKeys.has(
+                        claimTypeKey(cfg.claim_kind, cfg.claim_key),
+                      );
+                      return (
+                        <label
+                          key={cfg.id}
+                          className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                        >
+                          <Checkbox
+                            checked={picked.has(cfg.id)}
+                            onCheckedChange={() => toggle(cfg.id)}
+                          />
+                          <span className="text-foreground">{cfg.display_label}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {cfg.field_map_count} mappings · {cfg.rule_count} rules
+                            {cfg.required_document_count > 0 &&
+                              ` · ${cfg.required_document_count} required docs`}
+                          </span>
+                          <span className="ml-auto flex items-center gap-1.5">
+                            <Badge variant="outline">
+                              {cfg.claim_kind === "flex" ? "Flex" : cfg.claim_key}
+                            </Badge>
+                            {overwrites && (
+                              <Badge variant="warn">will overwrite</Badge>
+                            )}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
+                    <Button type="button" variant="ghost" onClick={() => close(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={picked.size === 0 || importConfigs.isPending}
+                      onClick={runImport}
+                    >
+                      {importConfigs.isPending && (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      )}
+                      <span className={importConfigs.isPending ? "ml-1.5" : undefined}>
+                        Import {picked.size || ""} selected
+                      </span>
+                    </Button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </SheetBody>
+      </SheetContent>
+    </Sheet>
+  );
+}

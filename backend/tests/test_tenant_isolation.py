@@ -34,6 +34,7 @@ from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     Category,
     ClaimDocType,
+    ClaimReviewConfig,
     Client,
     Dependant,
     Employee,
@@ -249,6 +250,34 @@ def _setup_db():
             )
         )
 
+        # A per-claim-type review rule setup owned by client B.
+        session.add(
+            ClaimReviewConfig(
+                id=REVIEW_CONFIG_B,
+                client_id=CLIENT_B_ID,
+                claim_kind="insured",
+                claim_key="GP",
+                display_label="Client B GP rules",
+                field_maps=[
+                    {
+                        "portal_field": "amount_claimed",
+                        "document_field": "Total Amount",
+                        "mode": "numeric",
+                        "tolerance": 0.01,
+                        "verify_with_vision": True,
+                    }
+                ],
+                ai_rules=[
+                    {
+                        "id": "rule_1",
+                        "rule": "Client B secret rule",
+                        "category": "general",
+                        "severity": "critical",
+                    }
+                ],
+            )
+        )
+
         # A product + employee-attribute owned by client B (schemas CRUD
         # isolation — load_editable_global 404s on another tenant's row).
         session.add(
@@ -324,6 +353,7 @@ CARD_B = "00000000-0000-0000-0000-0000000000bb"
 CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
 PRODUCT_B_OWNED = "00000000-0000-0000-0000-0000000000bf"
 ATTR_B = "00000000-0000-0000-0000-0000000000c1"
+REVIEW_CONFIG_B = "00000000-0000-0000-0000-0000000000c2"
 
 
 # ── PolicyYear ──────────────────────────────────────────────────────────────
@@ -1510,6 +1540,138 @@ def test_claim_doc_type_update_cross_tenant_404(client_as_a: TestClient) -> None
 def test_claim_doc_type_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/claim-doc-types/{DOCTYPE_B}")
     assert res.status_code == 404
+
+
+def test_claim_review_configs_list_excludes_other_tenant(client_as_a: TestClient) -> None:
+    """The per-claim-type review rule setup is per-client — client B's rows
+    must never appear in client A's list."""
+    rows = client_as_a.get("/api/v1/claim-review-configs").json()
+    assert all(r["id"] != REVIEW_CONFIG_B for r in rows)
+
+
+def test_claim_review_config_update_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.put(
+        f"/api/v1/claim-review-configs/{REVIEW_CONFIG_B}",
+        json={
+            "claim_kind": "insured",
+            "claim_key": "GP",
+            "display_label": "Hijacked",
+            "field_maps": [
+                {"portal_field": "amount_claimed", "document_field": "Total"}
+            ],
+        },
+    )
+    assert res.status_code == 404
+
+
+def test_claim_review_config_delete_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.delete(f"/api/v1/claim-review-configs/{REVIEW_CONFIG_B}")
+    assert res.status_code == 404
+
+
+def test_claim_review_options_requires_a_tenant(
+    client_as_no_tenant: TestClient,
+) -> None:
+    """The claim-type vocabulary is built from the ACTIVE client's benefit year
+    — an unbound principal must not reach it."""
+    assert (
+        client_as_no_tenant.get("/api/v1/claim-review-configs/options").status_code
+        == 400
+    )
+
+
+def test_claim_review_create_requires_a_tenant(
+    client_as_no_tenant: TestClient,
+) -> None:
+    res = client_as_no_tenant.post(
+        "/api/v1/claim-review-configs",
+        json={
+            "claim_kind": "insured",
+            "claim_key": "GP",
+            "display_label": "Unbound",
+            "field_maps": [
+                {"portal_field": "amount_claimed", "document_field": "Total"}
+            ],
+        },
+    )
+    assert res.status_code == 400
+
+
+def test_claim_review_preview_requires_a_tenant(
+    client_as_no_tenant: TestClient,
+) -> None:
+    res = client_as_no_tenant.post(
+        "/api/v1/claim-review-configs/preview",
+        json={
+            "claim_kind": "insured",
+            "claim_key": "GP",
+            "display_label": "Unbound",
+            "field_maps": [
+                {"portal_field": "amount_claimed", "document_field": "Total"}
+            ],
+        },
+    )
+    assert res.status_code == 400
+
+
+def test_claim_review_sources_exclude_active_and_other_firms(
+    client_as_a: TestClient,
+) -> None:
+    """The import picker is server-authoritative — it must offer exactly what
+    /import accepts: same broker firm, never the active company."""
+    body = client_as_a.get("/api/v1/claim-review-configs/sources").json()
+    ids = {c["id"] for c in body}
+    assert DEMO_CLIENT_ID not in ids
+    assert CLIENT_B_ID in ids  # same firm → importable
+
+
+def test_claim_review_import_source_other_firm_404(client_as_a: TestClient) -> None:
+    """The import source must be accessible AND in the same broker firm — a
+    rival firm's client 404s (on Postgres its rows live in another schema, so
+    a cross-firm import would silently copy nothing)."""
+    from app.models import BrokerFirm
+
+    other_firm_id = "00000000-0000-0000-0000-0000000000f2"
+    other_client_id = "00000000-0000-0000-0000-0000000000f3"
+    with SessionLocal() as session:
+        if session.get(BrokerFirm, other_firm_id) is None:
+            session.add(BrokerFirm(id=other_firm_id, name="Rival Brokers Two"))
+            session.add(
+                Client(
+                    id=other_client_id,
+                    name="Rival-firm client two",
+                    broker_firm_id=other_firm_id,
+                )
+            )
+            session.commit()
+
+    assert (
+        client_as_a.get(f"/api/v1/claim-review-configs/from/{other_client_id}").status_code
+        == 404
+    )
+    res = client_as_a.post(
+        "/api/v1/claim-review-configs/import",
+        json={"source_client_id": other_client_id, "config_ids": [REVIEW_CONFIG_B]},
+    )
+    assert res.status_code == 404
+
+
+def test_claim_review_import_same_firm_source_allowed(client_as_a: TestClient) -> None:
+    """Same-firm import is the FEATURE: client A duplicates client B's GP
+    setup onto its own GP claim type (a copy — B's row is untouched)."""
+    listed = client_as_a.get(f"/api/v1/claim-review-configs/from/{CLIENT_B_ID}").json()
+    assert [r["id"] for r in listed] == [REVIEW_CONFIG_B]
+    res = client_as_a.post(
+        "/api/v1/claim-review-configs/import",
+        json={"source_client_id": CLIENT_B_ID, "config_ids": [REVIEW_CONFIG_B]},
+    )
+    assert res.status_code == 200
+    imported = res.json()["imported"]
+    assert len(imported) == 1
+    new_id = imported[0]["id"]
+    assert new_id != REVIEW_CONFIG_B  # a copy, not a shared row
+    # Clean up so A's list-isolation test stays order-independent.
+    assert client_as_a.delete(f"/api/v1/claim-review-configs/{new_id}").status_code == 204
 
 
 def test_dashboard_summary_excludes_other_firm(client_as_a: TestClient) -> None:

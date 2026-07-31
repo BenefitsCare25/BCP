@@ -57,3 +57,8 @@ class ClaimAIReview(Base, TimestampMixin):
     cost_estimate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     superseded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Which per-claim-type rule setup drove this run (claim_review_configs) —
+    # NULL = the in-code defaults. Deliberately no FK: the provenance must
+    # survive the config row being deleted/reverted later.
+    review_config_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    review_config_label: Mapped[str | None] = mapped_column(String(128), nullable=True)

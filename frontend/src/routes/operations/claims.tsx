@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Download, Loader2, RefreshCw } from "lucide-react";
 import {
   DOC_TYPE_LABELS,
@@ -40,7 +41,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ClaimGracePeriodField } from "@/components/claims/ClaimGracePeriodField";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
+import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
+import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
 import { InfoHint } from "@/components/ui/tooltip";
 import { PageGuide } from "@/components/ui/page-guide";
 import { formatError } from "@/lib/errors";
@@ -115,7 +120,7 @@ const RERUNNABLE = new Set([
 
 type DecisionAction = "approve" | "reject" | "needs_info";
 
-export function ClaimsQueuePage() {
+function QueueTab() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const [status, setStatus] = useState<string>("");
   const [page, setPage] = useState(0);
@@ -629,5 +634,59 @@ export function ClaimsQueuePage() {
         ]}
       />
     </div>
+  );
+}
+
+// The Claims page: the review queue plus everything that governs it — the
+// per-claim-type AI review rule setup (AI extraction) and the company claim
+// settings (grace period + document vocabulary, moved here from Company
+// settings so the whole claims surface lives in one place).
+const CLAIMS_TABS = ["queue", "ai-extraction", "settings"] as const;
+type ClaimsTab = (typeof CLAIMS_TABS)[number];
+const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
+  CLAIMS_TABS.includes(v as ClaimsTab);
+
+export function ClaimsQueuePage() {
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { tab?: string };
+  const tab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
+
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(v) =>
+        navigate({ to: "/operations/claims", search: { tab: v } })
+      }
+    >
+      <TabsList>
+        <TabsTrigger value="queue">Queue</TabsTrigger>
+        <TabsTrigger value="ai-extraction">AI extraction</TabsTrigger>
+        <TabsTrigger value="settings">Settings</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="queue">
+        <QueueTab />
+      </TabsContent>
+
+      <TabsContent value="ai-extraction">
+        <ReviewRuleSettings />
+      </TabsContent>
+
+      <TabsContent value="settings" className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Claim submission</CardTitle>
+            <CardDescription>
+              Governs when members may submit claims for the current benefit
+              year.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ClaimGracePeriodField />
+          </CardContent>
+        </Card>
+        <DocTypeSettings />
+      </TabsContent>
+    </Tabs>
   );
 }

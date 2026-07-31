@@ -70,7 +70,10 @@ RECOMMEND_PROMPT_VERSION = "schema_recommend/v1"
 SLIP_EXTRACT_PROMPT_VERSION = "slip_extract/v2"
 FLEX_EXTRACT_PROMPT_VERSION = "flex_extract/v1"
 CLAIM_EXTRACT_PROMPT_VERSION = "claim_extract/v1"
-CLAIM_REVIEW_PROMPT_VERSION = "claim_review/v1"
+# v2: severity-tagged business rules ([CRITICAL]/[WARNING]/[INFO]) + the
+# verbatim-echo instruction in the system prompt. The cache key hashes only
+# the USER prompt, so a system-prompt semantics change must bump this.
+CLAIM_REVIEW_PROMPT_VERSION = "claim_review/v2"
 CLAIM_VERIFY_PROMPT_VERSION = "claim_verify/v1"
 
 # Per-model pricing — $/million tokens. Hardcoded list pricing; override

@@ -30,7 +30,6 @@ MAX_VISION_CHECKS = 4
 # MISSING_IN_PDF and the verdict flags it (see verdict.py) — evidence for a
 # vision-checked field is never assumed present just because confidence is high.
 _VERIFIABLE_STATUSES = frozenset({"MISMATCH", "UNCERTAIN", "MISSING_IN_PDF"})
-_VISION_FIELDS = VISION_FIELDS
 
 # MISMATCH/UNCERTAIN comparisons get the shared MAX_VISION_CHECKS budget FIRST:
 # a vision recheck can flip a false MISMATCH back to MATCH (clearing a flag),
@@ -55,8 +54,13 @@ def run_vision_checks(
     claim: Claim,
     docs: list[StoredDocument],
     field_comparisons: list[dict[str, Any]],
+    vision_fields: frozenset[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Returns ``(updated_comparisons, vision_checks, call_metadata)``."""
+    """Returns ``(updated_comparisons, vision_checks, call_metadata)``.
+
+    ``vision_fields`` comes from the claim's resolved review config
+    (per-claim-type field maps); None keeps the in-code defaults."""
+    fields = VISION_FIELDS if vision_fields is None else vision_fields
     storage = get_storage()
     updated = [dict(c) for c in field_comparisons]
     vision_checks: list[dict[str, Any]] = []
@@ -71,7 +75,7 @@ def run_vision_checks(
             break
         if comparison.get("status") not in _VERIFIABLE_STATUSES:
             continue
-        if comparison.get("field_name") not in _VISION_FIELDS:
+        if comparison.get("field_name") not in fields:
             continue
         if comparison.get("claim_value") in (None, ""):
             continue

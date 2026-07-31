@@ -883,3 +883,537 @@ def test_recover_stranded_reviews_reverts_interrupted_run() -> None:
     # Idempotent: a second sweep finds nothing new to revert (the first run
     # already moved every stranded claim to submitted).
     assert recover_stranded_reviews() == 0
+
+
+# ── Per-claim-type review rule setup (claim_review_configs) ───────────────────
+
+
+def _mk_review_config(**over):
+    """Create a ClaimReviewConfig row for DEMO_CLIENT_ID. Returns its id.
+    Callers MUST delete it (``_drop_review_configs``) — the module DB is shared
+    and a leftover row would re-configure every later GHS claim's review."""
+    from app.models import ClaimReviewConfig
+
+    data = {
+        "client_id": DEMO_CLIENT_ID,
+        "claim_kind": "insured",
+        "claim_key": "GHS",
+        "display_label": "Hospitalisation rules",
+        "enabled": True,
+        "field_maps": [
+            {
+                "portal_field": "amount_claimed",
+                "document_field": "Total Amount",
+                "mode": "numeric",
+                "tolerance": 0.01,
+                "verify_with_vision": True,
+            }
+        ],
+        "ai_rules": [],
+        "required_documents": None,
+    }
+    data.update(over)
+    with SessionLocal() as s:
+        row = ClaimReviewConfig(**data)
+        s.add(row)
+        s.commit()
+        return row.id
+
+
+def _drop_review_configs():
+    from app.models import ClaimReviewConfig
+
+    with SessionLocal() as s:
+        s.query(ClaimReviewConfig).delete()
+        s.commit()
+
+
+def test_resolve_review_config_defaults_and_matching():
+    """No row → the in-code defaults; an enabled row on the claim's product
+    wins; a disabled row is ignored; flex categories match case-insensitively."""
+    from app.services.claim_review_configs import resolve_review_config
+
+    insured_claim = Claim(
+        client_id=DEMO_CLIENT_ID, claim_kind="insured", product_code="GHS"
+    )
+    flex_claim = Claim(
+        client_id=DEMO_CLIENT_ID, claim_kind="flex", flex_category_name="Gym Membership"
+    )
+    try:
+        with SessionLocal() as s:
+            cfg = resolve_review_config(s, insured_claim)
+            assert cfg.config_id is None
+            assert cfg.vision_fields == {
+                "amount_claimed", "incurred_date", "provider_name"
+            }
+            assert all(r.severity == "critical" for r in cfg.ai_rules)
+
+        config_id = _mk_review_config()
+        flex_id = _mk_review_config(
+            claim_kind="flex", claim_key="gym  membership",
+            display_label="Gym rules",
+        )
+        with SessionLocal() as s:
+            cfg = resolve_review_config(s, insured_claim)
+            assert cfg.config_id == config_id
+            assert cfg.config_label == "Hospitalisation rules"
+            # The row's single field map drives the vision set.
+            assert cfg.vision_fields == {"amount_claimed"}
+            # Flex category name matches normalized/casefolded.
+            assert resolve_review_config(s, flex_claim).config_id == flex_id
+
+        with SessionLocal() as s:
+            from app.models import ClaimReviewConfig
+
+            s.get(ClaimReviewConfig, config_id).enabled = False
+            s.commit()
+        with SessionLocal() as s:
+            assert resolve_review_config(s, insured_claim).config_id is None
+    finally:
+        _drop_review_configs()
+
+
+def test_warning_severity_rule_fail_does_not_flag():
+    """A failed [WARNING] rule surfaces as a warning result — the claim still
+    verifies. A failed [CRITICAL] rule (and an unmatched failed rule) flags."""
+    _mk_review_config(
+        ai_rules=[
+            {"id": "r1", "rule": "Outstanding balance should be zero.",
+             "category": "amount", "severity": "warning"},
+        ]
+    )
+    claim_id, review_id = _mk_claim(marker=b"warnsev")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result(
+                       [_match("amount_claimed")],
+                       rules=[{"rule": "[WARNING] Outstanding balance should be zero.",
+                               "status": "fail",
+                               "evidence": "Balance shows $12 outstanding."}],
+                   )), \
+             patch("app.services.ai_gateway.verify_claim_concern"):
+            run_review(claim_id, review_id, None)
+
+        claim, review = _load(claim_id, review_id)
+        assert claim.status == CLAIM_STATUS_AI_VERIFIED
+        assert review.verdict == "clean"
+        entry = next(r for r in review.rule_results if r.get("rule_id") == "r1")
+        assert entry["status"] == "warning"
+        assert entry["severity"] == "warning"
+        assert entry["category"] == "amount"
+        # Provenance: the review records which setup drove it.
+        assert review.review_config_id is not None
+        assert review.review_config_label == "Hospitalisation rules"
+    finally:
+        _drop_review_configs()
+
+
+def test_critical_and_unmatched_rule_failures_flag():
+    _mk_review_config(
+        ai_rules=[
+            {"id": "r1", "rule": "Documents must be genuine.",
+             "category": "authenticity", "severity": "critical"},
+        ]
+    )
+    claim_id, review_id = _mk_claim(marker=b"critsev")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result(
+                       [_match("amount_claimed")],
+                       rules=[
+                           {"rule": "[CRITICAL] Documents must be genuine.",
+                            "status": "fail", "evidence": "Looks doctored."},
+                           # The AI echoed text that matches NOTHING configured —
+                           # must stay a fail (never silently downgraded).
+                           {"rule": "Some drifted rule text.", "status": "fail",
+                            "evidence": "…"},
+                       ],
+                   )), \
+             patch("app.services.ai_gateway.verify_claim_concern"):
+            run_review(claim_id, review_id, None)
+
+        claim, review = _load(claim_id, review_id)
+        assert claim.status == CLAIM_STATUS_AI_FLAGGED
+        assert review.verdict == "flagged"
+        drifted = next(
+            r for r in review.rule_results if r.get("rule") == "Some drifted rule text."
+        )
+        assert drifted["status"] == "fail"
+        assert drifted["severity"] == "critical"
+    finally:
+        _drop_review_configs()
+
+
+def test_required_documents_config_adds_to_derived_families():
+    """A configured required-documents list ADDS to the automatic slot/
+    sub-type derivation — it never replaces it, so a per-claim-type list can't
+    drop a sub-type-specific family or a guaranteed referral check."""
+    _mk_review_config(required_documents=["itemised physiotherapy invoice"])
+    claim_id, review_id = _mk_claim(marker=b"reqdocs")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result([_match("amount_claimed")])) as rv, \
+             patch("app.services.ai_gateway.verify_claim_concern"):
+            run_review(claim_id, review_id, None)
+        sent = rv.call_args.kwargs["required_documents"]
+        # The derived family for this claim survives...
+        assert "receipt or tax invoice" in sent
+        # ...and the broker's extra rides alongside it.
+        assert "itemised physiotherapy invoice" in sent
+        # The configured field maps + severity-tagged rules rode along too.
+        assert rv.call_args.kwargs["field_maps"][0]["document_field"] == "Total Amount"
+    finally:
+        _drop_review_configs()
+
+
+def test_required_documents_extra_is_deduped_against_derived():
+    """Re-stating a family the derivation already produces must not duplicate
+    it in the prompt."""
+    _mk_review_config(required_documents=["Receipt or Tax Invoice"])
+    claim_id, review_id = _mk_claim(marker=b"reqdocsdup")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result([_match("amount_claimed")])) as rv, \
+             patch("app.services.ai_gateway.verify_claim_concern"):
+            run_review(claim_id, review_id, None)
+        sent = [d.lower() for d in rv.call_args.kwargs["required_documents"]]
+        assert sent.count("receipt or tax invoice") == 1
+    finally:
+        _drop_review_configs()
+
+
+def test_blank_echoed_rule_text_is_not_attributed():
+    """An AI rule_result with a blank/missing `rule` must NOT be matched to a
+    configured rule — "" is contained in every rule text, so a containment
+    fallback would lend it the first rule's severity and a warning-severity
+    match would downgrade an unattributable FAIL into a passing claim."""
+    _mk_review_config(
+        ai_rules=[
+            {"id": "r1", "rule": "Outstanding balance should be zero.",
+             "category": "amount", "severity": "warning"},
+        ]
+    )
+    claim_id, review_id = _mk_claim(marker=b"blankrule")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result(
+                       [_match("amount_claimed")],
+                       rules=[{"rule": "", "status": "fail", "evidence": "?"}],
+                   )), \
+             patch("app.services.ai_gateway.verify_claim_concern"):
+            run_review(claim_id, review_id, None)
+
+        claim, review = _load(claim_id, review_id)
+        entry = next(r for r in review.rule_results if r.get("source") == "ai")
+        assert entry.get("rule_id") is None       # never attributed
+        assert entry["severity"] == "critical"    # fail-safe default
+        assert entry["status"] == "fail"          # NOT downgraded
+        assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    finally:
+        _drop_review_configs()
+
+
+def test_severity_prefix_is_stripped_from_stored_rule_text():
+    """`[CRITICAL]` etc. is prompt markup — the review row (and so the broker's
+    rule panel and the flagged reasons) must carry the broker's own wording."""
+    _mk_review_config(
+        ai_rules=[
+            {"id": "r1", "rule": "Documents must be genuine.",
+             "category": "authenticity", "severity": "critical"},
+        ]
+    )
+    claim_id, review_id = _mk_claim(marker=b"prefix")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result(
+                       [_match("amount_claimed")],
+                       rules=[
+                           {"rule": "[CRITICAL] Documents must be genuine.",
+                            "status": "fail", "evidence": "Looks doctored."},
+                           {"rule": "[WARNING] Some unconfigured rule text.",
+                            "status": "fail", "evidence": "…"},
+                       ],
+                   )), \
+             patch("app.services.ai_gateway.verify_claim_concern"):
+            run_review(claim_id, review_id, None)
+
+        _, review = _load(claim_id, review_id)
+        texts = [r.get("rule", "") for r in review.rule_results]
+        assert "Documents must be genuine." in texts
+        # Even an UNMATCHED rule gets the markup stripped.
+        assert "Some unconfigured rule text." in texts
+        assert not any(t.startswith("[") for t in texts)
+        # …and the flagged reasons quote the clean text too.
+        assert "[CRITICAL]" not in (review.summary or "")
+    finally:
+        _drop_review_configs()
+
+
+def test_evidence_requirement_is_independent_of_vision_spend():
+    """Turning OFF a vision re-check is a cost decision; it must not switch off
+    the unsubstantiated-value guard. require_evidence keeps MISSING_IN_PDF
+    flagging with zero vision calls."""
+    _mk_review_config(
+        field_maps=[{
+            "portal_field": "amount_claimed",
+            "document_field": "Total Amount",
+            "mode": "numeric",
+            "tolerance": 0.01,
+            "verify_with_vision": False,
+            "require_evidence": True,
+        }]
+    )
+    claim_id, review_id = _mk_claim(marker=b"evidenceonly")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result([{
+                       "field_name": "amount_claimed", "claim_value": "85.00",
+                       "document_value": None, "status": "MISSING_IN_PDF",
+                       "confidence": 0.9,
+                   }])), \
+             patch("app.services.ai_gateway.verify_claim_concern") as vf:
+            run_review(claim_id, review_id, None)
+
+        assert vf.call_count == 0  # no vision spend
+        claim, review = _load(claim_id, review_id)
+        assert claim.status == CLAIM_STATUS_AI_FLAGGED
+        assert "Not substantiated" in (review.summary or "")
+    finally:
+        _drop_review_configs()
+
+
+def test_legacy_field_map_without_require_evidence_mirrors_vision():
+    """Rows written before the flags were split carry only
+    `verify_with_vision` — they must keep their original behaviour."""
+    from app.models import ClaimReviewConfig
+    from app.services.claim_review_configs import config_from_row
+
+    config_id = _mk_review_config(
+        field_maps=[
+            {"portal_field": "amount_claimed", "document_field": "Total",
+             "mode": "numeric", "verify_with_vision": True},
+            {"portal_field": "currency", "document_field": "Currency",
+             "mode": "fuzzy", "verify_with_vision": False},
+        ]
+    )
+    try:
+        with SessionLocal() as s:
+            cfg = config_from_row(s.get(ClaimReviewConfig, config_id))
+        assert cfg.vision_fields == {"amount_claimed"}
+        assert cfg.evidence_fields == {"amount_claimed"}
+    finally:
+        _drop_review_configs()
+
+
+def test_review_config_stamped_on_deterministically_flagged_claim():
+    """A stage-1 fail short-circuits before any AI spend — but the review row
+    must still record WHICH setup was in force (NULL means 'the defaults')."""
+    _mk_review_config()
+    # Out-of-period incurred date → deterministic fail.
+    claim_id, review_id = _mk_claim(incurred=date(2027, 1, 1), marker=b"detprov")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document") as ex, \
+             patch("app.services.ai_gateway.review_claim") as rv:
+            run_review(claim_id, review_id, None)
+        assert ex.call_count == 0 and rv.call_count == 0
+
+        claim, review = _load(claim_id, review_id)
+        assert claim.status == CLAIM_STATUS_AI_FLAGGED
+        assert review.review_config_label == "Hospitalisation rules"
+        assert review.review_config_id is not None
+    finally:
+        _drop_review_configs()
+
+
+def test_vision_gating_follows_config():
+    """verify_with_vision=False on the amount map → no vision spend, and a
+    MISSING_IN_PDF on that field no longer blocks verification."""
+    _mk_review_config(
+        field_maps=[{
+            "portal_field": "amount_claimed",
+            "document_field": "Total Amount",
+            "mode": "numeric",
+            "tolerance": 0.01,
+            "verify_with_vision": False,
+        }]
+    )
+    claim_id, review_id = _mk_claim(marker=b"novision")
+    try:
+        with patch("app.services.ai_gateway.extract_claim_document",
+                   return_value=_extract_result()), \
+             patch("app.services.ai_gateway.review_claim",
+                   return_value=_review_result([{
+                       "field_name": "amount_claimed", "claim_value": "85.00",
+                       "document_value": None, "status": "MISSING_IN_PDF",
+                       "confidence": 0.9,
+                   }])), \
+             patch("app.services.ai_gateway.verify_claim_concern") as vf:
+            run_review(claim_id, review_id, None)
+
+        assert vf.call_count == 0
+        claim, review = _load(claim_id, review_id)
+        assert claim.status == CLAIM_STATUS_AI_VERIFIED
+        assert review.verdict == "clean"
+    finally:
+        _drop_review_configs()
+
+
+def test_review_config_crud_over_http(broker: TestClient):
+    """CRUD + options + duplicate guard + preview, as the settings UI uses it."""
+    try:
+        assert broker.get("/api/v1/claim-review-configs").json() == []
+
+        options = broker.get("/api/v1/claim-review-configs/options").json()
+        defaults = options["default_config"]
+        assert {m["portal_field"] for m in defaults["field_maps"]} >= {
+            "amount_claimed", "incurred_date", "provider_name"
+        }
+        assert len(defaults["ai_rules"]) == 6
+
+        body = {
+            "claim_kind": "insured",
+            "claim_key": "GHS",
+            "display_label": "Hospitalisation rules",
+            "field_maps": defaults["field_maps"],
+            "ai_rules": [{"rule": "No third-party billing.",
+                          "category": "amount", "severity": "warning"}],
+            "required_documents": [],
+        }
+        created = broker.post("/api/v1/claim-review-configs", json=body)
+        assert created.status_code == 201
+        config_id = created.json()["id"]
+        # Rules get stable ids assigned on write.
+        assert created.json()["ai_rules"][0]["id"]
+
+        # Same claim type again (case-insensitive key) → 409.
+        dup = broker.post(
+            "/api/v1/claim-review-configs", json={**body, "claim_key": "ghs"}
+        )
+        assert dup.status_code == 409
+        assert dup.json()["detail"]["code"] == "duplicate_claim_type"
+
+        updated = broker.put(
+            f"/api/v1/claim-review-configs/{config_id}",
+            json={**body, "display_label": "GHS review rules", "enabled": False},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["enabled"] is False
+
+        preview = broker.post("/api/v1/claim-review-configs/preview", json=body)
+        assert preview.status_code == 200
+        prompt = preview.json()["prompt"]
+        assert "[WARNING] No third-party billing." in prompt
+        assert "<amount_claimed>" in prompt
+        assert "derived automatically from the claim type" in prompt
+
+        # Self-import is rejected.
+        self_import = broker.post(
+            "/api/v1/claim-review-configs/import",
+            json={"source_client_id": DEMO_CLIENT_ID, "config_ids": [config_id]},
+        )
+        assert self_import.status_code == 422
+
+        assert (
+            broker.delete(f"/api/v1/claim-review-configs/{config_id}").status_code
+            == 204
+        )
+        assert broker.get("/api/v1/claim-review-configs").json() == []
+    finally:
+        _drop_review_configs()
+
+
+def test_blank_label_is_rejected_not_committed(broker: TestClient):
+    """A whitespace-only label used to pass min_length, normalize to "" on
+    write, and then make EVERY later list call 500 — the row was committed but
+    unserializable. It must be refused at the boundary instead."""
+    try:
+        options = broker.get("/api/v1/claim-review-configs/options").json()
+        body = {
+            "claim_kind": "insured",
+            "claim_key": "GHS",
+            "display_label": "   ",
+            "field_maps": options["default_config"]["field_maps"],
+            "ai_rules": [],
+            "required_documents": [],
+        }
+        assert broker.post("/api/v1/claim-review-configs", json=body).status_code == 422
+        assert (
+            broker.post(
+                "/api/v1/claim-review-configs",
+                json={**body, "display_label": "GHS", "claim_key": " "},
+            ).status_code
+            == 422
+        )
+        # Nothing was written, and the surface still reads.
+        assert broker.get("/api/v1/claim-review-configs").status_code == 200
+        assert broker.get("/api/v1/claim-review-configs").json() == []
+    finally:
+        _drop_review_configs()
+
+
+def test_corrupt_row_stays_listable_and_deletable(broker: TestClient):
+    """Reading must never fail: a hand-edited row that violates the write-side
+    schema (over-long rule, too many required docs) still lists — otherwise the
+    broker could neither see nor delete it."""
+    config_id = _mk_review_config(
+        ai_rules=[{"id": "r1", "rule": "x" * 5000, "category": "c" * 200,
+                   "severity": "bogus"}],
+        required_documents=[f"doc {i}" for i in range(40)],
+    )
+    try:
+        res = broker.get("/api/v1/claim-review-configs")
+        assert res.status_code == 200
+        row = next(r for r in res.json() if r["id"] == config_id)
+        assert len(row["ai_rules"][0]["rule"]) == 2000      # clamped
+        assert row["ai_rules"][0]["severity"] == "critical"  # fail-safe
+        assert len(row["required_documents"]) == 15          # clamped
+        assert (
+            broker.delete(f"/api/v1/claim-review-configs/{config_id}").status_code
+            == 204
+        )
+    finally:
+        _drop_review_configs()
+
+
+def test_import_sources_lists_only_same_firm_companies(broker: TestClient):
+    """The picker is server-authoritative: it must offer exactly the companies
+    /import would accept (same broker firm, never the active one)."""
+    from app.models import BrokerFirm, Client
+
+    rival_firm = "00000000-0000-0000-0000-0000000000e0"
+    rival_client = "00000000-0000-0000-0000-0000000000e1"
+    with SessionLocal() as s:
+        if s.get(BrokerFirm, rival_firm) is None:
+            s.add(BrokerFirm(id=rival_firm, name="Rival Brokers"))
+            s.add(Client(id=rival_client, name="Rival client",
+                         broker_firm_id=rival_firm))
+            s.commit()
+    try:
+        sources = broker.get("/api/v1/claim-review-configs/sources").json()
+        ids = {c["id"] for c in sources}
+        assert DEMO_CLIENT_ID not in ids   # never the active company
+        assert rival_client not in ids     # never another firm
+        assert all("configured_count" in c for c in sources)
+    finally:
+        with SessionLocal() as s:
+            rc = s.get(Client, rival_client)
+            if rc is not None:
+                s.delete(rc)
+            rf = s.get(BrokerFirm, rival_firm)
+            if rf is not None:
+                s.delete(rf)
+            s.commit()

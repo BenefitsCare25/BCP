@@ -1,8 +1,11 @@
-"""Static review configuration — field maps, required documents, AI rules.
+"""Default review configuration — field maps, required documents, AI rules.
 
-In-code for v1 (per the plan); a future iteration can move these to a
-DB-driven per-client template. A field map pairs a claim-form field with the
-document field family it should match, plus the comparison mode:
+These are the IN-CODE DEFAULTS: `services/claim_review_configs.py` overlays
+them with the per-company, per-claim-type rows the broker edits on the Claims
+page (AI extraction tab), and the required-document derivation below stays
+live whenever a claim type doesn't override it. A field map pairs a
+claim-form field with the document field family it should match, plus the
+comparison mode:
 
 - ``fuzzy``   — semantic equivalence, formatting ignored (dates get the
   any-date-field fallback scan, see the review prompt).

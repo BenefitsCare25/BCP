@@ -33,6 +33,7 @@ from app.models.claim_ai_review import (
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
 from app.services.claim_doc_types import resolve_doc_types
+from app.services.claim_review_configs import resolve_review_config
 from app.services.claims import claim_documents
 from app.services.claims_review import (
     comparison,
@@ -152,6 +153,15 @@ def _run_stages(
         raise RuntimeError(f"Employee {claim.employee_id} not found for claim {claim.id}")
     statement = build_member_statement(db, employee)
 
+    # The claim type's review configuration (per-company; in-code defaults when
+    # the type isn't customized) — resolved once, drives comparison, vision
+    # gating and the verdict. Stamped BEFORE stage 1 so a deterministically
+    # flagged claim still records which setup was in force (a NULL there means
+    # "ran on the defaults", which would be a lie for a customized claim type).
+    cfg = resolve_review_config(db, claim)
+    review.review_config_id = cfg.config_id
+    review.review_config_label = cfg.config_label
+
     # Stage 1 — deterministic pre-checks. A hard fail flags the claim with
     # zero AI spend.
     det_results = rules.deterministic_rule_results(db, claim, statement)
@@ -195,19 +205,21 @@ def _run_stages(
     )
 
     # Stage 3 — comparison + AI-judged rules + required-documents check.
-    ai_review, call_meta = comparison.compare_claim(db, claim, extractions)
+    ai_review, call_meta = comparison.compare_claim(db, claim, extractions, cfg)
     all_calls.append(call_meta)
 
     # Stage 4 — selective vision verification (cap in vision_verify).
     comparisons, vision_checks, calls = vision_verify.run_vision_checks(
-        db, claim, docs, ai_review["field_comparisons"]
+        db, claim, docs, ai_review["field_comparisons"],
+        vision_fields=cfg.vision_fields,
     )
     all_calls.extend(calls)
 
     # Stage 5 — verdict.
     rule_results = det_results + doc_warnings + ai_review["rule_results"]
     verdict, reasons = compute_verdict(
-        rule_results, comparisons, vision_checks, ai_review["confidence"]
+        rule_results, comparisons, vision_checks, ai_review["confidence"],
+        evidence_fields=cfg.evidence_fields,
     )
 
     review.status = REVIEW_STATUS_COMPLETE
