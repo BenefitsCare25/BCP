@@ -31,7 +31,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { claimTypeKey } from "@/lib/claimTypes";
 import { formatError } from "@/lib/errors";
 
 export function ImportRulesDialog({
@@ -50,12 +49,11 @@ export function ImportRulesDialog({
   const own = useClaimReviewConfigs();
   const importConfigs = useImportReviewConfigs();
 
-  // Claim types already customized HERE — an import overwrites them.
+  // Claim types already customized HERE — an import overwrites them. Both
+  // sides carry the server's own join key (see `ClaimReviewConfig.key`); a
+  // locally derived one could disagree with the UPSERT the import performs.
   const ownKeys = useMemo(
-    () =>
-      new Set(
-        (own.data ?? []).map((c) => claimTypeKey(c.claim_kind, c.claim_key)),
-      ),
+    () => new Set((own.data ?? []).map((c) => c.key)),
     [own.data],
   );
 
@@ -170,9 +168,7 @@ export function ImportRulesDialog({
                       together as one sentence at small widths. */}
                   <div className="space-y-2">
                     {(source.data ?? []).map((cfg) => {
-                      const overwrites = ownKeys.has(
-                        claimTypeKey(cfg.claim_kind, cfg.claim_key),
-                      );
+                      const overwrites = ownKeys.has(cfg.key);
                       return (
                         <label
                           key={cfg.id}

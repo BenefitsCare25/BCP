@@ -739,10 +739,13 @@ export function useSetCurrentPolicyYear() {
   return useMutation({
     mutationFn: (policyYearId: string) =>
       api.post<PolicyYear>(`/policy-years/${policyYearId}/set-current`, {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["policy-years"] });
-      qc.invalidateQueries({ queryKey: ["audit-log"] });
-    },
+    // Which year is current changes what a LOT of unrelated queries return —
+    // the claim-type vocabulary, the dashboard roll-up, panel assignments,
+    // portal previews. Listing them would guarantee one gets missed and shows
+    // stale-empty, so invalidate broadly: this is a rare, deliberate action.
+    // (Safe here unlike a tenant switch — the active client is unchanged, so no
+    // in-flight query can be refetched against the wrong tenant.)
+    onSuccess: () => qc.invalidateQueries(),
   });
 }
 

@@ -286,3 +286,60 @@ def test_create_product_firm_scope_requires_admin() -> None:
         assert res.status_code == 403, res.text
     finally:
         app.dependency_overrides[get_current_user] = _user_d
+
+
+def test_envelope_paths_agree_on_a_half_written_term(client: TestClient) -> None:
+    """`envelopes_for` (policy-year list) and `envelope_for` (single year) must
+    resolve a ProductTerm's dates identically.
+
+    They didn't: the batched path honoured an override only when BOTH dates were
+    set, the single-year path when the START was set. `ProductTermUpdate`
+    enforces both-or-neither, so only a migrated or hand-written row reaches the
+    difference — but the batched path is what feeds `PolicyYearOut.coverage_*`,
+    which the UI gates "Set current" on, so a disagreement there strands the
+    member portal. Both now go through `term_window`.
+    """
+    from app.models import Category, ProductTerm
+    from app.services.product_terms import envelope_for, envelopes_for
+
+    terms = client.get(f"/api/v1/policy-years/{PY_D}/product-terms").json()
+    gpa = next(t for t in terms if t["code"] == "GPA")
+    client.delete(f"/api/v1/policy-years/{PY_D}/product-terms/{gpa['product_id']}")
+
+    with SessionLocal() as s:
+        # Bind the product INTO the year, so it actually shapes the envelope.
+        s.add(
+            Category(
+                id="00000000-0000-0000-0000-0000000000dc",
+                policy_year_id=PY_D,
+                product_id=gpa["product_id"],
+                display_name="Envelope probe",
+                raw_description="Envelope probe",
+                source="manual",
+            )
+        )
+        s.add(
+            ProductTerm(
+                policy_year_id=PY_D,
+                product_id=gpa["product_id"],
+                coverage_start=date(2029, 4, 1),  # end deliberately absent
+            )
+        )
+        s.commit()
+    try:
+        with SessionLocal() as s:
+            py = s.get(PolicyYear, PY_D)
+            batched = envelopes_for(s, [py])[PY_D]
+            assert batched == envelope_for(s, py)
+            # The start override is honoured; the absent end still inherits.
+            assert batched == (date(2029, 4, 1), py.end_date)
+    finally:
+        with SessionLocal() as s:
+            s.query(ProductTerm).filter(
+                ProductTerm.policy_year_id == PY_D,
+                ProductTerm.product_id == gpa["product_id"],
+            ).delete()
+            s.query(Category).filter(
+                Category.id == "00000000-0000-0000-0000-0000000000dc"
+            ).delete()
+            s.commit()

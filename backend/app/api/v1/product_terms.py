@@ -25,7 +25,11 @@ from app.core.deps import assert_policy_year_editable, load_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear, Product, ProductTerm
 from app.schemas.api import ProductTermOut, ProductTermUpdate
-from app.services.product_terms import product_ids_in_year, resolve_terms
+from app.services.product_terms import (
+    product_ids_in_year,
+    resolve_terms,
+    term_window,
+)
 from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["product-terms"])
@@ -90,19 +94,17 @@ def list_product_terms(
         } if added else {}
         for cp in added:
             t = added_terms.get(cp.id)
-            has_dates = t is not None and t.coverage_start is not None
+            start, end, is_default = term_window(
+                t.coverage_start if t else None, t.coverage_end if t else None, py
+            )
             items.append(
                 ProductTermOut(
                     product_id=cp.id,
                     code=cp.code,
                     display_name=cp.display_name,
-                    coverage_start=t.coverage_start if has_dates else py.start_date,
-                    coverage_end=(
-                        t.coverage_end
-                        if t is not None and t.coverage_end is not None
-                        else py.end_date
-                    ),
-                    is_default=not has_dates,
+                    coverage_start=start,
+                    coverage_end=end,
+                    is_default=is_default,
                     line=cp.line,
                     gst_included=t.gst_included if t else None,
                     gst_rate=t.gst_rate if t else None,
@@ -175,7 +177,8 @@ def set_product_term(
     if {"free_cover_limit", "nel_age_limit"} & sent:
         refresh_underwriting_cases(db, py)
 
-    has_dates = term.coverage_start is not None
+    start, end, is_default = term_window(term.coverage_start, term.coverage_end, py)
+    has_dates = not is_default
     write_audit(
         db, user, action=action, entity_type="product_term", entity_id=term.id,
         after={
@@ -197,9 +200,9 @@ def set_product_term(
         product_id=product_id,
         code=product.code,
         display_name=product.display_name,
-        coverage_start=term.coverage_start if has_dates else py.start_date,
-        coverage_end=term.coverage_end if term.coverage_end is not None else py.end_date,
-        is_default=not has_dates,
+        coverage_start=start,
+        coverage_end=end,
+        is_default=is_default,
         line=product.line,
         gst_included=term.gst_included,
         gst_rate=term.gst_rate,

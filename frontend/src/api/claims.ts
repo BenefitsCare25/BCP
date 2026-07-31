@@ -359,11 +359,19 @@ export interface ClaimReviewConfigInput {
 
 export interface ClaimReviewConfig extends ClaimReviewConfigInput {
   id: string;
+  /** Server-computed identity of the claim type. ALWAYS join configs to claim
+   *  types on this — never on a locally derived key. The backend normalizes
+   *  with Python's `casefold()`, which has no exact JS equivalent, and a key
+   *  that drifts is silent: the type renders "Default" while its custom rules
+   *  are live, and "Customize" then 409s. */
+  key: string;
 }
 
 export interface ReviewClaimType {
   claim_kind: "insured" | "flex";
   claim_key: string;
+  /** See `ClaimReviewConfig.key`. */
+  key: string;
   display_label: string;
   sub_types: string[];
 }
@@ -375,12 +383,18 @@ export interface ReviewScopeOptions {
     ai_rules: ReviewAIRule[];
     required_documents: string[];
   };
+  /** False when no benefit year is flagged current — the vocabulary is read
+   *  from that year alone, so an empty list means something different (and
+   *  one-click fixable) in that case. */
+  has_current_year: boolean;
 }
 
 export interface SourceReviewConfig {
   id: string;
   claim_kind: string;
   claim_key: string;
+  /** See `ClaimReviewConfig.key`. */
+  key: string;
   display_label: string;
   enabled: boolean;
   field_map_count: number;

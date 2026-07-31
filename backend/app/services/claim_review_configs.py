@@ -135,9 +135,21 @@ def default_review_config() -> ReviewConfig:
 
 def _norm_key(value: str | None) -> str:
     """Canonical comparison key for a claim type / rule text — inner
-    whitespace collapsed, casefolded. `lib/claimTypes.ts::claimTypeKey`
-    mirrors this on the frontend; the two must not drift."""
+    whitespace collapsed, casefolded."""
     return " ".join(str(value or "").split()).casefold()
+
+
+def type_key(claim_kind: str | None, claim_key: str | None) -> str:
+    """The claim type's identity, as the frontend must join on it.
+
+    Served on BOTH sides of the join (``ReviewClaimTypeOut.key`` and
+    ``ClaimReviewConfigOut.key``) so the UI never recomputes it. It used to be
+    mirrored in TypeScript, but ``casefold()`` has no exact JS equivalent
+    (``"ß".casefold() == "ss"``, ``"ß".toLowerCase() == "ß"``), and a key that
+    drifts is silent: the configured claim type renders as "Default" while its
+    rules are live, and "Customize" then 409s ``duplicate_claim_type``.
+    """
+    return f"{claim_kind or ''}:{_norm_key(claim_key)}"
 
 
 # The severity tag `rendered_rules` prefixes onto each rule for the prompt.

@@ -21,7 +21,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { formatError } from "@/lib/errors";
 import { triggerDownload } from "@/lib/download";
-import { isWithinPolicyPeriod } from "@/lib/policy-year";
+import {
+  formatPolicyRange,
+  isPastPolicyPeriod,
+  isWithinPolicyPeriod,
+} from "@/lib/policy-year";
 import type { PolicyYear } from "@/types";
 
 /** `2026-01-01` + `2026-12-31` → `202601-202612` (insurer-style benefit-year id). */
@@ -119,6 +123,9 @@ export function BenefitYearPanel({
   const copy = useCopyPolicyYear();
 
   const [confirmDelete, setConfirmDelete] = useState<PolicyYear | null>(null);
+  // Set-current outside the year's coverage period: confirmed, never blocked
+  // (see the button below).
+  const [confirmCurrent, setConfirmCurrent] = useState<PolicyYear | null>(null);
   // Date edit buffer, keyed by year id → field. Makes the date inputs
   // controlled so a rejected PATCH (e.g. an overlap 409) reverts to the server
   // value instead of leaving the invalid typed date on screen.
@@ -133,6 +140,19 @@ export function BenefitYearPanel({
   const previousYear = years.length
     ? years.reduce((a, b) => (a.start_date > b.start_date ? a : b))
     : null;
+
+  /** Returns whether it actually landed — the confirm dialog must stay open on
+   *  failure, and the error is reported as a toast rather than thrown. */
+  const promote = async (py: PolicyYear): Promise<boolean> => {
+    try {
+      await setCurrent.mutateAsync(py.id);
+      toast.success("Set as current benefit year");
+      return true;
+    } catch (e) {
+      toast.error(formatError(e));
+      return false;
+    }
+  };
 
   const clearDateDraft = (id: string, field: "start_date" | "end_date") =>
     setDateDraft((d) => ({ ...d, [id]: { ...d[id], [field]: undefined } }));
@@ -291,10 +311,13 @@ export function BenefitYearPanel({
               {years.map((py) => {
                 const isCurrent = py.status === "active";
                 const isSelected = py.id === viewingId;
-                // A year can only be made "current" while today's date is inside
-                // its coverage period (the range shown in the picker), matching
-                // the member-facing "active year" rule.
-                const canSetCurrent = isWithinPolicyPeriod(
+                // Today inside the coverage period is the NORMAL case, not a
+                // precondition. Disabling the button outside it was a dead end:
+                // the server imposes no such rule, so a company onboarded on a
+                // forward-dated year (say 1 Sep 2026 – 31 Aug 2027) could not be
+                // made current at all before 1 Sep — its portal, claims and AI
+                // review all dark, with no in-app way out. Confirm instead.
+                const inPeriod = isWithinPolicyPeriod(
                   py.coverage_start,
                   py.coverage_end,
                 );
@@ -343,20 +366,17 @@ export function BenefitYearPanel({
                           size="sm"
                           variant="ghost"
                           className="h-7 text-xs"
-                          disabled={setCurrent.isPending || !canSetCurrent}
+                          disabled={setCurrent.isPending}
                           title={
-                            canSetCurrent
-                              ? undefined
-                              : "Today's date must fall within this benefit year's period to make it current."
+                            inPeriod
+                              ? "Make this the year the member portal reads and claims are submitted against"
+                              : isPastPolicyPeriod(py.coverage_end)
+                                ? "This benefit year has already ended — you'll be asked to confirm."
+                                : "This benefit year hasn't started yet — you'll be asked to confirm."
                           }
-                          onClick={async () => {
-                            try {
-                              await setCurrent.mutateAsync(py.id);
-                              toast.success("Set as current benefit year");
-                            } catch (e) {
-                              toast.error(formatError(e));
-                            }
-                          }}
+                          onClick={() =>
+                            inPeriod ? promote(py) : setConfirmCurrent(py)
+                          }
                         >
                           Set current
                         </Button>
@@ -405,6 +425,62 @@ export function BenefitYearPanel({
         </div>
 
       </CardContent>
+
+      {/* Two different situations share `inPeriod === false`, and only one of
+          them is routine — a year that has ENDED points the portal at expired
+          coverage and fails every claim's grace-period check, so it must not be
+          described as normal onboarding. Tone is `info`: promoting a year is a
+          confirmation, not a destructive act. */}
+      <AlertDialog
+        open={!!confirmCurrent}
+        onOpenChange={(o) => !o && setConfirmCurrent(null)}
+        tone="info"
+        confirmVariant="default"
+        title={
+          confirmCurrent && isPastPolicyPeriod(confirmCurrent.coverage_end)
+            ? "Set an ended benefit year as current?"
+            : "Set a benefit year before its start date as current?"
+        }
+        description={
+          confirmCurrent ? (
+            isPastPolicyPeriod(confirmCurrent.coverage_end) ? (
+              <>
+                <strong>
+                  {formatPolicyRange(
+                    confirmCurrent.coverage_start,
+                    confirmCurrent.coverage_end,
+                  )}
+                </strong>{" "}
+                has already ended. Members would see expired coverage, and new
+                claims would be rejected once the submission grace period runs
+                out. Set the year that is actually in force instead, unless you
+                are deliberately reopening this one.
+              </>
+            ) : (
+              <>
+                Today is before{" "}
+                <strong>
+                  {formatPolicyRange(
+                    confirmCurrent.coverage_start,
+                    confirmCurrent.coverage_end,
+                  )}
+                </strong>{" "}
+                starts. Members will immediately see this year as their current
+                coverage, and claims will be submitted against it. This is
+                normal when onboarding a company ahead of its policy start.
+              </>
+            )
+          ) : null
+        }
+        confirmLabel="Set as current"
+        loading={setCurrent.isPending}
+        onConfirm={async () => {
+          if (!confirmCurrent) return;
+          // Only dismiss on success — a failed promotion must not look like it
+          // worked (`promote` reports the error as a toast, never throws).
+          if (await promote(confirmCurrent)) setConfirmCurrent(null);
+        }}
+      />
 
       <AlertDialog
         open={!!confirmDelete}

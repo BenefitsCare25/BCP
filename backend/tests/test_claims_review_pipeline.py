@@ -1417,3 +1417,54 @@ def test_import_sources_lists_only_same_firm_companies(broker: TestClient):
             if rf is not None:
                 s.delete(rf)
             s.commit()
+
+
+def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
+    broker: TestClient,
+):
+    """The claim-type vocabulary is read from the CURRENT benefit year alone.
+
+    With no year flagged current the list is empty for a reason that has
+    nothing to do with claim rules (the member portal is dark too), so the
+    response says which case it is instead of leaving them indistinguishable.
+    Also pins the two shapes the endpoint must tolerate: a `key` on every entry
+    (the UI's join key — never re-derived client-side) and a `FlexScheme.scheme`
+    that isn't an object (it is unvalidated JSON; raising there would take the
+    whole AI-extraction tab down).
+    """
+    from app.models import FlexScheme
+
+    with SessionLocal() as s:
+        demoted = [
+            y for y in s.query(PolicyYear).filter(
+                PolicyYear.client_id == DEMO_CLIENT_ID,
+                PolicyYear.status == PolicyYearStatus.active,
+            )
+        ]
+        demoted_ids = [y.id for y in demoted]
+        s.add(FlexScheme(policy_year_id=PY, status="draft", scheme=["not-an-object"]))
+        s.commit()
+    try:
+        options = broker.get("/api/v1/claim-review-configs/options").json()
+        assert options["has_current_year"] is True
+        # Malformed scheme → no flex types, but a 200 with the insured ones.
+        assert [t for t in options["claim_types"] if t["claim_kind"] == "flex"] == []
+        for t in options["claim_types"]:
+            assert t["key"] == f"{t['claim_kind']}:{t['claim_key'].casefold()}"
+
+        with SessionLocal() as s:
+            for y in s.query(PolicyYear).filter(PolicyYear.id.in_(demoted_ids)):
+                y.status = PolicyYearStatus.archived
+            s.commit()
+
+        options = broker.get("/api/v1/claim-review-configs/options").json()
+        assert options["has_current_year"] is False
+        assert options["claim_types"] == []
+        # The defaults still come back — the editor prefills from them.
+        assert options["default_config"]["field_maps"]
+    finally:
+        with SessionLocal() as s:
+            for y in s.query(PolicyYear).filter(PolicyYear.id.in_(demoted_ids)):
+                y.status = PolicyYearStatus.active
+            s.query(FlexScheme).filter(FlexScheme.policy_year_id == PY).delete()
+            s.commit()

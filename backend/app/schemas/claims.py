@@ -465,6 +465,9 @@ class ClaimReviewConfigOut(BaseModel):
     id: str
     claim_kind: str
     claim_key: str
+    # Server-computed join key — see `claim_review_configs.type_key`. The UI
+    # matches configs to claim types on this, never on a re-derived key.
+    key: str
     display_label: str
     enabled: bool = True
     field_maps: list[ReviewFieldMapModel] = Field(default_factory=list)
@@ -486,6 +489,8 @@ class ReviewClaimTypeOut(BaseModel):
 
     claim_kind: Literal["insured", "flex"]
     claim_key: str
+    # Server-computed join key — see `claim_review_configs.type_key`.
+    key: str
     display_label: str
     sub_types: list[str] = Field(default_factory=list)
 
@@ -493,6 +498,12 @@ class ReviewClaimTypeOut(BaseModel):
 class ReviewScopeOptionsOut(BaseModel):
     claim_types: list[ReviewClaimTypeOut] = Field(default_factory=list)
     default_config: ReviewDefaultConfigOut
+    # False when NO benefit year is flagged current. The vocabulary is read from
+    # that year alone, so this is the difference between "this company has
+    # nothing claimable configured" and "the year holding the products was never
+    # made current" — which look identical from an empty list, and only the
+    # second is a one-click fix (the whole member portal is dark meanwhile).
+    has_current_year: bool = False
 
 
 class ReviewPromptPreviewOut(BaseModel):
@@ -505,6 +516,10 @@ class SourceReviewConfigOut(BaseModel):
     id: str
     claim_kind: str
     claim_key: str
+    # Server-computed join key — see `claim_review_configs.type_key`. Lets the
+    # import dialog mark "already customized here" against the active company's
+    # configs without re-deriving the key.
+    key: str
     display_label: str
     enabled: bool
     field_map_count: int

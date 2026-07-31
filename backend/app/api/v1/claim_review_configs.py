@@ -21,7 +21,7 @@ from app.core.deps import require_client_id
 from app.core.identity import accessible_clients, assert_client_accessible
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
-from app.models import ClaimReviewConfig, Client, FlexScheme, Plan, Product
+from app.models import ClaimReviewConfig, Client, FlexScheme, Product
 from app.models.claim import CLAIM_KIND_FLEX, CLAIM_KIND_INSURED
 from app.schemas.claims import (
     ClaimReviewConfigIn,
@@ -44,7 +44,9 @@ from app.services.claim_review_configs import (
     config_rows,
     default_review_config,
     find_config_row,
+    type_key,
 )
+from app.services.product_terms import product_ids_in_year
 
 router = APIRouter(prefix="/claim-review-configs", tags=["claim-review-configs"])
 
@@ -59,6 +61,7 @@ def _out(row: ClaimReviewConfig) -> ClaimReviewConfigOut:
         id=row.id,
         claim_kind=row.claim_kind,
         claim_key=row.claim_key,
+        key=type_key(row.claim_kind, row.claim_key),
         display_label=row.display_label,
         enabled=row.enabled,
         field_maps=[ReviewFieldMapModel(**m) for m in cfg.field_maps],
@@ -140,6 +143,43 @@ def list_review_configs(
     return [_out(r) for r in config_rows(db, client_id)]
 
 
+def _flex_category_names(db: Session, policy_year_id: str) -> list[str]:
+    """Claimable flex benefit-category names of the year's scheme, de-duped.
+
+    ``FlexScheme.scheme`` is unvalidated JSON (AI-extracted then broker-edited),
+    so every level is shape-guarded: a scheme stored as anything but an object
+    must not raise out of the options endpoint and take the whole AI-extraction
+    tab down with it.
+    """
+    row = (
+        db.execute(select(FlexScheme).where(FlexScheme.policy_year_id == policy_year_id))
+        .scalars()
+        .first()
+    )
+    scheme = row.scheme if row is not None else None
+    if not isinstance(scheme, dict):
+        return []
+    tiers = scheme.get("tiers")
+    names: list[str] = []
+    folded: set[str] = set()
+    for tier in tiers if isinstance(tiers, list) else []:
+        if not isinstance(tier, dict):
+            continue
+        categories = tier.get("benefit_categories")
+        for cat in categories if isinstance(categories, list) else []:
+            if not isinstance(cat, dict):
+                continue
+            name = str(cat.get("name") or "").strip()
+            # Missing "claimable" reads as claimable — mirrors the member claim
+            # form's defensive reading.
+            if not name or not cat.get("claimable", True):
+                continue
+            if name.casefold() not in folded:
+                folded.add(name.casefold())
+                names.append(name)
+    return sorted(names, key=str.casefold)
+
+
 @router.get("/options", response_model=ReviewScopeOptionsOut)
 def review_scope_options(
     user: CurrentUser = Depends(get_current_user),
@@ -147,20 +187,24 @@ def review_scope_options(
 ) -> ReviewScopeOptionsOut:
     """The company's claim types (the config vocabulary) + the default setup.
 
-    Insured claim types = member-claimable products with plans in the CURRENT
-    benefit year; flex claim types = the year's flex scheme benefit categories.
+    Insured claim types = the member-claimable products of the CURRENT benefit
+    year; flex claim types = that year's flex scheme benefit categories. With
+    no year flagged current there is no vocabulary at all — reported as
+    ``has_current_year=False`` rather than an indistinguishable empty list.
     """
     client_id = require_client_id(user)
     claim_types: list[ReviewClaimTypeOut] = []
     year = active_policy_year(db, client_id)
     if year is not None:
-        products = list(
-            db.execute(
-                select(Product)
-                .join(Plan, Plan.product_id == Product.id)
-                .where(Plan.policy_year_id == year.id)
-                .distinct()
-            ).scalars()
+        # Products in the year = plans UNION product-bound categories, the same
+        # set `product_ids_in_year` resolves for coverage periods and the setup
+        # list. Joining on Plan alone dropped a product configured with
+        # categories but no plan rows.
+        pids = product_ids_in_year(db, year.id)
+        products = (
+            list(db.execute(select(Product).where(Product.id.in_(pids))).scalars())
+            if pids
+            else []
         )
         seen: set[str] = set()
         for p in sorted(products, key=lambda p: (p.display_name or p.code or "")):
@@ -175,37 +219,24 @@ def review_scope_options(
                 ReviewClaimTypeOut(
                     claim_kind=CLAIM_KIND_INSURED,
                     claim_key=code,
+                    key=type_key(CLAIM_KIND_INSURED, code),
                     display_label=profile.claim_type_label or p.display_name or code,
                     sub_types=list(profile.sub_types),
                 )
             )
-        scheme_row = db.execute(
-            select(FlexScheme).where(FlexScheme.policy_year_id == year.id)
-        ).scalars().first()
-        if scheme_row is not None:
-            names: list[str] = []
-            for tier in (scheme_row.scheme or {}).get("tiers") or []:
-                if not isinstance(tier, dict):
-                    continue
-                for cat in tier.get("benefit_categories") or []:
-                    if not isinstance(cat, dict):
-                        continue
-                    name = str(cat.get("name") or "").strip()
-                    # Missing "claimable" reads as claimable — mirrors the
-                    # member claim form's defensive reading.
-                    if name and cat.get("claimable", True):
-                        if name.casefold() not in {n.casefold() for n in names}:
-                            names.append(name)
-            claim_types.extend(
-                ReviewClaimTypeOut(
-                    claim_kind=CLAIM_KIND_FLEX,
-                    claim_key=n,
-                    display_label=n,
-                )
-                for n in sorted(names, key=str.casefold)
+        claim_types.extend(
+            ReviewClaimTypeOut(
+                claim_kind=CLAIM_KIND_FLEX,
+                claim_key=n,
+                key=type_key(CLAIM_KIND_FLEX, n),
+                display_label=n,
             )
+            for n in _flex_category_names(db, year.id)
+        )
     return ReviewScopeOptionsOut(
-        claim_types=claim_types, default_config=_default_config_out()
+        claim_types=claim_types,
+        default_config=_default_config_out(),
+        has_current_year=year is not None,
     )
 
 
@@ -403,6 +434,7 @@ def source_review_configs(
                 id=row.id,
                 claim_kind=row.claim_kind,
                 claim_key=row.claim_key,
+                key=type_key(row.claim_kind, row.claim_key),
                 display_label=row.display_label,
                 enabled=row.enabled,
                 field_map_count=len(cfg.field_maps),

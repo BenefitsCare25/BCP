@@ -6,6 +6,13 @@
  * "Customize" opens the editor prefilled with those defaults. Setups whose
  * claim type no longer exists (product removed, flex category renamed) are
  * still listed under "No longer active" — they'd otherwise be invisible.
+ *
+ * The vocabulary comes from the CURRENT benefit year alone, so with no year
+ * flagged current this page is empty for a reason that has nothing to do with
+ * the claim rules — and everything to do with the member portal being dark.
+ * `has_current_year` separates the two cases; never show the generic "no claim
+ * types yet" copy for it, which reads as false to a broker looking at a
+ * configured product list.
  */
 import { useMemo, useState } from "react";
 import { Copy, Pencil, RotateCcw } from "lucide-react";
@@ -30,14 +37,10 @@ import {
 } from "@/components/ui/card";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { claimTypeKey } from "@/lib/claimTypes";
+import { NoCurrentYearNotice } from "@/components/shell/CurrentYearBanner";
 import { formatError } from "@/lib/errors";
 import { ImportRulesDialog } from "./ImportRulesDialog";
 import { ReviewConfigEditor, type EditorTarget } from "./ReviewConfigEditor";
-
-// Must match the backend's normalization exactly (see lib/claimTypes.ts) —
-// a looser key here would show a configured claim type as "Default".
-const typeKey = claimTypeKey;
 
 function summarize(cfg: ClaimReviewConfig): string {
   const parts = [
@@ -135,23 +138,23 @@ export function ReviewRuleSettings() {
   const [reverting, setReverting] = useState<ClaimReviewConfig | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
+  // Keyed on the SERVER's `key` on both sides of the join — see
+  // `ClaimReviewConfig.key`.
   const configByType = useMemo(() => {
     const map = new Map<string, ClaimReviewConfig>();
-    for (const c of configs.data ?? []) {
-      map.set(typeKey(c.claim_kind, c.claim_key), c);
-    }
+    for (const c of configs.data ?? []) map.set(c.key, c);
     return map;
   }, [configs.data]);
 
   const claimTypes = options.data?.claim_types ?? [];
-  const knownKeys = new Set(
-    claimTypes.map((t) => typeKey(t.claim_kind, t.claim_key)),
-  );
-  // Customized setups whose claim type is gone from the current year's
-  // vocabulary — inert (reviews fall back to defaults) but must stay visible.
-  const orphans = (configs.data ?? []).filter(
-    (c) => !knownKeys.has(typeKey(c.claim_kind, c.claim_key)),
-  );
+  const knownKeys = new Set(claimTypes.map((t) => t.key));
+  // Customized setups with no matching claim type. Normally that means the
+  // type is gone (product removed, flex category renamed) — inert, but they
+  // must stay visible to edit or delete. With NO current year there is no
+  // vocabulary at all, so EVERY setup lands here and "No longer active" would
+  // be a lie; the heading and note switch accordingly.
+  const hasCurrentYear = options.data?.has_current_year ?? true;
+  const unmatched = (configs.data ?? []).filter((c) => !knownKeys.has(c.key));
 
   const openEditor = (t: ReviewClaimType, config: ClaimReviewConfig | null) => {
     const defaults = options.data?.default_config;
@@ -232,21 +235,31 @@ export function ReviewRuleSettings() {
           <p className="px-5 pb-5 text-sm text-error">
             {formatError(options.error)}
           </p>
-        ) : claimTypes.length === 0 && orphans.length === 0 ? (
-          <p className="px-5 pb-5 text-sm text-muted-foreground">
-            No claim types yet — they appear once the current benefit year has
-            products (or a flex scheme) configured.
-          </p>
+        ) : claimTypes.length === 0 && unmatched.length === 0 ? (
+          <div className="px-5 pb-5">
+            {hasCurrentYear ? (
+              <p className="text-sm text-muted-foreground">
+                No claim types yet — they appear once the current benefit year
+                has member-claimable products (or a flex scheme) configured.
+              </p>
+            ) : (
+              <NoCurrentYearNotice />
+            )}
+          </div>
         ) : (
           <>
+            {!hasCurrentYear && (
+              <div className="px-5 pb-5">
+                <NoCurrentYearNotice />
+              </div>
+            )}
             {insured.length > 0 && (
               <TypeSection title="Insurance products">
                 {insured.map((t) => {
-                  const cfg =
-                    configByType.get(typeKey(t.claim_kind, t.claim_key)) ?? null;
+                  const cfg = configByType.get(t.key) ?? null;
                   return (
                     <TypeRow
-                      key={typeKey(t.claim_kind, t.claim_key)}
+                      key={t.key}
                       label={t.display_label}
                       config={cfg}
                       onEdit={() => openEditor(t, cfg)}
@@ -259,11 +272,10 @@ export function ReviewRuleSettings() {
             {flex.length > 0 && (
               <TypeSection title="Flexible benefits">
                 {flex.map((t) => {
-                  const cfg =
-                    configByType.get(typeKey(t.claim_kind, t.claim_key)) ?? null;
+                  const cfg = configByType.get(t.key) ?? null;
                   return (
                     <TypeRow
-                      key={typeKey(t.claim_kind, t.claim_key)}
+                      key={t.key}
                       label={t.display_label}
                       config={cfg}
                       onEdit={() => openEditor(t, cfg)}
@@ -273,12 +285,16 @@ export function ReviewRuleSettings() {
                 })}
               </TypeSection>
             )}
-            {orphans.length > 0 && (
+            {unmatched.length > 0 && (
               <TypeSection
-                title="No longer active"
-                note="These setups reference a claim type not in the current benefit year (product removed or flex category renamed) — reviews use the defaults until the type returns."
+                title={hasCurrentYear ? "No longer active" : "Configured setups"}
+                note={
+                  hasCurrentYear
+                    ? "These setups reference a claim type not in the current benefit year (product removed or flex category renamed) — reviews use the defaults until the type returns."
+                    : "Claim types are read from the current benefit year. Set one as current and these match back to their claim types."
+                }
               >
-                {orphans.map((cfg) => (
+                {unmatched.map((cfg) => (
                   <TypeRow
                     key={cfg.id}
                     label={cfg.display_label}

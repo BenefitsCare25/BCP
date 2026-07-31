@@ -40,6 +40,30 @@ class ResolvedTerm:
     policy_number: str | None = None
 
 
+def term_window(
+    coverage_start: date | None, coverage_end: date | None, py: PolicyYear
+) -> tuple[date, date, bool]:
+    """THE definition of "does this ProductTerm override the year's span" —
+    returns ``(start, end, is_default)``.
+
+    The rule was written out in four places, and two of them already disagreed:
+    ``envelopes_for`` honoured an override only when BOTH dates were set, while
+    ``resolve_terms`` (and the product-terms endpoint) honoured a start alone.
+    So a row carrying one date gave the policy-year list a different coverage
+    envelope from the product-terms page — and that envelope is what the UI
+    gates "Set current" on. ``ProductTermUpdate`` enforces both-or-neither, so
+    today only a migrated or hand-written row can hit the difference; one
+    definition keeps it that way.
+
+    ``is_default`` tracks the START only, matching the long-standing meaning of
+    "this product inherits the year's period" (a term row may exist purely to
+    carry GST / NEL config).
+    """
+    start = coverage_start if coverage_start is not None else py.start_date
+    end = coverage_end if coverage_end is not None else py.end_date
+    return start, end, coverage_start is None
+
+
 def gst_multiplier(included: bool | None, rate: float | None) -> float:
     """The premium gross-up factor for a GST config — 1.0 unless GST is on."""
     if not included:
@@ -112,19 +136,19 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
         if product is None:  # product row vanished — skip orphan reference
             continue
         term = overrides.get(pid)
-        has_dates = term is not None and term.coverage_start is not None
+        start, end, is_default = term_window(
+            term.coverage_start if term else None,
+            term.coverage_end if term else None,
+            py,
+        )
         out.append(
             ResolvedTerm(
                 product_id=pid,
                 code=product.code,
                 display_name=product.display_name,
-                coverage_start=term.coverage_start if has_dates else py.start_date,
-                coverage_end=(
-                    term.coverage_end
-                    if term is not None and term.coverage_end is not None
-                    else py.end_date
-                ),
-                is_default=not has_dates,
+                coverage_start=start,
+                coverage_end=end,
+                is_default=is_default,
                 gst_included=term.gst_included if term else None,
                 gst_rate=term.gst_rate if term else None,
                 free_cover_limit=term.free_cover_limit if term else None,
@@ -205,7 +229,7 @@ def envelope_for(db: Session, py: PolicyYear) -> tuple[date, date]:
 def envelopes_for(
     db: Session, policy_years: list[PolicyYear]
 ) -> dict[str, tuple[date, date]]:
-    """Batched envelope for many policy years — three queries regardless of
+    """Batched envelope for many policy years — four queries regardless of
     count, for the list endpoint hot path."""
     if not policy_years:
         return {}
@@ -228,22 +252,34 @@ def envelopes_for(
         if prod_id:
             by_year[pyid].add(prod_id)
 
-    overrides: dict[tuple[str, str], tuple[date, date]] = {}
-    for t in db.execute(
-        select(ProductTerm).where(ProductTerm.policy_year_id.in_(py_ids))
-    ).scalars():
-        # GST-only rows carry no dates — they don't shape the envelope.
-        if t.coverage_start is not None and t.coverage_end is not None:
-            overrides[(t.policy_year_id, t.product_id)] = (
-                t.coverage_start,
-                t.coverage_end,
-            )
+    # Kept as the RAW stored dates (either may be None — a GST/NEL-only row
+    # carries neither) so `term_window` applies the same fallback rule the
+    # single-year path uses.
+    overrides: dict[tuple[str, str], tuple[date | None, date | None]] = {
+        (t.policy_year_id, t.product_id): (t.coverage_start, t.coverage_end)
+        for t in db.execute(
+            select(ProductTerm).where(ProductTerm.policy_year_id.in_(py_ids))
+        ).scalars()
+    }
+
+    # Mirror `resolve_terms`'s orphan skip. It can't normally trigger — a
+    # deleted product cascades its plans away and nulls its categories'
+    # `product_id` — but leaving the two paths asymmetric is the exact shape of
+    # bug `term_window` exists to remove, and an orphan pair here silently
+    # widens the envelope back to the year's span.
+    all_pids = {pid for pids in by_year.values() for pid in pids}
+    live = (
+        set(db.execute(select(Product.id).where(Product.id.in_(all_pids))).scalars())
+        if all_pids
+        else set()
+    )
 
     result: dict[str, tuple[date, date]] = {}
     for py in policy_years:
-        pairs = [
-            overrides.get((py.id, pid), (py.start_date, py.end_date))
-            for pid in by_year.get(py.id, set())
-        ]
+        pairs = []
+        for pid in by_year.get(py.id, set()) & live:
+            raw_start, raw_end = overrides.get((py.id, pid), (None, None))
+            start, end, _ = term_window(raw_start, raw_end, py)
+            pairs.append((start, end))
         result[py.id] = _envelope_from_pairs(py, pairs)
     return result

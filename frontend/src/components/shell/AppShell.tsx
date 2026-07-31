@@ -6,6 +6,7 @@ import { useSession } from "@/stores/session";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { ContextBar } from "./ContextBar";
+import { CurrentYearBanner } from "./CurrentYearBanner";
 import { CompanyPickerDialog } from "./CompanyPickerDialog";
 import { isCompanyPath, PAGE_TITLES } from "./nav";
 
@@ -75,6 +76,10 @@ export function AppShell() {
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar title={title} onMenuClick={() => setMobileNavOpen(true)} />
         <ContextBar />
+        {/* Company-scoped only, and only once a company is actually chosen —
+            the query is client-scoped, so firing it under the picker gate would
+            read whichever company the session last held. */}
+        {isCompanyPath(path) && activeClientId != null && <CurrentYearBanner />}
         <main className="flex-1 overflow-y-auto p-5">
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
