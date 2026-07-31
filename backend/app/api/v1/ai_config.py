@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.ai_config import (
     DEFAULT_VERTEX_LOCATION,
     DEFAULT_VERTEX_MODEL,
-    assert_vertex_residency,
+    assert_vertex_location_writable,
     pack_vertex_secret,
 )
 from app.core.audit import write_audit
@@ -107,9 +107,14 @@ def put_ai_config(
             status.HTTP_400_BAD_REQUEST,
             "Service-account JSON has an empty 'project_id'.",
         )
+    # Write boundary: Singapore-only in EVERY environment, not just prod — a
+    # stored row ships to prod as-is.
+    # Store the CANONICAL form it returns: Vertex resource paths are
+    # case-sensitive, so persisting the caller's raw "Asia-Southeast1" would
+    # save a location every later call rejects.
     try:
-        assert_vertex_residency(location)
-    except RuntimeError as exc:
+        location = assert_vertex_location_writable(location)
+    except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     row.endpoint = location
     row.model = model

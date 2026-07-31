@@ -33,9 +33,11 @@ AISource = Literal["byok", "platform", "env", "none"]
 
 # Vertex (Gemini) residency guard. Keep claims PII in Singapore: the "global"
 # Vertex location routes to any geography, so it's refused in prod;
-# asia-southeast1 is the Singapore region.
+# asia-southeast1 is the Singapore region — and it is the ONLY one. Google has
+# no second Singapore region (asia-southeast2 is Jakarta), so this set is
+# complete, not a starting point.
 DEFAULT_VERTEX_LOCATION = "asia-southeast1"
-DEFAULT_VERTEX_MODEL = "gemini-2.5-flash"
+DEFAULT_VERTEX_MODEL = "gemini-3.5-flash"
 APPROVED_VERTEX_LOCATIONS = frozenset({"asia-southeast1"})
 
 
@@ -79,6 +81,39 @@ def assert_vertex_residency(location: str) -> None:
             "(asia-southeast1). Dev/staging only.",
             location,
         )
+
+
+def assert_vertex_location_writable(location: str) -> str:
+    """Reject a non-Singapore Vertex location at the WRITE boundary, in EVERY
+    environment.
+
+    ``assert_vertex_residency`` is the READ-path guard: it fail-closes in prod
+    but only warns in dev/staging, because a local checkout may legitimately
+    point env vars at another region and must not be bricked by it.
+
+    STORING a credential is a different act. A saved row is promoted to prod
+    unchanged, so a dev/staging save of ``us-central1`` is a latent prod outage
+    the moment it ships — and a residency breach if it ever served a call. This
+    is what makes the guarantee "Singapore only" rather than "Singapore only in
+    prod"; keep the two functions separate.
+
+    Raises ValueError (a validation failure), which the credential endpoints
+    surface as a 400.
+
+    RETURNS THE CANONICAL LOCATION, and callers must store what it returns, not
+    their raw input. Vertex resource paths are case-sensitive
+    (``projects/…/locations/<loc>/…``), so accepting ``"Asia-Southeast1"`` on
+    the strength of a case-insensitive comparison and then persisting it
+    verbatim stores a location every later call rejects.
+    """
+    loc = (location or "").strip().lower()
+    if loc not in APPROVED_VERTEX_LOCATIONS:
+        raise ValueError(
+            f"Vertex location {location!r} is not permitted. Claim documents "
+            "are Singapore-resident, so the only allowed region is "
+            f"{DEFAULT_VERTEX_LOCATION}."
+        )
+    return loc
 
 
 def _load_vertex_from_env() -> AIConfig | None:

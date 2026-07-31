@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.ai_config import (
     DEFAULT_VERTEX_LOCATION,
     DEFAULT_VERTEX_MODEL,
-    assert_vertex_residency,
+    assert_vertex_location_writable,
     pack_vertex_secret,
 )
 from app.core.audit import write_audit
@@ -152,9 +152,14 @@ def put_platform_ai_credentials(
             status.HTTP_400_BAD_REQUEST,
             "Service-account JSON is missing 'project_id'.",
         )
+    # Write boundary: Singapore-only in EVERY environment, not just prod — and
+    # this key is fleet-wide, so a wrong region here would move every company's
+    # claim documents out of region at once.
+    # Store the CANONICAL form it returns — Vertex resource paths are
+    # case-sensitive, so the raw input must not be persisted.
     try:
-        assert_vertex_residency(location)
-    except RuntimeError as exc:
+        location = assert_vertex_location_writable(location)
+    except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     row, _created = _get_or_create(db)

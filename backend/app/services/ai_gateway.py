@@ -104,6 +104,34 @@ _PRICE_TABLE: dict[str, tuple[float, float]] = {
 _DEFAULT_PRICE: tuple[float, float] = (3.0, 15.0)
 
 
+def _family_price(key: str) -> tuple[float, float]:
+    """Approximate price for a model with no list-price entry.
+
+    A Gemini model must NEVER fall through to ``_DEFAULT_PRICE`` (Claude
+    Sonnet): Gemini is ~10x cheaper, so that overstates spend ~10x on every
+    call and misreports the AI-usage tile — and the reported figure is what
+    operators size the platform cap against. Newer Gemini releases land here
+    the moment they're selected as the default model, before anyone has added
+    a row above, so match the nearest known family tier instead.
+
+    This is an ESTIMATE, deliberately in the right order of magnitude rather
+    than exact. Pin the real rate with
+    ``INSPRO_AI_PRICE_<MODEL>_IN`` / ``_OUT`` (see ``_price_for``) once list
+    pricing is published, or add an explicit ``_PRICE_TABLE`` row.
+
+    Note this only affects the *cost estimate*. Budgets and the platform cap
+    are enforced on TOKEN counts, so an inexact rate here cannot let spend
+    past a cap.
+    """
+    if key.startswith("gemini-"):
+        if "flash-lite" in key:
+            return _PRICE_TABLE["gemini-2.5-flash-lite"]
+        if "flash" in key:
+            return _PRICE_TABLE["gemini-2.5-flash"]
+        return _PRICE_TABLE["gemini-2.5-pro"]
+    return _DEFAULT_PRICE
+
+
 class AIBudgetExceededError(RuntimeError):
     """Raised when the client's monthly token budget would be exceeded."""
 
@@ -360,7 +388,8 @@ def _price_for(model: str) -> tuple[float, float]:
     slug = key.upper().translate(_PRICE_ENV_TRANS)
     env_in = os.environ.get(f"INSPRO_AI_PRICE_{slug}_IN", "").strip()
     env_out = os.environ.get(f"INSPRO_AI_PRICE_{slug}_OUT", "").strip()
-    default = _PRICE_TABLE.get(key, _DEFAULT_PRICE)
+    listed = _PRICE_TABLE.get(key)
+    default = listed if listed is not None else _family_price(key)
     if not (env_in or env_out):
         return default
     try:

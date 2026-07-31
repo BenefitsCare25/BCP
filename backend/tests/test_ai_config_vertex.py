@@ -15,6 +15,7 @@ from app.core.ai_config import (
     DEFAULT_VERTEX_MODEL,
     _load_vertex_from_env,
     _vertex_from_secret,
+    assert_vertex_location_writable,
     assert_vertex_residency,
     pack_vertex_secret,
 )
@@ -41,6 +42,47 @@ def test_residency_refuses_non_approved_in_prod(monkeypatch):
     monkeypatch.setenv("INSPRO_ENV", "prod")
     with pytest.raises(RuntimeError, match="approved residency"):
         assert_vertex_residency("us-central1")
+
+
+def test_write_boundary_refuses_non_singapore_outside_prod(monkeypatch):
+    """The WRITE guard is env-independent — that's the whole point of it.
+
+    `assert_vertex_residency` only warns in dev/staging so a local checkout
+    pointed at another region still boots. A stored credential is different: it
+    ships to prod unchanged, so accepting `us-central1` in dev plants a prod
+    outage (and a residency breach if it ever served a call).
+    """
+    monkeypatch.setenv("INSPRO_ENV", "dev")
+    assert_vertex_residency("us-central1")  # read path: warns, does not raise
+    with pytest.raises(ValueError, match="not permitted"):
+        assert_vertex_location_writable("us-central1")
+
+
+def test_write_boundary_returns_canonical_location():
+    """It must RETURN the canonical form, not merely accept a sloppy one.
+
+    Vertex resource paths are case-sensitive (`projects/…/locations/<loc>/…`),
+    so a validator that lowercases only for its comparison while the caller
+    persists the raw string stores a location every later call rejects.
+    """
+    assert assert_vertex_location_writable("asia-southeast1") == "asia-southeast1"
+    assert assert_vertex_location_writable("  ASIA-SOUTHEAST1  ") == "asia-southeast1"
+
+
+def test_write_boundary_refuses_global_location():
+    # Vertex's "global" location routes to any geography — the exact case the
+    # residency guarantee exists to prevent.
+    with pytest.raises(ValueError, match="not permitted"):
+        assert_vertex_location_writable("global")
+
+
+def test_default_model_is_a_gemini_flash_model():
+    # The default is what every company runs on absent an explicit choice, and
+    # it must stay in the Gemini family: `_family_price` keys the cost estimate
+    # off the `gemini-` prefix, and a non-Gemini default would silently price
+    # the whole fleet at Claude rates.
+    assert DEFAULT_VERTEX_MODEL.startswith("gemini-")
+    assert "flash" in DEFAULT_VERTEX_MODEL
 
 
 def test_residency_only_warns_in_dev(monkeypatch):

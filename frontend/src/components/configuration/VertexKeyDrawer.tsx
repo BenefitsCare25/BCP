@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Wand2 } from "lucide-react";
+import { Loader2, Lock, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,8 +14,13 @@ import {
 import { FieldLabel, InfoHint } from "@/components/ui/tooltip";
 
 // Vertex/Gemini is the sole provider (AWS Bedrock + Anthropic were removed).
-export const DEFAULT_VERTEX_LOCATION = "asia-southeast1";
-export const DEFAULT_VERTEX_MODEL = "gemini-2.5-flash";
+// The location is FIXED, not a default: claim documents are Singapore-resident
+// and asia-southeast1 is Google's only Singapore region, so the backend refuses
+// every other value on save (core/ai_config.py::assert_vertex_location_writable).
+// Offering a free-text box here only let an operator compose a request the
+// server is guaranteed to reject.
+export const VERTEX_LOCATION = "asia-southeast1";
+export const DEFAULT_VERTEX_MODEL = "gemini-3.5-flash";
 
 export interface VertexKeyDraft {
   location: string;
@@ -24,7 +29,7 @@ export interface VertexKeyDraft {
 }
 
 export const EMPTY_VERTEX_DRAFT: VertexKeyDraft = {
-  location: DEFAULT_VERTEX_LOCATION,
+  location: VERTEX_LOCATION,
   model: "",
   serviceAccountJson: "",
 };
@@ -102,11 +107,14 @@ export function VertexKeyDrawer({
     if (seededForOpen.current) return;
     seededForOpen.current = true;
     setDraft({
-      location: initial?.location ?? DEFAULT_VERTEX_LOCATION,
+      // Always the fixed region — NOT `initial.location`. A row written before
+      // the region was locked could carry a stale non-Singapore value, and
+      // seeding that would round-trip it straight back into a 400 on save.
+      location: VERTEX_LOCATION,
       model: initial?.model ?? "",
       serviceAccountJson: "",
     });
-  }, [open, initial?.location, initial?.model]);
+  }, [open, initial?.model]);
 
   const keyTouched = draft.serviceAccountJson.trim() !== "";
 
@@ -127,14 +135,16 @@ export function VertexKeyDrawer({
             {scopeNote}
           </div>
           <div className="flex flex-col gap-1.5">
-            <FieldLabel hint="The Vertex AI location. Keep this in Singapore (asia-southeast1) so claim data stays in-region — the backend refuses other regions in prod.">
+            <FieldLabel hint="Claim documents are Singapore-resident, and asia-southeast1 is Google's only Singapore region — so this is fixed, not a choice. The backend rejects any other value on save.">
               GCP location
             </FieldLabel>
-            <Input
-              value={draft.location}
-              onChange={(e) => setDraft({ ...draft, location: e.target.value })}
-              placeholder={DEFAULT_VERTEX_LOCATION}
-            />
+            <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-muted px-3 text-sm">
+              <Lock className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-mono">{VERTEX_LOCATION}</span>
+              <span className="ml-auto text-xs text-muted-foreground">
+                Singapore
+              </span>
+            </div>
           </div>
           <div className="flex flex-col gap-1.5">
             <FieldLabel

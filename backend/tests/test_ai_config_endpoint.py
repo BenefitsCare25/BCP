@@ -403,6 +403,35 @@ def test_gemini_pricing_is_accurate():
     assert abs(cost - 0.024) < 0.001
 
 
+def test_unlisted_gemini_model_gets_gemini_pricing_not_claude():
+    """A Gemini release with no price row must not be billed as Claude Sonnet.
+
+    Newer Gemini models land here the moment one is selected as the default,
+    before anyone adds a `_PRICE_TABLE` row. Falling through to `_DEFAULT_PRICE`
+    overstates spend ~10x on every call, and that inflated figure is what
+    operators size the platform cap against.
+    """
+    from app.core.ai_config import DEFAULT_VERTEX_MODEL
+    from app.services.ai_gateway import _DEFAULT_PRICE, _PRICE_TABLE, _price_for
+
+    # Synthetic UNLISTED ids only. Asserting a specific rate for
+    # DEFAULT_VERTEX_MODEL would pin the default to having no price row, and
+    # `_family_price` tells you to add one once list pricing is published —
+    # the test would then fail for doing exactly what it prescribes.
+    for model in ("gemini-4-flash", "gemini-9-flash"):
+        assert model not in _PRICE_TABLE, f"{model} is listed; pick an unlisted id"
+        assert _price_for(model) == (0.30, 2.50), model
+
+    assert _price_for("gemini-9-flash-lite") == (0.10, 0.40)
+    assert _price_for("gemini-9-pro") == (1.25, 10.0)
+    # Non-Gemini models are untouched by the family fallback.
+    assert _price_for("some-unknown-model") == _DEFAULT_PRICE
+
+    # What actually matters for the default, whether or not it gains a row:
+    # never Claude's rate. This holds both before and after one is added.
+    assert _price_for(DEFAULT_VERTEX_MODEL) != _DEFAULT_PRICE
+
+
 def test_summary_reports_input_output_split():
     from app.models import AISpendLog
 
