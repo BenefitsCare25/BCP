@@ -37,6 +37,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { SectionLabel } from "@/components/ui/section-label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatError } from "@/lib/errors";
 
@@ -45,8 +47,22 @@ const SECTOR_LABELS: Record<string, string> = {
   private: "Private hospital",
 };
 
-const selectClass =
-  "h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground focus-ring disabled:opacity-50";
+/** A labelled control. The label sits ABOVE its control: inline labels put the
+ * control mid-sentence, which reads as prose rather than as a form field. */
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1.5">
+      <SectionLabel as="span">{label}</SectionLabel>
+      {children}
+    </label>
+  );
+}
 
 function toInput(t: ClaimDocType): ClaimDocTypeInput {
   return {
@@ -90,24 +106,26 @@ function ChipRow({
     setDraft("");
   };
   return (
-    <div className="space-y-1.5">
-      <p className="text-xs font-medium text-muted-foreground">
-        {label}
-        {hint && <span className="font-normal text-muted-foreground/60"> — {hint}</span>}
+    <div className="space-y-2">
+      {/* Only the label itself takes the uppercase grammar — the hint is a
+          sentence, and setting a whole sentence in tracked caps is unreadable. */}
+      <p className="flex flex-wrap items-baseline gap-x-1.5">
+        <SectionLabel as="span">{label}</SectionLabel>
+        {hint && <span className="text-xs text-subtle">— {hint}</span>}
       </p>
       <div className="flex flex-wrap items-center gap-1.5">
         {chips.map((chip, i) => (
           <span
             key={`${chip}-${i}`}
             title={chipTitle?.(chip, i)}
-            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-foreground"
+            className="inline-flex h-7 items-center gap-0.5 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
           >
             {chip}
             <button
               type="button"
               disabled={disabled}
               onClick={() => onRemove(i)}
-              className="text-muted-foreground hover:text-foreground disabled:opacity-50"
+              className="grid size-5 place-items-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
               aria-label={`Remove ${chip}`}
             >
               <X className="size-3" />
@@ -133,7 +151,8 @@ function ChipRow({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 px-2"
+            aria-label={placeholder}
+            className="size-7 shrink-0 p-0"
             disabled={disabled || !draft.trim()}
             onClick={add}
           >
@@ -145,7 +164,10 @@ function ChipRow({
   );
 }
 
-function DocTypeCard({
+/** One document type, as a row on the card's divided settings rail. It is
+ * deliberately NOT its own bordered card — a stack of cards inside a card
+ * double-frames every row and eats the padding that separates the groups. */
+function DocTypeRow({
   docType,
   fetching,
 }: {
@@ -167,8 +189,8 @@ function DocTypeCard({
   };
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-      <div className="flex items-start justify-between gap-2">
+    <div className="space-y-5 px-5 py-6">
+      <div className="flex items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold text-foreground">{docType.display}</h3>
           {docType.sector && (
@@ -180,7 +202,7 @@ function DocTypeCard({
           type="button"
           disabled={busy}
           onClick={() => setConfirmDelete(true)}
-          className="text-muted-foreground hover:text-error disabled:opacity-50"
+          className="-mr-1.5 -mt-1.5 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
           aria-label={`Delete ${docType.display}`}
         >
           <Trash2 className="size-4" />
@@ -227,11 +249,9 @@ function DocTypeCard({
       {/* Hospital sector + the required-document slot this type fills — a
           sectored invoice type is classified govt/private, and the slot drives
           where an autofilled upload of this type lands on the claim form. */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          Hospital sector
-          <select
-            className={selectClass}
+      <div className="grid max-w-xl gap-x-6 gap-y-4 sm:grid-cols-2">
+        <Field label="Hospital sector">
+          <NativeSelect
             disabled={busy}
             value={docType.sector ?? ""}
             onChange={(e) =>
@@ -243,12 +263,10 @@ function DocTypeCard({
             <option value="">Any / not a hospital bill</option>
             <option value="govt">Government hospital</option>
             <option value="private">Private hospital</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          Fills document slot
-          <select
-            className={selectClass}
+          </NativeSelect>
+        </Field>
+        <Field label="Fills document slot">
+          <NativeSelect
             disabled={busy}
             value={docType.slot_key ?? ""}
             onChange={(e) => save({ slot_key: e.target.value || null })}
@@ -259,8 +277,8 @@ function DocTypeCard({
                 {label}
               </option>
             ))}
-          </select>
-        </label>
+          </NativeSelect>
+        </Field>
       </div>
 
       <AlertDialog
@@ -312,11 +330,14 @@ export function DocTypeSettings() {
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
+      <CardHeader className="pb-5">
+        {/* basis-80 + shrink-0: without a basis the description absorbs the
+            whole row and pushes the action onto its own line, where it reads as
+            a step in the description rather than the card's action. */}
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+          <div className="min-w-0 flex-1 basis-80 space-y-1">
             <CardTitle>Claim document types</CardTitle>
-            <CardDescription>
+            <CardDescription className="max-w-prose">
               How uploaded claim documents are recognised. Aliases match the
               document's title; key fields drive the completeness check —
               missing ones appear as warnings in the AI review, and never block
@@ -327,6 +348,7 @@ export function DocTypeSettings() {
             type="button"
             variant="outline"
             size="sm"
+            className="shrink-0"
             disabled={reset.isPending}
             onClick={() => setConfirmReset(true)}
           >
@@ -339,18 +361,25 @@ export function DocTypeSettings() {
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      {/* p-0 so the hairlines span the card and the rows own their padding —
+          the separation between document types is the rule plus real space,
+          not a border drawn around each one. */}
+      <CardContent className="p-0">
         {docTypes.isLoading ? (
-          <Skeleton className="h-40 w-full" />
+          <div className="px-5 pb-5">
+            <Skeleton className="h-40 w-full" />
+          </div>
         ) : docTypes.isError ? (
-          <p className="text-sm text-error">{formatError(docTypes.error)}</p>
+          <p className="px-5 pb-5 text-sm text-error">
+            {formatError(docTypes.error)}
+          </p>
         ) : (
-          <>
+          <div className="divide-y divide-border border-t border-border">
             {(docTypes.data ?? []).map((t) => (
-              <DocTypeCard key={t.id} docType={t} fetching={docTypes.isFetching} />
+              <DocTypeRow key={t.id} docType={t} fetching={docTypes.isFetching} />
             ))}
             {adding ? (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 px-5 py-4">
                 <Input
                   autoFocus
                   value={newName}
@@ -390,17 +419,19 @@ export function DocTypeSettings() {
                 </Button>
               </div>
             ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setAdding(true)}
-              >
-                <Plus className="size-3.5" />
-                <span className="ml-1.5">Add document type</span>
-              </Button>
+              <div className="px-5 py-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAdding(true)}
+                >
+                  <Plus className="size-3.5" />
+                  <span className="ml-1.5">Add document type</span>
+                </Button>
+              </div>
             )}
-          </>
+          </div>
         )}
       </CardContent>
 

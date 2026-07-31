@@ -98,7 +98,7 @@ function SectionLabel({ group, active }: { group: NavGroup; active: boolean }) {
     <div className="mb-0.5 px-3">
       <span
         className={cn(
-          "text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors",
+          "text-2xs font-semibold uppercase tracking-[0.08em] transition-colors",
           active ? "text-foreground/70" : "text-subtle",
         )}
       >

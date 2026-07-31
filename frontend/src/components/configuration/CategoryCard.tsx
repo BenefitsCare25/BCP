@@ -533,7 +533,7 @@ export function CategoryCard({
               feeds dependant pricing in enrollment, never an employee tier. */}
           {(category.plan_assignments as { member_scope?: string } | null)
             ?.member_scope === "dependant" && (
-            <Badge variant="outline" className="text-[10px]">
+            <Badge variant="outline" className="text-2xs">
               Dependant option
             </Badge>
           )}
@@ -546,7 +546,7 @@ export function CategoryCard({
           {insuredEntities.length > 0 && (
             <Badge
               variant="outline"
-              className="max-w-64 truncate text-[10px]"
+              className="max-w-64 truncate text-2xs"
               title={`Only employees of ${insuredEntities.join(", ")} match this category`}
             >
               {insuredEntities.join(", ")}
@@ -724,7 +724,7 @@ export function CategoryCard({
       {basisModel === "sum_assured" ? (
         <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
           {ageBanded ? (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               Voluntary — priced by age band. Premium per employee = amount
               covered ÷ 1,000 × the rate for the member's age band (set in{" "}
               <span className="font-medium text-foreground">
@@ -778,7 +778,7 @@ export function CategoryCard({
               className="h-8 w-44 text-sm"
             />
           </Field>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             One flat annual premium for the whole policy — not a per-member rate.
           </p>
         </div>
@@ -804,7 +804,7 @@ export function CategoryCard({
             />
           </Field>
           <div className="flex flex-col gap-1">
-            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
               Annual Premium
             </Label>
             <div className="flex h-8 items-center text-sm text-foreground">
@@ -865,7 +865,7 @@ export function CategoryCard({
         </div>
       )}
 
-      <div className="mt-2 text-[11px] text-muted-foreground">
+      <div className="mt-2 text-2xs text-muted-foreground">
         {count ? (
           <>
             <span className="font-medium text-foreground">{count.employees}</span>{" "}
@@ -879,7 +879,7 @@ export function CategoryCard({
                 dependant{count.dependants === 1 ? "" : "s"}
               </>
             )}{" "}
-            <span className="text-muted-foreground/70">matched from roster</span>
+            <span className="text-subtle">matched from roster</span>
           </>
         ) : countsError ? (
           "Count unavailable"
@@ -912,7 +912,7 @@ export function CategoryCard({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         {label}
       </Label>
       {children}
@@ -951,13 +951,13 @@ function TierRateGrid({
   return (
     <div className="mt-3 border-t border-border pt-3">
       <div className="grid grid-cols-[1.4fr_1fr_1fr_auto] items-center gap-2">
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Tier
         </Label>
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Rate
         </Label>
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Premium
         </Label>
         <span />
@@ -967,7 +967,7 @@ function TierRateGrid({
             <div key={t.code} className="contents">
               <div className="flex items-baseline gap-1 text-sm text-foreground">
                 {t.code}
-                <span className="text-[11px] text-muted-foreground">{t.label}</span>
+                <span className="text-2xs text-muted-foreground">{t.label}</span>
               </div>
               <Input
                 type="number"
@@ -998,7 +998,7 @@ function TierRateGrid({
         })}
       </div>
       <div className="mt-2 flex items-center justify-between gap-3">
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-2xs text-muted-foreground">
           Annual premium (sum of tiers):{" "}
           <span className="font-medium text-foreground">
             {annual.toLocaleString(undefined, { maximumFractionDigits: 2 })}
@@ -1006,7 +1006,7 @@ function TierRateGrid({
         </div>
         {addable.length > 0 && (
           <Select value="" onValueChange={onAdd}>
-            <SelectTrigger className="h-7 w-48 text-[11px] text-muted-foreground">
+            <SelectTrigger className="h-7 w-48 text-2xs text-muted-foreground">
               <SelectValue placeholder="+ Add tier" />
             </SelectTrigger>
             <SelectContent>

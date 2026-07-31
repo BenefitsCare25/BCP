@@ -100,7 +100,7 @@ export function PortalSignInPage() {
           <div className="space-y-1.5">
             <Label
               htmlFor="portal-identifier"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Email, member ID or employee ID
             </Label>
@@ -122,7 +122,7 @@ export function PortalSignInPage() {
           <div className="space-y-1.5">
             <Label
               htmlFor="portal-password"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Password
             </Label>
@@ -142,7 +142,7 @@ export function PortalSignInPage() {
           {error && <p className="text-sm text-error">{error}</p>}
           <Button
             type="submit"
-            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={
               login.isPending ||
               !identifier.trim() ||
@@ -159,7 +159,7 @@ export function PortalSignInPage() {
           <div className="space-y-1.5">
             <Label
               htmlFor="portal-totp"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Authentication code
             </Label>
@@ -178,7 +178,7 @@ export function PortalSignInPage() {
           {error && <p className="text-sm text-error">{error}</p>}
           <Button
             type="submit"
-            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify"}

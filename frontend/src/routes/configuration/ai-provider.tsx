@@ -326,7 +326,7 @@ function Field({
     <div
       className={`rounded-md border border-border bg-card p-3 ${className ?? ""}`}
     >
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <div

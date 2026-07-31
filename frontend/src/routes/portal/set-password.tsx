@@ -93,7 +93,7 @@ export function PortalSetPasswordPage() {
           <div className="space-y-1.5">
             <Label
               htmlFor="portal-setpw-totp"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Authentication code
             </Label>
@@ -112,7 +112,7 @@ export function PortalSetPasswordPage() {
           {error && <p className="text-sm text-error">{error}</p>}
           <Button
             type="submit"
-            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify & sign in"}
@@ -132,7 +132,7 @@ export function PortalSetPasswordPage() {
         <div className="space-y-1.5">
           <Label
             htmlFor="portal-new-password"
-            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+            className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
             New password
           </Label>
@@ -158,7 +158,7 @@ export function PortalSetPasswordPage() {
         <div className="space-y-1.5">
           <Label
             htmlFor="portal-confirm-password"
-            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+            className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
             Confirm password
           </Label>
@@ -181,7 +181,7 @@ export function PortalSetPasswordPage() {
         {error && <p className="text-sm text-error">{error}</p>}
         <Button
           type="submit"
-          className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+          className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
           disabled={setPw.isPending || !canSubmit}
         >
           <ShieldCheck className="size-[18px]" />

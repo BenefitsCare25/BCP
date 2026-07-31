@@ -214,7 +214,7 @@ export function FieldControl({
   const hasSuggestions = suggestions.length > 0;
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         {field.label}
       </Label>
       {field.type === "multichoice" ? (

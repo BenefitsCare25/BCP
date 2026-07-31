@@ -553,7 +553,7 @@ export function EmployeesPage() {
               <SheetBody className="space-y-4">
                 <div>
                   <div className="flex items-center gap-1 mb-2">
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                    <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                       Manual mapping
                     </div>
                     <InfoHint>
@@ -569,7 +569,7 @@ export function EmployeesPage() {
                     )}
                     {categoryGroups.map((g) => (
                       <div key={g.product_code} className="p-2">
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                        <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-1">
                           {g.product_code} — {g.product_display_name}
                         </div>
                         {g.categories.map((c) => (
@@ -627,7 +627,7 @@ export function EmployeesPage() {
                 </div>
                 {detail.matched_plans.length > 0 && (
                   <div>
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+                    <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-2">
                       Assigned plans
                     </div>
                     <div className="space-y-1.5">
@@ -669,7 +669,7 @@ export function EmployeesPage() {
                             <div className="mt-2 pt-2 border-t border-border grid grid-cols-2 gap-x-3 gap-y-1">
                               {p.financials.sum_insured != null && (
                                 <div>
-                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                                     Sum insured
                                   </div>
                                   <div className="text-xs font-medium">
@@ -679,7 +679,7 @@ export function EmployeesPage() {
                               )}
                               {p.financials.premium_rate != null && (
                                 <div>
-                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                                     Rate{p.financials.rate_basis === "per_1000_si" ? " (per $1k SI)" : ""}
                                   </div>
                                   <div className="text-xs font-medium">
@@ -689,7 +689,7 @@ export function EmployeesPage() {
                               )}
                               {p.financials.annual_premium != null && (
                                 <div>
-                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                                     Annual premium
                                   </div>
                                   <div className="text-xs font-medium">
@@ -703,7 +703,7 @@ export function EmployeesPage() {
                               {p.financials.basis &&
                                 isNaN(Number(p.financials.basis)) && (
                                 <div>
-                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                                     Basis
                                   </div>
                                   <div className="text-xs font-medium truncate" title={p.financials.basis}>
@@ -713,7 +713,7 @@ export function EmployeesPage() {
                               )}
                               {p.financials.rate_tiers && (
                                 <div className="col-span-2 mt-1">
-                                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-1">
                                     Rate tiers
                                   </div>
                                   <div className="grid grid-cols-4 gap-1 text-xs">
@@ -730,7 +730,7 @@ export function EmployeesPage() {
                           )}
                           {p.benefit_schedule?.items && p.benefit_schedule.items.length > 0 && (
                             <div className="mt-2 pt-2 border-t border-border">
-                              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                              <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-1.5">
                                 Schedule of Benefits
                               </div>
                               <div className="max-h-64 overflow-y-auto">
@@ -753,7 +753,7 @@ export function EmployeesPage() {
                 <FlexBenefitsDetail fa={flexByEmp.get(detail.id)} />
                 <FlexPriceTagDetail flex={detailStatement?.flex ?? null} />
                 <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                     Coverage flexibility
                   </div>
                   <CoverageRevertControls
@@ -767,7 +767,7 @@ export function EmployeesPage() {
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="flex items-center gap-1">
-                      <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                         Details (editable)
                       </div>
                       <InfoHint>
@@ -802,7 +802,7 @@ export function EmployeesPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block rounded-md border border-border p-2.5 bg-card">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                         employee_name
                       </div>
                       <Input
@@ -816,7 +816,7 @@ export function EmployeesPage() {
                         key={k}
                         className="block rounded-md border border-border p-2.5 bg-card"
                       >
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                           {k}
                         </div>
                         <Input
@@ -832,7 +832,7 @@ export function EmployeesPage() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                    <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                       Derived attributes
                     </div>
                     {detail.matched_category_id && detail.match_method && (
@@ -856,7 +856,7 @@ export function EmployeesPage() {
                             key={k}
                             className="rounded-md border border-border p-2.5 bg-card"
                           >
-                            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                               {k}
                             </div>
                             <div className="text-sm font-medium mt-0.5 break-words">
@@ -915,7 +915,7 @@ function FlexBenefitsDetail({ fa }: { fa?: FlexEmployeeAssignment }) {
   return (
     <div>
       <div className="flex items-center gap-1 mb-2">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">
+        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
           Flexible benefits
         </div>
         <InfoHint>
@@ -940,13 +940,13 @@ function FlexBenefitsDetail({ fa }: { fa?: FlexEmployeeAssignment }) {
         </div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
               Eligibility tier
             </div>
             <div className="font-medium">{fa.tier_name ?? "—"}</div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
               Flexi wallet
             </div>
             <div className="font-medium">
@@ -954,7 +954,7 @@ function FlexBenefitsDetail({ fa }: { fa?: FlexEmployeeAssignment }) {
             </div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
               Spouse / children
             </div>
             <div className="font-medium">

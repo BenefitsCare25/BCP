@@ -58,7 +58,7 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
           Trading is only offered in windows that have leave trading switched on.
         </InfoHint>
       </div>
-      <p className="mt-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+      <p className="mt-1 text-2xs uppercase tracking-wider text-muted-foreground">
         Company default
       </p>
       <div className="mt-1.5 grid gap-3 sm:grid-cols-3">

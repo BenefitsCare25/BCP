@@ -64,7 +64,7 @@ export function SignInPage() {
       <Button
         onClick={() => void handleSignIn()}
         disabled={!ENTRA_ENABLED || submitting}
-        className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+        className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
       >
         <LogIn className="size-[18px]" />
         {submitting ? "Redirecting…" : "Sign in with Microsoft"}

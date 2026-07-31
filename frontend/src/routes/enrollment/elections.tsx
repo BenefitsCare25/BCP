@@ -133,7 +133,7 @@ export function EnrollmentElectionsPage() {
           isLoading={isLoading}
           emptyText="No members."
           header={
-            <div className="px-1 pb-2 text-[11px] text-muted-foreground">
+            <div className="px-1 pb-2 text-2xs text-muted-foreground">
               {roster?.total ?? 0} members
             </div>
           }
@@ -165,7 +165,7 @@ export function EnrollmentElectionsPage() {
 
 function StatusDot({ status }: { status: string }) {
   const map: Record<string, string> = {
-    not_started: "text-muted-foreground/60",
+    not_started: "text-subtle",
     in_progress: "text-warn",
     submitted: "text-info",
     confirmed: "text-good",
@@ -173,7 +173,7 @@ function StatusDot({ status }: { status: string }) {
     declined: "text-muted-foreground",
   };
   return (
-    <span className={cn("text-[10px] capitalize", map[status] ?? "text-muted-foreground")}>
+    <span className={cn("text-2xs capitalize", map[status] ?? "text-muted-foreground")}>
       {status.replace("_", " ")}
     </span>
   );

@@ -34,6 +34,10 @@ export const DEFAULT_PLACEMENT: Omit<PlacementField, "key"> = {
   size: 0.05,
   weight: 500,
   align: "left",
+  // Ink colour PRINTED onto the broker's card artwork, not app chrome — it is
+  // persisted per placement and edited by the broker, and the artwork is not
+  // themed. A theme token would be wrong here: this must stay legible against
+  // whatever image was uploaded, independent of the UI palette.
   color: "#111111",
   uppercase: false,
   max_width: null,

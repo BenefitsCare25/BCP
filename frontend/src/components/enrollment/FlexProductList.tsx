@@ -119,18 +119,18 @@ export function FlexProductList({
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                   {p.product_code}
-                  <Badge variant="outline" className="text-[10px] capitalize">
+                  <Badge variant="outline" className="text-2xs capitalize">
                     {p.line}
                   </Badge>
                   {!onSourceChange && !lifeVoluntary && (
-                    <Badge variant="outline" className="text-[10px] font-normal">
+                    <Badge variant="outline" className="text-2xs font-normal">
                       {source === "slip" ? "From slip" : "Manual matrix"}
                     </Badge>
                   )}
                 </div>
                 {!isOpen &&
                   (lifeVoluntary ? (
-                    <div className="mt-0.5 text-[11px] text-muted-foreground">
+                    <div className="mt-0.5 text-2xs text-muted-foreground">
                       Age-banded voluntary rates ({p.voluntary_rates?.length ?? 0}{" "}
                       bands){editable ? " — expand to preview premiums." : "."}
                     </div>
@@ -141,7 +141,7 @@ export function FlexProductList({
                           key={row.rep.key}
                           title={row.rep.is_baseline ? "Default plan" : undefined}
                           className={cn(
-                            "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]",
+                            "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-2xs",
                             row.rep.is_baseline
                               ? "border-transparent bg-sidebar-active text-sidebar-active-foreground"
                               : "border-border bg-card",
@@ -171,7 +171,7 @@ export function FlexProductList({
                       ))}
                     </div>
                   ) : (
-                    <div className="mt-0.5 text-[11px] text-warn">
+                    <div className="mt-0.5 text-2xs text-warn">
                       {source === "slip"
                         ? "No slip premiums for this product."
                         : editable

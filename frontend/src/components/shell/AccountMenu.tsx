@@ -69,7 +69,7 @@ function SignedInOrOut() {
         onClick={() => setOpen(!open)}
         className="flex h-8 items-center gap-2 rounded-md border border-border bg-card px-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <div className="flex size-6 items-center justify-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+        <div className="flex size-6 items-center justify-center rounded-full bg-primary text-2xs font-semibold text-primary-foreground">
           {initials}
         </div>
         <span className="max-w-[160px] truncate text-foreground">{display}</span>

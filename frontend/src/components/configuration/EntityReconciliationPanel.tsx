@@ -65,7 +65,7 @@ export function EntityReconciliationPanel({
     <Card>
       <CardHeader>
         <div className="flex items-center gap-1.5">
-          <AlertTriangle className="size-4 text-amber-500" />
+          <AlertTriangle className="size-4 text-warn" />
           <CardTitle>Insured entities need reconciling</CardTitle>
         </div>
         <CardDescription>

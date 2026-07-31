@@ -3,7 +3,9 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/cn";
 
 const badgeVariants = cva(
-  "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+  // whitespace-nowrap: a badge is a single label — letting it wrap inside the
+  // pill (narrow table cells) turned "Manual review" into a two-line lozenge.
+  "inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium",
   {
     variants: {
       variant: {

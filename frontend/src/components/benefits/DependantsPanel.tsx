@@ -44,7 +44,7 @@ export function DependantsPanel({ dependants, coverage }: Props) {
                     </Badge>
                   ))
                 ) : (
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-2xs text-muted-foreground">
                     Not covered under any product
                   </span>
                 )}

@@ -62,7 +62,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
       <BenefitStatement data={statement} utilization={utilization} />
       {utilization && (
         <div>
-          <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+          <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-2">
             Claims utilization
           </div>
           <UtilizationView data={utilization} />
@@ -219,10 +219,10 @@ export function EmployeeCoveragePage() {
             trailing: (
               <span
                 className={cn(
-                  "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] tabular-nums",
+                  "shrink-0 rounded-full px-1.5 py-0.5 text-2xs tabular-nums",
                   it.product_count > 0
                     ? "bg-muted text-muted-foreground"
-                    : "text-muted-foreground/60",
+                    : "text-subtle",
                 )}
                 title={`${it.product_count} ${it.product_count === 1 ? "product" : "products"} covered`}
               >
@@ -236,7 +236,7 @@ export function EmployeeCoveragePage() {
           query={query}
           onQueryChange={setQuery}
           header={
-            <div className="flex items-center justify-between px-1 pb-2 text-[11px] text-muted-foreground">
+            <div className="flex items-center justify-between px-1 pb-2 text-2xs text-muted-foreground">
               <span>
                 {filtered.length.toLocaleString()}{" "}
                 {filtered.length === 1 ? "employee" : "employees"}

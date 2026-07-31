@@ -493,7 +493,7 @@ export function ProductSetupForm({
         />
         {showDependants && (
           <div className="flex flex-col gap-2 border-t border-border pt-4">
-            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
               Dependant Category &amp; Plan Type · dependant participation &amp; rate
             </Label>
             <DependantCards
@@ -512,7 +512,7 @@ export function ProductSetupForm({
     schedule_of_benefits: (
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-1.5">
-          <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
             Cover
           </Label>
           <textarea
@@ -535,7 +535,7 @@ export function ProductSetupForm({
 
         {template.additional_arrangements.length > 0 && (
           <div className="flex flex-col gap-2.5">
-            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
               Additional arrangements · {enabledArrangements} enabled
             </Label>
             {template.additional_arrangements.map((a) => (

@@ -15,7 +15,7 @@ export function FlexPriceTagSummary({ flex }: { flex: FlexCoverageLine }) {
   const lines = flex.price_tag_lines.filter((l) => l.price_tag != null);
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-1 text-xs uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center gap-1 text-2xs uppercase tracking-wider text-muted-foreground">
         Flex spend (price tags)
         <InfoHint>
           A price tag is the flex-dollar cost of a coverage choice. Wallet minus
@@ -74,7 +74,7 @@ export function FlexPriceTagSummary({ flex }: { flex: FlexCoverageLine }) {
         </div>
       )}
       {!flex.price_age_known && (
-        <div className="flex items-start gap-1.5 rounded-md border border-warn/40 bg-warn-soft/30 p-2 text-[11px] text-foreground">
+        <div className="flex items-start gap-1.5 rounded-md border border-warn/40 bg-warn-soft/30 p-2 text-2xs text-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" />
           <span>
             This member's age couldn't be determined (missing date of birth), so
@@ -103,7 +103,7 @@ function Stat({
 }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <div

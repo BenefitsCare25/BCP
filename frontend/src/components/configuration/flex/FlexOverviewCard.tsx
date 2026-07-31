@@ -74,15 +74,15 @@ function CheckRow({
       }
     >
       {ok ? (
-        <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+        <CheckCircle2 className="size-4 shrink-0 text-good" />
       ) : (
-        <AlertTriangle className="size-4 shrink-0 text-amber-500" />
+        <AlertTriangle className="size-4 shrink-0 text-warn" />
       )}
       <span className="text-foreground">{bucket.label}</span>
       <span
         className={
           "ml-auto font-medium tabular-nums " +
-          (ok ? "text-muted-foreground" : "text-amber-600 dark:text-amber-400")
+          (ok ? "text-muted-foreground" : "text-warn")
         }
       >
         {bucket.count}
@@ -233,7 +233,7 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
 
         {/* Family-status distribution */}
         <section className="space-y-2">
-          <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <div className="text-2xs font-medium uppercase tracking-wider text-muted-foreground">
             Family-status distribution
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -242,7 +242,7 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
                 key={code}
                 className="rounded-lg border border-border bg-muted/20 p-3"
               >
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                   {FAMILY_STATUS_LABELS[code]}
                 </div>
                 <div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
@@ -340,7 +340,7 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
                 </div>
 
                 {active.truncated && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                  <p className="text-xs text-warn">
                     Showing the first {active.rows.length.toLocaleString()} of{" "}
                     {active.count.toLocaleString()} — download the report for the
                     full list.
@@ -349,7 +349,7 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
 
                 <div className="overflow-x-auto rounded-lg border border-border">
                   <table className="w-full text-sm">
-                    <thead className="bg-muted/50 text-left text-xs uppercase tracking-wider text-muted-foreground">
+                    <thead className="bg-muted/50 text-left text-2xs uppercase tracking-wider text-muted-foreground">
                       {active.kind === "employee" ? (
                         <tr>
                           <th className="px-3 py-2 font-medium">Staff ID</th>

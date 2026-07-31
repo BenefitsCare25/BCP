@@ -66,13 +66,13 @@ export function AttributeSchemaEditor({
                     {attr.enum_values.slice(0, 4).map((v) => (
                       <span
                         key={v}
-                        className="text-[10px] bg-muted px-1.5 py-0.5 rounded font-mono"
+                        className="text-2xs bg-muted px-1.5 py-0.5 rounded font-mono"
                       >
                         {v}
                       </span>
                     ))}
                     {attr.enum_values.length > 4 && (
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-2xs text-muted-foreground">
                         +{attr.enum_values.length - 4} more
                       </span>
                     )}

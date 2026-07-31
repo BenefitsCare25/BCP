@@ -69,7 +69,7 @@ export function PortalDependantsPage() {
 
   const rows = dependants.data ?? [];
   const selectClass =
-    "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring";
+    "w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-ring";
 
   return (
     <div className="space-y-4">

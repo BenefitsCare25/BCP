@@ -46,7 +46,7 @@ export function FlexCoverageCard({ flex }: { flex: FlexCoverageLine }) {
           <div className="text-lg font-semibold text-foreground">
             {formatWallet(flex.wallet_amount, flex.currency)}
           </div>
-          <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-end gap-1 text-2xs text-muted-foreground">
             Annual wallet
             <InfoHint>
               Your yearly flex dollars to spend across the claimable benefits
@@ -72,13 +72,13 @@ export function FlexCoverageCard({ flex }: { flex: FlexCoverageLine }) {
         )}
       </div>
       {flex.source && SOURCE_LABEL[flex.source] && (
-        <p className="mt-1.5 text-[11px] italic text-muted-foreground">
+        <p className="mt-1.5 text-2xs italic text-muted-foreground">
           {SOURCE_LABEL[flex.source]}
         </p>
       )}
 
       {flex.assignment_stale && (
-        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-border bg-warn-soft/40 p-2 text-[11px] text-foreground">
+        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-border bg-warn-soft/40 p-2 text-2xs text-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" />
           <span>
             The Flex scheme changed after this wallet was assigned, so the
@@ -96,7 +96,7 @@ export function FlexCoverageCard({ flex }: { flex: FlexCoverageLine }) {
 
       {flex.benefit_categories.length > 0 && (
         <div className="mt-3 border-t border-border pt-3">
-          <div className="mb-1.5 text-xs uppercase tracking-wider text-muted-foreground">
+          <div className="mb-1.5 text-2xs uppercase tracking-wider text-muted-foreground">
             Claimable benefits
           </div>
           <div className="space-y-1">

@@ -43,7 +43,7 @@ export function ColumnManager({
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3">
       <div className="flex items-center justify-between">
-        <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Benefit columns
         </Label>
         <Button size="sm" variant="ghost" onClick={onAddColumn}>
@@ -62,8 +62,8 @@ export function ColumnManager({
             <span
               className={
                 col.plan_codes.length === 0
-                  ? "shrink-0 text-[10px] font-medium text-warn"
-                  : "shrink-0 text-[10px] text-muted-foreground"
+                  ? "shrink-0 text-2xs font-medium text-warn"
+                  : "shrink-0 text-2xs text-muted-foreground"
               }
             >
               {col.plan_codes.length === 0
@@ -85,7 +85,7 @@ export function ColumnManager({
       </div>
       {plans.length > 0 && (
         <div className="flex flex-col gap-1.5 border-t border-border pt-2">
-          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
             Plan → column
           </Label>
           {plans.map((p) => (

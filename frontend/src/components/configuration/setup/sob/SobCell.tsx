@@ -89,7 +89,7 @@ export function SobCell({
       ) : (
         <>
           {prefix && (
-            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-2xs text-muted-foreground">
               {prefix}
             </span>
           )}
@@ -123,7 +123,7 @@ export function SobCell({
             )}
           />
           {suffix && (
-            <span className="pointer-events-none absolute right-8 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+            <span className="pointer-events-none absolute right-8 top-1/2 -translate-y-1/2 text-2xs text-muted-foreground">
               {suffix}
             </span>
           )}

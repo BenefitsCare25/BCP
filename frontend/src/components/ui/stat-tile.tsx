@@ -22,7 +22,7 @@ export function StatTile({ label, value, variant, formatNumber = false }: Props)
   return (
     <Card>
       <CardContent className="p-4">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
           {label}
         </div>
         <div

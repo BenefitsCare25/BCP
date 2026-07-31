@@ -51,7 +51,7 @@ function CoverageFinancials({ fin }: { fin: PlanFinancials }) {
     <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1.5 rounded-md border border-border bg-muted/40 p-2.5">
       {stats.map((s) => (
         <div key={s.label} className="flex flex-col">
-          <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <span className="flex items-center gap-1 text-2xs uppercase tracking-wider text-muted-foreground">
             {s.label}
             {s.hint ? <InfoHint>{s.hint}</InfoHint> : null}
           </span>
@@ -96,7 +96,7 @@ export function CoverageCard({
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground">
               {line.product_code}
             </span>
             <h3 className="text-sm font-semibold text-foreground">
@@ -123,7 +123,7 @@ export function CoverageCard({
       </div>
 
       {line.rule_human_readable && (
-        <p className="mt-2 text-[11px] italic text-muted-foreground">
+        <p className="mt-2 text-2xs italic text-muted-foreground">
           Why assigned: {line.rule_human_readable}
         </p>
       )}

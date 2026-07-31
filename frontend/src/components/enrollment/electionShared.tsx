@@ -52,13 +52,13 @@ export interface ProductState {
 export function DirectionTag({ direction }: { direction: CohortTier["direction"] }) {
   if (direction === "upgrade")
     return (
-      <span className="inline-flex items-center gap-0.5 text-[10px] text-good">
+      <span className="inline-flex items-center gap-0.5 text-2xs text-good">
         <ArrowUp className="size-2.5" /> Upgrade
       </span>
     );
   if (direction === "downgrade")
     return (
-      <span className="inline-flex items-center gap-0.5 text-[10px] text-warn">
+      <span className="inline-flex items-center gap-0.5 text-2xs text-warn">
         <ArrowDown className="size-2.5" /> Downgrade
       </span>
     );
@@ -263,7 +263,7 @@ export function FlexStat({
 }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
       <div
@@ -353,7 +353,7 @@ export function PlanFinancialsRow({ fin }: { fin: PlanFinancials }) {
     <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-border pt-2 sm:grid-cols-3">
       {stats.map((s) => (
         <div key={s.label}>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          <div className="text-2xs uppercase tracking-wider text-muted-foreground">
             {s.label}
           </div>
           <div className="text-xs font-medium text-foreground">{s.value}</div>
@@ -505,7 +505,7 @@ export function LeaveTradingCard({
           {trading && (
             <p
               className={cn(
-                "mt-1 text-[10px]",
+                "mt-1 text-2xs",
                 daysError ? "text-error" : "text-muted-foreground",
               )}
             >
@@ -522,7 +522,7 @@ export function LeaveTradingCard({
             member what leaving with 3 days costs their wallet. */}
         {trading && rate > 0 && (
           <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
               {isBuy ? "Flex spent" : "Flex credited"}
             </div>
             {/* Exact figures, not compacted — this lands on payroll. */}
@@ -534,7 +534,7 @@ export function LeaveTradingCard({
             >
               {isBuy ? "-" : "+"}${fmtAmount(Math.abs(impact))}
             </div>
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-2xs text-muted-foreground">
               {enteredDays} × ${fmtAmount(rate)}/day · max ${fmtAmount(maxImpact)}
             </div>
           </div>
@@ -612,11 +612,11 @@ export function ElectionProductCard({
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-foreground">{ts.product_code}</span>
           {isCompulsory ? (
-            <Badge variant="outline" className="gap-1 text-[10px]">
+            <Badge variant="outline" className="gap-1 text-2xs">
               <Lock className="size-2.5" /> Required
             </Badge>
           ) : (
-            <Badge variant="outline" className="text-[10px] text-muted-foreground">
+            <Badge variant="outline" className="text-2xs text-muted-foreground">
               Optional
             </Badge>
           )}
@@ -649,7 +649,7 @@ export function ElectionProductCard({
                     </span>
                     {!t.is_baseline && <DirectionTag direction={t.direction} />}
                     {t.price_tag != null && (
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="text-2xs text-muted-foreground">
                         · flex {fmtCurrency(t.price_tag)}
                       </span>
                     )}
@@ -668,7 +668,7 @@ export function ElectionProductCard({
           <span className="font-medium text-foreground">
             {fmtCurrency(selectedTier.price_tag)}
           </span>
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             {flexOnChange
               ? "(difference vs default plan, drawn from wallet)"
               : "(deducted from wallet — separate from premium)"}
@@ -679,7 +679,7 @@ export function ElectionProductCard({
       {allowDeps && dependants.length > 0 && !ps.declined && (
         <div className="mt-2 border-t border-border pt-2">
           {dependantScope && (
-            <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1 flex items-center gap-1 text-2xs uppercase tracking-wider text-muted-foreground">
               <span>
                 Dependants · {dependantScope}
                 {depCompulsory && " (auto-included)"}
@@ -752,7 +752,7 @@ export function ElectionProductCard({
                                 ? `${c.label} — ${fmtCurrency(c.sum_insured)}`
                                 : c.label}
                             </span>
-                            <span className="text-[10px] text-muted-foreground">
+                            <span className="text-2xs text-muted-foreground">
                               {c.amount != null
                                 ? `· flex ${fmtCurrency(c.amount)}`
                                 : "· by age"}
@@ -763,7 +763,7 @@ export function ElectionProductCard({
                     </SelectContent>
                   </Select>
                   {!ps.depOptionIds[r.role] && (
-                    <span className="text-[10px] text-warn">
+                    <span className="text-2xs text-warn">
                       Unpriced until a level is selected
                     </span>
                   )}
@@ -779,7 +779,7 @@ export function ElectionProductCard({
                 <span className="font-medium text-foreground">
                   +{fmtCurrency(cost)}
                 </span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-2xs text-muted-foreground">
                   {ts.dependant.mode === "per_pax"
                     ? "(per dependant, added to wallet draw)"
                     : ts.dependant.mode === "slip_options"

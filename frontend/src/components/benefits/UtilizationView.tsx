@@ -60,7 +60,7 @@ function AmountRow({
   remaining: number | null;
 }) {
   return (
-    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+    <div className="flex items-center gap-3 text-2xs text-muted-foreground">
       <span>
         <span className="inline-block size-2 rounded-sm bg-good align-[-1px] mr-1" />
         Approved {fmtAmount(approved)}
@@ -115,7 +115,7 @@ function BucketRow({ bucket, sub }: { bucket: UtilizationBucket; sub?: boolean }
             </Badge>
           )}
         </div>
-        <div className="text-[11px] text-muted-foreground shrink-0">
+        <div className="text-2xs text-muted-foreground shrink-0">
           {bucket.limit_display
             ? `Limit ${bucket.limit_display}`
             : "No annual limit"}
@@ -163,7 +163,7 @@ function FlexSection({ flex }: { flex: FlexUtilization }) {
         remaining={flex.available}
       />
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-muted-foreground sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-2xs text-muted-foreground sm:grid-cols-4">
         {flex.wallet_amount !== null && (
           <span>Wallet {fmtAmount(flex.wallet_amount)}</span>
         )}
@@ -182,7 +182,7 @@ function FlexSection({ flex }: { flex: FlexUtilization }) {
             <div key={c.name} className="ml-1 py-1">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm text-foreground">{c.name}</span>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-2xs text-muted-foreground">
                   {c.sub_limit !== null
                     ? `Sub-limit ${fmtAmount(c.sub_limit)}`
                     : "No sub-limit"}
@@ -248,7 +248,7 @@ export function UtilizationView({ data }: { data: Utilization }) {
         </div>
       )}
       {data.flex && <FlexSection flex={data.flex} />}
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-2xs text-muted-foreground">
         Pending claims are shown for awareness and aren't subtracted from your
         remaining balance.
       </p>

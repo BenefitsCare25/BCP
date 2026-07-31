@@ -149,7 +149,7 @@ export function CompanyDashboardPage() {
           <div className="space-y-4">
             {COMPANY_NAV.map((group) => (
               <div key={group.key}>
-                <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <div className="mb-1.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
                   {group.label}
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -217,7 +217,7 @@ function RecentActivity() {
           {items.map((e) => (
             <li key={e.id} className="text-xs">
               <div className="text-foreground/80">{describe(e)}</div>
-              <div className="text-muted-foreground/70">{relTime(e.created_at)}</div>
+              <div className="text-subtle">{relTime(e.created_at)}</div>
             </li>
           ))}
         </ul>

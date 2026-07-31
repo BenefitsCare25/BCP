@@ -28,6 +28,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { SectionLabel } from "@/components/ui/section-label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { claimTypeKey } from "@/lib/claimTypes";
 import { formatError } from "@/lib/errors";
@@ -63,14 +64,16 @@ function TypeRow({
   onRevert: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5">
+    // A row on the section's divided rail, not its own card: a stack of
+    // bordered cards inside a Card double-frames every claim type.
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 transition-colors hover:bg-muted/40">
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
         <p className="text-xs text-muted-foreground">
           {config ? summarize(config) : (subLabel ?? "Built-in review rules")}
         </p>
       </div>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         {config && config.enabled && config.ai_rules.length === 0 && (
           // Legitimate but consequential: the built-in fraud rules are off for
           // this claim type. Surface it in the list, not just in the editor.
@@ -97,6 +100,30 @@ function TypeRow({
         </Button>
       </div>
     </div>
+  );
+}
+
+/** A named group of claim types: a banded header over its own divided rail, so
+ * the three groups read as groups without each row needing its own frame. */
+function TypeSection({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border-t border-border">
+      <div className="space-y-1 bg-muted/40 px-5 py-2.5">
+        <SectionLabel as="h3">{title}</SectionLabel>
+        {note && <p className="max-w-prose text-xs text-subtle">{note}</p>}
+      </div>
+      <div className="divide-y divide-border border-t border-border">
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -171,11 +198,13 @@ export function ReviewRuleSettings() {
 
   return (
     <Card>
-      <CardHeader>
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
+      <CardHeader className="pb-5">
+        {/* basis-80 + shrink-0 keeps the action on the title's line; without it
+            the description absorbs the row and drops the button below. */}
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+          <div className="min-w-0 flex-1 basis-80 space-y-1">
             <CardTitle>AI review rules by claim type</CardTitle>
-            <CardDescription>
+            <CardDescription className="max-w-prose">
               What the AI checks when it reviews a submitted claim — field
               comparisons, business rules and required documents, configurable
               per claim type. Types without a custom setup use the built-in
@@ -186,6 +215,7 @@ export function ReviewRuleSettings() {
             type="button"
             variant="outline"
             size="sm"
+            className="shrink-0"
             onClick={() => setImportOpen(true)}
           >
             <Copy className="size-3.5" />
@@ -193,23 +223,24 @@ export function ReviewRuleSettings() {
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-0">
         {loading ? (
-          <Skeleton className="h-40 w-full" />
+          <div className="px-5 pb-5">
+            <Skeleton className="h-40 w-full" />
+          </div>
         ) : options.isError ? (
-          <p className="text-sm text-error">{formatError(options.error)}</p>
+          <p className="px-5 pb-5 text-sm text-error">
+            {formatError(options.error)}
+          </p>
         ) : claimTypes.length === 0 && orphans.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="px-5 pb-5 text-sm text-muted-foreground">
             No claim types yet — they appear once the current benefit year has
             products (or a flex scheme) configured.
           </p>
         ) : (
           <>
             {insured.length > 0 && (
-              <section className="space-y-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Insurance products
-                </h3>
+              <TypeSection title="Insurance products">
                 {insured.map((t) => {
                   const cfg =
                     configByType.get(typeKey(t.claim_kind, t.claim_key)) ?? null;
@@ -223,13 +254,10 @@ export function ReviewRuleSettings() {
                     />
                   );
                 })}
-              </section>
+              </TypeSection>
             )}
             {flex.length > 0 && (
-              <section className="space-y-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Flexible benefits
-                </h3>
+              <TypeSection title="Flexible benefits">
                 {flex.map((t) => {
                   const cfg =
                     configByType.get(typeKey(t.claim_kind, t.claim_key)) ?? null;
@@ -243,18 +271,13 @@ export function ReviewRuleSettings() {
                     />
                   );
                 })}
-              </section>
+              </TypeSection>
             )}
             {orphans.length > 0 && (
-              <section className="space-y-2">
-                <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  No longer active
-                </h3>
-                <p className="text-xs text-muted-foreground/70">
-                  These setups reference a claim type not in the current benefit
-                  year (product removed or flex category renamed) — reviews use
-                  the defaults until the type returns.
-                </p>
+              <TypeSection
+                title="No longer active"
+                note="These setups reference a claim type not in the current benefit year (product removed or flex category renamed) — reviews use the defaults until the type returns."
+              >
                 {orphans.map((cfg) => (
                   <TypeRow
                     key={cfg.id}
@@ -265,7 +288,7 @@ export function ReviewRuleSettings() {
                     onRevert={() => setReverting(cfg)}
                   />
                 ))}
-              </section>
+              </TypeSection>
             )}
           </>
         )}

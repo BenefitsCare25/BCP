@@ -34,7 +34,7 @@ export function AuthScene({
 
           <div className="flex flex-1 flex-col justify-center py-10">
             <p
-              className="signin-in text-[11px] font-semibold uppercase tracking-[0.16em] text-primary"
+              className="signin-in text-2xs font-semibold uppercase tracking-[0.16em] text-primary"
               style={{ animationDelay: "0.04s" }}
             >
               {eyebrow}
@@ -46,7 +46,7 @@ export function AuthScene({
               {title}
             </h1>
             <p
-              className="signin-in mt-2.5 text-[15px] leading-relaxed text-muted-foreground"
+              className="signin-in mt-2.5 text-md leading-relaxed text-muted-foreground"
               style={{ animationDelay: "0.12s" }}
             >
               {subtitle}

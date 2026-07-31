@@ -232,7 +232,7 @@ function ClassifyProduct({
         <label className="space-y-1 text-xs text-muted-foreground">
           Product type
           <select
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs text-foreground"
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs text-foreground"
             value={profileId}
             onChange={(e) => setProfileId(e.target.value)}
           >
@@ -246,7 +246,7 @@ function ClassifyProduct({
         <label className="space-y-1 text-xs text-muted-foreground">
           Insurance line (tab)
           <select
-            className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-xs text-foreground"
+            className="w-full rounded-md border border-input bg-card px-2 py-1.5 text-xs text-foreground"
             value={line}
             onChange={(e) => setLine(e.target.value as InsuranceLine)}
           >

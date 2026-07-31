@@ -96,7 +96,7 @@ export function SobEditor({ sob, plans, columnAxis = [], setSob }: Props) {
             : `${columns.length} benefit columns`}
         </Button>
         {usesAxis && (
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-2xs text-muted-foreground">
             {columnAxis.join(" / ")} values per plan — edit in each row's details
           </span>
         )}
@@ -124,7 +124,7 @@ export function SobEditor({ sob, plans, columnAxis = [], setSob }: Props) {
           </div>
         )}
 
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-2xs text-muted-foreground">
           {query
             ? `${visible.length} of ${sob.items.length} benefits`
             : `${sob.items.length} benefit${sob.items.length === 1 ? "" : "s"}`}
@@ -145,7 +145,7 @@ export function SobEditor({ sob, plans, columnAxis = [], setSob }: Props) {
       </div>
 
       {unassigned.length > 0 && (
-        <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-[11px] text-foreground">
+        <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-2xs text-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" />
           <span>
             {unassigned.map((c) => c.label).join(", ")}{" "}
@@ -178,19 +178,19 @@ export function SobEditor({ sob, plans, columnAxis = [], setSob }: Props) {
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-20 bg-muted">
             <tr className="border-b border-border">
-              <th className="sticky left-0 z-30 bg-muted px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+              <th className="sticky left-0 z-30 bg-muted px-2 py-1.5 text-left text-2xs uppercase tracking-wider text-muted-foreground">
                 Benefit
               </th>
               {columns.map((col) => (
                 <th
                   key={col.id}
-                  className="min-w-36 px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-muted-foreground"
+                  className="min-w-36 px-2 py-1.5 text-left text-2xs uppercase tracking-wider text-muted-foreground"
                 >
                   <span className="block truncate" title={col.label}>
                     {col.label}
                   </span>
                   {usesAxis && (
-                    <span className="block truncate font-normal normal-case text-muted-foreground/70">
+                    <span className="block truncate font-normal normal-case text-subtle">
                       {columnAxis.join(" / ")}
                     </span>
                   )}

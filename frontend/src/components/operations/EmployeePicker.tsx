@@ -71,7 +71,7 @@ export function EmployeePicker({
               <span className="min-w-0">
                 <span className="block truncate">{item.name}</span>
                 {item.subtitle && (
-                  <span className="block font-mono text-[11px] text-muted-foreground">
+                  <span className="block font-mono text-2xs text-muted-foreground">
                     {item.subtitle}
                   </span>
                 )}

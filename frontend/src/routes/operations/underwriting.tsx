@@ -92,7 +92,7 @@ function ProductDecisionBlock({
           <dt className="text-muted-foreground">Underwritten amount</dt>
           <dd>
             {line.pending_si > 0 ? (
-              <span className="text-amber-500">
+              <span className="text-warn">
                 {fmtCurrency(line.pending_si)}
               </span>
             ) : (
@@ -158,7 +158,7 @@ function ProductDecisionBlock({
         </div>
         <textarea
           rows={2}
-          className="mt-1.5 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring"
+          className="mt-1.5 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-ring"
           placeholder="Remarks (e.g. Accepted on 6 May 2026)"
           value={edit.remarks}
           maxLength={1024}
@@ -301,7 +301,7 @@ function ReviewDetail({
           </Label>
           <textarea
             rows={3}
-            className="w-full max-w-2xl resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring"
+            className="w-full max-w-2xl resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-ring"
             placeholder="Medical / evidence requirements the insurer asked for"
             value={requirements}
             maxLength={2000}
@@ -475,7 +475,7 @@ export function UnderwritingPage() {
                           </TableCell>
                           <TableCell className="text-right">
                             {pending > 0 ? (
-                              <span className="text-amber-500">
+                              <span className="text-warn">
                                 {fmtCurrency(pending)}
                               </span>
                             ) : (

@@ -163,12 +163,12 @@ export function DependantCard({
             />
           </Field>
         ) : (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Dependant premiums are set in the EO/ES/EC/EF tier rates on the
             employee card.
           </p>
         )}
-        <p className="w-full text-[11px] text-muted-foreground">
+        <p className="w-full text-2xs text-muted-foreground">
           {participation === "voluntary"
             ? "Voluntary — the member opts in to cover dependants, drawing down flex dollars."
             : participation === "compulsory"
@@ -183,7 +183,7 @@ export function DependantCard({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         {label}
       </Label>
       {children}

@@ -115,7 +115,7 @@ export const SobRow = memo(function SobRow({
             )}
             {limitCount > 0 && (
               <span
-                className="flex items-center gap-0.5 text-[10px]"
+                className="flex items-center gap-0.5 text-2xs"
                 title={`${limitCount} limit / qualifier`}
               >
                 <Tags className="size-3" />
@@ -124,7 +124,7 @@ export const SobRow = memo(function SobRow({
             )}
             {subCount > 0 && (
               <span
-                className="flex items-center gap-0.5 text-[10px]"
+                className="flex items-center gap-0.5 text-2xs"
                 title={`${subCount} sub-benefit`}
               >
                 <ListTree className="size-3" />

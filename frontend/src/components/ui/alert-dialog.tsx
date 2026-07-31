@@ -1,6 +1,6 @@
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import { Button, type ButtonProps } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
@@ -12,14 +12,24 @@ interface AlertDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: ButtonProps["variant"];
+  /** Visual register of the prompt. Defaults to `danger` so existing
+   * destructive call sites are unchanged; use `info` for a confirmation that
+   * isn't destructive — a red warning triangle over "Approve this claim?"
+   * contradicts the action it is confirming. */
+  tone?: "danger" | "info";
   onConfirm: () => void | Promise<void>;
   loading?: boolean;
 }
 
+const TONES = {
+  danger: { icon: AlertTriangle, className: "bg-error-soft text-error" },
+  info: { icon: Info, className: "bg-info-soft text-info" },
+} as const;
+
 /**
- * Destructive-action confirmation dialog. Renders an icon + title + body +
- * cancel/confirm buttons. The confirm button defaults to the `destructive`
- * variant; pass `confirmVariant` to override.
+ * Confirmation dialog. Renders an icon + title + body + cancel/confirm buttons.
+ * The confirm button defaults to the `destructive` variant; pass
+ * `confirmVariant` and `tone` to override for non-destructive prompts.
  */
 export function AlertDialog({
   open,
@@ -29,9 +39,11 @@ export function AlertDialog({
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
   confirmVariant = "destructive",
+  tone = "danger",
   onConfirm,
   loading = false,
 }: AlertDialogProps) {
+  const { icon: ToneIcon, className: toneClass } = TONES[tone];
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -52,8 +64,13 @@ export function AlertDialog({
           )}
         >
           <div className="p-6 flex gap-4">
-            <div className="size-10 rounded-full bg-error-soft text-error grid place-items-center shrink-0">
-              <AlertTriangle className="size-5" />
+            <div
+              className={cn(
+                "grid size-10 shrink-0 place-items-center rounded-full",
+                toneClass,
+              )}
+            >
+              <ToneIcon className="size-5" />
             </div>
             <div className="flex-1 min-w-0">
               <DialogPrimitive.Title className="text-base font-semibold text-foreground">

@@ -53,7 +53,7 @@ export function InfoHint({
             type="button"
             aria-label={label}
             className={cn(
-              "inline-flex items-center align-middle text-muted-foreground/60 " +
+              "inline-flex items-center align-middle text-subtle " +
                 "transition-colors hover:text-foreground focus-visible:text-foreground " +
                 "focus-visible:outline-none",
               className,

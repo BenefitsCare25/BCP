@@ -93,7 +93,7 @@ export function SobRowDetail({
             <div className="flex flex-col gap-1">
               <Label
                 htmlFor={`kind-${item.uid}`}
-                className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                className="text-2xs uppercase tracking-wider text-muted-foreground"
               >
                 Value type
               </Label>
@@ -118,7 +118,7 @@ export function SobRowDetail({
             <div className="flex min-w-64 flex-1 flex-col gap-1">
               <Label
                 htmlFor={`note-${item.uid}`}
-                className="text-[10px] uppercase tracking-wider text-muted-foreground"
+                className="text-2xs uppercase tracking-wider text-muted-foreground"
               >
                 Footnote
               </Label>
@@ -190,7 +190,7 @@ function AxisValues({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         Values per {axis.join(" / ")}
       </Label>
       <div className="overflow-x-auto">
@@ -201,7 +201,7 @@ function AxisValues({
               {columns.map((col) => (
                 <th
                   key={col.id}
-                  className="px-1 pb-1 text-left text-[10px] uppercase tracking-wider text-muted-foreground"
+                  className="px-1 pb-1 text-left text-2xs uppercase tracking-wider text-muted-foreground"
                 >
                   {col.label}
                 </th>
@@ -211,7 +211,7 @@ function AxisValues({
           <tbody>
             {axis.map((label) => (
               <tr key={label}>
-                <td className="pr-2 text-[11px] text-muted-foreground">{label}</td>
+                <td className="pr-2 text-2xs text-muted-foreground">{label}</td>
                 {columns.map((col) => (
                   <td key={col.id} className="px-1 py-0.5">
                     <Input
@@ -254,7 +254,7 @@ function CopayGrid({
   const addable = COPAY_FIELD_PRESETS.filter((p) => !present.has(p.key));
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         Per-visit / co-payment
       </Label>
       <div className="overflow-x-auto">
@@ -265,7 +265,7 @@ function CopayGrid({
               {columns.map((col) => (
                 <th
                   key={col.id}
-                  className="px-1 pb-1 text-left text-[10px] uppercase tracking-wider text-muted-foreground"
+                  className="px-1 pb-1 text-left text-2xs uppercase tracking-wider text-muted-foreground"
                 >
                   {col.label}
                 </th>
@@ -275,7 +275,7 @@ function CopayGrid({
           <tbody>
             {fields.map((f) => (
               <tr key={f.key}>
-                <td className="pr-2 text-[11px] text-muted-foreground">
+                <td className="pr-2 text-2xs text-muted-foreground">
                   <div className="flex items-center gap-1">
                     {f.label}
                     {!STANDARD_COPAY_KEYS.has(f.key) && (
@@ -312,7 +312,7 @@ function CopayGrid({
       </div>
       {addable.length > 0 && (
         <Select value="" onValueChange={(key) => setSob((s) => addCopayField(s, idx, key))}>
-          <SelectTrigger className="h-7 w-72 self-start text-[11px] text-muted-foreground">
+          <SelectTrigger className="h-7 w-72 self-start text-2xs text-muted-foreground">
             <SelectValue placeholder="+ Add qualifier (per visit / co-payment variant)" />
           </SelectTrigger>
           <SelectContent>
@@ -344,7 +344,7 @@ function LimitRows({
   return (
     <div className="flex flex-col gap-1">
       {limits.length > 0 && (
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Limits / qualifiers
         </Label>
       )}
@@ -379,7 +379,7 @@ function LimitRows({
         size="sm"
         variant="ghost"
         onClick={() => onChange([...limits, { label: "", value: "" }])}
-        className="self-start text-[11px] text-muted-foreground"
+        className="self-start text-2xs text-muted-foreground"
       >
         <Plus className="size-3.5" /> Add limit / qualifier
       </Button>
@@ -404,7 +404,7 @@ function SubItems({
   return (
     <div className="flex flex-col gap-2">
       {item.sub_items.length > 0 && (
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Sub-benefits
         </Label>
       )}
@@ -438,7 +438,7 @@ function SubItems({
               {/* Sub-items carry their OWN kind. The old editor forced the
                   parent's, so a day cap under a currency parent was prefixed
                   "S$" — and the stored kind was never read back. */}
-              <SelectTrigger aria-label="Sub-benefit value type" className="h-7 w-32 text-[11px]">
+              <SelectTrigger aria-label="Sub-benefit value type" className="h-7 w-32 text-2xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -463,7 +463,7 @@ function SubItems({
             {columns.map((col, ci) => (
               <div key={col.id} className="flex w-40 flex-col gap-1">
                 {columns.length > 1 && (
-                  <span className="truncate text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <span className="truncate text-2xs uppercase tracking-wider text-muted-foreground">
                     {col.label}
                   </span>
                 )}
@@ -528,7 +528,7 @@ function ListRows({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         {showKey ? "Scale rows" : "Covered conditions"}
       </Label>
       {item.sub_items.map((sub, subIdx) => (

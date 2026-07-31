@@ -246,7 +246,7 @@ export function AIUsageTile() {
                 key={op.operation}
                 className="rounded-md border border-border p-2 bg-card"
               >
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                   {op.operation}
                 </div>
                 <div className="text-sm font-medium">

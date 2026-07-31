@@ -268,7 +268,7 @@ export function BenefitYearPanel({
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
+              <tr className="border-b border-border text-left text-2xs uppercase tracking-wider text-muted-foreground">
                 <th className="pb-2 pr-3 font-medium">Start date</th>
                 <th className="pb-2 pr-3 font-medium">End date</th>
                 <th className="pb-2 pr-3 font-medium">Current</th>

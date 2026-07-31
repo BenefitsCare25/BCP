@@ -127,14 +127,14 @@ export function LeaveRatesEditor({
 
       {distinctValues.length > 0 && (
         <>
-          <p className="mt-3 text-[11px] text-muted-foreground">
+          <p className="mt-3 text-2xs text-muted-foreground">
             Blank limits inherit the company default ({maxBuyDays} buy /{" "}
             {maxSellDays} sell).
           </p>
           <div className="mt-2 overflow-x-auto">
             <table className="w-full min-w-[560px] border-separate border-spacing-y-1 text-sm">
               <thead>
-                <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                <tr className="text-2xs uppercase tracking-wider text-muted-foreground">
                   <th className="px-2 pb-1 text-left font-medium">Tier · members</th>
                   <th className="w-[110px] px-2 pb-1 text-right font-medium">
                     Rate / day
@@ -210,7 +210,7 @@ export function LeaveRatesEditor({
                           }
                         />
                       </td>
-                      <td className="rounded-r-md border-y border-r border-border px-2.5 py-1.5 text-right text-[11px]">
+                      <td className="rounded-r-md border-y border-r border-border px-2.5 py-1.5 text-right text-2xs">
                         {rate > 0 ? (
                           <>
                             <span className="text-error">

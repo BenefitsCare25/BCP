@@ -4,6 +4,7 @@ import { FieldComparisonTable } from "@/components/claims/FieldComparisonTable";
 import { RuleResultsList } from "@/components/claims/RuleResultsList";
 import { VisionCheckList } from "@/components/claims/VisionCheckList";
 import { Button } from "@/components/ui/button";
+import { SectionLabel } from "@/components/ui/section-label";
 import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
 
@@ -18,10 +19,8 @@ function Section({
 }) {
   return (
     <div>
-      <div className="flex items-center gap-1 mb-2">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">
-          {title}
-        </div>
+      <div className="mb-2 flex items-center gap-1">
+        <SectionLabel>{title}</SectionLabel>
         {hint ? <InfoHint>{hint}</InfoHint> : null}
       </div>
       {children}
@@ -165,7 +164,7 @@ export function ClaimReviewPanel({
         </Section>
       )}
 
-      <div className="text-[11px] text-muted-foreground/60">
+      <div className="border-t border-border pt-3 text-2xs text-subtle">
         {review.model && <>Model {review.model} · </>}
         {(review.input_tokens ?? 0) + (review.output_tokens ?? 0)} tokens
         {review.cost_estimate_usd != null && (

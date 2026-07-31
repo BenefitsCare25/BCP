@@ -116,7 +116,7 @@ function money(n: number): string {
 function UsagePill({ bucket }: { bucket: UtilizationBucket }) {
   if (bucket.approved <= 0 && bucket.pending <= 0) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 text-[11px]">
+    <div className="flex flex-wrap items-center gap-x-2 text-2xs">
       {bucket.remaining != null ? (
         <span className="font-medium text-foreground/80">
           {money(bucket.remaining)} left
@@ -141,7 +141,7 @@ function Limits({ limits }: { limits?: BenefitLimit[] }) {
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-0.5">
       {limits.map((lim, i) => (
-        <span key={i} className="text-[11px] text-muted-foreground">
+        <span key={i} className="text-2xs text-muted-foreground">
           {lim.label}
           {lim.value ? `: ${lim.value}` : ""}
         </span>
@@ -202,7 +202,7 @@ function Row({
           )}
         </div>
       )}
-      {note && <div className="text-[11px] italic text-muted-foreground">{note}</div>}
+      {note && <div className="text-2xs italic text-muted-foreground">{note}</div>}
       <Limits limits={limits} />
     </div>
   );
@@ -241,7 +241,7 @@ function ItemBlock({
           </span>
         </button>
         {item.note && (
-          <div className="pl-4 text-[11px] italic text-muted-foreground">
+          <div className="pl-4 text-2xs italic text-muted-foreground">
             {item.note}
           </div>
         )}
@@ -351,7 +351,7 @@ export function BenefitScheduleView({
   return (
     <div className="flex flex-col gap-1.5">
       {coverDescription && (
-        <p className="text-[11px] text-muted-foreground">{coverDescription}</p>
+        <p className="text-2xs text-muted-foreground">{coverDescription}</p>
       )}
       {annualPolicyLimit && (
         <div className="text-xs font-medium text-foreground">
@@ -359,7 +359,7 @@ export function BenefitScheduleView({
         </div>
       )}
       {valuesMissing && (
-        <p className="text-[11px] italic text-muted-foreground">
+        <p className="text-2xs italic text-muted-foreground">
           Covered benefits are listed below; limits for this plan are not yet
           recorded.
         </p>
@@ -377,7 +377,7 @@ export function BenefitScheduleView({
           type="button"
           onClick={() => setShowAll((s) => !s)}
           aria-expanded={showAll}
-          className="mt-1 flex items-center gap-1 self-start text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline"
+          className="mt-1 flex items-center gap-1 self-start text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline"
         >
           {showAll ? (
             <>

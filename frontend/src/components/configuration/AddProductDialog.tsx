@@ -236,7 +236,7 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                       className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"
                     >
                       <CheckCircle2 className="size-4 text-good shrink-0" />
-                      <code className="text-[11px] font-mono bg-muted px-1.5 py-0.5 rounded">
+                      <code className="text-2xs font-mono bg-muted px-1.5 py-0.5 rounded">
                         {p.code}
                       </code>
                       <span className="text-sm text-foreground flex-1">
@@ -261,7 +261,7 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                         checked={picked.has(p.code)}
                         onCheckedChange={() => toggle(p.code)}
                       />
-                      <code className="text-[11px] font-mono bg-muted px-1.5 py-0.5 rounded">
+                      <code className="text-2xs font-mono bg-muted px-1.5 py-0.5 rounded">
                         {p.code}
                       </code>
                       <span className="text-sm text-foreground flex-1">

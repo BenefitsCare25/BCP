@@ -106,7 +106,7 @@ export function HrSignInPage() {
           <div className="space-y-1.5">
             <Label
               htmlFor="hr-password"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Password
             </Label>
@@ -126,7 +126,7 @@ export function HrSignInPage() {
           {error && <p className="text-sm text-error">{error}</p>}
           <Button
             type="submit"
-            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={
               login.isPending ||
               !identifier.trim() ||
@@ -143,7 +143,7 @@ export function HrSignInPage() {
           <div className="space-y-1.5">
             <Label
               htmlFor="hr-totp"
-              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Authentication code
             </Label>
@@ -162,7 +162,7 @@ export function HrSignInPage() {
           {error && <p className="text-sm text-error">{error}</p>}
           <Button
             type="submit"
-            className="h-12 w-full text-[15px] transition-transform duration-150 active:scale-[0.99]"
+            className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify"}

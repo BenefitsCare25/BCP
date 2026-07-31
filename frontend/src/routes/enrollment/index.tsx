@@ -201,7 +201,7 @@ export function EnrollmentDashboardPage() {
               <Link
                 to="/enrollment"
                 search={{ tab: "leave" }}
-                className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
                 Set the day limits &amp; per-day rate →
               </Link>
@@ -230,7 +230,7 @@ export function EnrollmentDashboardPage() {
                   { value: "on_change", label: "Only on plan change" },
                 ]}
               />
-              <span className="basis-full text-[11px] text-muted-foreground sm:basis-auto">
+              <span className="basis-full text-2xs text-muted-foreground sm:basis-auto">
                 {drawdownRule === "on_change"
                   ? "Only the upgrade/downgrade difference vs the default plan is deducted (a downgrade credits the wallet)."
                   : "The member's full plan price tag is deducted from the wallet."}
@@ -243,7 +243,7 @@ export function EnrollmentDashboardPage() {
                 <Switch checked={allowOverdraft} onCheckedChange={setAllowOverdraft} />
                 Allow overdraft
               </label>
-              <span className="basis-full text-[11px] text-muted-foreground sm:basis-auto">
+              <span className="basis-full text-2xs text-muted-foreground sm:basis-auto">
                 {allowOverdraft
                   ? "Elections may exceed the flex wallet — the shortfall is the member's to top up (e.g. via payroll)."
                   : "Submitting is blocked when elections draw more flex than the member's wallet holds."}
@@ -252,7 +252,7 @@ export function EnrollmentDashboardPage() {
 
             {flexProducts.length > 0 && (
               <div className="mt-3 border-t border-border pt-2.5">
-                <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+                <div className="flex items-center justify-between gap-2 text-2xs uppercase tracking-wider text-muted-foreground">
                   <span>Price-tag source per product</span>
                   {/* The SOURCE is a window column and is set here; the price
                       tags themselves are per policy year and live on the Flex
@@ -313,7 +313,7 @@ export function EnrollmentDashboardPage() {
                     </span>
                     <Badge variant={STATUS_VARIANT[w.status] ?? "outline"}>{w.status}</Badge>
                   </div>
-                  <div className="text-[11px] text-muted-foreground">
+                  <div className="text-2xs text-muted-foreground">
                     {new Date(w.opens_at).toLocaleDateString()} —{" "}
                     {new Date(w.closes_at).toLocaleDateString()}
                   </div>

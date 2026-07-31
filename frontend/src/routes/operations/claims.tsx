@@ -16,6 +16,7 @@ import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { SectionLabel } from "@/components/ui/section-label";
 import {
   Card,
   CardContent,
@@ -29,6 +30,7 @@ import {
   Sheet,
   SheetBody,
   SheetContent,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
@@ -88,7 +90,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function VerdictBadge({ claim }: { claim: BrokerClaim }) {
   const r = claim.ai_review;
-  if (!r) return <span className="text-muted-foreground/60 text-xs">—</span>;
+  if (!r) return <span className="text-xs text-subtle">—</span>;
   if (r.status === "pending") {
     return <Badge variant="outline">running…</Badge>;
   }
@@ -119,6 +121,44 @@ const RERUNNABLE = new Set([
 ]);
 
 type DecisionAction = "approve" | "reject" | "needs_info";
+
+/** One label/value pair in the claim detail sheet. The sheet used to run a 10px
+ * tracked eyebrow for fields against a 12px one for sections — one tier now,
+ * shared with every other panel in the app via `SectionLabel`. */
+function DetailField({
+  label,
+  wide,
+  children,
+}: {
+  label: string;
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={wide ? "sm:col-span-2" : undefined}>
+      <SectionLabel as="dt">{label}</SectionLabel>
+      <dd className="mt-0.5 text-sm text-foreground">{children}</dd>
+    </div>
+  );
+}
+
+/** A titled block of the sheet. Its heading shares the one label tier, so the
+ * separation is carried by the rule and the space above it, not by a second
+ * near-identical uppercase size. */
+function DetailSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-3 border-t border-border pt-5">
+      <SectionLabel as="h3">{title}</SectionLabel>
+      {children}
+    </section>
+  );
+}
 
 function QueueTab() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
@@ -205,20 +245,24 @@ function QueueTab() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="space-y-4">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
+        <CardHeader className="pb-4">
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+            <div className="min-w-0 space-y-1">
               <CardTitle>Claims review queue</CardTitle>
               <CardDescription>
                 {total.toLocaleString()} claim{total === 1 ? "" : "s"}
                 {status ? ` · ${STATUS_FILTERS.find((f) => f.value === status)?.label}` : ""}
               </CardDescription>
             </div>
-            <Segmented
-              value={status}
-              onChange={setStatus}
-              options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
-            />
+            {/* Eight filters overflow a narrow viewport — scroll the rail
+                rather than reflowing it into a second ragged line. */}
+            <div className="-mx-1 max-w-full overflow-x-auto px-1 py-0.5">
+              <Segmented
+                value={status}
+                onChange={setStatus}
+                options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
+              />
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -271,25 +315,28 @@ function QueueTab() {
                     >
                       <TableCell className="font-medium">
                         {c.employee_name ?? "—"}
-                        <div className="text-[11px] text-muted-foreground font-normal">
+                        <div className="text-2xs text-muted-foreground font-normal">
                           {c.staff_id}
                         </div>
                       </TableCell>
                       <TableCell>
                         {c.claim_type}
-                        <div className="text-[11px] text-muted-foreground">
+                        <div className="text-2xs text-muted-foreground">
                           {c.claim_kind === "flex"
                             ? `Flex · ${c.flex_category_name}`
                             : c.product_code}
                         </div>
                       </TableCell>
-                      <TableCell>
+                      {/* Money and dates are single values: wrapping them mid-
+                          figure ("SGD / 165.83") made the column unscannable.
+                          tabular-nums keeps the digits column-aligned. */}
+                      <TableCell className="whitespace-nowrap tabular-nums">
                         {c.currency} {c.amount_claimed.toFixed(2)}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
                         {fmtDate(c.incurred_date)}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
                         {fmtDate(c.submitted_at)}
                       </TableCell>
                       <TableCell>
@@ -318,20 +365,20 @@ function QueueTab() {
         <SheetContent className="sm:max-w-2xl">
           {selected && (
             <>
-              <SheetHeader>
-                <SheetTitle>
-                  {selected.claim_type} · {selected.currency}{" "}
-                  {selected.amount_claimed.toFixed(2)}
-                </SheetTitle>
-              </SheetHeader>
-              <SheetBody className="space-y-4">
-                <div className="flex items-center gap-2 flex-wrap">
+              {/* pr-10 keeps the title clear of the overlaid close control. */}
+              <SheetHeader className="gap-3 pr-10">
+                <SheetTitle>{selected.claim_type}</SheetTitle>
+                {/* Status, verdict and the re-run action identify the claim, so
+                    they belong beside its name rather than as the first item of
+                    the scrolling body. */}
+                <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={selected.status} />
                   <VerdictBadge claim={selected} />
                   {RERUNNABLE.has(selected.status) && (
                     <Button
                       size="sm"
                       variant="outline"
+                      className="ml-auto"
                       disabled={rerun.isPending}
                       onClick={async () => {
                         try {
@@ -351,28 +398,40 @@ function QueueTab() {
                     </Button>
                   )}
                 </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Member
-                    </div>
+              </SheetHeader>
+              <SheetBody className="space-y-5">
+                <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                  <DetailField label="Amount claimed">
+                    <span className="font-medium tabular-nums">
+                      {selected.currency} {selected.amount_claimed.toFixed(2)}
+                    </span>
+                  </DetailField>
+                  {remainingLimit != null && (
+                    <DetailField label="Remaining limit">
+                      <span
+                        className={
+                          selected.amount_claimed > remainingLimit
+                            ? "font-medium tabular-nums text-warn"
+                            : "tabular-nums"
+                        }
+                      >
+                        {selected.currency} {remainingLimit.toFixed(2)}
+                      </span>
+                    </DetailField>
+                  )}
+                  <DetailField label="Member">
                     {selected.employee_name ?? "—"}{" "}
-                    <span className="text-muted-foreground">({selected.staff_id})</span>
-                  </div>
+                    <span className="text-muted-foreground">
+                      ({selected.staff_id})
+                    </span>
+                  </DetailField>
                   {selected.dependant_name && (
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Claimant
-                      </div>
+                    <DetailField label="Claimant">
                       {selected.dependant_name}{" "}
                       <span className="text-muted-foreground">(dependant)</span>
-                    </div>
+                    </DetailField>
                   )}
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Coverage
-                    </div>
+                  <DetailField label="Coverage">
                     {selected.claim_kind === "flex"
                       ? `Flex · ${selected.flex_category_name}`
                       : `${selected.product_code}${
@@ -382,54 +441,28 @@ function QueueTab() {
                               ? ` · ${selected.benefit_key}`
                               : ""
                         }`}
-                  </div>
-                  {remainingLimit != null && (
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Remaining limit
-                      </div>
-                      <span
-                        className={
-                          selected.amount_claimed > remainingLimit
-                            ? "text-warn"
-                            : undefined
-                        }
-                      >
-                        {selected.currency} {remainingLimit.toFixed(2)}
-                      </span>
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Incurred
-                    </div>
-                    {fmtDate(selected.incurred_date)}
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                      Provider
-                    </div>
+                  </DetailField>
+                  <DetailField label="Incurred">
+                    <span className="tabular-nums">
+                      {fmtDate(selected.incurred_date)}
+                    </span>
+                  </DetailField>
+                  <DetailField label="Provider">
                     {selected.provider_name ?? "—"}
-                  </div>
+                  </DetailField>
                   {selected.diagnosis && (
-                    <div className="col-span-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Diagnosis / description
-                      </div>
+                    <DetailField label="Diagnosis / description" wide>
                       {selected.diagnosis}
-                    </div>
+                    </DetailField>
                   )}
                   {selected.claim_kind === "insured" &&
                     (selected.referral_document ||
                       selected.referral_not_applicable) && (
-                      <div className="col-span-2">
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                          Referral letter
-                        </div>
+                      <DetailField label="Referral letter" wide>
                         {selected.referral_document ? (
                           <button
                             type="button"
-                            className="text-left underline-offset-2 hover:underline"
+                            className="rounded text-left underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                             onClick={async () => {
                               try {
                                 await downloadClaimDocument(
@@ -446,53 +479,49 @@ function QueueTab() {
                         ) : (
                           "Declared not applicable by the member"
                         )}
-                      </div>
+                      </DetailField>
                     )}
-                  {selected.decision_notes && (
-                    <div className="col-span-2">
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Decision note
-                      </div>
-                      {selected.decision_notes}
-                    </div>
-                  )}
                   {selected.amount_approved != null && (
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                        Approved amount
-                      </div>
-                      {selected.currency} {selected.amount_approved.toFixed(2)}
-                    </div>
+                    <DetailField label="Approved amount">
+                      <span className="font-medium tabular-nums">
+                        {selected.currency} {selected.amount_approved.toFixed(2)}
+                      </span>
+                    </DetailField>
                   )}
-                </div>
+                  {selected.decision_notes && (
+                    <DetailField label="Decision note" wide>
+                      {selected.decision_notes}
+                    </DetailField>
+                  )}
+                </dl>
 
-                <div>
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
-                    Documents
-                  </div>
+                <DetailSection title="Documents">
                   {selected.documents.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">No documents.</div>
+                    <p className="text-sm text-muted-foreground">No documents.</p>
                   ) : (
-                    <ul className="space-y-1.5">
+                    <ul className="space-y-2">
                       {selected.documents.map((d) => (
                         <li
                           key={d.id}
-                          className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-sm"
+                          className="flex items-center justify-between gap-3 rounded-md border border-border bg-card py-2 pl-3 pr-2 text-sm"
                         >
-                          <span className="truncate">
-                            {d.file_name}
+                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="truncate font-medium">
+                              {d.file_name}
+                            </span>
                             {d.doc_type && DOC_TYPE_LABELS[d.doc_type] && (
-                              <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                              <Badge variant="outline">
                                 {DOC_TYPE_LABELS[d.doc_type]}
-                              </span>
+                              </Badge>
                             )}
-                            <span className="text-[11px] text-muted-foreground ml-2">
+                            <span className="text-xs tabular-nums text-muted-foreground">
                               {(d.size_bytes / 1024).toFixed(0)} KB
                             </span>
                           </span>
                           <Button
                             size="sm"
                             variant="ghost"
+                            className="shrink-0"
                             aria-label={`Download ${d.file_name}`}
                             onClick={async () => {
                               try {
@@ -508,34 +537,34 @@ function QueueTab() {
                       ))}
                     </ul>
                   )}
-                </div>
+                </DetailSection>
 
-                <div>
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
-                    AI review
-                  </div>
+                <DetailSection title="AI review">
                   <ClaimReviewPanel
                     claimId={selected.id}
                     claimStatus={selected.status}
                   />
-                </div>
-
-                {DECIDABLE.has(selected.status) && (
-                  <div className="flex gap-2 border-t border-border pt-4">
-                    <Button onClick={() => setDecision("approve")}>Approve</Button>
-                    <Button
-                      variant="outline"
-                      className="text-error hover:text-error"
-                      onClick={() => setDecision("reject")}
-                    >
-                      Reject
-                    </Button>
-                    <Button variant="outline" onClick={() => setDecision("needs_info")}>
-                      Request more info
-                    </Button>
-                  </div>
-                )}
+                </DetailSection>
               </SheetBody>
+
+              {/* Pinned: deciding is why this sheet is open, but the buttons sat
+                  under the full AI review — every decision meant scrolling past
+                  the evidence to reach them. */}
+              {DECIDABLE.has(selected.status) && (
+                <SheetFooter className="justify-start">
+                  <Button onClick={() => setDecision("approve")}>Approve</Button>
+                  <Button
+                    variant="outline"
+                    className="text-error hover:text-error"
+                    onClick={() => setDecision("reject")}
+                  >
+                    Reject
+                  </Button>
+                  <Button variant="outline" onClick={() => setDecision("needs_info")}>
+                    Request more info
+                  </Button>
+                </SheetFooter>
+              )}
             </>
           )}
         </SheetContent>
@@ -554,10 +583,13 @@ function QueueTab() {
               : "Request more information?"
         }
         confirmVariant={decision === "reject" ? "destructive" : "default"}
+        // Only rejection is destructive; a red warning triangle over "Approve
+        // this claim?" argues against the action it is confirming.
+        tone={decision === "reject" ? "danger" : "info"}
         description={
-          <div className="space-y-3">
+          <div className="space-y-4">
             {limitWarning && (
-              <p className="rounded-md border border-warn/40 bg-warn-soft px-2.5 py-2 text-warn">
+              <p className="rounded-md border border-warn/40 bg-warn-soft px-3 py-2.5 text-warn">
                 {limitWarning} Confirm again to approve anyway, or lower the
                 amount.
               </p>
@@ -569,8 +601,8 @@ function QueueTab() {
                   approve the full {selected.currency}{" "}
                   {selected.amount_claimed.toFixed(2)}.
                 </p>
-                <label className="block">
-                  <span className="text-xs text-muted-foreground">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">
                     Approved amount (optional)
                   </span>
                   <Input
@@ -583,7 +615,7 @@ function QueueTab() {
                       setLimitWarning(null); // new amount → re-check the limit
                     }}
                     placeholder={selected.amount_claimed.toFixed(2)}
-                    className="mt-1 h-8"
+                    className="tabular-nums"
                   />
                 </label>
               </>
@@ -597,8 +629,8 @@ function QueueTab() {
                 what's missing in the note.
               </p>
             )}
-            <label className="block">
-              <span className="text-xs text-muted-foreground">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">
                 Note {decision === "needs_info" ? "(shown to the member)" : "(optional)"}
               </span>
               <Input
@@ -607,7 +639,6 @@ function QueueTab() {
                 placeholder={
                   decision === "needs_info" ? "e.g. Send the itemized bill" : "Optional note"
                 }
-                className="mt-1 h-8"
               />
             </label>
           </div>
@@ -672,16 +703,16 @@ export function ClaimsQueuePage() {
         <ReviewRuleSettings />
       </TabsContent>
 
-      <TabsContent value="settings" className="space-y-4">
+      <TabsContent value="settings" className="space-y-5">
         <Card>
-          <CardHeader>
+          <CardHeader className="pb-4">
             <CardTitle>Claim submission</CardTitle>
-            <CardDescription>
+            <CardDescription className="max-w-prose">
               Governs when members may submit claims for the current benefit
               year.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pb-6">
             <ClaimGracePeriodField />
           </CardContent>
         </Card>

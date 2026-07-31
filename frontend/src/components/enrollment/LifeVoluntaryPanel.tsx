@@ -150,7 +150,7 @@ export function LifeVoluntaryPanel({
                       <span className="text-foreground">{t.label}</span>
                       <Badge
                         variant={DIRECTION_VARIANT[t.direction] ?? "outline"}
-                        className="text-[10px]"
+                        className="text-2xs"
                       >
                         {t.direction}
                       </Badge>
@@ -198,7 +198,7 @@ export function LifeVoluntaryPanel({
         <div className="mt-2 grid grid-cols-2 gap-3">
           {(["spouse", "child"] as const).map((role) => (
             <div key={role} className="rounded-md border border-border bg-card px-2.5 py-2">
-              <div className="text-[11px] font-medium capitalize text-foreground">{role}</div>
+              <div className="text-2xs font-medium capitalize text-foreground">{role}</div>
               <div className="mt-1 flex items-center gap-1.5">
                 <Input
                   type="number"

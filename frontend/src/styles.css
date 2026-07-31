@@ -13,11 +13,24 @@
   --color-muted: #f5efef;
   --color-muted-foreground: #6f6362;
   /* Lightest de-emphasized text tier. Held at the lightest value that still
-     clears WCAG AA (4.56:1 on --color-background); anything lighter fails 4.5:1. */
+     clears WCAG AA (4.56:1 on --color-background); anything lighter fails 4.5:1.
+     USE THIS for de-emphasized text — never `text-muted-foreground/60` or `/70`,
+     which composite to 2.45:1 and 2.94:1 and fail 1.4.3 outright. Opacity
+     modifiers on a text token are a contrast bug, not a shade. */
   --color-subtle: #7a6f6e;
+  /* --color-border is DECORATIVE: card edges, dividers, hairlines between list
+     rows. Purely presentational boundaries are exempt from WCAG 1.4.11, so it
+     stays light and quiet. */
   --color-border: #ebe3e3;
   --color-border-strong: #d9cdcd;
-  --color-input: #ebe3e3;
+  /* --color-input is NOT decorative: it draws the visual boundary of a form
+     control (input, select, textarea), which 1.4.11 requires to reach 3:1
+     against the adjacent surface. The old #ebe3e3 managed 1.26:1 — the control
+     edge was effectively invisible. This value clears 3:1 on BOTH surfaces a
+     control sits against (3.39:1 on --color-card, 3.18:1 on
+     --color-background); a lighter one passes on white and fails on the page.
+     Keep them separate — collapsing input back onto border reopens the bug. */
+  --color-input: #948988;
   --color-ring: #c11a2b;
 
   --color-primary: #c11a2b;
@@ -66,6 +79,22 @@
 
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+
+  /* The two steps Tailwind's default scale lacks for a data-dense product.
+     Without them, ~160 places reached for arbitrary `text-[10px]` /
+     `text-[11px]` / `text-[15px]` values, so the smallest tier drifted a pixel
+     either way depending on who wrote it. Declare the steps here and use
+     `text-2xs` / `text-md`; arbitrary pixel sizes are a hardcoded style.
+
+     2xs is the floor — the metadata tier (badge captions, byte sizes, the AI
+     spend line). It replaced a 10px tier: below 11px this UI stops being
+     comfortable for the broad employee population the portal serves. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  /* md sits between sm and base, for the taller auth call-to-action buttons
+     and the sign-in lede, which read as undersized at sm. */
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.375rem;
 }
 
 @layer base {
@@ -108,8 +137,17 @@
 }
 
 @layer components {
+  /* Focus affordance for native controls that don't go through the Input /
+     Button primitives. The ring MUST stay behind :focus-visible — as a static
+     utility it painted a permanent brand-red halo on every select and textarea
+     that carried the class, so whole forms (the claim review-rule editor, the
+     document-type settings, the portal claim form) read as if every field were
+     focused or errored. Mirrors the Input primitive's focus treatment. */
   .focus-ring {
-    @apply outline-none ring-2 ring-ring/40 ring-offset-2 ring-offset-background;
+    @apply outline-none;
+  }
+  .focus-ring:focus-visible {
+    @apply ring-2 ring-ring/40 ring-offset-2 ring-offset-background;
   }
 }
 

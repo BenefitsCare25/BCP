@@ -17,18 +17,16 @@ export function VisionCheckList({ checks }: { checks: VisionCheck[] }) {
       {checks.map((v, i) => {
         const cfg = VERDICT[v.verdict] ?? { label: v.verdict, variant: "warn" as const };
         return (
-          <li key={i} className="rounded-md border border-border bg-card p-2.5">
-            <div className="flex items-start justify-between gap-2">
+          <li key={i} className="rounded-md border border-border bg-card p-3">
+            <div className="flex items-start justify-between gap-3">
               <div className="text-sm text-foreground">{v.question}</div>
               <Badge variant={cfg.variant} className="shrink-0">
                 {cfg.label}
               </Badge>
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
+            <div className="mt-1.5 text-xs text-muted-foreground">
               {v.explanation}
-              {v.file_name && (
-                <span className="text-muted-foreground/60"> · {v.file_name}</span>
-              )}
+              {v.file_name && <span className="text-subtle"> · {v.file_name}</span>}
             </div>
           </li>
         );

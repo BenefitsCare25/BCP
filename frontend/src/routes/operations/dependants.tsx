@@ -328,7 +328,7 @@ export function DependantsPage() {
               </SheetHeader>
               <SheetBody className="space-y-4">
                 <div>
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">
+                  <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-2">
                     Employee link
                   </div>
                   <div className="flex items-center gap-2 mb-2">
@@ -432,7 +432,7 @@ export function DependantsPage() {
 
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                    <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                       Details (editable)
                     </div>
                     <Button
@@ -465,7 +465,7 @@ export function DependantsPage() {
                         key={k}
                         className="block rounded-md border border-border p-2.5 bg-card"
                       >
-                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                           {k}
                         </div>
                         <Input

@@ -62,7 +62,7 @@ export function FieldComparisonTable({ comparisons }: { comparisons: FieldCompar
                   <Badge variant={cfg.variant}>{cfg.label}</Badge>
                   {c.vision_verified && (
                     <span
-                      className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+                      className="inline-flex items-center gap-1 text-2xs text-muted-foreground"
                       title={c.notes ?? "Confirmed by vision re-check"}
                     >
                       <Eye className="size-3" /> vision
@@ -70,7 +70,7 @@ export function FieldComparisonTable({ comparisons }: { comparisons: FieldCompar
                   )}
                 </div>
                 {c.notes && !c.vision_verified && (
-                  <div className="text-[11px] text-muted-foreground mt-1 max-w-56">
+                  <div className="text-2xs text-muted-foreground mt-1 max-w-56">
                     {c.notes}
                   </div>
                 )}

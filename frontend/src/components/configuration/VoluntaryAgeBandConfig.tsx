@@ -100,16 +100,16 @@ export function VoluntaryAgeBandConfig({
       </div>
 
       <div className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_auto] items-end gap-2">
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Age band
         </Label>
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Min age
         </Label>
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Max age
         </Label>
-        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
           Rate / S$1k
         </Label>
         <span />

@@ -50,7 +50,7 @@ export function AuthPanel() {
               {COVERAGE.map((c) => (
                 <span
                   key={c}
-                  className="rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-foreground"
+                  className="rounded-md bg-accent px-2 py-0.5 text-2xs font-medium text-accent-foreground"
                 >
                   {c}
                 </span>
@@ -58,7 +58,7 @@ export function AuthPanel() {
             </div>
 
             <div className="mt-6 flex items-center justify-between border-t border-border pt-4">
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
                 <span className="size-1.5 rounded-full bg-good" />
                 Coverage active
               </span>
@@ -77,14 +77,14 @@ export function AuthPanel() {
               <BadgeCheck className="size-5" strokeWidth={2.25} />
             </span>
             <div className="min-w-0">
-              <p className="whitespace-nowrap text-[13px] font-semibold leading-tight text-foreground">
+              <p className="whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
                 Claim approved
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">
                 Outpatient · GP visit
               </p>
             </div>
-            <span className="ml-auto shrink-0 text-[13px] font-semibold tabular-nums text-foreground">
+            <span className="ml-auto shrink-0 text-sm font-semibold tabular-nums text-foreground">
               S$420
             </span>
           </div>
@@ -99,7 +99,7 @@ export function AuthPanel() {
             {AVATARS.map((a) => (
               <span
                 key={a.initials}
-                className={`grid size-8 place-items-center rounded-full ${a.tint} text-[10px] font-semibold text-primary-foreground ring-2 ring-card`}
+                className={`grid size-8 place-items-center rounded-full ${a.tint} text-2xs font-semibold text-primary-foreground ring-2 ring-card`}
               >
                 {a.initials}
               </span>

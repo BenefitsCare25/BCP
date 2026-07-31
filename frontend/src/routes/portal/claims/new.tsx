@@ -145,7 +145,7 @@ interface PendingClaim {
 }
 
 const selectClass =
-  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring disabled:cursor-not-allowed disabled:opacity-60";
+  "w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null;
@@ -849,7 +849,7 @@ export function PortalNewClaimPage() {
                     <Paperclip className="size-3 shrink-0" />
                     <span className="truncate">{file.name}</span>
                     {(detectedType || destination) && (
-                      <span className="shrink-0 text-muted-foreground/60">
+                      <span className="shrink-0 text-subtle">
                         {detectedType ? ` · ${detectedType}` : ""}
                         {destination ? ` → ${destination}` : ""}
                       </span>
@@ -929,7 +929,7 @@ export function PortalNewClaimPage() {
               </ul>
             )}
             {pendingClaims.length > 0 && (
-              <p className="text-xs text-muted-foreground/60">
+              <p className="text-xs text-subtle">
                 Remove an invoice if you don't want to submit a claim for it.
               </p>
             )}
@@ -1393,14 +1393,14 @@ export function PortalNewClaimPage() {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label htmlFor="claim-remarks">Remarks</Label>
-            <span className="text-xs text-muted-foreground/60">
+            <span className="text-xs text-subtle">
               {remarks.length}/{MAX_REMARKS}
             </span>
           </div>
           <textarea
             id="claim-remarks"
             rows={3}
-            className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus-ring"
+            className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus-ring"
             placeholder="Anything your broker should know about this claim (optional)"
             value={remarks}
             maxLength={MAX_REMARKS}

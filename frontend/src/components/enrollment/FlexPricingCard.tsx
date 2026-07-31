@@ -361,7 +361,7 @@ export function ProductFlexEditor({
   return (
     <div className="space-y-2 rounded-md border border-border bg-muted/10 p-2.5">
       {source === "slip" && (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-2xs text-muted-foreground">
           Values default to the placement slip (shown as placeholders). Edit any
           field to correct a wrong extraction — typed values override the slip.
         </p>
@@ -435,12 +435,12 @@ function TierLabel({
     <div className="flex items-center gap-1.5">
       <span className="text-foreground">{rep.label}</span>
       {cohortLabel && (
-        <span className="text-[11px] text-muted-foreground">· {cohortLabel}</span>
+        <span className="text-2xs text-muted-foreground">· {cohortLabel}</span>
       )}
       {!rep.is_baseline && (
         <Badge
           variant={DIRECTION_VARIANT[rep.direction] ?? "outline"}
-          className="text-[10px]"
+          className="text-2xs"
         >
           {rep.direction}
         </Badge>
@@ -462,7 +462,7 @@ function DepPlanLabel({
     <span className="text-foreground">
       {rep.label}
       {cohortLabel && (
-        <span className="ml-1 text-[11px] text-muted-foreground">· {cohortLabel}</span>
+        <span className="ml-1 text-2xs text-muted-foreground">· {cohortLabel}</span>
       )}
     </span>
   );
@@ -735,7 +735,7 @@ function DependantPricing({
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border text-[11px] text-muted-foreground">
+                <tr className="border-b border-border text-2xs text-muted-foreground">
                   <th className="px-2 py-1.5 text-left font-medium">Plan</th>
                   {FAMILY_ROLES.map((role) => (
                     <th key={role} className="px-2 py-1.5 text-left font-medium">
@@ -766,7 +766,7 @@ function DependantPricing({
               </tbody>
             </table>
           </div>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Incremental flex over Employee-Only, per plan.{slipHint}
           </p>
         </div>
@@ -776,7 +776,7 @@ function DependantPricing({
         <div className="mt-2.5 space-y-2">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border text-[11px] text-muted-foreground">
+              <tr className="border-b border-border text-2xs text-muted-foreground">
                 <th className="px-2 py-1.5 text-left font-medium">Plan</th>
                 <th className="px-2 py-1.5 text-left font-medium">Per dependant</th>
               </tr>
@@ -800,7 +800,7 @@ function DependantPricing({
               ))}
             </tbody>
           </table>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Rate per covered dependant, drawn per dependant on top of the employee
             plan tag.{slipHint}
           </p>

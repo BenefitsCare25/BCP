@@ -66,7 +66,7 @@ export function CoverageHistory({
 
   return (
     <div>
-      <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+      <div className="mb-2 flex items-center gap-2 text-2xs uppercase tracking-wider text-muted-foreground">
         <History className="size-3.5" />
         Coverage history
       </div>
@@ -85,13 +85,13 @@ export function CoverageHistory({
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <span className="text-sm text-foreground">{e.label}</span>
                   {e.product_code && (
-                    <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 text-2xs text-muted-foreground">
                       {e.product_code}
                     </span>
                   )}
                   {planChange(e)}
                 </div>
-                <div className="text-[11px] text-muted-foreground">
+                <div className="text-2xs text-muted-foreground">
                   {whenLabel(e.at)}
                   {e.actor ? ` · ${e.actor}` : ""}
                 </div>
@@ -101,7 +101,7 @@ export function CoverageHistory({
         </ol>
       )}
       {limit != null && entries.length > limit && (
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
+        <p className="mt-1.5 text-2xs text-muted-foreground">
           Showing {limit} of {entries.length} changes.
         </p>
       )}

@@ -251,7 +251,7 @@ export function MemberAccountActions({
   return (
     <div>
       <div className="flex items-center gap-1 mb-2">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">
+        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
           Portal access
         </div>
         <InfoHint>

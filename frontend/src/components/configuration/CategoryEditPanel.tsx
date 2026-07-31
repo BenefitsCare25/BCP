@@ -136,7 +136,7 @@ function EditForm({
         </div>
         <SheetTitle>{category.display_name}</SheetTitle>
         {category.source_ref && (
-          <p className="text-[10px] font-mono text-muted-foreground truncate">
+          <p className="text-2xs font-mono text-muted-foreground truncate">
             {category.source_ref}
           </p>
         )}
@@ -220,7 +220,7 @@ function EditForm({
 
         <div className="rounded-md border border-border bg-muted/40 p-3">
           <Label>Live JSON</Label>
-          <pre className="text-[11px] font-mono whitespace-pre-wrap mt-2 text-muted-foreground">
+          <pre className="text-2xs font-mono whitespace-pre-wrap mt-2 text-muted-foreground">
             {JSON.stringify(rule, null, 2)}
           </pre>
         </div>

@@ -26,6 +26,7 @@ import {
   Sheet,
   SheetBody,
   SheetContent,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
@@ -91,6 +92,10 @@ export function ImportRulesDialog({
 
   const sourceName =
     companies.find((c) => c.id === sourceId)?.name ?? "another company";
+  // Drives the pinned footer: it only applies once a source is chosen and that
+  // source actually has setups to copy.
+  const canImport =
+    sourceId !== null && !source.isLoading && (source.data ?? []).length > 0;
 
   return (
     <Sheet open={open} onOpenChange={close}>
@@ -98,7 +103,7 @@ export function ImportRulesDialog({
         <SheetHeader>
           <SheetTitle>Duplicate rules from another company</SheetTitle>
         </SheetHeader>
-        <SheetBody className="space-y-3">
+        <SheetBody className="space-y-4">
           {sourceId === null ? (
             <>
               <p className="text-sm text-muted-foreground">
@@ -115,17 +120,17 @@ export function ImportRulesDialog({
                   You have no other companies to copy from.
                 </p>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {companies.map((c) => (
                     <button
                       key={c.id}
                       type="button"
                       disabled={c.configured_count === 0}
-                      className="flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-foreground hover:bg-muted focus-ring disabled:opacity-50 disabled:hover:bg-transparent"
+                      className="flex w-full items-center gap-3 rounded-md border border-border px-3 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-muted focus-ring disabled:opacity-50 disabled:hover:bg-transparent"
                       onClick={() => setSourceId(c.id)}
                     >
-                      <span>{c.name}</span>
-                      <span className="ml-auto text-xs text-muted-foreground">
+                      <span className="font-medium">{c.name}</span>
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                         {c.configured_count === 0
                           ? "nothing configured"
                           : `${c.configured_count} claim type${c.configured_count === 1 ? "" : "s"}`}
@@ -161,7 +166,9 @@ export function ImportRulesDialog({
                     Select the claim types to copy from {sourceName}. Each one
                     lands on the matching claim type of this company.
                   </p>
-                  <div className="space-y-1.5">
+                  {/* The label and its summary stack: side by side they ran
+                      together as one sentence at small widths. */}
+                  <div className="space-y-2">
                     {(source.data ?? []).map((cfg) => {
                       const overwrites = ownKeys.has(
                         claimTypeKey(cfg.claim_kind, cfg.claim_key),
@@ -169,19 +176,23 @@ export function ImportRulesDialog({
                       return (
                         <label
                           key={cfg.id}
-                          className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                          className="flex items-center gap-3 rounded-md border border-border px-3 py-2.5 text-sm transition-colors hover:bg-muted/50"
                         >
                           <Checkbox
                             checked={picked.has(cfg.id)}
                             onCheckedChange={() => toggle(cfg.id)}
                           />
-                          <span className="text-foreground">{cfg.display_label}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {cfg.field_map_count} mappings · {cfg.rule_count} rules
-                            {cfg.required_document_count > 0 &&
-                              ` · ${cfg.required_document_count} required docs`}
+                          <span className="min-w-0">
+                            <span className="block font-medium text-foreground">
+                              {cfg.display_label}
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
+                              {cfg.field_map_count} mappings · {cfg.rule_count} rules
+                              {cfg.required_document_count > 0 &&
+                                ` · ${cfg.required_document_count} required docs`}
+                            </span>
                           </span>
-                          <span className="ml-auto flex items-center gap-1.5">
+                          <span className="ml-auto flex shrink-0 items-center gap-1.5">
                             <Badge variant="outline">
                               {cfg.claim_kind === "flex" ? "Flex" : cfg.claim_key}
                             </Badge>
@@ -193,28 +204,31 @@ export function ImportRulesDialog({
                       );
                     })}
                   </div>
-                  <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
-                    <Button type="button" variant="ghost" onClick={() => close(false)}>
-                      Cancel
-                    </Button>
-                    <Button
-                      type="button"
-                      disabled={picked.size === 0 || importConfigs.isPending}
-                      onClick={runImport}
-                    >
-                      {importConfigs.isPending && (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      )}
-                      <span className={importConfigs.isPending ? "ml-1.5" : undefined}>
-                        Import {picked.size || ""} selected
-                      </span>
-                    </Button>
-                  </div>
                 </>
               )}
             </>
           )}
         </SheetBody>
+
+        {canImport && (
+          <SheetFooter>
+            <Button type="button" variant="ghost" onClick={() => close(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={picked.size === 0 || importConfigs.isPending}
+              onClick={runImport}
+            >
+              {importConfigs.isPending && (
+                <Loader2 className="size-3.5 animate-spin" />
+              )}
+              <span className={importConfigs.isPending ? "ml-1.5" : undefined}>
+                Import {picked.size || ""} selected
+              </span>
+            </Button>
+          </SheetFooter>
+        )}
       </SheetContent>
     </Sheet>
   );

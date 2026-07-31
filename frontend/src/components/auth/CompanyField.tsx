@@ -38,7 +38,7 @@ export function CompanyField({ id, value, onChange }: Props) {
     <div className="space-y-1.5">
       <Label
         htmlFor={id}
-        className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
       >
         Company
       </Label>
