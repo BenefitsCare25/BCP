@@ -31,6 +31,8 @@ from app.services.placement_slip_export import (
     build_placement_slip_workbook,
     build_quotation_slip_workbook,
 )
+from app.services.underwriting import adopt_orphan_cases
+from app.services.underwriting_report import build_underwriting_report
 
 
 def _slug(insurer: str) -> str:
@@ -225,6 +227,39 @@ def download_employee_listing(
         wb,
         f"employee-listing-for-insurer-report-{_slug(insurer)}-"
         f"{date.today():%Y%m%d}.xlsx",
+    )
+
+
+@router.get("/underwriting")
+@limiter.limit("20/minute")
+def download_underwriting_report(
+    request: Request,
+    policy_year_id: str,
+    masked: bool = True,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Underwriting case register across every insurer (.xlsx, internal).
+
+    Deliberately NOT insurer-scoped: this is the broker's own working record,
+    and one member is usually underwritten with several insurers at once.
+    """
+    py = assert_policy_year_for_user(policy_year_id, user, db)
+    assert_masking_allowed(user, masked)
+    # Same lazy adoption the queue GET performs: rows written before the
+    # insurer-grouped model carry no review, so without it their workflow
+    # status would export blank.
+    if adopt_orphan_cases(db, policy_year_id):
+        db.commit()
+    wb = build_underwriting_report(db, py, masked=masked)
+    write_audit(
+        db, user, action="export", entity_type="insurer_report",
+        entity_id=policy_year_id,
+        after={"report": "underwriting", "masked": masked},
+    )
+    db.commit()
+    return _xlsx_response(
+        wb, f"underwriting-report-{py.year}-{date.today():%Y%m%d}.xlsx"
     )
 
 

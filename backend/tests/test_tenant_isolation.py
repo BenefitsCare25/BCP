@@ -477,6 +477,11 @@ def test_reports_member_listing_template_cross_tenant_404(
     assert res.status_code == 404
 
 
+def test_reports_underwriting_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/underwriting")
+    assert res.status_code == 404
+
+
 def test_underwriting_cases_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/underwriting/cases")
     assert res.status_code == 404

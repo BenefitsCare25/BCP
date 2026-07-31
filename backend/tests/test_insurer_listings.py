@@ -1322,3 +1322,160 @@ def test_decide_case_cross_tenant_404(client: TestClient) -> None:
         assert res.status_code == 404
     finally:
         app.dependency_overrides[get_current_user] = _user
+
+
+# ── Underwriting report (internal register) ──────────────────────────────────
+
+
+def test_underwriting_report_rows_and_columns(client: TestClient) -> None:
+    """One row per underwritten life + product, with the workflow status from
+    the review and the figures the queue screen shows."""
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    queue = client.get(f"/api/v1/policy-years/{PY_ID}/underwriting/cases").json()
+    emp_review = next(
+        r for r in queue["items"] if r["subject_type"] == "employee"
+        and r["staff_id"] == "IL-1"
+    )
+    client.patch(
+        f"/api/v1/underwriting/reviews/{emp_review['id']}",
+        json={"status": "pending_insurer", "requirements": "Medical report"},
+    )
+    client.patch(
+        f"/api/v1/underwriting/cases/{emp_review['cases'][0]['id']}",
+        json={"status": "approved_substandard", "accepted_si": 90000,
+              "decided_on": "2034-03-04", "remarks": "loaded 50%"},
+    )
+
+    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/underwriting")
+    assert res.status_code == 200, res.text
+    rows = _sheet_rows(res.content)
+    assert rows, "expected at least the family employee + spouse cases"
+
+    emp = next(r for r in rows if r["Staff ID"] == "IL-1" and not r["Dependant Name"])
+    assert emp["Entity"] == "Listing Co Pte Ltd"
+    assert emp["Employee Name"] == "Fam Ily"
+    assert emp["Identification No."] == "S******7D"  # masked by default
+    assert emp["Name of Insurer"] == "TestSure"
+    assert emp["Product Type"] == "TLIF" and emp["Product Name"] == "Test Life"
+    assert emp["UW Status"] == "Pending Insurer Decision"
+    assert emp["UW Decision"] == "Approved Substandard Life"
+    # openpyxl reads a date cell back as a datetime — the cell is a real date,
+    # not text, which is the point (it sorts and filters in Excel).
+    assert emp["UW Decision Date"].date() == date(2034, 3, 4)
+    assert emp["Life Underwritten"] == "Employee"
+    assert emp["Free Cover Limit"] == 50000
+    assert emp["Eligible Sum Insured"] == 100000
+    assert emp["Last Accepted Sum Insured"] == 90000
+    assert emp["Sum Insured Pending U/W"] == 0  # a decision settles the excess
+    assert emp["Requirements"] == "Medical report"
+    assert emp["Case Remarks"] == "loaded 50%"
+    assert emp["Policy Period"] == "1 Jan 2034 to 31 Dec 2034"
+    # Chaser emails aren't tracked anywhere — the column stays blank rather
+    # than asserting "0 sent".
+    assert emp["No. of Reminders Sent"] in (None, "")
+
+    # The spouse's own case is its own row, carrying the employee's identity.
+    spouse = next(r for r in rows if r["Dependant Name"] == "Spo Use")
+    assert spouse["Staff ID"] == "IL-1" and spouse["Employee Name"] == "Fam Ily"
+    assert spouse["Dependant Relationship"] == "Spouse"
+    assert spouse["Life Underwritten"] == "Dependant"
+    assert spouse["Eligible Sum Insured"] == 60000
+    assert spouse["UW Decision"] == "Pending"
+    # Undecided → in force at the guarantee, the excess still pending.
+    assert (
+        spouse["Sum Insured Pending U/W"]
+        == spouse["Eligible Sum Insured"] - spouse["Guaranteed Sum Insured"]
+    )
+
+
+def test_underwriting_report_masking(client: TestClient) -> None:
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    res = client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/underwriting?masked=false"
+    )
+    assert res.status_code == 200
+    emp = next(
+        r for r in _sheet_rows(res.content)
+        if r["Staff ID"] == "IL-1" and not r["Dependant Name"]
+    )
+    assert emp["Identification No."] == "S1234567D"
+
+
+def test_underwriting_report_unmasked_needs_write_access(
+    viewer_client: TestClient,
+) -> None:
+    # Unmasked PII is write-access only (same gate as the insurer listings).
+    assert viewer_client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/underwriting?masked=false"
+    ).status_code == 403
+    assert viewer_client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/underwriting"
+    ).status_code == 200
+
+
+def test_underwriting_report_keeps_legacy_and_retired_cases(
+    client: TestClient,
+) -> None:
+    """A pre-review-model line and a review whose lines were all retired must
+    both stay on the register — the report is the broker's record of work
+    done, not just of currently-open excesses."""
+    with SessionLocal() as s:
+        s.add(UnderwritingCase(
+            client_id=CLIENT_ID, policy_year_id=PY_ID, product_id=LIF_PROD,
+            employee_id=EMP_SOLO, eligible_si=100000.0, accepted_si=50000.0,
+            status="pending",  # legacy row: no review_id
+        ))
+        s.add(UnderwritingReview(
+            client_id=CLIENT_ID, policy_year_id=PY_ID, insurer="TestSure",
+            employee_id=EMP_FAMILY, status="cancelled",
+            requirements="closed after FCL increase",
+        ))
+        s.commit()
+
+    rows = _sheet_rows(
+        client.get(f"/api/v1/policy-years/{PY_ID}/reports/underwriting").content
+    )
+    # The legacy line was adopted into a review on read, so it exports with a
+    # workflow status rather than a blank one.
+    legacy = next(r for r in rows if r["Staff ID"] == "IL-2")
+    assert legacy["UW Status"] == "Pending U/W Requirements"
+    assert legacy["Guaranteed Sum Insured"] == 50000  # legacy FCL in accepted_si
+    assert legacy["Sum Insured Pending U/W"] == 50000
+
+    retired = next(r for r in rows if r["UW Status"] == "Cancelled")
+    assert retired["Employee Name"] == "Fam Ily"
+    assert not retired["Product Type"] and not retired["UW Decision"]
+    assert retired["Requirements"] == "closed after FCL increase"
+
+
+def test_underwriting_report_activity_and_insurer_are_review_truthful(
+    client: TestClient,
+) -> None:
+    """A row joins a review and a case: the workflow edit is activity too, and
+    the insurer printed is the one the review is FILED under."""
+    from datetime import datetime
+
+    client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
+    with SessionLocal() as s:
+        case = (
+            s.query(UnderwritingCase).filter_by(employee_id=EMP_FAMILY).first()
+        )
+        review = s.get(UnderwritingReview, case.review_id)
+        case.updated_at = datetime(2034, 2, 1, 9, 0)
+        # Workflow moved later than any case edit — and the review was opened
+        # before the product had an insurer assigned.
+        review.updated_at = datetime(2034, 6, 30, 17, 30)
+        review.insurer = ""
+        s.commit()
+
+    rows = _sheet_rows(
+        client.get(f"/api/v1/policy-years/{PY_ID}/reports/underwriting").content
+    )
+    row = next(
+        r for r in rows if r["Staff ID"] == "IL-1" and not r["Dependant Name"]
+        and r["Product Type"] == "TLIF"
+    )
+    assert row["Last Updated"] == datetime(2034, 6, 30, 17, 30)
+    # Not "TestSure" from the product: the review isn't opened with anyone yet,
+    # and the queue screen shows it ungrouped too.
+    assert not row["Name of Insurer"]

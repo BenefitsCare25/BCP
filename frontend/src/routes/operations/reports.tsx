@@ -5,6 +5,7 @@ import {
   Building2,
   Calendar,
   CalendarCheck,
+  ClipboardCheck,
   FileSpreadsheet,
   FileText,
   Gauge,
@@ -350,6 +351,21 @@ function PaReports({
         <ReportDownloadButton
           path={`/dependants/coverage-report/export?policy_year_id=${year.id}`}
           filename={`dependant-coverage-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: ClipboardCheck,
+      title: "Underwriting Report",
+      description:
+        "Internal underwriting register — one row per life and product above the Non-Evidence Limit, with the insurer case status, decision and sums insured. Covers every insurer.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/underwriting${nric === "full" ? "?masked=false" : ""}`}
+          filename={`underwriting-report-${stamp(year)}.xlsx`}
           label="Download"
           size="sm"
         />

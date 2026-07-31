@@ -45,6 +45,7 @@ from app.services.roster_attributes import (
 )
 from app.services.underwriting import (
     adopt_orphan_cases,
+    case_amounts,
     refresh_underwriting_cases,
 )
 
@@ -118,15 +119,7 @@ class RefreshOut(BaseModel):
 
 def _case_out(case: UnderwritingCase, products: dict[str, Product]) -> UnderwritingCaseOut:
     decision = normalize_uw_status(case.status)
-    guaranteed = (
-        case.guaranteed_si if case.guaranteed_si is not None else case.accepted_si
-    )
-    guaranteed = min(max(guaranteed, 0.0), case.eligible_si)
-    pending = (
-        max(case.eligible_si - guaranteed, 0.0)
-        if decision not in DECIDED_UW_STATUSES
-        else 0.0
-    )
+    guaranteed, pending, accepted = case_amounts(case)
     product = products.get(case.product_id)
     return UnderwritingCaseOut(
         id=case.id,
@@ -136,7 +129,7 @@ def _case_out(case: UnderwritingCase, products: dict[str, Product]) -> Underwrit
         requested_si=case.eligible_si,
         guaranteed_si=guaranteed,
         pending_si=pending,
-        accepted_si=min(case.accepted_si, case.eligible_si),
+        accepted_si=accepted,
         status=decision,
         decided_on=case.decided_on,
         remarks=case.remarks,

@@ -59,6 +59,19 @@ VALID_REVIEW_STATUSES = frozenset(
     }
 )
 
+# Printable wording for the workflow states (the insurer's own vocabulary).
+# Mirrored by ``frontend/src/api/underwriting.ts::REVIEW_STATUS_LABELS`` — keep
+# the two in step so the queue screen and the exported report read alike.
+REVIEW_STATUS_LABELS = {
+    ReviewStatus.pending_requirements: "Pending U/W Requirements",
+    ReviewStatus.pending_employee: "Pending Employee",
+    ReviewStatus.pending_insurer: "Pending Insurer Decision",
+    ReviewStatus.pending_hr: "Pending HR",
+    ReviewStatus.completed: "Completed",
+    ReviewStatus.cancelled: "Cancelled",
+}
+
+
 OPEN_REVIEW_STATUSES = frozenset(
     {
         ReviewStatus.pending_requirements,
@@ -111,6 +124,19 @@ VALID_UW_STATUSES = frozenset(
 _LEGACY_STATUS_MAP = {
     UnderwritingStatus.accepted: UnderwritingStatus.approved_standard,
     UnderwritingStatus.declined: UnderwritingStatus.rejected,
+}
+
+
+# Printable wording for a per-product decision. Mirrors
+# ``frontend/src/api/underwriting.ts::DECISION_LABELS``; legacy values are
+# normalized before lookup, so they label as their current equivalent.
+DECISION_LABELS = {
+    UnderwritingStatus.pending: "Pending",
+    UnderwritingStatus.approved_standard: "Approved Standard Life",
+    UnderwritingStatus.approved_substandard: "Approved Substandard Life",
+    UnderwritingStatus.rejected: "Rejected",
+    UnderwritingStatus.postponed: "Postponed",
+    UnderwritingStatus.closed: "Closed",
 }
 
 

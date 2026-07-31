@@ -88,6 +88,31 @@ def load_cases(db: Session, policy_year_id: str) -> CaseMap:
     }
 
 
+def case_amounts(case: UnderwritingCase) -> tuple[float, float, float]:
+    """(guaranteed, pending, accepted) for ONE case line, from its own snapshot.
+
+    The case-centric view: everything is read off the line itself (its
+    ``eligible_si`` snapshot from the last sync), so the queue UI and the
+    underwriting report can never disagree about a case's figures. Contrast
+    ``report_uw_amounts``, which answers the coverage-centric question for the
+    insurer listings — LIVE eligible SI, and an auto position when no case row
+    exists at all.
+    """
+    decision = normalize_uw_status(case.status)
+    # Legacy pending rows (pre review model) carried the auto-covered FCL in
+    # accepted_si.
+    guaranteed = (
+        case.guaranteed_si if case.guaranteed_si is not None else case.accepted_si
+    )
+    guaranteed = min(max(guaranteed, 0.0), case.eligible_si)
+    pending = (
+        max(case.eligible_si - guaranteed, 0.0)
+        if decision not in DECIDED_UW_STATUSES
+        else 0.0
+    )
+    return guaranteed, pending, min(case.accepted_si, case.eligible_si)
+
+
 def report_uw_amounts(
     eligible: float, fcl: float | None, case: UnderwritingCase | None
 ) -> tuple[float, float]:

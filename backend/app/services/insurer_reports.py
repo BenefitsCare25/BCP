@@ -178,6 +178,8 @@ def _bold_header(ws: Worksheet) -> None:
 naive = _naive
 autosize = _autosize
 bold_header = _bold_header
+as_date = _as_date
+last_day_of_service = _last_day_of_service
 
 
 # Spreadsheet formula-injection guard. openpyxl stores any string starting with

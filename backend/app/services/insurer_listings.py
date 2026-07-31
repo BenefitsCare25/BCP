@@ -325,6 +325,11 @@ def _policy_period(py: PolicyYear) -> str:
     return " to ".join(p for p in (fmt(py.start_date), fmt(py.end_date)) if p)
 
 
+# Public alias — the underwriting report prints the same period string, and the
+# two documents must never format the same policy year differently.
+policy_period = _policy_period
+
+
 def _flag(value: object) -> str:
     if value is None or value == "":
         return ""
