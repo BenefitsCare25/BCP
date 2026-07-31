@@ -88,7 +88,7 @@ export function EnrollmentElectionsPage() {
   if (!openWindows.length) {
     return (
       <p className="text-sm text-muted-foreground">
-        No open enrollment window. Open one from the Windows &amp; leave tab first.
+        No open enrollment window. Open one from the Windows tab first.
       </p>
     );
   }
@@ -353,6 +353,8 @@ function ElectionPanel({
         <LeaveTradingCard
           action={leaveAction}
           days={leaveDays}
+          leave={options?.leave ?? null}
+          ratePerDay={options?.member_leave_rate ?? null}
           disabled={finalized}
           saving={setLeave.isPending}
           onActionChange={setLeaveAction}

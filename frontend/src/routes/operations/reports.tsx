@@ -6,6 +6,7 @@ import {
   Calendar,
   CalendarCheck,
   ClipboardCheck,
+  Coins,
   FileSpreadsheet,
   FileText,
   Gauge,
@@ -51,17 +52,24 @@ import type { PolicyYear } from "@/types";
 // current one. Some reports are file exports (download here); a few are
 // interactive per-employee views that live on a working page, so their row
 // links there instead of exporting.
-type TeamKey = "cr" | "pa" | "claims" | "it";
+//
+// Flex is its own tab, NOT a Policy Admin section: everything in it is funded by
+// the member's OWN flex wallet, so it is never insurer-scoped — and the Policy
+// Admin tab is headed by an insurer picker. Sitting under that picker made the
+// enrollment/leave and wallet reports read as an AIA submission when the insurer
+// is meaningless to them.
+type TeamKey = "cr" | "pa" | "flex" | "claims" | "it";
 
 const TEAMS: { key: TeamKey; label: string }[] = [
   { key: "cr", label: "Client Relations" },
   { key: "pa", label: "Policy Admin" },
+  { key: "flex", label: "Flex" },
   { key: "claims", label: "Claims" },
   { key: "it", label: "IT / Firm" },
 ];
 
 function isTeam(v: string | undefined): v is TeamKey {
-  return v === "cr" || v === "pa" || v === "claims" || v === "it";
+  return TEAMS.some((t) => t.key === v);
 }
 
 type NricMode = "masked" | "full";
@@ -159,6 +167,58 @@ function NoYearNotice() {
     <p className="text-sm text-muted-foreground">
       Select a benefit year to generate reports.
     </p>
+  );
+}
+
+/** A titled group of rows, with the controls that actually scope THEM in its
+ *  header. A filter rendered above the whole tab reads as scoping every row in
+ *  it — which is how the insurer picker came to sit over reports no insurer
+ *  submission touches. */
+function ReportSection({
+  title,
+  hint,
+  controls,
+  rows,
+}: {
+  title: string;
+  hint: string;
+  controls?: React.ReactNode;
+  rows: ReportRow[];
+}) {
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+          <p className="text-xs text-muted-foreground">{hint}</p>
+        </div>
+        {controls}
+      </div>
+      <ReportTable rows={rows} />
+    </section>
+  );
+}
+
+/** NRIC/FIN masking toggle — shared by the tabs whose exports carry NRICs. */
+function NricToggle({
+  nric,
+  setNric,
+}: {
+  nric: NricMode;
+  setNric: (v: NricMode) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-muted-foreground">NRIC/FIN</span>
+      <Segmented
+        value={nric}
+        onChange={setNric}
+        options={[
+          { value: "masked", label: "Masked" },
+          { value: "full", label: "Unmasked" },
+        ]}
+      />
+    </div>
   );
 }
 
@@ -302,30 +362,9 @@ function PaReports({
         />
       ),
     },
-    {
-      icon: CalendarCheck,
-      title: "Benefit Selection & Leave",
-      description:
-        "Enrollment selection status with buy/sell-leave — one row per employee for the latest window.",
-      format: ".xlsx",
-      action: (
-        <ReportVersionActions
-          policyYearId={year.id}
-          reportType="benefit_selection"
-          scopeKey={null}
-          createInput={{
-            report_type: "benefit_selection",
-            masked: nric === "masked",
-          }}
-          mode="versioned"
-          hasMovement={false}
-          liveDownload={{
-            path: `/policy-years/${year.id}/reports/benefit-selection${nric === "full" ? "?masked=false" : ""}`,
-            filename: `benefit-selection-status-with-buy-sell-leave-report-${stamp(year)}.xlsx`,
-          }}
-        />
-      ),
-    },
+  ];
+
+  const internalRows: ReportRow[] = [
     {
       icon: Users,
       title: "Employee Coverage Report",
@@ -371,24 +410,10 @@ function PaReports({
         />
       ),
     },
-    {
-      icon: Wallet,
-      title: "Flex Coverage",
-      description:
-        "Flexible-benefit reconciliation — who is left out of a tier and every wallet balance. Open the flex overview to export.",
-      format: "Interactive",
-      action: (
-        <OpenLink
-          to="/configuration"
-          search={{ tab: "flex" }}
-          label="Open flex overview"
-        />
-      ),
-    },
   ];
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {isError && (
         <div className="flex items-center gap-2 rounded-lg border border-error/40 bg-error-soft/40 px-3 py-2 text-sm text-error">
           <AlertTriangle className="size-4 shrink-0" />
@@ -403,40 +428,151 @@ function PaReports({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-sm text-muted-foreground">Insurer</span>
-        <Select
-          value={insurer}
-          onValueChange={setInsurer}
-          disabled={!insurers.length}
-        >
-          <SelectTrigger className="w-[200px]" aria-label="Insurer">
-            <SelectValue
-              placeholder={
-                insurers.length ? "Select insurer" : "No insurers configured"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {insurers.map((ins) => (
-              <SelectItem key={ins} value={ins}>
-                {ins}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <span className="ml-2 text-sm text-muted-foreground">NRIC/FIN</span>
-        <Segmented
-          value={nric}
-          onChange={setNric}
-          options={[
-            { value: "masked", label: "Masked" },
-            { value: "full", label: "Unmasked" },
-          ]}
-        />
-      </div>
+      <ReportSection
+        title="Insurer submissions"
+        hint="One submission per insurer — pick the insurer these are generated for."
+        controls={
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-muted-foreground">Insurer</span>
+            <Select
+              value={insurer}
+              onValueChange={setInsurer}
+              disabled={!insurers.length}
+            >
+              <SelectTrigger className="w-[200px]" aria-label="Insurer">
+                <SelectValue
+                  placeholder={
+                    insurers.length ? "Select insurer" : "No insurers configured"
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {insurers.map((ins) => (
+                  <SelectItem key={ins} value={ins}>
+                    {ins}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <NricToggle nric={nric} setNric={setNric} />
+          </div>
+        }
+        rows={rows}
+      />
 
-      <ReportTable rows={rows} />
+      {/* Its own NRIC control, bound to the same state: the underwriting export
+          in here honours masking, so the toggle must sit with the rows it
+          governs rather than in the insurer header above (the exact
+          mislabelled-scope problem this split exists to fix). */}
+      <ReportSection
+        title="Internal registers"
+        hint="Our own records — these span every insurer and aren't filtered by the picker above."
+        controls={<NricToggle nric={nric} setNric={setNric} />}
+        rows={internalRows}
+      />
+    </div>
+  );
+}
+
+/* ── Flex — funded by the member's own wallet, never insurer-scoped ──── */
+function FlexReports({
+  year,
+  nric,
+  setNric,
+}: {
+  year: PolicyYear;
+  nric: NricMode;
+  setNric: (v: NricMode) => void;
+}) {
+  // Only the elections export carries NRICs, so it is the ONLY row the masking
+  // toggle governs — hence its own section rather than a tab-level control that
+  // silently does nothing to the wallet export beside it.
+  const electionRows: ReportRow[] = [
+    {
+      icon: CalendarCheck,
+      title: "Benefit Selection & Leave",
+      description:
+        "What each member elected and what it draws from their flex wallet — plan changes, dependant cover and buy/sell-leave, one row per employee for the latest window.",
+      format: ".xlsx",
+      action: (
+        <ReportVersionActions
+          policyYearId={year.id}
+          reportType="benefit_selection"
+          scopeKey={null}
+          createInput={{
+            report_type: "benefit_selection",
+            masked: nric === "masked",
+          }}
+          mode="versioned"
+          hasMovement={false}
+          liveDownload={{
+            path: `/policy-years/${year.id}/reports/benefit-selection${nric === "full" ? "?masked=false" : ""}`,
+            filename: `benefit-selection-status-with-buy-sell-leave-report-${stamp(year)}.xlsx`,
+          }}
+        />
+      ),
+    },
+  ];
+
+  const walletRows: ReportRow[] = [
+    {
+      icon: Wallet,
+      title: "Flex Coverage & Wallets",
+      description:
+        "Flexible-benefit reconciliation — every member's wallet balance, and who is left out of a tier (no family status, in no tier, orphaned dependants).",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/flex-scheme/coverage/export`}
+          filename={`flex-coverage-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: Coins,
+      title: "Flex Price Tags",
+      description:
+        "What each plan and dependant option costs the wallet, plus the buy/sell-leave rate per tier. Set on the enrollment Flex tab.",
+      format: "Interactive",
+      action: (
+        <OpenLink
+          to="/enrollment"
+          search={{ tab: "flex" }}
+          label="Open flex pricing"
+        />
+      ),
+    },
+    {
+      icon: Wallet,
+      title: "Flex Scheme",
+      description:
+        "The scheme itself — family-status tiers, wallet amounts and eligibility, with the coverage drill-down.",
+      format: "Interactive",
+      action: (
+        <OpenLink
+          to="/configuration"
+          search={{ tab: "flex" }}
+          label="Open flex overview"
+        />
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <ReportSection
+        title="Member elections"
+        hint="What members chose, and what it costs their wallet."
+        controls={<NricToggle nric={nric} setNric={setNric} />}
+        rows={electionRows}
+      />
+      <ReportSection
+        title="Wallets & pricing"
+        hint="The scheme, the wallet balances and what each plan draws. No NRICs — nothing to mask."
+        rows={walletRows}
+      />
     </div>
   );
 }
@@ -614,6 +750,13 @@ export function ReportsPage() {
               insurer={insurer}
               setInsurer={setInsurer}
             />
+          ) : (
+            <NoYearNotice />
+          )}
+        </TabsContent>
+        <TabsContent value="flex">
+          {selectedYear ? (
+            <FlexReports year={selectedYear} nric={nric} setNric={setNric} />
           ) : (
             <NoYearNotice />
           )}

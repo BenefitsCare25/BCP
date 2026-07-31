@@ -1,14 +1,30 @@
-"""Resolve a member's buy/sell-leave price — the flex-wallet impact of trading
-leave days — from the policy-year ``LeavePolicy.leave_rates`` bag.
+"""Resolve a member's buy/sell-leave terms — the per-day price AND the day caps —
+from the policy-year ``LeavePolicy``.
 
-The rate is keyed by ONE employee attribute (a grade / designation value), NOT by
-age or product: ``leave_rates = {"attribute": "<key>", "rates": {<value>: rate}}``.
-A member's per-day rate is ``rates[ employee[attribute] ]``. Trading N days yields a
-signed flex impact — buying spends (negative), selling credits (positive) — which is
-snapshotted onto the ``LeaveElection`` and folded into the member's available flex
-balance. Pure helpers (no commit); the caller owns persistence.
+Both are keyed by ONE employee attribute (a grade / designation value), NOT by age
+or product, and by the SAME attribute — a leave "tier" is one value of it::
+
+    leave_rates = {
+        "attribute": "<key>",
+        "rates":  {<value>: per_day_rate},
+        "limits": {<value>: {"max_buy_days": n, "max_sell_days": n}},
+    }
+
+``rates`` prices a day; ``limits`` caps how many days that tier may trade. A tier
+absent from ``limits`` (or carrying a null field) INHERITS the policy-level
+``max_buy_days`` / ``max_sell_days``, so the global fields stay the default and
+per-tier entries are a sparse override — the same shape as every other override
+layer in the app. ``increment_days`` and the minimums stay global: they are a
+granularity convention, not an entitlement.
+
+Trading N days yields a signed flex impact — buying spends (negative), selling
+credits (positive) — which is snapshotted onto the ``LeaveElection`` and folded
+into the member's available flex balance. Pure helpers (no commit); the caller
+owns persistence.
 """
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,9 +33,23 @@ from app.models import Employee
 from app.models.leave_election import LeaveAction, LeaveElection, LeaveElectionStatus
 from app.models.leave_policy import LeavePolicy
 
+# Per-tier limit fields. Only the MAXIMA are per-tier — see the module docstring.
+_LIMIT_FIELDS = ("max_buy_days", "max_sell_days")
 
-def validate_leave_rates_shape(leave_rates: dict) -> list[str]:
-    """Write-boundary shape check for a leave-rates bag (empty list == valid)."""
+
+def validate_leave_rates_shape(
+    leave_rates: dict,
+    *,
+    min_buy_days: float = 0.0,
+    min_sell_days: float = 0.0,
+) -> list[str]:
+    """Write-boundary shape check for a leave-rates bag (empty list == valid).
+
+    The minimums are passed in because they stay COMPANY-WIDE while the maxima are
+    per tier: a tier max below the policy minimum makes the range unsatisfiable
+    (``lo=2, hi=1`` rejects every possible value) and must be caught at the write
+    boundary, not discovered by a member who can never save a valid number.
+    """
     if not leave_rates:
         return []
     errs: list[str] = []
@@ -27,20 +57,46 @@ def validate_leave_rates_shape(leave_rates: dict) -> list[str]:
         return ["leave_rates must be an object."]
     attribute = leave_rates.get("attribute")
     rates = leave_rates.get("rates", {})
+    limits = leave_rates.get("limits", {})
     if attribute is not None and not isinstance(attribute, str):
         errs.append("leave_rates.attribute must be a string.")
     if not isinstance(rates, dict):
         errs.append("leave_rates.rates must be an object keyed by attribute value.")
         return errs
-    if rates and not (isinstance(attribute, str) and attribute.strip()):
-        errs.append("leave_rates.attribute is required when rates are set.")
+    if (rates or limits) and not (isinstance(attribute, str) and attribute.strip()):
+        errs.append("leave_rates.attribute is required when rates or limits are set.")
     for value, rate in rates.items():
         if rate is not None and (not isinstance(rate, (int, float)) or rate < 0):
             errs.append(f"leave_rates: rate for '{value}' must be ≥ 0.")
+    if not isinstance(limits, dict):
+        errs.append("leave_rates.limits must be an object keyed by attribute value.")
+        return errs
+    floors = {"max_buy_days": min_buy_days, "max_sell_days": min_sell_days}
+    for value, entry in limits.items():
+        if not isinstance(entry, dict):
+            errs.append(f"leave_rates.limits: '{value}' must be an object.")
+            continue
+        for field in _LIMIT_FIELDS:
+            days = entry.get(field)
+            if days is None:
+                continue
+            if (
+                not isinstance(days, (int, float))
+                or isinstance(days, bool)
+                or days < 0
+            ):
+                errs.append(f"leave_rates.limits: {field} for '{value}' must be ≥ 0.")
+                continue
+            floor = floors[field]
+            if days < floor:
+                errs.append(
+                    f"leave_rates.limits: {field} for '{value}' ({days}) is below the "
+                    f"company minimum ({floor}) — no number of days would be valid."
+                )
     return errs
 
 
-def _leave_attribute(policy: LeavePolicy | None) -> str | None:
+def leave_attribute(policy: LeavePolicy | None) -> str | None:
     bag = (policy.leave_rates or {}) if policy else {}
     attr = bag.get("attribute") if isinstance(bag, dict) else None
     return attr if isinstance(attr, str) and attr.strip() else None
@@ -58,7 +114,7 @@ def employee_leave_value(employee: Employee, attribute: str) -> str | None:
 
 def leave_rate_for(policy: LeavePolicy | None, employee: Employee) -> float | None:
     """The member's per-day leave rate, or None when no rate applies to them."""
-    attribute = _leave_attribute(policy)
+    attribute = leave_attribute(policy)
     if attribute is None:
         return None
     value = employee_leave_value(employee, attribute)
@@ -66,6 +122,61 @@ def leave_rate_for(policy: LeavePolicy | None, employee: Employee) -> float | No
         return None
     rate = ((policy.leave_rates or {}).get("rates") or {}).get(value)
     return float(rate) if isinstance(rate, (int, float)) else None
+
+
+@dataclass(frozen=True)
+class LeaveLimits:
+    """The day caps that actually apply to ONE member."""
+
+    max_buy_days: float
+    max_sell_days: float
+    # True when a per-tier entry supplied either cap, so the UI can say the limit
+    # is the member's grade rather than the company default.
+    from_tier: bool
+    # The tier the caps were looked up by (None when the member has no value for
+    # the leave attribute, or no attribute is configured).
+    tier_value: str | None
+
+
+def _limit_field(entry: object, field: str) -> float | None:
+    if not isinstance(entry, dict):
+        return None
+    days = entry.get(field)
+    # bool is an int subclass — a stray `true` must not read as 1 day.
+    if isinstance(days, bool) or not isinstance(days, (int, float)):
+        return None
+    return float(days)
+
+
+def leave_limits_for(
+    policy: LeavePolicy | None, employee: Employee | None
+) -> LeaveLimits:
+    """The member's buy/sell day caps: their tier's override, else the policy default.
+
+    Sparse by design — a tier that sets only ``max_buy_days`` still inherits the
+    company ``max_sell_days``. A member with no value for the leave attribute (or a
+    tier with no entry) gets the defaults, never zero: an unconfigured tier must not
+    silently revoke leave trading the company has switched on.
+    """
+    default_buy = float(policy.max_buy_days or 0.0) if policy else 0.0
+    default_sell = float(policy.max_sell_days or 0.0) if policy else 0.0
+    attribute = leave_attribute(policy)
+    value = (
+        employee_leave_value(employee, attribute)
+        if employee is not None and attribute
+        else None
+    )
+    if policy is None or value is None:
+        return LeaveLimits(default_buy, default_sell, False, value)
+    entry = ((policy.leave_rates or {}).get("limits") or {}).get(value)
+    buy = _limit_field(entry, "max_buy_days")
+    sell = _limit_field(entry, "max_sell_days")
+    return LeaveLimits(
+        max_buy_days=default_buy if buy is None else buy,
+        max_sell_days=default_sell if sell is None else sell,
+        from_tier=buy is not None or sell is not None,
+        tier_value=value,
+    )
 
 
 # Roster attribute keys that can sensibly key a leave rate (grade / designation).

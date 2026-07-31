@@ -3,8 +3,9 @@
 Centralizes the rules that an election or leave choice must satisfy: the window
 must be open and within its dates, the chosen plan must be a real tier for the
 product, named dependants must belong to the employee, and leave days must sit
-within the policy bounds + increment. Raised errors are HTTPException so routers
-stay thin.
+within the member's bounds + increment (the day caps are per grade/designation
+tier — see ``leave_pricing_resolver``). Raised errors are HTTPException so
+routers stay thin.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from app.models import Dependant, Employee, LeavePolicy
 from app.models.enrollment import ElectionAction
 from app.models.enrollment_window import EnrollmentWindow, WindowStatus
 from app.models.leave_election import LeaveAction
+from app.services.leave_pricing_resolver import leave_limits_for
 
 if TYPE_CHECKING:
     from app.services.cohort_tiers import CohortTier, ProductTierSet
@@ -236,9 +238,18 @@ def assert_valid_dependant_options(
 
 
 def validate_leave(
-    policy: LeavePolicy | None, action: str, days: float
+    policy: LeavePolicy | None,
+    action: str,
+    days: float,
+    employee: Employee | None = None,
 ) -> None:
-    """Validate a buy/sell-leave choice against the policy bounds + increment."""
+    """Validate a buy/sell-leave choice against the member's bounds + increment.
+
+    The MAXIMA are per-tier (``leave_pricing_resolver.leave_limits_for`` — the
+    member's grade/designation entry, else the policy default); the minimums and
+    the increment are company-wide. Passing no ``employee`` validates against the
+    defaults, which is the correct fallback for a caller with no member in hand.
+    """
     if action == LeaveAction.none:
         if days not in (0, 0.0):
             raise HTTPException(
@@ -250,14 +261,15 @@ def validate_leave(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "No leave policy is configured for this year."
         )
+    limits = leave_limits_for(policy, employee)
     if action == LeaveAction.buy:
         if not policy.allow_buy:
             raise HTTPException(status.HTTP_409_CONFLICT, "Buying leave is not permitted.")
-        lo, hi = policy.min_buy_days, policy.max_buy_days
+        lo, hi = policy.min_buy_days, limits.max_buy_days
     elif action == LeaveAction.sell:
         if not policy.allow_sell:
             raise HTTPException(status.HTTP_409_CONFLICT, "Selling leave is not permitted.")
-        lo, hi = policy.min_sell_days, policy.max_sell_days
+        lo, hi = policy.min_sell_days, limits.max_sell_days
     else:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown leave action '{action}'."
@@ -268,9 +280,16 @@ def validate_leave(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "days must be positive for buy/sell."
         )
     if days < lo or days > hi:
+        # Name the tier when its own cap is what bit — otherwise the broker reads a
+        # number that matches nothing on the policy's global fields.
+        scope = (
+            f" for '{limits.tier_value}'"
+            if limits.from_tier and limits.tier_value
+            else ""
+        )
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"days must be between {lo} and {hi} for '{action}'.",
+            f"days must be between {lo} and {hi} for '{action}'{scope}.",
         )
     inc = policy.increment_days or 1.0
     # Guard against float drift when checking divisibility by the increment.

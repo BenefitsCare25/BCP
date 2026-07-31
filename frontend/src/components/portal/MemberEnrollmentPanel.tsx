@@ -257,6 +257,8 @@ export function MemberEnrollmentPanel({
         <LeaveTradingCard
           action={leaveAction}
           days={leaveDays}
+          leave={options?.leave ?? null}
+          ratePerDay={options?.member_leave_rate ?? null}
           disabled={disabled}
           saving={savingLeave}
           onActionChange={setLeaveAction}

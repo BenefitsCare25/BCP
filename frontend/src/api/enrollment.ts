@@ -86,10 +86,19 @@ export interface WindowOpenResult {
   enrollments_created: number;
 }
 
-/** Per-day buy/sell-leave rate keyed by an employee grade/designation attribute. */
+/** One tier's day caps. A null/absent field inherits the policy-level maximum,
+ *  so this is a SPARSE override — same shape as every other override layer. */
+export interface LeaveTierLimit {
+  max_buy_days?: number | null;
+  max_sell_days?: number | null;
+}
+
+/** Per-day buy/sell-leave price AND day caps, both keyed by the SAME employee
+ *  grade/designation attribute — one value of it is a leave "tier". */
 export interface LeaveRates {
   attribute: string | null;
   rates: Record<string, number | null>;
+  limits?: Record<string, LeaveTierLimit>;
 }
 
 export interface LeavePolicy {
@@ -117,6 +126,25 @@ export interface LeaveRateValue {
 export interface LeaveRateOptions {
   attributes: string[];
   values: Record<string, LeaveRateValue[]>;
+}
+
+/** What ONE member may trade — the year's bounds plus their own eligibility, so
+ *  the election UI can state the limit (and its dollar value) before saving. */
+export interface MemberLeaveOptions {
+  allow_buy: boolean;
+  allow_sell: boolean;
+  min_buy_days: number;
+  max_buy_days: number;
+  min_sell_days: number;
+  max_sell_days: number;
+  increment_days: number;
+  /** Roster flag "Eligible to Sell Leave" — absent on the roster = eligible. */
+  sell_eligible: boolean;
+  /** The grade/designation the member's per-day rate + caps were looked up by. */
+  rate_attribute: string | null;
+  rate_value: string | null;
+  /** True when the caps above are that tier's own, not the company default. */
+  limits_from_tier: boolean;
 }
 
 export interface EnrollmentRosterItem {
@@ -244,6 +272,8 @@ export interface EnrollmentOptions {
   member_age: number | null;
   /** Per-day buy/sell-leave rate for this member (null = none), for a live balance. */
   member_leave_rate: number | null;
+  /** Bounds this member trades leave within (null = the year has no leave policy). */
+  leave: MemberLeaveOptions | null;
   /** The window's drawdown rule, so the UI can label each tier's price tag as the
    *  full plan cost or the upgrade/downgrade difference. */
   flex_drawdown_rule: FlexDrawdownRule;

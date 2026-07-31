@@ -12,10 +12,19 @@ import { Label } from "@/components/ui/label";
 import { InfoHint } from "@/components/ui/tooltip";
 import { LeaveRatesEditor } from "@/components/enrollment/LeaveRatesEditor";
 
-// Standing per-year leave policy (buy/sell bounds + price tag). Lives on the
-// company Settings page; the enrollment window form only opens/closes windows.
-// Keyed by policyYearId at the call site so local edit state resets on a year
-// switch.
+/** Does ANY tier grant days in this direction? The company default of 0 means
+ *  "not by default", not "never" — a tier override still has to work. */
+function anyTierAllows(
+  rates: LeaveRates,
+  field: "max_buy_days" | "max_sell_days",
+): boolean {
+  return Object.values(rates.limits ?? {}).some((l) => (l?.[field] ?? 0) > 0);
+}
+
+// Standing per-year leave policy (buy/sell bounds + per-day price tag). Lives on
+// the Leave tab of the enrollment page, beside the windows that switch trading
+// on; the window form only opens/closes windows. Keyed by policyYearId at the
+// call site so local edit state resets on a year switch.
 export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
   const { data: policy } = useLeavePolicy(policyYearId);
   const upsert = useUpsertLeavePolicy(policyYearId);
@@ -27,15 +36,13 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
   const buy = maxBuy !== "" ? Number(maxBuy) : (policy?.max_buy_days ?? 0);
   const sell = maxSell !== "" ? Number(maxSell) : (policy?.max_sell_days ?? 0);
   const inc = increment !== "" ? Number(increment) : (policy?.increment_days ?? 1);
+  // The stored bag is untyped JSON server-side, so read it defensively — a
+  // pre-per-tier row has no `limits` key at all.
+  const stored = (policy?.leave_rates ?? {}) as Partial<LeaveRates>;
   const initialRates: LeaveRates = {
-    attribute:
-      policy && "attribute" in (policy.leave_rates ?? {})
-        ? (policy.leave_rates as LeaveRates).attribute
-        : null,
-    rates:
-      policy && "rates" in (policy.leave_rates ?? {})
-        ? (policy.leave_rates as LeaveRates).rates
-        : {},
+    attribute: typeof stored.attribute === "string" ? stored.attribute : null,
+    rates: stored.rates ?? {},
+    limits: stored.limits ?? {},
   };
   const ratesToSave = leaveRates ?? initialRates;
 
@@ -44,11 +51,17 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
       <div className="flex items-center gap-1">
         <h3 className="text-sm font-semibold text-foreground">Leave policy</h3>
         <InfoHint>
-          Buy/sell-leave bounds for this policy year. Members can buy extra days
-          or sell days back — day counts only, no pricing is applied here.
+          How much leave members may trade this benefit year, and what a day is
+          worth. Buying spends the per-day rate from the member's flex wallet;
+          selling credits it. The limits below are the company DEFAULT — each
+          grade/designation tier can override them in the price tag table.
+          Trading is only offered in windows that have leave trading switched on.
         </InfoHint>
       </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+      <p className="mt-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+        Company default
+      </p>
+      <div className="mt-1.5 grid gap-3 sm:grid-cols-3">
         <div>
           <Label htmlFor="lp-buy">Max buy (days)</Label>
           <Input
@@ -83,15 +96,23 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
       </div>
 
       <div className="mt-3">
-        <Label>Leave price tag</Label>
-        {/* Mount only once the policy has resolved (data !== undefined) and key it
-            to the loaded policy, so the editor seeds from the saved rates instead
-            of capturing empties on the pre-load render and wiping them on save. */}
+        <Label>Leave price tag &amp; limits per tier</Label>
+        {/* Mount only once the policy has RESOLVED (data !== undefined), so the
+            editor seeds from the saved rates instead of capturing empties on the
+            pre-load render and wiping them on save.
+
+            The key is the YEAR, deliberately not `policy.id`: the first save
+            CREATES the policy, so an id-based key remounted the editor mid-save,
+            reseeded it from the not-yet-refetched (still null) policy, and its
+            mount effect pushed `{attribute: null, rates: {}}` back up — the next
+            save then wrote those empties over the rates just entered. */}
         {policy !== undefined && (
           <LeaveRatesEditor
-            key={policy?.id ?? "new"}
+            key={policyYearId}
             policyYearId={policyYearId}
             value={initialRates}
+            maxBuyDays={buy}
+            maxSellDays={sell}
             onChange={setLeaveRates}
           />
         )}
@@ -104,11 +125,19 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
           onClick={() =>
             upsert.mutate(
               {
-                allow_buy: buy > 0,
-                allow_sell: sell > 0,
-                min_buy_days: 0,
+                // `allow_*` is the company-wide ON/OFF gate and `validate_leave`
+                // checks it BEFORE the per-tier cap — so it must consider the
+                // tiers too. Deriving it from the global max alone made
+                // "nobody by default, Managers up to 10" impossible: the tier
+                // cap saved and displayed, but every Manager was refused.
+                allow_buy: buy > 0 || anyTierAllows(ratesToSave, "max_buy_days"),
+                allow_sell: sell > 0 || anyTierAllows(ratesToSave, "max_sell_days"),
+                // Preserve any stored minimum rather than silently resetting it
+                // to 0 on every save; clamp so it can't exceed a lowered max
+                // (the server rejects min > max).
+                min_buy_days: Math.min(policy?.min_buy_days ?? 0, buy),
                 max_buy_days: buy,
-                min_sell_days: 0,
+                min_sell_days: Math.min(policy?.min_sell_days ?? 0, sell),
                 max_sell_days: sell,
                 increment_days: inc || 1,
                 leave_rates: ratesToSave,

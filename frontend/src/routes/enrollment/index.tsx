@@ -5,8 +5,6 @@ import { EnrollmentElectionsPage } from "./elections";
 import { EnrollmentBulkPage } from "./bulk";
 import {
   CalendarClock,
-  ChevronDown,
-  ChevronRight,
   Loader2,
   Lock,
   Play,
@@ -19,8 +17,6 @@ import {
   type EnrollmentWindow,
   type FlexDrawdownRule,
   type FlexPriceSource,
-  type FlexPricingBag,
-  type FlexPricingProduct,
   useCloseWindow,
   useCreateWindow,
   useDeleteWindow,
@@ -30,9 +26,6 @@ import {
   useOpenWindow,
 } from "@/api/enrollment";
 import { formatError } from "@/lib/errors";
-import { fmtCurrency } from "@/lib/format";
-import { type PlanRow, planRows, planScalar } from "@/lib/flexTiers";
-import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,11 +34,9 @@ import { Badge } from "@/components/ui/badge";
 import { InfoHint } from "@/components/ui/tooltip";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Segmented } from "@/components/ui/segmented";
-import {
-  ProductFlexEditor,
-  useFlexPricingEditor,
-} from "@/components/enrollment/FlexPricingCard";
-import { LifeVoluntaryPanel } from "@/components/enrollment/LifeVoluntaryPanel";
+import { useFlexPricingEditor } from "@/components/enrollment/FlexPricingCard";
+import { FlexProductList } from "@/components/enrollment/FlexProductList";
+import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
 
 const STATUS_VARIANT: Record<string, "primary" | "good" | "outline"> = {
   draft: "outline",
@@ -63,51 +54,13 @@ function toLocalInput(): { opens: string; closes: string } {
   return { opens: fmt(now), closes: fmt(later) };
 }
 
-// The collapsed price-tag chips, one per plan. Cohort tiers that share a plan and
-// price identically fold into a single chip (mirroring the editor); a plan whose
-// cohorts genuinely differ stays split (each carrying its cohort label) so nothing
-// is silently merged. Folds off the SAVED pricing so the chip can't disagree with
-// the values it shows.
-function planPreviewRows(
-  product: FlexPricingProduct,
-  bag: FlexPricingBag | undefined,
-): PlanRow[] {
-  const tags = bag?.products?.[product.product_id]?.price_tags;
-  return planRows(product.tiers, (t) => [t.slip_premium, planScalar(tags, t.key)]);
-}
-
-// One plan's exact price tag: a broker-set matrix value is a sparse OVERRIDE that
-// wins; otherwise the "slip" source falls back to the slip premium. A single
-// number, or a range only when the row varies by age band. "—" when unpriced.
-// Scans every key in the row so a folded plan reads its (consistent) value.
-function planTag(
-  bag: FlexPricingBag | undefined,
-  product: FlexPricingProduct,
-  row: PlanRow,
-  source: FlexPriceSource,
-): string {
-  for (const key of row.keys) {
-    const cell = bag?.products?.[product.product_id]?.price_tags?.[key];
-    const vals = cell
-      ? Object.values(cell).filter((v): v is number => typeof v === "number")
-      : [];
-    if (vals.length) {
-      const min = Math.min(...vals);
-      const max = Math.max(...vals);
-      return min === max ? fmtCurrency(min) : `${fmtCurrency(min)}–${fmtCurrency(max)}`;
-    }
-  }
-  if (source === "slip" && row.rep.slip_premium != null)
-    return fmtCurrency(row.rep.slip_premium);
-  return "—";
-}
-
 export function EnrollmentDashboardPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: windows, isLoading } = useEnrollmentWindows(policyYearId);
   const { data: flexPricing } = useFlexPricing(policyYearId);
-  // Inline editor for the per-year price-tag matrix, surfaced under a product when
-  // its window price-tag source is the manual matrix.
+  // Read-only here: the window form previews each product's price tags but the
+  // matrix itself is edited on the Flex tab (it is per policy year, not per
+  // window). FlexProductList still needs an editor instance to type-check.
   const flexEditor = useFlexPricingEditor(policyYearId);
   const createWindow = useCreateWindow(policyYearId);
   const openWindow = useOpenWindow();
@@ -128,8 +81,6 @@ export function EnrollmentDashboardPage() {
   // price-tag source ("slip" = from placement-slip premium, else portal matrix).
   const [drawdownRule, setDrawdownRule] = useState<FlexDrawdownRule>("full");
   const [priceSource, setPriceSource] = useState<Record<string, FlexPriceSource>>({});
-  // Per-product reveal of the inline price-tag editor; defaults open for manual.
-  const [openEditor, setOpenEditor] = useState<Record<string, boolean>>({});
   const [confirmClose, setConfirmClose] = useState<EnrollmentWindow | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<EnrollmentWindow | null>(null);
 
@@ -235,7 +186,7 @@ export function EnrollmentDashboardPage() {
               onChange={(e) => setClosesAt(e.target.value)}
             />
           </div>
-          <div className="flex items-center gap-4 sm:col-span-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 sm:col-span-2">
             <label className="flex items-center gap-2 text-sm text-foreground">
               <Switch checked={allowLeave} onCheckedChange={setAllowLeave} />
               Leave trading
@@ -244,6 +195,17 @@ export function EnrollmentDashboardPage() {
               <Switch checked={allowDeps} onCheckedChange={setAllowDeps} />
               Dependants
             </label>
+            {/* The switch only EXPOSES trading — the day caps and per-day rate
+                that decide what members can actually do live on the Leave tab. */}
+            {allowLeave && (
+              <Link
+                to="/enrollment"
+                search={{ tab: "leave" }}
+                className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Set the day limits &amp; per-day rate →
+              </Link>
+            )}
           </div>
 
           {/* Flex funding: company-wide drawdown rule + per-product price-tag source */}
@@ -292,142 +254,27 @@ export function EnrollmentDashboardPage() {
               <div className="mt-3 border-t border-border pt-2.5">
                 <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
                   <span>Price-tag source per product</span>
-                  {flexEditor.dirty ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-6 normal-case"
-                      onClick={flexEditor.onSave}
-                      disabled={flexEditor.saving}
-                    >
-                      Save price tags
-                    </Button>
-                  ) : (
-                    <span className="normal-case">Price tag per plan · default highlighted</span>
-                  )}
+                  {/* The SOURCE is a window column and is set here; the price
+                      tags themselves are per policy year and live on the Flex
+                      tab, so this stays a preview. */}
+                  <Link
+                    to="/enrollment"
+                    search={{ tab: "flex" }}
+                    className="normal-case underline underline-offset-2 hover:text-foreground"
+                  >
+                    Edit price tags →
+                  </Link>
                 </div>
-                <div className="mt-1.5 divide-y divide-border">
-                  {flexProducts.map((p) => {
-                    const source: FlexPriceSource = priceSource[p.product_id] ?? "slip";
-                    const tags = planPreviewRows(p, flexPricing?.pricing).map((row) => ({
-                      row,
-                      tag: planTag(flexPricing?.pricing, p, row, source),
-                    }));
-                    const anyPriced = tags.some((x) => x.tag !== "—");
-                    const editorOpen = openEditor[p.product_id] ?? source === "manual";
-                    // Products publishing a slip voluntary rate table price by
-                    // age band — shape-driven (not line-gated), so any product
-                    // with the table gets the age-banded panel + live preview
-                    // instead of the matrix.
-                    const isLifeVoluntary = (p.voluntary_rates?.length ?? 0) > 0;
-                    return (
-                      <div key={p.product_id} className="py-2">
-                        <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                            {p.product_code}
-                            <Badge variant="outline" className="text-[10px] capitalize">
-                              {p.line}
-                            </Badge>
-                          </div>
-                          {!editorOpen &&
-                            (isLifeVoluntary ? (
-                            <div className="mt-0.5 text-[11px] text-muted-foreground">
-                              Age-banded voluntary rates ({p.voluntary_rates?.length ?? 0}{" "}
-                              bands) — expand to preview premiums.
-                            </div>
-                          ) : anyPriced ? (
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {tags.map(({ row, tag }) => (
-                                <span
-                                  key={row.rep.key}
-                                  title={row.rep.is_baseline ? "Default plan" : undefined}
-                                  className={cn(
-                                    "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px]",
-                                    row.rep.is_baseline
-                                      ? "border-transparent bg-sidebar-active text-sidebar-active-foreground"
-                                      : "border-border bg-card",
-                                  )}
-                                >
-                                  <span
-                                    className={cn(
-                                      !row.rep.is_baseline && "text-muted-foreground",
-                                    )}
-                                  >
-                                    {row.rep.label}
-                                    {row.cohortLabel && (
-                                      <span className="ml-1 opacity-70">
-                                        · {row.cohortLabel}
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span
-                                    className={cn(
-                                      "font-medium",
-                                      !row.rep.is_baseline && "text-foreground",
-                                    )}
-                                  >
-                                    {tag}
-                                  </span>
-                                </span>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="mt-0.5 text-[11px] text-warn">
-                              {source === "slip"
-                                ? "No slip premiums for this product."
-                                : "No matrix prices yet — set them below."}
-                            </div>
-                            ))}
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          {/* Life-voluntary products price off the rate table, not the
-                              slip-vs-matrix source, so the toggle would be a no-op. */}
-                          {!isLifeVoluntary && (
-                            <Segmented
-                              value={source}
-                              onChange={(v) =>
-                                setPriceSource((s) => ({ ...s, [p.product_id]: v }))
-                              }
-                              options={[
-                                { value: "slip", label: "From slip" },
-                                { value: "manual", label: "Manual matrix" },
-                              ]}
-                            />
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-7"
-                            onClick={() =>
-                              setOpenEditor((s) => ({ ...s, [p.product_id]: !editorOpen }))
-                            }
-                            aria-label={editorOpen ? "Hide price tags" : "Edit price tags"}
-                          >
-                            {editorOpen ? (
-                              <ChevronDown className="size-4" />
-                            ) : (
-                              <ChevronRight className="size-4" />
-                            )}
-                          </Button>
-                        </div>
-                        </div>
-                        {editorOpen && (
-                          <div className="mt-2">
-                            {isLifeVoluntary ? (
-                              <LifeVoluntaryPanel product={p} editor={flexEditor} />
-                            ) : (
-                              <ProductFlexEditor
-                                product={p}
-                                editor={flexEditor}
-                                source={source}
-                              />
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                <div className="mt-1.5">
+                  <FlexProductList
+                    products={flexProducts}
+                    pricing={flexPricing?.pricing}
+                    editor={flexEditor}
+                    sourceFor={(pid) => priceSource[pid] ?? "slip"}
+                    onSourceChange={(pid, v) =>
+                      setPriceSource((s) => ({ ...s, [pid]: v }))
+                    }
+                  />
                 </div>
               </div>
             )}
@@ -620,12 +467,121 @@ export function EnrollmentDashboardPage() {
 }
 
 const ENROLLMENT_TABS = [
-  { key: "windows", label: "Windows & leave" },
+  { key: "windows", label: "Windows" },
   { key: "elections", label: "Elections" },
+  { key: "flex", label: "Flex" },
+  { key: "leave", label: "Leave" },
   { key: "bulk", label: "Bulk plan update" },
 ] as const;
 
 type EnrollmentTab = (typeof ENROLLMENT_TABS)[number]["key"];
+const isEnrollmentTab = (v: string | undefined): v is EnrollmentTab =>
+  ENROLLMENT_TABS.some((t) => t.key === v);
+
+// The leave policy is standing per-year config, but it's part of the enrollment
+// workflow (a window's "Leave trading" switch is what exposes it to members), so
+// it lives here rather than on the company Settings page —
+// /configuration/settings?tab=enrollment redirects to this tab.
+// Everything the flex WALLET pays for, in one place: what each plan and
+// dependant option costs, and the age-banded voluntary rates. All of it is per
+// policy YEAR — it used to live inside the create-window form, which meant the
+// year's prices were unreachable unless you were opening a window. The
+// per-window price-tag SOURCE (slip vs matrix) stays on the window form,
+// because it is a column on the window.
+function EnrollmentFlexTab() {
+  const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
+  const { data: flexPricing, isLoading } = useFlexPricing(policyYearId);
+  const flexEditor = useFlexPricingEditor(policyYearId);
+  const { data: windows } = useEnrollmentWindows(policyYearId);
+  const [openEditor, setOpenEditor] = useState<Record<string, boolean>>({});
+
+  // The source each product is actually priced by = the governing window's
+  // choice (latest non-draft, mirroring the backend's `governing_flex_config`),
+  // so the preview here matches what members are charged. The list endpoint
+  // already orders opens_at DESC, so the newest is [0] — taking the LAST element
+  // read the OLDEST window and could show a slip tag while members were being
+  // charged the matrix value.
+  const governing = (windows ?? []).filter((w) => w.status !== "draft")[0];
+  const sourceFor = (pid: string): FlexPriceSource =>
+    governing?.flex_price_source?.[pid] ?? "slip";
+
+  if (!policyYearId) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Select a benefit year to configure flex pricing.
+      </p>
+    );
+  }
+
+  const products = flexPricing?.products ?? [];
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+          <h3 className="text-sm font-semibold text-foreground">Flex price tags</h3>
+          <InfoHint>
+            What each plan draws from the member&apos;s flex wallet — separate
+            from the insurer premium. A blank matrix cell falls back to the
+            placement-slip premium when the window prices that product
+            &ldquo;from slip&rdquo;. Buy/sell-leave is priced on the Leave tab.
+          </InfoHint>
+        </div>
+        {flexEditor.dirty && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={flexEditor.onSave}
+            disabled={flexEditor.saving}
+          >
+            {flexEditor.saving && <Loader2 className="size-4 animate-spin" />}
+            Save price tags
+          </Button>
+        )}
+      </div>
+      <div className="mt-3">
+        {isLoading ? (
+          <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Loading…
+          </div>
+        ) : (
+          <FlexProductList
+            products={products}
+            pricing={flexPricing?.pricing}
+            editor={flexEditor}
+            sourceFor={sourceFor}
+            openEditor={openEditor}
+            onToggleEditor={(pid) =>
+              setOpenEditor((s) => ({
+                ...s,
+                [pid]: !(s[pid] ?? sourceFor(pid) === "manual"),
+              }))
+            }
+            emptyHint={
+              <p className="text-sm text-muted-foreground">
+                No flex-priced products in this benefit year yet. Products appear
+                here once the placement slip is parsed and the flex scheme is
+                confirmed.
+              </p>
+            }
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EnrollmentLeaveTab() {
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
+  if (!policyYearId) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Select a benefit year to configure the leave policy.
+      </p>
+    );
+  }
+  return <LeavePolicyCard key={policyYearId} policyYearId={policyYearId} />;
+}
 
 // The enrollment surface is one workflow (open a window → manage member
 // elections → bulk adjust), so it renders as tabs of a single page. The
@@ -637,10 +593,7 @@ export function EnrollmentPage() {
     tab?: string;
     window?: string;
   };
-  const tab: EnrollmentTab =
-    search.tab === "elections" || search.tab === "bulk"
-      ? search.tab
-      : "windows";
+  const tab: EnrollmentTab = isEnrollmentTab(search.tab) ? search.tab : "windows";
 
   return (
     <Tabs
@@ -661,6 +614,12 @@ export function EnrollmentPage() {
       </TabsContent>
       <TabsContent value="elections">
         <EnrollmentElectionsPage />
+      </TabsContent>
+      <TabsContent value="flex">
+        <EnrollmentFlexTab />
+      </TabsContent>
+      <TabsContent value="leave">
+        <EnrollmentLeaveTab />
       </TabsContent>
       <TabsContent value="bulk">
         <EnrollmentBulkPage />

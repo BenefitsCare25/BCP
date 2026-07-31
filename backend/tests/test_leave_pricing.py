@@ -16,6 +16,7 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
 from datetime import UTC, date, datetime, timedelta  # noqa: E402
 
+from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
@@ -35,9 +36,11 @@ from app.models.enrollment import EnrollmentStatus  # noqa: E402
 from app.models.enrollment_window import WindowStatus  # noqa: E402
 from app.models.leave_election import LeaveElectionStatus  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
+from app.services.enrollment_validation import validate_leave  # noqa: E402
 from app.services.leave_pricing_resolver import (  # noqa: E402
     build_leave_rate_options,
     leave_flex_amount,
+    leave_limits_for,
     leave_rate_for,
     validate_leave_rates_shape,
 )
@@ -81,6 +84,116 @@ def test_validate_leave_rates_shape():
     )
     # Rates without an attribute rejected.
     assert validate_leave_rates_shape({"rates": {"Manager": 300}})
+    # Per-tier limits are valid, sparse (one field is enough) and bounded.
+    assert validate_leave_rates_shape(
+        {"attribute": "g", "rates": {}, "limits": {"Manager": {"max_buy_days": 10}}}
+    ) == []
+    assert any(
+        "must be ≥ 0" in e
+        for e in validate_leave_rates_shape(
+            {"attribute": "g", "limits": {"Manager": {"max_sell_days": -1}}}
+        )
+    )
+    # Limits without an attribute are unkeyable — rejected like rates.
+    assert validate_leave_rates_shape({"limits": {"Manager": {"max_buy_days": 3}}})
+    # A tier max BELOW the company minimum makes the range unsatisfiable
+    # (lo=2, hi=1 rejects every value) — caught at the write boundary.
+    bag = {"attribute": "g", "limits": {"Manager": {"max_buy_days": 1}}}
+    assert validate_leave_rates_shape(bag) == []  # fine when the minimum is 0
+    assert any(
+        "below the company minimum" in e
+        for e in validate_leave_rates_shape(bag, min_buy_days=2)
+    )
+
+
+def _tiered_policy() -> LeavePolicy:
+    """Company default 5 buy / 3 sell, with Manager overriding ONLY the buy cap."""
+    return LeavePolicy(
+        allow_buy=True,
+        allow_sell=True,
+        min_buy_days=0,
+        max_buy_days=5,
+        min_sell_days=0,
+        max_sell_days=3,
+        increment_days=1,
+        leave_rates={
+            "attribute": "job_grade",
+            "rates": {"Manager": 350},
+            "limits": {"Manager": {"max_buy_days": 10}},
+        },
+    )
+
+
+def _emp(grade: str | None) -> Employee:
+    return Employee(
+        derived_attribute_values={"job_grade": grade} if grade else {},
+        attribute_values={},
+    )
+
+
+def test_leave_limits_are_per_tier_and_sparse():
+    pol = _tiered_policy()
+    # The overriding tier gets its own buy cap but INHERITS the sell default —
+    # a partial entry must not zero the field it didn't set.
+    mgr = leave_limits_for(pol, _emp("Manager"))
+    assert (mgr.max_buy_days, mgr.max_sell_days) == (10.0, 3.0)
+    assert mgr.from_tier is True and mgr.tier_value == "Manager"
+    # A tier with no entry, and a member with no value for the attribute, both
+    # fall back to the company default — never to zero, which would silently
+    # revoke trading the company has switched on.
+    for employee in (_emp("Analyst"), _emp(None)):
+        lim = leave_limits_for(pol, employee)
+        assert (lim.max_buy_days, lim.max_sell_days) == (5.0, 3.0)
+        assert lim.from_tier is False
+    # No policy at all → nothing tradable.
+    assert leave_limits_for(None, _emp("Manager")).max_buy_days == 0.0
+
+
+def test_validate_leave_enforces_the_members_tier_cap():
+    pol = _tiered_policy()
+    mgr, analyst = _emp("Manager"), _emp("Analyst")
+    # Manager's raised cap is honoured...
+    validate_leave(pol, "buy", 8, mgr)
+    # ...but is NOT granted to a tier that never overrode it.
+    with pytest.raises(HTTPException) as exc:
+        validate_leave(pol, "buy", 8, analyst)
+    assert exc.value.status_code == 422
+    # Past even the raised cap still fails, and the message names the tier so a
+    # broker isn't hunting for a number the global fields don't show.
+    with pytest.raises(HTTPException) as exc:
+        validate_leave(pol, "buy", 11, mgr)
+    assert "Manager" in exc.value.detail
+    # The inherited sell cap still binds for the overriding tier.
+    validate_leave(pol, "sell", 3, mgr)
+    with pytest.raises(HTTPException):
+        validate_leave(pol, "sell", 4, mgr)
+
+
+def test_tier_can_buy_when_the_company_default_is_zero():
+    """"Nobody by default, Managers up to 10" must actually work.
+
+    `allow_buy` is the company-wide gate and `validate_leave` checks it BEFORE
+    the per-tier cap, so a UI that derives it from the global maximum alone
+    saves the tier override and then refuses every member on that tier.
+    """
+    pol = LeavePolicy(
+        allow_buy=True,  # what the card must send once a tier grants days
+        allow_sell=True,
+        min_buy_days=0,
+        max_buy_days=0,  # nobody by default
+        min_sell_days=0,
+        max_sell_days=0,
+        increment_days=1,
+        leave_rates={
+            "attribute": "job_grade",
+            "rates": {"Manager": 350},
+            "limits": {"Manager": {"max_buy_days": 10}},
+        },
+    )
+    validate_leave(pol, "buy", 10, _emp("Manager"))
+    # Everyone else still can't — the default of 0 stands for them.
+    with pytest.raises(HTTPException):
+        validate_leave(pol, "buy", 1, _emp("Analyst"))
 
 
 def test_build_leave_rate_options_distinct_values():

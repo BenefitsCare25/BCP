@@ -14,10 +14,11 @@ import type {
   ElectionIn,
   EnrollmentDetail,
   EnrollmentOptions,
+  MemberLeaveOptions,
   ProductTierSet,
 } from "@/api/enrollment";
 import { cn } from "@/lib/cn";
-import { fmtCurrency } from "@/lib/format";
+import { fmtAmount, fmtCurrency } from "@/lib/format";
 import type { PlanFinancials } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -362,10 +363,33 @@ export function PlanFinancialsRow({ fin }: { fin: PlanFinancials }) {
   );
 }
 
-/** Buy/sell-leave election card (days only — pricing shows in the flex strip). */
+/** Why a leave action can't be chosen — null when it can. The same rules the
+ *  server enforces in `enrollment_validation.validate_leave` / `apply_leave`,
+ *  stated up front so a member doesn't discover the limit as a 422 on save. */
+function leaveBlockedReason(
+  action: "buy" | "sell",
+  leave: MemberLeaveOptions | null,
+): string | null {
+  if (!leave) return "No leave policy is configured for this benefit year.";
+  if (action === "buy") {
+    if (!leave.allow_buy) return "Buying leave isn't permitted this year.";
+    if (leave.max_buy_days <= 0) return "No buy-leave allowance is configured.";
+    return null;
+  }
+  if (!leave.allow_sell) return "Selling leave isn't permitted this year.";
+  if (!leave.sell_eligible) return "This member isn't eligible to sell leave.";
+  if (leave.max_sell_days <= 0) return "No sell-leave allowance is configured.";
+  return null;
+}
+
+/** Buy/sell-leave election card. Shows the DAY limit, the member's per-day rate
+ * and the resulting dollar impact on the flex wallet — the elected trade and the
+ * maximum they could trade — so leave reads in money, not just day counts. */
 export function LeaveTradingCard({
   action,
   days,
+  leave,
+  ratePerDay,
   disabled,
   saving,
   onActionChange,
@@ -374,15 +398,78 @@ export function LeaveTradingCard({
 }: {
   action: string;
   days: string;
+  /** The member's bounds + eligibility (null = no leave policy this year). */
+  leave: MemberLeaveOptions | null;
+  /** Per-day flex price of a traded day (null/0 = leave is unpriced). */
+  ratePerDay: number | null;
   disabled: boolean;
   saving: boolean;
   onActionChange: (action: string) => void;
   onDaysChange: (days: string) => void;
   onSave: () => void;
 }) {
+  const buyBlocked = leaveBlockedReason("buy", leave);
+  const sellBlocked = leaveBlockedReason("sell", leave);
+  const trading = action === "buy" || action === "sell";
+  const isBuy = action === "buy";
+  const maxDays = leave ? (isBuy ? leave.max_buy_days : leave.max_sell_days) : 0;
+  const minDays = leave ? (isBuy ? leave.min_buy_days : leave.min_sell_days) : 0;
+  const step = leave?.increment_days || 0.5;
+  const rate = ratePerDay ?? 0;
+  const enteredDays = Number(days) || 0;
+  // Signed flex impact, mirroring `leave_flex_amount`: buying spends, selling credits.
+  const impact = rate > 0 && trading ? enteredDays * rate : 0;
+  const maxImpact = rate > 0 && trading ? maxDays * rate : 0;
+  // Mirror EVERY rule `validate_leave` enforces, not just the maximum — a guard
+  // that catches one of three still lets the 422 it exists to prevent through.
+  const overLimit = trading && enteredDays > maxDays;
+  const belowMin = trading && enteredDays > 0 && enteredDays < minDays;
+  const notPositive = trading && enteredDays <= 0;
+  const offIncrement =
+    trading &&
+    enteredDays > 0 &&
+    step > 0 &&
+    Math.abs(enteredDays / step - Math.round(enteredDays / step)) > 1e-6;
+  const daysError = overLimit
+    ? `More than the ${maxDays}-day limit`
+    : belowMin
+      ? `At least ${minDays} day${minDays === 1 ? "" : "s"}`
+      : offIncrement
+        ? `Must be in ${step}-day steps`
+        : null;
+  const currentBlocked = trading ? (isBuy ? buyBlocked : sellBlocked) : null;
+
   return (
     <div className="rounded-lg border border-border bg-card p-3">
-      <div className="text-sm font-medium text-foreground">Leave trading</div>
+      <div className="flex items-center gap-1">
+        <span className="text-sm font-medium text-foreground">Leave trading</span>
+        <InfoHint>
+          Buy extra leave days (spends flex) or sell days back (credits flex). The
+          per-day rate comes from the leave policy for this member's
+          {leave?.rate_attribute ? ` ${leave.rate_attribute}` : " grade"}.
+        </InfoHint>
+      </div>
+
+      {/* The allowance, stated before anything is picked — day cap AND what it is
+          worth. Without this the member only learns their limit by exceeding it. */}
+      {leave && (!buyBlocked || !sellBlocked) && (
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {[
+            !buyBlocked &&
+              `buy up to ${leave.max_buy_days} day${leave.max_buy_days === 1 ? "" : "s"}${
+                rate > 0 ? ` (-$${fmtAmount(leave.max_buy_days * rate)})` : ""
+              }`,
+            !sellBlocked &&
+              `sell up to ${leave.max_sell_days} day${leave.max_sell_days === 1 ? "" : "s"}${
+                rate > 0 ? ` (+$${fmtAmount(leave.max_sell_days * rate)})` : ""
+              }`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          {rate > 0 && ` · $${fmtAmount(rate)} per day`}
+        </p>
+      )}
+
       <div className="mt-2 flex flex-wrap items-end gap-3">
         <div>
           <Label>Action</Label>
@@ -392,8 +479,12 @@ export function LeaveTradingCard({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="none">None</SelectItem>
-              <SelectItem value="buy">Buy</SelectItem>
-              <SelectItem value="sell">Sell</SelectItem>
+              <SelectItem value="buy" disabled={!!buyBlocked}>
+                Buy
+              </SelectItem>
+              <SelectItem value="sell" disabled={!!sellBlocked}>
+                Sell
+              </SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -402,18 +493,83 @@ export function LeaveTradingCard({
           <Input
             id="leave-days"
             type="number"
-            min={0}
-            step={0.5}
+            min={minDays}
+            max={trading ? maxDays : undefined}
+            step={step}
             className="w-[120px]"
             value={days}
-            disabled={disabled || action === "none"}
+            disabled={disabled || !trading}
+            aria-invalid={!!daysError || undefined}
             onChange={(e) => onDaysChange(e.target.value)}
           />
+          {trading && (
+            <p
+              className={cn(
+                "mt-1 text-[10px]",
+                daysError ? "text-error" : "text-muted-foreground",
+              )}
+            >
+              {daysError ?? (
+                <>
+                  {minDays > 0 ? `${minDays}–${maxDays} days` : `Up to ${maxDays} day${maxDays === 1 ? "" : "s"}`}
+                  {step !== 1 ? `, in ${step}-day steps` : ""}
+                </>
+              )}
+            </p>
+          )}
         </div>
-        <Button variant="outline" size="sm" disabled={disabled || saving} onClick={onSave}>
+        {/* The money view of the elected trade — day counts alone don't tell the
+            member what leaving with 3 days costs their wallet. */}
+        {trading && rate > 0 && (
+          <div className="rounded-md border border-border bg-muted/20 px-2.5 py-1.5">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {isBuy ? "Flex spent" : "Flex credited"}
+            </div>
+            {/* Exact figures, not compacted — this lands on payroll. */}
+            <div
+              className={cn(
+                "text-sm font-semibold",
+                isBuy ? "text-error" : "text-good",
+              )}
+            >
+              {isBuy ? "-" : "+"}${fmtAmount(Math.abs(impact))}
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {enteredDays} × ${fmtAmount(rate)}/day · max ${fmtAmount(maxImpact)}
+            </div>
+          </div>
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={
+            disabled || saving || !!daysError || notPositive || !!currentBlocked
+          }
+          onClick={onSave}
+        >
           Save leave
         </Button>
       </div>
+
+      {/* Why an option is unavailable, and what a missing rate means. Both are
+          silent server-side outcomes otherwise (a 422, or a $0 flex draw). */}
+      {currentBlocked && (
+        <p className="mt-2 text-xs text-error">{currentBlocked}</p>
+      )}
+      {trading && !currentBlocked && rate <= 0 && (
+        <p className="mt-2 text-xs text-warn">
+          No leave rate is configured
+          {leave?.rate_value ? ` for “${leave.rate_value}”` : ""} — trading leave
+          won't change the flex wallet.
+        </p>
+      )}
+      {!trading && (buyBlocked || sellBlocked) && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {buyBlocked && sellBlocked
+            ? `${buyBlocked} ${sellBlocked}`
+            : (buyBlocked ?? sellBlocked)}
+        </p>
+      )}
     </div>
   );
 }

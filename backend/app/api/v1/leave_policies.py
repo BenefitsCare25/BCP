@@ -1,8 +1,11 @@
-"""Leave policy — buy/sell-leave configuration for a policy year (days only).
+"""Leave policy — buy/sell-leave configuration for a policy year.
 
-One policy per year, upsert-by-year (like the Flex scheme). Tracks bounds and
-increment for buy/sell leave; no pricing/funding this phase.
+One policy per year, upsert-by-year (like the Flex scheme). Tracks the buy/sell
+bounds + increment AND the per-day price tag (``leave_rates``, keyed by one
+grade/designation attribute — see ``services/leave_pricing_resolver``), whose
+signed flex impact is snapshotted onto each ``LeaveElection``.
 
+- GET /policy-years/{id}/leave-rate-options — grade/designation vocabulary
 - GET /policy-years/{id}/leave-policy   — read (404 if unset)
 - PUT /policy-years/{id}/leave-policy    — upsert
 
@@ -77,7 +80,11 @@ def upsert_leave_policy(
     policy = db.execute(
         select(LeavePolicy).where(LeavePolicy.policy_year_id == py.id)
     ).scalar_one_or_none()
-    errs = validate_leave_rates_shape(body.leave_rates)
+    errs = validate_leave_rates_shape(
+        body.leave_rates,
+        min_buy_days=body.min_buy_days,
+        min_sell_days=body.min_sell_days,
+    )
     if errs:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "; ".join(errs))
     action = "update_leave_policy"

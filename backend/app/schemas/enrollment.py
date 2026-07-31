@@ -302,6 +302,36 @@ class ProductTierSetOut(BaseModel):
     dependant: DependantPricingOut | None = None
 
 
+class MemberLeaveOptionsOut(BaseModel):
+    """What this member may trade in leave — the policy-year bounds PLUS their own
+    eligibility, so the election UI can state the limit (and its dollar value at
+    ``member_leave_rate``) up front instead of surfacing it as a 422 on save.
+
+    Every field here is already enforced server-side by
+    ``enrollment_validation.validate_leave`` / ``apply_leave``; this only makes the
+    same rules legible. ``sell_eligible`` is the per-member roster flag
+    ("Eligible to Sell Leave") — absent = eligible.
+    """
+
+    allow_buy: bool
+    allow_sell: bool
+    min_buy_days: float
+    # RESOLVED maxima: the member's tier override if it has one, else the policy
+    # default (`leave_pricing_resolver.leave_limits_for`). Never the raw global
+    # field — the UI must state the same cap `validate_leave` enforces.
+    max_buy_days: float
+    min_sell_days: float
+    max_sell_days: float
+    increment_days: float
+    sell_eligible: bool
+    # The grade/designation the member's rate + caps were looked up by, so the UI
+    # can say WHY they are priced/capped rather than showing a bare "no rate".
+    rate_attribute: str | None = None
+    rate_value: str | None = None
+    # True when the caps above came from that tier's own entry (not the default).
+    limits_from_tier: bool = False
+
+
 class EnrollmentOptionsOut(BaseModel):
     """Per-product electable tiers for one member, scoped to their cohort."""
 
@@ -315,8 +345,10 @@ class EnrollmentOptionsOut(BaseModel):
     flex_currency: str | None = None
     member_age: int | None = None
     # Per-day buy/sell-leave rate for this member (None when no rate applies), so the
-    # UI can fold a live leave trade into the running balance.
+    # UI can fold a live leave trade into the running balance. The bounds that rate
+    # is charged within live on `leave` (None when the year has no leave policy).
     member_leave_rate: float | None = None
+    leave: MemberLeaveOptionsOut | None = None
     # The window's flex drawdown rule, so the UI can label each tier's price tag as
     # the full plan cost ("full") or the upgrade/downgrade difference ("on_change").
     flex_drawdown_rule: str = "full"

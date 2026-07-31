@@ -42,6 +42,7 @@ from app.schemas.enrollment import (
     EnrollmentWindowOut,
     LeaveElectionIn,
     LeaveElectionOut,
+    MemberLeaveOptionsOut,
     PortalEnrollmentOut,
     ProductTierSetOut,
 )
@@ -90,7 +91,9 @@ from app.services.flex_pricing_resolver import (
     window_flex_config,
 )
 from app.services.leave_pricing_resolver import (
+    leave_attribute,
     leave_flex_amount,
+    leave_limits_for,
     leave_rate_for,
     leave_sell_eligible,
 )
@@ -281,7 +284,36 @@ def build_enrollment_options(
         flex_currency=employee.flex_currency if employee else None,
         member_age=age,
         member_leave_rate=leave_rate_for(leave_policy, employee) if employee else None,
+        leave=_member_leave_options(leave_policy, employee),
         flex_drawdown_rule=rule,
+    )
+
+
+def _member_leave_options(
+    policy: LeavePolicy | None, employee: Employee | None
+) -> MemberLeaveOptionsOut | None:
+    """The leave bounds this member trades within, or None when the year has no
+    leave policy (nothing to trade).
+
+    The maxima are the RESOLVED per-tier caps, not the policy's global fields —
+    the UI states a limit and the server enforces one, so they must be the same
+    number (`validate_leave` reads the same resolver)."""
+    if policy is None:
+        return None
+    limits = leave_limits_for(policy, employee)
+    return MemberLeaveOptionsOut(
+        allow_buy=policy.allow_buy,
+        allow_sell=policy.allow_sell,
+        min_buy_days=policy.min_buy_days,
+        max_buy_days=limits.max_buy_days,
+        min_sell_days=policy.min_sell_days,
+        max_sell_days=limits.max_sell_days,
+        increment_days=policy.increment_days,
+        # No employee (a preview built without one) can't be shown as ineligible.
+        sell_eligible=leave_sell_eligible(employee) if employee else True,
+        rate_attribute=leave_attribute(policy),
+        rate_value=limits.tier_value,
+        limits_from_tier=limits.from_tier,
     )
 
 
@@ -553,8 +585,10 @@ def apply_leave(db: Session, enr: Enrollment, body: LeaveElectionIn) -> LeaveEle
     policy = db.execute(
         select(LeavePolicy).where(LeavePolicy.policy_year_id == enr.policy_year_id)
     ).scalar_one_or_none()
-    validate_leave(policy, body.action, body.days)
     employee = db.get(Employee, enr.employee_id)
+    # Load the employee FIRST: the day caps are per grade/designation tier, so
+    # validating without them would enforce the company default for everyone.
+    validate_leave(policy, body.action, body.days, employee)
     # Per-member sell eligibility from the roster flag ("Eligible to Sell
     # Leave"); absent = eligible. Shared with the insurer reports.
     if (

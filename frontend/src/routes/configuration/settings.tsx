@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
@@ -18,16 +18,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { InfoHint } from "@/components/ui/tooltip";
 import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
 import { HrAdminSettings } from "@/components/settings/HrAdminSettings";
-import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
 import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 import { formatError } from "@/lib/errors";
 
 // Standing, company-scoped configuration lives here so operational pages stay
 // focused on their workflow: claim behaviour + document vocabulary (moved off
-// the Claims review queue), the leave policy (moved off the enrollment window
-// form), and entity-matching aliases (moved out of the firm-wide Schema page,
-// where they were the only company-scoped tab).
-const SETTINGS_TABS = ["claims", "enrollment", "aliases", "hr"] as const;
+// the Claims review queue) and entity-matching aliases (moved out of the
+// firm-wide Schema page, where they were the only company-scoped tab).
+//
+// The leave policy is deliberately NOT here — it reads as part of the enrollment
+// workflow (a window's "Leave trading" switch is what exposes it to members), so
+// it lives on /enrollment?tab=leave. `?tab=enrollment` redirects there rather
+// than 'falling back to Claims', which would strand old links silently.
+const SETTINGS_TABS = ["claims", "aliases", "hr"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const isTab = (v: string | undefined): v is SettingsTab =>
   SETTINGS_TABS.includes(v as SettingsTab);
@@ -104,12 +107,17 @@ export function CompanySettingsPage() {
   const search = useSearch({ strict: false }) as { tab?: string };
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  // The leave policy moved to the enrollment page — send its old deep link there.
+  useEffect(() => {
+    if (search.tab === "enrollment") {
+      void navigate({ to: "/enrollment", search: { tab: "leave" }, replace: true });
+    }
+  }, [search.tab, navigate]);
   const requested: SettingsTab = isTab(search.tab) ? search.tab : "claims";
   // The Authentication tab is admin-only (firm-admin `/hr-admin` endpoints);
   // fall back to Claims if a viewer deep-links it.
   const tab: SettingsTab =
     requested === "hr" && !canAdmin ? "claims" : requested;
-  const policyYearId = useSession((s) => s.currentPolicyYearId);
   const [aliasAddOpen, setAliasAddOpen] = useState(false);
 
   return (
@@ -122,7 +130,6 @@ export function CompanySettingsPage() {
       >
         <TabsList>
           <TabsTrigger value="claims">Claims</TabsTrigger>
-          <TabsTrigger value="enrollment">Enrollment</TabsTrigger>
           <TabsTrigger value="aliases">Entity aliases</TabsTrigger>
           {canAdmin && <TabsTrigger value="hr">Authentication</TabsTrigger>}
         </TabsList>
@@ -141,16 +148,6 @@ export function CompanySettingsPage() {
             </CardContent>
           </Card>
           <DocTypeSettings />
-        </TabsContent>
-
-        <TabsContent value="enrollment">
-          {policyYearId ? (
-            <LeavePolicyCard key={policyYearId} policyYearId={policyYearId} />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Select a benefit year to configure the leave policy.
-            </p>
-          )}
         </TabsContent>
 
         <TabsContent value="aliases">
