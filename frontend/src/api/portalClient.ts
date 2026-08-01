@@ -34,7 +34,13 @@ function handleUnauthorized(): never {
   throw new PortalUnauthorizedError();
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  /** Set when the request BODY carries a credential the member just typed —
+   * see `portalApi.verify`. */
+  opts: { credential?: boolean } = {},
+): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
@@ -44,7 +50,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...init.headers,
     },
   });
-  if (res.status === 401) return handleUnauthorized();
+  if (res.status === 401 && !opts.credential) return handleUnauthorized();
   if (!res.ok) {
     // Coded 409s (e.g. unpriced_elections / flex_overdrawn on enrollment
     // submit) surface as ConflictDetailError so pages can offer a choice.
@@ -60,6 +66,20 @@ export const portalApi = {
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  /** A POST whose BODY carries a credential the member just typed — the 6-digit
+   * code confirming 2FA enrolment, the password confirming they may turn it
+   * off. Here a 401 means "that value is wrong", not "your session expired",
+   * so it must surface to the form.
+   *
+   * Routing these through `post` signed the member OUT for mistyping their own
+   * setup code: `handleUnauthorized` cleared the session and navigated away
+   * before the form's onError could render a word. */
+  verify: <T>(path: string, body: unknown) =>
+    request<T>(
+      path,
+      { method: "POST", body: JSON.stringify(body) },
+      { credential: true },
+    ),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   /** Binary fetch (card artwork). The member token rides an Authorization
    * header, so images can't be loaded via a plain <img src> — callers turn

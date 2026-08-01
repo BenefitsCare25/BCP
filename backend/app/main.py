@@ -53,6 +53,7 @@ from app.api.v1 import (
     portal_claims,
     portal_dependants,
     portal_enrollment,
+    portal_messages,
     portal_preview,
     product_setups,
     product_terms,
@@ -234,6 +235,7 @@ def create_app() -> FastAPI:
     app.include_router(portal_claims.options_router, prefix=api_prefix)
     app.include_router(portal_dependants.router, prefix=api_prefix)
     app.include_router(portal_enrollment.router, prefix=api_prefix)
+    app.include_router(portal_messages.router, prefix=api_prefix)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

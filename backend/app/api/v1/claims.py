@@ -29,7 +29,7 @@ from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.core.storage import get_storage
 from app.db.session import get_db
-from app.models import Claim, ClaimAIReview, Employee, StoredDocument
+from app.models import Claim, ClaimAIReview, ClaimMessage, Employee, StoredDocument
 from app.models.claim import (
     CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_APPROVED,
@@ -37,13 +37,29 @@ from app.models.claim import (
     CLAIM_STATUS_REJECTED,
     LIVE_STATUSES,
 )
+from app.models.claim_message import (
+    AUTHOR_MEMBER,
+    EVENT_APPROVED,
+    EVENT_NEEDS_INFO,
+    EVENT_REJECTED,
+)
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.claims import (
     BrokerClaimList,
     BrokerClaimOut,
+    BrokerMessageIn,
     ClaimAIReviewOut,
     ClaimAIReviewSummary,
     ClaimDecisionIn,
+    ClaimMessageOut,
+    MessagesReadOut,
+)
+from app.services.claim_messages import (
+    broker_message_out,
+    mark_broker_read,
+    post_broker_message,
+    post_system_message,
+    thread_for_claim,
 )
 from app.services.claims import (
     assert_transition,
@@ -62,6 +78,15 @@ _DECISION_STATUS = {
     "needs_info": CLAIM_STATUS_NEEDS_INFO,
 }
 
+# Every broker decision posts the member a notice carrying the decision note.
+# Keyed off the ACTION rather than the resulting status so the mapping can't
+# drift from `_DECISION_STATUS` above.
+_DECISION_EVENT = {
+    "approve": EVENT_APPROVED,
+    "reject": EVENT_REJECTED,
+    "needs_info": EVENT_NEEDS_INFO,
+}
+
 
 def _latest_review(db: Session, claim_id: str) -> ClaimAIReview | None:
     return db.execute(
@@ -75,6 +100,23 @@ def _latest_review(db: Session, claim_id: str) -> ClaimAIReview | None:
     ).scalar_one_or_none()
 
 
+def _unread_member_messages(db: Session, claim_ids: list[str]) -> dict[str, int]:
+    """Unread member replies per claim, for a whole page in ONE query. Claims
+    with none are absent from the map (callers default to 0)."""
+    if not claim_ids:
+        return {}
+    rows = db.execute(
+        select(ClaimMessage.claim_id, func.count(ClaimMessage.id))
+        .where(
+            ClaimMessage.claim_id.in_(claim_ids),
+            ClaimMessage.author_type == AUTHOR_MEMBER,
+            ClaimMessage.broker_read_at.is_(None),
+        )
+        .group_by(ClaimMessage.claim_id)
+    ).all()
+    return {claim_id: count for claim_id, count in rows}
+
+
 def _broker_out(
     db: Session,
     claim: Claim,
@@ -82,6 +124,7 @@ def _broker_out(
     *,
     referral_docs: dict[str, StoredDocument] | None = None,
     dep_names: dict[str, str | None] | None = None,
+    unread_messages: dict[str, int] | None = None,
 ) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
     # Shared filler (documents, referral letter, claimant name) — keeps the
@@ -95,6 +138,11 @@ def _broker_out(
     review = _latest_review(db, claim.id)
     if review is not None:
         out.ai_review = ClaimAIReviewSummary.model_validate(review)
+    out.unread_member_messages = (
+        unread_messages
+        if unread_messages is not None
+        else _unread_member_messages(db, [claim.id])
+    ).get(claim.id, 0)
     return out
 
 
@@ -124,12 +172,20 @@ def list_claims(
         .limit(limit)
     ).all()
     referral_docs, dep_names = prefetch_claim_relations(db, [c for c, _ in rows])
+    unread = _unread_member_messages(db, [c.id for c, _ in rows])
     return BrokerClaimList(
         total=total,
         offset=offset,
         limit=limit,
         items=[
-            _broker_out(db, claim, employee, referral_docs=referral_docs, dep_names=dep_names)
+            _broker_out(
+                db,
+                claim,
+                employee,
+                referral_docs=referral_docs,
+                dep_names=dep_names,
+                unread_messages=unread,
+            )
             for claim, employee in rows
         ],
     )
@@ -237,6 +293,13 @@ def decide_claim(
     claim.status = new_status
     claim.decision_notes = body.note
 
+    # Tell the member, in the thread, carrying the broker's note. Posted BEFORE
+    # the commit so a decision and its notice land in one transaction — a
+    # rolled-back decision must not leave a member reading that their claim was
+    # approved. Written from the claim as it stands NOW: the notice is the
+    # record of what they were told, not a template re-rendered on read.
+    post_system_message(db, claim, _DECISION_EVENT[body.action], note=body.note)
+
     write_audit(
         db, user, f"claim.{body.action}", "claim", claim.id,
         before=before,
@@ -250,6 +313,58 @@ def decide_claim(
     db.commit()
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
+
+
+@router.get("/{claim_id}/messages", response_model=list[ClaimMessageOut])
+def list_claim_messages(
+    claim: Claim = Depends(load_claim),
+    db: Session = Depends(get_db),
+) -> list[ClaimMessageOut]:
+    """The claim's conversation with the member, oldest first."""
+    return [broker_message_out(m) for m in thread_for_claim(db, claim.id)]
+
+
+@router.post(
+    "/{claim_id}/messages",
+    response_model=ClaimMessageOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("30/minute")
+def post_claim_message(
+    request: Request,
+    body: BrokerMessageIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ClaimMessageOut:
+    """Write to the member on this claim.
+
+    **Everything posted here is member-visible** — there is no internal-note
+    mode by design (see models/claim_message.py). Broker-only reasoning belongs
+    in the decision note and the AI review.
+    """
+    msg = post_broker_message(
+        db, claim, user_id=user.user_id, body=body.body, subject=body.subject
+    )
+    write_audit(
+        db, user, "claim.message_sent", "claim", claim.id,
+        after={"message_id": msg.id, "subject": msg.subject},
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return broker_message_out(msg)
+
+
+@router.post("/{claim_id}/messages/read", response_model=MessagesReadOut)
+def mark_claim_messages_read(
+    claim: Claim = Depends(load_claim),
+    db: Session = Depends(get_db),
+) -> MessagesReadOut:
+    """Clear the queue's unread badge for this claim. Not audited — opening a
+    thread is not an action on the record."""
+    marked = mark_broker_read(db, claim.id)
+    db.commit()
+    return MessagesReadOut(marked=marked)
 
 
 @router.get("/{claim_id}/review", response_model=ClaimAIReviewOut)

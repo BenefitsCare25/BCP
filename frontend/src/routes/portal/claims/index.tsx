@@ -1,19 +1,20 @@
-/** "My claims" — the member's claims for the active policy year. */
+/** "My claims" — the member's claims for the current benefit year. */
 import { Link } from "@tanstack/react-router";
-import { FilePlus2, ReceiptText } from "lucide-react";
+import { FilePlus2 } from "lucide-react";
 import { usePortalClaims } from "@/api/portal";
-import { ClaimCards } from "@/components/portal/ClaimCards";
+import { ClaimList } from "@/components/portal/leaf/ClaimMount";
+import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
+import { Mount } from "@/components/portal/leaf/Mount";
+import { actionClass } from "@/components/portal/leaf/Action";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { isNotFoundError } from "@/lib/errors";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function PortalClaimsPage() {
   const claims = usePortalClaims();
+  useDocumentTitle("My claims");
 
-  if (claims.isLoading) {
-    return <Skeleton className="h-48 w-full" />;
-  }
+  if (claims.isLoading) return <LeafSkeleton label="Loading your claims" />;
 
   // A 404 keeps the confident empty state below; anything else is a fetch
   // failure and must not read as "no claims yet".
@@ -24,31 +25,28 @@ export function PortalClaimsPage() {
   const rows = claims.data?.items ?? [];
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-foreground">
-          {rows.length > 0
-            ? `${claims.data?.total ?? rows.length} claim${rows.length === 1 ? "" : "s"} this policy year`
-            : "My claims"}
-        </h2>
-        <Button asChild size="sm">
-          <Link to="/portal/claims/new">
-            <FilePlus2 className="size-4" />
-            <span className="ml-1">Submit a claim</span>
-          </Link>
-        </Button>
-      </div>
+    <div className="space-y-3">
+      {/* THE primary action of the member portal, and the page's one brand
+          fill. Full width on a phone: submitting a claim is the reason the
+          member is on this screen, and a right-aligned small button is the
+          hardest thing to hit one-handed. */}
+      <Link
+        to="/portal/claims/new"
+        className={actionClass("primary", { block: "phone" })}
+      >
+        <FilePlus2 className="size-4" aria-hidden />
+        Make a claim
+      </Link>
 
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-8 text-center">
-          <ReceiptText className="mx-auto size-6 text-muted-foreground" />
-          <p className="mt-2 text-sm font-medium text-foreground">No claims yet</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Submit a claim with your receipts — you can track its status here.
+        <Mount label="No claims yet">
+          <p className="text-row text-label">
+            When you pay for treatment that your benefits cover, send us the
+            receipt here and we'll tell you where it's up to.
           </p>
-        </div>
+        </Mount>
       ) : (
-        <ClaimCards items={rows} interactive />
+        <ClaimList items={rows} interactive />
       )}
     </div>
   );

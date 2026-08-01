@@ -328,3 +328,98 @@ def test_preview_matches_portal_and_never_creates(broker: TestClient) -> None:
     # Preview context flags the open window.
     ctx = broker.get(f"/api/v1/employees/{EMP1}/portal-preview").json()
     assert ctx["enrollment_open"] is True
+
+
+def test_member_safe_options_scrubs_premiums() -> None:
+    """A member electing a plan must not see what the employer is charged.
+
+    `member_statement.py` already nulls premium figures before the portal sees a
+    benefit statement, but the enrollment surface called
+    `build_enrollment_options` directly and served the broker's payload — so the
+    member's own election screen printed "Rate (per $1k SI)" and the annual
+    premium beside their flex wallet. Two surfaces disagreeing about what a
+    member may see is how a leak survives review.
+
+    Asserted against a CONSTRUCTED payload rather than the seed: the demo
+    fixture's tiers happen to carry no financials, so an end-to-end assertion
+    would pass whether or not the scrub existed.
+    """
+    from app.schemas.api import PlanFinancials
+    from app.schemas.enrollment import (
+        CohortTierOut,
+        EnrollmentOptionsOut,
+        ProductTierSetOut,
+    )
+    from app.services.enrollment_elections import _member_safe_options
+
+    options = EnrollmentOptionsOut(
+        products=[
+            ProductTierSetOut(
+                product_id="prod-1",
+                product_code="GTL",
+                employee_participation="voluntary",
+                dependant_participation=None,
+                baseline_tier_category_id="cat-1",
+                baseline_plan_code="PLAN A",
+                allow_plan_change=True,
+                can_decline=True,
+                tiers=[
+                    CohortTierOut(
+                        key="cat-1|PLAN A",
+                        tier_category_id="cat-1",
+                        plan_code="PLAN A",
+                        label="Plan A",
+                        participation="voluntary",
+                        direction="same",
+                        is_baseline=True,
+                        financials=PlanFinancials(
+                            num_employees=51,
+                            basis="12 times basic monthly salary",
+                            sum_insured=250_000.0,
+                            premium_rate=454.0,
+                            annual_premium=1_234.5,
+                            rate_basis="per_1000_si",
+                            estimated_annual_earnings=60_000.0,
+                            gst_included=True,
+                        ),
+                        price_tag=120.0,
+                    )
+                ],
+            )
+        ]
+    )
+
+    fin = _member_safe_options(options).products[0].tiers[0].financials
+    assert fin is not None
+    for field in (
+        "num_employees",
+        "basis",
+        "premium_rate",
+        "annual_premium",
+        "rate_basis",
+        "rate_tiers",
+        "dependant_rate",
+        "estimated_annual_earnings",
+        "voluntary_rates",
+    ):
+        assert getattr(fin, field) is None, f"leaked {field}"
+    assert fin.gst_included is False, "the GST badge only means anything beside a premium"
+
+    # What a member actually decides on survives untouched.
+    assert fin.sum_insured == 250_000.0
+    assert _member_safe_options(options).products[0].tiers[0].price_tag == 120.0
+
+    # The source object is not mutated — the broker's own payload is built from
+    # the same builder and must keep its premiums.
+    assert options.products[0].tiers[0].financials.premium_rate == 454.0
+
+
+def test_preview_also_hides_premiums(broker: TestClient) -> None:
+    """The employee-view preview must show exactly what the member sees — so it
+    goes through the same gate, not a parallel one."""
+    _make_window(broker)
+    broker.get("/api/v1/portal/enrollment", headers=_member_auth())
+    preview = broker.get(f"/api/v1/employees/{EMP1}/portal-preview/enrollment")
+    portal = broker.get("/api/v1/portal/enrollment", headers=_member_auth())
+    assert preview.status_code == 200
+    assert preview.json() == portal.json()

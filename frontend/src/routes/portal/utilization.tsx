@@ -1,35 +1,31 @@
-import { Loader2 } from "lucide-react";
+/** "What's left" — how much of each benefit the member has used. */
 import { usePortalUtilization } from "@/api/portal";
-import { UtilizationView } from "@/components/benefits/UtilizationView";
+import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
+import { Mount } from "@/components/portal/leaf/Mount";
+import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 
 export function PortalUtilizationPage() {
   const { data, isLoading, isError, error, refetch } = usePortalUtilization();
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">My usage</h1>
-        <p className="text-sm text-muted-foreground">
-          How much of each benefit you've used this policy year.
-        </p>
-      </div>
+  if (isLoading) return <LeafSkeleton label="Loading your balances" mounts={2} />;
 
-      {isLoading ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground py-8">
-          <Loader2 className="size-4 animate-spin" /> Loading usage…
-        </div>
-      ) : isError && !isNotFoundError(error) ? (
-        <PortalErrorState onRetry={() => void refetch()} />
-      ) : isError || !data ? (
-        <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          No active coverage found for your account. If you believe this is a
-          mistake, contact your benefits administrator.
-        </div>
-      ) : (
-        <UtilizationView data={data} />
-      )}
-    </div>
-  );
+  if (isError && !isNotFoundError(error)) {
+    return <PortalErrorState onRetry={() => void refetch()} />;
+  }
+
+  if (isError || !data) {
+    return (
+      <Mount label="Nothing to show yet">
+        <p className="text-row text-label">
+          We don't have any benefits recorded against your name for this
+          period, so there's nothing to track yet. Your HR team can check your
+          record.
+        </p>
+      </Mount>
+    );
+  }
+
+  return <UsageLeaf data={data} />;
 }

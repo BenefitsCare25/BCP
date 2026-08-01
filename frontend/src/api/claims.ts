@@ -113,6 +113,8 @@ export interface BrokerClaim {
   /** Remaining amount in the claim's tightest utilization bucket — detail
    *  endpoint only (null = no numeric limit known / list payload). */
   remaining_limit?: number | null;
+  /** Member replies nobody here has opened — on the list AND the detail. */
+  unread_member_messages: number;
 }
 
 export interface BrokerClaimList {
@@ -229,6 +231,75 @@ export function useRerunReview() {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-review"], exact: false });
       void qc.invalidateQueries({ queryKey: ["claim-review", undefined, claimId] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+// ── Claim messages (broker side of the member conversation) ──────────────────
+
+/** Same row the member reads, with two differences the backend fills in:
+ * `author_name` is the REAL author here, and `mine`/`unread` are from the
+ * broker's point of view (`unread` = the member wrote it and nobody here has
+ * opened the thread). Re-deriving either from `author_type` in the UI would
+ * invert it on one surface. */
+export interface ClaimMessage {
+  id: string;
+  claim_id: string;
+  author_type: "system" | "broker" | "member";
+  author_name: string | null;
+  subject: string;
+  body: string;
+  event: string | null;
+  created_at: string;
+  mine: boolean;
+  unread: boolean;
+  claim_type: string | null;
+  claim_status: string | null;
+}
+
+export function useClaimMessages(claimId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-messages", cid, claimId],
+    queryFn: () => api.get<ClaimMessage[]>(`/claims/${claimId}/messages`),
+    enabled: Boolean(claimId),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+export function useSendClaimMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { claimId: string; body: string; subject?: string }) =>
+      api.post<ClaimMessage>(`/claims/${input.claimId}/messages`, {
+        body: input.body,
+        subject: input.subject?.trim() || null,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claim-messages"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Clears the queue's unread badge for one claim. `["claims"]` is invalidated
+ * because the count rides on the LIST row, not just the thread. */
+export function useMarkClaimMessagesRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (claimId: string) =>
+      api.post<{ marked: number }>(`/claims/${claimId}/messages/read`, {}),
+    onSuccess: (out) => {
+      if (out.marked === 0) return;
+      // The thread too, not just the counts: `unread` is a field ON each
+      // message, so without this the rows keep their "new" badges while the
+      // queue behind the sheet has already cleared — the same fact disagreeing
+      // with itself on one screen.
+      void qc.invalidateQueries({ queryKey: ["claim-messages"] });
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
     },
     meta: { localErrorHandling: true },
   });

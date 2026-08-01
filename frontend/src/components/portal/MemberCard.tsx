@@ -1,5 +1,6 @@
-/** Panel e-card renderer — shared by the member portal, the broker "employee
- * view" preview and the config placement editor.
+/** Panel e-card CANVAS — the artwork plus its printed fields, shared by the
+ * member portal (`leaf/CardLeaf.tsx`), the broker "employee view" preview and
+ * the config placement editor.
  *
  * The card is a pure join: the artwork is an <img>, and every printed value is
  * an absolutely-positioned span whose geometry comes from `placements` and
@@ -13,19 +14,20 @@
  * The artwork itself rides an Authorization header, so it can't be loaded with
  * a plain src — each surface injects its own `useArtwork` hook (broker blob vs
  * portal blob), the same data-hook-injection pattern as ClinicLocator.
+ *
+ * Everything member-FACING (which card, whose, what it entitles you to) lives
+ * in `leaf/CardLeaf.tsx`. This file stays world-neutral because the placement
+ * editor renders it inside the broker app.
  */
-import { useState } from "react";
-import { ImageOff } from "lucide-react";
-import type { CardFace, MemberCard, PlacementField } from "@/api/panelCards";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { ImageOff, Loader2 } from "lucide-react";
+import type { ArtworkState, CardFace, PlacementField } from "@/api/panelCards";
 import { cn } from "@/lib/cn";
 
 export type ArtworkHook = (
   cardId: string | null,
   face: CardFace,
   enabled?: boolean,
-) => string | null;
+) => ArtworkState;
 
 const DEFAULT_ASPECT = 1012 / 638; // ISO/IEC 7810 ID-1 (a physical card)
 
@@ -52,17 +54,30 @@ function fieldStyle(field: PlacementField): React.CSSProperties {
 export function CardCanvas({
   aspectRatio,
   artworkSrc,
+  artworkStatus = artworkSrc ? "ready" : "absent",
   fields,
   values,
   className,
+  fallback = "No artwork uploaded",
+  errorFallback = "The card design couldn't be loaded just now.",
   children,
 }: {
   aspectRatio: number | null;
   artworkSrc: string | null;
+  /** Defaulted from `artworkSrc` so the placement editor, which hands this a
+   * plain URL, keeps its existing two-state behaviour untouched. */
+  artworkStatus?: ArtworkState["status"];
   fields: PlacementField[];
   values: Record<string, string>;
   className?: string;
-  /** Editor overlays (drag handles, guides). */
+  /** What stands in for missing artwork. The broker is being told a file is
+   * missing; a member needs to know their details still work at a clinic —
+   * same absence, two different facts, so the caller supplies the words. */
+  fallback?: string;
+  /** Shown when the fetch FAILED, which is not the same fact as "no artwork
+   * exists" and must not be reported as one — the design is there, this
+   * screen just doesn't have it yet, and retrying may fix it. */
+  errorFallback?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -83,154 +98,46 @@ export function CardCanvas({
           className="absolute inset-0 size-full object-cover"
           draggable={false}
         />
+      ) : artworkStatus === "loading" ? (
+        // A spinner, not the "no artwork" message: every card shows this state
+        // for the length of a blob fetch, and telling the member their insurer
+        // supplied no design while it is still downloading is a wrong answer
+        // that happens to be temporary.
+        <div
+          className="absolute inset-0 flex items-center justify-center text-muted-foreground"
+          role="status"
+          aria-label="Loading the card design"
+        >
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+        </div>
       ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-          <ImageOff className="size-6" />
-          <span className="text-xs">No artwork uploaded</span>
-        </div>
-      )}
-      {fields.map((field, index) => {
-        const text = values[field.key] ?? "";
-        if (!text) return null;
-        return (
-          <span
-            key={`${field.key}-${index}`}
-            style={fieldStyle(field)}
-            className="pointer-events-none select-none"
-          >
-            {text}
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-muted-foreground">
+          <ImageOff className="size-6" aria-hidden />
+          <span className="text-xs leading-5">
+            {artworkStatus === "error" ? errorFallback : fallback}
           </span>
-        );
-      })}
+        </div>
+      )}
+      {/* Placed fields need the artwork they were placed against. Without it
+          they render at coordinates that mean nothing and land on top of the
+          stand-in message — and on the member surface the same values are
+          already printed legibly beneath the card. The placement editor draws
+          its own handles and passes `fields={[]}`, so it is unaffected. */}
+      {artworkSrc &&
+        fields.map((field, index) => {
+          const text = values[field.key] ?? "";
+          if (!text) return null;
+          return (
+            <span
+              key={`${field.key}-${index}`}
+              style={fieldStyle(field)}
+              className="pointer-events-none select-none"
+            >
+              {text}
+            </span>
+          );
+        })}
       {children}
-    </div>
-  );
-}
-
-/** One member card with a front/back flip and the details that don't fit on
- * the artwork (covered services, remarks, special conditions). */
-export function MemberCardView({
-  card,
-  useArtwork,
-  className,
-}: {
-  card: MemberCard;
-  useArtwork: ArtworkHook;
-  className?: string;
-}) {
-  const [face, setFace] = useState<CardFace>("front");
-  const showingBack = face === "back" && card.has_back;
-  // Both faces are fetched so flipping doesn't flash; the back only when it exists.
-  const front = useArtwork(card.card_id, "front");
-  const back = useArtwork(card.card_id, "back", card.has_back);
-
-  const fields = card.placements.fields.filter(
-    (f) => f.face === (showingBack ? "back" : "front"),
-  );
-  const remarkEntries = Object.entries(card.remarks);
-
-  return (
-    <div className={cn("space-y-3", className)}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-foreground">
-            {card.product_name}
-          </p>
-          <p className="truncate text-xs text-muted-foreground">
-            {card.card_name}
-            {card.holder_type === "dependant" && card.holder_name
-              ? ` · ${card.holder_name}`
-              : ""}
-          </p>
-        </div>
-        {card.has_back && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setFace(showingBack ? "front" : "back")}
-          >
-            {showingBack ? "Show front" : "Show back"}
-          </Button>
-        )}
-      </div>
-
-      <CardCanvas
-        aspectRatio={card.aspect_ratio}
-        artworkSrc={showingBack ? back : front}
-        fields={fields}
-        values={card.values}
-      />
-
-      {card.services.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {card.services.map((service) => (
-            <Badge key={service.key} variant="outline">
-              {service.label}
-            </Badge>
-          ))}
-        </div>
-      )}
-
-      {(remarkEntries.length > 0 || card.special_conditions) && (
-        <div className="space-y-1 rounded-lg border border-border bg-card p-3">
-          {remarkEntries.map(([key, value]) => (
-            <p key={key} className="text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">
-                {REMARK_LABELS[key] ?? key}:
-              </span>{" "}
-              {value}
-            </p>
-          ))}
-          {card.special_conditions && (
-            <p className="text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">
-                Special conditions:
-              </span>{" "}
-              {card.special_conditions}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Mirrors CARD_REMARK_LABELS in models/panel_card.py.
-const REMARK_LABELS: Record<string, string> = {
-  gp: "GP",
-  ae: "A&E",
-  restructured_sp: "Restructured SP",
-  private_sp: "Private SP",
-  general: "General",
-};
-
-/** The card list shared by /portal/card and the employee-view preview tab. */
-export function MemberCardList({
-  cards,
-  useArtwork,
-  emptyMessage = "No e-cards have been issued for your plan yet.",
-}: {
-  cards: MemberCard[];
-  useArtwork: ArtworkHook;
-  emptyMessage?: string;
-}) {
-  if (cards.length === 0) {
-    return (
-      <div className="rounded-lg border border-dashed border-border p-8 text-center">
-        <ImageOff className="mx-auto size-6 text-muted-foreground" />
-        <p className="mt-2 text-sm text-muted-foreground">{emptyMessage}</p>
-      </div>
-    );
-  }
-  return (
-    <div className="grid gap-6 sm:grid-cols-2">
-      {cards.map((card) => (
-        <MemberCardView
-          key={`${card.assignment_id}-${card.holder_id}`}
-          card={card}
-          useArtwork={useArtwork}
-        />
-      ))}
     </div>
   );
 }

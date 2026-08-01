@@ -69,9 +69,9 @@ export const COMPANY_NAV: NavGroup[] = [
     key: "pa",
     items: [
       {
-        label: "Membership",
+        label: "Member Listing",
         to: "/operations/roster",
-        title: "Membership / Listing Upload",
+        title: "Member Listing / Upload",
         icon: Upload,
       },
       {

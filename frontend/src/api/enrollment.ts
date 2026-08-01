@@ -251,6 +251,10 @@ export interface DependantPricing {
 export interface ProductTierSet {
   product_id: string;
   product_code: string;
+  /** The product's own name. Served (not looked up client-side) so a member
+   * surface can lead with words instead of a code — the portal's gloss map
+   * only knows the codes someone has written a line for. */
+  product_name: string | null;
   employee_participation: string | null;
   dependant_participation: string | null;
   baseline_tier_category_id: string;

@@ -323,26 +323,43 @@ function useCardInvalidator() {
 /** Artwork rides an Authorization header, so it can't be loaded with a plain
  * <img src>. Fetch the blob once and hand the renderer an object URL, revoking
  * it on unmount/refetch so blobs don't accumulate. */
+/** What the artwork fetch currently knows.
+ *
+ * **The three failure-ish states must stay distinguishable.** This used to
+ * return a bare `string | null`, so "still fetching", "the blob 5xx'd" and
+ * "there is no artwork for this face" were the same value — and the card
+ * renderer, which drops every placed field when it has no artwork, therefore
+ * announced "your insurer hasn't supplied the card design yet" during every
+ * normal fetch and permanently after any swallowed error. */
+export type ArtworkState = {
+  url: string | null;
+  status: "absent" | "loading" | "ready" | "error";
+};
+
 export function useArtworkObjectUrl(
   fetchBlob: (path: string) => Promise<Blob>,
   path: string | null,
-): string | null {
-  const [url, setUrl] = useState<string | null>(null);
+): ArtworkState {
+  const [state, setState] = useState<ArtworkState>(() => ({
+    url: null,
+    status: path ? "loading" : "absent",
+  }));
   useEffect(() => {
     if (!path) {
-      setUrl(null);
+      setState({ url: null, status: "absent" });
       return;
     }
     let objectUrl: string | null = null;
     let cancelled = false;
+    setState({ url: null, status: "loading" });
     void fetchBlob(path)
       .then((blob) => {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
+        setState({ url: objectUrl, status: "ready" });
       })
       .catch(() => {
-        if (!cancelled) setUrl(null);
+        if (!cancelled) setState({ url: null, status: "error" });
       });
     return () => {
       cancelled = true;
@@ -351,7 +368,7 @@ export function useArtworkObjectUrl(
     // fetchBlob is a stable module-level function on both surfaces.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
-  return url;
+  return state;
 }
 
 /** Broker-side artwork (config editor + employee view). */
@@ -359,7 +376,7 @@ export function useBrokerCardArtwork(
   cardId: string | null,
   face: CardFace,
   enabled = true,
-): string | null {
+): ArtworkState {
   return useArtworkObjectUrl(
     (path) => api.download(path),
     cardId && enabled ? `/panel-cards/${cardId}/artwork/${face}` : null,

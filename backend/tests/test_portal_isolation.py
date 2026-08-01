@@ -202,6 +202,46 @@ def test_clinics_scoped_to_own_active_year(anon: TestClient):
     assert res.json()["total"] == 0
 
 
+def test_messages_scoped_to_own_employee(anon: TestClient):
+    """The inbox resolves through the member's own employee row and never
+    accepts a client/employee id. A member of a client with no active year gets
+    the same 404 every other data endpoint gives — not an empty inbox, which
+    would read as "you have no messages"."""
+    res = anon.get("/api/v1/portal/messages", headers=_auth(ACC_ALICE))
+    assert res.status_code == 200
+    assert res.json()["items"] == [] and res.json()["unread"] == 0
+
+    res = anon.get("/api/v1/portal/messages", headers=_auth(ACC_BOB_B, CLIENT_B_ID))
+    assert res.status_code == 404
+
+
+def test_claim_thread_of_an_unknown_claim_404(anon: TestClient):
+    """A claim id the member doesn't own 404s on read AND on write — the same
+    not-403 convention as the rest of the portal, so the thread endpoints can't
+    be used to probe which claim ids exist."""
+    ghost = "00000000-0000-0000-0000-0000000000ff"
+    assert (
+        anon.get(
+            f"/api/v1/portal/claims/{ghost}/messages", headers=_auth(ACC_ALICE)
+        ).status_code
+        == 404
+    )
+    assert (
+        anon.post(
+            f"/api/v1/portal/claims/{ghost}/messages",
+            json={"body": "hello"},
+            headers=_auth(ACC_ALICE),
+        ).status_code
+        == 404
+    )
+    assert (
+        anon.post(
+            f"/api/v1/portal/claims/{ghost}/messages/read", headers=_auth(ACC_ALICE)
+        ).status_code
+        == 404
+    )
+
+
 def test_token_client_mismatch_401(anon: TestClient):
     """A token minted for another client than the account's is refused —
     same staff_id in two clients must never cross."""

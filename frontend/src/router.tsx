@@ -83,6 +83,10 @@ const PortalSetPasswordPage = lazyRouteComponent(
   () => import("@/routes/portal/set-password"),
   "PortalSetPasswordPage",
 );
+const PortalHomePage = lazyRouteComponent(
+  () => import("@/routes/portal/home"),
+  "PortalHomePage",
+);
 const PortalCoveragePage = lazyRouteComponent(
   () => import("@/routes/portal/coverage"),
   "PortalCoveragePage",
@@ -98,6 +102,10 @@ const PortalClaimsPage = lazyRouteComponent(
 const PortalClinicsPage = lazyRouteComponent(
   () => import("@/routes/portal/clinics"),
   "PortalClinicsPage",
+);
+const PortalMessagesPage = lazyRouteComponent(
+  () => import("@/routes/portal/messages"),
+  "PortalMessagesPage",
 );
 const PortalCardPage = lazyRouteComponent(
   () => import("@/routes/portal/card"),
@@ -264,13 +272,13 @@ const portalLayoutRoute = createRoute({
   component: PortalShell,
 });
 
+// `/portal` is now the home mosaic rather than a redirect to Coverage. The
+// mosaic answers all four questions members arrive with; Coverage's three tabs
+// are reached from the tiles that summarise them.
 const portalIndexRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
   path: "/portal",
-  beforeLoad: () => {
-    throw redirect({ to: "/portal/coverage" });
-  },
-  component: () => null,
+  component: PortalHomePage,
 });
 
 const portalCoverageRoute = createRoute({
@@ -329,6 +337,15 @@ const portalCardRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
   path: "/portal/card",
   component: PortalCardPage,
+});
+
+// Deliberately NOT a nav destination. The home's Messages tile is the way in
+// (and its unread badge is on Home in the dock) — a seventh pill would not fit
+// the one-row desktop bar, and the phone dock is settled at five.
+const portalMessagesRoute = createRoute({
+  getParentRoute: () => portalLayoutRoute,
+  path: "/portal/messages",
+  component: PortalMessagesPage,
 });
 
 const portalSecurityRoute = createRoute({
@@ -657,6 +674,7 @@ const routeTree = rootRoute.addChildren([
     portalClaimsRoute,
     portalClinicsRoute,
     portalCardRoute,
+    portalMessagesRoute,
     portalSecurityRoute,
     portalNewClaimRoute,
     portalClaimDetailRoute,

@@ -1115,3 +1115,187 @@ def test_broker_document_download(anon: TestClient, broker: TestClient):
 def test_upload_after_submit_409(anon: TestClient):
     claim_id = _submitted_claim(anon, b" locked-1")
     assert _upload(anon, claim_id, PDF + b" locked-1b").status_code == 409
+
+
+# ── Claim messages (the member <-> broker thread) ────────────────────────────
+
+
+def _thread(anon: TestClient, claim_id: str, account: str = ACC_A) -> list[dict]:
+    res = anon.get(
+        f"/api/v1/portal/claims/{claim_id}/messages", headers=_auth(account)
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _inbox(anon: TestClient, account: str = ACC_A) -> dict:
+    res = anon.get("/api/v1/portal/messages", headers=_auth(account))
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_submit_posts_the_acknowledgement(anon: TestClient):
+    claim_id = _submitted_claim(anon, b" msg-ack")
+
+    thread = _thread(anon, claim_id)
+    assert [m["event"] for m in thread] == ["submitted"]
+    assert thread[0]["subject"] == "We have your claim"
+    assert thread[0]["author_type"] == "system"
+    assert thread[0]["unread"] is True
+    assert thread[0]["mine"] is False
+
+    # The inbox carries the claim context the thread doesn't need.
+    inbox = _inbox(anon)
+    assert inbox["unread"] >= 1
+    # The inbox row carries the claim it belongs to, which is what makes the
+    # home tile able to send the member to that claim rather than to a longer
+    # list of the same rows.
+    mine = next(m for m in inbox["items"] if m["claim_id"] == claim_id)
+    assert mine["claim_type"] == "Group Hospital & Surgical"
+
+
+def test_decision_posts_a_notice_carrying_the_note(
+    anon: TestClient, broker: TestClient
+):
+    claim_id = _submitted_claim(anon, b" msg-decision")
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve", "approved_amount": 60.0, "note": "Paid in full."},
+    )
+    assert res.status_code == 200, res.text
+
+    thread = _thread(anon, claim_id)
+    assert [m["event"] for m in thread] == ["submitted", "approved"]
+    notice = thread[-1]
+    assert notice["subject"] == "Your claim is approved"
+    # Written from the claim as decided — the approved figure, not the claimed
+    # one — in the member's own currency convention (S$, never "SGD"), and
+    # carrying the broker's note verbatim.
+    assert "S$60" in notice["body"]
+    assert "Paid in full." in notice["body"]
+
+
+def test_member_reply_reaches_the_broker_queue(anon: TestClient, broker: TestClient):
+    claim_id = _submitted_claim(anon, b" msg-reply")
+
+    res = anon.post(
+        f"/api/v1/portal/claims/{claim_id}/messages",
+        json={"body": "  I've attached the itemised bill.  "},
+        headers=_auth(ACC_A),
+    )
+    assert res.status_code == 201, res.text
+    posted = res.json()
+    assert posted["mine"] is True
+    assert posted["body"] == "I've attached the itemised bill."  # trimmed on write
+
+    # The queue surfaces it without opening the sheet.
+    listing = broker.get(f"/api/v1/claims?policy_year_id={PY}").json()
+    row = next(c for c in listing["items"] if c["id"] == claim_id)
+    assert row["unread_member_messages"] == 1
+
+    broker_thread = broker.get(f"/api/v1/claims/{claim_id}/messages").json()
+    reply = broker_thread[-1]
+    assert reply["author_type"] == "member"
+    assert reply["unread"] is True and reply["mine"] is False
+
+    assert broker.post(f"/api/v1/claims/{claim_id}/messages/read").json()["marked"] == 1
+    listing = broker.get(f"/api/v1/claims?policy_year_id={PY}").json()
+    row = next(c for c in listing["items"] if c["id"] == claim_id)
+    assert row["unread_member_messages"] == 0
+
+
+def test_member_never_sees_which_broker_wrote(anon: TestClient, broker: TestClient):
+    """The trail keeps the real author; the member reads a team. A router that
+    serialized the model directly would leak the staff name here."""
+    claim_id = _submitted_claim(anon, b" msg-anon")
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/messages",
+        json={"body": "We're waiting on the insurer."},
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["author_name"] == "Demo Broker Admin"
+    assert res.json()["subject"] == "A message about your claim"
+
+    member_view = _thread(anon, claim_id)[-1]
+    assert member_view["author_name"] == "Claims team"
+    assert "Demo Broker Admin" not in member_view["body"]
+
+
+def test_member_read_receipt_clears_their_own_count(anon: TestClient):
+    claim_id = _submitted_claim(anon, b" msg-read")
+    before = _inbox(anon)["unread"]
+    assert before >= 1
+
+    res = anon.post(
+        f"/api/v1/portal/claims/{claim_id}/messages/read", headers=_auth(ACC_A)
+    )
+    assert res.status_code == 200 and res.json()["marked"] >= 1
+    assert _inbox(anon)["unread"] == before - res.json()["marked"]
+    assert all(not m["unread"] for m in _thread(anon, claim_id))
+
+
+def test_messages_are_member_scoped(anon: TestClient):
+    """Carol may not read or write on Alice's claim — 404, not 403, so the
+    portal can't be used to discover whose claims exist."""
+    claim_id = _submitted_claim(anon, b" msg-isolation")
+    assert (
+        anon.get(
+            f"/api/v1/portal/claims/{claim_id}/messages", headers=_auth(ACC_C)
+        ).status_code
+        == 404
+    )
+    assert (
+        anon.post(
+            f"/api/v1/portal/claims/{claim_id}/messages",
+            json={"body": "hello"},
+            headers=_auth(ACC_C),
+        ).status_code
+        == 404
+    )
+    assert all(m["claim_id"] != claim_id for m in _inbox(anon, ACC_C)["items"])
+
+
+def test_reply_on_a_draft_409_and_blank_body_422(anon: TestClient):
+    draft = _draft(anon)
+    res = anon.post(
+        f"/api/v1/portal/claims/{draft['id']}/messages",
+        json={"body": "anyone there?"},
+        headers=_auth(ACC_A),
+    )
+    assert res.status_code == 409
+
+    claim_id = _submitted_claim(anon, b" msg-blank")
+    assert (
+        anon.post(
+            f"/api/v1/portal/claims/{claim_id}/messages",
+            json={"body": "   "},
+            headers=_auth(ACC_A),
+        ).status_code
+        == 422
+    )
+
+
+def test_preview_messages_match_the_member(anon: TestClient, broker: TestClient):
+    claim_id = _submitted_claim(anon, b" msg-preview")
+    broker.post(
+        f"/api/v1/claims/{claim_id}/messages", json={"body": "Preview parity."}
+    )
+
+    member_thread = _thread(anon, claim_id)
+    preview = broker.get(
+        f"/api/v1/employees/{EMP_A}/portal-preview/claims/{claim_id}/messages"
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json() == member_thread
+
+    inbox = broker.get(f"/api/v1/employees/{EMP_A}/portal-preview/messages")
+    assert inbox.status_code == 200
+    assert {m["id"] for m in member_thread} <= {m["id"] for m in inbox.json()["items"]}
+
+    # Another member's claim is not reachable through this employee's preview.
+    assert (
+        broker.get(
+            f"/api/v1/employees/{EMP_C}/portal-preview/claims/{claim_id}/messages"
+        ).status_code
+        == 404
+    )

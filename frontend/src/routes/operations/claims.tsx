@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ClaimGracePeriodField } from "@/components/claims/ClaimGracePeriodField";
+import { ClaimMessages } from "@/components/claims/ClaimMessages";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
 import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
 import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
@@ -68,7 +69,7 @@ const STATUS_FILTERS = [
 ] as const;
 
 // Brokers see the real machine statuses (members get the sanitized labels in
-// components/portal/ClaimStatusBadge).
+// components/portal/leaf/Strike).
 const BROKER_STATUS: Record<
   string,
   { label: string; variant: "good" | "warn" | "error" | "outline" | "info" | "default" }
@@ -315,6 +316,14 @@ function QueueTab() {
                     >
                       <TableCell className="font-medium">
                         {c.employee_name ?? "—"}
+                        {/* A member waiting on a reply is a reason to open this
+                            row, so it has to be visible in the queue rather
+                            than only inside the sheet. */}
+                        {c.unread_member_messages > 0 && (
+                          <Badge variant="warn" className="ml-2 align-middle">
+                            {c.unread_member_messages} new
+                          </Badge>
+                        )}
                         <div className="text-2xs text-muted-foreground font-normal">
                           {c.staff_id}
                         </div>
@@ -537,6 +546,13 @@ function QueueTab() {
                       ))}
                     </ul>
                   )}
+                </DetailSection>
+
+                {/* Above the AI review, deliberately: a member waiting on an
+                    answer is a person, and burying their question under the
+                    fraud evidence is how it goes unanswered for a week. */}
+                <DetailSection title="Messages">
+                  <ClaimMessages claimId={selected.id} />
                 </DetailSection>
 
                 <DetailSection title="AI review">

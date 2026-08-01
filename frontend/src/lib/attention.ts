@@ -1,4 +1,5 @@
 import type { CompanySummary } from "@/api/hooks";
+import { parseServerDate } from "@/lib/format";
 
 // Shared "needs attention" derivation for the firm Home and company dashboard,
 // so the two surfaces can't disagree about what counts as outstanding work.
@@ -21,13 +22,11 @@ export type AttentionItem = {
 
 const plural = (n: number) => (n === 1 ? "" : "s");
 
-/** Parse a server timestamp. The backend emits UTC, but on SQLite the value is
- * serialized without an offset — treat an offset-less string as UTC (append
- * `Z`) so it isn't read as browser-local time and skew the day count. */
-export function parseServerDate(iso: string): Date {
-  const hasTz = /([zZ])|([+-]\d{2}:?\d{2})$/.test(iso);
-  return new Date(hasTz ? iso : `${iso}Z`);
-}
+// Moved to `lib/format.ts` — it describes the WIRE FORMAT, not this feature,
+// and the claim message thread was the second surface to be bitten by parsing
+// an offset-less UTC string as local. Re-exported so existing importers keep
+// working and there stays exactly one definition.
+export { parseServerDate } from "@/lib/format";
 
 /** Whole CALENDAR days from today until a timestamp, in the viewer's timezone:
  * 0 = closes at any time today, 1 = tomorrow, negative once past. Calendar-based

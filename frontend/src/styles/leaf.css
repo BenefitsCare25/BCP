@@ -1,0 +1,559 @@
+/* ─── Daylight — the member portal's visual world ──────────────────────────
+   Scope: `/portal/*` only. The broker app keeps its own token set in
+   styles.css; everything here is additive and is only *applied* under the
+   `.leaf` root that PortalShell renders.
+
+   The world: the portal is a record ISSUED to one person. The ground is a
+   light warm surface with colour moving across it, and every unit of content
+   is a PANE OF GLASS laid on that ground — softly rounded, thin enough that
+   the colour beneath shows through, lifted by a shadow rather than outlined
+   by an ink rule. **Depth is lit, not printed.** That single sentence
+   reverses the previous system, which was printed paper: flat, rectilinear,
+   hairline-framed.
+
+   The device is still the MOUNT: one framed unit carrying its own label,
+   showing its state by how full it is — where fullness always means
+   UTILISATION, never absence of entitlement. See DESIGN.md; that is the
+   load-bearing rule.
+
+   NAMING: `.leaf`, this filename and `components/portal/leaf/` are a
+   TECHNICAL NAMESPACE kept so the scoping mechanism and its behavioural twin
+   (`lib/leaf-scope.ts`) keep working. They are not the name of the world.
+
+   Every ratio in the comments below was COMPUTED against the *composited*
+   glass at its hardest case — and the hardest case is a pane UNDER THE POINTER
+   over the hottest part of the ground, `#F7E1E0`, because hover thins the glass
+   rather than brightening it. A translucent surface has no single colour, and
+   measuring against the nominal one is how a design like this ships an
+   unreadable tier; measuring against the resting one and forgetting that hover
+   moves it is the same mistake one step later. The bare ground has its own,
+   stricter hardest case (`#F1CDCC`) for the things that stand on it with no
+   pane beneath — see the ground blooms below. */
+
+@import "@fontsource-variable/archivo/wght.css";
+
+@theme {
+  /* ── Ground and glass ──────────────────────────────────────────────────
+     Ground and glass sit only 1.06:1 apart, so separation comes from radius,
+     the shadow and the lit top edge — never from a fill step. */
+  --color-ground: #fafaf9;
+
+  /* The soft neutral fill: the active nav pill, the current tab, a selected
+     chip, the benefit-year chip, an icon's hover. **Not the same thing as the
+     ground, and the split is load-bearing** — these borrowed the ground's value
+     while the ground was a warm grey, which worked right up until the ground
+     moved to near-white. Pointing them at #FAFAF9 would leave the active
+     navigation item at 1.02:1 on the white bar: the current page would simply
+     stop being marked.
+
+     It is also DARKER than the value the ground used to carry, and that is the
+     second half of the same problem. Inheriting #F4F3F0 kept these legible on
+     the white bar at 1.11:1 and nothing else — on the near-white ground they
+     landed at 1.06:1, so the benefit-year chip read as a faint smudge rather
+     than as an object. A selected fill has to be a step against every surface
+     it can sit on, and there are now four: the bar (1.25:1), a pane (1.23:1),
+     the ground (1.19:1) and a bloomed pane (1.16:1). Warm-olive rather than
+     grey, because the neutrals here descend from the logo's own grey #BCBBAD. */
+  --color-shade: #e9e6df;
+
+  /* Thin on purpose. Raising the opacity makes it paint, not glass: the
+     point is that the ground's colour reads THROUGH it. A pane only reads as
+     glass if the thing behind it is worth frosting — the first revision paired
+     thin glass with a nearly flat ground, and 60% white over #F4F3F0
+     composites to #F9F8F7, which is indistinguishable from paint. Strengthening
+     the blooms below is what makes this number mean anything.
+
+     **HOVER CLEARS THE PANE — it does not brighten it, and the direction is the
+     whole gesture.** Under the pointer the glass thins from 62% to 40% and the
+     ground's colour comes UP through it; the pane does not whiten and float off
+     the page. Anything else is a fill changing shade, which is what a button
+     does. Glass responds by becoming more glass.
+
+     Both values are free to be anything, and that is not luck: the ground below
+     is constrained so that its OWN hardest point already clears every ratio in
+     this file (see there). Compositing white over it can only raise luminance,
+     so no glass opacity — resting, hover, or any future third state — can push
+     a pane below the envelope. Contrast is held by the ground, which frees the
+     glass to be a purely visual decision. */
+  --color-glass: rgb(255 255 255 / 0.62);
+  --color-glass-hover: rgb(255 255 255 / 0.4);
+  /* A pane is lit along its top edge. With only 1.06:1 of fill contrast to
+     work with, this highlight is structural, not ornament. */
+  --color-glass-edge: rgb(255 255 255 / 0.92);
+  --blur-glass: 26px;
+
+  /* Solid, so the mark has an uncomplicated field. */
+  --color-bar: #ffffff;
+
+  /* Decorative boundaries — bar borders and in-mount rules. Exempt from
+     1.4.11, and NEVER used for text. */
+  --color-hairline: #dfdcd3;
+  --color-track: #dedad0;
+
+  /* ── Inks ──────────────────────────────────────────────────────────────
+     Record: body copy and every figure. 14.52:1 on the hardest glass.
+     Label:  printed labels and glosses. 5.68:1 on the hardest glass, 4.86:1
+             on the hardest bare ground — this is the LIGHTEST text tier in
+             the portal. There is nothing below it, and an opacity modifier on
+             it is a contrast bug, not a shade. */
+  --color-record: #17160f;
+  --color-label: #5c584d;
+
+  /* Form-control and selector edges, which ARE covered by 1.4.11 and need
+     3:1 against the adjacent surface. 3.56:1 on the hardest glass, 3.04:1 on
+     the hardest bare ground, 4.45:1 on the white bar. **The bare-ground figure
+     is the binding one** — the benefit-year control sits in the heading row
+     with no pane under it, so the ground blooms are sized against this number
+     rather than against the glass. The broker's --color-input is tuned for
+     #faf7f7 and falls under 3:1 here — the same trap that token pair already
+     documents, reappearing because the ground changed. */
+  --color-leaf-input: #7d776b;
+
+  /* ── Brand ─────────────────────────────────────────────────────────────
+     Sampled directly from the logo mark, so the button and the mark are the
+     same red. It appears at most TWICE on a screen — the mark, and the one
+     primary action (The Twice Rule). It never tints a surface, a status or a
+     chart.
+
+     TWO TOKENS, SPLIT BY ROLE, and the split is load-bearing:
+       brand      — FILLS only. White on it measures 5.36:1.
+       brand-ink  — TEXT only. The fill red measures 4.29:1 on the hardest
+                    glass and misses AA; this is the same red darkened until
+                    it clears (5.30:1).
+     Using the fill value as text is the bug this pair exists to prevent. */
+  --color-brand: #d21b21;
+  --color-brand-ink: #b8161d;
+  --color-brand-foreground: #ffffff;
+
+  /* ── Action ────────────────────────────────────────────────────────────
+     A terracotta, and it is DELIBERATELY NOT THE BRAND. Red is the portal's
+     identity — the mark and the ground it sits on; terracotta is what a member
+     TOUCHES. Splitting them buys back what the Twice Rule was rationing: the
+     brand is now free to appear on the mark and in the ground without a single
+     control competing with it, and no control can ever be mistaken for a
+     rejected-claim verdict, which is the failure mode a red action language
+     always risked.
+
+     Every control takes this colour — buttons, the focus ring, the "See all
+     limits →" tier. A surface with terracotta buttons and a red focus ring
+     reads as a mistake, so there is no partial adoption.
+
+     THE REFERENCE VALUES DO NOT SHIP AS-IS. Sampled from the source design,
+     the pill was fill #C15F3C with #C15F3C text on a 10% wash. White on that
+     fill measures 4.23:1 and the label on the wash 3.60:1 — both under AA at
+     the sizes used here. So the same role split the brand pair already carries
+     is applied: the fill is darkened until white clears (4.75:1), and the ink
+     is darkened further until it clears on the wash over the hottest surface a
+     member can see (4.87:1). They read as the same terracotta.
+
+       action      — FILLS only, and the hover state of an outline pill.
+       action-ink  — TEXT and BORDERS. Never use the fill value as text.
+       action-wash — the resting fill: the fill at 10%, left TRANSLUCENT so it
+                     composites over glass, ground or bar alike rather than
+                     assuming one page colour the way a flat #F4EBE6 would. */
+  --color-action: #b45636;
+  --color-action-ink: #92482d;
+  --color-action-wash: rgb(180 86 54 / 0.1);
+  --color-action-foreground: #ffffff;
+
+  /* ── Strike inks ───────────────────────────────────────────────────────
+     A claim's state is struck onto its mount in its own ink — never coloured
+     text on a coloured wash. Full-strength text inks, measured on the
+     hardest glass.
+
+     "Review" is graphite on purpose: it is the most common state and the
+     quietest ink — a portal where the routine case shouts has no headroom
+     left for the exceptional one.
+
+     "Rejected" is OXBLOOD, deliberately far darker and less saturated than
+     the brand fill, because brand-red and rejected-red now share a hue
+     family. Value separation is half the defence; the other half is
+     treatment — an action is a FILLED PILL, a verdict is STRUCK TEXT, never
+     the reverse. */
+  --color-strike-approved: #1c6b3f; /* 5.21:1 */
+  --color-strike-pending: #8a5a06; /* 4.74:1 */
+
+  /* An UNREAD message's row fill — the pending ink at 8%, and translucent for
+     the same reason `action-wash` is: it composites over glass, ground and bar
+     alike instead of assuming one page colour.
+     Two things it must NOT be. Not `shade`, which already means "selected /
+     hovered" everywhere in this world (nav pill, tab, chip, row hover) — an
+     unread row would then read as the one you are pointing at. And not strong
+     enough to be a highlighter: the text on it is `record` ink, which has to
+     stay at full contrast, so the wash marks the ROW without touching what is
+     written in it. Colour is never the only signal — the row also keeps its
+     bold subject, its dot and an sr-only "(unread)" (WCAG 1.4.1). */
+  --color-unread-wash: rgb(138 90 6 / 0.08);
+  --color-strike-review: #46433d; /* 7.89:1 */
+  --color-strike-rejected: #7e1f1a; /* 8.01:1 */
+
+  /* ── Type ──────────────────────────────────────────────────────────────
+     One family, self-hosted, weight axis only. A workhorse grotesque with an
+     administrative temperament — the register of something issued to you
+     rather than marketed at you. */
+  --font-leaf:
+    "Archivo Variable", "Archivo", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+
+  /* The portal's row/body step. 13px sits between Tailwind's xs (12) and
+     sm (14); it was previously written as `text-[0.8125rem]` at ~90 call
+     sites, which is exactly how a scale drifts a pixel either way. */
+  --text-row: 0.8125rem;
+  --text-row--line-height: 1.25rem;
+
+  --tracking-display: -0.036em;
+  --tracking-title: -0.02em;
+
+  /* ── Shape ─────────────────────────────────────────────────────────────
+     Softly rounded. The previous system's "rectilinear, no pill shapes, no
+     full-round containers" rule described the printed world and is retired. */
+  --radius-tile: 1.375rem; /* 22px */
+  --radius-control: 0.75rem; /* 12px */
+  --radius-pill: 9999px;
+
+  /* ── Depth ─────────────────────────────────────────────────────────────
+     Three elevations, no more: ground (none), mount (resting), floating
+     chrome (bar + dock). Each carries its own inset top highlight, because
+     that highlight is what reads as a lit edge. */
+  --shadow-mount:
+    0 1px 2px rgb(30 28 24 / 0.05), 0 16px 38px -22px rgb(30 28 24 / 0.34),
+    inset 0 1px 0 rgb(255 255 255 / 0.9);
+  --shadow-mount-hover:
+    0 2px 4px rgb(30 28 24 / 0.06), 0 30px 56px -26px rgb(30 28 24 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 1);
+  --shadow-float:
+    0 2px 6px rgb(30 28 24 / 0.08), 0 22px 42px -18px rgb(30 28 24 / 0.44),
+    inset 0 1px 0 rgb(255 255 255 / 1);
+  /* Tinted from the ACTION colour, not the brand — a red glow under a
+     terracotta pill reads as a colour-management bug. */
+  --shadow-cta:
+    0 1px 1px rgb(96 45 26 / 0.26), 0 8px 18px -8px rgb(180 86 54 / 0.5),
+    inset 0 1px 0 rgb(255 255 255 / 0.26);
+  --shadow-cta-hover:
+    0 2px 3px rgb(96 45 26 / 0.28), 0 14px 26px -10px rgb(180 86 54 / 0.56),
+    inset 0 1px 0 rgb(255 255 255 / 0.32);
+
+  /* ── Motion ────────────────────────────────────────────────────────────
+     One easing for the whole world. */
+  --ease-leaf: cubic-bezier(0.16, 1, 0.3, 1);
+
+}
+
+/* ─── Applied world ────────────────────────────────────────────────────────
+   Scoped to `.leaf` so none of this can reach the broker app, which shares
+   the same document in the employee-view preview. */
+
+.leaf {
+  /* ── Re-pointing the shared primitives ────────────────────────────────
+     The portal shares `ui/*` (Button, Badge, Input, Table, Dialog…) with the
+     broker app, and those read broker tokens. Rather than fork every
+     primitive, the tokens themselves are re-pointed for the subtree: a
+     Tailwind v4 utility compiles to `var(--color-…)`, so redefining the
+     variable here reaches every descendant.
+
+     The status remap is the load-bearing one. `Badge` draws coloured text on
+     a coloured wash and all four variants failed WCAG 1.4.3 at their size;
+     pointing them at the strike inks — full-strength by construction — fixes
+     them without forking the component. New portal UI still uses `Strike`;
+     this is the safety net for what already exists, not a licence to keep
+     shipping soft badges. */
+  --color-background: var(--color-ground);
+  --color-foreground: var(--color-record);
+  --color-card: #fbfaf9;
+  --color-card-foreground: var(--color-record);
+  --color-muted: #eae8e2;
+  --color-muted-foreground: var(--color-label);
+  --color-subtle: var(--color-label);
+  --color-border: var(--color-hairline);
+  --color-border-strong: var(--color-hairline);
+  --color-input: var(--color-leaf-input);
+
+  /* Shared primitives (Button, Select, Dialog…) resolve `primary` and `ring`
+     for anything interactive, so they point at the ACTION colour, not the
+     brand. A shared Button that arrived terracotta beside a red focus ring —
+     or vice versa — is the visible half of forgetting one of these. */
+  --color-primary: var(--color-action);
+  --color-primary-foreground: var(--color-action-foreground);
+  --color-ring: var(--color-action);
+  --color-accent: #eae8e2;
+  --color-accent-foreground: var(--color-action-ink);
+  --color-secondary: #eae8e2;
+  --color-secondary-foreground: var(--color-record);
+
+  --color-good: var(--color-strike-approved);
+  --color-warn: var(--color-strike-pending);
+  --color-error: var(--color-strike-rejected);
+  --color-info: var(--color-strike-review);
+
+  --font-sans: var(--font-leaf);
+  /* The shared help panel is a control on this surface, so it takes the
+     control radius rather than the broker's. */
+  --radius-hint: var(--radius-control);
+
+  background: var(--color-ground);
+  color: var(--color-record);
+  font-family: var(--font-leaf);
+  /* Tabular lining figures everywhere a number appears, so any two figures a
+     member might compare line up in their columns (The Tabular-Figure Rule).
+     Set on the root rather than per component: a figure that opts out is a
+     bug, and opting IN per site guarantees some site forgets. */
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings:
+    "tnum" 1,
+    "lnum" 1;
+}
+
+/* ─── The ground blooms ────────────────────────────────────────────────────
+   THE MECHANISM, NOT DECORATION. Over a flat ground, translucent white
+   renders as nothing more than a paler flat colour — these very large washes
+   are what the glass has to frost. Remove them and the whole material fails
+   to read; that is precisely what the first revision of this design got wrong,
+   and the second revision got it wrong a subtler way: the blooms were there
+   but capped so low (9–13%) that the composited pane still landed on #F9F8F7.
+   A member reading the portal saw opaque white cards. **A bloom nobody can see
+   is the same as no bloom.**
+
+   THE FAMILY IS THE BRAND'S. Six washes, all in the red family bar one: rose
+   top-left and upper-right, brand red through the middle, deep brand mid-right,
+   blush along the bottom, and the logo grey lower-left as the neutral anchor
+   that keeps the field from reading as a single flat pink. (The earlier cool
+   blue-grey is retired — it was the only cool note on the surface and it fought
+   the mark.)
+
+   THE CEILING IS COMPUTED, AND IT IS SET BY THE BARE GROUND, NOT BY THE GLASS.
+   The tempting way to size these is against the composited pane, since that is
+   where the body copy sits. It is the wrong constraint, and it fails silently:
+   things stand on the ground with NO pane under them. The benefit-year control
+   in the heading row is a form control, so its edge owes 3:1 against whatever
+   is beside it (WCAG 1.4.11), and any Label-ink text placed on the ground owes
+   4.5:1. Sized against the glass, blooms that measured perfectly safe on a
+   mount put that control's edge at 2.71:1.
+
+   So they are sized so the WORST POINT OF THE GROUND ITSELF clears both. Swept
+   across 380/768/1024/1270/1600px and page heights from one screenful to nine,
+   the darkest ground inside the content column is **#F8E6E5** — Control Edge
+   3.68:1, Label ink 5.87:1, Record ink 15.0:1. Every pane is lighter than that
+   by construction (white over it can only raise luminance), so the whole
+   surface is safe at ANY glass opacity, which is what lets hover thin the glass
+   freely. **Bloom 1 is a rose, not the brand fill, for exactly this reason**:
+   red is dark, and the brand value at a visible alpha spends the entire
+   luminance budget before it is visible enough to frost.
+
+   HOW LOUD. These sit at roughly a third of their first tuning, and both the
+   alphas and the RADII came down. Scaling alpha alone would have faded the
+   corners along with everything else; pulling the radii in instead leaves the
+   middle of the page as clean `#FAFAF9` and keeps real colour where the blooms
+   are concentrated. At the hottest point the ground is #F8E6E5 and the pane
+   over it #FCF5F5 — the pane still reads as a lighter thing laid ON something,
+   rather than as a white box on a white page.
+
+   Raising any alpha here without re-running that sweep is how this surface
+   ships an unreadable tier.
+
+   TWO SETS, AND THE SPLIT IS THE POINT. `/portal/coverage` runs to nine
+   screenfuls; a bloom whose vertical radius is a PERCENTAGE of that is 3,000px
+   tall, so its falloff disappears and the first screen arrives as one flat
+   sheet of pink — colour everywhere is the same as colour nowhere. A bloom
+   sized in `vh` instead has real falloff, but it exhausts itself in the first
+   screenful and leaves every mount below it back on flat ground, which is the
+   defect this whole block exists to fix.
+
+   So: blooms 1–2 are VIEWPORT-scaled and anchored to the top, carrying the
+   concentration a member meets on arrival; blooms 3–6 are DOCUMENT-scaled and
+   quiet, carrying enough colour down the rest of the page that the glass keeps
+   something to frost. Horizontal radii stay percentages in both sets — width is
+   bounded, so it needs no such trick. */
+.leaf-ground {
+  position: relative;
+}
+.leaf-ground::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    /* 1 — rose, top-left. The strongest wash, and the one behind the first
+       mount on every page. Its centre is off-canvas so the top edge arrives
+       already falling off rather than as a hot spot under the bar. */
+    radial-gradient(
+      52% 62vh at -8% -10vh,
+      rgb(232 88 92 / 0.17) 0%,
+      rgb(232 88 92 / 0) 100%
+    ),
+    /* 2 — a lighter rose, upper-right, reaching lower than 1 so the two do not
+       resolve into a single band across the top. */
+    radial-gradient(
+      46% 66vh at 108% 2vh,
+      rgb(238 132 130 / 0.11) 0%,
+      rgb(238 132 130 / 0) 100%
+    ),
+    /* 3 — brand red, mid-left, document-scaled and quiet. The handover: on a
+       nine-screen page blooms 1–2 are spent by the second screenful and 5–6
+       have not arrived yet, so without this the middle third of the longest
+       page in the portal falls back to bare ground and its mounts go back to
+       reading as white boxes. */
+    radial-gradient(
+      46% 38% at -8% 44%,
+      rgb(210 27 33 / 0.05) 0%,
+      rgb(210 27 33 / 0) 100%
+    ),
+    /* 4 — deep brand, mid-right: the depth accent that stops the field
+       reading as one even gradient corner to corner. */
+    radial-gradient(
+      44% 34% at 96% 56%,
+      rgb(186 30 46 / 0.05) 0%,
+      rgb(186 30 46 / 0) 100%
+    ),
+    /* 5 — blush, bottom-centre. */
+    radial-gradient(
+      74% 44% at 46% 106%,
+      rgb(238 138 132 / 0.07) 0%,
+      rgb(238 138 132 / 0) 100%
+    ),
+    /* 6 — the logo grey, lower-left. The neutral anchor: without it the
+       lower half of a long page drifts to uniform pink. */
+    radial-gradient(
+      58% 42% at 0% 90%,
+      rgb(188 187 173 / 0.12) 0%,
+      rgb(188 187 173 / 0) 100%
+    );
+}
+.leaf-ground > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── The specular bloom ───────────────────────────────────────────────────
+   The lit top face of a pane. `--shadow-mount` already draws a 1px inset rim
+   along the very edge; this is the soft fall of light BELOW that rim, and the
+   pair together is what separates a sheet of glass from a rounded white box.
+
+   It is a BACKGROUND LAYER, not a `::before` overlay, and that is the whole
+   trick. An overlay paints above the mount's text (a positioned pseudo-element
+   with `inset: 0` wins the paint order against non-positioned in-flow content),
+   so a 45% white veil over the top third of a mount would wash out exactly the
+   row that carries its heading — and it could not be pushed behind with
+   `z-index: -1` either, because that puts it behind the glass fill itself.
+   As a background layer it sits above the fill and below every glyph, needs no
+   `overflow: hidden`, and therefore cannot clip a mount's own furniture (the
+   negative-margin 44px touch targets, a focus ring, the dock's pills).
+
+   Colour, radius, blur and border stay on the utilities in `glassSurface`:
+   this class sets `background-image` ONLY, so `bg-glass` / `hover:bg-glass-hover`
+   keep sole ownership of `background-color`. leaf.css is unlayered and would
+   otherwise beat Tailwind's utility layer and freeze the hover response. */
+.leaf-specular {
+  background-image: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.45) 0%,
+    rgb(255 255 255 / 0) 38%
+  );
+}
+
+/* One uppercase label tier, app-wide. Hierarchy comes from rules and spacing,
+   never from a second size step in the same treatment. */
+.leaf-label {
+  font-size: var(--text-2xs);
+  line-height: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  color: var(--color-label);
+}
+
+/* Focus, drawn in the ACTION colour — it marks the thing you are about to
+   touch, so it belongs to the touch language rather than to the identity.
+   Behind :focus-visible so it can never become a permanent halo on a native
+   control — the exact regression the broker's .focus-ring carries a comment
+   about. */
+.leaf-focus {
+  outline: none;
+}
+.leaf-focus:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+}
+
+/* ─── Motion ───────────────────────────────────────────────────────────────
+   Spent on four things, each tied to feedback or to data: the tile's response
+   to a pointer, a fill drawing its value, the home mosaic's entrance, and the
+   strike. No infinite loops; nothing animates on a high-frequency action.
+
+   The two keyframes below are the ones with a REST STATE THAT MUST SURVIVE
+   reduced motion — an element left at `opacity:0` or `scaleX(0)` is invisible,
+   which is worse than no animation at all. Both are written so removing the
+   animation leaves the finished state, and the sweep at the bottom is the
+   backstop for anything that slips through (including `animate-pulse` on the
+   loading skeletons). */
+@keyframes leaf-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes leaf-grow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.leaf-rise {
+  animation: leaf-rise 0.5s var(--ease-leaf) both;
+}
+/* Staggered by sibling position rather than by a prop, so every surface gets
+   the entrance without threading an index through its components.
+   Capped at the sixth: past that the delay would start withholding content
+   from a member who is scrolling, which is the failure mode a page-load
+   entrance always risks. */
+.leaf-rise:nth-of-type(2) {
+  animation-delay: 0.05s;
+}
+.leaf-rise:nth-of-type(3) {
+  animation-delay: 0.1s;
+}
+.leaf-rise:nth-of-type(4) {
+  animation-delay: 0.15s;
+}
+.leaf-rise:nth-of-type(5) {
+  animation-delay: 0.2s;
+}
+.leaf-rise:nth-of-type(n + 6) {
+  animation-delay: 0.25s;
+}
+.leaf-grow {
+  transform-origin: left center;
+  animation: leaf-grow 0.9s var(--ease-leaf) 0.12s both;
+}
+/* The pending hatch follows the approved fill rather than racing it, so the
+   eye reads "spent, then pending" in that order. */
+.leaf-grow-late {
+  transform-origin: left center;
+  animation: leaf-grow 0.9s var(--ease-leaf) 0.34s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .leaf *,
+  .leaf *::before,
+  .leaf *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  /* Resolve to the END state rather than killing mid-flight. */
+  .leaf .leaf-rise {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .leaf .leaf-grow,
+  .leaf .leaf-grow-late {
+    transform: scaleX(1) !important;
+  }
+}

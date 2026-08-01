@@ -1,0 +1,120 @@
+/** Everything the claim form refuses to submit, as a pure function.
+ *
+ * Pure and outside the hook on purpose: these are the rules, and rules are
+ * easier to trust when they can be read (and one day tested) without a React
+ * tree around them. Every one of them mirrors a check the backend also makes —
+ * the form exists to spare the member a round trip, never to be the only gate.
+ */
+import type { DocSlot, InsuredClaimOption } from "@/api/portal";
+import { formatDay } from "@/components/portal/leaf/date";
+import { OTHER_HOSPITAL } from "./claimForm";
+
+export interface ClaimValues {
+  effectiveKind: "insured" | "flex" | null;
+  selectedProduct: InsuredClaimOption | null;
+  diagnosis: string;
+  needsReferral: boolean;
+  visitType: string;
+  /** Letters still loading — never accuse the member of having none on file. */
+  referralLoading: boolean;
+  referralCount: number;
+  referralMode: string;
+  referralFile: File | null;
+  referralExistingId: string;
+  incurredDate: string;
+  yearStart: string;
+  yearEnd: string;
+  today: string;
+  isHospitalisation: boolean;
+  hospital: string;
+  provider: string;
+  invoiceNumber: string;
+  amount: string;
+  docSlots: DocSlot[];
+  slotFiles: Record<string, File | null>;
+}
+
+function referralError(v: ClaimValues): string | null {
+  if (!v.visitType) return null;
+  if (v.referralLoading) {
+    // The follow-up auto-link hasn't run yet, so ask them to wait rather than
+    // telling them they have no letter.
+    return "Loading your referral letters — try again in a moment.";
+  }
+  if (!v.referralMode) {
+    // Only claim "none on file" once the query has resolved empty.
+    return v.visitType === "follow_up" && v.referralCount === 0
+      ? "We couldn't find a referral letter on file — attach one."
+      : "Attach or select the referral letter.";
+  }
+  if (v.referralMode === "upload" && !v.referralFile) {
+    return "Attach the referral letter.";
+  }
+  if (v.referralMode === "existing" && !v.referralExistingId) {
+    return "Pick one of your previous referral letters.";
+  }
+  return null;
+}
+
+export function validateClaim(v: ClaimValues): Record<string, string> {
+  const errs: Record<string, string> = {};
+
+  if (!v.effectiveKind) {
+    errs.claim_type = "Select what you're claiming for.";
+  } else if (v.effectiveKind === "insured") {
+    if (
+      v.selectedProduct?.diagnosis_required &&
+      !v.diagnosis.trim().replace(/^Other:\s*$/, "")
+    ) {
+      errs.diagnosis =
+        "Select the diagnosis (choose 'Other' if it isn't listed).";
+    }
+    if (v.needsReferral) {
+      if (!v.visitType) {
+        errs.visit_type = "Tell us whether this is a first or follow-up visit.";
+      }
+      const referral = referralError(v);
+      if (referral) errs.referral = referral;
+    }
+  }
+
+  if (!v.incurredDate) {
+    errs.incurred_date = "Enter the visit date.";
+  } else if (v.incurredDate < v.yearStart || v.incurredDate > v.yearEnd) {
+    errs.incurred_date = `Pick a date between ${formatDay(v.yearStart)} and ${formatDay(v.yearEnd)} — that's the period your benefits cover.`;
+  } else if (v.incurredDate > v.today) {
+    errs.incurred_date = "The incurred date can't be in the future.";
+  }
+
+  if (v.isHospitalisation) {
+    if (!v.hospital) {
+      errs.provider = "Select the hospital.";
+    } else if (
+      v.hospital === OTHER_HOSPITAL &&
+      v.provider.trim().length < 2
+    ) {
+      errs.provider = "Enter the hospital name.";
+    }
+  } else if (v.provider.trim().length < 2) {
+    errs.provider = "Enter the clinic or provider name.";
+  }
+
+  if (!v.invoiceNumber.trim()) {
+    errs.invoice = "Enter the invoice or receipt number.";
+  }
+
+  const amount = Number(v.amount);
+  if (!(amount > 0)) {
+    errs.amount = "Enter the amount on the receipt.";
+  } else if (amount > 1_000_000) {
+    errs.amount = "Amount looks too large — check the receipt.";
+  }
+
+  for (const slot of v.docSlots) {
+    if (!v.slotFiles[slot.key]) {
+      errs[`slot_${slot.key}`] = `Attach the ${slot.label.toLowerCase()}.`;
+    }
+  }
+
+  return errs;
+}

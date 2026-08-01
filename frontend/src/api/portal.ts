@@ -8,6 +8,7 @@ import type {
 } from "@/api/enrollment";
 import {
   useArtworkObjectUrl,
+  type ArtworkState,
   type CardFace,
   type MemberCards,
 } from "@/api/panelCards";
@@ -162,7 +163,9 @@ export function useMemberMfaEnrollStart() {
 export function useMemberMfaEnrollConfirm() {
   return useMutation({
     mutationFn: (code: string) =>
-      portalApi.post<{ status: string; recovery_codes: string[] }>(
+      // `verify`, not `post`: a 401 here means the typed code is wrong, and
+      // signing the member out for a typo would make 2FA unenrollable.
+      portalApi.verify<{ status: string; recovery_codes: string[] }>(
         "/portal/auth/mfa/enroll/confirm",
         { code },
       ),
@@ -174,7 +177,9 @@ export function useMemberMfaDisable() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (password: string) =>
-      portalApi.post<{ status: string }>("/portal/auth/mfa/disable", {
+      // `verify` for the same reason as enrol-confirm: the 401 is about this
+      // password, not about the session.
+      portalApi.verify<{ status: string }>("/portal/auth/mfa/disable", {
         password,
       }),
     onSuccess: () =>
@@ -229,7 +234,7 @@ export function usePortalCardArtwork(
   cardId: string | null,
   face: CardFace,
   enabled = true,
-): string | null {
+): ArtworkState {
   return useArtworkObjectUrl(
     (path) => portalApi.blob(path),
     cardId && enabled ? `/portal/cards/${cardId}/artwork/${face}` : null,

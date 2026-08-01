@@ -290,6 +290,12 @@ class DependantPricingOut(BaseModel):
 class ProductTierSetOut(BaseModel):
     product_id: str
     product_code: str
+    # The product's own name, so a MEMBER surface never has to lead with a code.
+    # The Printed-Label Rule (DESIGN.md) says no code appears without a
+    # plain-language gloss beside it, and the portal's gloss map only covers
+    # codes it knows — an unlisted product left the member choosing between
+    # tiers under a bare "GXYZ". None when the product row is gone.
+    product_name: str | None = None
     employee_participation: str | None
     dependant_participation: str | None
     baseline_tier_category_id: str

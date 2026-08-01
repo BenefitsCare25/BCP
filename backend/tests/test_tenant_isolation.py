@@ -1323,6 +1323,41 @@ def test_claim_rerun_review_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_claim_messages_list_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.get(f"/api/v1/claims/{CLAIM_B}/messages")
+    assert res.status_code == 404
+
+
+def test_claim_message_post_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.post(
+        f"/api/v1/claims/{CLAIM_B}/messages", json={"body": "cross-tenant"}
+    )
+    assert res.status_code == 404
+
+
+def test_claim_messages_read_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.post(f"/api/v1/claims/{CLAIM_B}/messages/read")
+    assert res.status_code == 404
+
+
+def test_portal_preview_messages_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/employees/{EMP_B}/portal-preview/messages")
+    assert res.status_code == 404
+
+
+def test_portal_preview_claim_messages_cross_tenant_404(
+    client_as_a: TestClient,
+) -> None:
+    _ensure_claim_b()
+    res = client_as_a.get(
+        f"/api/v1/employees/{EMP_B}/portal-preview/claims/{CLAIM_B}/messages"
+    )
+    assert res.status_code == 404
+
+
 def test_employee_utilization_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/employees/{EMP_B}/utilization")
     assert res.status_code == 404

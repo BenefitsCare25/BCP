@@ -6,6 +6,7 @@ import {
   type NotificationTone,
 } from "@/stores/notifications";
 import { cn } from "@/lib/cn";
+import { useInLeaf } from "@/lib/leaf-scope";
 
 const TONE_ICON: Record<NotificationTone, typeof AlertCircle> = {
   error: AlertCircle,
@@ -38,6 +39,9 @@ function ago(at: number): string {
  * nothing blocks a click.
  */
 export function NotificationBell() {
+  // Mounted in all three shells. On the member portal it is a TOUCH target and
+  // its rows must be dismissable without a pointer — see the two uses below.
+  const inLeaf = useInLeaf();
   const items = useNotifications((s) => s.items);
   const lastArrivalId = useNotifications((s) => s.lastArrivalId);
   const markAllRead = useNotifications((s) => s.markAllRead);
@@ -93,7 +97,10 @@ export function NotificationBell() {
         aria-expanded={open}
         aria-haspopup="dialog"
         className={cn(
-          "relative flex size-8 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          "relative flex items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          // 44×44 on the member surface (The Reach Rule); the broker app is a
+          // desktop tool whose top bar is built on a 32px rhythm.
+          inLeaf ? "size-11 rounded-pill" : "size-8",
           open
             ? "bg-accent text-primary"
             : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -141,7 +148,12 @@ export function NotificationBell() {
           ) : (
             <ul className="max-h-[22rem] overflow-y-auto">
               {items.map((n) => (
-                <NotificationRow key={n.id} item={n} onDismiss={dismiss} />
+                <NotificationRow
+                  key={n.id}
+                  item={n}
+                  onDismiss={dismiss}
+                  touch={inLeaf}
+                />
               ))}
             </ul>
           )}
@@ -154,9 +166,13 @@ export function NotificationBell() {
 function NotificationRow({
   item,
   onDismiss,
+  touch,
 }: {
   item: AppNotification;
   onDismiss: (id: string) => void;
+  /** Member surface: the dismiss control cannot hide behind hover — a phone has
+   * no hover state, so the row would be permanently undismissable. */
+  touch?: boolean;
 }) {
   const Icon = TONE_ICON[item.tone];
   return (
@@ -176,7 +192,12 @@ function NotificationRow({
         type="button"
         onClick={() => onDismiss(item.id)}
         aria-label="Dismiss notification"
-        className="shrink-0 rounded p-0.5 text-subtle opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
+        className={cn(
+          "shrink-0 rounded text-subtle transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          touch
+            ? "-m-2 flex size-11 items-center justify-center"
+            : "p-0.5 opacity-0 group-hover:opacity-100",
+        )}
       >
         <X className="size-3.5" />
       </button>

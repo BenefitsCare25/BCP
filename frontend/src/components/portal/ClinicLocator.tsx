@@ -1,22 +1,33 @@
-/** Clinic locator — shared between the member portal (/portal/clinics) and
- * the broker employee-view preview (PortalFrame). The data hook is injected
- * so each surface fetches through its own auth client; both endpoints return
- * the identical ClinicSearch shape.
+/** Find a clinic — the one portal screen a member opens while already standing
+ * somewhere, deciding where to walk.
  *
- * Core flow: set an origin (GPS or a typed Singapore postal code/address,
- * geocoded via OneMap) → the list becomes the nearest clinics first, 10 per
- * page, with distances on every card. */
-import { useMemo, useState } from "react";
+ * That framing decides the layout. The origin comes first, because a list of
+ * 836 clinics sorted alphabetically answers nothing; once an origin is set the
+ * list is the ten nearest, ranked, with the distance set as a figure beside
+ * each name. And on every clinic the phone number is a full-height action
+ * rather than a line of text — at this point in the task, calling ahead IS the
+ * task, and it was previously a 66×20px link.
+ *
+ * Shared between `/portal/clinics` and the broker employee-view preview
+ * (PortalFrame); both render inside `.leaf`. The data hook is injected so each
+ * surface fetches through its own auth client, and both endpoints return the
+ * identical ClinicSearch shape — which is what stops the preview drifting from
+ * what the member actually sees.
+ *
+ * Native `<select>` rather than the shared Radix one on purpose: Radix portals
+ * its listbox to `document.body`, i.e. OUTSIDE the `.leaf` subtree, so it would
+ * render in the broker's tokens and type on the member's screen. A native
+ * select also gets the platform's own picker on a phone. */
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
+  ChevronDown,
   Clock,
   ExternalLink,
   Loader2,
   LocateFixed,
-  MapPin,
   Phone,
   Search,
-  Stethoscope,
   X,
 } from "lucide-react";
 import type {
@@ -28,19 +39,10 @@ import type {
   PanelCountry,
 } from "@/api/panelListings";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { PaginationControls } from "@/components/ui/pagination-controls";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
-import { InfoHint } from "@/components/ui/tooltip";
+import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
+import { Mount, MountRule } from "@/components/portal/leaf/Mount";
+import { leafControl } from "@/components/portal/leaf/Field";
+import { actionClass } from "@/components/portal/leaf/Action";
 import { cn } from "@/lib/cn";
 import { formatError, isNotFoundError } from "@/lib/errors";
 import { geocodeSingapore, type GeocodedPoint } from "@/lib/geocode";
@@ -51,6 +53,19 @@ const PAGE_SIZE = 10;
 const ALL_AREAS = "__all__";
 // Mirrors the backend Query(max_length=128) bound so a long paste can't 422.
 const MAX_QUERY_LENGTH = 128;
+
+/** Every control on this page is a leaf action — 44×44 by construction, which
+ * is how the page went from 49 undersized targets to none. They are the SHARED
+ * ones now: this file used to carry its own copy of the class string, alongside
+ * near-identical copies in security and enrollment, and they had already
+ * drifted apart.
+ *
+ * Two tones, split by what the control DOES. This one is for the things a
+ * member came here to do — call the clinic, open directions, set an origin. */
+const leafAction = actionClass("quiet", { className: "px-3" });
+/** Controls that CHOOSE a view rather than do something: the type chips, the
+ * opening-hours disclosure, the pager. See the tone note in leaf/Action. */
+const leafPick = actionClass("neutral", { className: "px-3" });
 
 type OriginStatus =
   | { kind: "idle" }
@@ -81,109 +96,126 @@ function formatDistance(km: number): string {
   return km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
 }
 
-function ClinicCard({ clinic, rank }: { clinic: Clinic; rank: number | null }) {
+/** Type, area and specialty, printed as one line rather than three pills. The
+ * album has no pill shapes, and three badges of equal weight beside a clinic
+ * name competed with the name itself. */
+function clinicGloss(clinic: Clinic): string {
+  return [clinic.type_label, clinic.area, clinic.specialty]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function ClinicLeaf({ clinic, rank }: { clinic: Clinic; rank: number | null }) {
   const [showHours, setShowHours] = useState(false);
   const phoneHref = clinic.phone ? telHref(clinic.phone) : null;
   const hours = clinic.hours ?? {};
   const hasHours = HOURS_LABELS.some(([key]) => hours[key]);
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-foreground">
-            {rank !== null && (
-              <span className="mr-1.5 text-muted-foreground">{rank}.</span>
-            )}
-            {clinic.name}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline">{clinic.type_label}</Badge>
-            {clinic.area && <Badge variant="default">{clinic.area}</Badge>}
-            {clinic.specialty && (
-              <Badge variant="default">{clinic.specialty}</Badge>
-            )}
-          </div>
-        </div>
-        {clinic.distance_km !== null && (
-          <Badge variant="outline" className="shrink-0">
-            {formatDistance(clinic.distance_km)}
-          </Badge>
-        )}
-      </div>
-
-      <div className="mt-3 space-y-1.5 text-sm text-muted-foreground">
-        {clinic.address && (
-          <p className="flex items-start gap-2">
-            <MapPin className="mt-0.5 size-4 shrink-0" />
-            <span>{clinic.address}</span>
-          </p>
-        )}
-        {clinic.doctor && (
-          <p className="flex items-start gap-2">
-            <Stethoscope className="mt-0.5 size-4 shrink-0" />
-            <span>{clinic.doctor}</span>
-          </p>
-        )}
-        {clinic.phone && (
-          <p className="flex items-start gap-2">
-            <Phone className="mt-0.5 size-4 shrink-0" />
-            {phoneHref ? (
-              <a
-                href={phoneHref}
-                className="text-primary underline-offset-2 hover:underline"
-              >
-                {clinic.phone}
-              </a>
-            ) : (
-              <span>{clinic.phone}</span>
-            )}
-          </p>
-        )}
-      </div>
-
-      {showHours && hasHours && (
-        <dl className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1 rounded-md bg-muted/60 p-3 text-xs sm:grid-cols-2">
-          {HOURS_LABELS.map(([key, label]) =>
-            hours[key] ? (
-              <div key={key} className="flex justify-between gap-3">
-                <dt className="shrink-0 font-medium text-foreground">{label}</dt>
-                <dd className="text-right text-muted-foreground">
-                  {hours[key]}
-                </dd>
-              </div>
-            ) : null,
+    <Mount
+      as="li"
+      label={
+        <>
+          {rank !== null && (
+            <span className="mr-1.5 font-normal text-label">{rank}.</span>
           )}
-        </dl>
+          {clinic.name}
+        </>
+      }
+      gloss={clinicGloss(clinic)}
+      aside={
+        clinic.distance_km !== null ? (
+          <span className="whitespace-nowrap text-row font-semibold text-record">
+            {formatDistance(clinic.distance_km)}
+          </span>
+        ) : undefined
+      }
+    >
+      {clinic.address && (
+        <p className="text-row text-label">
+          {clinic.address}
+        </p>
+      )}
+      {clinic.doctor && (
+        <p className="mt-1 text-row text-label">
+          {clinic.doctor}
+        </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {hasHours && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowHours((v) => !v)}
+      {/* The phone number is the action, not a detail: a member reading this
+          is deciding whether to walk over, and ringing ahead is what settles
+          it. Full-width on a phone so it can be hit one-handed. */}
+      {clinic.phone &&
+        (phoneHref ? (
+          <a
+            href={phoneHref}
+            className={cn(leafAction, "mt-3 w-full sm:w-auto")}
           >
-            <Clock className="size-4" />
-            <span className="ml-1">
-              {showHours ? "Hide hours" : "Opening hours"}
-            </span>
-          </Button>
-        )}
-        {clinic.google_map_url && (
-          <Button variant="outline" size="sm" asChild>
+            <Phone className="size-4" aria-hidden />
+            Call {clinic.phone}
+          </a>
+        ) : (
+          <p className="mt-3 flex items-start gap-2 text-row text-record">
+            <Phone className="mt-0.5 size-4 shrink-0 text-label" aria-hidden />
+            {clinic.phone}
+          </p>
+        ))}
+
+      {(hasHours || clinic.google_map_url) && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {hasHours && (
+            <button
+              type="button"
+              onClick={() => setShowHours((v) => !v)}
+              aria-expanded={showHours}
+              className={leafPick}
+            >
+              <Clock className="size-4" aria-hidden />
+              Opening hours
+              <ChevronDown
+                className={cn("size-4 transition-transform", showHours && "rotate-180")}
+                aria-hidden
+              />
+            </button>
+          )}
+          {clinic.google_map_url && (
             <a
               href={clinic.google_map_url}
               target="_blank"
               rel="noopener noreferrer"
+              className={leafAction}
             >
-              <ExternalLink className="size-4" />
-              <span className="ml-1">Open in Google Maps</span>
+              <ExternalLink className="size-4" aria-hidden />
+              Directions
+              <span className="sr-only">(opens in a new tab)</span>
             </a>
-          </Button>
-        )}
-      </div>
-    </div>
+          )}
+        </div>
+      )}
+
+      {showHours && hasHours && (
+        <>
+          <MountRule className="mt-3" />
+          <dl className="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
+            {HOURS_LABELS.map(([key, label]) =>
+              hours[key] ? (
+                <div
+                  key={key}
+                  className="flex items-baseline justify-between gap-3 py-2"
+                >
+                  <dt className="shrink-0 text-row text-label">
+                    {label}
+                  </dt>
+                  <dd className="text-right text-row text-record">
+                    {hours[key]}
+                  </dd>
+                </div>
+              ) : null,
+            )}
+          </dl>
+        </>
+      )}
+    </Mount>
   );
 }
 
@@ -201,6 +233,7 @@ function OriginPanel({
   onClear: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const originId = useId();
   const busy = status.kind === "busy";
   const submit = () => {
     if (query.trim()) {
@@ -210,64 +243,77 @@ function OriginPanel({
   };
 
   return (
-    <div className="rounded-lg border border-border bg-card p-3">
-      <p className="text-xs font-medium text-foreground">Your location</p>
-      <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-        <Button
-          variant="outline"
+    <Mount>
+      <p className="leaf-label">Where you are</p>
+      <div className="mt-2 space-y-2">
+        <button
+          type="button"
           onClick={onGps}
           disabled={busy}
-          className="shrink-0"
+          className={cn(leafAction, "w-full disabled:opacity-60")}
         >
           {busy ? (
-            <Loader2 className="size-4 animate-spin" />
+            <Loader2 className="size-4 animate-spin" aria-hidden />
           ) : (
-            <LocateFixed className="size-4" />
+            <LocateFixed className="size-4" aria-hidden />
           )}
-          <span className="ml-1">Use my location</span>
-        </Button>
-        <div className="flex flex-1 gap-2">
-          <Input
+          Use my location
+        </button>
+        <div className="flex gap-2">
+          {/* `useId`, not a literal: this component is rendered by BOTH
+              `/portal/clinics` and the broker's employee-view preview, and a
+              hardcoded id resolves every `htmlFor` in the document to whichever
+              instance mounted first. `leaf/Field.tsx` solves it the same way. */}
+          <label htmlFor={originId} className="sr-only">
+            Postal code or address
+          </label>
+          <input
+            id={originId}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") submit();
             }}
             maxLength={MAX_QUERY_LENGTH}
-            placeholder="or enter a postal code / address (e.g. 760618)"
-            aria-label="Enter a postal code or address"
+            inputMode="text"
+            placeholder="or a postal code — 760618"
             disabled={busy}
+            className={cn(leafControl, "flex-1")}
           />
-          <Button
-            variant="secondary"
+          <button
+            type="button"
             onClick={submit}
             disabled={busy || query.trim() === ""}
-            className="shrink-0"
+            className={cn(leafAction, "shrink-0 disabled:opacity-60")}
           >
             Set
-          </Button>
+          </button>
         </div>
       </div>
       {origin && (
-        <div className="mt-2 flex items-center gap-2">
-          <Badge variant="outline" className="max-w-full">
-            <MapPin className="mr-1 size-3 shrink-0" />
-            <span className="truncate">Near {origin.label}</span>
-          </Badge>
+        <p className="mt-2 flex items-center gap-2 text-row text-label">
+          <span className="min-w-0 flex-1 truncate">Near {origin.label}</span>
           <button
             type="button"
             onClick={onClear}
-            className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
             aria-label="Clear location"
+            className="leaf-focus -m-3 inline-flex size-11 shrink-0 items-center justify-center text-label"
           >
-            <X className="size-3" /> Clear
+            <X className="size-4" aria-hidden />
           </button>
-        </div>
+        </p>
       )}
       {status.kind === "error" && (
-        <p className="mt-2 text-xs text-warn">{status.message}</p>
+        // role=alert: this arrives asynchronously, after a tap, and the member
+        // is usually looking at the button they just pressed.
+        <p
+          role="alert"
+          className="mt-2 text-row text-strike-pending"
+        >
+          {status.message}
+        </p>
       )}
-    </div>
+    </Mount>
   );
 }
 
@@ -290,6 +336,8 @@ function FilterControls({
   search: string;
   onSearch: (value: string) => void;
 }) {
+  const searchId = useId();
+  const areaId = useId();
   const chips = [
     { key: "all", label: "All", count: null as number | null },
     ...facets.map((f) => ({
@@ -299,83 +347,71 @@ function FilterControls({
     })),
   ];
   return (
-    <>
-      <div className="flex flex-wrap items-center gap-2">
-        <div
-          className="flex flex-wrap gap-1.5"
-          role="group"
-          aria-label="Clinic type"
-        >
-          {chips.map((chip) => (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Clinic type">
+        {chips.map((chip) => {
+          const active = typeKey === chip.key;
+          return (
             <button
               key={chip.key}
               type="button"
               onClick={() => onTypeKey(chip.key)}
+              aria-pressed={active}
               className={cn(
-                "inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                typeKey === chip.key
-                  ? "border-primary bg-accent text-accent-foreground"
-                  : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                leafPick,
+                "px-3",
+                // Ink, not brand: an active chip is marked the way every other
+                // current thing in this world is marked (nav, dock, tabs).
+                active && "bg-shade font-semibold text-record",
               )}
             >
               {chip.label}
               {chip.count !== null && (
-                <span className="tabular-nums opacity-70">{chip.count}</span>
+                <span className="font-normal text-label">{chip.count}</span>
               )}
             </button>
-          ))}
+          );
+        })}
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="relative flex-1">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-label"
+            aria-hidden
+          />
+          <label htmlFor={searchId} className="sr-only">
+            Filter by clinic name, address or postal code
+          </label>
+          <input
+            id={searchId}
+            value={search}
+            onChange={(e) => onSearch(e.target.value)}
+            maxLength={MAX_QUERY_LENGTH}
+            placeholder="Clinic name or address"
+            className={cn(leafControl, "pl-9")}
+          />
         </div>
         {areas.length > 0 && (
-          <Select value={area} onValueChange={onArea}>
-            <SelectTrigger
-              className="h-8 w-44 text-xs"
-              aria-label="Filter by area"
+          <>
+            <label htmlFor={areaId} className="sr-only">
+              Filter by area
+            </label>
+            <select
+              id={areaId}
+              value={area}
+              onChange={(e) => onArea(e.target.value)}
+              className={cn(leafControl, "sm:w-48")}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="max-h-72">
-              <SelectItem value={ALL_AREAS}>All areas</SelectItem>
+              <option value={ALL_AREAS}>All areas</option>
               {areas.map((a) => (
-                <SelectItem key={a} value={a}>
+                <option key={a} value={a}>
                   {a}
-                </SelectItem>
+                </option>
               ))}
-            </SelectContent>
-          </Select>
+            </select>
+          </>
         )}
-        <InfoHint side="left">
-          Chips filter by consultation type (GP, dental, TCM, specialist). Pick
-          a type to narrow the area list; the box below searches clinic name,
-          address or postal code within the current filter.
-        </InfoHint>
       </div>
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={search}
-          onChange={(e) => onSearch(e.target.value)}
-          maxLength={MAX_QUERY_LENGTH}
-          placeholder="Filter by clinic name, address or postal code"
-          className="pl-9"
-          aria-label="Filter clinics"
-        />
-      </div>
-    </>
-  );
-}
-
-function EmptyResults({ filtersActive }: { filtersActive: boolean }) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-8 text-center">
-      <Search className="mx-auto size-6 text-muted-foreground" />
-      <p className="mt-2 text-sm font-medium text-foreground">
-        No clinics match
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {filtersActive
-          ? "Try a different clinic type, area or search term."
-          : "No clinics have been published for your policy yet."}
-      </p>
     </div>
   );
 }
@@ -397,6 +433,11 @@ export function ClinicLocator({
     kind: "idle",
   });
   const q = useDebouncedValue(search.trim(), 300);
+  const summaryRef = useRef<HTMLParagraphElement>(null);
+  // Paging replaces the list in place, so without this the member is left at
+  // the bottom of the previous page looking at results 11-20's footer. Moving
+  // focus to the summary scrolls it into view AND announces the new count.
+  const pagedRef = useRef(false);
 
   const [typeCountry, clinicType] = useMemo(() => {
     if (typeKey === "all") return [undefined, undefined] as const;
@@ -414,6 +455,13 @@ export function ClinicLocator({
     offset: page * PAGE_SIZE,
     limit: PAGE_SIZE,
   });
+
+  useEffect(() => {
+    if (pagedRef.current) {
+      pagedRef.current = false;
+      summaryRef.current?.focus();
+    }
+  }, [page]);
 
   const setNewOrigin = (next: Origin) => {
     setOrigin(next);
@@ -469,15 +517,7 @@ export function ClinicLocator({
     }
   };
 
-  if (query.isLoading) {
-    return (
-      <div className="space-y-3">
-        <Skeleton className="h-9 w-full" />
-        <Skeleton className="h-32 w-full" />
-        <Skeleton className="h-32 w-full" />
-      </div>
-    );
-  }
+  if (query.isLoading) return <LeafSkeleton label="Loading clinics" />;
   if (query.isError && !isNotFoundError(query.error)) {
     return <PortalErrorState onRetry={() => void query.refetch()} />;
   }
@@ -492,24 +532,26 @@ export function ClinicLocator({
   // and only rank clinics that actually have a distance.
   const rankBase = data?.offset ?? 0;
   const filtersActive = typeKey !== "all" || area !== ALL_AREAS || q !== "";
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  if (query.isError || (!query.isError && facets.length === 0)) {
+  if (query.isError || facets.length === 0) {
     return (
-      <div className="rounded-lg border border-border bg-card p-8 text-center">
-        <MapPin className="mx-auto size-6 text-muted-foreground" />
-        <p className="mt-2 text-sm font-medium text-foreground">
-          No panel clinics available yet
+      <Mount label="No panel clinics yet">
+        <p className="text-row text-label">
+          Your policy doesn't have a clinic network published yet. Your HR team
+          can tell you where you're covered in the meantime.
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Your benefits provider hasn't published panel clinic lists for your
-          policy — check back later or contact your HR / broker.
-        </p>
-      </div>
+      </Mount>
     );
   }
 
+  const goToPage = (next: number) => {
+    pagedRef.current = true;
+    setPage(next);
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <OriginPanel
         origin={origin}
         status={originStatus}
@@ -542,23 +584,32 @@ export function ClinicLocator({
         }}
       />
 
-      <p className="text-xs text-muted-foreground">
-        {located && rankBase === 0
-          ? `Nearest ${Math.min(PAGE_SIZE, total)} of ${total} clinic${total === 1 ? "" : "s"} near ${origin?.label ?? "you"}`
-          : located
-            ? `${total} clinics — nearest first from ${origin?.label ?? "you"}`
-            : `${total} clinic${total === 1 ? "" : "s"} — sorted by name`}
+      <p
+        ref={summaryRef}
+        tabIndex={-1}
+        aria-live="polite"
+        className="leaf-focus text-row text-label"
+      >
+        {located
+          ? `${total} clinic${total === 1 ? "" : "s"}, nearest first`
+          : `${total} clinic${total === 1 ? "" : "s"}, A to Z`}
         {query.isFetching && (
-          <Loader2 className="ml-2 inline size-3 animate-spin align-middle" />
+          <Loader2 className="ml-2 inline size-3 animate-spin align-middle" aria-hidden />
         )}
       </p>
 
       {items.length === 0 ? (
-        <EmptyResults filtersActive={filtersActive} />
+        <Mount label="Nothing matches">
+          <p className="text-row text-label">
+            {filtersActive
+              ? "Try another clinic type or area, or clear what you typed."
+              : "No clinics have been published for your policy yet."}
+          </p>
+        </Mount>
       ) : (
-        <div className="space-y-3">
+        <ul className="space-y-3">
           {items.map((clinic, idx) => (
-            <ClinicCard
+            <ClinicLeaf
               key={clinic.id}
               clinic={clinic}
               rank={
@@ -568,14 +619,32 @@ export function ClinicLocator({
               }
             />
           ))}
-        </div>
+        </ul>
       )}
 
-      <PaginationControls
-        page={page}
-        pages={Math.max(1, Math.ceil(total / PAGE_SIZE))}
-        onPageChange={setPage}
-      />
+      {pages > 1 && (
+        <div className="flex items-center justify-between gap-3 pt-1">
+          <button
+            type="button"
+            onClick={() => goToPage(Math.max(0, page - 1))}
+            disabled={page === 0}
+            className={cn(leafPick, "disabled:opacity-40")}
+          >
+            Previous
+          </button>
+          <span className="text-row text-label">
+            {page + 1} of {pages}
+          </span>
+          <button
+            type="button"
+            onClick={() => goToPage(Math.min(pages - 1, page + 1))}
+            disabled={page >= pages - 1}
+            className={cn(leafPick, "disabled:opacity-40")}
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -68,6 +68,11 @@ class PortalMe(BaseModel):
     # True while an enrollment window is open and in-period for the member's
     # policy year — drives the "Enrollment open" call-to-action in the shell.
     enrollment_open: bool = False
+    # NOTE: there is deliberately no `unread_messages` here. It existed briefly
+    # to badge Home in the shell, but a dot on Home names nothing — unread is
+    # stated in words on the home Messages tile, which reads the count off
+    # `GET /portal/messages`. Adding it back means a COUNT query on this hot
+    # endpoint for a mark that has to explain itself some other way.
 
 
 # ── Broker-side member-account provisioning ───────────────────────────────────

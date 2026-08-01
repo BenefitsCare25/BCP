@@ -8,7 +8,7 @@ member actions (submit claim, add dependant) stay portal-only.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -19,7 +19,13 @@ from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
 from app.models import Claim, Dependant, Employee, MemberAccount, PolicyYear
 from app.schemas.api import BenefitStatementOut, DependantOut
-from app.schemas.claims import ClaimList, CoverageOptionsOut, UtilizationOut
+from app.schemas.claims import (
+    ClaimList,
+    ClaimMessageList,
+    ClaimMessageOut,
+    CoverageOptionsOut,
+    UtilizationOut,
+)
 from app.schemas.enrollment import PortalEnrollmentOut
 from app.schemas.panel import ClinicSearchOut
 from app.schemas.panel_card import MemberCardsOut
@@ -28,6 +34,12 @@ from app.schemas.portal import (
     PortalEmployeeOut,
     PortalPolicyYearOut,
     PortalPreviewOut,
+)
+from app.services.claim_messages import (
+    member_inbox,
+    member_message_out,
+    member_unread_count,
+    thread_for_claim,
 )
 from app.services.claims import claim_to_out
 from app.services.enrollment_elections import (
@@ -228,3 +240,41 @@ def portal_preview_claims(
         limit=limit,
         items=[claim_to_out(db, c) for c in rows],
     )
+
+
+@router.get("/messages", response_model=ClaimMessageList)
+def portal_preview_messages(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=MAX_LIMIT),
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> ClaimMessageList:
+    """Mirror of `GET /portal/messages`. Built through `member_message_out`,
+    the same serializer the member gets — so the preview can't show a broker's
+    name where the member reads "Claims team"."""
+    total, rows = member_inbox(
+        db, employee.id, employee.policy_year_id, offset=offset, limit=limit
+    )
+    return ClaimMessageList(
+        total=total,
+        offset=offset,
+        limit=limit,
+        unread=member_unread_count(db, employee.id, employee.policy_year_id),
+        items=[member_message_out(m, c) for m, c in rows],
+    )
+
+
+@router.get("/claims/{claim_id}/messages", response_model=list[ClaimMessageOut])
+def portal_preview_claim_messages(
+    claim_id: str,
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> list[ClaimMessageOut]:
+    """Mirror of `GET /portal/claims/{id}/messages`. The claim must belong to
+    the previewed employee — `load_employee` proves tenant access, not that this
+    claim is theirs, and without the second check a broker could read one
+    member's thread through another member's preview URL."""
+    claim = db.get(Claim, claim_id)
+    if claim is None or claim.employee_id != employee.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
+    return [member_message_out(m) for m in thread_for_claim(db, claim.id)]

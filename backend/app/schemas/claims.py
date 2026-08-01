@@ -142,6 +142,10 @@ class BrokerClaimOut(ClaimOut):
     # `remaining_for_claim`); None = no numeric limit known. Computed on the
     # single-claim detail only — the list stays cheap.
     remaining_limit: float | None = None
+    # Member replies nobody here has opened. Counted for a whole page in ONE
+    # grouped query — a member waiting on an answer is the reason to open the
+    # claim, so it has to be visible in the queue rather than inside the sheet.
+    unread_member_messages: int = 0
 
 
 class BrokerClaimList(BaseModel):
@@ -149,6 +153,77 @@ class BrokerClaimList(BaseModel):
     offset: int
     limit: int
     items: list[BrokerClaimOut] = Field(default_factory=list)
+
+
+# ── Claim messages (the member <-> broker thread) ─────────────────────────────
+
+
+class ClaimMessageOut(BaseModel):
+    """One message, rendered for whichever surface asked.
+
+    `mine` and `unread` are RELATIVE to the reader — the same row is `mine` on
+    the broker surface and not on the member's. Both are filled by the two
+    builders in `services/claim_messages.py`, never by `model_validate`: reading
+    the model directly would hand the member the broker's `author_name`.
+    """
+
+    id: str
+    claim_id: str
+    author_type: str  # system | broker | member
+    author_name: str | None = None
+    subject: str
+    body: str
+    # Set only on automatic notices (models.claim_message.EVENT_*).
+    event: str | None = None
+    created_at: datetime
+    mine: bool = False
+    unread: bool = False
+    # Claim context, populated only in the cross-claim inbox list (the thread
+    # already sits on its claim's page).
+    claim_type: str | None = None
+    claim_status: str | None = None
+
+
+class ClaimMessageList(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    unread: int = 0
+    items: list[ClaimMessageOut] = Field(default_factory=list)
+
+
+class MemberMessageIn(BaseModel):
+    """A member's reply. No subject — the inbox supplies one, and a second box
+    on a phone keyboard buys nothing."""
+
+    body: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("body")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class BrokerMessageIn(BaseModel):
+    # Optional: falls back to `claim_messages.DEFAULT_BROKER_SUBJECT`, which is
+    # what the member's inbox lists when the broker just types a body.
+    subject: str | None = Field(default=None, max_length=255)
+    body: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("body")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class MessagesReadOut(BaseModel):
+    marked: int
 
 
 class ClaimDecisionIn(BaseModel):

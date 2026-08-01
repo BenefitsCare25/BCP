@@ -41,6 +41,7 @@ from app.models.claim import (
     CLAIM_STATUS_AI_REVIEW_PENDING,
     MEMBER_EDITABLE_STATUSES,
 )
+from app.models.claim_message import EVENT_SUBMITTED
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import (
     ClaimCreateIn,
@@ -74,6 +75,7 @@ from app.services.claim_intake import (
     required_doc_slots,
 )
 from app.services.claim_intake_suggest import build_intake_suggestion
+from app.services.claim_messages import post_system_message
 from app.services.claims import (
     attach_document,
     claim_to_out,
@@ -675,6 +677,10 @@ def submit_my_claim(
     review = ClaimAIReview(client_id=claim.client_id, claim_id=claim.id)
     db.add(review)
     db.flush()
+    # The "we have it" notice. Posted on every submit INCLUDING a needs_info
+    # resubmission — the member has just been asked for something and sent it,
+    # which is exactly when they need the acknowledgement most.
+    post_system_message(db, claim, EVENT_SUBMITTED)
     write_member_audit(
         db, member, "claim.submitted", "claim", claim.id,
         after={

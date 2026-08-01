@@ -10,10 +10,7 @@ import {
   FileWarning,
   Loader2,
   LogOut,
-  ReceiptText,
-  ShieldCheck,
   UserPlus,
-  Users,
 } from "lucide-react";
 import {
   usePortalPreviewContext,
@@ -22,49 +19,67 @@ import {
   usePreviewClinics,
   usePreviewDependants,
   usePreviewEnrollment,
+  usePreviewMessages,
   usePreviewStatement,
   usePreviewUtilization,
 } from "@/api/portalPreview";
 import { useBrokerCardArtwork } from "@/api/panelCards";
 import type { ClinicSearchParams } from "@/api/panelListings";
 import { ClinicLocator } from "@/components/portal/ClinicLocator";
-import { MemberCardList } from "@/components/portal/MemberCard";
-import { BenefitStatement } from "@/components/benefits/BenefitStatement";
-import { UtilizationView } from "@/components/benefits/UtilizationView";
+import { CardLeaf } from "@/components/portal/leaf/CardLeaf";
+import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
+import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
+import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
 import type { DependantRef } from "@/components/enrollment/electionShared";
-import { ClaimCards } from "@/components/portal/ClaimCards";
+import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import {
-  DependantsTable,
-  dependantName,
-  dependantRelationship,
-} from "@/components/portal/DependantsTable";
+  HomeMosaicView,
+  type HomeDest,
+} from "@/components/portal/HomeMosaic";
+import { Mount } from "@/components/portal/leaf/Mount";
+import { MessageRows } from "@/components/portal/leaf/MessageMount";
+import { Strike } from "@/components/portal/leaf/Strike";
+import { Action } from "@/components/portal/leaf/Action";
+import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
+import {
+  LeafTabsList,
+  LeafTabsTrigger,
+} from "@/components/portal/leaf/TabStrip";
+import { dependantName, dependantRelationship } from "@/lib/dependant";
 import { MemberEnrollmentPanel } from "@/components/portal/MemberEnrollmentPanel";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
+import { BenefitYearControl } from "@/components/portal/BenefitYearControl";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
+import { LeafScopeContext } from "@/lib/leaf-scope";
 import { isNotFoundError } from "@/lib/errors";
-import { formatPolicyRange } from "@/lib/policy-year";
 
 // Mirrors the live shell nav in components/portal/PortalShell — change both
-// together.
+// together. Labels are the shell's short set, because the live bar is one row.
 const TABS = [
-  { key: "coverage", label: "My coverage" },
-  { key: "claims", label: "My claims" },
-  { key: "card", label: "My card" },
-  { key: "clinics", label: "Find a clinic" },
-  { key: "enrollment", label: "My enrollment" },
+  { key: "home", label: "Home" },
+  { key: "coverage", label: "Coverage" },
+  { key: "claims", label: "Claims" },
+  { key: "card", label: "Card" },
+  { key: "clinics", label: "Clinics" },
+  { key: "enrollment", label: "Enrolment" },
+  // Messages is NOT in the live shell's nav — the member reaches it from the
+  // home tile (see router.tsx). It gets a tab here because this frame has only
+  // tabs to navigate with, and without one the home tile's "See all messages"
+  // would be the one tile whose link goes nowhere.
+  { key: "messages", label: "Messages" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
 
 // Mirrors the sub-tabs of routes/portal/coverage.
 const COVERAGE_TABS = [
-  { key: "benefits", label: "Benefits" },
-  { key: "usage", label: "Usage" },
-  { key: "dependants", label: "Dependants" },
+  { key: "benefits", label: "What's covered" },
+  { key: "usage", label: "What's left" },
+  { key: "dependants", label: "My family" },
 ] as const;
 
 type CoverageTabKey = (typeof COVERAGE_TABS)[number]["key"];
@@ -75,18 +90,24 @@ const ACCOUNT_BADGE = {
   disabled: { variant: "error" as const, label: "Portal: disabled" },
 };
 
+/** Made of the member's material — glass on the ground — because everything
+ * inside the frame is meant to be what the member sees. A broker-styled card
+ * here read as our chrome reporting a fault, which is exactly the confusion the
+ * preview exists to avoid. */
 function NoCoverageCard() {
   return (
-    <div className="rounded-lg border border-border bg-card p-8 text-center">
-      <FileWarning className="mx-auto size-6 text-muted-foreground" />
-      <p className="mt-2 text-sm font-medium text-foreground">
-        No active coverage found
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        This is what the employee sees when their record isn't on the current
-        roster or the policy year isn't active yet.
-      </p>
-    </div>
+    <Mount>
+      <div className="text-center">
+        <FileWarning className="mx-auto size-6 text-label" aria-hidden />
+        <p className="mt-2 text-md font-semibold text-record">
+          No active coverage found
+        </p>
+        <p className="mt-1 text-row text-label">
+          This is what the employee sees when their record isn't on the current
+          roster or the policy year isn't active yet.
+        </p>
+      </div>
+    </Mount>
   );
 }
 
@@ -95,13 +116,10 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
   // Mirrors the member surface — the preview must show the same remaining
   // balances the member sees. Never gates rendering.
   const utilization = usePreviewUtilization(employeeId);
+  // The member's own loading state, not the broker's grey blocks — the frame
+  // shows what the member sees at every moment, including this one.
   if (statement.isLoading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-48 w-full" />
-      </div>
-    );
+    return <LeafSkeleton label="Loading benefits" />;
   }
   // Only a 404 is the member's "no coverage" experience — other failures are
   // broker-side fetch errors and get a retryable error state.
@@ -109,99 +127,82 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
     return <PortalErrorState onRetry={() => void statement.refetch()} />;
   }
   if (statement.isError || !statement.data) return <NoCoverageCard />;
-  return <BenefitStatement data={statement.data} utilization={utilization.data} />;
+  return <CoverageLeaf data={statement.data} utilization={utilization.data} />;
 }
 
+/** Mirrors routes/portal/claims: the member's own action in the member's own
+ * position, disabled, and their empty-state wording — a broker reading this
+ * needs to see the screen the employee sees, not a broker summary of it. */
 function ClaimsTab({ employeeId }: { employeeId: string }) {
   const claims = usePreviewClaims(employeeId);
-  if (claims.isLoading) return <Skeleton className="h-48 w-full" />;
+  if (claims.isLoading) return <LeafSkeleton label="Loading claims" />;
   if (claims.isError && !isNotFoundError(claims.error)) {
     return <PortalErrorState onRetry={() => void claims.refetch()} />;
   }
   const rows = claims.data?.items ?? [];
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-foreground">
-          {rows.length > 0
-            ? `${claims.data?.total ?? rows.length} claim${rows.length === 1 ? "" : "s"} this policy year`
-            : "My claims"}
-        </h2>
-        <Button size="sm" disabled title="Disabled in preview — members submit claims from their own sign-in">
-          <FilePlus2 className="size-4" />
-          <span className="ml-1">Submit a claim</span>
-        </Button>
-      </div>
+    <div className="space-y-3">
+      <Action
+        tone="primary"
+        block="phone"
+        disabled
+        title="Disabled in preview — members submit claims from their own sign-in"
+      >
+        <FilePlus2 className="size-4" aria-hidden />
+        Make a claim
+      </Action>
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-8 text-center">
-          <ReceiptText className="mx-auto size-6 text-muted-foreground" />
-          <p className="mt-2 text-sm font-medium text-foreground">No claims yet</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The employee hasn't submitted any claims this policy year.
+        <Mount label="No claims yet">
+          <p className="text-row text-label">
+            When you pay for treatment that your benefits cover, send us the
+            receipt here and we'll tell you where it's up to.
           </p>
-        </div>
+        </Mount>
       ) : (
-        <ClaimCards items={rows} />
+        <ClaimList items={rows} />
       )}
     </div>
   );
 }
 
+/** Mirrors routes/portal/utilization. The member's page carries no heading of
+ * its own — the running head is the only h1 and the tab already names the
+ * question — so neither does this. */
 function UtilizationTab({ employeeId }: { employeeId: string }) {
   const { data, isLoading, isError, error, refetch } =
     usePreviewUtilization(employeeId);
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">My usage</h1>
-        <p className="text-sm text-muted-foreground">
-          How much of each benefit you've used this policy year.
-        </p>
-      </div>
-      {isLoading ? (
-        <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" /> Loading usage…
-        </div>
-      ) : isError && !isNotFoundError(error) ? (
-        <PortalErrorState onRetry={() => void refetch()} />
-      ) : isError || !data ? (
-        <NoCoverageCard />
-      ) : (
-        <UtilizationView data={data} />
-      )}
-    </div>
-  );
+  if (isLoading) return <LeafSkeleton label="Loading balances" mounts={2} />;
+  if (isError && !isNotFoundError(error)) {
+    return <PortalErrorState onRetry={() => void refetch()} />;
+  }
+  if (isError || !data) return <NoCoverageCard />;
+  return <UsageLeaf data={data} />;
 }
 
+/** Mirrors routes/portal/dependants: the same quiet action in the same place,
+ * disabled, and the member's own empty state (`DependantsLeaf` with no rows)
+ * rather than a broker-worded card — a broker looking at this needs to read the
+ * sentence the employee would read. */
 function DependantsTab({ employeeId }: { employeeId: string }) {
   const dependants = usePreviewDependants(employeeId);
-  if (dependants.isLoading) return <Skeleton className="h-48 w-full" />;
+  if (dependants.isLoading) return <LeafSkeleton label="Loading family" mounts={2} />;
   if (dependants.isError && !isNotFoundError(dependants.error)) {
     return <PortalErrorState onRetry={() => void dependants.refetch()} />;
   }
   const rows = dependants.data ?? [];
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-foreground">My dependants</h2>
-        <Button size="sm" disabled title="Disabled in preview — members add dependants from their own sign-in">
-          <UserPlus className="size-4" />
-          <span className="ml-1">Add dependant</span>
-        </Button>
+    <div className="space-y-3">
+      <div className="flex sm:justify-end">
+        <Action
+          block="phone"
+          disabled
+          title="Disabled in preview — members add family from their own sign-in"
+        >
+          <UserPlus className="size-4" aria-hidden />
+          Add a family member
+        </Action>
       </div>
-      {rows.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-8 text-center">
-          <Users className="mx-auto size-6 text-muted-foreground" />
-          <p className="mt-2 text-sm font-medium text-foreground">
-            No dependants on record
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Dependants the employee adds appear here pending broker approval.
-          </p>
-        </div>
-      ) : (
-        <DependantsTable rows={rows} />
-      )}
+      <DependantsLeaf rows={rows} />
     </div>
   );
 }
@@ -219,20 +220,14 @@ function CardTab({ employeeId }: { employeeId: string }) {
     return isNotFoundError(cards.error) ? <NoCoverageCard /> : <PortalErrorState onRetry={() => void cards.refetch()} />;
   }
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">My card</h1>
-        <p className="text-sm text-muted-foreground">
-          Show this at a panel clinic. One card per plan you're covered under,
-          plus a card for each covered family member.
-        </p>
-      </div>
-      <MemberCardList
-        cards={cards.data?.items ?? []}
-        useArtwork={useBrokerCardArtwork}
-        emptyMessage="No e-cards have been issued for this employee's plan yet."
-      />
-    </div>
+    <CardLeaf
+      cards={cards.data?.items ?? []}
+      useArtwork={useBrokerCardArtwork}
+      // The broker is being told a configuration fact, not given a member's
+      // next step — and the member's clinic route isn't navigable from here.
+      emptyMessage="No panel card is assigned to this employee's plan for the current benefit year, so nothing appears on their card screen."
+      emptyAction={false}
+    />
   );
 }
 
@@ -242,18 +237,7 @@ function ClinicsTab({ employeeId }: { employeeId: string }) {
   // hooks in the same order.
   const useClinics = (params: ClinicSearchParams) =>
     usePreviewClinics(employeeId, params);
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">Find a clinic</h1>
-        <p className="text-sm text-muted-foreground">
-          Panel clinics covered under your policy — use your device location or
-          enter a postal code to see the 10 nearest first.
-        </p>
-      </div>
-      <ClinicLocator key={employeeId} useClinicsQuery={useClinics} />
-    </div>
-  );
+  return <ClinicLocator key={employeeId} useClinicsQuery={useClinics} />;
 }
 
 function EnrollmentTab({ employeeId }: { employeeId: string }) {
@@ -295,18 +279,110 @@ function EnrollmentTab({ employeeId }: { employeeId: string }) {
   );
 }
 
-/** Mirrors the "My coverage" sub-tab page (routes/portal/coverage). */
-function CoverageTab({ employeeId }: { employeeId: string }) {
-  const [tab, setTab] = useState<CoverageTabKey>("benefits");
+/** Mirrors the member's home (routes/portal/home + HomeMosaic).
+ *
+ * The tiles navigate by switching THIS frame's tabs — `onGo` — because a real
+ * `<Link>` here would walk the broker out of their own application and into the
+ * member portal. Same component, same tiles, same rules about what may be
+ * rendered; only the onward step differs. */
+function HomeTab({
+  employeeId,
+  enrollmentOpen,
+  onGo,
+}: {
+  employeeId: string;
+  enrollmentOpen: boolean;
+  onGo: (dest: HomeDest) => void;
+}) {
+  const utilization = usePreviewUtilization(employeeId);
+  const claims = usePreviewClaims(employeeId);
+  const statement = usePreviewStatement(employeeId);
+  const dependants = usePreviewDependants(employeeId);
+  const messages = usePreviewMessages(employeeId);
+  return (
+    <HomeMosaicView
+      source={{
+        enrollmentOpen,
+        utilization,
+        claims,
+        statement,
+        dependants,
+        messages,
+        // **Every preview tab must pass a retry.** These queries carry
+        // `localErrorHandling` + `retry: false`, so a transient 500 neither
+        // retries itself nor reaches the notification bell — without this the
+        // Home tab rendered "We couldn't load this just now" with no way out of
+        // it but a full page reload. The member's own Home has always passed
+        // one; this tab was the only mirror that did not.
+        onRetry: () => {
+          void utilization.refetch();
+          void claims.refetch();
+          void statement.refetch();
+          void dependants.refetch();
+          void messages.refetch();
+        },
+      }}
+      onGo={onGo}
+    />
+  );
+}
+
+/** Mirrors routes/portal/messages. Rows are INERT here: the member's inbox
+ * navigates to the claim, and this frame's Claims tab is a list, not a detail
+ * — a row that jumped to a tab showing something else would be worse than one
+ * that does nothing. */
+function MessagesTab({ employeeId }: { employeeId: string }) {
+  const messages = usePreviewMessages(employeeId);
+  if (messages.isLoading) return <LeafSkeleton label="Loading messages" />;
+  if (messages.isError && !isNotFoundError(messages.error)) {
+    return <PortalErrorState onRetry={() => void messages.refetch()} />;
+  }
+  const items = messages.data?.items ?? [];
+  const unread = messages.data?.unread ?? 0;
+  if (items.length === 0) {
+    return (
+      <Mount label="No messages yet">
+        <p className="text-row text-label">
+          When we have news about a claim &mdash; that we&rsquo;ve received it,
+          that it&rsquo;s settled, or that we need something else &mdash; it
+          will appear here.
+        </p>
+      </Mount>
+    );
+  }
+  return (
+    <Mount
+      label={`${messages.data?.total ?? items.length} message${
+        (messages.data?.total ?? items.length) === 1 ? "" : "s"
+      }`}
+      aside={unread > 0 ? <Strike tone="pending">{unread} unread</Strike> : undefined}
+    >
+      <MessageRows items={items} className="-mt-1" />
+    </Mount>
+  );
+}
+
+/** Mirrors the "My coverage" sub-tab page (routes/portal/coverage). The sub-tab
+ * is lifted so a home tile can land the broker on the right reading of it. */
+function CoverageTab({
+  employeeId,
+  tab,
+  setTab,
+}: {
+  employeeId: string;
+  tab: CoverageTabKey;
+  setTab: (tab: CoverageTabKey) => void;
+}) {
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as CoverageTabKey)}>
-      <TabsList>
+      {/* The member's strip, from the same component — see leaf/TabStrip. */}
+      <LeafTabsList label="Coverage">
         {COVERAGE_TABS.map((t) => (
-          <TabsTrigger key={t.key} value={t.key}>
+          <LeafTabsTrigger key={t.key} value={t.key}>
             {t.label}
-          </TabsTrigger>
+          </LeafTabsTrigger>
         ))}
-      </TabsList>
+      </LeafTabsList>
       <TabsContent value="benefits">
         <BenefitsTab employeeId={employeeId} />
       </TabsContent>
@@ -324,10 +400,25 @@ function CoverageTab({ employeeId }: { employeeId: string }) {
  * visually faithful, with tabs instead of routes and actions disabled. */
 export function PortalFrame({ employeeId }: { employeeId: string }) {
   const { data: ctx } = usePortalPreviewContext(employeeId);
-  const [tab, setTab] = useState<TabKey>("coverage");
+  const [tab, setTab] = useState<TabKey>("home");
+  const [coverageTab, setCoverageTab] = useState<CoverageTabKey>("benefits");
 
-  // Re-selecting a different employee restarts the walkthrough on coverage.
-  useEffect(() => setTab("coverage"), [employeeId]);
+  // Re-selecting a different employee restarts the walkthrough at the home
+  // screen — the same place the member lands when they sign in.
+  useEffect(() => {
+    setTab("home");
+    setCoverageTab("benefits");
+  }, [employeeId]);
+
+  /** A home tile's destination, mapped onto this frame's tabs. */
+  const goFromHome = (dest: HomeDest) => {
+    if (dest === "usage" || dest === "benefits" || dest === "dependants") {
+      setCoverageTab(dest);
+      setTab("coverage");
+      return;
+    }
+    setTab(dest);
+  };
 
   const memberLabel =
     ctx?.member_account?.display_name ||
@@ -362,75 +453,112 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
         {ctx?.enrollment_open && <Badge variant="warn">Enrollment open</Badge>}
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border shadow-sm">
-        <header className="border-b border-border bg-card">
-          <div className="flex h-14 items-center justify-between px-4">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="size-5 text-primary" />
-              <span className="text-sm font-semibold text-foreground">
-                My Benefits Portal
-              </span>
-              {ctx?.policy_year && (
-                <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">
-                  {formatPolicyRange(
-                    ctx.policy_year.start_date,
-                    ctx.policy_year.end_date,
-                  )}
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="hidden text-xs text-muted-foreground sm:inline">
-                {memberLabel}
-              </span>
-              <Button variant="ghost" size="sm" disabled title="Disabled in preview">
+      {/* `leaf` puts the preview inside the member's visual world, not just its
+          content. Without it a broker reads the member's screens in broker red
+          and broker type and comes away with the wrong idea of what the member
+          is looking at — which defeats the point of a preview. The class only
+          re-points tokens for this subtree; the surrounding broker chrome above
+          is unaffected. */}
+      <LeafScopeContext.Provider value>
+      <div className="leaf overflow-hidden rounded-xl border border-border shadow-sm">
+        {/* One row, mirroring the live shell: mark, hairline, pill nav, then the
+            benefit-year scope control and the account action. No primary action
+            in the bar — see PortalShell. */}
+        <header className="border-b border-hairline bg-bar">
+          <div className="flex flex-wrap items-center gap-y-2 px-5 py-3">
+            <img
+              src="/inspro-logo-header.png"
+              alt="Inspro Insurance Brokers"
+              width={140}
+              height={45}
+              className="h-11 w-auto shrink-0"
+            />
+            <span aria-hidden className="mx-4 h-7 w-px shrink-0 bg-hairline" />
+            <nav className="flex items-center gap-0.5">
+              {TABS.map((item) => {
+                // Mirror the live shell: the enrollment tab gets a dot while a
+                // window is open.
+                const highlight =
+                  item.key === "enrollment" &&
+                  ctx?.enrollment_open &&
+                  tab !== item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setTab(item.key)}
+                    className={cn(
+                      "leaf-focus inline-flex h-10 items-center gap-1.5 rounded-pill px-4 text-row",
+                      "transition-colors duration-200 ease-leaf",
+                      tab === item.key
+                        ? "bg-shade font-semibold text-record"
+                        : "text-label hover:bg-shade hover:text-record",
+                    )}
+                  >
+                    {item.label}
+                    {highlight && (
+                      <span
+                        className="size-1.5 rounded-pill bg-strike-pending"
+                        title="Enrollment window open"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="ml-auto flex shrink-0 items-center gap-3 pl-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled
+                title="Disabled in preview"
+              >
                 <LogOut className="size-4" />
                 <span className="ml-1">Sign out</span>
               </Button>
             </div>
           </div>
-          <nav className="flex gap-1 px-4 pb-2">
-            {TABS.map((item) => {
-              // Mirror the live shell: the enrollment tab gets a dot while a
-              // window is open.
-              const highlight =
-                item.key === "enrollment" &&
-                ctx?.enrollment_open &&
-                tab !== item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setTab(item.key)}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
-                    tab === item.key
-                      ? "bg-sidebar-active text-sidebar-active-foreground font-medium"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  {item.label}
-                  {highlight && (
-                    <span
-                      className="size-1.5 rounded-full bg-warn"
-                      title="Enrollment window open"
-                    />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
         </header>
-        <main className="bg-background px-4 py-6">
+        {/* `leaf-ground` carries the colour blooms the glass frosts. Without it
+            the tiles read as paler paint — the same trap documented in
+            leaf.css. */}
+        <main className="leaf-ground bg-ground px-4 py-6">
           <div className="mx-auto max-w-4xl">
-            {tab === "coverage" && <CoverageTab employeeId={employeeId} />}
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <h2 className="min-w-0 truncate text-2xl font-bold tracking-title text-record">
+                {memberLabel}
+              </h2>
+              {ctx?.policy_year && (
+                <BenefitYearControl
+                  start={ctx.policy_year.start_date}
+                  end={ctx.policy_year.end_date}
+                  className="hidden sm:inline-flex"
+                />
+              )}
+            </div>
+            {tab === "home" && (
+              <HomeTab
+                employeeId={employeeId}
+                enrollmentOpen={Boolean(ctx?.enrollment_open)}
+                onGo={goFromHome}
+              />
+            )}
+            {tab === "coverage" && (
+              <CoverageTab
+                employeeId={employeeId}
+                tab={coverageTab}
+                setTab={setCoverageTab}
+              />
+            )}
             {tab === "claims" && <ClaimsTab employeeId={employeeId} />}
+            {tab === "messages" && <MessagesTab employeeId={employeeId} />}
             {tab === "card" && <CardTab employeeId={employeeId} />}
             {tab === "clinics" && <ClinicsTab employeeId={employeeId} />}
             {tab === "enrollment" && <EnrollmentTab employeeId={employeeId} />}
           </div>
         </main>
       </div>
+      </LeafScopeContext.Provider>
     </div>
   );
 }

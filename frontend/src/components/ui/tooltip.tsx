@@ -2,6 +2,8 @@ import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Info } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useInLeaf } from "@/lib/leaf-scope";
+import { Hint } from "@/components/ui/hint";
 import { Label } from "@/components/ui/label";
 
 export const TooltipProvider = TooltipPrimitive.Provider;
@@ -31,8 +33,19 @@ export const TooltipContent = React.forwardRef<
 TooltipContent.displayName = "TooltipContent";
 
 /**
- * Compact info affordance: a small ⓘ icon that reveals help text on hover/focus.
+ * Compact info affordance: a small ⓘ icon that reveals help text.
  * Use it in place of long inline helper paragraphs to keep forms dense.
+ *
+ * **Both surfaces open it on hover; they differ in what opens.** On the broker
+ * app it is a Radix tooltip — a dark, compact chip, the right density for a
+ * desktop tool. Inside the member portal (`useInLeaf`) it is `Hint`, a light
+ * floating panel drawn in the member's own tokens, which ALSO opens on tap: the
+ * portal is phone-first, Radix's tooltip has no touch trigger, and its portalled
+ * content escapes `.leaf` and would arrive in the broker's tokens on a member's
+ * screen. Several of the components carrying these hints (UtilizationView,
+ * CoverageCard, FlexCoverageCard, FlexPriceTagSummary, the enrollment election
+ * UI) render on BOTH surfaces, which is why the choice is made here from the
+ * surrounding world rather than passed down as a prop from each of them.
  */
 export function InfoHint({
   children,
@@ -45,6 +58,14 @@ export function InfoHint({
   className?: string;
   label?: string;
 }) {
+  const inLeaf = useInLeaf();
+  if (inLeaf) {
+    return (
+      <Hint label={label} className={className}>
+        {children}
+      </Hint>
+    );
+  }
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
@@ -53,7 +74,7 @@ export function InfoHint({
             type="button"
             aria-label={label}
             className={cn(
-              "inline-flex items-center align-middle text-subtle " +
+              "-m-3 inline-flex size-11 items-center justify-center align-middle text-subtle " +
                 "transition-colors hover:text-foreground focus-visible:text-foreground " +
                 "focus-visible:outline-none",
               className,

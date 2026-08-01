@@ -62,3 +62,7 @@ frontend.zip
 
 # Retained document storage (claim receipts, dependant proofs) — PII
 backend/var/
+
+# Design-skill working state (audits, critiques, question state). The
+# deliverables it produces — DESIGN.md, docs/ — are committed; this is scratch.
+.impeccable/

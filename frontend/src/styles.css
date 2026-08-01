@@ -1,4 +1,13 @@
 @import "tailwindcss";
+/* Self-hosted so the first paint doesn't wait on a third-party round trip.
+   Same family the broker app has always used — this replaces the render-
+   blocking Google Fonts <link>, it does not change the typeface. */
+@import "@fontsource-variable/inter";
+/* The member portal's own visual world ("Daylight"). Additive tokens, applied
+   only under the `.leaf` root PortalShell renders — the broker tokens below
+   are untouched. `.leaf` is a technical namespace, not the world's name; see
+   DESIGN.md and docs/PORTAL_REDESIGN_PLAN.md. */
+@import "./styles/leaf.css";
 
 @theme {
   /* Red & white theme. Neutrals carry a faint warm tint so they harmonize with
@@ -73,11 +82,15 @@
 
   --radius-sm: 0.375rem;
   --radius: 0.5rem;
+  /* The tap-open help panel (ui/hint.tsx), which renders in BOTH worlds. Its own
+     token because the leaf re-points it to the album's 2px and every other
+     radius here would carry the broker's softer corner onto a printed frame. */
+  --radius-hint: 0.375rem;
   --radius-md: 0.625rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
 
   /* The two steps Tailwind's default scale lacks for a data-dense product.

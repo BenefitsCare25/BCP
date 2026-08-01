@@ -4,6 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type { PortalClaimList, PortalEnrollmentData } from "@/api/portal";
+import type { ClaimMessage, ClaimMessageList } from "@/api/portalMessages";
 import type { MemberAccount } from "@/api/memberAccounts";
 import type { MemberCards } from "@/api/panelCards";
 import {
@@ -70,6 +71,29 @@ export function usePreviewDependants(employeeId: string | null) {
 
 export function usePreviewClaims(employeeId: string | null) {
   return usePreviewQuery<PortalClaimList>(employeeId, "/claims", "claims");
+}
+
+/** The member's inbox as the MEMBER sees it — the preview endpoint runs the
+ * member serializer, so a broker's name never appears here either. */
+export function usePreviewMessages(employeeId: string | null) {
+  return usePreviewQuery<ClaimMessageList>(employeeId, "/messages", "messages");
+}
+
+export function usePreviewClaimMessages(
+  employeeId: string | null,
+  claimId: string | null,
+) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["portal-preview", "claim-messages", employeeId, claimId, cid],
+    queryFn: () =>
+      api.get<ClaimMessage[]>(
+        `/employees/${employeeId}/portal-preview/claims/${claimId}/messages`,
+      ),
+    enabled: Boolean(employeeId && claimId),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
 }
 
 export function usePreviewEnrollment(employeeId: string | null) {

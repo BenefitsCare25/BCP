@@ -43,6 +43,7 @@ from app.schemas.enrollment import (
     LeaveElectionIn,
     LeaveElectionOut,
     MemberLeaveOptionsOut,
+    PlanFinancials,
     PortalEnrollmentOut,
     ProductTierSetOut,
 )
@@ -129,6 +130,70 @@ def find_enrollment(
     ).scalar_one_or_none()
 
 
+def _member_safe_options(options: EnrollmentOptionsOut) -> EnrollmentOptionsOut:
+    """Strip broker-facing PREMIUM figures from the enrollment options.
+
+    `build_enrollment_options` is the broker's payload: each tier carries the
+    premium rate, the annual premium and the age-banded rate table. Those are
+    the same figures `member_statement.py` deliberately nulls before the portal
+    ever sees a benefit statement — but the enrollment surface was calling the
+    builder directly, so a member electing a plan was shown the rate the
+    employer is charged for them ("Rate (per $1k SI) 454"). Two surfaces
+    disagreeing about what a member may see is how a leak survives review.
+
+    What SURVIVES is what a member actually decides on:
+      * ``sum_insured`` — how much they'd be covered for, and
+      * ``price_tag`` (untouched, on the tier itself) — what the change costs
+        THEM out of their own flex wallet.
+
+    ``num_employees`` and ``basis`` go too: the first is the slip's cohort
+    headcount and the second the group rating basis, both broker aggregates
+    about the scheme rather than facts about this member. Nothing renders them,
+    but they were still in the JSON the member's browser received.
+
+    A premium is what the company pays the insurer. It is not a price the
+    member can act on, and showing it next to a wallet figure invites reading
+    one as the other.
+    """
+
+    def scrub(fin: PlanFinancials | None) -> PlanFinancials | None:
+        if fin is None:
+            return None
+        return fin.model_copy(
+            update={
+                "premium_rate": None,
+                "annual_premium": None,
+                "rate_basis": None,
+                "rate_tiers": None,
+                "dependant_rate": None,
+                "estimated_annual_earnings": None,
+                "voluntary_rates": None,
+                # Broker aggregates about the COHORT, not this member: the
+                # slip's stated headcount and the basis it was rated on.
+                "num_employees": None,
+                "basis": None,
+                # The badge only means anything beside a premium figure.
+                "gst_included": False,
+            }
+        )
+
+    return options.model_copy(
+        update={
+            "products": [
+                p.model_copy(
+                    update={
+                        "tiers": [
+                            t.model_copy(update={"financials": scrub(t.financials)})
+                            for t in p.tiers
+                        ]
+                    }
+                )
+                for p in options.products
+            ]
+        }
+    )
+
+
 def build_portal_enrollment(
     db: Session,
     employee: Employee | None,
@@ -137,7 +202,11 @@ def build_portal_enrollment(
 ) -> PortalEnrollmentOut:
     """The member enrollment payload (window + own session + options) — served
     to the member on /portal/enrollment and mirrored read-only by the broker's
-    employee-view preview (which never materializes an enrollment row)."""
+    employee-view preview (which never materializes an enrollment row).
+
+    Premium figures are scrubbed here rather than in the API layer so BOTH
+    consumers — the member endpoint and the preview — are covered by one gate,
+    the same shape as `build_member_statement`."""
     if employee is None:
         return PortalEnrollmentOut()
     window = open_window_for(db, employee)
@@ -147,9 +216,11 @@ def build_portal_enrollment(
     return PortalEnrollmentOut(
         window=EnrollmentWindowOut.model_validate(window),
         enrollment=enrollment_detail(db, enr) if enr is not None else None,
-        options=build_enrollment_options(
-            db, employee, window, employee.policy_year_id,
-            enrollment_id=enr.id if enr is not None else None,
+        options=_member_safe_options(
+            build_enrollment_options(
+                db, employee, window, employee.policy_year_id,
+                enrollment_id=enr.id if enr is not None else None,
+            )
         ),
     )
 
@@ -224,10 +295,24 @@ def build_enrollment_options(
     dep_profiles_by_id = (
         dependant_profiles_by_id(db, employee.id, ref) if employee is not None else {}
     )
+    # Product NAMES for the member surface, resolved once rather than per tier
+    # set. Loaded by id (the ids came from this year's own categories), so a
+    # firm-library product with client_id NULL resolves the same as a
+    # company-owned one.
+    product_names: dict[str, str] = {}
+    pids = [ts.product_id for ts in tier_sets.values() if ts.product_id]
+    if pids:
+        product_names = {
+            p.id: p.display_name
+            for p in db.scalars(
+                select(ProductModel).where(ProductModel.id.in_(pids))
+            ).all()
+        }
     products = [
         ProductTierSetOut(
             product_id=ts.product_id,
             product_code=ts.product_code,
+            product_name=product_names.get(ts.product_id),
             employee_participation=ts.employee_participation,
             dependant_participation=ts.dependant_participation,
             baseline_tier_category_id=ts.baseline_tier_category_id,

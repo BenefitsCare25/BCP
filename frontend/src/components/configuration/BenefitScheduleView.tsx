@@ -9,100 +9,25 @@ import type {
   UtilizationBucket,
 } from "@/types";
 import { propertyLabel } from "@/lib/sob";
+import {
+  displayProps,
+  formatValue,
+  isEnumeration,
+  readSchedule,
+  subItemsOf,
+  usageFor,
+} from "@/lib/benefitSchedule";
 
-// `properties` is an open bag: outpatient copay fields (per_visit / co_payment
-// / per_policy_year and their site variants), the dental Panel/Non-Panel axis,
-// and the slip parser's qualifier keys below.
-//
-// Only these four are ALSO written into `limits` by the parser
-// (placement_slip_sob.py::_SOB_PROPERTY_PATTERNS), so they are the only ones
-// that must be suppressed here to avoid rendering twice. Everything else is
-// shown.
-//
-// This is deliberately a deny-list. It used to be an allow-list of copay
-// prefixes, which silently dropped every dental Panel/Non-Panel value and would
-// drop any future qualifier preset whose key didn't start with a listed prefix.
-const MIRRORED_INTO_LIMITS = new Set([
-  "maximum_days",
-  "qualification_period",
-  "co_insurance",
-  "surgical_schedule",
-]);
-
-function displayProps(
-  properties: Record<string, string> | undefined,
-): [string, string][] {
-  return Object.entries(properties ?? {}).filter(
-    ([k, v]) => !MIRRORED_INTO_LIMITS.has(k) && String(v ?? "").trim() !== "",
-  );
-}
-
-// Read-only Schedule of Benefits renderer. Shared by the broker employee detail
-// view and the employee-facing benefits portal.
+// Read-only Schedule of Benefits renderer for the BROKER surfaces. The reading
+// logic (which rows carry content, which are reference, how values format,
+// which rows earn the headline) lives in `lib/benefitSchedule` and is shared
+// with the member portal's own renderer, so the two can never disagree about
+// what a schedule says — only about how it looks.
 //
 // A member sees the schedule of every product they're matched to, which for a
 // fully-covered employee is ~230 rows. So the headline limits render first and
 // the long tail (reference lines, condition lists, rows with no value) collapses
 // behind a disclosure — nothing is removed, only demoted.
-
-// How many valued rows to show before collapsing the rest.
-const SUMMARY_ROWS = 6;
-
-function formatValue(
-  value: string | null | undefined,
-  kind?: BenefitKind,
-): string | null {
-  if (value == null || value === "") return null;
-  const v = value.trim();
-  const numeric = /^\d{1,3}(,\d{3})*$/.test(v) || /^\d+$/.test(v);
-  const asCurrency = () =>
-    numeric ? `$${Number(v.replace(/,/g, "")).toLocaleString()}` : v;
-
-  // A kind that states the type outright wins over the digits.
-  if (kind === "percent") return v.endsWith("%") ? v : `${v}%`;
-  if (kind === "days") return /\bdays?\b/i.test(v) ? v : `${v} days`;
-  if (kind === "text" || kind === "boolean" || kind === "list" || kind === "scale") {
-    return v;
-  }
-  if (kind === "currency") return asCurrency();
-
-  // `amount` is the DEFAULT kind, not a broker's choice — `sob_columns` stamps
-  // it on any row nobody typed a type for, so it carries no more information
-  // than no kind at all. Both fall back to the numeric heuristic, which keeps
-  // the 400 stored `amount` rows (all of GBT) rendering as currency.
-  //
-  // This is why a genuine non-money count still needs its kind set explicitly
-  // (the row detail panel has a per-item and per-sub-item picker): "Number of
-  // Visits: 6" is only distinguishable from "$6" by someone saying so.
-  return asCurrency();
-}
-
-// `benefit_schedule` is an untyped JSON column server-side (`dict[str, Any]`),
-// so `BenefitItem` describes what writers SHOULD produce, not what every stored
-// row actually has — seeded and hand-PATCHed schedules routinely omit
-// `sub_items` entirely. Read it defensively: a missing key must render an empty
-// section, never crash the member's benefits page.
-function subItemsOf(item: BenefitItem): BenefitSubItem[] {
-  return Array.isArray(item.sub_items) ? item.sub_items : [];
-}
-
-/** A row worth rendering: it says something beyond its own name. */
-function hasContent(item: BenefitItem): boolean {
-  return Boolean(
-    (item.value != null && item.value !== "") ||
-      item.note ||
-      (item.limits && item.limits.length > 0) ||
-      subItemsOf(item).length > 0 ||
-      displayProps(item.properties).length > 0,
-  );
-}
-
-/** Enumerations (covered conditions, compensation scales) are reference, not limits. */
-function isEnumeration(item: BenefitItem): boolean {
-  return (
-    (item.kind === "list" || item.kind === "scale") && subItemsOf(item).length > 0
-  );
-}
 
 function money(n: number): string {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -313,14 +238,10 @@ export function BenefitScheduleView({
 }: Props) {
   const [showAll, setShowAll] = useState(false);
 
-  // Rows that say nothing beyond their own name were still rendered as bare
-  // labels — a dental plan whose values never got filled in showed nine of them.
-  // If that empties the schedule outright the plan genuinely has names but no
-  // values, so keep the names: they still tell the member what is covered.
-  const all = schedule?.items ?? [];
-  const withContent = all.filter(hasContent);
-  const items = withContent.length > 0 ? withContent : all;
-  const valuesMissing = withContent.length === 0 && all.length > 0;
+  const { items, headline, collapsible, valuesMissing } = readSchedule(
+    schedule?.items,
+    usageByBenefit,
+  );
 
   if (items.length === 0) {
     return (
@@ -330,22 +251,6 @@ export function BenefitScheduleView({
     );
   }
 
-  // Headline = the non-enumeration rows, but any row the member has CLAIMED
-  // against is always promoted into it. Taking a flat first-N by document order
-  // could bury the one balance they opened the page to check behind "View full
-  // schedule". Document order is preserved among the chosen rows.
-  const candidates = items.filter((i) => !isEnumeration(i));
-  const used = (i: BenefitItem) => {
-    const b = usageByBenefit?.get((i.name ?? "").trim().toLowerCase());
-    return Boolean(b && (b.approved > 0 || b.pending > 0));
-  };
-  const usedRows = candidates.filter(used);
-  const filler = candidates
-    .filter((i) => !used(i))
-    .slice(0, Math.max(0, SUMMARY_ROWS - usedRows.length));
-  const picked = new Set<BenefitItem>([...usedRows, ...filler]);
-  const headline = candidates.filter((i) => picked.has(i));
-  const collapsible = items.length > headline.length;
   const shown = showAll || !collapsible ? items : headline;
 
   return (
@@ -369,7 +274,7 @@ export function BenefitScheduleView({
         <ItemBlock
           key={`${item.number}-${idx}`}
           item={item}
-          usage={usageByBenefit?.get((item.name ?? "").trim().toLowerCase())}
+          usage={usageFor(item, usageByBenefit)}
         />
       ))}
       {collapsible && (

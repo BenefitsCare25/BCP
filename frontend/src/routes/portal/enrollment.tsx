@@ -14,13 +14,15 @@ import type { DependantRef } from "@/components/enrollment/electionShared";
 import {
   dependantName,
   dependantRelationship,
-} from "@/components/portal/DependantsTable";
+} from "@/lib/dependant";
 import { MemberEnrollmentPanel } from "@/components/portal/MemberEnrollmentPanel";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isNotFoundError } from "@/lib/errors";
+import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function PortalEnrollmentPage() {
+  useDocumentTitle("My enrollment");
   const enrollment = usePortalEnrollment();
   const dependants = usePortalDependants();
   const saveElections = useSaveMyElections();
@@ -71,14 +73,11 @@ export function PortalEnrollmentPage() {
   }
 
   return (
+    // No page heading and no lede. The shell already carries the h1 and the
+    // nav already says which section this is, so both only repeated what the
+    // member could see; the deadline is the one fact worth the space, and the
+    // panel states it.
     <div className="space-y-4">
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">My enrollment</h1>
-        <p className="text-sm text-muted-foreground">
-          Review your plans and make changes while the enrollment window is
-          open.
-        </p>
-      </div>
       <MemberEnrollmentPanel
         data={enrollment.data ?? { window: null, enrollment: null, options: null }}
         dependants={dependantRefs}

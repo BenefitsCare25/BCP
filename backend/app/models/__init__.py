@@ -13,6 +13,7 @@ from app.models.category import Category
 from app.models.claim import Claim
 from app.models.claim_ai_review import ClaimAIReview
 from app.models.claim_doc_type import ClaimDocType
+from app.models.claim_message import ClaimMessage
 from app.models.claim_review_config import ClaimReviewConfig
 from app.models.client import BrokerFirm, Client
 from app.models.client_ai_config import ClientAIConfig
@@ -58,6 +59,7 @@ __all__ = [
     "Claim",
     "ClaimAIReview",
     "ClaimDocType",
+    "ClaimMessage",
     "ClaimReviewConfig",
     "Client",
     "ClientAIConfig",

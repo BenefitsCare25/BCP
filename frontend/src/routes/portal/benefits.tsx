@@ -1,10 +1,9 @@
-/** "My benefits" — the member's own statement, rendered with the same
- * components as the broker view (financials are stripped server-side). */
-import { FileWarning } from "lucide-react";
+/** "What's covered" — the member's own leaf. */
 import { usePortalStatement, usePortalUtilization } from "@/api/portal";
-import { BenefitStatement } from "@/components/benefits/BenefitStatement";
+import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
+import { Mount } from "@/components/portal/leaf/Mount";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
-import { Skeleton } from "@/components/ui/skeleton";
+import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { isNotFoundError } from "@/lib/errors";
 
 export function PortalBenefitsPage() {
@@ -13,15 +12,7 @@ export function PortalBenefitsPage() {
   // Never gates rendering: the schedule is still useful if usage fails to load.
   const utilization = usePortalUtilization();
 
-  if (statement.isLoading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-48 w-full" />
-        <Skeleton className="h-48 w-full" />
-      </div>
-    );
-  }
+  if (statement.isLoading) return <LeafSkeleton label="Loading your benefits" />;
 
   // Only a 404 means "no active coverage" — other failures get a retryable
   // error state instead of the confident no-coverage copy.
@@ -31,18 +22,17 @@ export function PortalBenefitsPage() {
 
   if (statement.isError || !statement.data) {
     return (
-      <div className="rounded-lg border border-border bg-card p-8 text-center">
-        <FileWarning className="mx-auto size-6 text-muted-foreground" />
-        <p className="mt-2 text-sm font-medium text-foreground">
-          No active coverage found
+      <Mount label="No benefits on record">
+        <p className="text-row text-label">
+          We don't have any benefits recorded against your name for this
+          period. This usually means your company's cover for the year hasn't
+          been finalised yet. Your HR team can tell you where things stand.
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Your company doesn't have an active policy year yet, or your record
-          isn't on the current roster. Contact your HR or broker.
-        </p>
-      </div>
+      </Mount>
     );
   }
 
-  return <BenefitStatement data={statement.data} utilization={utilization.data} />;
+  return (
+    <CoverageLeaf data={statement.data} utilization={utilization.data} />
+  );
 }

@@ -23,3 +23,38 @@ export function fmtDate(v: string | null | undefined): string {
   if (!v) return "—";
   return String(v).split(/[ T]/)[0];
 }
+
+/** Parse a server timestamp. The backend emits UTC, but on SQLite the value is
+ * serialized WITHOUT an offset (`2026-08-01T10:56:48.080711`), and `new Date()`
+ * reads an offset-less string as browser-LOCAL. In Singapore that is an
+ * eight-hour lie on every timestamp — a claim message posted at 18:56 reads as
+ * 10:56. Treat a bare string as UTC by appending `Z`.
+ *
+ * Lives here rather than in `lib/attention.ts` (its first home) because it is
+ * a property of the WIRE FORMAT, not of any one feature — every surface that
+ * renders a server timestamp needs it, and the claim thread was the second
+ * place to be caught by the same trap. */
+export function parseServerDate(iso: string): Date {
+  const hasTz = /([zZ])|([+-]\d{2}:?\d{2})$/.test(iso);
+  return new Date(hasTz ? iso : `${iso}Z`);
+}
+
+/** A real timestamp with its time of day, in the viewer's zone — for values
+ * that genuinely carry one (a message's `created_at`).
+ *
+ * Deliberately separate from `fmtDate`, which must never go near `new Date()`:
+ * a bare "2026-07-12" parsed that way is midnight UTC and renders a day early
+ * west of Greenwich. Anything unparseable falls back to the date alone rather
+ * than printing "Invalid Date". */
+export function fmtDateTime(v: string | null | undefined): string {
+  if (!v) return "—";
+  const when = parseServerDate(v);
+  if (Number.isNaN(when.getTime())) return fmtDate(v);
+  return when.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}

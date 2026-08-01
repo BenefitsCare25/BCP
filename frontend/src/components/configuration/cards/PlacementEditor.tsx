@@ -179,7 +179,8 @@ export function PlacementEditor({
 
         <CardCanvas
           aspectRatio={card.aspect_ratio}
-          artworkSrc={face === "back" ? back : front}
+          artworkSrc={(face === "back" ? back : front).url}
+          artworkStatus={(face === "back" ? back : front).status}
           // Positioned text is drawn by the drag handles below, not the canvas.
           fields={[]}
           values={{}}
