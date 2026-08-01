@@ -30,9 +30,10 @@ import { Mount } from "./Mount";
 import { Deck, type DeckSlide } from "./Deck";
 import { productShortLabel } from "./glossary";
 
-/** The flex wallet's slide key. Namespaced so it can never collide with a
- * product code, since both share one deck and one `?p=` parameter. */
-export const FLEX_SLIDE_KEY = "flex";
+/** The flex wallet's slide key, and the value `?p=flex` carries. Namespaced so
+ * it can never collide with a product code, since both share one deck and one
+ * URL parameter. Module-private: nothing outside builds these keys. */
+const FLEX_SLIDE_KEY = "flex";
 
 export function CoverageLeaf({
   data,

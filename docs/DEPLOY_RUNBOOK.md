@@ -276,18 +276,33 @@ az webapp deploy \
 
 ## Deploy frontend
 
-Build and ship to the App Service (or split out to a Static Web App):
+**There is nothing separate to deploy.** The SPA is built INTO the API image and
+served by the API process, so a frontend change ships through the ordinary
+container deploy above and needs no step of its own.
+
+- `backend/Dockerfile` — a `frontend` stage runs `pnpm build` and copies `dist`
+  into the runtime image as `./static`.
+- `app/core/spa.py::mount_spa` — mounts it at `/`, called LAST in `main.py`
+  because its catch-all would shadow any route registered after it. Hashed asset
+  filenames are cached forever; `index.html` never is, or a deploy leaves browsers
+  pinned to a stale bundle pointing at assets that no longer exist.
+
+**Do not split the frontend onto its own host.** Same-origin is a requirement,
+not a preference: the HR refresh cookie is host-only and `SameSite=Strict`
+(`core/hr_auth.set_refresh_cookie`), so it is only ever returned to the exact
+host that set it — a separately-hosted frontend calling a different API host
+could never refresh a session. Tenancy is header-based on a single host
+(`INSPRO_TENANT_MODE=header`), so there are no per-tenant subdomains to serve
+either.
+
+To confirm a frontend change actually reached prod, check the running image tag
+against the commit and fetch an asset off the live host:
 
 ```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm build
-zip -r ../frontend.zip dist
-az webapp deploy \
-  --resource-group rg-inspro-staging \
-  --name inspro-staging-web \
-  --src-path ../frontend.zip \
-  --type zip
+az webapp config show --name inspro-portal --resource-group rg-inspro-prod \
+  --query linuxFxVersion -o tsv          # → …/inspro-api:<commit sha>
+curl -s https://inspro-portal.azurewebsites.net/portal/coverage \
+  | grep -oE '/assets/[^"]+\.css'        # then curl that asset and grep it
 ```
 
 ## Smoke test
