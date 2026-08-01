@@ -113,9 +113,6 @@ function NoCoverageCard() {
 
 function BenefitsTab({ employeeId }: { employeeId: string }) {
   const statement = usePreviewStatement(employeeId);
-  // Mirrors the member surface — the preview must show the same remaining
-  // balances the member sees. Never gates rendering.
-  const utilization = usePreviewUtilization(employeeId);
   // The member's own loading state, not the broker's grey blocks — the frame
   // shows what the member sees at every moment, including this one.
   if (statement.isLoading) {
@@ -127,7 +124,7 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
     return <PortalErrorState onRetry={() => void statement.refetch()} />;
   }
   if (statement.isError || !statement.data) return <NoCoverageCard />;
-  return <CoverageLeaf data={statement.data} utilization={utilization.data} />;
+  return <CoverageLeaf data={statement.data} />;
 }
 
 /** Mirrors routes/portal/claims: the member's own action in the member's own
@@ -171,12 +168,15 @@ function ClaimsTab({ employeeId }: { employeeId: string }) {
 function UtilizationTab({ employeeId }: { employeeId: string }) {
   const { data, isLoading, isError, error, refetch } =
     usePreviewUtilization(employeeId);
+  // Mirrors the member page — the preview itemises what is under review the
+  // same way, from the same member-gated endpoint.
+  const claims = usePreviewClaims(employeeId);
   if (isLoading) return <LeafSkeleton label="Loading balances" mounts={2} />;
   if (isError && !isNotFoundError(error)) {
     return <PortalErrorState onRetry={() => void refetch()} />;
   }
   if (isError || !data) return <NoCoverageCard />;
-  return <UsageLeaf data={data} />;
+  return <UsageLeaf data={data} claims={claims.data?.items} />;
 }
 
 /** Mirrors routes/portal/dependants: the same quiet action in the same place,
@@ -460,7 +460,14 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
           re-points tokens for this subtree; the surrounding broker chrome above
           is unaffected. */}
       <LeafScopeContext.Provider value>
-      <div className="leaf overflow-hidden rounded-xl border border-border shadow-sm">
+      {/* `overflow-clip`, NOT `overflow-hidden`. Hidden makes this a scroll
+          container, which becomes the containing block for any `position:
+          sticky` inside it — and since this box never scrolls, sticky silently
+          stops working. The coverage deck's rail is sticky, so in the preview it
+          scrolled away with the content while the member's own rail stayed put:
+          a divergence in the one component whose whole job is not to diverge.
+          `clip` clips identically, radius included, without the side effect. */}
+      <div className="leaf overflow-clip rounded-xl border border-border shadow-sm">
         {/* One row, mirroring the live shell: mark, hairline, pill nav, then the
             benefit-year scope control and the account action. No primary action
             in the bar — see PortalShell. */}

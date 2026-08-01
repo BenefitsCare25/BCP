@@ -7,13 +7,20 @@
  * broker's filing vocabulary, not an answer to "am I covered for this?".
  *
  * The mount never appears for a product the member does not hold: the leaf
- * shows only what was issued. */
-import { useId, useMemo } from "react";
-import { Users } from "lucide-react";
-import type { CoverageLine, Utilization } from "@/types";
+ * shows only what was issued.
+ *
+ * **It carries no claim figures.** What has been claimed against this product,
+ * what is still under review and what is left are the "What's left" tab's
+ * question; here the answer is what the policy entitles the member to. The two
+ * were interleaved — a product's balance printed between its description and
+ * its schedule — which made an entitlement page read as a statement of account.
+ * Flexible benefits is the one exception, and it is not one in spirit: a flex
+ * wallet's allowance and what remains of it ARE its entitlement, so `FlexMount`
+ * keeps its ledger. */
+import { useId } from "react";
+import type { CoverageLine } from "@/types";
 import { Mount, MountRule } from "./Mount";
 import { Money } from "./Figure";
-import { FillRule } from "./FillRule";
 import { ScheduleLeaf } from "./ScheduleLeaf";
 import { glossBeside } from "./glossary";
 
@@ -25,43 +32,57 @@ function dependantLabel(d: {
   return d.name ?? d.relationship ?? "Dependant";
 }
 
+/** The slip writes its description as a labelled field — "Cover: Reimbursement
+ * of eligible inpatient expenses…". Under the product's own title the label is
+ * furniture: the member is not choosing between fields, they are reading what
+ * this product does. */
+function describedCover(text: string | null | undefined): string | null {
+  const trimmed = text?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/^cover\s*[:\-–—]\s*/i, "").trim() || null;
+}
+
+/** A value long enough to read as a sentence goes full width beneath its label;
+ * squeezed into the right-hand column it forces the label to wrap one word per
+ * line. Same threshold `ScheduleRow` uses, so a mount's own rows and its
+ * schedule's rows break at the same point. */
+const LONG_VALUE = 40;
+
 export function BenefitMount({
   line,
-  utilization,
+  rise = true,
 }: {
   line: CoverageLine;
-  utilization?: Utilization | null;
+  /** Off inside a coverage-deck slide, whose own transition owns the arrival. */
+  rise?: boolean;
 }) {
   const titleId = useId();
 
-  // This product's buckets, keyed by the lowercased benefit NAME — the same
-  // join key `utilization.py` buckets on. Memoised because a fully-covered
-  // member renders eleven of these, and a fresh Map identity each render would
-  // also defeat any memo downstream.
-  const { usageByBenefit, productUsage } = useMemo(() => {
-    const mine = (utilization?.insured ?? []).filter(
-      (b) => b.product_code === line.product_code,
+  // **One description, in one place.** The mount used to print two: our
+  // plain-language gloss under the title, and the slip's own cover description
+  // further down inside the schedule. On a product whose NAME already says it
+  // ("Group Hospital & Surgical" / "hospital stays and surgery" / "Cover:
+  // Reimbursement of eligible inpatient expenses…") the member read the same
+  // fact three times before reaching a single figure.
+  //
+  // The slip's description wins when there is one: it comes from the policy, it
+  // is specific to this plan, and the gloss is a generic line written per
+  // product CODE. The gloss stays as the fallback, which is what it was for.
+  const described = describedCover(line.cover_description);
+  const gloss =
+    described ??
+    glossBeside(
+      line.product_name ?? line.product_code,
+      line.product_code,
+      line.product_name,
     );
-    return {
-      usageByBenefit: new Map(
-        mine
-          .filter((b) => b.benefit_key)
-          .map((b) => [b.benefit_key!.trim().toLowerCase(), b]),
-      ),
-      productUsage: mine.find((b) => !b.benefit_key) ?? null,
-    };
-  }, [utilization, line.product_code]);
-
-  const gloss = glossBeside(
-    line.product_name ?? line.product_code,
-    line.product_code,
-    line.product_name,
-  );
   const covered = line.covers_dependants ? line.covered_dependants : [];
+  const coveredText = covered.map(dependantLabel).join(", ");
 
   return (
     <Mount
       as="article"
+      rise={rise}
       labelId={titleId}
       label={
         <>
@@ -78,58 +99,52 @@ export function BenefitMount({
       }
       gloss={gloss}
     >
-      {/* Product-level fullness — utilisation, so an empty bar means an unused
-          limit and never a benefit the member lacks.
-          Rendered only when there is something to report: a product with no
-          yearly cap and nothing claimed against it would otherwise print a bare
-          "Nothing claimed yet" under its own name, which reads like a verdict
-          on the cover rather than a fact about this member's year. The
-          "what's left" tab is where an untouched benefit is worth stating. */}
-      {productUsage &&
-        (productUsage.limit !== null ||
-          productUsage.approved > 0 ||
-          productUsage.pending > 0) && (
-          <div className="mb-3">
-            <FillRule
-              limit={productUsage.limit}
-              approved={productUsage.approved}
-              pending={productUsage.pending}
-              remaining={productUsage.remaining}
-            />
-          </div>
-        )}
+      {/* **No margins on any of these blocks.** `Mount` is a flex column with
+          `gap-3`; the `mb-3` these each carried added to that gap rather than
+          replacing it, so every row in the mount's head sat 24px from its
+          neighbour while the schedule's rows below sat at 14px. Spacing here is
+          the layout's job, in one place. */}
 
-      {/* Amount covered is present only where the surface is allowed it —
-          `financials` is nulled for members by design. Rendered when it
-          survives so the broker preview and the member stay identical. */}
-      {line.financials?.sum_insured != null && (
-        <div className="mb-3 flex items-baseline justify-between gap-4">
-          <span className="text-row text-label">
-            Amount you're covered for
-          </span>
-          <Money value={line.financials.sum_insured} emphasis="strong" />
-        </div>
+      {/* Every row in this head is the SAME shape — printed term on the left at
+          the mount's own margin, value on the right — so they read as one
+          column of terms and one of values. "Also covers" used to lead with an
+          icon, which indented its label past every other label in the mount for
+          no information: the term already says what it is. */}
+      {(line.financials?.sum_insured != null || covered.length > 0) && (
+        <dl className="flex flex-col gap-2">
+          {/* Amount covered is present only where the surface is allowed it —
+              `financials` is nulled for members by design. Rendered when it
+              survives so the broker preview and the member stay identical. */}
+          {line.financials?.sum_insured != null && (
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-row text-label">Amount you're covered for</dt>
+              <dd className="m-0 shrink-0 text-right">
+                <Money value={line.financials.sum_insured} emphasis="strong" />
+              </dd>
+            </div>
+          )}
+          {covered.length > 0 &&
+            (coveredText.length > LONG_VALUE ? (
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-row text-label">Also covers</dt>
+                <dd className="m-0 text-row text-record">{coveredText}</dd>
+              </div>
+            ) : (
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-row text-label">Also covers</dt>
+                <dd className="m-0 shrink-0 text-right text-row text-record">
+                  {coveredText}
+                </dd>
+              </div>
+            ))}
+        </dl>
       )}
 
-      {covered.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-          <span className="inline-flex items-center gap-1.5 text-row text-label">
-            <Users className="size-3.5" aria-hidden />
-            Also covers
-          </span>
-          <span className="text-row text-record">
-            {covered.map(dependantLabel).join(", ")}
-          </span>
-        </div>
-      )}
-
-      <MountRule className="mb-1" />
+      <MountRule />
 
       <ScheduleLeaf
         schedule={line.benefit_schedule}
         annualPolicyLimit={line.annual_policy_limit}
-        coverDescription={line.cover_description}
-        usageByBenefit={usageByBenefit}
         titleId={titleId}
       />
     </Mount>

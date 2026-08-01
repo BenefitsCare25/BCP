@@ -26,6 +26,7 @@ translucent panels, floating pill chrome. Approved previews:
 | 7 | `/portal/card`, `/clinics`, `/security`, `/enrollment` | **done**, verified in browser |
 | 8 | Broker preview: a Home tab + retire the migration aliases | **done** |
 | 9 | Verification — detector, full browser pass | **done** |
+| 10 | Coverage deck — "What's covered" becomes an index + a stage | **done**, verified in browser |
 
 The **migration aliases** at the foot of `leaf.css`'s `@theme` block are GONE
 (phase 8) — nothing reads `--color-mount`, `--color-issue`, `--radius-leaf` or
@@ -310,6 +311,251 @@ than in the insurer's document order. That is the cost of having both the
 promotion rule and the aperture; reopening it means giving up one of them.
 
 ---
+
+## Phase 10 — the coverage deck (2026-08-01)
+
+"What's covered" rendered one `BenefitMount` per product down one column. A fully
+covered CDL member holds nine, each with its own schedule, and the page ran to
+nine screenfuls — which serves neither thing a member opens it to do (look one
+benefit up; see what they hold). It is now `leaf/Deck.tsx`: a sticky rail naming
+everything, and one product on stage. `CoverageLeaf` owns what belongs to
+coverage — which slides exist, their rail labels, which one it opens on, how the
+selection is carried — and `Deck` owns the mechanism.
+
+Settled while building, and the reasons are the load-bearing part:
+
+- **The rail is the point, not the animation.** A deck without a visible index is
+  a carousel, and a carousel is strictly worse than a scroll for a lookup. Sticky,
+  so it is still reachable three screenfuls down.
+- **It opens on what is MOVING** — the product with a pending claim, else one with
+  an approved claim, else the first. Opening on whichever product sorts first is
+  an arbitrary choice dressed as a default.
+- **ONE tablist element, relaid out.** The obvious build renders a horizontal rail
+  and a vertical one and hides one with `hidden`; that is fine for a heading
+  (`PortalShell` does it with its two `h1`s) and wrong for a tablist, which owns
+  roving focus and `aria-controls` that a second live copy duplicates. Same note
+  as `HeadRail`, same reason.
+- **The layout switches on the DECK'S width, via ResizeObserver — not the
+  viewport's.** `PortalFrame` renders this in a column much narrower than its
+  window, and a media query would hand that column a two-column desktop layout it
+  cannot fit. Verified: the preview column measures 836px and gets the vertical
+  rail; a 390px iframe of the same code gets the horizontal one.
+- **The pill is measured and transformed, NOT a `layoutId`.** motion.dev's layout
+  animation is the idiomatic answer and the wrong one here: the rail is a
+  horizontally scrolling container that the deck also scrolls programmatically to
+  reveal the active chip, and a layout projection measured across a concurrent
+  scroll lands the pill somewhere it does not belong.
+- **Only a change of SELECTION animates the pill** (`data-still`). This was a real
+  defect caught in the browser, not a hypothetical: `wide` starts false, so the
+  pill is measured against the horizontal rail one frame before the
+  ResizeObserver reports the vertical one, and it flew diagonally across the page
+  on every load. Suppressed for two frames — one to paint the move, one to restore
+  the transition, because restoring it in the same commit as the move is the case
+  browsers disagree about. The `ResizeObserver` guard compares against the last
+  size for a related reason: a fresh observer always fires once on `observe`, and
+  the effect re-runs on every selection, so an unguarded callback cancelled the
+  very travel it existed to preserve.
+- **`Mount` gained `rise={false}`.** Two entrances on one element do not compose —
+  the deck's directional transition ran with `leaf-rise` fading and lifting the
+  same node underneath it. Verified both ways: deck slides carry no `.leaf-rise`,
+  and "What's left" still staggers at 0 / 0.05 / 0.1s.
+- **`?p=` uses `replace: true`.** Stepping through nine products is reading, not
+  navigating; without it Back walked back through every product visited instead of
+  leaving the page. Verified: `history.length` unchanged across selections. The
+  tab switcher deliberately does NOT carry `p` across — it names a slide only
+  "What's covered" has.
+- **An unknown `?p=` resolves to the default**, not to an empty stage — a
+  bookmarked product dropped at renewal must still open the page. Verified with
+  `?p=WICA` on a member who has no WICA.
+- **Chips carry the short gloss, never the code.** `productShortLabel` in
+  `glossary.ts` is a second tier of the same copy (the sentence gloss's headline),
+  falling back to the insurer's product NAME and only then to the code. A rail
+  reading `GCGP · GCSP · GHS` is exactly what the Printed-Label Rule forbids.
+- **Prev/next are named by destination and are `neutral`**, not terracotta — they
+  pick a view (Do-vs-Pick). They go to `opacity-0` at the ends rather than
+  greying: a permanently dead control is furniture, and the counter says where you
+  are. The counter itself is `aria-hidden`; the chips carry `aria-posinset` /
+  `aria-setsize`, so a screen reader would otherwise announce the position twice.
+- **The outgoing panel is `inert` + `aria-hidden` while motion keeps it mounted**,
+  set through a ref because React 18 drops an unknown boolean `inert` prop
+  silently. Verified mid-transition: two panels, the outgoing one absolute, inert
+  and hidden.
+- **Height never animates** (`mode="popLayout"`), and the reader is scrolled to the
+  top of the new schedule when the stage has already left the viewport — never
+  landed halfway down a product they have not seen. `scroll-mt-20` keeps the
+  sticky rail off the heading it scrolls to.
+- **Swipe locks direction**: 40px threshold, 2:1 horizontal over vertical, and a
+  24px left-edge guard so it cannot fight the OS back-swipe. Vertical scrolling
+  wins every tie — this page is read by scrolling.
+
+Browser pass: nine chips at 390px, all 44px, rail scrolls inside itself with no
+document overflow and no sub-44px target; sticky at 8px; arrows / Home / End move
+selection and focus with a correct roving tabindex; the outer Coverage strip is
+unaffected.
+
+### Fixed on the user's review of phase 10
+
+Four faults, three of them older than the deck — the deck only made them legible by
+putting one product on screen at a time.
+
+- **The activity dot is GONE.** It was added in this phase and the first person to
+  see it asked what it meant, which is the answer. A mark carrying meaning no frame
+  explains is an unglossed term, and a nine-chip rail has nowhere to print the gloss
+  it would need. The signal survives where it can be read: the deck still opens on
+  the product that is moving, and that product's mount states the claim in words.
+- **Two descriptions became one.** `BenefitMount` printed our per-code gloss under
+  the title AND the slip's `cover_description` further down inside the schedule. On
+  GHS the member read the same fact three times ("Group Hospital & Surgical" /
+  "hospital stays and surgery" / "Cover: Reimbursement of eligible inpatient
+  expenses…") before reaching a figure. The policy's description now sits under the
+  title and the gloss is its fallback; `ScheduleLeaf` no longer takes
+  `coverDescription` at all. The leading `Cover:` label is stripped — it is a slip
+  field name, and under the title it is furniture.
+- **Margins compounded with the mount's gap.** `Mount` is `flex flex-col gap-3` and
+  every block in `BenefitMount` also carried `mb-3`, so the head's rows sat 24px
+  apart against the schedule's 14px; `FlexMount` had the same problem with `my-1`
+  rules and an `mt-3` heading, giving 16px on one side of a rule and 24px on the
+  other. All removed — see the Single-Spacing Rule now in DESIGN.md. Verified: 0
+  stray margins across all nine products at both widths.
+- **"Also covers" was indented past every other label** by a decorative `Users`
+  icon, and set as label-then-value inline while every neighbouring row was
+  justified. It is a proper `dt`/`dd` row now, on the mount's own left edge, and a
+  long dependant list stacks beneath its label at the same 40-character threshold
+  `ScheduleRow` already uses.
+- **The disclosure stated one quantity twice** — "Show all 10 benefits" on the left,
+  "4 more" on the right. The schedule's own size survives (it is what the button
+  reveals and what the insurer's document states); the tail count is derivable and
+  was never the point. Expanded now reads "Show fewer" rather than "Show headline
+  benefits", which was our vocabulary, not the member's.
+- Also: a **lone claimable flex category with no cap of its own is dropped**, using
+  the rule `UsageLeaf.FlexBlock` already applied to the same list — a mount titled
+  "Flexible benefits" was printing "What you can claim for: Flexible Benefits · No
+  separate cap". The two tabs must not disagree about whether that row is worth
+  printing.
+
+### Fixed from the code review of phase 10
+
+Twelve findings, all real. The two that would have shipped as behaviour bugs:
+
+- **`defaultKey` was frozen at mount.** `useState(defaultKey)` reads its argument
+  once, and `defaultKey` is derived from utilisation, which arrives later — the
+  broker preview deliberately does not gate rendering on it. So the uncontrolled
+  deck kept whatever the default was at mount (the first product) while the member
+  page, always controlled and re-deriving every render, moved to the pending one:
+  a divergence in the one component whose whole job is not to diverge. It now
+  falls through (`internalKey ?? defaultKey`), which makes both paths the same
+  expression. Verified: the preview opens Kamsinah on Hospital, as her own page does.
+- **`product_code` is not a unique slide key.** `hydrate_plans` emits a line per
+  matched CATEGORY and the product index is keyed on id; a firm-library product and
+  a company one can share a code (the unique constraint exempts `client_id IS
+  NULL`), and an unlinked category falls back to `"?"`. Two such lines collided on
+  the React key, on the `deck-tab-`/`deck-panel-` ids wiring the tablist together,
+  and on the `findIndex` resolving a selection — the second line was unreachable.
+  Keys are now suffixed on collision. The same slip carries `GHS`/`GHS2` and
+  `GMM`/`GMM2`, which share a short label, so a repeated LABEL is disambiguated by
+  plan code and then by product name.
+
+**The stage no longer uses `AnimatePresence`.** Chasing the review's "two live
+tabpanels" finding surfaced a worse one: under rapid switching — tapping through
+nine products, which is exactly what a deck invites — exits stopped replacing one
+another and stacked, seven full schedules deep, lingering for seconds. The swap is
+unchanged; what changed is who owns removal. `exiting` is now one piece of state
+cleared on a known deadline and the entrance is a CSS keyframe that runs on
+remount, so *at most one outgoing slide, gone in 200ms* is a property of the code
+rather than a hope about a scheduler — and it is how every other animation in this
+world is already written. Measured: max 2 panels while tapping all nine, settling
+to 1. It also deleted the `forwardRef`/`useIsPresent`/`popLayout` machinery, and
+with it the ref-forwarding bug I introduced while trying to keep it.
+
+Also fixed: the outgoing panel carries `inert`/`aria-hidden`/`tabIndex={-1}` on the
+element holding `role="tabpanel"` (it was on an inner div, leaving the panel itself
+live and tabbable); `aria-controls` is set only on the selected tab, since the
+others named ids that are not in the document; `onPointerCancel` no longer commits
+a swipe the reader never released; `onPointerDown` ignores non-primary pointers and
+non-left mouse buttons; `moveStill` cancels *both* of its frames, so two layout
+changes in consecutive frames — the documented mount sequence — cannot re-enable
+the pill transition early; `useIsWide` measures synchronously so the deck never
+paints the phone rail before flipping to the vertical one; the lone-benefit path
+renders its mount **with** the entrance, since outside the deck nothing else owns
+it; and `FlexMount`'s comment no longer claims a parity with `UsageLeaf.FlexBlock`
+that the two data shapes cannot support.
+
+**`PortalFrame`'s wrapper is `overflow-clip`, not `overflow-hidden`.** Hidden makes
+that box a scroll container, which becomes the containing block for any `position:
+sticky` inside it — and since it never scrolls, the deck's sticky rail silently did
+nothing in the preview while working on the member's page. `clip` clips identically,
+radius included, without the side effect. Verified: the rail moves 345px against a
+500px scroll instead of 500.
+
+### "What's covered" carries no claim figures (user, 2026-08-01)
+
+The tab is ENTITLEMENT. Every utilisation figure came off the insured mounts — the
+product-level `FillRule` ("Still under review · S$303.48", "Nothing claimed yet",
+the approved/pending bar) and the per-schedule-row fullness inside `ScheduleLeaf`.
+Those answer "what's left", which has its own tab, and interleaving them put a
+figure that changes weekly beside one that holds for the year. **`FlexMount` keeps
+its ledger** — a flex wallet's allowance and what remains of it *are* its
+entitlement, not an account of it.
+
+`BenefitMount` and `ScheduleLeaf` no longer take a `Utilization` at all, so
+`CoverageLeaf` no longer takes one either and neither `routes/portal/benefits` nor
+`PortalFrame.BenefitsTab` fetches it for this tab. `readSchedule`/`usageFor` keep
+their optional usage parameters — the broker's `BenefitScheduleView` and
+`CoverageCard` still show both — this surface simply passes none.
+
+Two consequences worth knowing:
+
+- **The deck now opens on the FIRST product, not the one with a claim in flight.**
+  Opening on the moving product was defensible while the tab showed claim figures;
+  with them gone the reason is invisible, and a page that opens halfway down a list
+  for an unstated reason is the same failure as the activity dot the rail used to
+  carry. `DeckActivity`, `DeckSlide.activity` and `Deck`'s `defaultKey` were
+  deleted rather than left dead.
+- **Nothing was lost.** Verified: "What's left" still renders "Group Hospital &
+  Surgical · Still under review · S$303.48" with its fill bars, and all nine
+  products on "What's covered" now match `/still under review|approved and
+  paid|nothing claimed|being assessed/` zero times, with zero fill bars, at 390px
+  and desktop.
+
+### "What's left" — itemised pending, and two duplications removed (user, 2026-08-01)
+
+- **"Still under review" now itemises the claims behind it.** The figure IS a sum
+  of submitted claims — `utilization.py` adds `amount_converted or amount_claimed`
+  for every claim whose status is in `PENDING_STATUSES` (everything except draft,
+  rejected and approved) — and a bare "S$303.48" answers nothing on its own. The
+  member is the only person who can tell us a receipt is missing from that total,
+  so `PendingBreakdown` (`UsageLeaf`) lists each contributing claim: provider,
+  date, dependant, amount. It **renders only when the rows reconcile with the
+  bucket to the cent** — the total comes from the utilisation service and the rows
+  from the claims list, two independent queries that can be a moment apart, and a
+  breakdown that does not add up reads as a fault in the number rather than in the
+  pairing. `IN_FLIGHT` is spelled out rather than derived by subtraction, because
+  a set defined as "everything except" silently grows a member the day a status is
+  added server-side, and these two lists have to agree for the reconciliation to
+  hold. `UsageLeaf` takes `claims` as a PROP (never fetches), so the member page
+  and `PortalFrame` pass their own member-gated queries and stay identical.
+- **The "Nothing claimed yet" mount is gone.** A product with no cap, nothing
+  claimed and no sub-limits has no fullness to draw and nothing to count down; the
+  only thing it could state is that it has no yearly cap, which is a fact about
+  the policy and belongs to the other tab. Collapsed into one mount it was still
+  eight rows of "No yearly cap" — the largest object on a page about what is left,
+  carrying nothing that is left. The empty state now gates on `active`, not on
+  `products`, or a member with nine uncapped products and no claims gets a blank
+  page.
+- **`glossBeside` now measures what a gloss ADDS.** An exact-match test was not
+  enough: "Group Hospital & Surgical" glossed "hospital stays and surgery" is a
+  different string and the same sentence. A gloss contributing fewer than two
+  words the title does not already carry is an echo, not a translation, and is
+  dropped. Two, not one, because English always supplies a connective the title
+  omits. Words match on a four-character stem (`surgery`/`surgical`,
+  `accident`/`accidental`), which is the shortest prefix that does not start
+  pairing unrelated words. Verified against every entry in the map: only
+  `GHS`/`GHS2` suppress; a code-only heading shares no words at all and so always
+  keeps its gloss, which is the case the Printed-Label Rule actually cares about.
+- **The flex tile stated what is left twice** — "S$2,680 · LEFT TO CLAIM" as the
+  mount's aside and "S$2,680 left" in the fill legend. The legend no longer takes
+  `remaining`; it keeps the half the aside does not carry, which is how much of
+  the allowance has gone.
 
 ## Open — needs a decision or backend work
 

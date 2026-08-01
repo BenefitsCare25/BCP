@@ -26,7 +26,7 @@ type CoverageTab = (typeof TABS)[number]["key"];
  * mirrors this structure — keep the two in sync. */
 export function PortalCoveragePage() {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { tab?: string };
+  const search = useSearch({ strict: false }) as { tab?: string; p?: string };
   const tab: CoverageTab =
     search.tab === "usage" || search.tab === "dependants"
       ? search.tab
@@ -38,6 +38,11 @@ export function PortalCoveragePage() {
     <Tabs
       value={tab}
       onValueChange={(value) =>
+        // `p` is deliberately NOT carried across: it names a slide of the
+        // coverage deck, which only "What's covered" has. TanStack replaces the
+        // whole search object, so dropping it is the default and the right
+        // behaviour — a stale product key on the family tab would come back the
+        // next time someone returned to this one.
         navigate({ to: "/portal/coverage", search: { tab: value } })
       }
     >
@@ -59,7 +64,21 @@ export function PortalCoveragePage() {
         </LeafTabsList>
       </HeadRail>
       <TabsContent value="benefits">
-        <PortalBenefitsPage />
+        {/* The selected benefit lives in the URL so it survives a refresh, the
+            back button and a shared link. `replace` because stepping through
+            nine products is reading, not navigating: without it the browser's
+            Back button walks back through every product visited instead of
+            leaving the page. */}
+        <PortalBenefitsPage
+          productKey={search.p ?? null}
+          onProductKeyChange={(p) =>
+            navigate({
+              to: "/portal/coverage",
+              search: { tab: "benefits", p },
+              replace: true,
+            })
+          }
+        />
       </TabsContent>
       <TabsContent value="usage">
         <PortalUtilizationPage />

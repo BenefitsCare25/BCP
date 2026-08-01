@@ -25,10 +25,35 @@ function familyLabel(code: string | null): string | null {
   );
 }
 
-export function FlexMount({ flex }: { flex: FlexCoverageLine }) {
+export function FlexMount({
+  flex,
+  rise = true,
+}: {
+  flex: FlexCoverageLine;
+  /** Off inside a coverage-deck slide, whose own transition owns the arrival. */
+  rise?: boolean;
+}) {
   const family = familyLabel(flex.family_status);
-  const claimable = flex.benefit_categories.filter((c) => c.claimable);
   const currency = flex.currency ?? "S$";
+
+  // A lone claimable category with no cap and no note of its own is the wallet
+  // restated under a second name — "What you can claim for: Flexible Benefits ·
+  // No separate cap", inside a mount already titled "Flexible benefits". A
+  // second category, a sub-limit or a note all make the breakdown say something
+  // the allowance above it doesn't.
+  //
+  // `UsageLeaf.FlexBlock` drops a lone row on the same REASONING, deliberately
+  // not the same TEST — and the two are not interchangeable. That tab lists
+  // `FlexCategoryUtilization` (which carries `approved`/`pending` and no note)
+  // over every category; this one lists `FlexBenefitCategoryLine` (which carries
+  // a note and no usage) over the CLAIMABLE ones only, because a member is never
+  // shown cover they cannot obtain. Each drops the row when its own list has
+  // nothing left to add, which is the shared rule; asserting a stronger parity
+  // than the data shapes allow is how a comment starts lying.
+  const allClaimable = flex.benefit_categories.filter((c) => c.claimable);
+  const lone = allClaimable.length === 1 ? allClaimable[0] : null;
+  const claimable =
+    lone && lone.sub_limit === null && !lone.note ? [] : allClaimable;
 
   // The wallet ledger: allowance − what your choices cost ± a leave trade.
   //
@@ -49,6 +74,7 @@ export function FlexMount({ flex }: { flex: FlexCoverageLine }) {
   return (
     <Mount
       as="article"
+      rise={rise}
       label="Flexible benefits"
       gloss="Your yearly allowance to spend across the benefits listed here."
       aside={
@@ -71,9 +97,14 @@ export function FlexMount({ flex }: { flex: FlexCoverageLine }) {
         </dl>
       )}
 
+      {/* No margins on any block below. `Mount` is a flex column with `gap-3`;
+          a margin here ADDS to that gap rather than replacing it, which is what
+          left this mount's rules sitting 16px from one neighbour and 24px from
+          the other. Grouping that needs to be tighter than the gap gets its own
+          flex wrapper, so there is still exactly one spacing mechanism. */}
       {showLedger && (
         <>
-          <MountRule className="my-1" />
+          <MountRule />
           <dl>
             {spent !== 0 && (
               <MountRow
@@ -140,27 +171,31 @@ export function FlexMount({ flex }: { flex: FlexCoverageLine }) {
 
       {claimable.length > 0 && (
         <>
-          <MountRule className="my-1" />
-          <h3 className="leaf-label mb-1 mt-3">What you can claim for</h3>
-          <dl className="divide-y divide-hairline/75">
-            {claimable.map((cat, i) => (
-              <MountRow key={i} term={cat.name} gloss={cat.note ?? undefined}>
-                {cat.sub_limit != null ? (
-                  <>
-                    <Money value={cat.sub_limit} currency={currency} />
-                    <span className="text-label"> cap</span>
-                  </>
-                ) : (
-                  <span className="text-label">No separate cap</span>
-                )}
-              </MountRow>
-            ))}
-          </dl>
+          <MountRule />
+          {/* The label belongs to the list it heads, so the two are one group
+              rather than two siblings spaced identically to everything else. */}
+          <div className="flex flex-col gap-1">
+            <h3 className="leaf-label">What you can claim for</h3>
+            <dl className="divide-y divide-hairline/75">
+              {claimable.map((cat, i) => (
+                <MountRow key={i} term={cat.name} gloss={cat.note ?? undefined}>
+                  {cat.sub_limit != null ? (
+                    <>
+                      <Money value={cat.sub_limit} currency={currency} />
+                      <span className="text-label"> cap</span>
+                    </>
+                  ) : (
+                    <span className="text-label">No separate cap</span>
+                  )}
+                </MountRow>
+              ))}
+            </dl>
+          </div>
         </>
       )}
 
       {flex.assignment_stale && (
-        <p className="mt-3 border-t border-hairline/75 pt-3 text-row text-label">
+        <p className="border-t border-hairline/75 pt-3 text-row text-label">
           Your company recently changed this scheme, so the list above may not
           be up to date yet. Your HR team can confirm what you can claim for.
         </p>

@@ -539,6 +539,113 @@
   animation: leaf-grow 0.9s var(--ease-leaf) 0.34s both;
 }
 
+/* ─── The coverage deck ────────────────────────────────────────────────────
+   Two things the utilities cannot express.
+
+   The rail scrolls horizontally on a phone and its scrollbar is noise: the
+   chips are the affordance, the active one is scrolled into view for you, and
+   a 15px gutter under a 44px pill throws the whole strip's vertical rhythm out.
+   Scroll is not the only way to reach any chip — the rail is a tablist with
+   arrow keys, and prev/next sit under the stage — so hiding it removes no
+   route to the content.
+
+   The pill TRAVELS between chips rather than fading from one to the next; it
+   is the same statement the stage makes, one level up. Written here rather
+   than as a `layoutId` because the rail is a scroll container this component
+   also scrolls programmatically — see the note in Deck.tsx. The reduced-motion
+   sweep below already neutralises this transition, so it needs no override of
+   its own: with no transition the pill simply appears on the current chip,
+   which is the end state. */
+.leaf-deck-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.leaf-deck-scroll::-webkit-scrollbar {
+  display: none;
+}
+.leaf-deck-pill {
+  transition:
+    transform 0.32s var(--ease-leaf),
+    width 0.32s var(--ease-leaf),
+    height 0.32s var(--ease-leaf);
+}
+/* Set while the RAIL'S OWN layout changed rather than the selection — see the
+   note in Deck.tsx. Every chip moved at once, so there is no travel to draw. */
+.leaf-deck-pill[data-still] {
+   transition: none;
+}
+
+/* The stage changing product. Direction-aware, because the motion's job is to
+   say WHERE IN THE SET the reader just moved. The incoming pane's 80ms delay
+   against the outgoing's 160ms exit is the overlap that makes the two CROSS
+   rather than queue — the difference between a transition and a slideshow.
+
+   CSS keyframes rather than a JS presence library, and the reason is not taste.
+   A library that owns removal decides when the outgoing node leaves the DOM,
+   and under rapid switching — tapping through nine products, which a deck
+   invites — exits stacked up and lingered for seconds, seven full schedules
+   deep. Here the outgoing slide is a single piece of state removed on a known
+   deadline, so "at most one outgoing, gone in 160ms" is a property of the code
+   rather than a hope about a scheduler. It also matches how every other
+   animation in this world is written (`leaf-rise`, `leaf-grow`).
+
+   `both` on every one of these: the incoming must hold its start state through
+   the delay, and the outgoing must hold its end state until it is removed. */
+@keyframes deck-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(32px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes deck-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-32px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes deck-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-24px) scale(0.99);
+  }
+}
+@keyframes deck-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(24px) scale(0.99);
+  }
+}
+.leaf-deck-in-right {
+  animation: deck-in-right 0.34s var(--ease-leaf) 0.08s both;
+}
+.leaf-deck-in-left {
+  animation: deck-in-left 0.34s var(--ease-leaf) 0.08s both;
+}
+.leaf-deck-out-left {
+  animation: deck-out-left 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+}
+.leaf-deck-out-right {
+  animation: deck-out-right 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+/* A swipe that did not go far enough to change product has to come BACK, and
+   it has to come back like an object rather than by teleporting. Off while the
+   finger is down: a transition there would lag the drag behind the pointer. */
+.leaf-deck-drag {
+  transition: transform 0.22s var(--ease-leaf);
+}
+.leaf-deck-drag-active {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .leaf *,
   .leaf *::before,
@@ -555,5 +662,12 @@
   .leaf .leaf-grow,
   .leaf .leaf-grow-late {
     transform: scaleX(1) !important;
+  }
+  /* The slide still swaps under reduced motion — it simply arrives already in
+     place. Resolved to the END state, never left mid-flight and invisible. */
+  .leaf .leaf-deck-in-right,
+  .leaf .leaf-deck-in-left {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

@@ -262,6 +262,26 @@ bottom, carrying all five destinations at once. Nothing a member may need on a
 deadline is ever reachable only by horizontal scroll, and there is no overflow
 menu.
 
+**Coverage is a deck, not a stack.** A fully covered member holds nine to eleven
+products, each carrying its own schedule, and rendering them down one column ran
+"What's covered" to nine screenfuls. It is now an **index and a stage**: a rail
+naming everything the member holds, and one product on stage beneath it. The rail
+is what makes this better than the stack — a deck without a visible index is a
+carousel, and a carousel is strictly worse than scrolling for the thing a member
+mostly does here, which is look one benefit up. The rail is therefore **sticky**,
+so it is still reachable three screenfuls into a schedule.
+
+The rail is a **horizontal glass pill** on a phone and a **vertical list** at
+width, and it switches on the deck's own measured width rather than the
+viewport's — the broker's employee-view preview renders the same component in a
+column far narrower than its window. Its chips carry the short form of the
+plain-language gloss ("GP visits"), never the product code: a rail reading
+`GCGP · GCSP · GHS` is precisely the failure the Printed-Label Rule exists to
+prevent. Previous/next are named by their destination rather than drawn as bare
+arrows, and they are **neutral, not terracotta** — they pick a view (see the
+Do-vs-Pick Rule). Below two products there is no deck at all: an index naming its
+only member, beside a counter reading "1 of 1", is chrome describing nothing.
+
 **The benefit-year selector is a scope control**, not a caption — it changes what
 the whole page shows. It sits with the account controls, never stacked under the
 member's name. With one year on file it renders as plain text with no affordance;
@@ -272,6 +292,39 @@ the page carries a notice that claims cannot be submitted against a closed year.
 
 **The Whole-Frame Rule.** A mount reflows by whole frames, never fractions. There
 is no half-width form field on a phone.
+
+**The Single-Spacing Rule.** A mount is a flex column with its own `gap`, and that
+gap is the only thing that spaces its children. A margin on a block inside it
+**adds to** the gap rather than replacing it, so the rows that carried one sat 24px
+apart while the schedule rows beneath them sat at 14px — the mount's head read as
+loose and the reader saw two rhythms in one frame. Grouping that genuinely needs to
+be tighter than the gap gets its own flex wrapper, so there is still exactly one
+spacing mechanism per frame.
+
+**The One-Left-Edge Rule.** Every printed term in a mount starts at the mount's own
+margin, and every value ends at the opposite one. A leading icon on a single row
+indents that row's label past every other label in the frame and buys nothing — the
+term already says what it is. Sub-rows are the one deliberate exception, and they
+indent by one step, consistently.
+
+**Entitlement and account are different questions, on different tabs.** "What's
+covered" states what the policy entitles the member to — limits, sums insured, who
+else is covered, the schedule. What has been claimed against it, what is still
+under review and what is left belong to "What's left". Interleaving them (a
+product's balance printed between its description and its schedule) made a page
+about cover read as a statement of account, and put a figure that changes weekly
+beside one that holds for the year. **Flexible benefits is the one exception and
+it is not really one:** a flex wallet's allowance and what remains of it *are* its
+entitlement, so its ledger stays.
+
+**One description, and one count.** A frame states a thing once. The mount used to
+print the insurer's cover description *and* our per-code gloss, so a product whose
+name already said it ("Group Hospital & Surgical" / "hospital stays and surgery" /
+"Reimbursement of eligible inpatient expenses…") said it three times before the
+first figure. The policy's own description wins where there is one; the gloss is
+the fallback it always was. Likewise a disclosure carries one number, not two: "Show
+all 10 benefits" beside "4 more" states one quantity twice and invites the reader to
+reconcile figures that were never in conflict.
 
 **The Reach Rule.** Every interactive element is at minimum 44×44 CSS px on touch
 and no smaller than 24×24 anywhere. Form controls render at 16px minimum on touch
@@ -309,7 +362,7 @@ contain another tile.
 
 ## Motion
 
-Motion is spent on four things, and each is tied to feedback or to data:
+Motion is spent on five things, and each is tied to feedback or to data:
 
 1. **The surface answering the pointer**, in two grades, and the difference
    between them is a promise. *Every* mount **thins its glass** (62% → 40%) and
@@ -333,6 +386,20 @@ Motion is spent on four things, and each is tied to feedback or to data:
    someone already scrolling.
 4. **The strike.** A verdict's rule draws itself beneath the word — claim detail
    only, `animate` opt-in, so a list of twenty verdicts never fires at once.
+5. **The deck changing product.** Direction-aware, because the motion's job is to
+   say *where in the set you just moved*. The outgoing pane leaves over 160ms
+   (`cubic-bezier(.4,0,1,1)`, −24px against the travel, scale .99); the incoming
+   arrives over 340ms on the world's easing after an 80ms delay (±32px, scale
+   .985 → 1). The overlap is the point: the panes **cross** rather than queue,
+   which is the difference between a transition and a slideshow. The rail's
+   selected pill **travels** between chips over 320ms rather than fading from one
+   to the next — the index moves, then the content arrives.
+
+   **Height never animates.** The outgoing slide leaves the flow, so the stage
+   adopts the incoming height in one frame; springing between a four-row schedule
+   and a sixty-nine-row one is where a component like this janks. And because
+   slides unmount, every fill rule redraws its value on arrival — spend #2 firing
+   at exactly the right moment, for free.
 
 No infinite loops. Nothing animates on a keyboard-triggered or high-frequency
 action. `prefers-reduced-motion` resolves every one of these to its **end state** —
@@ -374,3 +441,6 @@ never a blanket kill, and never an element left mid-transition and invisible.
 - **Don't** show broker vocabulary, remediation instructions or pipeline
   diagnostics on a member surface.
 - **Don't** add a second uppercase label tier. One tier, app-wide.
+- **Don't** put a margin on a block inside a mount — the mount's `gap` owns it.
+- **Don't** print a mark whose meaning the frame does not explain. A coloured dot
+  in a navigation rail is an unglossed term with nowhere to put its gloss.

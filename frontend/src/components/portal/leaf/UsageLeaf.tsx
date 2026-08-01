@@ -16,10 +16,93 @@ import type {
   Utilization,
   UtilizationBucket,
 } from "@/types";
-import { Mount, MountRow, MountRule } from "./Mount";
+import type { PortalClaim } from "@/api/portal";
+import { Mount, MountRule } from "./Mount";
 import { Limit, Money, currencySymbol } from "./Figure";
 import { FillRule } from "./FillRule";
 import { glossBeside } from "./glossary";
+import { formatDay } from "./date";
+
+/** In-flight claims — the ones whose amounts make up a bucket's `pending`.
+ *
+ * Mirrors `utilization.py::PENDING_STATUSES`, which is "every status except
+ * draft, rejected and approved". Spelled out rather than derived, because the
+ * two lists have to agree for the breakdown below to reconcile, and a set
+ * defined by subtraction silently grows a new member the day a status is added
+ * server-side. */
+const IN_FLIGHT = new Set([
+  "submitted",
+  "ai_review_pending",
+  "ai_verified",
+  "ai_flagged",
+  "needs_info",
+]);
+
+/** The amount a claim contributes, exactly as `utilization.py::_claim_amount`
+ * computes it — the converted figure when the claim was filed in another
+ * currency, else what was claimed. */
+function claimAmount(c: PortalClaim): number {
+  return c.amount_converted ?? c.amount_claimed;
+}
+
+/** What the member sent in, itemised, for a product whose total is under
+ * review. "S$303.48" answers nothing on its own — the question it provokes is
+ * "which claims is that?", and the member is the only person who can tell us a
+ * receipt is missing from it.
+ *
+ * **Rendered only when the rows RECONCILE with the bucket.** The total comes
+ * from the utilisation service and the rows from the claims list — two
+ * independent queries that can be a moment apart, and a breakdown that does not
+ * add up to the figure above it reads as a fault in the number rather than in
+ * the pairing. When they disagree the figure stands alone, which is what it did
+ * before. */
+function PendingBreakdown({
+  bucket,
+  claims,
+}: {
+  bucket: UtilizationBucket;
+  claims: PortalClaim[];
+}) {
+  const mine = claims.filter(
+    (c) =>
+      c.claim_kind === "insured" &&
+      c.product_code === bucket.product_code &&
+      IN_FLIGHT.has(c.status),
+  );
+  if (mine.length === 0) return null;
+
+  const total = mine.reduce((sum, c) => sum + claimAmount(c), 0);
+  if (Math.abs(total - bucket.pending) > 0.01) return null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="leaf-label">
+        {mine.length === 1
+          ? "The claim under review"
+          : `The ${mine.length} claims under review`}
+      </h3>
+      <dl className="divide-y divide-hairline/75">
+        {mine.map((c) => (
+          <div
+            key={c.id}
+            className="flex items-baseline justify-between gap-4 py-1.5"
+          >
+            <dt className="min-w-0 text-row text-record">
+              {c.provider_name?.trim() || c.claim_type}
+              <span className="block text-row text-label">
+                {formatDay(c.incurred_date)}
+                {c.dependant_name ? ` · for ${c.dependant_name}` : ""}
+              </span>
+            </dt>
+            <dd className="m-0 shrink-0 text-right">
+              <Money value={claimAmount(c)} currency={currencySymbol(c.currency)} />
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
 
 function BucketBlock({
   bucket,
@@ -102,11 +185,17 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
         ) : undefined
       }
     >
+      {/* `remaining` is deliberately NOT passed. The mount's own aside already
+          states what is left, in the largest type on the tile — passing it here
+          too printed the same figure twice under two labels ("Left to claim"
+          above, "left" in the legend), which reads as two facts that happen to
+          agree rather than one stated once. The legend keeps the half the aside
+          does not carry: how much of the allowance has gone. */}
       <FillRule
         limit={base}
         approved={flex.approved}
         pending={flex.pending}
-        remaining={flex.available}
+        remaining={null}
         currency={currency}
       />
 
@@ -142,14 +231,41 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
   );
 }
 
-export function UsageLeaf({ data }: { data: Utilization }) {
+export function UsageLeaf({
+  data,
+  claims = [],
+}: {
+  data: Utilization;
+  /** The member's claims, for itemising what is under review. Optional: the
+   * balances are still the answer if the claims query is slow or fails, so this
+   * never gates rendering. */
+  claims?: PortalClaim[];
+}) {
   const products = data.insured.filter((b) => b.benefit_key === null);
   const subsFor = (product: string | null) =>
     data.insured.filter(
       (b) => b.product_code === product && b.benefit_key !== null,
     );
 
-  if (products.length === 0 && data.flex === null) {
+  // **A product with no cap, nothing claimed and no sub-limits is not shown.**
+  // It has no fullness to draw and nothing to count down, so the only thing it
+  // could state is that it has no yearly cap — which is a fact about the policy,
+  // and the policy is the other tab. Eight of them collapsed into one mount
+  // ("Nothing claimed yet · These are still fully available to you") and that
+  // mount was still eight rows of "No yearly cap": the largest object on a page
+  // about what is left, carrying nothing that is left.
+  const active = products.filter(
+    (b) =>
+      b.limit !== null ||
+      b.approved > 0 ||
+      b.pending > 0 ||
+      subsFor(b.product_code).length > 0,
+  );
+
+  // Gated on what there is to RENDER, not on what exists. With the caps gone, a
+  // member holding nine uncapped products and no claims has an empty page, and
+  // an empty page must still say why.
+  if (active.length === 0 && data.flex === null) {
     return (
       <Mount label="Nothing to track yet">
         <p className="text-row text-label">
@@ -160,34 +276,8 @@ export function UsageLeaf({ data }: { data: Utilization }) {
     );
   }
 
-  // A product with no cap, nothing claimed and no sub-limits has NO fullness to
-  // draw — it can only print "Nothing claimed yet" under its own name. Eight of
-  // those is eight glass tiles carrying one repeated sentence, which is noise
-  // rather than information, and it buries the one product that does have
-  // something to report.
-  //
-  // So the tab is partitioned by whether a product has an answer to its own
-  // question. The ones that do keep their mount; the ones that don't collapse
-  // into a single mount that states the sentence ONCE and spends the space on
-  // the caps — the half of "how much is left" that still has an answer.
-  const quiet = products.filter(
-    (b) =>
-      b.limit === null &&
-      b.approved <= 0 &&
-      b.pending <= 0 &&
-      subsFor(b.product_code).length === 0,
-  );
-  const active = products.filter((b) => !quiet.includes(b));
   const anyPending =
     data.insured.some((b) => b.pending > 0) || (data.flex?.pending ?? 0) > 0;
-  // Nothing anywhere has been claimed, so the collapsed mount is the whole page
-  // and can say so plainly instead of reading as a leftovers bin. The flex
-  // wallet counts: a member who has spent their allowance HAS claimed this
-  // year, and telling them otherwise contradicts the mount directly above.
-  const nothingClaimed =
-    active.length === 0 &&
-    (data.flex === null ||
-      (data.flex.approved <= 0 && data.flex.pending <= 0));
 
   return (
     <div className="space-y-3">
@@ -222,6 +312,9 @@ export function UsageLeaf({ data }: { data: Utilization }) {
             pending={b.pending}
             remaining={b.remaining}
           />
+          {b.pending > 0 && (
+            <PendingBreakdown bucket={b} claims={claims} />
+          )}
           {subsFor(b.product_code).length > 0 && (
             <>
               <MountRule className="mt-4" />
@@ -240,46 +333,6 @@ export function UsageLeaf({ data }: { data: Utilization }) {
       ))}
 
       {data.flex && <FlexBlock flex={data.flex} />}
-
-      {quiet.length > 0 && (
-        <Mount
-          label={
-            nothingClaimed
-              ? "You haven't claimed anything yet this year"
-              : "Nothing claimed yet"
-          }
-          gloss="These are still fully available to you."
-        >
-          <dl className="divide-y divide-hairline/75">
-            {quiet.map((b) => (
-              <MountRow
-                key={b.product_code ?? "unknown"}
-                term={b.product_name ?? b.product_code ?? "Benefit"}
-                gloss={
-                  b.product_code
-                    ? (glossBeside(
-                        b.product_name ?? b.product_code,
-                        b.product_code,
-                        b.product_name,
-                      ) ?? undefined)
-                    : undefined
-                }
-              >
-                <Limit
-                  amount={b.limit}
-                  display={b.limit_display}
-                  currency={currencySymbol(null)}
-                />
-              </MountRow>
-            ))}
-          </dl>
-          <p className="text-row text-label">
-            &ldquo;No yearly cap&rdquo; means there is no fixed yearly amount —
-            the plan pays eligible costs as they come in, on the terms in your
-            schedule.
-          </p>
-        </Mount>
-      )}
 
       {anyPending && (
         <p className="px-1 text-row text-label">

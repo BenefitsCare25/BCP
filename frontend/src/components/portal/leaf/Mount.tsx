@@ -66,6 +66,7 @@ export function Mount({
   as: Tag = "section",
   labelId,
   interactive = false,
+  rise = true,
 }: {
   /** The mount's name, set as a Title. Sentence case, not the uppercase tier:
    * an insurer product name run through `text-transform: uppercase` is 40-odd
@@ -85,6 +86,13 @@ export function Mount({
   /** Give the mount the hover lift. Set this only when the whole mount is a
    * target. */
   interactive?: boolean;
+  /** The entrance, on by default.
+   *
+   * Turn it OFF only where something else already owns this mount's arrival —
+   * today that is a coverage-deck slide, whose own directional transition would
+   * otherwise run underneath a second 500ms rise-and-fade of the same element.
+   * Two entrances on one object do not compose; they read as a stutter. */
+  rise?: boolean;
 }) {
   return (
     <Tag
@@ -92,7 +100,8 @@ export function Mount({
         glassSurface,
         // `leaf-rise` on every mount, staggered by sibling position in CSS so
         // no component has to thread an index. It runs once, for half a second.
-        "leaf-rise flex flex-col gap-3 rounded-tile p-4 sm:p-5",
+        rise && "leaf-rise",
+        "flex flex-col gap-3 rounded-tile p-4 sm:p-5",
         interactive ? glassInteractive : glassResting,
         className,
       )}

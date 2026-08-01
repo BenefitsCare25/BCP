@@ -5,9 +5,12 @@
  * earn the headline) comes from `lib/benefitSchedule`, shared with the broker's
  * renderer so the two surfaces can never disagree.
  *
- * A row the member has claimed against is always promoted into the headline and
- * carries its fullness inline, because that balance is the reason the page was
- * opened. */
+ * **No claim figures here.** This is the entitlement — what the policy covers.
+ * What has been claimed against it, what is still under review and what is left
+ * are a different question with its own tab ("What's left"), and mixing the two
+ * made a schedule row state a limit and a balance in the same breath. The
+ * shared reader still accepts a usage map, because the broker's renderers do
+ * show both; this surface simply does not pass one. */
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type {
@@ -15,7 +18,6 @@ import type {
   BenefitLimit,
   BenefitSchedule,
   BenefitSubItem,
-  UtilizationBucket,
 } from "@/types";
 import { propertyLabel } from "@/lib/sob";
 import {
@@ -24,10 +26,8 @@ import {
   isEnumeration,
   readSchedule,
   subItemsOf,
-  usageFor,
 } from "@/lib/benefitSchedule";
 import { MountRule } from "./Mount";
-import { FillRule } from "./FillRule";
 
 /** Schedules carry Singapore dollars; `formatValue` defaults to a bare "$" for
  * the broker app, which is not what this surface writes. */
@@ -50,7 +50,6 @@ function ScheduleRow({
   kind,
   note,
   limits,
-  usage,
   indent,
 }: {
   label: string;
@@ -58,7 +57,6 @@ function ScheduleRow({
   kind?: BenefitItem["kind"];
   note?: string | null;
   limits?: BenefitLimit[];
-  usage?: UtilizationBucket;
   indent?: boolean;
 }) {
   // The member surface writes money as S$ everywhere else.
@@ -100,16 +98,6 @@ function ScheduleRow({
       <dd>
         <LimitNotes limits={limits} />
       </dd>
-      {usage && (usage.approved > 0 || usage.pending > 0) && (
-        <dd className="mt-2">
-          <FillRule
-            limit={usage.limit}
-            approved={usage.approved}
-            pending={usage.pending}
-            remaining={usage.remaining}
-          />
-        </dd>
-      )}
     </div>
   );
 }
@@ -167,11 +155,9 @@ function Enumeration({
 
 function Item({
   item,
-  usage,
   hidden = false,
 }: {
   item: BenefitItem;
-  usage?: UtilizationBucket;
   /** Outside the headline while the schedule is collapsed. `display:none`, so
    * the row keeps its position in document order without being announced or
    * tabbable — see the note at the call site. */
@@ -196,7 +182,6 @@ function Item({
         kind={item.kind}
         note={item.note}
         limits={item.limits}
-        usage={usage}
       />
       {displayProps(item.properties).map(([key, value]) => (
         <ScheduleRow key={key} indent label={propertyLabel(key)} value={value} />
@@ -219,21 +204,16 @@ function Item({
 export function ScheduleLeaf({
   schedule,
   annualPolicyLimit,
-  coverDescription,
-  usageByBenefit,
   titleId,
 }: {
   schedule: BenefitSchedule | null | undefined;
   annualPolicyLimit?: string | null;
-  coverDescription?: string | null;
-  usageByBenefit?: Map<string, UtilizationBucket>;
   /** Ties the disclosure's label to the mount it belongs to. */
   titleId?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const { items, headline, collapsible, valuesMissing } = readSchedule(
     schedule?.items,
-    usageByBenefit,
   );
 
   if (items.length === 0) {
@@ -259,16 +239,13 @@ export function ScheduleLeaf({
   const hiddenSet = collapsible
     ? new Set(items.filter((i) => !headline.includes(i)))
     : new Set<(typeof items)[number]>();
-  const tailCount = hiddenSet.size;
   const panelId = titleId ? `${titleId}-schedule-tail` : undefined;
 
   return (
     <div>
-      {coverDescription && (
-        <p className="mb-2 text-row text-label">
-          {coverDescription}
-        </p>
-      )}
+      {/* The slip's cover description is NOT rendered here. It moved up to sit
+          directly under the product's title (`BenefitMount`), where it replaces
+          the generic per-code gloss instead of repeating it further down. */}
       {annualPolicyLimit && (
         <p className="mb-2 text-row text-record">
           <span className="text-label">Yearly cap · </span>
@@ -294,7 +271,6 @@ export function ScheduleLeaf({
           <Item
             key={`${item.number}-${idx}`}
             item={item}
-            usage={usageFor(item, usageByBenefit)}
             hidden={!showAll && hiddenSet.has(item)}
           />
         ))}
@@ -316,24 +292,28 @@ export function ScheduleLeaf({
             aria-controls={panelId}
             className="leaf-focus mt-1 flex min-h-11 w-full items-center justify-between gap-2 text-left"
           >
-            {/* Ink, not brand. A fully covered member holds eleven of these
+            {/* **ONE count, not two.** This read "Show all 10 benefits" on the
+                left and "4 more" on the right — both true (ten rows in the
+                schedule, four of them hidden) and, side by side on one control,
+                simply confusing: two numbers on one button describe one
+                quantity, so the reader tries to reconcile them.
+                The schedule's own size is the one that survives, because that
+                is what the button reveals and what the insurer's document
+                states. The tail count is derivable and was never the point.
+
+                Ink, not brand. A fully covered member holds nine of these
                 mounts, so a brand-coloured disclosure would put the brand on
-                the screen eleven times — the third appearance is already one
-                too many (The Twice Rule). */}
+                the screen nine times — the third appearance is already one too
+                many (The Twice Rule). */}
             <span className="text-row font-semibold text-record">
-              {showAll
-                ? "Show headline benefits"
-                : `Show all ${items.length} benefits`}
+              {showAll ? "Show fewer" : `Show all ${items.length} benefits`}
             </span>
-            <span className="flex items-center gap-1.5 text-row text-label">
-              {!showAll && tailCount > 0 && `${tailCount} more`}
-              <ChevronDown
-                className={`size-4 text-label transition-transform duration-200 ease-leaf ${
-                  showAll ? "rotate-180" : ""
-                }`}
-                aria-hidden
-              />
-            </span>
+            <ChevronDown
+              className={`size-4 shrink-0 text-label transition-transform duration-200 ease-leaf ${
+                showAll ? "rotate-180" : ""
+              }`}
+              aria-hidden
+            />
           </button>
         </>
       )}

@@ -1,5 +1,5 @@
 /** "What's left" — how much of each benefit the member has used. */
-import { usePortalUtilization } from "@/api/portal";
+import { usePortalClaims, usePortalUtilization } from "@/api/portal";
 import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
@@ -8,6 +8,10 @@ import { isNotFoundError } from "@/lib/errors";
 
 export function PortalUtilizationPage() {
   const { data, isLoading, isError, error, refetch } = usePortalUtilization();
+  // Itemises what is under review. Never gates rendering: the balances are
+  // still the answer if this is slow or fails, and the breakdown simply does
+  // not appear (see `PendingBreakdown`).
+  const claims = usePortalClaims();
 
   if (isLoading) return <LeafSkeleton label="Loading your balances" mounts={2} />;
 
@@ -27,5 +31,5 @@ export function PortalUtilizationPage() {
     );
   }
 
-  return <UsageLeaf data={data} />;
+  return <UsageLeaf data={data} claims={claims.data?.items} />;
 }
