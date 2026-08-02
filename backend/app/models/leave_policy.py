@@ -9,6 +9,8 @@ One policy per policy year (upsert-by-year, like FlexScheme).
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import Boolean, Float, ForeignKey, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -55,7 +57,7 @@ class LeavePolicy(Base, TimestampMixin):
     # NOT by age or product. Shape: ``{"attribute": "<key>", "rates": {<value>: rate}}``.
     # A member buying N days spends N*rate from their flex wallet; selling credits it.
     # Empty bag = leave priced at 0 (days-only, the prior behavior).
-    leave_rates: Mapped[dict] = mapped_column(
+    leave_rates: Mapped[dict[str, Any]] = mapped_column(
         JSON(), nullable=False, default=dict, server_default=text("'{}'")
     )
     notes: Mapped[str | None] = mapped_column(String(1024), nullable=True)

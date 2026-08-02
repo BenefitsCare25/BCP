@@ -8,7 +8,7 @@ the previously-current one to ``archived``.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -35,7 +35,7 @@ from app.services.product_terms import envelope_for, envelopes_for
 router = APIRouter(prefix="/policy-years", tags=["policy-years"])
 
 
-def _policy_year_out(py: PolicyYear, envelope: tuple) -> PolicyYearOut:
+def _policy_year_out(py: PolicyYear, envelope: tuple[date, date]) -> PolicyYearOut:
     """Build the response, layering the derived coverage envelope over the ORM
     row (which only knows its own nominal span)."""
     start, end = envelope
@@ -54,7 +54,7 @@ def _policy_year_out(py: PolicyYear, envelope: tuple) -> PolicyYearOut:
 
 
 def _assert_no_overlap(
-    db: Session, client_id: str, start, end, *, exclude_id: str | None = None
+    db: Session, client_id: str, start: date, end: date, *, exclude_id: str | None = None
 ) -> None:
     """409 if [start, end] overlaps another year for the client.
 

@@ -18,6 +18,7 @@ a time. On SQLite (single schema) every accessible company is counted.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -89,7 +90,9 @@ class DashboardSummary(BaseModel):
     companies: list[CompanySummary]
 
 
-def _grouped_count(db: Session, column, model, year_ids: list[str], *filters) -> dict[str, int]:
+def _grouped_count(
+    db: Session, column: Any, model: type[Any], year_ids: list[str], *filters: Any
+) -> dict[str, int]:
     """`{policy_year_id: count}` for `year_ids`, applying extra WHERE filters."""
     if not year_ids:
         return {}
@@ -161,15 +164,19 @@ def get_summary(
 
     companies: list[CompanySummary] = []
     for client in clients:
-        py = current_year_by_client.get(client.id)
-        yid = py.id if py else None
+        current_py = current_year_by_client.get(client.id)
+        yid = current_py.id if current_py else None
         companies.append(
             CompanySummary(
                 id=client.id,
                 name=client.name,
                 current_year=(
-                    CompanyYear(id=py.id, year=py.year, status=py.status.value)
-                    if py
+                    CompanyYear(
+                        id=current_py.id,
+                        year=current_py.year,
+                        status=current_py.status.value,
+                    )
+                    if current_py
                     else None
                 ),
                 member_count=members.get(yid, 0) if yid else 0,

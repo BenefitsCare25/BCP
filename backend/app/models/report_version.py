@@ -15,6 +15,8 @@ the movement diff for the two insurer listings).
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,11 +56,11 @@ class ReportVersion(Base, TimestampMixin):
     mode: Mapped[str] = mapped_column(String(16), nullable=False)
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Exact request params (insurer/masked/window_id) — reproducibility + audit.
-    params: Mapped[dict] = mapped_column(JSON(), nullable=False, default=dict)
+    params: Mapped[dict[str, Any]] = mapped_column(JSON(), nullable=False, default=dict)
     # Counts shown in the history list (members, adds/leavers, manifest_hash).
-    summary: Mapped[dict] = mapped_column(JSON(), nullable=False, default=dict)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON(), nullable=False, default=dict)
     # Membership fingerprint for the movement diff (insurer listings only).
-    manifest: Mapped[dict | None] = mapped_column(JSON(), nullable=True)
+    manifest: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)

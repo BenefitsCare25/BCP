@@ -111,7 +111,7 @@ class EnrollmentElection(Base, TimestampMixin):
     # the slip lists multiple unlinked option levels (e.g. GTL Spouse S$20k/40k/60k)
     # — linked option rows (GPA markers, VDL composition) price without an election.
     # NULL = no level chosen. Not an FK so a category re-parse can't cascade.
-    dependant_option_ids: Mapped[dict | None] = mapped_column(JSON(), nullable=True)
+    dependant_option_ids: Mapped[dict[str, str] | None] = mapped_column(JSON(), nullable=True)
     # Flex "price tag" deducted from the member's wallet for this election,
     # resolved from FlexPricing (tier x age band) and snapshotted at confirm so
     # reporting is stable if the matrix later changes. NULL = no flex price.

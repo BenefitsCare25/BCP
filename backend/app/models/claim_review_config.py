@@ -20,6 +20,8 @@ absence of a row IS the default, and the UI shows a "Default" badge instead.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,8 +52,8 @@ class ClaimReviewConfig(Base, TimestampMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # [{"portal_field", "document_field", "mode", "tolerance"?,
     #   "verify_with_vision"}] — read defensively in config_from_row.
-    field_maps: Mapped[list[dict] | None] = mapped_column(JSON(), nullable=True)
+    field_maps: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(), nullable=True)
     # [{"id", "rule", "category", "severity"}]
-    ai_rules: Mapped[list[dict] | None] = mapped_column(JSON(), nullable=True)
+    ai_rules: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON(), nullable=True)
     # ["receipt or tax invoice", ...]; empty/NULL = automatic derivation.
     required_documents: Mapped[list[str] | None] = mapped_column(JSON(), nullable=True)

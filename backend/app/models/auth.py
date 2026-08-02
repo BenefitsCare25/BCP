@@ -11,6 +11,7 @@ See ``docs/AUTH_DESIGN.md`` §4 for the full rationale.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -106,7 +107,7 @@ class AuthMfa(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     # Single-use recovery codes, stored as hashes (list[str]).
-    recovery_codes: Mapped[list | None] = mapped_column(JSON(), nullable=True)
+    recovery_codes: Mapped[list[str] | None] = mapped_column(JSON(), nullable=True)
     # Replay guard: reject reuse of the same 30s step.
     last_used_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
@@ -181,7 +182,7 @@ class AuthEvent(Base):
     ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subdomain: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    detail: Mapped[dict | None] = mapped_column(JSON(), nullable=True)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
 
 
 # Which identifier a surface's users type as their username. Broker-configured

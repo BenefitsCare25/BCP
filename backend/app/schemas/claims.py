@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -118,10 +118,10 @@ class ClaimAIReviewSummary(_Base):
 
 
 class ClaimAIReviewOut(ClaimAIReviewSummary):
-    extractions: list[dict] | None = None
-    field_comparisons: list[dict] | None = None
-    rule_results: list[dict] | None = None
-    vision_checks: list[dict] | None = None
+    extractions: list[dict[str, Any]] | None = None
+    field_comparisons: list[dict[str, Any]] | None = None
+    rule_results: list[dict[str, Any]] | None = None
+    vision_checks: list[dict[str, Any]] | None = None
     model: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -349,7 +349,7 @@ class CoverageOptionsOut(BaseModel):
     policy_year_end: str
     insured: list[InsuredClaimOption] = Field(default_factory=list)
     flex: FlexClaimOptions | None = None
-    dependants: list[dict] = Field(default_factory=list)  # {id, name, relationship}
+    dependants: list[dict[str, Any]] = Field(default_factory=list)  # {id, name, relationship}
     # Single source of truth for the currency picker (claim_intake.py).
     currencies: list[str] = Field(default_factory=list)
     # Hospital picker for inpatient claims (sg_hospitals.py) — sector drives

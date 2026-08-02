@@ -65,15 +65,16 @@ def panel_setup_history(
         .order_by(PanelListing.insurer, PanelListing.panel_provider)
     ).all()
     if rows:
-        clinic_counts = dict(
-            db.execute(
+        clinic_counts = {
+            listing_id: count
+            for listing_id, count in db.execute(
                 select(PanelClinic.panel_listing_id, func.count(PanelClinic.id))
                 .where(
                     PanelClinic.panel_listing_id.in_({listing.id for _, listing in rows})
                 )
                 .group_by(PanelClinic.panel_listing_id)
             ).all()
-        )
+        }
     for year_id, listing in rows:
         listings_by_year.setdefault(year_id, []).append(
             SetupHistoryListing(

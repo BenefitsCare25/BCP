@@ -60,7 +60,7 @@ class EmployeePlanOverride(Base, TimestampMixin):
     covered_dependant_ids: Mapped[list[str] | None] = mapped_column(JSON(), nullable=True)
     # Elected freestanding dependant option LEVEL per role, ``{role: category_id}``
     # (see EnrollmentElection.dependant_option_ids). NULL = no level chosen.
-    dependant_option_ids: Mapped[dict | None] = mapped_column(JSON(), nullable=True)
+    dependant_option_ids: Mapped[dict[str, str] | None] = mapped_column(JSON(), nullable=True)
     source: Mapped[str] = mapped_column(
         String(32), nullable=False, default=OverrideSource.manual_admin,
         server_default=OverrideSource.manual_admin,
