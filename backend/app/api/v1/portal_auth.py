@@ -58,6 +58,7 @@ from app.schemas.portal import (
     OtpVerifyOut,
     PortalMemberOut,
 )
+from app.services.member_invite import clear_invite_expiry, invite_expired
 from app.services.member_otp import as_utc, can_issue_otp, issue_otp, send_otp
 
 logger = logging.getLogger(__name__)
@@ -276,6 +277,24 @@ def member_login(
     if PW.needs_rehash(account.password_hash):
         account.password_hash = PW.hash_password(body.password)
 
+    # An emailed one-time password is bounded (`INVITE_TTL_DAYS`) — an unread
+    # invite is otherwise a live credential sitting in a mailbox forever. The
+    # deadline is cleared the moment a real password is set, so reaching it here
+    # means the mailed value was never used. Checked AFTER verification so it
+    # cannot be probed to discover which accounts have a pending invite.
+    if invite_expired(account):
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_BLOCKED,
+            surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
+            client_id=tenant.client_id, identifier=body.identifier,
+            ip=_client_ip(request), subdomain=request.headers.get("host"),
+        )
+        db.commit()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "This invite has expired. Ask your HR team to send a new one.",
+        )
+
     policy = get_auth_policy(db, tenant.client_id)
 
     # Forced rotation — the member proved the current password, so hand them a
@@ -380,6 +399,10 @@ def member_set_password(
     account.must_rotate_after = CRED.next_rotation_deadline(
         policy.password_rotation_days, account.password_updated_at
     )
+    # The member now has a password of their own, so the mailed one-time
+    # value's deadline no longer applies — leaving it set would expire the
+    # password they just chose, locking them out of the account they just made.
+    clear_invite_expiry(account)
     CRED.reset_failures(account)
     EV.write_auth_event(
         db, event_type=EV.EVENT_PASSWORD_RESET_COMPLETE, outcome=EV.OUTCOME_SUCCESS,

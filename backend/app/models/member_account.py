@@ -48,6 +48,20 @@ class MemberAccount(Base, TimestampMixin):
     )
     # Broker user who provisioned the account (plain string, like audit rows).
     invited_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # When the invite email was CONFIRMED delivered to the mailer. NULL means
+    # "never received one", and that is the whole targeting rule for the bulk
+    # send: it only ever touches NULL rows, so a member can never be emailed an
+    # invite twice, and a send that failed (mail outage) stays NULL and is
+    # picked up by the next run. Stamped only after a successful send.
+    invite_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Deadline on the MAILED one-time password. Set when an invite goes out and
+    # cleared by every path that sets a real password, so it can only ever gate
+    # a credential still sitting unused in a mailbox. NULL = no invite pending.
+    invite_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_sign_in_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

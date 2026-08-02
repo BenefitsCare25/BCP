@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,8 +91,20 @@ class MemberAccountOut(_Base):
     created_at: datetime
     # Broker-generated alternate username; None until allocated.
     system_login_id: str | None = None
-    # True once the member has set a password (credential login enabled).
+    # True once a password exists (invite issued, or one set directly).
     has_password: bool = False
+    # What THIS member should be told to type, resolved from the company's
+    # `portal_login_source` setting. SERVED, never re-derived in the UI: the
+    # setting lives behind a firm-admin-only endpoint that Coverage & Members
+    # cannot call, so a client-side guess there silently ignored the setting and
+    # printed the email for a company signing in by system ID.
+    login_username: str | None = None
+    # When an invite email was confirmed delivered. None = never sent, which is
+    # what the bulk send targets — so the panel can say "not invited yet"
+    # instead of leaving the broker to infer it from the status badge.
+    invite_sent_at: datetime | None = None
+    # Deadline on a mailed one-time password that hasn't been used yet.
+    invite_expires_at: datetime | None = None
     # Set by invite/resend responses only (None on plain reads): False means
     # the account exists but the OTP email could not be delivered.
     mail_sent: bool | None = None
@@ -107,6 +120,12 @@ class MemberAccountOut(_Base):
 class MemberAccountList(BaseModel):
     total: int
     items: list[MemberAccountOut] = Field(default_factory=list)
+    # Rules the UI states and enforces client-side. Served rather than mirrored
+    # as TypeScript constants: a copy drifts the moment the real value moves,
+    # and the failure is silent — a form that accepts a password the server
+    # rejects, or a link described as lasting longer than it does.
+    password_min_length: int = 0
+    set_password_ttl_hours: int = 0
 
 
 class MemberAccountCreateIn(BaseModel):
@@ -123,12 +142,88 @@ class BulkInviteIn(BaseModel):
 
 
 class BulkInviteResult(BaseModel):
-    invited: int
-    skipped_existing: int
-    skipped_no_email: int
-    # Accounts created whose invite email failed to send (mail outage ≠ rollout
-    # success — the broker must resend these once mail is fixed).
-    mail_failed: int = 0
+    """Outcome of one bulk send. Every employee falls in exactly one bucket.
+
+    Delivery runs in the background (Argon2id + SMTP per member is far too slow
+    to hold a request open for a full roster), so this reports what was QUEUED.
+    Progress is read back from `PortalRolloutOut`, whose `invited` count rises
+    as invites land — and because targeting is `invite_sent_at IS NULL`, a run
+    cut short by a restart is resumed by pressing the button again, with no
+    possibility of a second email to anyone already served.
+    """
+
+    # Invites dispatched for delivery.
+    queued: int = 0
+    # Accounts created by this run (covers queued members AND the no-email ones,
+    # who are provisioned so they appear on the follow-up list).
+    accounts_created: int = 0
+    # Provisioned, but no email address on the roster to send to.
+    no_email: int = 0
+    # Not provisioned: shares an email address (or staff id) with another
+    # employee, so it cannot have an account of its own.
+    duplicate: int = 0
+    # Already had an invite delivered, or already onboarded. Untouched — this is
+    # what makes the button safe to press twice.
+    already_invited: int = 0
+    skipped_disabled: int = 0
+    # True when a run was already in flight and this request did nothing. The
+    # counts do not move for a minute or two while delivery works through the
+    # roster, which reads like nothing happened — so a second press is refused
+    # rather than allowed to re-queue members mid-send and mail them twice.
+    already_sending: bool = False
+
+
+class PortalRolloutMember(BaseModel):
+    """One employee the rollout could not reach, and why.
+
+    The reason is carried rather than implied: "no address on file" and "this
+    address belongs to another employee" need different fixes, and a single
+    undifferentiated list would send HR looking for a missing email that is
+    sitting right there.
+    """
+
+    employee_id: str
+    staff_id: str
+    employee_name: str | None = None
+    reason: Literal["no_email", "duplicate"] = "no_email"
+    email: str | None = None
+
+
+class PortalRolloutOut(BaseModel):
+    """Portal-access state of the whole roster, for the rollout card.
+
+    `invite_pending` is what the send button targets and what its label counts,
+    so the number on the button is the number the endpoint will act on.
+    """
+
+    employees_total: int
+    invite_pending: int
+    invited: int          # invite delivered, not signed in yet
+    signed_in: int        # has used the portal (or has a password set)
+    no_email: int         # provisioned, but nowhere to send
+    # Roster rows whose email (or staff id) already belongs to another employee.
+    # Not provisioned at all: an account is unique per client on both, and
+    # sharing one would put a member's benefits in a colleague's inbox.
+    duplicate: int = 0
+    disabled: int
+    # False when the configured mailer cannot even be CONSTRUCTED — which is the
+    # real production failure: `INSPRO_MAIL_MODE=smtp` with no `INSPRO_SMTP_HOST`
+    # raises, every send fails, and a rollout reports hundreds queued and
+    # delivers none. Checked BEFORE the button is offered rather than discovered
+    # after pressing it.
+    mail_deliverable: bool
+    # The delivery mode, so `log` (dev/staging default — invites are written to
+    # the application log, not emailed) can be WARNED about without disabling
+    # the button: it is how the flow is rehearsed before a real rollout, and
+    # prod is fail-closed against it at boot anyway.
+    mail_mode: str
+    # True while a delivery run is working through the roster. Delivery is slow
+    # (Argon2id per member), so without this the card looks idle mid-send and
+    # the button invites a second press.
+    sending: bool = False
+    # Everyone the send could not reach, with their reason. Capped for render.
+    needs_attention: list[PortalRolloutMember] = Field(default_factory=list)
+    needs_attention_truncated: bool = False
 
 
 # ── Broker-side portal preview ("employee view") ─────────────────────────────

@@ -8,8 +8,19 @@ employee's `member_account_id`, and sends the OTP invite.
 from __future__ import annotations
 
 import logging
+import threading
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -28,12 +39,14 @@ from app.core.deps import (
 )
 from app.core.hr_auth import get_auth_policy
 from app.core.portal_auth import (
+    SET_PW_TTL_HOURS,
     generate_member_login_id,
     issue_member_set_password_token,
 )
 from app.core.rate_limit import limiter
-from app.db.session import get_db
-from app.models import Employee, MemberAccount
+from app.core.settings import get_settings
+from app.db.session import SessionLocal, get_db
+from app.models import Client, Employee, MemberAccount
 from app.models.member_account import (
     MEMBER_STATUS_ACTIVE,
     MEMBER_STATUS_DISABLED,
@@ -46,8 +59,18 @@ from app.schemas.portal import (
     MemberAccountList,
     MemberAccountOut,
     MemberAccountPatch,
+    PortalRolloutMember,
+    PortalRolloutOut,
 )
-from app.services.member_otp import issue_otp, send_otp
+from app.services.member_invite import (
+    clear_invite_expiry,
+    issue_invite_credential,
+    login_username,
+    mail_deliverable,
+    restore_credential,
+    send_member_invite,
+    snapshot_credential,
+)
 from app.services.roster_attributes import EMAIL_KEYS, first_value
 
 logger = logging.getLogger(__name__)
@@ -61,6 +84,24 @@ def _tenant_slug(db: Session, client_id: str | None) -> str | None:
 
     client = db.get(Client, client_id) if client_id else None
     return client.slug if client else None
+
+
+def _login_source(db: Session, client_id: str | None) -> str | None:
+    """The company's `portal_login_source` — what employees sign in with."""
+    if not client_id:
+        return None
+    return get_auth_policy(db, client_id).portal_login_source
+
+
+def _account_out(db: Session, account: MemberAccount) -> MemberAccountOut:
+    """Serialize an account WITH its resolved sign-in username.
+
+    Every single-account response goes through here, so a freshly created
+    account states the same username as the list refetch behind it.
+    """
+    out = MemberAccountOut.model_validate(account)
+    out.login_username = login_username(account, _login_source(db, account.client_id))
+    return out
 
 
 def _load_account(
@@ -131,9 +172,23 @@ def list_member_accounts(
     rows = db.execute(
         select(MemberAccount).where(*conditions).order_by(MemberAccount.staff_id)
     ).scalars().all()
+    # One lookup for the whole list: the UI prints the member's own sign-in URL,
+    # which MUST carry the tenant. Without it the portal can't resolve the
+    # company and the member is told their details weren't recognised —
+    # indistinguishable from a wrong password.
+    slug = _tenant_slug(db, client_id)
+    source = _login_source(db, client_id)
+    items = []
+    for row in rows:
+        out = MemberAccountOut.model_validate(row)
+        out.tenant_slug = slug
+        out.login_username = login_username(row, source)
+        items.append(out)
     return MemberAccountList(
         total=total,
-        items=[MemberAccountOut.model_validate(r) for r in rows],
+        items=items,
+        password_min_length=PW.MIN_LENGTH,
+        set_password_ttl_hours=SET_PW_TTL_HOURS,
     )
 
 
@@ -169,7 +224,7 @@ def create_member_account(
                 status.HTTP_409_CONFLICT,
                 "A portal account already exists for this staff ID.",
             ) from None
-        out = MemberAccountOut.model_validate(account)
+        out = _account_out(db, account)
         out.set_password_token = token
         out.tenant_slug = _tenant_slug(db, account.client_id)
         return out
@@ -177,7 +232,6 @@ def create_member_account(
 
     try:
         account = _create_account(db, employee, email, user.user_id)
-        issued = issue_otp(db, account)
         write_audit(
             db, user, "member_account.invited", "member_account", account.id,
             after={"email": email, "staff_id": employee.staff_id},
@@ -190,10 +244,38 @@ def create_member_account(
             status.HTTP_409_CONFLICT,
             "A portal account already exists for this email or staff ID.",
         ) from None
-    mail_sent = send_otp(account, issued)
-    out = MemberAccountOut.model_validate(account)
+    mail_sent = _issue_and_send_invite(db, account)
+    out = _account_out(db, account)
     out.mail_sent = mail_sent
     return out
+
+
+def _issue_and_send_invite(db: Session, account: MemberAccount) -> bool:
+    """Mint a one-time password, mail it, and record delivery. Returns whether
+    the mailer accepted it.
+
+    The single-account path (per-employee invite / resend). The credential is
+    committed before the send so it is live when the mail lands, and rolled back
+    if the send fails — an account is never left holding a password that was
+    never delivered, and `invite_sent_at` is stamped only on real delivery, so a
+    failure keeps the member in the bulk send's target set.
+    """
+    policy = get_auth_policy(db, account.client_id)
+    prior = snapshot_credential(account)
+    password = issue_invite_credential(account, policy.password_min_entropy)
+    db.commit()
+    sent = send_member_invite(
+        account,
+        password,
+        _tenant_slug(db, account.client_id),
+        _login_source(db, account.client_id),
+    )
+    if sent:
+        account.invite_sent_at = datetime.now(UTC)
+    else:
+        restore_credential(account, prior)
+    db.commit()
+    return sent
 
 
 @router.post("/member-accounts/{account_id}/resend-invite", response_model=MemberAccountOut)
@@ -204,19 +286,29 @@ def resend_invite(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MemberAccountOut:
+    """Re-issue this member's invite: a NEW one-time password, mailed to them.
+
+    Deliberately a per-employee action. Any existing password stops working, so
+    on an already-onboarded member this is a password reset — the UI confirms it
+    as one. The bulk send can never do this: it only targets members with no
+    delivered invite, which is what keeps a rollout from mailing anyone twice.
+    """
     account = _load_account(account_id, user, db)
     if account.status == MEMBER_STATUS_DISABLED:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Account is disabled — re-enable it first."
         )
-    issued = issue_otp(db, account)
+    if not account.email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "No email address on file — use a set-password link instead.",
+        )
     write_audit(
         db, user, "member_account.invite_resent", "member_account", account.id,
         after={"email": account.email},
     )
-    db.commit()
-    mail_sent = send_otp(account, issued)
-    out = MemberAccountOut.model_validate(account)
+    mail_sent = _issue_and_send_invite(db, account)
+    out = _account_out(db, account)
     out.mail_sent = mail_sent
     return out
 
@@ -244,7 +336,7 @@ def member_password_setup(
     token = issue_member_set_password_token(account.id, credential_version(account))
     write_audit(db, user, "member_account.password_setup", "member_account", account.id)
     db.commit()
-    out = MemberAccountOut.model_validate(account)
+    out = _account_out(db, account)
     out.set_password_token = token
     out.tenant_slug = _tenant_slug(db, account.client_id)
     return out
@@ -286,11 +378,14 @@ def member_set_password_direct(
     )
     account.failed_attempts = 0
     account.locked_until = None
+    # A real password supersedes any mailed one-time value, so its deadline no
+    # longer applies — leaving it set would expire the password just chosen.
+    clear_invite_expiry(account)
     if account.status == MEMBER_STATUS_INVITED:
         account.status = MEMBER_STATUS_ACTIVE
     write_audit(db, user, "member_account.password_set", "member_account", account.id)
     db.commit()
-    return MemberAccountOut.model_validate(account)
+    return _account_out(db, account)
 
 
 @router.post(
@@ -305,7 +400,7 @@ def member_regenerate_login_id(
     account.system_login_id = _unique_member_login_id(db, account.client_id)
     write_audit(db, user, "member_account.login_id_regenerated", "member_account", account.id)
     db.commit()
-    return MemberAccountOut.model_validate(account)
+    return _account_out(db, account)
 
 
 @router.patch("/member-accounts/{account_id}", response_model=MemberAccountOut)
@@ -328,7 +423,266 @@ def update_member_account(
         before={"status": before}, after={"status": body.status},
     )
     db.commit()
-    return MemberAccountOut.model_validate(account)
+    return _account_out(db, account)
+
+
+# ── Portal rollout: one classification, shared by the count and the send ─────
+#
+# The number on the button and the set the endpoint acts on MUST come from the
+# same function. Two implementations drift, and the failure is silent: the card
+# offers "Send invites to 412 employees" and 380 go out, with nothing to say
+# which 32 were dropped or why.
+
+_BUCKET_PENDING = "pending"      # has an email, no invite delivered yet → target
+_BUCKET_INVITED = "invited"      # invite delivered, not signed in
+_BUCKET_SIGNED_IN = "signed_in"  # onboarded
+_BUCKET_NO_EMAIL = "no_email"    # nowhere to send
+_BUCKET_DUPLICATE = "duplicate"  # its email/staff id belongs to another employee
+_BUCKET_DISABLED = "disabled"
+
+# The follow-up list is rendered in full, so it is capped rather than unbounded.
+ATTENTION_LIST_LIMIT = 500
+
+# Clients with a delivery run in flight.
+#
+# Delivery is slow by design (Argon2id per member), so for a minute or two after
+# pressing send the counts have not moved yet — which reads exactly like nothing
+# happened and invites a second press. Without this, that second press re-queues
+# members whose first invite is mid-flight but not yet stamped, and mails them
+# twice: the one outcome this feature must never produce.
+#
+# In-process, so it bounds a double-press on ONE instance rather than across a
+# scaled-out deployment. That is the realistic failure (one operator, one page,
+# two clicks); the per-account `invite_sent_at` check inside the run still
+# closes the window for anything already delivered.
+_SENDING: set[str] = set()
+_SENDING_LOCK = threading.Lock()
+
+
+@dataclass
+class _RosterEntry:
+    employee: Employee
+    account: MemberAccount | None
+    email: str | None
+    # True when provisioning this employee would collide with another employee
+    # on the same roster (a shared email address, or a repeated staff id).
+    duplicate: bool = False
+
+
+def _roster_email(employee: Employee) -> str | None:
+    """The employee's roster email, or None when it is absent or unusable."""
+    raw = first_value(employee.attribute_values or {}, EMAIL_KEYS)
+    if not raw:
+        return None
+    email = raw.strip().lower()
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return None
+    return email
+
+
+def _roster_entries(
+    db: Session, client_id: str, policy_year_id: str
+) -> list[_RosterEntry]:
+    """Every active employee of the year, joined to its portal account (if any).
+
+    Accounts are matched the same three ways provisioning writes them: the
+    stamped `member_account_id`, then staff id, then email — both of the latter
+    being unique per client.
+    """
+    accounts = db.execute(
+        select(MemberAccount).where(MemberAccount.client_id == client_id)
+    ).scalars().all()
+    by_id = {a.id: a for a in accounts}
+    by_staff = {a.staff_id: a for a in accounts}
+    by_email = {a.email: a for a in accounts if a.email}
+
+    employees = db.execute(
+        select(Employee)
+        .where(
+            Employee.client_id == client_id,
+            Employee.policy_year_id == policy_year_id,
+            Employee.status == "active",
+        )
+        .order_by(Employee.staff_id)
+    ).scalars().all()
+
+    # Accounts are unique per client on BOTH email and staff id, so two roster
+    # rows sharing either cannot both be provisioned. Detected here, in the one
+    # shared classifier, so the count and the send agree — and so the second
+    # employee is REPORTED rather than silently dropped or, worse, handed an
+    # account on a mailbox that belongs to someone else. (A shared address is
+    # real: spouses at the same employer, a department inbox, a copy-paste
+    # error. Mailing both people's credentials there would put one member's
+    # benefits in another's inbox.) Employees are ordered by staff id, so which
+    # row wins is stable between the preview and the run.
+    seen_emails: set[str] = set()
+    seen_staff: set[str] = set()
+
+    entries: list[_RosterEntry] = []
+    for employee in employees:
+        account = by_id.get(employee.member_account_id or "") or by_staff.get(
+            employee.staff_id
+        )
+        email = _roster_email(employee)
+        duplicate = False
+        if account is None:
+            # An account already on this address belongs to a DIFFERENT staff id
+            # — it is a colleague's, not this employee's. Adopting it here would
+            # be worse than the constraint violation it avoids: this employee
+            # would be reported as covered, and the colleague's mailbox would be
+            # treated as theirs. (The `by_staff` lookup above already covers the
+            # legitimate case of an account whose employee link was never
+            # stamped.)
+            owner = by_email.get(email) if email else None
+            duplicate = (
+                owner is not None
+                or employee.staff_id in seen_staff
+                or (email is not None and email in seen_emails)
+            )
+            if not duplicate:
+                seen_staff.add(employee.staff_id)
+                if email:
+                    seen_emails.add(email)
+        entries.append(
+            _RosterEntry(
+                employee=employee, account=account, email=email, duplicate=duplicate
+            )
+        )
+    return entries
+
+
+def _bucket(entry: _RosterEntry) -> str:
+    account = entry.account
+    if account is not None:
+        if account.status == MEMBER_STATUS_DISABLED:
+            return _BUCKET_DISABLED
+        # Status flips to active on the first successful sign-in or set-password
+        # (`_issue_member_login`), so it — not `has_password` — is what marks a
+        # member as onboarded. An outstanding invite ALSO leaves a password
+        # hash on the row (the mailed one-time value), so testing that would
+        # class everyone mid-rollout as already done.
+        if account.status == MEMBER_STATUS_ACTIVE or account.last_sign_in_at:
+            return _BUCKET_SIGNED_IN
+        if account.invite_sent_at:
+            return _BUCKET_INVITED
+    elif entry.duplicate:
+        return _BUCKET_DUPLICATE
+    if not entry.email:
+        return _BUCKET_NO_EMAIL
+    return _BUCKET_PENDING
+
+
+def _deliver_invites(account_ids: list[str], client_id: str) -> None:
+    """Issue + mail one-time passwords, one member at a time.
+
+    Runs in the background: Argon2id is ~100ms by design and SMTP is slower
+    still, so a full roster would hold a request open for minutes.
+
+    Each account is committed INDIVIDUALLY and `invite_sent_at` is stamped only
+    after the mailer accepts the message. Batching the commit would mean a fault
+    at member 400 discarded the record of 399 deliveries that really happened —
+    and the next run would email all of them a second time, which is the one
+    outcome this feature must never produce. A failed send rolls that account's
+    credential back to what it was, so nobody is left holding a password that
+    was never delivered.
+
+    Touches only control tables (`member_accounts`, `clients`), which live in
+    `public` on every dialect — so unlike the claim-review pipeline this needs
+    no firm `search_path`.
+    """
+    db = SessionLocal()
+    try:
+        client = db.get(Client, client_id)
+
+        slug = client.slug if client else None
+        policy = get_auth_policy(db, client_id)
+        source = policy.portal_login_source
+        sent = failed = 0
+        for account_id in account_ids:
+            account = db.get(MemberAccount, account_id)
+            if account is None or account.status == MEMBER_STATUS_DISABLED:
+                continue
+            if account.invite_sent_at is not None:
+                continue  # delivered by a concurrent run — never send twice
+            prior = snapshot_credential(account)
+            password = issue_invite_credential(account, policy.password_min_entropy)
+            db.commit()
+            if send_member_invite(account, password, slug, source):
+                account.invite_sent_at = datetime.now(UTC)
+                db.commit()
+                sent += 1
+            else:
+                restore_credential(account, prior)
+                db.commit()
+                failed += 1
+        if failed:
+            logger.error(
+                "Portal invites: %d of %d failed to send for client %s — they stay "
+                "unstamped and will be retried by the next run",
+                failed, sent + failed, client_id,
+            )
+    except Exception:
+        logger.exception("Portal invite delivery failed for client %s", client_id)
+    finally:
+        db.close()
+        with _SENDING_LOCK:
+            _SENDING.discard(client_id)
+
+
+@router.get("/member-accounts/rollout", response_model=PortalRolloutOut)
+def portal_rollout(
+    policy_year_id: str = Query(...),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PortalRolloutOut:
+    """Portal-access state of the whole roster — the rollout card's data."""
+    client_id = require_client_id(user)
+    assert_policy_year_for_user(policy_year_id, user, db)
+
+    entries = _roster_entries(db, client_id, policy_year_id)
+    counts = dict.fromkeys(
+        (
+            _BUCKET_PENDING,
+            _BUCKET_INVITED,
+            _BUCKET_SIGNED_IN,
+            _BUCKET_NO_EMAIL,
+            _BUCKET_DUPLICATE,
+            _BUCKET_DISABLED,
+        ),
+        0,
+    )
+    attention: list[PortalRolloutMember] = []
+    for entry in entries:
+        bucket = _bucket(entry)
+        counts[bucket] += 1
+        if (
+            bucket in (_BUCKET_NO_EMAIL, _BUCKET_DUPLICATE)
+            and len(attention) < ATTENTION_LIST_LIMIT
+        ):
+            attention.append(
+                PortalRolloutMember(
+                    employee_id=entry.employee.id,
+                    staff_id=entry.employee.staff_id,
+                    employee_name=entry.employee.employee_name,
+                    reason="duplicate" if bucket == _BUCKET_DUPLICATE else "no_email",
+                    email=entry.email,
+                )
+            )
+    unreachable = counts[_BUCKET_NO_EMAIL] + counts[_BUCKET_DUPLICATE]
+    return PortalRolloutOut(
+        employees_total=len(entries),
+        invite_pending=counts[_BUCKET_PENDING],
+        invited=counts[_BUCKET_INVITED],
+        signed_in=counts[_BUCKET_SIGNED_IN],
+        no_email=counts[_BUCKET_NO_EMAIL],
+        duplicate=counts[_BUCKET_DUPLICATE],
+        disabled=counts[_BUCKET_DISABLED],
+        mail_deliverable=mail_deliverable(),
+        mail_mode=get_settings().mail_mode,
+        sending=client_id in _SENDING,
+        needs_attention=attention,
+        needs_attention_truncated=unreachable > len(attention),
+    )
 
 
 @router.post("/member-accounts/bulk-invite", response_model=BulkInviteResult)
@@ -336,67 +690,85 @@ def update_member_account(
 def bulk_invite(
     request: Request,
     body: BulkInviteIn,
+    background: BackgroundTasks,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BulkInviteResult:
-    """Provision every employee in the policy year that has a roster email and
-    no portal account yet. Existing accounts (matched by email or staff_id)
-    are skipped, not re-invited."""
+    """Send a portal invite to every employee who has not had one delivered.
+
+    Provisions an account for EVERY active employee — including those with no
+    email address, who get no send but do get an account, so they appear on the
+    follow-up list and can be handed a set-password link individually.
+
+    Members who already received an invite, or who are already onboarded, are
+    left untouched: the target set is the `pending` bucket alone. That is what
+    makes this safe to press repeatedly — it never becomes a second email to
+    someone who already has one, only a first email to whoever is left.
+    """
     client_id = require_client_id(user)
     assert_policy_year_for_user(body.policy_year_id, user, db)
 
-    accounts = db.execute(
-        select(MemberAccount).where(MemberAccount.client_id == client_id)
-    ).scalars().all()
-    known_emails = {a.email for a in accounts}
-    known_staff = {a.staff_id for a in accounts}
+    # A run already in flight has targets it has not stamped yet; re-queueing
+    # them here is how a member ends up with two emails.
+    with _SENDING_LOCK:
+        if client_id in _SENDING:
+            return BulkInviteResult(already_sending=True)
 
-    employees = db.execute(
-        select(Employee).where(
-            Employee.client_id == client_id,
-            Employee.policy_year_id == body.policy_year_id,
-            Employee.status == "active",
-        )
-    ).scalars().all()
+    entries = _roster_entries(db, client_id, body.policy_year_id)
+    created = no_email = already = disabled = duplicate = 0
+    targets: list[str] = []
 
-    invited = skipped_existing = skipped_no_email = 0
-    to_send: list[tuple[MemberAccount, object]] = []
-    for employee in employees:
-        raw_email = first_value(employee.attribute_values or {}, EMAIL_KEYS)
-        if not raw_email:
-            skipped_no_email += 1
+    for entry in entries:
+        bucket = _bucket(entry)
+        if bucket == _BUCKET_DISABLED:
+            disabled += 1
             continue
-        email = raw_email.strip().lower()
-        if "@" not in email or "." not in email.split("@")[-1]:
-            skipped_no_email += 1
+        if bucket in (_BUCKET_INVITED, _BUCKET_SIGNED_IN):
+            already += 1
             continue
-        if email in known_emails or employee.staff_id in known_staff:
-            skipped_existing += 1
+        if bucket == _BUCKET_DUPLICATE:
+            # Deliberately NOT provisioned: an account is unique per client on
+            # email and staff id, so this row cannot have one of its own, and
+            # attaching it to the colleague's address would deliver a member's
+            # credentials — and then their benefits — to someone else's inbox.
+            # Reported on the follow-up list for the roster to be corrected.
+            duplicate += 1
             continue
-        account = _create_account(db, employee, email, user.user_id)
-        to_send.append((account, issue_otp(db, account)))
-        known_emails.add(email)
-        known_staff.add(employee.staff_id)
-        invited += 1
+        account = entry.account
+        if account is None:
+            account = _create_account(db, entry.employee, entry.email, user.user_id)
+            created += 1
+        if bucket == _BUCKET_NO_EMAIL:
+            no_email += 1
+            continue
+        targets.append(account.id)
 
-    if invited:
-        write_audit(
-            db, user, "member_account.bulk_invited", "member_account", None,
-            after={"policy_year_id": body.policy_year_id, "invited": invited},
-        )
+    write_audit(
+        db, user, "member_account.bulk_invited", "member_account", None,
+        after={
+            "policy_year_id": body.policy_year_id,
+            "queued": len(targets),
+            "accounts_created": created,
+            "no_email": no_email,
+            "duplicate": duplicate,
+        },
+    )
+    # Accounts must exist and be committed before delivery starts — the
+    # background task opens its own session and looks them up by id.
     db.commit()
-    mail_failed = 0
-    for account, issued in to_send:
-        if not send_otp(account, issued):
-            mail_failed += 1
-    if mail_failed:
-        logger.error(
-            "Bulk invite: %d of %d invite emails failed to send for policy year %s",
-            mail_failed, invited, body.policy_year_id,
-        )
+
+    if targets:
+        # Claimed BEFORE dispatch — a second request arriving while this one is
+        # still queueing must be refused too, not just one arriving mid-send.
+        with _SENDING_LOCK:
+            _SENDING.add(client_id)
+        background.add_task(_deliver_invites, targets, client_id)
+
     return BulkInviteResult(
-        invited=invited,
-        skipped_existing=skipped_existing,
-        skipped_no_email=skipped_no_email,
-        mail_failed=mail_failed,
+        queued=len(targets),
+        accounts_created=created,
+        no_email=no_email,
+        duplicate=duplicate,
+        already_invited=already,
+        skipped_disabled=disabled,
     )

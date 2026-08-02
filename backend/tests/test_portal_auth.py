@@ -18,11 +18,18 @@ from app.core.auth import (  # noqa: E402
     CurrentUser,
     get_current_user,
 )
+from app.core.credentials import credential_version  # noqa: E402
 from app.core.portal_auth import hash_otp_code, issue_member_token  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Employee, MemberAccount, MemberOtpCode, PolicyYear  # noqa: E402
+from app.models import (  # noqa: E402
+    Client,
+    Employee,
+    MemberAccount,
+    MemberOtpCode,
+    PolicyYear,
+)
 from app.models.member_account import (  # noqa: E402
     MEMBER_STATUS_ACTIVE,
     MEMBER_STATUS_INVITED,
@@ -35,6 +42,7 @@ EMP_ALICE = "00000000-0000-0000-0000-00000000pa02"
 EMP_NO_EMAIL = "00000000-0000-0000-0000-00000000pa03"
 EMP_NO_EMAIL_2 = "00000000-0000-0000-0000-00000000pa04"
 ALICE_EMAIL = "alice@acme.test"
+DEMO_SLUG = "demo"
 
 
 def _broker() -> CurrentUser:
@@ -53,6 +61,9 @@ def _setup_db():
     Base.metadata.create_all(bind=engine)
     seed()
     with SessionLocal() as session:
+        # The portal resolves its tenant from the subdomain (stood in for by
+        # X-Inspro-Tenant-Slug here), so set-password needs a slug on the client.
+        session.get(Client, DEMO_CLIENT_ID).slug = DEMO_SLUG
         session.add(
             PolicyYear(
                 id=PY_ACTIVE,
@@ -166,8 +177,20 @@ def test_invite_then_otp_sign_in_flow(broker_client: TestClient, anon_client: Te
         emp = session.get(Employee, EMP_ALICE)
         assert emp.member_account_id == body["id"]
 
-    # The invite itself already issued a code; clear it so the fresh request
-    # isn't suppressed by the per-account cooldown.
+    # Inviting mails a ONE-TIME password (no OTP is issued any more) and records
+    # delivery — `invite_sent_at` is what the bulk send targets on.
+    with SessionLocal() as session:
+        acc = session.get(MemberAccount, body["id"])
+        assert acc.invite_sent_at is not None
+        assert acc.password_hash is not None
+        assert acc.invite_expires_at is not None
+        assert (
+            session.query(MemberOtpCode)
+            .filter(MemberOtpCode.member_account_id == acc.id)
+            .count()
+            == 0
+        )
+
     _clear_otps()
     code = _request_code(anon_client)
     assert code is not None and len(code) == 6  # dev+mock exposes debug_code
@@ -177,14 +200,29 @@ def test_invite_then_otp_sign_in_flow(broker_client: TestClient, anon_client: Te
     )
     assert res.status_code == 200, res.text
     out = res.json()
+    # The mailed password is rotation-due on arrival, so proving the mailbox
+    # still can't skip choosing a password — verify hands back the same
+    # forced-rotation challenge `/login` would.
+    assert out["status"] == "password_reset_required"
+    assert out["challenge_token"]
+
+    res = anon_client.post(
+        "/api/v1/portal/auth/set-password",
+        json={"token": out["challenge_token"], "password": "Chosen-By-Member-42"},
+        headers={"X-Inspro-Tenant-Slug": DEMO_SLUG},
+    )
+    assert res.status_code == 200, res.text
+    out = res.json()
     assert out["token"]
     assert out["member"]["email"] == ALICE_EMAIL
 
-    # First verify activates the invited account.
+    # Setting a real password activates the account and retires the invite
+    # deadline — leaving it set would expire the password just chosen.
     with SessionLocal() as session:
         acc = session.get(MemberAccount, body["id"])
         assert acc.status == MEMBER_STATUS_ACTIVE
         assert acc.last_sign_in_at is not None
+        assert acc.invite_expires_at is None
 
     # Token works on the portal surface and resolves the member's own row.
     me = anon_client.get(
@@ -396,14 +434,22 @@ def test_resend_invite(broker_client: TestClient):
             .one()
         )
         account_id = account.id
+    with SessionLocal() as session:
+        before = session.get(MemberAccount, account_id).password_hash
     res = broker_client.post(f"/api/v1/member-accounts/{account_id}/resend-invite")
     assert res.status_code == 200
     with SessionLocal() as session:
+        acc = session.get(MemberAccount, account_id)
+        # A resend issues a NEW one-time password (no OTP), which is why it is a
+        # per-employee action the UI confirms — the old password stops working.
+        assert acc.password_hash != before
+        assert acc.invite_sent_at is not None
+        assert acc.invite_expires_at is not None
         assert (
             session.query(MemberOtpCode)
             .filter(MemberOtpCode.member_account_id == account_id)
             .count()
-            == 1
+            == 0
         )
 
 
@@ -416,20 +462,157 @@ def test_list_member_accounts(broker_client: TestClient):
     assert body["total"] == len(body["items"])
 
 
-def test_bulk_invite_skips_existing_and_no_email(broker_client: TestClient):
-    # First run provisions whoever still lacks an account (order-independent);
-    # the immediate second run must be a no-op with everyone skipped.
+def test_bulk_invite_never_sends_twice(broker_client: TestClient):
+    """The whole point of the feature: pressing it again must not re-email."""
     first = broker_client.post(
         "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
     )
     assert first.status_code == 200
+
+    # Email-less employees are PROVISIONED (so they appear on the follow-up
+    # list and can be handed a link 1:1) but nothing is sent to them.
+    # (EMP_NO_EMAIL_2 was given an explicit email by an earlier test, so
+    # EMP_NO_EMAIL is the only genuinely email-less employee here.)
+    with SessionLocal() as session:
+        for emp_id in (EMP_NO_EMAIL,):
+            emp = session.get(Employee, emp_id)
+            assert emp.member_account_id is not None
+            acc = session.get(MemberAccount, emp.member_account_id)
+            assert acc.email is None
+            assert acc.invite_sent_at is None
+            assert acc.system_login_id  # they sign in with this instead
+
     second = broker_client.post(
         "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
     )
     assert second.status_code == 200
     body = second.json()
-    assert body["invited"] == 0
-    assert body["skipped_existing"] + body["skipped_no_email"] >= 2
+    assert body["queued"] == 0
+    assert body["accounts_created"] == 0
+    assert body["already_invited"] >= 1
+    assert body["no_email"] >= 1
+
+
+def test_bulk_invite_retries_only_undelivered(broker_client: TestClient):
+    """A failed send stays unstamped, so the next run picks up exactly those —
+    a retry of a first email, never a second one to anyone already served."""
+    with SessionLocal() as session:
+        alice = (
+            session.query(MemberAccount)
+            .filter(MemberAccount.email == ALICE_EMAIL)
+            .one()
+        )
+        alice.invite_sent_at = None  # stand in for a send that failed
+        alice.status = MEMBER_STATUS_INVITED
+        alice.last_sign_in_at = None
+        session.commit()
+
+    res = broker_client.get(
+        "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_ACTIVE}
+    )
+    assert res.status_code == 200
+    roll = res.json()
+    assert roll["invite_pending"] == 1  # only the undelivered one
+    assert roll["no_email"] >= 1
+    assert {m["staff_id"] for m in roll["needs_attention"]} >= {"S-101"}
+
+    res = broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
+    )
+    assert res.json()["queued"] == 1
+
+    with SessionLocal() as session:
+        alice = (
+            session.query(MemberAccount)
+            .filter(MemberAccount.email == ALICE_EMAIL)
+            .one()
+        )
+        assert alice.invite_sent_at is not None
+
+
+def test_shared_roster_email_is_reported_not_provisioned(broker_client: TestClient):
+    """Two employees on one address: the second is REPORTED, never attached to
+    the first one's mailbox. Real CDL data has this, and provisioning it blindly
+    both violated the (client, email) uniqueness constraint AND would have sent
+    one member's credentials — and so their benefits — to a colleague."""
+    shared = "shared.mailbox@acme.test"
+    with SessionLocal() as session:
+        for emp_id in (EMP_NO_EMAIL, EMP_NO_EMAIL_2):
+            emp = session.get(Employee, emp_id)
+            emp.attribute_values = {**emp.attribute_values, "email": shared}
+            emp.member_account_id = None
+        session.query(MemberAccount).filter(
+            MemberAccount.staff_id.in_(["S-101", "S-777"])
+        ).delete(synchronize_session=False)
+        session.commit()
+
+    res = broker_client.get(
+        "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_ACTIVE}
+    )
+    roll = res.json()
+    assert roll["duplicate"] == 1
+    dup = [m for m in roll["needs_attention"] if m["reason"] == "duplicate"]
+    assert len(dup) == 1 and dup[0]["email"] == shared
+
+    # The run must not 500 on the constraint, and must leave the loser alone.
+    res = broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["duplicate"] == 1
+    with SessionLocal() as session:
+        holders = (
+            session.query(MemberAccount).filter(MemberAccount.email == shared).all()
+        )
+        assert len(holders) == 1  # exactly one employee owns the address
+
+    # And on the NEXT read — now that the colleague's account exists — the loser
+    # must still be reported as a duplicate. Resolving an employee to an account
+    # merely because it shares their email adopts a COLLEAGUE's account: the
+    # employee is then counted as covered while their colleague's mailbox is
+    # treated as theirs.
+    roll = broker_client.get(
+        "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_ACTIVE}
+    ).json()
+    assert roll["duplicate"] == 1
+    assert broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
+    ).json()["duplicate"] == 1
+
+    # Restore the fixture for any later test in this module.
+    with SessionLocal() as session:
+        for emp_id in (EMP_NO_EMAIL, EMP_NO_EMAIL_2):
+            emp = session.get(Employee, emp_id)
+            attrs = dict(emp.attribute_values)
+            attrs.pop("email", None)
+            emp.attribute_values = attrs
+            emp.member_account_id = None
+        session.query(MemberAccount).filter(
+            MemberAccount.staff_id.in_(["S-101", "S-777"])
+        ).delete(synchronize_session=False)
+        session.commit()
+
+
+def test_rollout_counts_match_the_send(broker_client: TestClient):
+    """The number on the button and the number acted on come from one
+    classification — if they can drift, the card quietly under-reports."""
+    res = broker_client.get(
+        "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_ACTIVE}
+    )
+    roll = res.json()
+    assert (
+        roll["invite_pending"]
+        + roll["invited"]
+        + roll["signed_in"]
+        + roll["no_email"]
+        + roll["duplicate"]
+        + roll["disabled"]
+        == roll["employees_total"]
+    )
+    queued = broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
+    ).json()["queued"]
+    assert queued == roll["invite_pending"]
 
 
 def test_verify_activates_only_on_success(anon_client: TestClient):
@@ -477,7 +660,11 @@ def test_token_survives_reissue_and_encodes_client(anon_client: TestClient):
         account.status = MEMBER_STATUS_ACTIVE
         session.commit()
         account_id, client_id = account.id, account.client_id
-    token, expires_at = issue_member_token(account_id, client_id)
+        # Issuing an invite bumps `password_updated_at`, which IS the credential
+        # version — so a token must be minted against the current one. (That is
+        # the intended effect: a re-issued credential evicts older sessions.)
+        version = credential_version(account)
+    token, expires_at = issue_member_token(account_id, client_id, version)
     assert expires_at > datetime.now(UTC)
     res = anon_client.get(
         "/api/v1/portal/me", headers={"Authorization": f"Bearer {token}"}

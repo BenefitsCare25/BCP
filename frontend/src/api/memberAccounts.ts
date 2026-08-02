@@ -15,8 +15,18 @@ export interface MemberAccount {
   created_at: string;
   /** Broker-generated alternate username; null until allocated. */
   system_login_id: string | null;
-  /** True once the member has set a password (credential login enabled). */
+  /** True once a password exists — either a mailed one-time value or one the
+   *  member set. NOT a sign of being onboarded; read `status` for that. */
   has_password: boolean;
+  /** When an invite email was confirmed delivered. null = never received one,
+   *  which is exactly what the bulk send targets. */
+  invite_sent_at: string | null;
+  /** Deadline on a mailed one-time password that hasn't been used yet. */
+  invite_expires_at: string | null;
+  /** What THIS member should be told to type, resolved server-side from the
+   *  company's "Login username" setting. Never re-derive it here: the setting
+   *  lives behind a firm-admin-only endpoint this page can't call. */
+  login_username: string | null;
   /** Invite/resend responses only: whether the invite email actually sent.
    *  Absent on older backends — treat undefined as "assumed sent". */
   mail_sent?: boolean;
@@ -29,14 +39,56 @@ export interface MemberAccount {
 export interface MemberAccountListResult {
   total: number;
   items: MemberAccount[];
+  /** Server-owned rules the UI states and pre-validates. Served, not mirrored —
+   *  a TypeScript copy drifts silently the moment the real value moves. */
+  password_min_length: number;
+  set_password_ttl_hours: number;
 }
 
 export interface BulkInviteResult {
+  /** Invites dispatched for delivery (sending runs in the background). */
+  queued: number;
+  accounts_created: number;
+  no_email: number;
+  duplicate: number;
+  already_invited: number;
+  skipped_disabled: number;
+  /** A run was already in flight; this request did nothing. */
+  already_sending: boolean;
+}
+
+export interface PortalRolloutMember {
+  employee_id: string;
+  staff_id: string;
+  employee_name: string | null;
+  /** Why the send couldn't reach them — the two need different fixes. */
+  reason: "no_email" | "duplicate";
+  email: string | null;
+}
+
+/** Portal-access state of the whole roster. `invite_pending` is both what the
+ *  send button counts and what the endpoint acts on — one server-side
+ *  classification, so the label can't promise more than the send delivers. */
+export interface PortalRollout {
+  employees_total: number;
+  invite_pending: number;
   invited: number;
-  skipped_existing: number;
-  skipped_no_email: number;
-  /** Number of invite emails that failed to send (absent on older backends). */
-  mail_failed?: number;
+  signed_in: number;
+  no_email: number;
+  /** Roster rows sharing an email (or staff id) with another employee — not
+   *  provisioned, because one mailbox must not receive two members' logins. */
+  duplicate: number;
+  disabled: number;
+  /** False when the configured mailer can't even be built (e.g. SMTP mode with
+   *  no host) — pressing send would queue hundreds and deliver none. */
+  mail_deliverable: boolean;
+  /** "log" writes invites to the application log rather than emailing them —
+   *  the dev/staging default. Warned about, not blocked. */
+  mail_mode: string;
+  /** A delivery run is working through the roster right now. */
+  sending: boolean;
+  needs_attention: PortalRolloutMember[];
+  needs_attention_truncated: boolean;
 }
 
 export function useMemberAccounts() {
@@ -56,6 +108,8 @@ export function useCreateMemberAccount() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      // Every one of these moves a member between rollout buckets.
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -68,6 +122,8 @@ export function useResendMemberInvite() {
       api.post<MemberAccount>(`/member-accounts/${accountId}/resend-invite`, {}),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      // Every one of these moves a member between rollout buckets.
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
   });
 }
@@ -81,6 +137,8 @@ export function useSetMemberAccountStatus() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      // Every one of these moves a member between rollout buckets.
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
   });
 }
@@ -94,6 +152,8 @@ export function useMemberPasswordSetupLink() {
       api.post<MemberAccount>(`/member-accounts/${accountId}/password-setup`, {}),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      // Every one of these moves a member between rollout buckets.
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -110,6 +170,8 @@ export function useSetMemberPassword() {
       ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      // Every one of these moves a member between rollout buckets.
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -125,8 +187,26 @@ export function useRegenerateMemberLoginId() {
       ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      // Every one of these moves a member between rollout buckets.
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
     meta: { localErrorHandling: true },
+  });
+}
+
+export function usePortalRollout(policyYearId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["portal-rollout", cid, policyYearId],
+    queryFn: () =>
+      api.get<PortalRollout>(
+        `/member-accounts/rollout?policy_year_id=${policyYearId}`,
+      ),
+    enabled: Boolean(policyYearId),
+    // Delivery is a background run that takes minutes on a full roster, so the
+    // counts move while the page sits open. Poll only WHILE it runs — a static
+    // card that silently goes stale is what makes an operator press send again.
+    refetchInterval: (q) => (q.state.data?.sending ? 3000 : false),
   });
 }
 
@@ -139,6 +219,7 @@ export function useBulkInviteMembers() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
     },
   });
 }

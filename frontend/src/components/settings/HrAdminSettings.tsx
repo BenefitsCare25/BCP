@@ -14,6 +14,7 @@ import {
   type LoginSource,
 } from "@/api/hrAdmin";
 import { useMe } from "@/api/hooks";
+import { PortalRolloutCard } from "@/components/settings/PortalRolloutCard";
 import { formatError } from "@/lib/errors";
 import { tenantSurfaceUrl } from "@/lib/tenant";
 import { Badge } from "@/components/ui/badge";
@@ -525,6 +526,11 @@ export function HrAdminSettings() {
   return (
     <div className="space-y-4">
       <SignInSettingsCard clientId={clientId} />
+      {/* Rollout sits under the sign-in policy that governs it: "Login
+       * username" decides what members type, this decides who has an account
+       * to type it into. It used to be a button on the roster page, two
+       * screens from the setting it depends on. */}
+      <PortalRolloutCard />
       <AccountsCard clientId={clientId} />
     </div>
   );

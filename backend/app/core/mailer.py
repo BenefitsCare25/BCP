@@ -25,6 +25,40 @@ logger = logging.getLogger(__name__)
 class Mailer(Protocol):
     def send_otp(self, email: str, code: str, magic_link: str) -> None: ...
 
+    def send_member_invite(
+        self, email: str, username: str, password: str, sign_in_url: str
+    ) -> None: ...
+
+
+def _invite_message(
+    email: str, username: str, password: str, sign_in_url: str, sender: str
+) -> EmailMessage:
+    """Portal welcome: username + a ONE-TIME password.
+
+    The password is single-use by construction — the account is stamped
+    rotation-due, so the first sign-in immediately hands the member a
+    set-password step and the mailed value dies there. It is the only copy that
+    ever exists: no broker, HR user or admin sees it (that is the whole reason
+    invites go to the member's own mailbox rather than out as a list).
+    """
+    msg = EmailMessage()
+    msg["Subject"] = "Your employee benefits portal account"
+    msg["From"] = sender
+    msg["To"] = email
+    msg.set_content(
+        "Your employee benefits portal account is ready.\n\n"
+        f"    Sign in:    {sign_in_url}\n"
+        f"    Username:   {username}\n"
+        f"    Password:   {password}\n\n"
+        "You'll be asked to choose your own password the first time you sign "
+        "in — the password above stops working at that point, so there's "
+        "nothing to keep.\n\n"
+        "From the portal you can see what you're covered for, check what's "
+        "left of your limits, submit claims and manage your dependants.\n\n"
+        "If you weren't expecting this, please contact your HR team."
+    )
+    return msg
+
 
 def _otp_message(email: str, code: str, magic_link: str, sender: str) -> EmailMessage:
     msg = EmailMessage()
@@ -44,6 +78,14 @@ class LogMailer:
     def send_otp(self, email: str, code: str, magic_link: str) -> None:
         logger.info("Portal OTP for %s: %s (magic link: %s)", email, code, magic_link)
 
+    def send_member_invite(
+        self, email: str, username: str, password: str, sign_in_url: str
+    ) -> None:
+        logger.info(
+            "Portal invite for %s: username=%s password=%s (%s)",
+            email, username, password, sign_in_url,
+        )
+
 
 class SmtpMailer:
     def __init__(self) -> None:
@@ -58,8 +100,7 @@ class SmtpMailer:
                 "INSPRO_SMTP_FROM (or INSPRO_SMTP_USER)."
             )
 
-    def send_otp(self, email: str, code: str, magic_link: str) -> None:
-        msg = _otp_message(email, code, magic_link, self.sender)
+    def _send(self, msg: EmailMessage) -> None:
         with smtplib.SMTP(self.host, self.port, timeout=15) as smtp:
             smtp.ehlo()
             if smtp.has_extn("starttls"):
@@ -69,6 +110,14 @@ class SmtpMailer:
                 smtp.login(self.user, self.password)
             smtp.send_message(msg)
 
+    def send_otp(self, email: str, code: str, magic_link: str) -> None:
+        self._send(_otp_message(email, code, magic_link, self.sender))
+
+    def send_member_invite(
+        self, email: str, username: str, password: str, sign_in_url: str
+    ) -> None:
+        self._send(_invite_message(email, username, password, sign_in_url, self.sender))
+
 
 class AcsMailer:
     def __init__(self) -> None:
@@ -77,6 +126,11 @@ class AcsMailer:
         )
 
     def send_otp(self, email: str, code: str, magic_link: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def send_member_invite(  # pragma: no cover
+        self, email: str, username: str, password: str, sign_in_url: str
+    ) -> None:
         raise NotImplementedError
 
 

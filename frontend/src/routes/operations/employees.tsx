@@ -1,28 +1,22 @@
-/** ⚠️ ORPHANED — this file is imported by nothing and routed by nothing.
+/** The Employees TAB of the roster page — NOT a route of its own.
  *
- * The nav consolidation retired `/operations/employees` (it is now a redirect
- * to `/operations/roster?tab=employees`, see `router.tsx`) and split this page
- * across the roster and coverage pages — but the panels below were never
- * re-mounted on either successor, so each one shipped UNREACHABLE. The file
- * name still reads like a live route, which is how it went unnoticed and how a
- * reader (or an assistant) is led to give directions to a page that no longer
- * exists.
+ * `/operations/employees` was retired by the nav consolidation and redirects to
+ * `/operations/roster?tab=employees` (`router.tsx`); this file is imported by
+ * `roster.tsx:8` and rendered as that tab, so everything here IS reachable —
+ * under the nav item labelled **Member Listing**.
  *
- * Kept, deliberately, as the record of what was lost rather than deleted:
+ * The file previously carried a banner claiming it was orphaned. It was not:
+ * the check that produced that conclusion excluded this file from its own
+ * search, and `docs/ORPHANED_UI_RECOVERY.md` still repeats it. Run matching,
+ * match results, the per-employee override, bulk delete and the flex detail
+ * blocks are all live on the tab.
  *
- *   - `MemberAccountActions`  — RESTORED on `routes/operations/coverage.tsx`.
- *     It is the only UI for creating a portal account / minting a set-password
- *     link / setting a member's password, so while it was orphaned no broker
- *     could give any employee portal access at all.
- *   - `FlexBenefitsDetail`, `FlexPriceTagDetail` — STILL UNREACHABLE. No other
- *     file renders them.
- *   - `CoverageRevertControls`, `CoverageHistory` — these DO have another
- *     consumer, so they are fine.
- *
- * Before adding anything here, mount it on a routed page instead.
+ * Bulk portal invites DID move out — to Company settings → Authentication,
+ * beside the sign-in policy that governs them. `MemberAccountActions` renders
+ * both here and on `routes/operations/coverage.tsx`.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Play, RefreshCw, Save, Send, Trash2 } from "lucide-react";
+import { Loader2, Play, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
   useBenefitStatement,
   useBulkDeleteEmployees,
@@ -72,7 +66,6 @@ import { AdcCard } from "@/components/operations/AdcCard";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { RosterTabActions } from "./rosterTabActions";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
-import { useBulkInviteMembers } from "@/api/memberAccounts";
 import { BenefitScheduleView } from "@/components/configuration/BenefitScheduleView";
 import { useCoverageHistory } from "@/api/enrollment";
 import { FlexPriceTagSummary } from "@/components/benefits/FlexPriceTagSummary";
@@ -105,7 +98,6 @@ export function EmployeesPage() {
   const upload = useUploadEmployees();
   const bulkDelete = useBulkDeleteEmployees();
   const runMatching = useRunMatching();
-  const bulkInvite = useBulkInviteMembers();
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 250);
@@ -188,35 +180,9 @@ export function EmployeesPage() {
           label="Employee report"
           disabled={!employeesTotal}
         />
-        <Button
-          variant="outline"
-          disabled={!employeesTotal || bulkInvite.isPending}
-          onClick={async () => {
-            try {
-              const r = await bulkInvite.mutateAsync(policyYearId);
-              toast.success(
-                r.invited > 0
-                  ? `Invited ${r.invited} employee${r.invited === 1 ? "" : "s"} to the portal` +
-                      (r.skipped_no_email ? ` (${r.skipped_no_email} without an email skipped)` : "")
-                  : `No new invites — ${r.skipped_existing} already have accounts, ${r.skipped_no_email} have no roster email`,
-              );
-              if ((r.mail_failed ?? 0) > 0) {
-                toast.warning(
-                  `${r.mail_failed} invite email${r.mail_failed === 1 ? "" : "s"} failed to send — check mail settings`,
-                );
-              }
-            } catch {
-              /* global mutation toast surfaces the error */
-            }
-          }}
-        >
-          {bulkInvite.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Send className="size-4" />
-          )}
-          Invite all to portal
-        </Button>
+        {/* "Invite all to portal" moved to Company settings → Authentication,
+         * beside the sign-in policy that governs it (and where the rollout
+         * counts + the "needs an email address" follow-up list now live). */}
         <Button
           variant={pending ? "default" : "outline"}
           onClick={() => setShowRunConfirm(true)}
