@@ -66,3 +66,8 @@ backend/var/
 # Design-skill working state (audits, critiques, question state). The
 # deliverables it produces — DESIGN.md, docs/ — are committed; this is scratch.
 .impeccable/
+
+# Markdown is not committed — docs live on disk for local/assistant reference
+# only, deliberately not in the repo. Files stay in the working tree; they are
+# just never tracked. (CLAUDE.md is already excluded by the global gitignore.)
+*.md
