@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -379,7 +379,7 @@ def bulk_delete_employees(
     confirm: bool = False,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Delete every employee for a policy year. Cascades to dependants,
     enrollments/elections, leave elections, claims, and plan overrides.
 

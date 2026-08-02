@@ -20,6 +20,7 @@ slip through):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -110,7 +111,7 @@ def normalize_sub_type(sub_type: str | None) -> str | None:
 
 
 def benefit_row_for_sub_type(
-    benefit_schedule: dict | None, sub_type: str | None
+    benefit_schedule: dict[str, Any] | None, sub_type: str | None
 ) -> str | None:
     """The schedule row name funding a GP-rider sub-type (TCM/Physio), or None
     when the plan doesn't carry one. Read defensively — `benefit_schedule` is

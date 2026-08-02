@@ -7,6 +7,7 @@ has no rows, so deleting everything can never break claims)."""
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -80,7 +81,7 @@ def _clean_aliases(aliases: list[str]) -> list[str]:
     return out
 
 
-def _payload(body: ClaimDocTypeIn) -> dict:
+def _payload(body: ClaimDocTypeIn) -> dict[str, Any]:
     return {
         "display": body.display.strip(),
         "aliases": _clean_aliases(body.aliases),

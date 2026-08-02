@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -88,7 +89,9 @@ def hydrate_plans(
         .outerjoin(Product, Category.product_id == Product.id)
         .where(Category.id.in_(all_cat_ids))
     ).all()
-    cat_info: dict[str, tuple[str | None, dict | None, str | None, str | None, str | None]] = {
+    cat_info: dict[
+        str, tuple[str | None, dict[str, Any] | None, str | None, str | None, str | None]
+    ] = {
         cid: (cat_disp, pa, prod_id, pcode, pname)
         for cid, cat_disp, pa, prod_id, pcode, pname in rows
     }
@@ -228,7 +231,7 @@ def hydrate_plans(
     return result
 
 
-def build_financials(pa: dict) -> PlanFinancials | None:
+def build_financials(pa: dict[str, Any]) -> PlanFinancials | None:
     """Convert ``plan_assignments`` dict to ``PlanFinancials`` if it has financial data."""
     has_data = any(
         pa.get(k) is not None
@@ -286,7 +289,7 @@ def member_age(db: Session, employee: Employee) -> int | None:
     return _employee_age(employee, _reference_date(db, employee.policy_year_id))
 
 
-def basis_amount(pa: dict) -> float | None:
+def basis_amount(pa: dict[str, Any]) -> float | None:
     """Per-member sum assured from ``basis`` — but only when it's a plain amount.
 
     ``basis`` can also be a salary-multiple expression ('12 times basic monthly
@@ -321,7 +324,7 @@ _SALARY_MULTIPLE = re.compile(
 SALARY_KEYS: tuple[str, ...] = ("salary", "monthly_salary", "basic_salary")
 
 
-def salary_from_attrs(attribute_values: dict | None) -> float | None:
+def salary_from_attrs(attribute_values: dict[str, Any] | None) -> float | None:
     """Monthly salary as a number from a roster ``attribute_values`` blob.
 
     Roster cells arrive as floats or display strings ("5,500", "S$5,500.00");
@@ -338,7 +341,7 @@ def salary_from_attrs(attribute_values: dict | None) -> float | None:
     return value if value > 0 else None
 
 
-def salary_multiple(pa: dict) -> tuple[float, bool] | None:
+def salary_multiple(pa: dict[str, Any]) -> tuple[float, bool] | None:
     """``(multiple, is_annual)`` from an 'N times/x … salary' basis, else None.
 
     ``is_annual`` is read from the phrase THIS multiple qualifies, not the whole
@@ -359,7 +362,7 @@ def salary_multiple(pa: dict) -> tuple[float, bool] | None:
     return mult, "annual" in m.group(2).lower()
 
 
-def resolve_basis_amount(pa: dict, attribute_values: dict | None) -> float | None:
+def resolve_basis_amount(pa: dict[str, Any], attribute_values: dict | None) -> float | None:
     """Per-member sum assured: a plain-amount basis, else a salary-multiple
     basis resolved against the member's roster monthly salary.
 
@@ -382,7 +385,7 @@ def resolve_basis_amount(pa: dict, attribute_values: dict | None) -> float | Non
     return salary * mult
 
 
-def voluntary_rate_for_age(bands: list | None, age: int | None) -> float | None:
+def voluntary_rate_for_age(bands: list[Any] | None, age: int | None) -> float | None:
     """Per-S$1000 rate for ``age`` from a voluntary age-band table, or None when no
     age / no band covers it. Band selection is shared with the flex price-tag bands
     via ``band_for_age`` so premium + price tag never disagree on the member's band."""
@@ -394,7 +397,7 @@ def voluntary_rate_for_age(bands: list | None, age: int | None) -> float | None:
 
 
 def member_financials(
-    pa: dict, age: int | None = None, attribute_values: dict | None = None
+    pa: dict[str, Any], age: int | None = None, attribute_values: dict | None = None
 ) -> PlanFinancials | None:
     """Per-MEMBER view of a category's financials for any per-employee read path.
 

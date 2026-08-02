@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 from io import BytesIO
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
@@ -196,7 +197,7 @@ def report_readiness(
     policy_year_id: str,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Config gaps blocking the insurer listings (missing insurers/labels/IDs)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
     return build_readiness(db, py)

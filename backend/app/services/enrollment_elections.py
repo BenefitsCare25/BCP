@@ -10,6 +10,7 @@ pricing snapshots a broker-on-behalf election does.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -466,7 +467,7 @@ def _dependant_pricing_out(
 
 
 def _option_choices_out(
-    choices: dict, dep_profiles_by_id: dict, age_limits: dict, gst_mult: float = 1.0
+    choices: dict[str, Any], dep_profiles_by_id: dict, age_limits: dict, gst_mult: float = 1.0
 ) -> list[DependantOptionRoleOut]:
     """Freestanding dependant option LEVELS as API output, with each level's flex
     amount resolved per the member's own dependants (age-banded levels price on

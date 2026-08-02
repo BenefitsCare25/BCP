@@ -22,6 +22,7 @@ the reconciliation check has to re-run once the roster lands.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -58,7 +59,7 @@ class EntityVocab:
     known: list[EntityValue]
 
 
-def _tally(bucket: dict[str, dict], raw: object, aliases: EntityAliases) -> None:
+def _tally(bucket: dict[str, dict[str, Any]], raw: object, aliases: EntityAliases) -> None:
     s = str(raw or "").strip()
     if not s:
         return
@@ -103,7 +104,7 @@ def _identity_tokens(norm: str) -> frozenset[str]:
     return frozenset(t for t in tokenize(norm) if t not in _SUFFIX_TOKENS)
 
 
-def _index_candidates(bucket: dict[str, dict]) -> list[_Candidate]:
+def _index_candidates(bucket: dict[str, dict[str, Any]]) -> list[_Candidate]:
     return [
         _Candidate(
             value=slot["value"],
@@ -233,7 +234,7 @@ def entity_vocabulary(db: Session, policy_year: PolicyYear) -> EntityVocab:
         ).scalars()
     )
     aliases = entity_alias_map(db, policy_year.client_id)
-    roster_bucket: dict[str, dict] = {}
+    roster_bucket: dict[str, dict[str, Any]] = {}
     for emp in employees:
         _tally(roster_bucket, (emp.attribute_values or {}).get("entity"), aliases)
 

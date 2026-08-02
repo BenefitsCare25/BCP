@@ -10,6 +10,7 @@ import logging
 import os
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
@@ -39,7 +40,7 @@ def _pool_setting(name: str, default: int) -> int:
     return value
 
 
-_engine_kwargs: dict = {"pool_pre_ping": True, "echo": False}
+_engine_kwargs: dict[str, Any] = {"pool_pre_ping": True, "echo": False}
 if _IS_SQLITE:
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:

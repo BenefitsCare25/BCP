@@ -1,6 +1,8 @@
 """System-level status endpoints — AI provider config, build info."""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -19,10 +21,10 @@ router = APIRouter(prefix="/system", tags=["system"])
 def ai_status(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Whether the AI provider is configured + cache/breaker/budget state."""
     cfg = load_ai_config(db, user.client_id)
-    out: dict = {
+    out: dict[str, Any] = {
         "configured": cfg is not None,
         "source": cfg.source if cfg else "none",
         "model": cfg.model if cfg else None,

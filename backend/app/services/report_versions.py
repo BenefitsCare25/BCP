@@ -11,6 +11,7 @@ import hashlib
 import json
 import zipfile
 from io import BytesIO
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -67,7 +68,7 @@ class ReportTooLargeError(Exception):
     """The generated report exceeds MAX_REPORT_BYTES."""
 
 
-def _manifest_hash(manifest: dict | None) -> str:
+def _manifest_hash(manifest: dict[str, Any] | None) -> str:
     members = sorted((manifest or {}).get("members", []), key=lambda m: m["key"])
     payload = json.dumps(members, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -118,8 +119,8 @@ def _content_signature(spec: ReportSpec, blob_bytes: bytes) -> str | None:
         return None
 
 
-def _summary(spec: ReportSpec, manifest: dict | None, params: dict) -> dict:
-    out: dict = {"masked": bool(params.get("masked", True))}
+def _summary(spec: ReportSpec, manifest: dict[str, Any] | None, params: dict) -> dict:
+    out: dict[str, Any] = {"masked": bool(params.get("masked", True))}
     if manifest is not None:
         members = manifest.get("members", [])
         out["member_count"] = len(members)
@@ -206,7 +207,7 @@ def create_version(
     user: CurrentUser,
     py: PolicyYear,
     report_type: str,
-    params: dict,
+    params: dict[str, Any],
     label: str | None = None,
 ) -> tuple[ReportVersion, bool, str | None]:
     """Generate the report, retain the bytes, and record a version row. Returns
@@ -355,7 +356,7 @@ def is_stale(db: Session, py: PolicyYear, rv: ReportVersion) -> bool:
 
 def report_status(
     db: Session, py: PolicyYear, report_type: str, scope_key: str | None
-) -> dict:
+) -> dict[str, Any]:
     """Drive the UI: the latest retained version (if any) + whether it is stale."""
     spec = spec_for(report_type)
     rv = latest_version(db, py, report_type, scope_key)
@@ -368,7 +369,7 @@ def report_status(
     }
 
 
-def version_out(rv: ReportVersion) -> dict:
+def version_out(rv: ReportVersion) -> dict[str, Any]:
     return {
         "id": rv.id,
         "report_type": rv.report_type,
@@ -390,14 +391,14 @@ _TERMINATED = "terminated"
 _CHANGE_FIELDS = ("member_id", "relationship")
 
 
-def _newly_terminated(old: dict, new: dict) -> bool:
+def _newly_terminated(old: dict[str, Any], new: dict) -> bool:
     """A member that stayed on the listing but just went terminated — a mid-year
     leaver reads as a DELETION on the movement report, not a field change (they
     remain on the full listing for the insurer to off-bill)."""
     return new.get("status") == _TERMINATED and old.get("status") != _TERMINATED
 
 
-def _member_diffs(old: dict, new: dict) -> list[str]:
+def _member_diffs(old: dict[str, Any], new: dict) -> list[str]:
     diffs = []
     for f in _CHANGE_FIELDS:
         if old.get(f) != new.get(f):
@@ -409,7 +410,7 @@ def _member_diffs(old: dict, new: dict) -> list[str]:
 
 def _baseline_and_target(
     db: Session, rv: ReportVersion, since: ReportVersion | str | None
-) -> tuple[list[dict], list[dict], str, str]:
+) -> tuple[list[dict[str, Any]], list[dict], str, str]:
     """Resolve (old_members, new_members, old_label, new_label) for a movement.
 
     ``since`` is a prior ReportVersion → diff(since → rv); the string ``"live"``
@@ -458,7 +459,7 @@ def compute_movement(
     append_safe(ws, [f"Movement report — {insurer or 'insurer'} ({old_label} → {new_label})"])
     append_safe(ws, [])
 
-    def _section(title: str, rows: list, cols: list[str], to_row) -> None:
+    def _section(title: str, rows: list[Any], cols: list[str], to_row) -> None:
         append_safe(ws, [f"{title} ({len(rows)})"])
         append_safe(ws, cols)
         # Bold this section's column-header row (the one just written), not row 1.
@@ -501,7 +502,7 @@ def compute_movement(
 
 def movement_summary(
     db: Session, rv: ReportVersion, since: ReportVersion | str | None
-) -> dict:
+) -> dict[str, Any]:
     """Counts only (for the staleness banner) — same diff as compute_movement."""
     old_members, new_members, _ol, _nl = _baseline_and_target(db, rv, since)
     old_by = {m["key"]: m for m in old_members}

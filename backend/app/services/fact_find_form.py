@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -292,7 +293,7 @@ class _FormData:
     # {product_id: insurer} for THIS year (services/product_insurer.py).
     insurers: dict[str, str]
     defaults: dict[str, dict[str, tuple[str, str | None]]]
-    overrides: dict
+    overrides: dict[str, Any]
     emp_cat_by_product: dict[str, dict[str, str]]
 
 
@@ -365,7 +366,7 @@ def _load_form_data(db: Session, policy_year: PolicyYear) -> _FormData:
 
 
 def _accumulate_basis(
-    basis_acc: dict[tuple[str, str], dict],
+    basis_acc: dict[tuple[str, str], dict[str, Any]],
     section_code: str,
     cid: str,
     cat: Category | None,
@@ -393,9 +394,9 @@ def _accumulate_basis(
 
 def _aggregate(
     data: _FormData, ref: date
-) -> tuple[dict[str, SectionContext], dict[tuple[str, str], dict], set[str]]:
+) -> tuple[dict[str, SectionContext], dict[tuple[str, str], dict[str, Any]], set[str]]:
     sections: dict[str, SectionContext] = {}
-    basis_acc: dict[tuple[str, str], dict] = {}
+    basis_acc: dict[tuple[str, str], dict[str, Any]] = {}
     insurers: set[str] = set()
 
     def section(code: str) -> SectionContext:
@@ -483,7 +484,7 @@ def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
     # (GCGP + GCSP → one page) carry parallel categories per sub-product over the
     # same members, so the same designation/cover would otherwise appear twice;
     # keep one row with the larger headcount rather than double the rows.
-    merged: dict[str, dict[tuple[str, str, str, str, str], dict]] = {}
+    merged: dict[str, dict[tuple[str, str, str, str, str], dict[str, Any]]] = {}
     for (section_code, _cid), acc in basis_acc.items():
         if section_code not in sections:
             continue

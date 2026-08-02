@@ -68,7 +68,7 @@ def _tier_label(cat: Category) -> str:
     return cat.display_name
 
 
-def _detail(cat: Category) -> dict:
+def _detail(cat: Category) -> dict[str, Any]:
     return cat.participation_detail if isinstance(cat.participation_detail, dict) else {}
 
 
@@ -248,7 +248,7 @@ def _sibling_tiers(
     baseline: Category,
     siblings: list[Category],
     age: int | None = None,
-    attrs: dict | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> list[CohortTier]:
     """Tier objects for a cohort's sibling categories (baseline + voluntary).
 
@@ -316,7 +316,7 @@ def _build_tier_set(
     plan_codes: set[str],
     product_code: str,
     age: int | None = None,
-    attrs: dict | None = None,
+    attrs: dict[str, Any] | None = None,
 ) -> ProductTierSet:
     """Assemble one product's electable, direction-ordered tier set for a member."""
     key = cohort_key(baseline.raw_description)
@@ -615,7 +615,7 @@ def tier_key(tier_category_id: str | None, plan_code: str | None) -> str:
 
 
 def first_category_per_product(
-    matched_categories: list[dict] | None, product_of: dict[str, str]
+    matched_categories: list[dict[str, Any]] | None, product_of: dict[str, str]
 ) -> dict[str, str]:
     """``{product_id: category_id}`` — the FIRST matched category per product.
 

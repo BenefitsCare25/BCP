@@ -9,6 +9,8 @@ writes an audit row. This module is a pure read; it adds no storage.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,7 +35,7 @@ ACTION_LABELS: dict[str, str] = {
 }
 
 
-def _plan_of(payload: dict | None) -> tuple[str | None, str | None, bool | None]:
+def _plan_of(payload: dict[str, Any] | None) -> tuple[str | None, str | None, bool | None]:
     """Extract (product_code, plan_code, declined) from an override snapshot."""
     if not isinstance(payload, dict):
         return None, None, None

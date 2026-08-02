@@ -24,6 +24,7 @@ import secrets
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, Request, Response, status
@@ -100,7 +101,7 @@ def issue_hr_access_token(
     return token, expires_at
 
 
-def _decode_hr_access_token(token: str) -> dict:
+def _decode_hr_access_token(token: str) -> dict[str, Any]:
     settings = get_settings()
     claims = jwt.decode(
         token,

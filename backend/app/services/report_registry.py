@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+from typing import Any
 
 from openpyxl import Workbook
 from sqlalchemy.orm import Session
@@ -76,7 +77,7 @@ def mime_for(fmt: str) -> str:
     return _DOCX_MIME if fmt == "docx" else _XLSX_MIME
 
 
-def scope_key_for(spec: ReportSpec, params: dict) -> str | None:
+def scope_key_for(spec: ReportSpec, params: dict[str, Any]) -> str | None:
     """Series discriminator: normalized insurer / window id / None."""
     if spec.scope == "insurer":
         return ((params.get("insurer") or "").strip().lower()) or None
@@ -92,7 +93,7 @@ def _xlsx_bytes(wb: Workbook) -> bytes:
 
 
 def build_report_bytes(
-    db: Session, py: PolicyYear, report_type: str, params: dict
+    db: Session, py: PolicyYear, report_type: str, params: dict[str, Any]
 ) -> bytes:
     """Produce the report artifact bytes by dispatching to the existing live
     builder. The single place that reconciles their divergent signatures.

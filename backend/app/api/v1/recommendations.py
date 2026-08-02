@@ -119,7 +119,7 @@ def _rule_patterns(rule: dict[str, Any]) -> list[str]:
 
 
 def _validate_proposal(
-    rule: dict | None, source: str | None, samples: list[str]
+    rule: dict[str, Any] | None, source: str | None, samples: list[str]
 ) -> tuple[bool, int, list[DerivationSample], str | None]:
     """Run a proposed derivation rule against the source column's sample values.
 

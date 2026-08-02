@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -72,8 +73,8 @@ class _EmpView:
     """Minimal stand-in for ``Employee`` — only the two fields ``match_one``
     reads — so we never touch (or flush) the ORM rows during a preview."""
 
-    attribute_values: dict
-    derived_attribute_values: dict
+    attribute_values: dict[str, Any]
+    derived_attribute_values: dict[str, Any]
 
 
 def _transient_categories(

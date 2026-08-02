@@ -25,6 +25,7 @@ blank instead of vanishing from the broker's record.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from openpyxl import Workbook
 from sqlalchemy import select
@@ -108,7 +109,7 @@ HEADER = [
 ]
 
 
-def _ident(attrs: dict, keys: tuple[str, ...], masked: bool) -> str:
+def _ident(attrs: dict[str, Any], keys: tuple[str, ...], masked: bool) -> str:
     raw = first_value(attrs, keys)
     return mask_nric(raw) if masked else (raw or "")
 
@@ -126,7 +127,7 @@ def _stamp(*values: datetime | None) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-def _load(db: Session, model, ids: set[str]) -> dict:
+def _load(db: Session, model, ids: set[str]) -> dict[str, Any]:
     if not ids:
         return {}
     return {
@@ -184,7 +185,7 @@ def build_underwriting_report(
             return emp, dep
         return employees.get(employee_id or ""), None
 
-    rows: list[tuple[tuple, list[object]]] = []
+    rows: list[tuple[tuple[Any, ...], list[object]]] = []
 
     def _emit(
         review: UnderwritingReview | None, case: UnderwritingCase | None

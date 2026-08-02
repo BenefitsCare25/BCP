@@ -752,7 +752,7 @@ def remove_product_from_year(
 
 
 def _sync_term_policy_number(
-    db: Session, product: Product, policy_year_id: str, answers: dict
+    db: Session, product: Product, policy_year_id: str, answers: dict[str, Any]
 ) -> None:
     """Route the Header & Policy "Policy No." into this product's term.
 

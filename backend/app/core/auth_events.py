@@ -7,6 +7,7 @@ SHA-256 hash — so a failed-login log can't be mined for valid emails/IDs.
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -46,7 +47,7 @@ def write_auth_event(
     ip: str | None = None,
     user_agent: str | None = None,
     subdomain: str | None = None,
-    detail: dict | None = None,
+    detail: dict[str, Any] | None = None,
 ):
     """Append an auth event. Does NOT commit — the caller does."""
     from app.models import AuthEvent  # lazy: avoid import cost at module load

@@ -320,7 +320,7 @@ def _write_voluntary_rates(
     # Many voluntary tiers usually share ONE published rate table (the slips
     # print it once) — dedupe identical band lists; a per-category heading only
     # appears when genuinely distinct tables exist.
-    blocks: list[tuple[str, list]] = []
+    blocks: list[tuple[str, list[Any]]] = []
     seen: set[str] = set()
     for c in categories:
         bands = plan_assignments(c).get("voluntary_rates")

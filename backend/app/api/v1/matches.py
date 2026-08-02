@@ -6,6 +6,7 @@ POST /api/v1/match-results/run — re-derive + re-match every employee in a poli
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import desc, func, select
@@ -201,7 +202,7 @@ def _bulk_override(
         seen_products.add(product_key)
         categories.append(cat)
 
-    entries: list[dict] = []
+    entries: list[dict[str, Any]] = []
     for cat in categories:
         prod = db.get(Product, cat.product_id) if cat.product_id else None
         entries.append({

@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from typing import Any
 
 from anthropic import RateLimitError
 from fastapi import (
@@ -278,7 +279,7 @@ async def _extract_with_throttle_retry(
     client_id: str,
     policy_year_id: str,
     sha256: str,
-    blocks: list[dict],
+    blocks: list[dict[str, Any]],
     file_name: str,
 ):
     """`ai_gateway.extract_claim_document` with a bounded async backoff on
@@ -341,7 +342,7 @@ async def extract_claim_intake(
     employee = resolve_member_employee(db, member)
     year = active_policy_year(db, member.client_id)
 
-    extractions: list[dict] = []
+    extractions: list[dict[str, Any]] = []
     for upload_index, upload in enumerate(files):
         # Stream to a temp file with the size cap enforced DURING read (never
         # buffer an over-cap upload in memory), then read the bounded bytes back

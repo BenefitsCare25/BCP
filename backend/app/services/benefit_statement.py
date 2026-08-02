@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -84,7 +85,7 @@ def _dep_summary(dep: Dependant) -> DependantSummary:
 
 def _category_covers_dependants(
     has_dependants: bool,
-    plan_assignments: dict | None,
+    plan_assignments: dict[str, Any] | None,
     display_name: str | None,
     raw_description: str | None,
 ) -> bool:
@@ -123,7 +124,7 @@ def _attribute_labels(db: Session, client_id: str) -> dict[str, str]:
     return {aid: name for aid, name in rows}
 
 
-def _find_tier(scheme: dict, tier_name: str | None) -> dict | None:
+def _find_tier(scheme: dict[str, Any], tier_name: str | None) -> dict | None:
     """Locate the scheme tier the employee was assigned to, by name."""
     if not tier_name:
         return None
@@ -142,7 +143,7 @@ def _naive(dt: datetime | None) -> datetime | None:
 
 
 def _assignment_is_stale(
-    scheme_row: FlexScheme, assigned_at: datetime | None, tier: dict | None
+    scheme_row: FlexScheme, assigned_at: datetime | None, tier: dict[str, Any] | None
 ) -> bool:
     """True when the wallet snapshot may no longer reflect the scheme.
 
@@ -242,7 +243,9 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
 
     # Per-category dependant-coverage facts (product.has_dependants + plan_assignments + text).
     cat_ids = [mp.category_id for mp in matched_plans if mp.category_id]
-    cat_facts: dict[str, tuple[bool, dict | None, str | None, str | None, str | None]] = {}
+    cat_facts: dict[
+        str, tuple[bool, dict[str, Any] | None, str | None, str | None, str | None]
+    ] = {}
     if cat_ids:
         rows = db.execute(
             select(

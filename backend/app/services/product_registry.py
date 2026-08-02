@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 LayoutFamily = Literal["si_based", "plan_tier", "travel", "named_person", "earnings"]
 
@@ -496,7 +496,7 @@ def derive_product_code(
     return code.rstrip("_"), False
 
 
-def resolve_entry(code: str, product_metadata: dict | None = None) -> ProductEntry:
+def resolve_entry(code: str, product_metadata: dict[str, Any] | None = None) -> ProductEntry:
     """Registry entry for a code with per-tenant ``product_metadata`` overrides
     applied. Unknown codes get a generic plan_tier/tiered_medical entry (the
     historical default) — callers should surface ``is_known`` separately so
@@ -512,7 +512,7 @@ def resolve_entry(code: str, product_metadata: dict | None = None) -> ProductEnt
         tier_schemes=_MEDICAL_TIERS,
     )
     meta = product_metadata or {}
-    updates: dict = {}
+    updates: dict[str, Any] = {}
     if meta.get("form_profile"):
         updates["form_profile"] = str(meta["form_profile"])
     if meta.get("line"):

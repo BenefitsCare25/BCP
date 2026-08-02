@@ -23,6 +23,7 @@ this returns drive the upload response, the review UI, and the AI fallback.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from app.services.placement_slip_parser import (
     _KNOWN_PRODUCT_CODES,
@@ -57,7 +58,7 @@ class ProductDiagnostics:
     # Template-memory: stable signature of this SOB layout + the column->role
     # mapping used, so a broker can correct it and have the fix reused.
     fingerprint: str | None = None
-    column_roles: dict | None = None
+    column_roles: dict[str, Any] | None = None
     # Registry classification: which layout family extracted the sheet and
     # whether the product code was recognized (registry entry or a stored
     # broker classification). Unknown codes need the broker to pick a product

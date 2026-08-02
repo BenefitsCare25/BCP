@@ -625,7 +625,7 @@ async def parse_upload(
     )
 
 
-@router.get("", response_model=list[dict])
+@router.get("", response_model=list[dict[str, Any]])
 def list_slips(
     policy_year_id: Annotated[str, Query(description="Policy year to list uploads for")],
     user: CurrentUser = Depends(get_current_user),

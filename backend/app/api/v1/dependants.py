@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -407,7 +407,7 @@ def bulk_delete_dependants(
     confirm: bool = False,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Delete every dependant for a policy year.
 
     409s with code ``member_data_at_risk`` (unless ``confirm=true``) when the

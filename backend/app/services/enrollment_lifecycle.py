@@ -13,6 +13,7 @@ commit to the caller — matching the rest of the codebase.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -90,7 +91,7 @@ def _defaults_and_baseline(
 
 def baseline_for(
     db: Session, employee: Employee
-) -> dict:
+) -> dict[str, Any]:
     """Snapshot the employee's current effective coverage as the baseline bag.
 
     Each product entry now includes a ``compulsory`` flag so the enrollment UI
@@ -99,7 +100,7 @@ def baseline_for(
     defaults, baseline_cat = _defaults_and_baseline(db, employee)
     overrides = load_overrides(db, employee.policy_year_id, [employee.id])
     compulsory_ids = employee_compulsory_product_ids(db, employee)
-    products: dict[str, dict] = {}
+    products: dict[str, dict[str, Any]] = {}
     for product_id, (code, default_plan) in defaults.items():
         ov = overrides.get((employee.id, product_id))
         compulsory = product_id in compulsory_ids

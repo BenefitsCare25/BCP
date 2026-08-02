@@ -28,6 +28,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -73,7 +74,7 @@ _NATIONALITY_COUNTRY: dict[str, str] = {
 }
 
 
-def _meta_date(meta: dict, key: str) -> date | None:
+def _meta_date(meta: dict[str, Any], key: str) -> date | None:
     """An ISO date from the scheme meta, or None (tolerates legacy junk — the
     save/confirm validation guards new writes)."""
     raw = meta.get(key)
@@ -118,7 +119,7 @@ def _coerce_int(value: object) -> int | None:
     return None
 
 
-def _grade_source(derived: dict, raw_attrs: dict) -> object:
+def _grade_source(derived: dict[str, Any], raw_attrs: dict) -> object:
     """The employee's grade value, preferring the derived attribute. Uses an
     explicit None/"" check (not truthiness) so an integer grade of 0 survives."""
     for src in (derived, raw_attrs):
@@ -141,7 +142,7 @@ def _grade_token(raw: object) -> str | None:
 
 
 def employee_signals(
-    derived: dict, raw_attrs: dict
+    derived: dict[str, Any], raw_attrs: dict
 ) -> tuple[int | None, str | None, str | None]:
     """The three matching inputs for one employee, resolved from ONE place so the
     vocabulary, the live match, and assignment can never drift: the numeric grade
@@ -199,7 +200,7 @@ def family_status_from_counts(married: bool, children: int) -> str:
 
 
 def resolve_family_status(
-    derived: dict, raw_attrs: dict, spouse_count: int, child_count: int, has_deps: bool
+    derived: dict[str, Any], raw_attrs: dict, spouse_count: int, child_count: int, has_deps: bool
 ) -> tuple[str | None, str]:
     """Resolve an employee's family status + the source it came from.
 
@@ -242,17 +243,17 @@ def nationality_country(nationality: object) -> str | None:
     return None
 
 
-def _tier_band(tier: dict) -> tuple[int | None, int | None]:
+def _tier_band(tier: dict[str, Any]) -> tuple[int | None, int | None]:
     et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
     return _coerce_int(et.get("job_grade_min")), _coerce_int(et.get("job_grade_max"))
 
 
-def _tier_has_band(tier: dict) -> bool:
+def _tier_has_band(tier: dict[str, Any]) -> bool:
     lo, hi = _tier_band(tier)
     return lo is not None or hi is not None
 
 
-def _grade_in_band(grade: int | None, tier: dict) -> bool:
+def _grade_in_band(grade: int | None, tier: dict[str, Any]) -> bool:
     if grade is None:
         return False
     lo, hi = _tier_band(tier)
@@ -265,7 +266,7 @@ def _grade_in_band(grade: int | None, tier: dict) -> bool:
     return True
 
 
-def _band_width(tier: dict) -> int:
+def _band_width(tier: dict[str, Any]) -> int:
     lo, hi = _tier_band(tier)
     if lo is not None and hi is not None:
         return hi - lo
@@ -307,7 +308,7 @@ def _normalize_label(value: object) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _tier_labels(tier: dict) -> set[str]:
+def _tier_labels(tier: dict[str, Any]) -> set[str]:
     """Normalized job-title labels a tier can be matched by (name + raw text)."""
     et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
     labels = {_normalize_label(tier.get("name")), _normalize_label(et.get("raw"))}
@@ -315,7 +316,7 @@ def _tier_labels(tier: dict) -> set[str]:
     return labels
 
 
-def _is_catch_all(tier: dict) -> bool:
+def _is_catch_all(tier: dict[str, Any]) -> bool:
     """A band-less tier with no specific job-title label — a pool's fallback."""
     et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
     raw = str(et.get("raw") or "").strip().lower()
@@ -325,7 +326,7 @@ def _is_catch_all(tier: dict) -> bool:
     return any(w in f"{raw} {name}" for w in _CATCH_ALL_WORDS)
 
 
-def employee_designation(derived: dict, raw_attrs: dict) -> str | None:
+def employee_designation(derived: dict[str, Any], raw_attrs: dict) -> str | None:
     """The employee's job-title / designation string, or None."""
     for key in _DESIGNATION_KEYS:
         for src in (derived, raw_attrs):
@@ -335,7 +336,9 @@ def employee_designation(derived: dict, raw_attrs: dict) -> str | None:
     return None
 
 
-def _match_designation(designation: str | None, pool: list[int], tiers: list[dict]) -> int | None:
+def _match_designation(
+    designation: str | None, pool: list[int], tiers: list[dict[str, Any]]
+) -> int | None:
     """Index of the pool tier whose label equals the employee's designation."""
     target = _normalize_label(designation)
     if not target:
@@ -355,7 +358,7 @@ def _match_designation(designation: str | None, pool: list[int], tiers: list[dic
 # numeric band + job-title label heuristics below.
 
 
-def _tier_match_sets(tier: dict) -> tuple[set[str], set[str]]:
+def _tier_match_sets(tier: dict[str, Any]) -> tuple[set[str], set[str]]:
     """Normalized (grades, designations) value sets a tier explicitly claims."""
     et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
     raw_grades = et.get("match_grades")
@@ -375,13 +378,13 @@ def _tier_match_sets(tier: dict) -> tuple[set[str], set[str]]:
     return grades, desigs
 
 
-def _tier_has_match_sets(tier: dict) -> bool:
+def _tier_has_match_sets(tier: dict[str, Any]) -> bool:
     grades, desigs = _tier_match_sets(tier)
     return bool(grades or desigs)
 
 
 def _tier_explicit_match(
-    tier: dict, grade_str: str | None, designation: str | None
+    tier: dict[str, Any], grade_str: str | None, designation: str | None
 ) -> bool:
     """Union rule: the employee's grade OR designation is in the tier's sets."""
     grades, desigs = _tier_match_sets(tier)
@@ -396,7 +399,7 @@ def explicit_match_indices(
     grade_str: str | None,
     designation: str | None,
     country: str | None,
-    tiers: list[dict],
+    tiers: list[dict[str, Any]],
 ) -> list[int]:
     """Every tier whose roster-anchored match sets the employee satisfies (union),
     within the same country pool ``match_tier`` uses. A length > 1 means the
@@ -420,7 +423,7 @@ def explicit_match_indices(
 def match_tier(
     grade: int | None,
     country: str | None,
-    tiers: list[dict],
+    tiers: list[dict[str, Any]],
     designation: str | None = None,
     grade_str: str | None = None,
 ) -> int | None:
@@ -471,7 +474,7 @@ def _match_in_pool(
     grade_str: str | None,
     designation: str | None,
     pool: list[int],
-    tiers: list[dict],
+    tiers: list[dict[str, Any]],
 ) -> int | None:
     """Within a candidate pool: roster-anchored explicit match sets first (grade
     OR designation), then narrowest grade band containing the grade, then an exact
@@ -513,7 +516,7 @@ def _match_in_pool(
     return None
 
 
-def tier_wallet(tier: dict | None, family_status: str | None, meta: dict) -> float | None:
+def tier_wallet(tier: dict[str, Any] | None, family_status: str | None, meta: dict) -> float | None:
     """Resolve the wallet amount for a family status: per-family limit, else the
     tier flat cap, else the scheme-level system cap."""
     if tier is None:
@@ -573,7 +576,7 @@ class FlexMembership:
     # reconciled match sets — they're assigned to the first (document order), but
     # the overlap is surfaced so the broker can tighten the tiers.
     ambiguous_count: int = 0
-    ambiguous_examples: list[dict] = field(default_factory=list)
+    ambiguous_examples: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ── Shared per-employee resolution (single source of truth) ───────────────────
@@ -611,9 +614,9 @@ class ResolvedEmployee:
 def resolve_employee(
     emp: Employee,
     emp_deps: list[Dependant],
-    derived: dict,
-    tiers: list[dict],
-    meta: dict,
+    derived: dict[str, Any],
+    tiers: list[dict[str, Any]],
+    meta: dict[str, Any],
     age_limits: dict[str, dict[str, int]] | None = None,
     ref: date | None = None,
 ) -> ResolvedEmployee:
@@ -683,8 +686,8 @@ class ResolvedRoster:
     dependants: list[Dependant]          # all active deps in the year (linked or not)
     active_emp_ids: set[str]
     emp_by_id: dict[str, Employee]
-    tiers: list[dict]
-    meta: dict
+    tiers: list[dict[str, Any]]
+    meta: dict[str, Any]
     scheme_status: str | None
     # Scheme-wide dependant age window + renewal ref, so coverage reconciliation
     # can flag dependants outside it (matching the family-status / wallet filter).
@@ -794,7 +797,7 @@ def aggregate_membership(roster: ResolvedRoster) -> FlexMembership:
     ineligible_designations: dict[str, int] = defaultdict(int)
     assignments: list[EmployeeFlex] = []
     ambiguous_count = 0
-    ambiguous_examples: list[dict] = []
+    ambiguous_examples: list[dict[str, Any]] = []
 
     for r in roster.resolved:
         fs_counts[r.family_status or "unknown"] += 1
@@ -928,7 +931,7 @@ class FlexCoverage:
     buckets: list[CoverageBucket]
 
 
-def _dep_name(av: dict) -> str | None:
+def _dep_name(av: dict[str, Any]) -> str | None:
     for key in _DEP_NAME_KEYS:
         v = av.get(key)
         if isinstance(v, str) and v.strip():
@@ -1120,7 +1123,7 @@ class RosterVocab:
     grades: list[VocabValue]
 
 
-def _tally(bucket: dict[str, dict], raw: object) -> None:
+def _tally(bucket: dict[str, dict[str, Any]], raw: object) -> None:
     s = str(raw or "").strip()
     if not s:
         return
@@ -1131,7 +1134,7 @@ def _tally(bucket: dict[str, dict], raw: object) -> None:
     slot["count"] += 1
 
 
-def _vocab_list(bucket: dict[str, dict], covered: set[str]) -> list[VocabValue]:
+def _vocab_list(bucket: dict[str, dict[str, Any]], covered: set[str]) -> list[VocabValue]:
     return [
         VocabValue(value=slot["value"], count=slot["count"], claimed=norm in covered)
         for norm, slot in sorted(bucket.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
@@ -1172,8 +1175,8 @@ def roster_vocabulary(
         ).scalars()
     )
 
-    desig_bucket: dict[str, dict] = {}
-    grade_bucket: dict[str, dict] = {}
+    desig_bucket: dict[str, dict[str, Any]] = {}
+    grade_bucket: dict[str, dict[str, Any]] = {}
     for emp in employees:
         raw_attrs = emp.attribute_values or {}
         derived = derive(raw_attrs, schemas)

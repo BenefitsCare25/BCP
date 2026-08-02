@@ -111,7 +111,7 @@ def _cohort_label(display_name: str | None) -> str | None:
 
 
 def _available_products(
-    db: Session, policy_year_id: str, pricing: dict | None = None
+    db: Session, policy_year_id: str, pricing: dict[str, Any] | None = None
 ) -> list[FlexPricingProductOut]:
     tier_sets = list_product_tiers(db, policy_year_id)
     pids = [ts.product_id for ts in tier_sets.values()]

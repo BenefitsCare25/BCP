@@ -10,7 +10,7 @@ routers stay thin.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -217,7 +217,7 @@ def assert_dependants_owned(
 
 def assert_valid_dependant_options(
     dependant_option_ids: dict[str, str] | None,
-    choices: dict[str, list[dict]],
+    choices: dict[str, list[dict[str, Any]]],
 ) -> None:
     """Each elected dependant option level must be one of the product's ACTUAL
     electable choices for the elected tier (``dependant_option_choices`` — the

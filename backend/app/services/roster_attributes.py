@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from typing import Any
 
 NAME_KEYS = ("name", "dependant_name", "full_name", "employee_name")
 REL_KEYS = ("relationship", "relation", "rel", "dependant_type", "type")
@@ -33,7 +34,7 @@ EMAIL_KEYS = (
 )
 
 
-def first_value(values: dict, keys: tuple[str, ...]) -> str | None:
+def first_value(values: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     """Return the first present, non-empty value among ``keys`` as a string."""
     for k in keys:
         v = values.get(k)
@@ -88,7 +89,7 @@ def normalize_nric(raw: object | None) -> str | None:
 
 
 def nric_from_attrs(
-    attribute_values: dict | None, keys: tuple[str, ...] = EMPLOYEE_ID_KEYS
+    attribute_values: dict[str, Any] | None, keys: tuple[str, ...] = EMPLOYEE_ID_KEYS
 ) -> str | None:
     """Normalized NRIC/FIN pulled from a roster ``attribute_values`` blob."""
     return normalize_nric(first_value(attribute_values or {}, keys))
@@ -208,7 +209,7 @@ def age_next_birthday_as_of(dob: date, ref: date) -> int:
     return age_as_of(dob, ref) + 1
 
 
-def age_from_attrs(attribute_values: dict | None, ref: date) -> int | None:
+def age_from_attrs(attribute_values: dict[str, Any] | None, ref: date) -> int | None:
     """Member/dependant age (last birthday) as of ``ref`` from their roster DOB,
     or None when there's no parseable DOB. Single source of truth for the
     employee + flex pricing read paths so both age the same person identically."""
@@ -216,7 +217,7 @@ def age_from_attrs(attribute_values: dict | None, ref: date) -> int | None:
     return age_as_of(dob, ref) if dob else None
 
 
-def anb_from_attrs(attribute_values: dict | None, ref: date) -> int | None:
+def anb_from_attrs(attribute_values: dict[str, Any] | None, ref: date) -> int | None:
     """Like ``age_from_attrs`` but returns age NEXT birthday as of ``ref`` (the
     renewal date) — for eligibility-limit comparisons and insurance rate-band
     lookups, which are quoted in ANB terms."""
@@ -224,7 +225,7 @@ def anb_from_attrs(attribute_values: dict | None, ref: date) -> int | None:
     return age_next_birthday_as_of(dob, ref) if dob else None
 
 
-def band_for_age(bands: list | None, age: int | None) -> dict | None:
+def band_for_age(bands: list[Any] | None, age: int | None) -> dict[str, Any] | None:
     """The first band whose ``[min, max]`` window contains ``age`` (a None bound is
     open-ended), or None. Shared by the flex price-tag age bands and the life
     voluntary-rate bands so 'which band is this member in?' is decided in ONE place

@@ -8,6 +8,8 @@ lives here once to keep them from drifting.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from app.models import Category
 from app.models.category import SourceKind
 from app.services.rule_generator import description_to_rule
@@ -23,8 +25,8 @@ def build_manual_category(
     status: str,
     modified_by: str | None,
     participation_model: str | None = None,
-    participation_detail: dict | None = None,
-    plan_assignments: dict | None = None,
+    participation_detail: dict[str, Any] | None = None,
+    plan_assignments: dict[str, Any] | None = None,
 ) -> Category:
     """Build (but do not persist) a manual Category whose matching rule is
     seeded from ``display_name``. Callers vary only status/source_ref and the

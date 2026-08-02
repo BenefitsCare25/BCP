@@ -25,6 +25,7 @@ owns persistence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -38,7 +39,7 @@ _LIMIT_FIELDS = ("max_buy_days", "max_sell_days")
 
 
 def validate_leave_rates_shape(
-    leave_rates: dict,
+    leave_rates: dict[str, Any],
     *,
     min_buy_days: float = 0.0,
     min_sell_days: float = 0.0,
@@ -187,7 +188,7 @@ _CANDIDATE_KEYS = (
 )
 
 
-def build_leave_rate_options(employees: list[Employee]) -> dict:
+def build_leave_rate_options(employees: list[Employee]) -> dict[str, Any]:
     """Distinct grade/designation values per candidate attribute across the roster.
 
     Returns ``{"attributes": [key, ...], "values": {key: [{value, count}, ...]}}``

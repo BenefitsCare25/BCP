@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -138,7 +139,7 @@ def _ai_extract_product(
     db: Session,
     client_id: str,
     policy_year_id: str,
-    grid: list[list],
+    grid: list[list[Any]],
     product: ProductSlip,
 ) -> ProductSlip | None:
     """Best-effort AI re-extraction of one product sheet. Returns None on any failure."""

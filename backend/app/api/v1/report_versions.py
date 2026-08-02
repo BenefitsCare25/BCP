@@ -8,6 +8,7 @@ and ``services/report_registry.py``.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
@@ -69,8 +70,8 @@ def _spec_or_404(report_type: str):
         ) from None
 
 
-def _params_from(body: CreateVersionIn) -> dict:
-    params: dict = {"masked": body.masked}
+def _params_from(body: CreateVersionIn) -> dict[str, Any]:
+    params: dict[str, Any] = {"masked": body.masked}
     if body.insurer:
         params["insurer"] = body.insurer
     if body.window_id:
@@ -81,7 +82,7 @@ def _params_from(body: CreateVersionIn) -> dict:
 @registry_router.get("/report-registry")
 def get_report_registry(
     user: CurrentUser = Depends(get_current_user),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """The report-versioning classification (mode/scope/movement per report)."""
     return [
         {
@@ -104,7 +105,7 @@ def create_report_version(
     body: CreateVersionIn,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     py = assert_policy_year_for_user(policy_year_id, user, db)
     spec = _spec_or_404(body.report_type)
     params = _params_from(body)
@@ -160,7 +161,7 @@ def list_report_versions(
     scope_key: str | None = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     py = assert_policy_year_for_user(policy_year_id, user, db)
     _spec_or_404(report_type)
     return [
@@ -175,7 +176,7 @@ def report_version_status(
     scope_key: str | None = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     py = assert_policy_year_for_user(policy_year_id, user, db)
     _spec_or_404(report_type)
     return report_status(db, py, report_type, scope_key)

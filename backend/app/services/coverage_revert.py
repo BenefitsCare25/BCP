@@ -19,6 +19,8 @@ commits — matching the rest of the codebase.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -189,7 +191,7 @@ def revert_to_baseline(
     left — so the broker knows the revert didn't cover them.
     """
     snapshot = enrollment.baseline_snapshot or {}
-    products: dict = snapshot.get("products", {}) if isinstance(snapshot, dict) else {}
+    products: dict[str, Any] = snapshot.get("products", {}) if isinstance(snapshot, dict) else {}
     wanted = {c.strip() for c in product_codes} if product_codes else None
 
     defaults, baseline_cat = _defaults_and_baseline(db, employee)
@@ -202,9 +204,9 @@ def revert_to_baseline(
     # comes from ``governing_flex_config`` — the SAME company-current setting the
     # benefit statement recomputes with — so the re-snapshotted tag matches what's
     # displayed (window-agnostic surfaces must agree).
-    _price_ctx: dict = {}
+    _price_ctx: dict[str, Any] = {}
 
-    def _price_inputs() -> dict:
+    def _price_inputs() -> dict[str, Any]:
         if "loaded" not in _price_ctx:
             _price_ctx["pricing"] = get_pricing(db, employee.policy_year_id)
             _price_ctx["ref"] = reference_date(db, employee.policy_year_id)

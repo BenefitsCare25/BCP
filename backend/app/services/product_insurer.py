@@ -25,6 +25,7 @@ above for any company whose setup carries the current answer.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -39,7 +40,7 @@ def _norm(code: str | None) -> str:
     return (code or "").strip().upper()
 
 
-def _captured(answers: dict | None) -> str:
+def _captured(answers: dict[str, Any] | None) -> str:
     """The Header & Policy answer — the broker's per-year entry.
 
     ``answers`` is unvalidated ``dict[str, Any]`` (``SetupSaveIn``), so nothing
@@ -116,7 +117,7 @@ def _legacy(product: Product | None) -> str:
 
 
 def insurer_from_answers(
-    answers: dict | None, product: Product | None
+    answers: dict[str, Any] | None, product: Product | None
 ) -> str:
     """THE resolution rule, for callers that already hold a product's setup
     answers (the slip export loads them for the header wording): the captured

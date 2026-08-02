@@ -16,7 +16,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -165,7 +165,7 @@ def product_entities(
 
 
 def employee_entity(
-    attribute_values: dict | None, aliases: EntityAliases | None = None
+    attribute_values: dict[str, Any] | None, aliases: EntityAliases | None = None
 ) -> str:
     """Resolved legal entity employing this member, from the roster's Entity
     column (attribute id "entity"). "" when the roster doesn't carry one."""

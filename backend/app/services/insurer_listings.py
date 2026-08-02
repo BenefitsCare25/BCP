@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from openpyxl import Workbook
 from sqlalchemy import select
@@ -104,7 +105,7 @@ class EmployeeCoverage:
     covered_dependant_ids: list[str] = field(default_factory=list)
     grouping: str = "EO"
     option_marker: str | None = None
-    dependant_option_ids: dict | None = None
+    dependant_option_ids: dict[str, Any] | None = None
 
 
 def _dep_reportable(dep: Dependant, start: date | None) -> bool:
@@ -383,12 +384,12 @@ def _prior_cover_flag(
     return _flag(emp.staff_id in prior_people or bool(nric and nric in prior_people))
 
 
-def _ident(attrs: dict, keys: tuple[str, ...], masked: bool) -> str:
+def _ident(attrs: dict[str, Any], keys: tuple[str, ...], masked: bool) -> str:
     raw = first_value(attrs, keys)
     return mask_nric(raw) if masked else (raw or "")
 
 
-def member_id_for_insurer(attrs: dict | None, insurer: str | None) -> str:
+def member_id_for_insurer(attrs: dict[str, Any] | None, insurer: str | None) -> str:
     """The member's ID with ``insurer`` from a roster ``insurer_member_ids`` map,
     tolerating casing drift between the roster column header and
     ``Product.insurer``. Returns "" when unknown."""
@@ -403,7 +404,7 @@ def member_id_for_insurer(attrs: dict | None, insurer: str | None) -> str:
     return ""
 
 
-def _member_id(attrs: dict, insurer: str) -> str:
+def _member_id(attrs: dict[str, Any], insurer: str) -> str:
     return member_id_for_insurer(attrs, insurer)
 
 
@@ -646,7 +647,7 @@ def build_dependant_listing(
     return wb
 
 
-def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict:
+def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict[str, Any]:
     """Compact per-member fingerprint of an insurer's employee + dependant
     listing, for the movement (adds/deletions/changes) diff between report
     versions. Reuses the listing's own membership + coverage resolution
@@ -663,7 +664,7 @@ def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict:
     coverage, deps_by_emp = _employee_coverage(db, py, employees, blocks)
     code_by_pid = {b.product.id: b.report_code for b in blocks}
 
-    members: list[dict] = []
+    members: list[dict[str, Any]] = []
     for emp in employees:
         cov = coverage.get(emp.id, {})
         if not cov:
@@ -757,7 +758,7 @@ def eligible_amounts(
     return out
 
 
-def build_readiness(db: Session, py: PolicyYear) -> dict:
+def build_readiness(db: Session, py: PolicyYear) -> dict[str, Any]:
     """Config gaps the Reports page surfaces before insurer listings run."""
     blocks = product_blocks(db, py)
     # Derived from the blocks already in hand, not via

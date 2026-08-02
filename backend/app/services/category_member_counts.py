@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -86,7 +87,7 @@ def build_category_member_counts(
     # product_id per category, plus which products cover dependants at all.
     cat_product: dict[str, str | None] = {}
     covers_dependants: dict[str, bool] = {}
-    cat_assignments: dict[str, dict] = {}
+    cat_assignments: dict[str, dict[str, Any]] = {}
     for cid, product_id, assignments, has_deps in db.execute(
         select(
             Category.id,

@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -183,12 +184,12 @@ class _ParsedRow:
     row_no: int
     action: str | None  # normalized lowercase, or None (blank → ignore)
     action_raw: str | None
-    attrs: dict
+    attrs: dict[str, Any]
     staff_id: str | None
     employee_name: str | None
 
 
-def _find_action_col(header: list) -> int | None:
+def _find_action_col(header: list[Any]) -> int | None:
     for idx, cell in enumerate(header):
         if cell is not None and str(cell).strip().lower() == "action":
             return idx
@@ -214,7 +215,7 @@ def _parse_sheet(sheet, spec: dict[str, str], is_dependant: bool) -> list[_Parse
         )
         action = raw_action.lower() if raw_action else None
 
-        attrs: dict = {}
+        attrs: dict[str, Any] = {}
         for idx, attr_id in col_map.items():
             if idx >= len(row):
                 continue
@@ -277,7 +278,7 @@ def _parse_adc_workbook(path: Path | str) -> tuple[list[_ParsedRow], list[_Parse
 @dataclass
 class _EmpAdd:
     row_no: int
-    attrs: dict
+    attrs: dict[str, Any]
     staff_id: str | None
     employee_name: str | None
     nric: str | None
@@ -287,7 +288,7 @@ class _EmpAdd:
 class _EmpChange:
     row_no: int
     target: Employee
-    merged: dict
+    merged: dict[str, Any]
     employee_name: str | None
     nric: str | None
     diffs: list[AdcFieldDiff]
@@ -303,7 +304,7 @@ class _EmpDelete:
 @dataclass
 class _DepAdd:
     row_no: int
-    attrs: dict
+    attrs: dict[str, Any]
     employee_id: str | None
     link_method: str
     nric: str | None
@@ -313,7 +314,7 @@ class _DepAdd:
 class _DepChange:
     row_no: int
     target: Dependant
-    merged: dict
+    merged: dict[str, Any]
     employee_id: str | None
     nric: str | None
     diffs: list[AdcFieldDiff]
@@ -337,7 +338,7 @@ class _Plan:
     issues: list[AdcIssue] = field(default_factory=list)
 
 
-def _merge_and_diff(existing: dict, new: dict) -> tuple[dict, list[AdcFieldDiff]]:
+def _merge_and_diff(existing: dict[str, Any], new: dict) -> tuple[dict, list[AdcFieldDiff]]:
     """Overlay non-empty ``new`` values onto ``existing``; return the merged dict
     and the list of fields that actually changed. Empty cells never clear a
     field (a prefilled template blank means 'unchanged', not 'delete')."""
@@ -359,7 +360,7 @@ def _merge_and_diff(existing: dict, new: dict) -> tuple[dict, list[AdcFieldDiff]
     return merged, diffs
 
 
-def _effective_from(attrs: dict) -> date:
+def _effective_from(attrs: dict[str, Any]) -> date:
     raw = first_value(attrs, ("termination_date", "effective_date"))
     return parse_dob(raw) or date.today()
 

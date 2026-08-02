@@ -1,6 +1,8 @@
 """Sheet assembly: the Overview index plus one sheet per configured product."""
 from __future__ import annotations
 
+from typing import Any
+
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -140,7 +142,7 @@ def _write_product_sheet(
         write_sob(ws, plans, cover)
 
 
-def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple) -> None:
+def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]) -> None:
     py = ctx.policy_year
     doc_name = "Quotation Slip" if ctx.blank_rates else "Placement Slip"
     overview = wb.active

@@ -66,7 +66,7 @@ def next_rotation_deadline(
 def rotation_due(cred: LockableCredential, now: datetime | None = None) -> bool:
     """True when a configured forced-rotation deadline has passed. NULL
     `must_rotate_after` (no rotation policy) is never due."""
-    deadline = getattr(cred, "must_rotate_after", None)
+    deadline = cred.must_rotate_after
     if deadline is None:
         return False
     now = now or datetime.now(UTC)
@@ -79,7 +79,7 @@ def credential_version(cred: LockableCredential) -> int:
     """Monotonic stamp that makes set-password tokens single-use: the password's
     last-update time in MICROSECONDS (second granularity would collide when a
     set-password lands in the same second as provisioning), 0 if never set."""
-    ts = getattr(cred, "password_updated_at", None)
+    ts = cred.password_updated_at
     if ts is None:
         return 0
     if ts.tzinfo is None:

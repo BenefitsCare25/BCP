@@ -1,6 +1,8 @@
 """AI spend visibility + budget endpoints."""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import Integer, case, desc, func, select
 from sqlalchemy.orm import Session
@@ -21,7 +23,7 @@ router = APIRouter(prefix="/ai-spend", tags=["ai-spend"])
 def summary(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     client_id = require_client_id(user)
     client = db.get(Client, client_id)
     if client is None:
@@ -70,7 +72,7 @@ def summary(
     # Platform-wide totals (shared provider key/quota) are only meaningful — and
     # only safe to expose — to a system_admin; a broker must not see the fleet
     # aggregate across other firms.
-    platform: dict = {}
+    platform: dict[str, Any] = {}
     if getattr(user, "role", None) == "system_admin":
         platform = {
             "platform_month_to_date_tokens": platform_month_to_date_tokens(db),
@@ -117,7 +119,7 @@ def set_budget(
     payload: AIBudgetUpdate,
     user: CurrentUser = Depends(require_broker_admin),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Set the tenant's monthly AI token budget. 0 = unlimited (tracking only).
 
     Broker-admin gated (mirrors BYOK config). Enforcement lives in the AI

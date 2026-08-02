@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,7 +93,7 @@ def mask_nric(value: str | None) -> str:
     return f"{'*' * max(len(raw) - 4, 0)}{raw[-4:]}"
 
 
-def insurer_member_id(attributes: dict | None, insurer: str | None) -> str:
+def insurer_member_id(attributes: dict[str, Any] | None, insurer: str | None) -> str:
     """The insurer's own member number off the roster, tolerating casing drift
     between the roster column header and the configured insurer name."""
     ids = (attributes or {}).get(INSURER_MEMBER_ID_KEY) or {}
@@ -116,7 +117,7 @@ def resolve_member_id(
     source: str,
     *,
     insurer: str | None,
-    attributes: dict | None,
+    attributes: dict[str, Any] | None,
     staff_id: str | None,
     email: str | None,
     national_id: str | None,
@@ -137,7 +138,7 @@ def resolve_member_id(
     return ""
 
 
-def _service_list(services: dict | None) -> list[CardServiceOut]:
+def _service_list(services: dict[str, Any] | None) -> list[CardServiceOut]:
     enabled = services or {}
     return [
         CardServiceOut(key=key, label=CARD_SERVICE_LABELS[key])

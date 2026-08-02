@@ -252,7 +252,7 @@ def bulk_confirm(
     min_confidence: float = Query(0.85, ge=0.0, le=1.0),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     assert_policy_year_editable(
         assert_policy_year_for_user(policy_year_id, user, db)
     )
@@ -313,7 +313,7 @@ def bulk_delete_categories(
     policy_year_id: str,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Clear the slip-generated config for a policy year: every category, plus
     the unconfirmed guided-setup drafts and provisional (``system_generated``)
     plans that feed the setup form. These live in separate tables, so a
@@ -483,7 +483,7 @@ def coverage_stats(
     policy_year_id: str,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Coverage breakdown — collapsed into a single round trip with conditional
     aggregates so a policy year with 100k categories needs only one query."""
     assert_policy_year_for_user(policy_year_id, user, db)

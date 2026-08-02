@@ -13,6 +13,7 @@ in callers.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,7 +93,7 @@ def is_sparse_default(
     covered_dependant_ids: list[str] | None,
     default_plan: str | None,
     base_tier: str | None,
-    dependant_option_ids: dict | None = None,
+    dependant_option_ids: dict[str, Any] | None = None,
 ) -> bool:
     """Does this coverage state equal the member's cohort default (→ no override)?
 

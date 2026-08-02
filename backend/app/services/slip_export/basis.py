@@ -62,7 +62,7 @@ def plan_assignments(cat: Category) -> dict[str, Any]:
     return cat.plan_assignments if isinstance(cat.plan_assignments, dict) else {}
 
 
-def insured_text(pa: dict) -> str:
+def insured_text(pa: dict[str, Any]) -> str:
     """The category's insured entities as they must appear ON THE SLIP.
 
     The export reproduces the LEGAL spelling verbatim — this document goes to

@@ -7,6 +7,8 @@ and stamps each with the batch record id. Preview reuses the same evaluation wit
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -359,7 +361,7 @@ def _write_override(
     record_id: str | None,
     user: CurrentUser | None,
     flex_price_tag: float | None,
-    dependant_option_ids: dict | None,
+    dependant_option_ids: dict[str, Any] | None,
 ) -> None:
     # dep_ids is None only when no dependant_action was requested — leave any
     # existing dependant coverage untouched in that case.
