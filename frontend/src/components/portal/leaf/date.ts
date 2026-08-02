@@ -28,6 +28,28 @@ export function formatDay(iso: string | null | undefined): string {
   return `${Number(day)} ${monthName} ${year}`;
 }
 
+const MONTHS_FULL = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** The month a claim belongs to, for a group heading over a ledger.
+ *
+ * Same defensive parse as `formatDay` and for the same reason — these values
+ * arrive as bare calendar dates and `new Date()` reads them a day early west of
+ * Greenwich, which on the last day of a month files the claim under the wrong
+ * heading. A value we cannot read returns "" so the caller can label the group
+ * itself rather than printing a broken month. */
+export function monthLabel(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const [datePart] = String(iso).split(/[ T]/);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!m) return "";
+  const [, year, month] = m;
+  const name = MONTHS_FULL[Number(month) - 1];
+  return name ? `${name} ${year}` : "";
+}
+
 /** The date rail beside a message: month over day.
  *
  * Takes the same defensive path as `formatDay` — a message's `created_at` is a

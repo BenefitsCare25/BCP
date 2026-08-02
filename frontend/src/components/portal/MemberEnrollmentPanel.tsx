@@ -1,63 +1,74 @@
 /** "My enrollment" — the member's own election panel, rendered by the portal
- * page (interactive) and the broker's employee-view preview (readOnly). Builds
- * on the SAME shared election components as the broker elections page, so the
- * member sees exactly the tiers, directions and flex prices a broker would
- * elect on their behalf. */
+ * page (interactive) and the broker's employee-view preview (`readOnly`).
+ *
+ * It is composed of the portal's own primitives — `Mount`, `Field`, `Action`,
+ * `Money`, `Strike` — not of the broker elections page's cards. Those cards
+ * used to serve both surfaces by branching on `memberLabels` / `useInLeaf()`,
+ * which is where the "44px controls leaked onto the broker page" and
+ * "member dropdown rendered in broker tokens" defects came from, and it left
+ * this route as the one member surface still drawn in the broker's radius,
+ * type scale and vocabulary.
+ *
+ * What the two surfaces still share is `enrollment/electionCore.ts` — tier
+ * resolution, dependant pricing, the flex arithmetic, the leave bounds and the
+ * PUT payload. That is the part that has to agree, and now it is the only part
+ * that can. */
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Loader2, Lock, Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import type { ElectionIn, ProductTierSet } from "@/api/enrollment";
 import type { PortalEnrollmentData } from "@/api/portal";
 import {
   type DependantRef,
-  ElectionProductCard,
-  FlexBalanceStrip,
-  LeaveTradingCard,
   type ProductState,
+  baselineElectionState,
   buildElectionsPayload,
   computeFlex,
   seedElectionState,
-} from "@/components/enrollment/electionShared";
+} from "@/components/enrollment/electionCore";
 import { AlertDialog } from "@/components/ui/alert-dialog";
-import { Mount } from "@/components/portal/leaf/Mount";
-import { actionClass } from "@/components/portal/leaf/Action";
+import { Action } from "@/components/portal/leaf/Action";
+import { Mount, glassSurface } from "@/components/portal/leaf/Mount";
+import { Strike } from "@/components/portal/leaf/Strike";
+import { currencySymbol } from "@/components/portal/leaf/Figure";
+import { formatDay } from "@/components/portal/leaf/date";
+import { LeaveMount } from "@/components/portal/enrollment/LeaveMount";
+import { ProductElectionMount } from "@/components/portal/enrollment/ProductElectionMount";
+import { WalletMount } from "@/components/portal/enrollment/WalletMount";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { fmtAmount } from "@/lib/format";
-import { currencySymbol } from "@/components/portal/leaf/Figure";
-import { productGloss } from "@/components/portal/leaf/glossary";
+import { cn } from "@/lib/cn";
 
-/** Leaf actions: 44px tall, printed rather than filled, matching the clinic
- * locator and the security page. The shared Button primitive tops out at 36px
- * and has no touch scale. */
-/** The shared leaf actions — this panel used to carry its own copy of both
- * class strings, as did clinics and security, and the three had drifted.
- * `leafPrimaryAction` is the page's one brand fill: submitting the member's
- * choices. */
-const leafAction = actionClass("quiet", { className: "px-4" });
-const leafPrimaryAction = actionClass("primary", { className: "px-4" });
-
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-/** Baseline-only state for a preview where no enrollment row exists yet. */
-function baselineState(tierSets: ProductTierSet[]): Record<string, ProductState> {
-  const next: Record<string, ProductState> = {};
-  for (const ts of tierSets) {
-    const baseline = ts.tiers.find((t) => t.is_baseline) ?? ts.tiers[0];
-    next[ts.product_code] = {
-      productCode: ts.product_code,
-      tierKey: baseline?.key ?? "",
-      declined: false,
-      dependantIds: [],
-      depOptionIds: {},
-    };
-  }
-  return next;
+/** Where the member's enrollment stands, struck onto the page.
+ *
+ * A state on this surface is STRUCK, never badged (The Ink-Over-Tint Rule) —
+ * the same construction the claims list uses, so "Sent" here and "Under review"
+ * there read as one vocabulary. Rendered in the PREVIEW too: it is a statement
+ * of where the enrollment stands rather than an action, and gated on
+ * `!readOnly` it made a submitted enrollment indistinguishable from an
+ * untouched one, which is the one thing the preview exists to show. */
+function StatusNote({
+  mark,
+  tone,
+  children,
+}: {
+  mark: string;
+  tone: "approved" | "review";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        glassSurface,
+        "flex flex-col gap-2 rounded-control p-3 sm:flex-row sm:items-baseline sm:gap-3",
+      )}
+    >
+      <Strike tone={tone} className="shrink-0">
+        {mark}
+      </Strike>
+      <p className="text-row text-label">{children}</p>
+    </div>
+  );
 }
 
 export function MemberEnrollmentPanel({
@@ -82,11 +93,12 @@ export function MemberEnrollmentPanel({
   submitting?: boolean;
 }) {
   const { window, enrollment, options } = data;
-  // "S$" — the same symbol the coverage and claims leaves print, so a member
-  // moving between tabs doesn't meet two currencies. Read from the scheme
-  // rather than hardcoded; the shared election components default to the
-  // broker's bare "$".
-  const money = currencySymbol(options?.flex_currency);
+  // The ISO code, handed to `Money`, which resolves it to the symbol a member
+  // writes ("SGD" → "S$"). Only the two places that compose money into a plain
+  // STRING — a toast and a dialog description, neither of which can hold a
+  // component — resolve it themselves.
+  const currency = options?.flex_currency ?? null;
+  const money = currencySymbol(currency);
 
   const productScopeSet = useMemo(
     () =>
@@ -108,7 +120,9 @@ export function MemberEnrollmentPanel({
   useEffect(() => {
     if (!options) return;
     setState(
-      enrollment ? seedElectionState(enrollment, tierSets) : baselineState(tierSets),
+      enrollment
+        ? seedElectionState(enrollment, tierSets)
+        : baselineElectionState(tierSets),
     );
     setLeaveAction(enrollment?.leave?.action ?? "none");
     setLeaveDays(String(enrollment?.leave?.days ?? 0));
@@ -119,8 +133,8 @@ export function MemberEnrollmentPanel({
       <Mount label="Nothing to choose right now">
         <p className="text-row text-label">
           When your company next opens a benefit selection period, this is where
-          you'll change your plan, cover your family or trade leave. You'll see
-          a marker on this section when it opens.
+          you&rsquo;ll change your plan, cover your family or trade leave.
+          You&rsquo;ll see a marker on this section when it opens.
         </p>
       </Mount>
     );
@@ -178,103 +192,81 @@ export function MemberEnrollmentPanel({
   }
 
   return (
+    // One column of siblings, deliberately not nested groups: `leaf-rise`
+    // staggers a mount's entrance by `:nth-of-type` among its siblings, so
+    // wrapping the products in their own div would restart the stagger at the
+    // first product and fire it against the wallet above.
     <div className="space-y-4">
       {/* The deadline, and nothing else.
           `window.name` is the broker's internal label for the window ("Testing
           2026") — it names a row in their tool, not anything the member has or
-          needs, and a member reading "Testing" about their own benefits has
-          every reason to worry. The "Not started" chip went with it: it stated
-          the absence of an action the page is already asking for, and the panel
-          below shows their current selections either way. What's left is the
-          only fact that changes what a member does today. */}
-      <p className="text-row text-record">
-        Make your changes before{" "}
-        <span className="font-semibold">{fmtDate(window.closes_at)}</span>
-        {" — after that your current selections are locked in."}
-      </p>
+          needs. The status notes below carry the same date when they apply, so
+          this is printed only while it is still the thing that changes what a
+          member does today. */}
+      {!submitted && !finalized && (
+        <p className="text-row text-record">
+          Make your changes before{" "}
+          <span className="font-semibold">{formatDay(window.closes_at)}</span>
+          {" — after that your current selections are locked in."}
+        </p>
+      )}
 
-      {/* Rendered in the PREVIEW too. It is a statement of where the member's
-          enrollment stands, not an action, and the preview's whole contract is
-          that a broker sees what the member sees — gated on `!readOnly` it made
-          a submitted enrollment indistinguishable from an untouched one. */}
       {submitted && (
-        <div className="flex items-start gap-2 rounded-control border border-hairline/75 bg-bar/70 p-3">
-          <CheckCircle2
-            className="mt-0.5 size-4 shrink-0 text-strike-approved"
-            aria-hidden
-          />
-          <p className="text-row text-label">
-            Your choices were sent
-            {enrollment?.submitted_at
-              ? ` on ${fmtDate(enrollment.submitted_at)}`
-              : ""}{" "}
-            and are being checked. You can still change them until{" "}
-            {fmtDate(window.closes_at)}.
-          </p>
-        </div>
+        <StatusNote mark="Sent" tone="review">
+          Your choices were sent
+          {enrollment?.submitted_at
+            ? ` on ${formatDay(enrollment.submitted_at)}`
+            : ""}{" "}
+          and are being checked. You can still change them until{" "}
+          {formatDay(window.closes_at)}.
+        </StatusNote>
       )}
       {finalized && (
-        <div className="flex items-start gap-2 rounded-control border border-hairline/75 bg-bar/70 p-3">
-          <Lock className="mt-0.5 size-4 shrink-0 text-label" aria-hidden />
-          <p className="text-row text-label">
-            These choices are confirmed and your cover is updated. Contact your
-            HR team if something needs to change.
-          </p>
-        </div>
+        <StatusNote mark="Confirmed" tone="approved">
+          These choices are confirmed and your cover is updated. Contact your HR
+          team if something needs to change.
+        </StatusNote>
       )}
 
-      {/* Flex wallet balance */}
       {flex && (
-        <FlexBalanceStrip
-          flex={flex}
-          allowOverdraft={window.allow_overdraft}
-          memberLabels
-          moneySymbol={money}
-          shortfallHint="Your choices cost more than your allowance. Reduce them to submit, or ask your HR team."
-        />
+        <WalletMount flex={flex} allowOverdraft={window.allow_overdraft} />
       )}
 
-      {/* Per-product elections — the member's own cohort tiers only */}
-      <div className="space-y-2">
-        {tierSets.map((ts) => {
-          const ps = state[ts.product_code];
-          if (!ps) return null;
-          return (
-            <ElectionProductCard
-              key={ts.product_code}
-              ts={ts}
-              ps={ps}
-              disabled={disabled}
-              allowDeps={allowDeps}
-              dependants={dependants}
-              flexOnChange={!!flex?.onChange}
-              gloss={productGloss(ts.product_code)}
-              memberLabels
-              moneySymbol={money}
-              onChange={(next) =>
-                setState((s) => ({ ...s, [ts.product_code]: next }))
-              }
-            />
-          );
-        })}
-        {!tierSets.length && (
-          <Mount label="No plans to change">
-            <p className="text-row text-label">
-              This period doesn't include any plan you can change. If you were
-              expecting a choice here, your HR team can tell you why.
-            </p>
-          </Mount>
-        )}
-      </div>
+      {tierSets.map((ts) => {
+        const ps = state[ts.product_code];
+        if (!ps) return null;
+        return (
+          <ProductElectionMount
+            key={ts.product_code}
+            ts={ts}
+            ps={ps}
+            disabled={disabled}
+            allowDeps={allowDeps}
+            dependants={dependants}
+            flexOnChange={!!flex?.onChange}
+            currency={currency}
+            onChange={(next) =>
+              setState((s) => ({ ...s, [ts.product_code]: next }))
+            }
+          />
+        );
+      })}
+      {!tierSets.length && (
+        <Mount label="No plans to change">
+          <p className="text-row text-label">
+            This period doesn&rsquo;t include any plan you can change. If you
+            were expecting a choice here, your HR team can tell you why.
+          </p>
+        </Mount>
+      )}
 
-      {/* Leave trading */}
       {window.allow_leave && (
-        <LeaveTradingCard
+        <LeaveMount
           action={leaveAction}
-          days={leaveDays}
+          daysValue={leaveDays}
           leave={options?.leave ?? null}
           ratePerDay={options?.member_leave_rate ?? null}
-          moneySymbol={money}
+          currency={currency}
           disabled={disabled}
           saving={savingLeave}
           onActionChange={setLeaveAction}
@@ -288,31 +280,30 @@ export function MemberEnrollmentPanel({
         />
       )}
 
-      {/* Actions */}
       {/* Two full-height actions, stacked on a phone. Saving keeps the work;
-          sending is what starts the check — so the sentence stating the
-          blocker sits with the button rather than in a `title` attribute,
-          which a touch device never shows. */}
+          sending is what starts the check — so the sentence stating the blocker
+          sits with the button rather than in a `title` attribute, which a touch
+          device never shows. */}
       {!disabled && (
         <div className="space-y-2">
           <div className="flex flex-col gap-2 sm:flex-row">
-            <button
-              type="button"
+            <Action
+              block="phone"
               onClick={() => void saveElections()}
               disabled={saving}
-              className={leafAction}
             >
               {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}
               Save my choices
-            </button>
-            <button
-              type="button"
+            </Action>
+            {/* The page's one brand-coloured fill. */}
+            <Action
+              tone="primary"
+              block="phone"
               disabled={submitting || submitBlocked}
               onClick={() => void doSubmit(false)}
-              className={leafPrimaryAction}
             >
               <Send className="size-4" aria-hidden /> Send them in
-            </button>
+            </Action>
           </div>
           {submitBlocked && (
             <p className="text-row text-strike-pending">
@@ -334,17 +325,17 @@ export function MemberEnrollmentPanel({
         onOpenChange={(open) => {
           if (!open) setUnpricedProducts(null);
         }}
-        title="Some choices have no flex price yet"
+        title="Some choices have no price yet"
         // The member's symbol and the member's people: `$0` contradicted the
         // `S$` every other figure on this surface uses, and "your broker" is
         // broker vocabulary — a member's route to a question is their HR team,
         // which is who the rest of the portal names.
         description={`${
           unpricedProducts?.length
-            ? `These plans change your coverage but don't have a flex price set yet, so they would draw ${money}0 from your wallet: ${unpricedProducts.join(", ")}. `
+            ? `These plans change your coverage but don't have a price set yet, so they would draw ${money}0 from your allowance: ${unpricedProducts.join(", ")}. `
             : ""
-        }You can submit anyway, or check with your HR team first.`}
-        confirmLabel="Submit anyway"
+        }You can send them anyway, or check with your HR team first.`}
+        confirmLabel="Send anyway"
         confirmVariant="default"
         loading={submitting}
         onConfirm={() => void doSubmit(true)}

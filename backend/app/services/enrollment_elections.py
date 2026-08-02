@@ -29,6 +29,7 @@ from app.models.enrollment_window import WindowStatus
 from app.models.leave_election import LeaveAction, LeaveElectionStatus
 from app.models.product import Product as ProductModel
 from app.schemas.enrollment import (
+    BenefitDifferenceOut,
     CohortTierOut,
     DependantOptionChoiceOut,
     DependantOptionRoleOut,
@@ -350,6 +351,14 @@ def build_enrollment_options(
                         default_tier_category_id=ts.baseline_tier_category_id,
                         default_plan=ts.baseline_plan_code,
                     ),
+                    # Entitlement, not premium — member-safe, and the
+                    # whole point of the tier list. `_member_safe_options`
+                    # scrubs `financials` only, so these survive to the
+                    # portal untouched.
+                    differences=[
+                        BenefitDifferenceOut(**d) for d in t.differences
+                    ],
+                    differences_total=t.differences_total,
                 )
                 for t in ts.tiers
             ],

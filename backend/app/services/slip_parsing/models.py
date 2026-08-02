@@ -88,6 +88,8 @@ class ExtractedSubItem:
     # Footnote on this cell ("Include Implants", "Surgical schedule applies...").
     note: str | None = None
     limits: tuple[ExtractedLimit, ...] = ()
+    # The cell EXPLICITLY read "NA" (see ExtractedBenefitItem.not_applicable).
+    not_applicable: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,20 @@ class ExtractedBenefitItem:
     limits: tuple[ExtractedLimit, ...] = ()
     sub_items: tuple[ExtractedSubItem, ...] = ()
     properties: dict[str, str] = field(default_factory=dict)
+    # The cell EXPLICITLY read "NA", as opposed to being blank. Both normalize
+    # to ``value=None`` for display — nobody wants "NA" printed at a member —
+    # but they mean OPPOSITE things when the per-plan grids are folded into the
+    # SOB column model (``sob_columns.sob_from_plan_items``):
+    #
+    #   blank  → the slip states this benefit ONCE across the plan columns, so
+    #            the later columns INHERIT column 0's value.
+    #   "NA"   → this plan genuinely does not carry the benefit → NOT_COVERED.
+    #
+    # Collapsing both to None made every blank cell an explicit empty override,
+    # so CDL's GMM plans 2/3/4 rendered "Inpatient benefits", "Daily Home
+    # Nursing" and "Extension to cover GST" as blank rows on the member's own
+    # coverage page when the slip grants them the same values as plan 1.
+    not_applicable: bool = False
 
 
 @dataclass(frozen=True)

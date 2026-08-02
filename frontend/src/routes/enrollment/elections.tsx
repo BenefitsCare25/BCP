@@ -24,11 +24,13 @@ import {
   ElectionProductCard,
   FlexBalanceStrip,
   LeaveTradingCard,
+} from "@/components/enrollment/electionShared";
+import {
   type ProductState,
   buildElectionsPayload,
   computeFlex,
   seedElectionState,
-} from "@/components/enrollment/electionShared";
+} from "@/components/enrollment/electionCore";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { fmtCurrency } from "@/lib/format";

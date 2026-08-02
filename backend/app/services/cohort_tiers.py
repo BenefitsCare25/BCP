@@ -16,7 +16,8 @@ back to sum-insured, then to plan-code ordering.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,6 +31,7 @@ from app.services.plan_hydration import (
     member_age,
     member_financials,
 )
+from app.services.tier_differences import MAX_DIFFERENCES, schedule_differences
 
 # A trailing "(Option 2)" / "(Plan B)" / "(Tier 3)" distinguishes tiers within a
 # cohort and must be stripped to group them; a "(Job category: 99)" is
@@ -194,6 +196,14 @@ class CohortTier:
     direction: str  # 'upgrade'|'downgrade'|'same'|'unknown' (rel. to baseline)
     is_baseline: bool
     financials: PlanFinancials | None
+    # Rows on which this tier's schedule differs from the BASELINE tier's —
+    # what a member actually gives up or gains by switching. Empty for the
+    # baseline itself (it is the reference) and for products whose plans
+    # share one schedule and differ only in sum insured (all the life ones).
+    differences: tuple[dict[str, str | None], ...] = ()
+    # The true count before `MAX_DIFFERENCES` slicing, so the UI can say what
+    # it is not showing rather than silently under-reporting a change.
+    differences_total: int = 0
 
 
 @dataclass(frozen=True)
@@ -218,7 +228,10 @@ def _matched_category_ids(employee: Employee) -> list[str]:
 
 
 def _sibling_tiers(
-    baseline: Category, siblings: list[Category], age: int | None = None
+    baseline: Category,
+    siblings: list[Category],
+    age: int | None = None,
+    attrs: dict | None = None,
 ) -> list[CohortTier]:
     """Tier objects for a cohort's sibling categories (baseline + voluntary).
 
@@ -242,7 +255,7 @@ def _sibling_tiers(
                 participation=_employee_mode(c),
                 direction="same" if is_base else _direction(baseline, c),
                 is_baseline=is_base,
-                financials=member_financials(c.plan_assignments, age)
+                financials=member_financials(c.plan_assignments, age, attrs)
                 if isinstance(c.plan_assignments, dict)
                 else None,
             )
@@ -286,6 +299,7 @@ def _build_tier_set(
     plan_codes: set[str],
     product_code: str,
     age: int | None = None,
+    attrs: dict | None = None,
 ) -> ProductTierSet:
     """Assemble one product's electable, direction-ordered tier set for a member."""
     key = cohort_key(baseline.raw_description)
@@ -303,7 +317,7 @@ def _build_tier_set(
         (_detail(c).get("dependant") for c in siblings if _detail(c).get("dependant")),
         None,
     )
-    tiers = _sibling_tiers(baseline, siblings, age)
+    tiers = _sibling_tiers(baseline, siblings, age, attrs)
     # Unclaimed product plans are a fallback for single-category-multi-plan
     # products (the slip expressed tiers as Plan rows). When the slip ALREADY
     # enumerated this cohort's alternatives as sibling categories, that
@@ -404,7 +418,70 @@ def electable_tiers_for_employee(
             plan_codes_by_pid.get(pid, set()),
             product_code,
             age,
+            # The member's roster attributes, so a salary-multiple sum insured
+            # resolves to THEIR figure. Without it every such tier reported the
+            # cohort's aggregate as the member's cover.
+            employee.attribute_values,
         )
+    return _attach_differences(db, employee.policy_year_id, out)
+
+
+def _attach_differences(
+    db: Session, policy_year_id: str | None, sets: dict[str, ProductTierSet]
+) -> dict[str, ProductTierSet]:
+    """Fill in each non-baseline tier's schedule difference from the baseline.
+
+    A POST-PASS, deliberately, rather than work done inside ``_build_tier_set``:
+    the schedules are only needed for the plans this member is actually
+    OFFERED — two or three per product — while the tier builder runs before
+    that set is known. Loading them alongside `plan_codes_by_pid` would pull
+    every plan's schedule for every matched product, which on CDL means all 28
+    GPA schedules and all 22 GTL ones to render three rows.
+
+    Only the member path calls this. The config-level tier set (the flex
+    pricing grid) has no member and no baseline to compare against.
+    """
+    wanted: set[tuple[str, str]] = set()
+    for ts in sets.values():
+        for t in ts.tiers:
+            if t.plan_code:
+                wanted.add((ts.product_id, str(t.plan_code)))
+    if not wanted:
+        return sets
+
+    schedules: dict[tuple[str, str], Any] = {}
+    for pid, code, sched in db.execute(
+        select(Plan.product_id, Plan.code, Plan.benefit_schedule).where(
+            Plan.policy_year_id == policy_year_id,
+            Plan.product_id.in_({p for p, _ in wanted}),
+        )
+    ).all():
+        schedules[(pid, str(code))] = sched
+
+    out: dict[str, ProductTierSet] = {}
+    for code, ts in sets.items():
+        baseline = next((t for t in ts.tiers if t.is_baseline), None)
+        base_sched = (
+            schedules.get((ts.product_id, str(baseline.plan_code)))
+            if baseline and baseline.plan_code
+            else None
+        )
+        tiers = []
+        for t in ts.tiers:
+            if t.is_baseline or not t.plan_code:
+                tiers.append(t)
+                continue
+            diffs = schedule_differences(
+                base_sched, schedules.get((ts.product_id, str(t.plan_code)))
+            )
+            tiers.append(
+                replace(
+                    t,
+                    differences=tuple(diffs[:MAX_DIFFERENCES]),
+                    differences_total=len(diffs),
+                )
+            )
+        out[code] = replace(ts, tiers=tiers)
     return out
 
 

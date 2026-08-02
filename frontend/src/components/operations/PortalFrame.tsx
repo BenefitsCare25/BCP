@@ -30,7 +30,7 @@ import { CardLeaf } from "@/components/portal/leaf/CardLeaf";
 import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
 import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
-import type { DependantRef } from "@/components/enrollment/electionShared";
+import type { DependantRef } from "@/components/enrollment/electionCore";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import {
   HomeMosaicView,
@@ -127,9 +127,14 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
   return <CoverageLeaf data={statement.data} />;
 }
 
-/** Mirrors routes/portal/claims: the member's own action in the member's own
- * position, disabled, and their empty-state wording — a broker reading this
- * needs to see the screen the employee sees, not a broker summary of it. */
+/** Mirrors routes/portal/claims: the member's own ledger, their filter strip,
+ * their empty-state wording — a broker reading this needs to see the screen the
+ * employee sees, not a broker summary of it.
+ *
+ * The one deliberate difference is the action. On the member's page it FLOATS
+ * (fixed, bottom-centre); a fixed element inside this bounded frame would
+ * escape it and hang over the broker's own app, so here it stays in the flow
+ * above the ledger — disabled, because members submit from their own sign-in. */
 function ClaimsTab({ employeeId }: { employeeId: string }) {
   const claims = usePreviewClaims(employeeId);
   if (claims.isLoading) return <LeafSkeleton label="Loading claims" />;
@@ -137,27 +142,31 @@ function ClaimsTab({ employeeId }: { employeeId: string }) {
     return <PortalErrorState onRetry={() => void claims.refetch()} />;
   }
   const rows = claims.data?.items ?? [];
+  const disabledTitle =
+    "Disabled in preview — members submit claims from their own sign-in";
+  if (rows.length === 0) {
+    return (
+      <Mount label="No claims yet">
+        <p className="text-row text-label">
+          When you pay for treatment that your benefits cover, send us the
+          receipt here and we&rsquo;ll tell you where it&rsquo;s up to.
+        </p>
+        <div>
+          <Action tone="primary" block="phone" disabled title={disabledTitle}>
+            <FilePlus2 className="size-4" aria-hidden />
+            Make a claim
+          </Action>
+        </div>
+      </Mount>
+    );
+  }
   return (
     <div className="space-y-3">
-      <Action
-        tone="primary"
-        block="phone"
-        disabled
-        title="Disabled in preview — members submit claims from their own sign-in"
-      >
+      <Action tone="primary" block="phone" disabled title={disabledTitle}>
         <FilePlus2 className="size-4" aria-hidden />
         Make a claim
       </Action>
-      {rows.length === 0 ? (
-        <Mount label="No claims yet">
-          <p className="text-row text-label">
-            When you pay for treatment that your benefits cover, send us the
-            receipt here and we'll tell you where it's up to.
-          </p>
-        </Mount>
-      ) : (
-        <ClaimList items={rows} />
-      )}
+      <ClaimList items={rows} total={claims.data?.total} />
     </div>
   );
 }
@@ -481,37 +490,34 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
               className="h-11 w-auto shrink-0"
             />
             <span aria-hidden className="mx-4 h-7 w-px shrink-0 bg-hairline" />
+            {/* NO dot on the Enrolment tab, and the comment that used to sit
+                here claiming it "mirrors the live shell" was simply wrong: the
+                member's desktop nav has never carried one. Only the phone dock
+                does, where it is paired with an `sr-only` gloss and is the sole
+                signal on a viewport that has no room for the enrolment tile.
+                A bare coloured dot in a nav rail is an unglossed term with
+                nowhere to put its gloss (DESIGN.md), and the deadline it stood
+                for is stated in words at the top of the enrolment page and on
+                the home tile. Adding it here made the preview show a broker
+                something the member never sees — the one thing this frame
+                exists not to do. */}
             <nav className="flex items-center gap-0.5">
-              {TABS.map((item) => {
-                // Mirror the live shell: the enrollment tab gets a dot while a
-                // window is open.
-                const highlight =
-                  item.key === "enrollment" &&
-                  ctx?.enrollment_open &&
-                  tab !== item.key;
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => setTab(item.key)}
-                    className={cn(
-                      "leaf-focus inline-flex h-10 items-center gap-1.5 rounded-pill px-4 text-row",
-                      "transition-colors duration-200 ease-leaf",
-                      tab === item.key
-                        ? "bg-shade font-semibold text-record"
-                        : "text-label hover:bg-shade hover:text-record",
-                    )}
-                  >
-                    {item.label}
-                    {highlight && (
-                      <span
-                        className="size-1.5 rounded-pill bg-strike-pending"
-                        title="Enrollment window open"
-                      />
-                    )}
-                  </button>
-                );
-              })}
+              {TABS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setTab(item.key)}
+                  className={cn(
+                    "leaf-focus inline-flex h-10 items-center gap-1.5 rounded-pill px-4 text-row",
+                    "transition-colors duration-200 ease-leaf",
+                    tab === item.key
+                      ? "bg-shade font-semibold text-record"
+                      : "text-label hover:bg-shade hover:text-record",
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
             </nav>
             <div className="ml-auto flex shrink-0 items-center gap-3 pl-4">
               <Button

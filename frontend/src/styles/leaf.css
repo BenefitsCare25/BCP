@@ -539,6 +539,77 @@
   animation: leaf-grow 0.9s var(--ease-leaf) 0.34s both;
 }
 
+/* ─── The clinic ledger row ────────────────────────────────────────────────
+   Written here rather than as Tailwind arbitrary values because
+   `grid-template-areas` needs quoted strings, which do not survive a class
+   name intact — and because the two layouts are one decision that should be
+   readable side by side.
+
+   The areas are the design. Each action shares a line with the fact it belongs
+   to: Call beside the state (OPEN NOW), Directions beside its detail ("until
+   5:30 pm"). Every right-hand column right-aligns, so states, pills and links
+   each hold a straight edge down the whole ledger — and the pair of controls
+   costs no row height, because it fits inside the lines the state already
+   occupied. Putting them on the address line instead grew every row by 24px
+   and left a hole under a right column that had ended two lines earlier.
+
+   Below `sm` the actions take a frame of their own (the Whole-Frame Rule) at a
+   full 44px: the Reach Rule is a TOUCH rule, which is also why the compact
+   34/32px pair above `sm` is not a violation of it. */
+.leaf-clinic-row {
+  display: grid;
+  align-items: center;
+  column-gap: 0.875rem;
+  row-gap: 0.125rem;
+  grid-template-columns: minmax(0, 1fr) auto 1.75rem;
+  grid-template-areas:
+    "main dist  disc"
+    "main state disc"
+    "main sub   disc"
+    "call dirs  dirs";
+}
+@media (min-width: 40rem) {
+  .leaf-clinic-row {
+    column-gap: 1rem;
+    grid-template-columns: minmax(0, 1fr) auto auto auto 1.75rem;
+    grid-template-areas:
+      "main dist state call disc"
+      "main dist sub   dirs disc";
+  }
+}
+.leaf-clinic-row > [data-cell="main"] {
+  grid-area: main;
+}
+.leaf-clinic-row > [data-cell="dist"] {
+  grid-area: dist;
+  justify-self: end;
+}
+.leaf-clinic-row > [data-cell="state"] {
+  grid-area: state;
+  justify-self: end;
+}
+.leaf-clinic-row > [data-cell="sub"] {
+  grid-area: sub;
+  justify-self: end;
+}
+.leaf-clinic-row > [data-cell="call"] {
+  grid-area: call;
+  justify-self: stretch;
+}
+.leaf-clinic-row > [data-cell="dirs"] {
+  grid-area: dirs;
+  justify-self: end;
+}
+.leaf-clinic-row > [data-cell="disc"] {
+  grid-area: disc;
+  justify-self: end;
+}
+@media (min-width: 40rem) {
+  .leaf-clinic-row > [data-cell="call"] {
+    justify-self: end;
+  }
+}
+
 /* ─── The coverage deck ────────────────────────────────────────────────────
    Two things the utilities cannot express.
 

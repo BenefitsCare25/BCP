@@ -361,12 +361,36 @@ def test_per_member_basis_drives_direction_and_financials() -> None:
     assert _member_financials(up.plan_assignments).sum_insured == 150_000.0
     assert _member_financials(down.plan_assignments).sum_insured == 50_000.0
 
-    # A salary-multiple basis has no per-member number → keep the parsed figures.
+    # A SALARY-MULTIPLE basis resolves against the member's own roster salary.
+    # It must NEVER fall back to the stored figure: that is the cohort's group
+    # sum insured (100 members x 100k = 10M here), and surfacing it told one
+    # Manager they were covered for S$10,000,000 on their benefit statement and
+    # enrollment page. Unknown is rendered as "—"; a hundredfold overstatement
+    # is rendered as a fact.
     txt = _cat("m-mult", GL_ID, "Manager", "99", "voluntary",
                {"employee": "voluntary", "dependant": None, "direction": None})
     txt.plan_assignments = {"plan_code": "99", "sum_insured": 10_000_000.0,
                             "basis": "12 times basic monthly salary"}
-    assert _member_financials(txt.plan_assignments).sum_insured == 10_000_000.0
+    assert _member_financials(txt.plan_assignments).sum_insured is None
+    assert _member_financials(txt.plan_assignments).annual_premium is None
+    resolved = _member_financials(txt.plan_assignments, None, {"salary": 9_000})
+    assert resolved.sum_insured == 108_000.0  # 12 x 9,000
+
+    # A RELATIVE basis has no per-member number even with a salary on file —
+    # it needs the linked product's sum insured, which this function has no
+    # access to. Still None, never the aggregate.
+    rel = _cat("m-rel", GL_ID, "Manager", "98", "voluntary",
+               {"employee": "voluntary", "dependant": None, "direction": None})
+    rel.plan_assignments = {"plan_code": "98", "sum_insured": 4_000_000.0,
+                            "basis": "50% of GTL"}
+    assert _member_financials(rel.plan_assignments, None, {"salary": 9_000}).sum_insured is None
+
+    # A category with NO basis at all (tiered medical) is untouched — there is
+    # no per-member expression we failed to evaluate, so nothing is dropped.
+    med = _cat("m-med", GL_ID, "Manager", "97", "compulsory",
+               {"employee": "compulsory", "dependant": None, "direction": None})
+    med.plan_assignments = {"plan_code": "97", "annual_premium": 1_234.0}
+    assert _member_financials(med.plan_assignments).annual_premium == 1_234.0
 
 
 def test_voluntary_life_tier_premium_is_age_banded() -> None:

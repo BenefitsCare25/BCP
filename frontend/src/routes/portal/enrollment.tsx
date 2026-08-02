@@ -10,7 +10,7 @@ import {
   useSetMyLeave,
   useSubmitMyEnrollment,
 } from "@/api/portal";
-import type { DependantRef } from "@/components/enrollment/electionShared";
+import type { DependantRef } from "@/components/enrollment/electionCore";
 import {
   dependantName,
   dependantRelationship,

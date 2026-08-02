@@ -221,23 +221,41 @@ def _fmt_value(cell: Cell) -> str | None:
     return s
 
 
-def _split_value_note(cell: Cell) -> tuple[str | None, str | None]:
-    """Split a SOB cell into (value, footnote).
+def _is_na(cell: Cell) -> bool:
+    """True when the cell EXPLICITLY reads "NA".
+
+    ``_fmt_value`` maps both "NA" and a blank cell to ``None`` — right for
+    display, wrong for folding per-plan grids into the column model, where
+    blank means "inherit" and "NA" means "this plan doesn't have it". See
+    ``ExtractedBenefitItem.not_applicable``.
+    """
+    if cell is None or isinstance(cell, float):
+        return False
+    first = str(cell).split("\n")[0].strip()
+    return first.upper() == "NA"
+
+
+def _split_value_note(cell: Cell) -> tuple[str | None, str | None, bool]:
+    """Split a SOB cell into (value, footnote, not_applicable).
 
     Insurers cram a primary value and a qualifying footnote into one cell,
     separated by newlines — e.g. "4 Bed Pte\\n* Bargainable employees:\\n4 Bed
     Govt/Restr. Hospital". The first line is the value; the rest (often an
     asterisked exception) becomes the note so the value stays clean for display
     and matching. Numeric cells never carry a note.
+
+    The third element distinguishes an explicit "NA" from a blank cell; both
+    yield ``value=None``. It is a 3-tuple rather than an optional extra so no
+    call site can silently keep discarding it.
     """
     if cell is None or isinstance(cell, float):
-        return _fmt_value(cell), None
+        return _fmt_value(cell), None, False
     parts = [p.strip() for p in str(cell).split("\n") if p.strip()]
     if not parts:
-        return None, None
+        return None, None, False
     value = _fmt_value(parts[0])
     note = " ".join(parts[1:]).strip() or None
-    return value, note
+    return value, note, _is_na(cell)
 
 
 def _infer_kind(value: str | None) -> str:
@@ -286,6 +304,7 @@ def _parse_sob_items(
     current_name: str = ""
     current_value: str | None = None
     current_note: str | None = None
+    current_na = False
     current_limits: list[ExtractedLimit] = []
     current_sub_items: list[dict[str, Any]] = []
     current_properties: dict[str, str] = {}
@@ -314,10 +333,12 @@ def _parse_sob_items(
                     ExtractedSubItem(
                         key=s["key"], name=s["name"], value=s["value"],
                         note=s["note"], limits=tuple(s["limits"]),
+                        not_applicable=bool(s.get("na")),
                     )
                     for s in current_sub_items
                 ),
                 properties=dict(current_properties),
+                not_applicable=current_na,
             ))
 
     def _attach_note(note: str | None) -> None:
@@ -370,7 +391,7 @@ def _parse_sob_items(
             # Handle multiline cell names — take first line
             if "\n" in current_name:
                 current_name = current_name.split("\n")[0].strip()
-            current_value, current_note = _split_value_note(plan_cell)
+            current_value, current_note, current_na = _split_value_note(plan_cell)
             current_limits = []
             current_sub_items = []
             current_properties = {}
@@ -388,7 +409,7 @@ def _parse_sob_items(
             _flush()
             current_number = f"-{group_match.group(1)}"
             current_name = name_cell.split("\n")[0].strip()
-            current_value, current_note = _split_value_note(plan_cell)
+            current_value, current_note, current_na = _split_value_note(plan_cell)
             if pending_group_note:
                 current_note = " ".join(
                     p for p in (pending_group_note, current_note) if p
@@ -423,10 +444,10 @@ def _parse_sob_items(
                     continue
             letter = (sub_match or bare_letter).group(1)
             key = f"({letter})"
-            value, note = _split_value_note(plan_cell)
+            value, note, sub_na = _split_value_note(plan_cell)
             sub: dict[str, Any] = {
                 "key": key, "name": name, "value": value,
-                "note": note, "limits": [],
+                "note": note, "limits": [], "na": sub_na,
             }
             current_sub_items.append(sub)
             target = sub
@@ -460,10 +481,10 @@ def _parse_sob_items(
                     pending_group_note = name_cell.rstrip(": ").strip()
                 elif _non_empty(plan_cell):
                     # Labelled sub-detail with a value — attach as sub-item.
-                    value, note = _split_value_note(plan_cell)
+                    value, note, sub_na = _split_value_note(plan_cell)
                     sub = {
                         "key": "", "name": name_cell, "value": value,
-                        "note": note, "limits": [],
+                        "note": note, "limits": [], "na": sub_na,
                     }
                     current_sub_items.append(sub)
                     target = sub
@@ -907,6 +928,7 @@ def _parse_name_first_items(
     current_name: str = ""
     current_value: str | None = None
     current_note: str | None = None
+    current_na = False
     current_sub_items: list[dict[str, Any]] = []
     consec_blank = 0
 
@@ -918,10 +940,12 @@ def _parse_name_first_items(
             name=current_name.strip(),
             value=current_value,
             note=current_note,
+            not_applicable=current_na,
             sub_items=tuple(
                 ExtractedSubItem(
                     key=s["key"], name=s["name"], value=s["value"],
                     note=s["note"], limits=(),
+                    not_applicable=bool(s.get("na")),
                 )
                 for s in current_sub_items
             ),
@@ -952,14 +976,15 @@ def _parse_name_first_items(
                 continue
             _flush()
             current_name = name_cell
-            current_value, current_note = _split_value_note(plan_cell)
+            current_value, current_note, current_na = _split_value_note(plan_cell)
             current_sub_items = []
         elif label_cell and current_name:
             # Continuation: qualifier label in the column after the name.
             if plan_val:
-                value, note = _split_value_note(plan_cell)
+                value, note, sub_na = _split_value_note(plan_cell)
                 current_sub_items.append({
-                    "key": "", "name": label_cell, "value": value, "note": note, "limits": [],
+                    "key": "", "name": label_cell, "value": value, "note": note,
+                    "limits": [], "na": sub_na,
                 })
             else:
                 current_note = " ".join(p for p in (current_note, label_cell) if p).strip() or None

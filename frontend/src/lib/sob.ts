@@ -205,6 +205,14 @@ export function buildSobFromPlans(plans: PlanAnswer[]): SobSchedule | null {
     // A column that genuinely lacks the row is EXCLUDED from it — which is what
     // NOT_COVERED means — rather than quietly inheriting the base. That
     // includes column 0, whose cell IS the base value.
+    //
+    // **This deliberately DIVERGES from the backend's `sob_from_plan_items`,
+    // which treats a null cell as "not stated → inherit".** Do not "resync" it.
+    // That rule is only safe where the parser can still tell a blank cell from
+    // an explicit "NA" (it carries `not_applicable` for exactly this). Here the
+    // input is a LEGACY per-plan draft, in which both were already flattened to
+    // null — so inheriting would hand a plan a benefit its slip said "NA" to,
+    // and overstating cover is the one error worse than blanking a row.
     const cells = columns.map((_, ci) => {
       const cell = byKey[ci]?.get(key);
       return cell ? (cell.value ?? "") : NOT_COVERED;

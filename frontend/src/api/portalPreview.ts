@@ -69,8 +69,15 @@ export function usePreviewDependants(employeeId: string | null) {
   return usePreviewQuery<Dependant[]>(employeeId, "/dependants", "dependants");
 }
 
+/** `limit` mirrors `usePortalClaims` — see the note there. The preview must
+ * show the member's screen, and a broker reading a truncated ledger would be
+ * reading a different one. */
 export function usePreviewClaims(employeeId: string | null) {
-  return usePreviewQuery<PortalClaimList>(employeeId, "/claims", "claims");
+  return usePreviewQuery<PortalClaimList>(
+    employeeId,
+    "/claims?limit=200",
+    "claims",
+  );
 }
 
 /** The member's inbox as the MEMBER sees it — the preview endpoint runs the

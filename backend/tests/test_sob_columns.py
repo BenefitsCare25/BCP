@@ -162,3 +162,75 @@ def test_copay_properties_resolve_per_column() -> None:
     s2 = resolve_plan_schedule(sob, "2", 200)
     assert s1[0]["properties"]["per_visit"] == "50"
     assert s2[0]["properties"]["per_visit"] == "30"
+
+
+def _grid(code: str, cells: list[dict]) -> dict:
+    """A plan whose rows carry an explicit value / na / sub_items shape."""
+    return {
+        "code": code,
+        "label": f"Plan {code}",
+        "selected": True,
+        "benefit_items": [
+            {
+                "number": str(i + 1),
+                "name": c.get("name", f"Item {i + 1}"),
+                "kind": "amount",
+                "value": c.get("value"),
+                "na": c.get("na", False),
+                "sub_items": c.get("sub_items", []),
+            }
+            for i, c in enumerate(cells)
+        ],
+    }
+
+
+def test_blank_cell_inherits_rather_than_blanking_the_row() -> None:
+    """CDL's GMM shape: the slip states a value ONCE under plan 1 and leaves the
+    later plan columns blank, meaning "same". Coercing that blank to "" made it
+    an explicit empty override, and every later plan rendered the row EMPTY on
+    the member's own coverage page — Inpatient benefits, Daily Home Nursing and
+    the GST extension all vanished for plans 2/3/4 while the slip granted them
+    plan 1's values."""
+    plans = [
+        _grid("1", [{"value": "1 Bed Private"}, {"value": "As charged"},
+                    {"value": "100000"}]),
+        # Room & board and the maximum genuinely differ; the middle row is blank.
+        _grid("2", [{"value": "1 Bed Restr."}, {"value": None},
+                    {"value": "80000"}]),
+    ]
+    sob = sob_from_plan_items(plans)
+    inpatient = sob["items"][1]
+    assert inpatient["overrides"] == {}, "a blank cell must not become an override"
+
+    s2 = resolve_plan_schedule(sob, "2", 200)
+    assert [it["value"] for it in s2] == ["1 Bed Restr.", "As charged", "80000"]
+
+
+def test_na_cell_excludes_rather_than_inheriting() -> None:
+    """The counterpart, and the reason a blank cannot simply be read as
+    "inherit" without the parser's `na` flag: an explicit "NA" also arrives as
+    ``value=None`` (``_fmt_value`` folds both), and inheriting THERE would
+    overstate cover — the one error worse than the one above."""
+    plans = [
+        _grid("1", [{"value": "3000"}]),
+        _grid("2", [{"value": None, "na": True}]),
+    ]
+    sob = sob_from_plan_items(plans)
+    assert sob["items"][0]["overrides"] == {"col1": NOT_COVERED}
+    assert resolve_plan_schedule(sob, "2", 200)[0]["value"] == NOT_COVERED
+
+
+def test_na_sub_item_excludes_rather_than_inheriting() -> None:
+    """GCSP's "Non Panel Specialists": plan 1 reads NA, plan 2 carries a limit.
+    The sub-item fold has always inherited a `None`, so before the flag existed
+    an NA sub-row silently took the richer plan's figure."""
+    subs1 = [{"key": "(b)", "name": "Non Panel", "value": None, "na": True}]
+    subs2 = [{"key": "(b)", "name": "Non Panel", "value": "1500"}]
+    plans = [
+        _grid("1", [{"name": "Specialist Care", "value": None, "sub_items": subs1}]),
+        _grid("2", [{"name": "Specialist Care", "value": None, "sub_items": subs2}]),
+    ]
+    sob = sob_from_plan_items(plans)
+    sub = sob["items"][0]["sub_items"][0]
+    assert sub["base_value"] == NOT_COVERED
+    assert sub["overrides"] == {"col1": "1500"}

@@ -218,6 +218,31 @@ class EnrollmentElectionOut(_Base):
 # ── Electable cohort tiers (scoped, direction-aware election options) ────────
 
 
+class BenefitDifferenceOut(BaseModel):
+    """One benefit row on which an electable tier differs from the baseline."""
+
+    # The parent benefit when this row is a sub-item ("Specialist Care"), so
+    # the UI can set it quietly above the specific benefit instead of joining
+    # the two into one long sentence. None for a top-level row.
+    group: str | None = None
+    # The row's own headline, with the insurer's bracketed wording split off.
+    benefit: str
+    # That bracketed wording ("on cashless basis · including Specialist
+    # Outpatient Clinics in Govt Restructured hospitals"). Load-bearing — it is
+    # the difference between being billed and not — but it is also most of the
+    # string, so it is placed rather than dropped.
+    qualifier: str | None = None
+    # The verbatim schedule cells. `None` means the plan states nothing for the
+    # row, which the member surface prints as "Not covered" rather than as an
+    # empty cell — a blank there reads as a rendering fault, not as an answer.
+    current: str | None = None
+    elected: str | None = None
+    # The row's value type, so the figures format exactly as they do on the
+    # coverage tab (`lib/benefitSchedule.ts::formatValue`). Without it a limit
+    # of 20000 prints as "20000" beside the same row's "S$20,000".
+    kind: str | None = None
+
+
 class CohortTierOut(BaseModel):
     # Stable unique key for this tier within the product = tier_category_id +
     # plan_code. Use it as the election dropdown's value: tier_category_id and
@@ -234,6 +259,19 @@ class CohortTierOut(BaseModel):
     # age band). None = no price configured. Distinct from the insurer premium
     # carried in ``financials``.
     price_tag: float | None = None
+    # What actually CHANGES if this tier is elected: the schedule rows on which
+    # it differs from the baseline tier. Empty on the baseline itself and on
+    # products whose plans share one schedule (the life ones, where the only
+    # difference is the sum insured `financials` already carries).
+    #
+    # This is the half of the decision the surface used to omit. "Less cover —
+    # adds back S$82.84" tells a member a switch is cheaper without telling
+    # them what they give up, and the coverage tab can't help: it only ever
+    # renders the plan they hold today, never the one they are considering.
+    differences: list[BenefitDifferenceOut] = Field(default_factory=list)
+    # The count BEFORE truncation, so a long list can say what it isn't
+    # showing. Equal to len(differences) in every real case.
+    differences_total: int = 0
 
 
 class DependantRoleOut(BaseModel):

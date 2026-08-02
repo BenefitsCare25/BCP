@@ -16,7 +16,12 @@ This module owns two operations:
   (used at confirm time to write ``Plan.benefit_schedule``, whose shape is
   unchanged).
 
-Mirror of ``frontend/src/lib/sob.ts`` — keep the two in sync.
+Mirror of ``frontend/src/lib/sob.ts`` — keep the two in sync, with ONE
+documented exception: the blank-cell-inherits rule in ``sob_from_plan_items``
+depends on the parser's ``not_applicable`` flag to tell a blank cell from an
+explicit "NA". The frontend's ``buildSobFromPlans`` only ever folds LEGACY
+per-plan drafts, where both were already flattened to null, so it deliberately
+keeps the old "" behaviour — see the note at that call site.
 """
 
 from __future__ import annotations
@@ -234,20 +239,40 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
             _varying_props(by_key[ci].get(row_key)) != first_props
             for ci in range(1, len(columns))
         )
-        # A column that genuinely lacks this row is EXCLUDED from it, which is
-        # exactly what NOT_COVERED means — don't let it inherit the base. That
-        # includes column 0, whose cell IS the base value.
-        cells = [
-            (c.get("value") or "") if (c := by_key[ci].get(row_key)) is not None
-            else NOT_COVERED
-            for ci in range(len(columns))
-        ]
-        base_value = cells[0] if cells else ""
+        # Three states, and conflating any two of them misreports cover:
+        #
+        #   row ABSENT from this plan   → NOT_COVERED (an explicit exclusion —
+        #                                 never let it inherit the base)
+        #   cell said "NA"              → NOT_COVERED (the slip states the plan
+        #                                 doesn't carry this benefit)
+        #   cell BLANK                  → None, i.e. NOT STATED → inherit
+        #
+        # The last one is the fix. A blank cell under a later plan column is the
+        # slip stating the value ONCE across the span, which is how these grids
+        # are written; coercing it to "" made it an explicit empty override, and
+        # `_effective` treats "" as a real value. CDL's GMM plans 2/3/4 rendered
+        # Inpatient benefits, Daily Home Nursing and the GST extension as blank
+        # rows on the member's own coverage page while the slip granted them
+        # plan 1's values. `None` cannot be used for "NA" as well, which is why
+        # the parser carries `not_applicable` separately — inheriting there
+        # would OVERSTATE cover, the one error worse than the one being fixed.
+        cells: list[Any] = []
+        for ci in range(len(columns)):
+            c = by_key[ci].get(row_key)
+            if c is None or c.get("na"):
+                cells.append(NOT_COVERED)
+            else:
+                cells.append(c.get("value") or None)
+        # Column 0's cell IS the base value and has nothing to inherit from, so
+        # "not stated" is simply blank there.
+        base_value = (cells[0] if cells else None) or ""
         overrides: dict[str, Any] = {}
         column_properties: dict[str, dict[str, str]] = {}
         for ci, col in enumerate(columns):
             cell = by_key[ci].get(row_key)
-            if ci > 0 and cells[ci] != base_value:
+            # `None` = not stated → no override → inherits (a stored null would
+            # mean the same thing, but writing nothing keeps the draft compact).
+            if ci > 0 and cells[ci] is not None and cells[ci] != base_value:
                 overrides[col["id"]] = cells[ci]
             if per_column_props:
                 column_properties[col["id"]] = {
@@ -258,20 +283,32 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
         sub_items: list[dict[str, Any]] = []
         for sub in base.get("sub_items") or []:
             sub_key = _sub_key(sub)
-            sub_base = sub.get("value")
+            # An "NA" sub-cell is an explicit exclusion, not a missing value.
+            # This branch has always inherited a `None`, which is right for a
+            # blank — but "NA" also arrives as `None` (`_fmt_value` folds them),
+            # so before `not_applicable` existed a plan whose sub-row read "NA"
+            # silently inherited the richer plan's figure and OVERSTATED its
+            # cover. GCSP's "Non Panel Specialists" is exactly that row.
+            sub_base = NOT_COVERED if sub.get("na") else sub.get("value")
             sub_overrides: dict[str, Any] = {}
             for ci, col in enumerate(columns):
                 if ci == 0:
                     continue
                 cell = by_key[ci].get(row_key) or {}
-                sv = next(
+                match = next(
                     (
-                        s.get("value")
+                        s
                         for s in (cell.get("sub_items") or [])
                         if _sub_key(s) == sub_key
                     ),
                     None,
                 )
+                if match is None:
+                    # The column doesn't carry this sub-row at all — inherit
+                    # (sub-item lists legitimately differ in length across
+                    # columns; absence here is not an assertion of exclusion).
+                    continue
+                sv = NOT_COVERED if match.get("na") else match.get("value")
                 # Only a genuine DIFFERENCE is an override; `None` means
                 # "inherit", so never persist it as one.
                 if sv is not None and sv != sub_base:

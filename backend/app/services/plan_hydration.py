@@ -167,7 +167,15 @@ def hydrate_plans(
                         "back to the baseline category.",
                         emp.id, prod_id, override.tier_category_id,
                     )
-            fin = member_financials(fin_pa, emp_age) if fin_pa else None
+            # `attribute_values` carries the roster salary, which is what
+            # resolves a salary-multiple basis ("12 times basic monthly salary")
+            # into THIS member's sum insured instead of falling back to the
+            # cohort aggregate.
+            fin = (
+                member_financials(fin_pa, emp_age, emp.attribute_values)
+                if fin_pa
+                else None
+            )
             if fin is not None and prod_id in gst_by_product:
                 fin = apply_gst_to_financials(fin, gst_by_product[prod_id])
             # A declined override means the member opted out of this product — drop
@@ -385,7 +393,9 @@ def voluntary_rate_for_age(bands: list | None, age: int | None) -> float | None:
     return float(rate) if isinstance(rate, (int, float)) else None
 
 
-def member_financials(pa: dict, age: int | None = None) -> PlanFinancials | None:
+def member_financials(
+    pa: dict, age: int | None = None, attribute_values: dict | None = None
+) -> PlanFinancials | None:
     """Per-MEMBER view of a category's financials for any per-employee read path.
 
     ``sum_insured`` / ``annual_premium`` in ``plan_assignments`` are GROUP
@@ -403,8 +413,22 @@ def member_financials(pa: dict, age: int | None = None) -> PlanFinancials | None
       ``annual_premium`` = basis / 1000 x rate (the carrier's per-mille formula
       for compulsory GCI / GTL / GPA). Works regardless of any stale group
       SI/premium that matching attached, because it recomputes from the basis.
-    - otherwise (salary-multiple / relative basis, tiered medical, no rate) →
-      not reducible to one member here; return the parsed figures unchanged.
+    - **a SALARY-MULTIPLE basis** ("12 times basic monthly salary") resolves
+      against the member's own roster salary — hence ``attribute_values``.
+    - otherwise (tiered medical, no basis at all, no rate) → not reducible to
+      one member here; return the parsed figures unchanged.
+
+    **A basis we recognise but cannot evaluate drops the aggregate rather than
+    surfacing it.** This is the case that was wrong: a salary-multiple or
+    relative basis ("50% of GTL") made ``basis_amount`` return None, the
+    function returned early, and the stored GROUP ``sum_insured`` went out as
+    the member's own cover — CDL's GTL/GPA/GCI "based in Thailand" cohorts
+    printed *"You'd be covered for S$97,421"* on the member's benefit statement
+    and enrollment page, which is the sum insured for the whole two-person
+    cohort. Where the basis says the figure is per-member and we cannot compute
+    it, the honest answer is that we don't know it; ``None`` renders as "—",
+    while a number twice the member's actual cover reads as a fact. The premium
+    goes with it because it was derived from that same aggregate.
 
     Single source of truth shared by the employee endpoints, the benefit
     statement, and the enrollment election options (``cohort_tiers``).
@@ -419,8 +443,19 @@ def member_financials(pa: dict, age: int | None = None) -> PlanFinancials | None
     # earnings, which are informational) rather than show a misleading figure.
     if fin.rate_basis in ("annual_flat", "earnings_based"):
         return fin.model_copy(update={"annual_premium": None, "num_employees": None})
-    basis_amt = basis_amount(pa)
+    basis_amt = resolve_basis_amount(pa, attribute_values)
     if basis_amt is None:
+        # A basis EXISTS but did not reduce (a salary multiple with no salary on
+        # file, or a relative one like "50% of GTL"). The stored figures are the
+        # cohort's, not this member's — see the docstring.
+        if pa.get("basis") is not None:
+            return fin.model_copy(
+                update={
+                    "sum_insured": None,
+                    "annual_premium": None,
+                    "num_employees": None,
+                }
+            )
         return fin
     bands = pa.get("voluntary_rates")
     if bands:

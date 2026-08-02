@@ -190,6 +190,29 @@ export interface CohortTier {
   financials: PlanFinancials | null;
   /** Flex wallet cost of electing this tier for the member (null = none). */
   price_tag: number | null;
+  /** Schedule rows on which this tier differs from the member's CURRENT plan —
+   *  what they actually gain or give up. Empty on the baseline, and on products
+   *  whose plans share one schedule (the life ones, where the only difference
+   *  is the sum insured `financials` already carries). */
+  differences: BenefitDifference[];
+  /** Count before truncation, so a long list can say what it isn't showing. */
+  differences_total: number;
+}
+
+/** One benefit row on which an electable tier differs from the baseline. */
+export interface BenefitDifference {
+  /** The parent benefit when this row is a sub-item ("Specialist Care"), kept
+   *  separate so the UI can rank it rather than joining it into one long name. */
+  group: string | null;
+  /** The row's own headline, with the insurer's bracketed wording split off. */
+  benefit: string;
+  /** That bracketed wording — load-bearing, so placed rather than dropped. */
+  qualifier: string | null;
+  /** Verbatim schedule cells; `null` = the plan states nothing for the row. */
+  current: string | null;
+  elected: string | null;
+  /** Value type, so figures format exactly as on the coverage tab. */
+  kind: string | null;
 }
 
 /** How a product prices coverage for a member's dependants (additive over EO).

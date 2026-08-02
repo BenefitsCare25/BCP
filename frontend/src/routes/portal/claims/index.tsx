@@ -10,6 +10,57 @@ import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
+/** THE primary action of the member portal, and the page's one brand fill —
+ * floating, centred, and present at every scroll position.
+ *
+ * It used to sit in the flow above the list, where on a desktop it was one pill
+ * in an otherwise empty 1180px row, and on a long ledger it was gone by the
+ * second screenful — a member who had just finished reading what happened to
+ * last month's claim had to scroll back up to file this month's.
+ *
+ * Three details are load-bearing:
+ *
+ * 1. **It lives in the ROUTE, never in `ClaimList`.** The broker's employee-view
+ *    preview renders that component inside a bounded frame, and a `fixed`
+ *    element there would escape the frame and float over the broker's own app.
+ *    The preview keeps its inline (disabled) pill.
+ * 2. **The wrapper is `pointer-events-none` and the pill re-enables them.**
+ *    Otherwise a full-width fixed strip sits over the bottom of the ledger and
+ *    swallows clicks on the rows beneath it.
+ * 3. **On a phone it clears the dock.** The dock is 64px of floating glass at
+ *    `bottom-3` plus the home-bar inset, so this sits 96px up and carries the
+ *    same inset — and the page grows enough bottom padding that the last row
+ *    can always be scrolled clear of it. */
+function MakeClaimAction() {
+  return (
+    <div
+      className={
+        "pointer-events-none fixed inset-x-0 z-30 flex justify-center px-4 " +
+        "bottom-[calc(6rem_+_env(safe-area-inset-bottom))] sm:bottom-6"
+      }
+    >
+      <Link
+        to="/portal/claims/new"
+        className={actionClass("primary", {
+          className: "pointer-events-auto",
+        })}
+      >
+        <FilePlus2 className="size-4" aria-hidden />
+        Make a claim
+      </Link>
+    </div>
+  );
+}
+
+/** The same measure the claim's own page uses.
+ *
+ * A ledger row is a term on the left and a figure on the right, and at the
+ * shell's full 1024px that put ~500px of nothing between them — the eye has to
+ * traverse it to pair a claim with its amount. Sharing the detail page's
+ * `max-w-3xl` also means opening a claim expands the row in place instead of
+ * reflowing the column it came from. */
+const MEASURE = "mx-auto max-w-3xl";
+
 export function PortalClaimsPage() {
   const claims = usePortalClaims();
   useDocumentTitle("My claims");
@@ -24,30 +75,47 @@ export function PortalClaimsPage() {
 
   const rows = claims.data?.items ?? [];
 
-  return (
-    <div className="space-y-3">
-      {/* THE primary action of the member portal, and the page's one brand
-          fill. Full width on a phone: submitting a claim is the reason the
-          member is on this screen, and a right-aligned small button is the
-          hardest thing to hit one-handed. */}
-      <Link
-        to="/portal/claims/new"
-        className={actionClass("primary", { block: "phone" })}
-      >
-        <FilePlus2 className="size-4" aria-hidden />
-        Make a claim
-      </Link>
+  // Nothing to scroll past, so nothing to float over: the action belongs IN the
+  // empty state, where it is the only thing on the screen to do. Full width on
+  // a phone — a right-aligned small button is the hardest thing to hit
+  // one-handed.
+  if (rows.length === 0) {
+    return (
+      <Mount label="No claims yet" className={MEASURE}>
+        <p className="text-row text-label">
+          When you pay for treatment that your benefits cover, send us the
+          receipt here and we&rsquo;ll tell you where it&rsquo;s up to.
+        </p>
+        <div>
+          <Link
+            to="/portal/claims/new"
+            className={actionClass("primary", { block: "phone" })}
+          >
+            <FilePlus2 className="size-4" aria-hidden />
+            Make a claim
+          </Link>
+        </div>
+      </Mount>
+    );
+  }
 
-      {rows.length === 0 ? (
-        <Mount label="No claims yet">
-          <p className="text-row text-label">
-            When you pay for treatment that your benefits cover, send us the
-            receipt here and we'll tell you where it's up to.
-          </p>
-        </Mount>
-      ) : (
-        <ClaimList items={rows} interactive />
-      )}
-    </div>
+  return (
+    <>
+      {/* FIRST in the DOM, though it is painted at the bottom of the viewport:
+          it is fixed, so its position owes nothing to document order, and
+          rendering it after the ledger put the portal's primary action behind
+          every claim link in the tab order — 40 tab stops to reach a button
+          that never left the screen. */}
+      <MakeClaimAction />
+      {/* Clearance for the floating pill, on top of the shell's own padding.
+          The pill's top edge is 144px off the floor on a phone (dock + gap +
+          pill) against the shell's 112px, and 72px from `sm` up against its
+          40px — so one value covers both and lands the last row ~30px clear on
+          either. Measured, not guessed: at `pb-10` the phone left 14px and the
+          ledger read as though the pill were resting on it. */}
+      <div className={`${MEASURE} pb-14`}>
+        <ClaimList items={rows} total={claims.data?.total} interactive />
+      </div>
+    </>
   );
 }

@@ -173,6 +173,8 @@ def _slip_values_by_plan(slip: ProductSlip) -> dict[str, dict[str, dict[str, Any
                     "value": _s(s.value),
                     "note": _s(s.note) or None,
                     "limits": _limits(s.limits),
+                    # "NA" vs blank — see ExtractedBenefitItem.not_applicable.
+                    "na": bool(getattr(s, "not_applicable", False)),
                 }
                 for s in item.sub_items
             }
@@ -182,6 +184,7 @@ def _slip_values_by_plan(slip: ProductSlip) -> dict[str, dict[str, dict[str, Any
                 "note": _s(item.note) or None,
                 "limits": _limits(item.limits),
                 "properties": dict(item.properties or {}),
+                "na": bool(getattr(item, "not_applicable", False)),
                 "subs": subs,
             }
         if by_number:
@@ -204,6 +207,8 @@ def _sub_answer(sub: Any, overlay: dict[str, Any] | None) -> dict[str, Any]:
         "value": ov.get("value") or tpl_value,
         "note": ov.get("note") or tpl_note,
         "limits": ov.get("limits", []),
+        # "NA" vs blank — see ExtractedBenefitItem.not_applicable.
+        "na": bool(ov.get("na")),
     }
 
 
@@ -322,6 +327,7 @@ def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any
                     "note": ov.get("note") or (getattr(bi, "note", None)),
                     "limits": ov.get("limits", []),
                     "properties": dict(ov.get("properties") or {}),
+                    "na": bool(ov.get("na")),
                     "sub_items": [
                         _sub_answer(s, sub_ov.get(_norm_key(s.key)))
                         for s in bi.sub_items
@@ -342,6 +348,7 @@ def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any
                     "note": ov.get("note") or shape.get("note"),
                     "limits": ov.get("limits", []),
                     "properties": dict(ov.get("properties") or {}),
+                    "na": bool(ov.get("na")),
                     # Row skeleton from the shared shape (identical across
                     # plans); each plan's own overlay supplies its values.
                     "sub_items": [

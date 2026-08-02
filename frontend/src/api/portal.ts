@@ -520,10 +520,27 @@ export function useExtractClaimIntake() {
   });
 }
 
+/** The whole year, not the server's first page.
+ *
+ * The endpoint defaults to 50 and there is no pager on any surface that reads
+ * this, so the default silently truncated three things at once: the claims
+ * ledger's state counts and month groups (a "Needs you 1" chip that omits an
+ * older claim sent back for more information is the one omission that costs a
+ * member money), and the usage page's per-claim itemisation, which is shown
+ * only when the rows reconcile with the bucket to the cent and therefore
+ * vanishes wholesale when a claim is missing from the window.
+ *
+ * 200 is `core/pagination.MAX_LIMIT`, so this is as complete as one request
+ * gets; the ledger still discloses the remainder from `total` above it. The
+ * extra payload is paid only by members who genuinely have that many claims —
+ * exactly the ones the truncation was wrong for. */
+const CLAIMS_PAGE = 200;
+
 export function usePortalClaims() {
   return useQuery({
     queryKey: ["portal", "claims"],
-    queryFn: () => portalApi.get<PortalClaimList>("/portal/claims"),
+    queryFn: () =>
+      portalApi.get<PortalClaimList>(`/portal/claims?limit=${CLAIMS_PAGE}`),
     meta: { localErrorHandling: true },
     retry: false,
   });
