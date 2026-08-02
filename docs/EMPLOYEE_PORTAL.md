@@ -223,19 +223,28 @@ the storage root. Bicep provisions the storage account + `documents` container
 - `src/api/portal.ts` — hooks (`["portal", …]` query keys).
 - `src/components/portal/PortalShell.tsx` — slim member shell (no client
   switcher / policy-year picker; the member is pinned server-side).
-- Pages: `src/routes/portal/sign-in.tsx` (email → code, magic-link
-  auto-verify), `benefits.tsx` (reuses `BenefitStatement`), `dependants.tsx`.
-- Broker side: `MemberAccountActions` in the employee detail sheet + an
-  "Invite all to portal" bulk button on `/operations/employees`.
+- Pages: `src/routes/portal/sign-in.tsx` (username/email + PASSWORD, optional
+  TOTP — not OTP; see the auth note below), `coverage.tsx`, `claims/`,
+  `clinics.tsx`, `enrollment.tsx`, `cards.tsx`, `messages.tsx`.
+- Broker side: `MemberAccountActions` renders inside the employee detail panel
+  of the **Coverage & Members** page — sidebar *Policy Admin → Coverage &
+  Members*, route **`/operations/coverage`**, Broker view, scrolled past the
+  product coverage blocks to the **"Portal access"** section. It is NOT on
+  `/operations/employees`: that path is a legacy redirect to
+  `/operations/roster?tab=employees` (see `router.tsx`), and the roster page
+  has no portal-access panel. The component file is still named
+  `routes/operations/employees.tsx`, which is what makes this easy to get
+  wrong — trust `router.tsx`, not the filename.
 
 ## Trying it locally — end-to-end walkthrough (all 4 phases)
 
 Setup: `cd backend && ./scripts/dev.ps1` and `cd frontend && pnpm dev`, then
 open http://localhost:5173. For Phase 3's live AI review you also need an AI
-provider configured (a tenant BYOK AWS Bedrock key on
-`/configuration/ai-provider`, or `INSPRO_AI_PROVIDER=bedrock` / `ANTHROPIC_API_KEY`
-env for local dev) —
-without one the pipeline degrades gracefully (see step 3c).
+provider configured — Google **Vertex AI (Gemini)** is the only provider now
+(AWS Bedrock and direct Anthropic were removed): a platform or per-company
+service-account key on `/configuration/ai-provider`, or `VERTEX_PROJECT` +
+Google ADC for local dev. Without one the pipeline degrades gracefully
+(see step 3c).
 
 **Shortcut — seed everything at once:**
 
@@ -256,16 +265,30 @@ to trip the `limit_exceeded` approve guard. Then: broker UI → switch to the
 whichever phase you want to test; the steps below still describe the manual
 path from scratch.
 
-### Phase 1 — OTP auth + benefits view
+### Phase 1 — sign-in + benefits view
 
-1. The member needs an **active** policy year — activate one on
-   `/operations/activations` first (draft years don't resolve coverage; the
-   local dev DB ships with all years draft).
-2. On `/operations/employees`, open an employee → "Invite to portal" (the
-   roster needs an email attribute, or type one in). "Invite all to portal"
-   bulk-invites the whole year.
-3. Open http://localhost:5173/portal/sign-in, enter the email — in dev+mock
-   the response auto-fills the code (also logged by the backend).
+> **Sign-in is PASSWORD-based (+ optional TOTP), not an emailed OTP.** The OTP
+> endpoints (`/portal/auth/request-code`) still exist server-side but nothing
+> links to them from the sign-in screen. Anything below describing a code is
+> historical.
+
+1. The member needs the year to be the **current** one — set it from the
+   banner on `/configuration` (the old `/operations/activations` page is gone;
+   nothing promotes a year automatically, so a fully configured company reads
+   as "no active coverage" until you do this).
+2. Go to **Policy Admin → Coverage & Members** (`/operations/coverage`), stay
+   in **Broker view**, pick the employee, and scroll the detail panel to
+   **"Portal access"**. Create the account there if the badge says "No portal
+   account", then use either:
+   - **Set-password link** — a one-time link (72h) you hand over; works
+     without email, and resolves to the right host in single-host header mode.
+   - **Set password** — set one directly (email-less members).
+   "Invite all to portal" bulk-invites the year, but note that **an invite
+   needs working email**, which prod does not currently have (`docs/EMAIL_SETUP.md`).
+3. Open `/portal/sign-in?company=<slug>` and sign in with the username (system
+   login id) or email, plus that password. The `?company=` is required in
+   header-tenancy mode (local dev and prod both) — without it the tenant can't
+   be resolved and every attempt reads as "Those details weren't recognised".
 4. You land on "My benefits": SOB and flex wallet, **no premium figures**
    (paste the portal token into a broker API call to confirm it 401s).
 
