@@ -329,6 +329,7 @@ def build_enrollment_options(
                     participation=t.participation,
                     direction=t.direction,
                     is_baseline=t.is_baseline,
+                    is_current=t.is_current,
                     # Gross the displayed PREMIUM by the product's own GST only
                     # (product_premium_multiplier — never the flex-scheme default),
                     # so it matches the benefit statement's premium for this product.
@@ -524,8 +525,15 @@ def apply_elections(
     avail_cache: dict[str, set[str]] = {}
     compulsory_ids = employee_compulsory_product_ids(db, employee) if employee else set()
     # Cohort-scoped electable tiers per product — restricts the election to the
-    # member's own cohort instead of every plan of the product.
-    tier_sets = electable_tiers_for_employee(db, employee) if employee else {}
+    # member's own cohort instead of every plan of the product. Validating an
+    # election needs tier IDENTITY only, so skip the schedule-difference pass:
+    # it queries and flattens every offered plan's schedule, and this path
+    # discards the result.
+    tier_sets = (
+        electable_tiers_for_employee(db, employee, include_differences=False)
+        if employee
+        else {}
+    )
     # Flex price-tag snapshot inputs, resolved once: the matrix, the member's age,
     # and the window's source/rule config (slip vs matrix; full vs on-change).
     pricing = get_pricing(db, py.id)

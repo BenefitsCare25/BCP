@@ -41,7 +41,7 @@ from app.services.claim_messages import (
     member_unread_count,
     thread_for_claim,
 )
-from app.services.claims import claim_to_out
+from app.services.claims import claims_to_out
 from app.services.enrollment_elections import (
     build_portal_enrollment,
     open_window_for,
@@ -238,7 +238,7 @@ def portal_preview_claims(
         total=total,
         offset=offset,
         limit=limit,
-        items=[claim_to_out(db, c) for c in rows],
+        items=claims_to_out(db, list(rows)),
     )
 
 

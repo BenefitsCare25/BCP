@@ -97,17 +97,24 @@ def populate_claim_out(
     *,
     referral_docs: dict[str, StoredDocument] | None = None,
     dep_names: dict[str, str | None] | None = None,
+    documents: dict[str, list[StoredDocument]] | None = None,
 ) -> ClaimOut:
     """Fill the derived fields every claim payload carries (documents, referral
     letter, claimant name). Shared by the member `claim_to_out` and the broker
     `_broker_out` so the two surfaces can't drift.
 
-    ``referral_docs`` / ``dep_names`` are optional per-page lookups the list
-    endpoints prefetch in one query each, so rendering N claims doesn't fan out
-    into N referral + N dependant point-loads."""
-    out.documents = [
-        StoredDocumentOut.model_validate(d) for d in claim_documents(db, claim)
-    ]
+    ``referral_docs`` / ``dep_names`` / ``documents`` are optional per-page
+    lookups the list endpoints prefetch in one query each, so rendering N claims
+    doesn't fan out into N document + N referral + N dependant point-loads.
+    **Every list endpoint must pass them** (`prefetch_claim_relations` returns
+    all three) — the page size is 200, so the fan-out is the difference between
+    3 queries and ~400."""
+    docs = (
+        documents.get(claim.id, [])
+        if documents is not None
+        else claim_documents(db, claim)
+    )
+    out.documents = [StoredDocumentOut.model_validate(d) for d in docs]
     if claim.referral_document_id:
         ref = (
             referral_docs.get(claim.referral_document_id)
@@ -140,12 +147,37 @@ def populate_claim_out(
     return out
 
 
+def claim_documents_for(
+    db: Session, claim_ids: list[str]
+) -> dict[str, list[StoredDocument]]:
+    """``{claim_id: [documents]}`` for a page of claims, in ONE query.
+
+    The per-claim `claim_documents` call is the dominant cost of rendering a
+    claims list: every claim carries at least one receipt, so a page of N claims
+    issued N queries on top of everything else. Ordering matches
+    `claim_documents` so a batched page renders identically to a single claim.
+    """
+    if not claim_ids:
+        return {}
+    out: dict[str, list[StoredDocument]] = {cid: [] for cid in claim_ids}
+    for d in db.execute(
+        select(StoredDocument)
+        .where(
+            StoredDocument.entity_type == DOC_ENTITY_CLAIM,
+            StoredDocument.entity_id.in_(claim_ids),
+        )
+        .order_by(StoredDocument.created_at)
+    ).scalars():
+        out.setdefault(d.entity_id, []).append(d)
+    return out
+
+
 def prefetch_claim_relations(
     db: Session, claims: list[Claim]
-) -> tuple[dict[str, StoredDocument], dict[str, str | None]]:
-    """One query each for the referral letters + dependant names a page of
-    claims references — pass the results to `populate_claim_out` to avoid the
-    per-claim point-loads."""
+) -> tuple[dict[str, StoredDocument], dict[str, str | None], dict[str, list[StoredDocument]]]:
+    """One query each for the documents, referral letters and dependant names a
+    page of claims references — pass the results to `populate_claim_out` to
+    avoid the per-claim point-loads."""
     referral_ids = {c.referral_document_id for c in claims if c.referral_document_id}
     dep_ids = {c.dependant_id for c in claims if c.dependant_id}
     referral_docs: dict[str, StoredDocument] = {}
@@ -160,7 +192,7 @@ def prefetch_claim_relations(
             select(Dependant).where(Dependant.id.in_(dep_ids))
         ).scalars():
             dep_names[dep.id] = dependant_display_name(dep)
-    return referral_docs, dep_names
+    return referral_docs, dep_names, claim_documents_for(db, [c.id for c in claims])
 
 
 def delete_stored_document(db: Session, doc: StoredDocument) -> None:
@@ -183,6 +215,27 @@ def delete_stored_document(db: Session, doc: StoredDocument) -> None:
 
 def claim_to_out(db: Session, claim: Claim) -> ClaimOut:
     return populate_claim_out(db, claim, ClaimOut.model_validate(claim))
+
+
+def claims_to_out(db: Session, claims: list[Claim]) -> list[ClaimOut]:
+    """A whole PAGE of member-facing claims, with the relations batched.
+
+    Use this for every list endpoint instead of mapping `claim_to_out`: that
+    one is the single-claim path and point-loads each claim's documents,
+    referral letter and dependant name. At the portal's page size (200) the
+    difference is ~400 queries per claims-tab open versus three."""
+    referral_docs, dep_names, documents = prefetch_claim_relations(db, claims)
+    return [
+        populate_claim_out(
+            db,
+            c,
+            ClaimOut.model_validate(c),
+            referral_docs=referral_docs,
+            dep_names=dep_names,
+            documents=documents,
+        )
+        for c in claims
+    ]
 
 
 def create_claim(

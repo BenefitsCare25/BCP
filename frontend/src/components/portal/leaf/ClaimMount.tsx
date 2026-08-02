@@ -44,8 +44,9 @@ import { cn } from "@/lib/cn";
 import { glassSurface } from "./Mount";
 import { HeadRail } from "./HeadRail";
 import { Money, currencySymbol, moneyText } from "./Figure";
-import { ClaimStrike } from "./Strike";
-import { formatDay, monthLabel } from "./date";
+import { ClaimStrike, type ClaimBucket, claimBucket } from "./Strike";
+import { dateKey, formatDay, monthLabel } from "./date";
+import { pickChipClass } from "./pickChip";
 
 /** What the claim is FOR, in the member's words. */
 export function claimTitle(claim: PortalClaim): string {
@@ -88,18 +89,15 @@ function claimContext(claim: PortalClaim): string {
  * something we are still working on. Cancel-like states are listed here for the
  * same reason — the API has none today, and the day one arrives it must not
  * appear under "In Review". */
-type View = "all" | "attention" | "review" | "approved" | "closed";
-type Bucket = Exclude<View, "all">;
+type View = "all" | ClaimBucket;
+type Bucket = ClaimBucket;
 
-const ATTENTION = new Set(["draft", "needs_info"]);
-const CLOSED = new Set(["rejected", "cancelled", "canceled", "withdrawn"]);
-
-function bucketOf(status: string): Bucket {
-  if (ATTENTION.has(status)) return "attention";
-  if (status === "approved") return "approved";
-  if (CLOSED.has(status)) return "closed";
-  return "review";
-}
+// Imported, not restated: `Strike.tsx` owns the member-facing claim vocabulary,
+// and this file already reads it for the strike itself. The two used to keep
+// separate status maps, so a state added to one was silently missing from the
+// other — and the one that silently defaults is this one, which would file a
+// settled claim under "In Review".
+const bucketOf = claimBucket;
 
 const BUCKET_LABEL: Record<Bucket, string> = {
   attention: "Pending Doc",
@@ -125,10 +123,13 @@ const EMPTY_VIEW: Record<Bucket, string> = {
 };
 
 /** The calendar day a claim belongs to. Missing dates sort last rather than
- * first — an undated row at the head of the ledger reads as the newest claim. */
+ * first — an undated row at the head of the ledger reads as the newest claim.
+ *
+ * Through `dateKey`, the same parse `monthLabel` uses for the group heading
+ * this sorts into — a private copy meant grouping and labelling could come to
+ * read a value differently and file a claim under a month that names another. */
 function dayKey(claim: PortalClaim): string {
-  const [datePart] = String(claim.incurred_date ?? "").split(/[ T]/);
-  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : "";
+  return dateKey(claim.incurred_date);
 }
 
 function byRecency(a: PortalClaim, b: PortalClaim): number {
@@ -255,9 +256,11 @@ function ClaimRow({
  * **The tabs are FIXED, not derived from the data.** All / Pending Doc / In
  * Review / Approved are the stages every claim passes through, so the strip
  * reads the same on every visit and a tab does not appear and disappear
- * underneath a member's finger as their claims move. Rejected is the exception
- * and joins only when there is one: a permanently displayed Rejected tab
- * announces an outcome most members never have.
+ * underneath a member's finger as their claims move. There is deliberately NO
+ * Rejected tab at all — a permanently displayed one announces an outcome most
+ * members never have, and a conditional one is the disappearing tab this rule
+ * exists to prevent. Those claims are reachable under All, and `closed` remains
+ * a real bucket so a settled refusal is never filed as "In Review".
  *
  * **One row on a phone**, which is what the tight `px-1.5` buys: at the `px-3.5`
  * the chips carry from `sm` up, four labels overflow a 390px pane by a few
@@ -308,12 +311,9 @@ function FilterStrip({
             type="button"
             aria-pressed={on}
             onClick={() => onPick(option.key)}
-            className={cn(
-              "leaf-focus min-h-11 flex-auto whitespace-nowrap rounded-pill px-1.5 text-row sm:flex-none sm:px-5 lg:px-4",
-              "transition-colors duration-200 ease-leaf",
-              on
-                ? "bg-shade font-semibold text-record"
-                : "text-label hover:bg-shade/60 hover:text-record",
+            className={pickChipClass(
+              on,
+              "flex-auto whitespace-nowrap px-1.5 sm:flex-none sm:px-5 lg:px-4",
             )}
           >
             {option.label}

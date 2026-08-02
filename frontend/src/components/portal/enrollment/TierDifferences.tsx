@@ -43,7 +43,7 @@
  * decision would be hiding the answer. */
 import type { BenefitDifference } from "@/api/enrollment";
 import { formatValue } from "@/lib/benefitSchedule";
-import type { BenefitKind } from "@/types";
+import { BENEFIT_KINDS, type BenefitKind } from "@/types";
 import { cn } from "@/lib/cn";
 
 /** The label/value pair beneath each changed benefit.
@@ -63,10 +63,10 @@ const pairRow =
 const pairLabel = "shrink-0 text-row text-label";
 const pairValue = "min-w-0 flex-1 text-right text-row";
 
-const KINDS = new Set([
-  "amount", "currency", "percent", "text", "days",
-  "boolean", "copay", "list", "scale", "group",
-]);
+// Derived from the union's own runtime list, never hand-listed here: a copy
+// would compile even after a new kind was added and would silently stop
+// formatting it.
+const KINDS = new Set<string>(BENEFIT_KINDS);
 
 /** The server sends `kind` as a plain string (it is untyped JSON on the way
  * in); only pass through the ones the formatter knows, so an unrecognised kind
@@ -124,8 +124,19 @@ export function TierDifferences({
       {/* The rule between items is the thing that makes this a list rather
           than a paragraph — see the note above. */}
       <dl className="mt-2 divide-y divide-hairline/75 border-t border-hairline/75">
+        {/* The qualifier is part of the KEY, not just of the display. Row
+            identity server-side is the raw benefit name, brackets and all, so
+            one payload legitimately carries "Panel Specialists (on cashless
+            basis)" and "(on reimbursement basis)" as two entries — and
+            `_split_qualifier` moves the brackets into `qualifier`, leaving
+            group+benefit identical. Keyed on those two alone React saw
+            duplicates and mis-reconciled or dropped one of the pair, which on
+            this list means a benefit change silently vanishing. */}
         {differences.map((d) => (
-          <div key={`${d.group ?? ""}|${d.benefit}`} className="py-2.5">
+          <div
+            key={`${d.group ?? ""}|${d.benefit}|${d.qualifier ?? ""}`}
+            className="py-2.5"
+          >
             <dt>
               {d.group && (
                 <span className="block text-row text-label">{d.group}</span>

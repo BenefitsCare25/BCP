@@ -148,6 +148,7 @@ export function MemberEnrollmentPanel({
 
   const flex = computeFlex(
     options ?? undefined, tierSets, state, dependants, allowDeps, leaveAction, leaveDays,
+    options?.leave ?? null,
   );
   const submitBlocked = !!flex && flex.balance < -0.005 && !window.allow_overdraft;
 

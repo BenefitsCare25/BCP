@@ -187,6 +187,12 @@ export interface CohortTier {
   participation: string | null;
   direction: "upgrade" | "downgrade" | "same" | "unknown";
   is_baseline: boolean;
+  /** The tier the member HOLDS today — the cohort baseline unless a standing
+   *  override moved them off it. This, not `is_baseline`, is "your current
+   *  plan" and the anchor `differences` are measured from; they coincide for
+   *  every member without an override. Resolved server-side (only the server
+   *  can read the override), so never derive it here. */
+  is_current: boolean;
   financials: PlanFinancials | null;
   /** Flex wallet cost of electing this tier for the member (null = none). */
   price_tag: number | null;

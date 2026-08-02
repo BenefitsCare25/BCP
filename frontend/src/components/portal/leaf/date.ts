@@ -17,6 +17,20 @@ const MONTHS = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/** The bare calendar date at the head of a server value ("2026-07-12"), or ""
+ * when there isn't one.
+ *
+ * The single defensive parse this module is built on — split the time component
+ * off, then require a real ISO date. It was written out inline in every
+ * function here (and again in the claims ledger), which is how a hardening of
+ * one copy would have silently left the others reading a different day.
+ */
+export function dateKey(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const [datePart] = String(iso).split(/[ T]/);
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : "";
+}
+
 export function formatDay(iso: string | null | undefined): string {
   if (!iso) return "—";
   const [datePart] = String(iso).split(/[ T]/);

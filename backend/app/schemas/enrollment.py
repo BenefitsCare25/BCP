@@ -254,6 +254,12 @@ class CohortTierOut(BaseModel):
     participation: str | None
     direction: str  # 'upgrade' | 'downgrade' | 'same' | 'unknown'
     is_baseline: bool
+    # The tier this member holds TODAY — the cohort default unless a standing
+    # override moved them off it. This, not ``is_baseline``, is what "your
+    # current plan" means and what ``differences`` are measured from; the two
+    # coincide for every member without an override. Served rather than derived
+    # because only the server can resolve an override.
+    is_current: bool = False
     financials: PlanFinancials | None = None
     # Flex wallet cost of electing this tier for this member (resolved by their
     # age band). None = no price configured. Distinct from the insurer premium

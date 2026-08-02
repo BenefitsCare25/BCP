@@ -55,18 +55,28 @@ function planVector(items: BenefitItemAnswer[]): string {
  * twice - exactly the missing-row case the union exists to handle.
  *
  * The name is already this system's benefit identity: claims.py and
- * utilization.py both join on name.strip().lower(). Names are unique within a
- * plan; the number only orders and displays. A nameless row falls back to its
- * number so blank rows do not all collide into one.
+ * utilization.py both join on it. Names are unique within a plan; the number
+ * only orders and displays. Internal whitespace is collapsed because a slip
+ * cell wrapped across two lines arrives with a double space and is the same
+ * benefit. A nameless row falls back to its number so blank rows do not all
+ * collide into one.
+ *
+ * Mirror of sob_columns.benefit_row_key - keep the two identical. They drifted
+ * once (one collapsed whitespace, the other did not), which made "Room  &
+ * Board" one row to one consumer and two to another.
  */
+function normalizeKey(name: string | undefined, fallback: string | undefined): string {
+  const key = (name ?? "").split(/\s+/).filter(Boolean).join(" ").toLowerCase();
+  if (key) return key;
+  return `#${(fallback ?? "").split(/\s+/).filter(Boolean).join(" ").toLowerCase()}`;
+}
+
 function rowKey(item: { number?: string; name?: string }): string {
-  const name = (item.name ?? "").trim().toLowerCase();
-  return name || `#${(item.number ?? "").trim().toLowerCase()}`;
+  return normalizeKey(item.name, item.number);
 }
 
 function subKey(sub: { key?: string; name?: string }): string {
-  const name = (sub.name ?? "").trim().toLowerCase();
-  return name || `#${(sub.key ?? "").trim().toLowerCase()}`;
+  return normalizeKey(sub.name, sub.key);
 }
 
 /**

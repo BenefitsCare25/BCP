@@ -37,16 +37,42 @@ const TONE_CLASS: Record<StrikeTone, string> = {
   rejected: "text-strike-rejected",
 };
 
-const CLAIM_STATE: Record<string, { label: string; tone: StrikeTone }> = {
-  draft: { label: "Not sent", tone: "review" },
-  submitted: { label: "Under review", tone: "review" },
-  ai_review_pending: { label: "Under review", tone: "review" },
-  ai_verified: { label: "Under review", tone: "review" },
-  ai_flagged: { label: "Under review", tone: "review" },
-  needs_info: { label: "More info needed", tone: "pending" },
-  approved: { label: "Approved", tone: "approved" },
-  rejected: { label: "Rejected", tone: "rejected" },
+/** Which group of the member's ledger a claim files under. */
+export type ClaimBucket = "attention" | "review" | "approved" | "closed";
+
+const CLAIM_STATE: Record<
+  string,
+  { label: string; tone: StrikeTone; bucket: ClaimBucket }
+> = {
+  draft: { label: "Not sent", tone: "review", bucket: "attention" },
+  submitted: { label: "Under review", tone: "review", bucket: "review" },
+  ai_review_pending: { label: "Under review", tone: "review", bucket: "review" },
+  ai_verified: { label: "Under review", tone: "review", bucket: "review" },
+  ai_flagged: { label: "Under review", tone: "review", bucket: "review" },
+  needs_info: { label: "More info needed", tone: "pending", bucket: "attention" },
+  approved: { label: "Approved", tone: "approved", bucket: "approved" },
+  rejected: { label: "Rejected", tone: "rejected", bucket: "closed" },
 };
+
+// A settled state this map hasn't been taught yet. The claim state machine can
+// grow one (`models/claim.py` has no cancel-like status today), and the failure
+// mode is asymmetric: filing a withdrawn claim under "In Review" tells a member
+// we are still working on something that is finished. Matched by PREFIX rather
+// than by a list of exact spellings — a guessed literal set ("cancelled",
+// "canceled", "withdrawn") is precisely what a real `withdrawn_by_member` or
+// `cancelled_by_broker` would slip past.
+const SETTLED_PREFIX = /^(cancel|withdraw|void|clos)/;
+
+/** The ledger group for a claim status.
+ *
+ * Lives HERE because this module already owns the member-facing claim
+ * vocabulary (see the header) — the ledger kept a second, hand-synced status
+ * map, so a status added to one was silently absent from the other. */
+export function claimBucket(status: string): ClaimBucket {
+  const known = CLAIM_STATE[status];
+  if (known) return known.bucket;
+  return SETTLED_PREFIX.test(status) ? "closed" : "review";
+}
 
 export function Strike({
   children,

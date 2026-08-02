@@ -22,6 +22,125 @@ function days(n: number): string {
   return `${n} day${n === 1 ? "" : "s"}`;
 }
 
+type Trade = ReturnType<typeof leaveTrade>;
+
+/** The traded days and what they are worth — the same two facts in both the
+ *  read-only and the editable shape, so they can't come to disagree. */
+function TradeImpact({
+  t,
+  currency,
+  emphasis,
+}: {
+  t: Trade;
+  currency: string | null;
+  emphasis?: boolean;
+}) {
+  return (
+    <MountRow
+      term={t.isBuy ? "Taken from your allowance" : "Added to your allowance"}
+      gloss={emphasis ? `${days(t.enteredDays)} at your daily rate.` : undefined}
+    >
+      <Money
+        value={t.impact}
+        currency={currency}
+        emphasis={emphasis ? "strong" : undefined}
+        className={emphasis && t.isBuy ? "text-strike-pending" : undefined}
+      />
+    </MountRow>
+  );
+}
+
+/** The two controls: what to do, and how many days. */
+function TradeControls({
+  action,
+  daysValue,
+  t,
+  onActionChange,
+  onDaysChange,
+}: {
+  action: string;
+  daysValue: string;
+  t: Trade;
+  onActionChange: (action: string) => void;
+  onDaysChange: (days: string) => void;
+}) {
+  return (
+    // One column on a phone — a frame is either full width or it is not on this
+    // breakpoint (The Whole-Frame Rule).
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <Field label="What would you like to do">
+        {(p) => (
+          <select
+            {...p}
+            className={leafControl}
+            value={action}
+            onChange={(e) => onActionChange(e.target.value)}
+          >
+            <option value="none">Nothing</option>
+            <option value="buy" disabled={!!t.buyBlocked}>
+              Buy extra days
+            </option>
+            <option value="sell" disabled={!!t.sellBlocked}>
+              Sell days back
+            </option>
+          </select>
+        )}
+      </Field>
+
+      <Field
+        label="How many days"
+        error={t.daysError}
+        hint={
+          t.trading
+            ? `${
+                t.minDays > 0
+                  ? `${t.minDays}–${t.maxDays} days`
+                  : `Up to ${days(t.maxDays)}`
+              }${t.step !== 1 ? `, in ${t.step}-day steps` : ""}.`
+            : undefined
+        }
+      >
+        {(p) => (
+          <input
+            {...p}
+            type="number"
+            className={leafControl}
+            min={t.minDays}
+            max={t.trading ? t.maxDays : undefined}
+            step={t.step}
+            value={daysValue}
+            disabled={!t.trading}
+            onChange={(e) => onDaysChange(e.target.value)}
+          />
+        )}
+      </Field>
+    </div>
+  );
+}
+
+/** Why an option is unavailable, and what a missing rate means. Both are
+ *  silent server-side outcomes otherwise (a 422, or a $0 draw). */
+function TradeNotices({ t }: { t: Trade }) {
+  return (
+    <>
+      {t.blockedReason && (
+        <p className="text-row text-strike-pending">{t.blockedReason}</p>
+      )}
+      {t.trading && !t.blockedReason && t.rate <= 0 && (
+        <p className="text-row text-label">
+          There&rsquo;s no daily rate set for your role yet, so trading leave
+          won&rsquo;t change your allowance. Your HR team can confirm it.
+        </p>
+      )}
+      {!t.trading && t.buyBlocked && t.sellBlocked && (
+        <p className="text-row text-label">
+          You can&rsquo;t buy or sell leave this year.
+        </p>
+      )}
+    </>
+  );
+}
+
 export function LeaveMount({
   action,
   daysValue,
@@ -89,106 +208,27 @@ export function LeaveMount({
               : "You haven't traded any leave"}
           </MountRow>
           {t.trading && t.rate > 0 && t.enteredDays > 0 && (
-            <MountRow
-              term={
-                t.isBuy ? "Taken from your allowance" : "Added to your allowance"
-              }
-            >
-              <Money value={t.impact} currency={currency} />
-            </MountRow>
+            <TradeImpact t={t} currency={currency} />
           )}
         </dl>
       ) : (
         <>
-          {/* One column on a phone — a frame is either full width or it is not
-              on this breakpoint (The Whole-Frame Rule). */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="What would you like to do">
-              {(p) => (
-                <select
-                  {...p}
-                  className={leafControl}
-                  value={action}
-                  onChange={(e) => onActionChange(e.target.value)}
-                >
-                  <option value="none">Nothing</option>
-                  <option value="buy" disabled={!!t.buyBlocked}>
-                    Buy extra days
-                  </option>
-                  <option value="sell" disabled={!!t.sellBlocked}>
-                    Sell days back
-                  </option>
-                </select>
-              )}
-            </Field>
-
-            <Field
-              label="How many days"
-              error={t.daysError}
-              hint={
-                t.trading
-                  ? `${
-                      t.minDays > 0
-                        ? `${t.minDays}–${t.maxDays} days`
-                        : `Up to ${days(t.maxDays)}`
-                    }${t.step !== 1 ? `, in ${t.step}-day steps` : ""}.`
-                  : undefined
-              }
-            >
-              {(p) => (
-                <input
-                  {...p}
-                  type="number"
-                  className={leafControl}
-                  min={t.minDays}
-                  max={t.trading ? t.maxDays : undefined}
-                  step={t.step}
-                  value={daysValue}
-                  disabled={!t.trading}
-                  onChange={(e) => onDaysChange(e.target.value)}
-                />
-              )}
-            </Field>
-          </div>
+          <TradeControls
+            action={action}
+            daysValue={daysValue}
+            t={t}
+            onActionChange={onActionChange}
+            onDaysChange={onDaysChange}
+          />
 
           {/* The money view of the elected trade. */}
           {t.trading && t.rate > 0 && t.enteredDays > 0 && !t.daysError && (
             <dl>
-              <MountRow
-                term={
-                  t.isBuy
-                    ? "Taken from your allowance"
-                    : "Added to your allowance"
-                }
-                gloss={`${days(t.enteredDays)} at your daily rate.`}
-              >
-                <Money
-                  value={t.impact}
-                  currency={currency}
-                  emphasis="strong"
-                  className={t.isBuy ? "text-strike-pending" : undefined}
-                />
-              </MountRow>
+              <TradeImpact t={t} currency={currency} emphasis />
             </dl>
           )}
 
-          {/* Why an option is unavailable, and what a missing rate means. Both
-              are silent server-side outcomes otherwise (a 422, or a $0 draw). */}
-          {t.blockedReason && (
-            <p className="text-row text-strike-pending">{t.blockedReason}</p>
-          )}
-          {t.trading && !t.blockedReason && t.rate <= 0 && (
-            <p className="text-row text-label">
-              There&rsquo;s no daily rate set for your role yet, so trading
-              leave won&rsquo;t change your allowance. Your HR team can confirm
-              it.
-            </p>
-          )}
-          {!t.trading && t.buyBlocked && t.sellBlocked && (
-            <p className="text-row text-label">
-              You can&rsquo;t buy or sell leave this year.
-            </p>
-          )}
+          <TradeNotices t={t} />
 
           {/* `sm:self-start` is load-bearing, and it is the same trap
               `Action.block` documents one level up: `block:"phone"` returns the

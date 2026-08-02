@@ -491,6 +491,10 @@ export interface DependantSummary {
   name: string | null;
   relationship: string | null;
   dob: string | null;
+  /** "spouse" | "child" | null — the pricing role, classified server-side.
+   *  Never re-derive it from `relationship`: the word lists are subtle and a
+   *  client-side copy of them drifted from the backend's once already. */
+  role: string | null;
 }
 
 export interface StatementAttribute {
@@ -749,17 +753,28 @@ export interface TemplateSubItem {
   note?: string | null;
 }
 
-export type BenefitKind =
-  | "amount"
-  | "currency"
-  | "percent"
-  | "text"
-  | "days"
-  | "boolean"
-  | "copay"
-  | "list"
-  | "scale"
-  | "group";
+/** Every benefit value type, as a RUNTIME list.
+ *
+ * The union below is derived from it rather than the other way round, because
+ * `kind` arrives from the server as a plain string (`benefit_schedule` is
+ * untyped JSON) and has to be narrowed at runtime before the formatter trusts
+ * it. A hand-kept second copy of these names in the narrowing code compiled
+ * fine and silently dropped any kind added here — the value then rendered as a
+ * bare number ("3000" for "S$3,000") on the row a member decides cover on. */
+export const BENEFIT_KINDS = [
+  "amount",
+  "currency",
+  "percent",
+  "text",
+  "days",
+  "boolean",
+  "copay",
+  "list",
+  "scale",
+  "group",
+] as const;
+
+export type BenefitKind = (typeof BENEFIT_KINDS)[number];
 
 export interface TemplateBenefitItem {
   number: string;

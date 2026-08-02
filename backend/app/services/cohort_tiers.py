@@ -15,6 +15,7 @@ back to sum-insured, then to plan-code ordering.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, replace
 from typing import Any
@@ -31,7 +32,14 @@ from app.services.plan_hydration import (
     member_age,
     member_financials,
 )
-from app.services.tier_differences import MAX_DIFFERENCES, schedule_differences
+from app.services.tier_differences import (
+    MAX_DIFFERENCES,
+    differences_from_rows,
+    flatten_schedule,
+    has_rows,
+)
+
+logger = logging.getLogger(__name__)
 
 # A trailing "(Option 2)" / "(Plan B)" / "(Tier 3)" distinguishes tiers within a
 # cohort and must be stripped to group them; a "(Job category: 99)" is
@@ -196,6 +204,15 @@ class CohortTier:
     direction: str  # 'upgrade'|'downgrade'|'same'|'unknown' (rel. to baseline)
     is_baseline: bool
     financials: PlanFinancials | None
+    # The tier the member ACTUALLY HOLDS right now — the cohort default unless a
+    # standing ``EmployeePlanOverride`` moved them off it (a prior window's
+    # confirmed upgrade). Distinct from ``is_baseline`` on purpose: the baseline
+    # is a property of the COHORT (which category matched, what the flex grid
+    # prices, what direction is measured from) while this is a property of the
+    # MEMBER. They differ for anyone holding an override, and conflating them
+    # labelled a plan the member had already left "your current plan" and
+    # diffed every alternative against it.
+    is_current: bool = False
     # Rows on which this tier's schedule differs from the BASELINE tier's —
     # what a member actually gives up or gains by switching. Empty for the
     # baseline itself (it is the reference) and for products whose plans
@@ -349,12 +366,17 @@ def _build_tier_set(
 
 
 def electable_tiers_for_employee(
-    db: Session, employee: Employee
+    db: Session, employee: Employee, *, include_differences: bool = True
 ) -> dict[str, ProductTierSet]:
     """``{product_code: ProductTierSet}`` of the member's electable cohort tiers.
 
     One entry per product the member is matched to. Each set lists the baseline
     tier plus the voluntary sibling tiers of the same cohort, direction-labelled.
+
+    ``include_differences=False`` skips the schedule diff pass, which needs a
+    query and a full flatten of every offered plan's schedule. The WRITE path
+    (``apply_elections``) only needs tier identity to validate an election, so
+    it would pay for dozens of 69-row schedule walks per save and discard them.
     """
     from app.models.product import Product
 
@@ -423,7 +445,66 @@ def electable_tiers_for_employee(
             # cohort's aggregate as the member's cover.
             employee.attribute_values,
         )
+    out = _mark_current_tiers(db, employee, out)
+    if not include_differences:
+        return out
     return _attach_differences(db, employee.policy_year_id, out)
+
+
+def _mark_current_tiers(
+    db: Session, employee: Employee, sets: dict[str, ProductTierSet]
+) -> dict[str, ProductTierSet]:
+    """Flag the tier each product's member actually holds today.
+
+    Effective coverage is "category default + sparse override", resolvable ONLY
+    through ``coverage_resolver`` — so the cohort baseline is the member's
+    current plan just until someone elects off it. ``enrollment_lifecycle``
+    already pre-elects through overrides, so without this the enrollment page
+    pre-selected plan 2 while calling plan 1 "your current plan".
+
+    A DECLINED override leaves no tier current: the member holds nothing here,
+    and naming one of the offers "current" would be worse than naming none.
+    """
+    from app.services.coverage_resolver import load_overrides
+
+    overrides = load_overrides(db, employee.policy_year_id, [employee.id])
+    out: dict[str, ProductTierSet] = {}
+    for code, ts in sets.items():
+        ov = overrides.get((employee.id, ts.product_id))
+        held_idx = _held_tier_index(ts, ov)
+        out[code] = replace(
+            ts,
+            tiers=[replace(t, is_current=(i == held_idx)) for i, t in enumerate(ts.tiers)],
+        )
+    return out
+
+
+def _held_tier_index(ts: ProductTierSet, ov: Any) -> int | None:
+    """Index of the tier the member holds, or None (declined / unresolvable)."""
+    if ov is None:
+        return next((i for i, t in enumerate(ts.tiers) if t.is_baseline), None)
+    if ov.declined:
+        return None
+    # A plan code can repeat across tiers (GPA's "(Option N)" share one), so the
+    # (category, plan) PAIR identifies a tier — the same rule the options API
+    # and `resolve_electable_tier` use.
+    held = ov.plan_code or ts.baseline_plan_code
+    tier_cat = ov.tier_category_id
+    if tier_cat:
+        for i, t in enumerate(ts.tiers):
+            if t.tier_category_id == tier_cat and (t.plan_code or None) == (held or None):
+                return i
+        for i, t in enumerate(ts.tiers):
+            if t.tier_category_id == tier_cat:
+                return i
+    for i, t in enumerate(ts.tiers):
+        if (t.plan_code or None) == (held or None):
+            return i
+    # An override for a plan no longer in this cohort is an ORPHAN (re-matching
+    # strands them; they're inert and surfaced separately for reconciliation).
+    # Fall back to the cohort default rather than claiming the member holds
+    # nothing.
+    return next((i for i, t in enumerate(ts.tiers) if t.is_baseline), None)
 
 
 def _attach_differences(
@@ -460,20 +541,52 @@ def _attach_differences(
 
     out: dict[str, ProductTierSet] = {}
     for code, ts in sets.items():
-        baseline = next((t for t in ts.tiers if t.is_baseline), None)
+        # Anchored on the tier the member HOLDS, not the cohort default — "if
+        # you switch" has to be measured from where they actually are. They are
+        # the same tier for everyone without a standing override.
+        baseline = next(
+            (t for t in ts.tiers if t.is_current),
+            next((t for t in ts.tiers if t.is_baseline), None),
+        )
         base_sched = (
             schedules.get((ts.product_id, str(baseline.plan_code)))
             if baseline and baseline.plan_code
             else None
         )
+        # A baseline with no schedule on record can't anchor a comparison. That
+        # is a real, documented state — an unmapped plan code gets NO schedule
+        # (`resolve_plan_schedule` logs and returns []), so `schedules.get` is
+        # None for it. Diffing against it reported every alternative's benefit
+        # as newly GAINED, and the reverse case reported every baseline benefit
+        # as lost, which the UI prints as "Not covered" — a config gap stated to
+        # the member as a fact about their cover.
+        if not has_rows(base_sched):
+            if any(t.plan_code and not t.is_baseline for t in ts.tiers):
+                logger.warning(
+                    "Product %r: baseline plan %r has no benefit schedule, so no "
+                    "tier differences can be shown for its alternatives.",
+                    code,
+                    baseline.plan_code if baseline else None,
+                )
+            out[code] = ts
+            continue
+        base_rows = flatten_schedule(base_sched)
         tiers = []
         for t in ts.tiers:
-            if t.is_baseline or not t.plan_code:
+            if t is baseline or not t.plan_code:
                 tiers.append(t)
                 continue
-            diffs = schedule_differences(
-                base_sched, schedules.get((ts.product_id, str(t.plan_code)))
-            )
+            elected = schedules.get((ts.product_id, str(t.plan_code)))
+            if not has_rows(elected):
+                logger.warning(
+                    "Product %r: plan %r has no benefit schedule, so its "
+                    "differences from the current plan are unknown.",
+                    code,
+                    t.plan_code,
+                )
+                tiers.append(t)
+                continue
+            diffs = differences_from_rows(base_rows, flatten_schedule(elected))
             tiers.append(
                 replace(
                     t,

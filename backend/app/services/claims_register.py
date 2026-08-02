@@ -68,7 +68,7 @@ def build_claims_register_workbook(
         ).all()
     )
     claims = [c for c, _ in rows]
-    _, dep_names = prefetch_claim_relations(db, claims)
+    _, dep_names, _ = prefetch_claim_relations(db, claims)
 
     wb = Workbook()
     ws = wb.active

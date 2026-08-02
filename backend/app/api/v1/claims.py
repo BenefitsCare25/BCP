@@ -124,13 +124,19 @@ def _broker_out(
     *,
     referral_docs: dict[str, StoredDocument] | None = None,
     dep_names: dict[str, str | None] | None = None,
+    documents: dict[str, list[StoredDocument]] | None = None,
     unread_messages: dict[str, int] | None = None,
 ) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
     # Shared filler (documents, referral letter, claimant name) — keeps the
     # broker payload in lockstep with the member's claim_to_out.
     populate_claim_out(
-        db, claim, out, referral_docs=referral_docs, dep_names=dep_names
+        db,
+        claim,
+        out,
+        referral_docs=referral_docs,
+        dep_names=dep_names,
+        documents=documents,
     )
     if employee is not None:
         out.staff_id = employee.staff_id
@@ -171,7 +177,9 @@ def list_claims(
         .offset(offset)
         .limit(limit)
     ).all()
-    referral_docs, dep_names = prefetch_claim_relations(db, [c for c, _ in rows])
+    referral_docs, dep_names, documents = prefetch_claim_relations(
+        db, [c for c, _ in rows]
+    )
     unread = _unread_member_messages(db, [c.id for c, _ in rows])
     return BrokerClaimList(
         total=total,
@@ -184,6 +192,7 @@ def list_claims(
                 employee,
                 referral_docs=referral_docs,
                 dep_names=dep_names,
+                documents=documents,
                 unread_messages=unread,
             )
             for claim, employee in rows

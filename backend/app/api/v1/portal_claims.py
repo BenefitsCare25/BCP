@@ -79,6 +79,7 @@ from app.services.claim_messages import post_system_message
 from app.services.claims import (
     attach_document,
     claim_to_out,
+    claims_to_out,
     create_claim,
     delete_documents,
     delete_stored_document,
@@ -558,7 +559,7 @@ def list_my_claims(
         total=total,
         offset=offset,
         limit=limit,
-        items=[claim_to_out(db, c) for c in rows],
+        items=claims_to_out(db, list(rows)),
     )
 
 

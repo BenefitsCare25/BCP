@@ -965,7 +965,6 @@ def _parse_name_first_items(
         name_cell = _cell_text(row, name_col)
         label_cell = _cell_text(row, label_col)
         plan_cell = row[plan_col] if 0 <= plan_col < len(row) else None
-        plan_val = _fmt_value(plan_cell)
         any_value = any(
             0 <= c < len(row) and _non_empty(row[c]) for c in all_plan_cols
         )
@@ -980,7 +979,15 @@ def _parse_name_first_items(
             current_sub_items = []
         elif label_cell and current_name:
             # Continuation: qualifier label in the column after the name.
-            if plan_val:
+            #
+            # Gated on the CELL being non-empty, not on `plan_val` being truthy:
+            # `_fmt_value` folds an explicit "NA" to None, so a truthiness test
+            # dropped exactly the rows that assert NO cover into the note text.
+            # The sub-row then didn't exist for that column, and the fold
+            # inherited the richer plan's figure — overstating cover, which is
+            # the one error worse than showing a blank. (The numbered layout has
+            # always gated on `_non_empty` for this reason.)
+            if _non_empty(plan_cell):
                 value, note, sub_na = _split_value_note(plan_cell)
                 current_sub_items.append({
                     "key": "", "name": label_cell, "value": value, "note": note,

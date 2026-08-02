@@ -56,8 +56,15 @@ def _effective(overrides: Any, col_id: str | None, base: Any) -> Any:
     return base if ov is None else ov
 
 
-def _row_key(item: dict[str, Any]) -> str:
-    """Identity of a benefit row across columns: its NAME.
+def benefit_row_key(name: Any, fallback: Any = None) -> str:
+    """Identity of a benefit row: its NAME, cased and spaced consistently.
+
+    THE one spelling of benefit-row identity — ``tier_differences`` compares two
+    plans' schedules with it, and must agree with the fold here or the two
+    disagree about whether a row changed. It grew a second, subtly different
+    copy once already (that one collapsed internal whitespace and had no
+    fallback), which made "Room  & Board" one row to the enrollment diff and two
+    to the column fold.
 
     Deliberately NOT the number. ``placement_slip_sob`` auto-assigns
     ``number = str(len(items) + 1)`` for name-first products (GBT/OSI/GD), so a
@@ -67,17 +74,24 @@ def _row_key(item: dict[str, Any]) -> str:
     handle.
 
     The name is already this system's benefit identity: ``claims.py`` and
-    ``utilization.py`` both join on ``name.strip().lower()``. Names are unique
-    within a plan; the number only orders and displays. A nameless row falls
-    back to its number so blank rows don't all collide into one.
+    ``utilization.py`` both join on it. Names are unique within a plan; the
+    number only orders and displays. Internal whitespace is collapsed because a
+    slip cell wrapped across two lines arrives with a double space and is the
+    same benefit. A nameless row falls back to ``fallback`` (its number, or a
+    sub-item's key) so blank rows don't all collide into one.
     """
-    name = str(item.get("name") or "").strip().lower()
-    return name or f"#{str(item.get('number') or '').strip().lower()}"
+    key = " ".join(str(name or "").split()).lower()
+    if key:
+        return key
+    return f"#{' '.join(str(fallback or '').split()).lower()}"
+
+
+def _row_key(item: dict[str, Any]) -> str:
+    return benefit_row_key(item.get("name"), item.get("number"))
 
 
 def _sub_key(sub: dict[str, Any]) -> str:
-    name = str(sub.get("name") or "").strip().lower()
-    return name or f"#{str(sub.get('key') or '').strip().lower()}"
+    return benefit_row_key(sub.get("name"), sub.get("key"))
 
 
 def _union_rows(rep_items: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -180,13 +194,29 @@ def _column_label(members: list[dict[str, Any]], only_column: bool) -> str:
     return f"{label} +{len(members) - 1}" if len(members) > 1 else label
 
 
-def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
+def sob_from_plan_items(
+    plans: list[dict[str, Any]], *, blank_inherits: bool = True
+) -> dict[str, Any]:
     """Build a ``{columns, items}`` schedule by de-duplicating per-plan grids.
 
     Plans whose value vectors match collapse to one column. The first column's
     representative supplies each row's ``base_value``; the rest carry a sparse
     override only where they differ. ``id``s are deterministic (``col0``, ``col1``
     …) so the projection is reproducible without a RNG.
+
+    ``blank_inherits`` distinguishes the two kinds of input this takes, and
+    getting it wrong misstates cover in one direction or the other:
+
+    * **Freshly PARSED slip grids** (the default) carry ``not_applicable``, so a
+      blank cell is genuinely "the slip stated this once across the span" and
+      must inherit — see the three-state note below.
+    * **Already-RESOLVED plan schedules** (``slip_export``, re-folding
+      ``Plan.benefit_schedule``) carry no ``na`` flag at all, and their blanks
+      are the OPPOSITE thing: a broker who cleared a cell in the editor stores a
+      real ``""``, and a row the slip said "NA" to was flattened to ``None``
+      when it was written. Inheriting either one prints another plan's value in
+      that column of the exported placement slip — a legal document. Pass
+      ``False`` there, so a blank stands as an explicit blank.
     """
     with_items = [p for p in plans if isinstance(p.get("benefit_items"), list)]
     if not with_items:
@@ -261,8 +291,12 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
             c = by_key[ci].get(row_key)
             if c is None or c.get("na"):
                 cells.append(NOT_COVERED)
-            else:
+            elif blank_inherits:
                 cells.append(c.get("value") or None)
+            else:
+                # Re-folding stored values: a blank is the broker's own blank
+                # (or a flattened "NA"), never "not stated". Keep it verbatim.
+                cells.append(c.get("value"))
         # Column 0's cell IS the base value and has nothing to inherit from, so
         # "not stated" is simply blank there.
         base_value = (cells[0] if cells else None) or ""
@@ -309,6 +343,10 @@ def sob_from_plan_items(plans: list[dict[str, Any]]) -> dict[str, Any]:
                     # columns; absence here is not an assertion of exclusion).
                     continue
                 sv = NOT_COVERED if match.get("na") else match.get("value")
+                if sv is None and not blank_inherits:
+                    # Re-folding stored values: this column HAS the sub-row and
+                    # states nothing for it, which is a blank, not an inherit.
+                    sv = ""
                 # Only a genuine DIFFERENCE is an override; `None` means
                 # "inherit", so never persist it as one.
                 if sv is not None and sv != sub_base:

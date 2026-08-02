@@ -24,6 +24,8 @@ from __future__ import annotations
 import re
 from typing import Any, NamedTuple
 
+from app.services.sob_columns import benefit_row_key
+
 # A schedule that differs on more rows than this is not a comparison any more,
 # and the payload stops being cheap. Well clear of the worst real case (9).
 # The caller slices to it AND reports the true total, so nothing is dropped
@@ -75,15 +77,10 @@ def _is_annotation(value: str | None) -> bool:
 
 
 
-def _key(name: Any) -> str:
-    """Row identity across two plans: the NAME, cased and spaced consistently.
-
-    The same identity ``sob_columns._row_key`` uses, and for the same reason —
-    the number is auto-assigned for name-first products, so a plan missing an
-    early row renumbers every later one and a number-keyed diff would report
-    the whole schedule as changed.
-    """
-    return " ".join(str(name or "").split()).strip().lower()
+# Row identity across two plans. IMPORTED, not reimplemented: this must be the
+# same identity the column fold uses, or the two disagree about whether a row
+# changed — which is how the copy that used to live here drifted.
+_key = benefit_row_key
 
 
 # The insurer's qualifying wording, which it writes in brackets inside the
@@ -196,6 +193,26 @@ def _entry(row: _Row, current: str | None, elected: str | None, kind: str | None
     }
 
 
+def flatten_schedule(schedule: Any) -> dict[str, _Row]:
+    """A stored schedule as ``{identity: _Row}``, ready to diff.
+
+    Exposed so a caller diffing one baseline against several alternatives can
+    flatten the baseline ONCE instead of once per alternative — the qualifier
+    split runs a regex over every row and sub-item, and a GBT-class schedule is
+    ~69 rows.
+    """
+    return _rows(_items(schedule))
+
+
+def has_rows(schedule: Any) -> bool:
+    """True when a stored schedule actually states any benefits.
+
+    The distinction a caller must draw before diffing: a schedule that says
+    NOTHING is unknown, not empty. See ``schedule_differences``.
+    """
+    return bool(_items(schedule))
+
+
 def schedule_differences(current: Any, elected: Any) -> list[dict[str, str | None]]:
     """Rows where ``elected`` says something different from ``current``.
 
@@ -211,10 +228,28 @@ def schedule_differences(current: Any, elected: Any) -> list[dict[str, str | Non
     because the caller can report what it dropped: a cover comparison that
     silently omits rows is worse than a long one, and this is the surface a
     member decides their family's cover on.
+
+    **A schedule that states nothing is UNKNOWN, not empty**, and the caller
+    must not ask for a diff against one — see ``has_rows``. Diffing a populated
+    schedule against a blank one reports every benefit as dropped, which the UI
+    renders as "Not covered": a plan-to-column mapping gap presented to the
+    member as total loss of cover. Guarded here as well as at the call site,
+    because the failure is silent and the consequence is a cover misstatement.
     """
-    cur = _rows(_items(current))
-    new = _rows(_items(elected))
-    if not cur and not new:
+    return differences_from_rows(flatten_schedule(current), flatten_schedule(elected))
+
+
+def differences_from_rows(
+    cur: dict[str, _Row], new: dict[str, _Row]
+) -> list[dict[str, str | None]]:
+    """``schedule_differences`` over already-flattened schedules.
+
+    Split out so a caller comparing one baseline against several alternatives
+    flattens the baseline once (see ``flatten_schedule``).
+    """
+    # Either side empty means "we don't know what this plan says", never "this
+    # plan covers nothing" — reporting no differences is the honest answer.
+    if not cur or not new:
         return []
 
     out: list[dict[str, str | None]] = []

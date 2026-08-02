@@ -621,6 +621,14 @@ class DependantSummary(BaseModel):
     name: str | None = None
     relationship: str | None = None
     dob: str | None = None
+    # "spouse" | "child" | None — the classification flex pricing keys on,
+    # SERVED rather than re-derived client-side. The word lists that decide it
+    # are subtle (a bare "step" matches "stepmother", so the backend excludes
+    # it) and a client-side mirror of them had already drifted: a step-parent
+    # classified as a child in the UI, was shown a confident child-rate price,
+    # and then 409'd `unpriced_elections` on submit because the server could not
+    # price them. `null` means "not spouse or child" — it is not a price of nil.
+    role: str | None = None
 
 
 class CoverageLine(BaseModel):

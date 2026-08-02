@@ -32,7 +32,11 @@ from app.schemas.api import (
     StatementAttribute,
     StatementEmployee,
 )
-from app.services.flex_membership import count_dependants, resolve_family_status
+from app.services.flex_membership import (
+    classify_relationship,
+    count_dependants,
+    resolve_family_status,
+)
 from app.services.flex_pricing_resolver import summarize_employee
 from app.services.plan_hydration import basis_amount, hydrate_plans
 from app.services.roster_attributes import (
@@ -66,11 +70,15 @@ _first = first_value
 
 def _dep_summary(dep: Dependant) -> DependantSummary:
     av = dep.attribute_values or {}
+    rel = _first(av, _REL_KEYS)
     return DependantSummary(
         id=dep.id,
         name=_first(av, _NAME_KEYS),
-        relationship=_first(av, _REL_KEYS),
+        relationship=rel,
         dob=iso_date(_first(av, _DOB_KEYS)),
+        # Classified HERE, by the same function flex pricing uses, so the UI
+        # never has to reimplement the word lists.
+        role=classify_relationship(rel),
     )
 
 

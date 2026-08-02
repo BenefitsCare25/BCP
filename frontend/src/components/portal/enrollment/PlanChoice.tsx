@@ -26,7 +26,7 @@ import {
   directionLabel,
 } from "@/components/enrollment/electionCore";
 import { Field, leafControl } from "@/components/portal/leaf/Field";
-import { Money } from "@/components/portal/leaf/Figure";
+import { Money, currencySymbol, moneyText } from "@/components/portal/leaf/Figure";
 import { MountRow } from "@/components/portal/leaf/Mount";
 import { choiceControl, choiceRowClass } from "./choiceRow";
 import { TierDifferences } from "./TierDifferences";
@@ -141,6 +141,51 @@ function priceTerm(
  * gap in what we loaded. The premium fields never arrive on this surface at all
  * (`build_portal_enrollment` scrubs them), so the covered amount plus the price
  * tag is the whole of what a member can act on. */
+function TierFigureRows({
+  tier,
+  flexOnChange,
+  currency,
+  row: Row,
+  siTerm,
+}: {
+  tier: CohortTier;
+  flexOnChange: boolean;
+  currency: string | null;
+  /** Which term/value row to render in — `ChoiceFigure` beside a radio,
+   *  `MountRow` when the outcome is simply printed on the mount's own margins.
+   *  Parameterised rather than duplicated: the read-only branch used to
+   *  reimplement this conditional tree by hand, so adding a figure (or changing
+   *  the zero-price wording) had to be done twice and would have been done
+   *  once — leaving the two surfaces stating different facts about one tier. */
+  row: typeof ChoiceFigure;
+  siTerm: string;
+}) {
+  const si = tier.financials?.sum_insured ?? null;
+  const price = priceTerm(tier, flexOnChange);
+  return (
+    <>
+      {si != null && (
+        <Row term={siTerm}>
+          <Money value={si} currency={currency} />
+        </Row>
+      )}
+      {price?.amount != null && (
+        <Row term={price.term}>
+          <Money value={price.amount} currency={currency} />
+        </Row>
+      )}
+    </>
+  );
+}
+
+/** True when a tier has any figure worth a `<dl>` at all. */
+function hasFigureRows(tier: CohortTier, flexOnChange: boolean): boolean {
+  return (
+    tier.financials?.sum_insured != null ||
+    priceTerm(tier, flexOnChange)?.amount != null
+  );
+}
+
 function TierFigures({
   tier,
   flexOnChange,
@@ -150,23 +195,19 @@ function TierFigures({
   flexOnChange: boolean;
   currency: string | null;
 }) {
-  const si = tier.financials?.sum_insured ?? null;
   const price = priceTerm(tier, flexOnChange);
-  if (si == null && !price) return null;
+  if (tier.financials?.sum_insured == null && !price) return null;
   return (
     <>
-      {(si != null || price?.amount != null) && (
+      {hasFigureRows(tier, flexOnChange) && (
         <dl>
-          {si != null && (
-            <ChoiceFigure term="You'd be covered for">
-              <Money value={si} currency={currency} />
-            </ChoiceFigure>
-          )}
-          {price?.amount != null && (
-            <ChoiceFigure term={price.term}>
-              <Money value={price.amount} currency={currency} />
-            </ChoiceFigure>
-          )}
+          <TierFigureRows
+            tier={tier}
+            flexOnChange={flexOnChange}
+            currency={currency}
+            row={ChoiceFigure}
+            siTerm="You'd be covered for"
+          />
         </dl>
       )}
       {price && price.amount == null && (
@@ -174,6 +215,38 @@ function TierFigures({
       )}
     </>
   );
+}
+
+/** One tier as a single `<option>` line: name, direction and price.
+ *
+ * The long-list fallback exists for the products with the MOST to compare (a
+ * GPA carrying twenty voluntary levels), and it was the one shape that named
+ * the tier and nothing else — so on exactly those products a member had to
+ * select each level in turn to learn whether it was an upgrade or what it cost,
+ * while the ≤6 row layout put both on screen at once. An `<option>` cannot
+ * carry a component, so the figures are composed here (symbol included and
+ * unabbreviated, per The Tabular-Figure Rule). */
+function tierOptionLabel(
+  t: CohortTier,
+  isCurrent: boolean,
+  flexOnChange: boolean,
+  currency: string | null,
+): string {
+  const parts = [t.label];
+  if (isCurrent) parts.push("your current plan");
+  else {
+    const dir = directionLabel(t.direction, true);
+    if (dir) parts.push(dir);
+  }
+  const price = priceTerm(t, flexOnChange);
+  if (price) {
+    parts.push(
+      price.amount == null
+        ? price.term.replace(/\.$/, "").toLowerCase()
+        : `${price.term.toLowerCase()} ${currencySymbol(currency)}${moneyText(price.amount)}`,
+    );
+  }
+  return parts.join(" — ");
 }
 
 export function PlanChoice({
@@ -210,7 +283,20 @@ export function PlanChoice({
     onChange({ ...ps, tierKey: key, declined: false });
   // Names the "before" side of every difference below, so the member is not
   // left inferring which of two values is the one they hold today.
-  const currentLabel = ts.tiers.find((t) => t.is_baseline)?.label ?? null;
+  //
+  // `is_current`, NOT `is_baseline`: the baseline is the cohort's matched
+  // category, while a member carrying a standing override (a prior window's
+  // confirmed upgrade) already holds a different tier — and the server
+  // pre-elects them onto it. Labelling the baseline meant the page could
+  // pre-select plan 2 while calling plan 1 "your current plan" and measuring
+  // every difference from a plan the member had already left. The two coincide
+  // for everyone without an override; `tierIsCurrent` falls back so an older
+  // payload (or a declined member, where nothing is current) still reads
+  // sensibly.
+  const heldTier = ts.tiers.find((t) => t.is_current) ?? null;
+  const currentLabel = (heldTier ?? ts.tiers.find((t) => t.is_baseline))?.label ?? null;
+  const tierIsCurrent = (t: CohortTier) =>
+    heldTier ? t.key === heldTier.key : t.is_baseline;
 
   if (asRows) {
     return (
@@ -230,12 +316,12 @@ export function PlanChoice({
               value={t.key}
               checked={!ps.declined && ps.tierKey === t.key}
               onSelect={() => selectTier(t.key)}
-              title={`${t.label}${t.is_baseline ? " — your current plan" : ""}`}
+              title={`${t.label}${tierIsCurrent(t) ? " — your current plan" : ""}`}
               // Neutral ink, deliberately. The strike ramp belongs to claim
               // verdicts (The Status-Is-Not-Brand Rule), and a green "upgrade"
               // beside an approved claim's green would ask the member to decide
               // which kind of green they are reading.
-              note={t.is_baseline ? null : directionLabel(t.direction, true)}
+              note={tierIsCurrent(t) ? null : directionLabel(t.direction, true)}
             >
               <TierFigures
                 tier={t}
@@ -289,8 +375,7 @@ export function PlanChoice({
             >
               {offered.map((t) => (
                 <option key={t.key} value={t.key}>
-                  {t.label}
-                  {t.is_baseline ? " — your current plan" : ""}
+                  {tierOptionLabel(t, tierIsCurrent(t), flexOnChange, currency)}
                 </option>
               ))}
               {ts.can_decline && (
@@ -321,7 +406,6 @@ export function PlanChoice({
   // Nothing to choose, or nothing choosable any more: print the outcome.
   // `MountRow` here rather than `ChoiceFigure` — with no radio to sit beside,
   // these rows belong on the mount's own left and right margins.
-  const selectedSi = selectedTier?.financials?.sum_insured ?? null;
   const selectedPrice = selectedTier
     ? priceTerm(selectedTier, flexOnChange)
     : null;
@@ -335,23 +419,20 @@ export function PlanChoice({
             <MountRow
               term="Your plan"
               gloss={
-                selectedTier.is_baseline
+                tierIsCurrent(selectedTier)
                   ? undefined
                   : (directionLabel(selectedTier.direction, true) ?? undefined)
               }
             >
               {selectedTier.label}
             </MountRow>
-            {selectedSi != null && (
-              <MountRow term="You're covered for">
-                <Money value={selectedSi} currency={currency} />
-              </MountRow>
-            )}
-            {selectedPrice?.amount != null && (
-              <MountRow term={selectedPrice.term}>
-                <Money value={selectedPrice.amount} currency={currency} />
-              </MountRow>
-            )}
+            <TierFigureRows
+              tier={selectedTier}
+              flexOnChange={flexOnChange}
+              currency={currency}
+              row={MountRow}
+              siTerm="You're covered for"
+            />
           </>
         ) : (
           <MountRow term="Your plan">Not set</MountRow>

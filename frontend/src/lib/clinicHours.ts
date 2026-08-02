@@ -15,6 +15,11 @@
  *     a per-day clause is discarded rather than absorbed — reading
  *     `MON, WED, THU: 6PM - 9PM` as a blanket weekday session would tell a
  *     member the clinic is open on a Tuesday evening when it is shut.
+ *   - The line's own day prefix is READ, not merely stripped, and a line is
+ *     only consulted on a day it actually names. `MON, WED, FRI: 9AM - 1PM`
+ *     names three days; stripping it left a blanket 9-to-1 that said "Open now"
+ *     on a Tuesday morning at a shut clinic. This is the same defect as the one
+ *     above, one position earlier in the line, and it needs the same answer.
  *   - An INCOMPLETE reading may say "Open now" (we are inside a range we
  *     actually read) but may NEVER say "Closed" (there could be an evening
  *     session we stopped before). It returns null instead, and the row simply
@@ -51,11 +56,95 @@ export interface OpenState {
 /** Which of the four cells today falls in. */
 export type HoursKey = "mon_fri" | "sat" | "sun" | "public_holiday";
 
+/** The seven days plus the public-holiday pseudo-day the sheet writes beside
+ * them. */
+export type DayName = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun" | "ph";
+
+/** "Now", read once for a whole list so no two rows disagree about it. */
+export interface ClinicClock {
+  key: HoursKey;
+  /** Today itself, which is what decides whether a day-specific line applies. */
+  day: DayName;
+  minutes: number;
+}
+
+const WEEK: DayName[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const WEEKDAYS: DayName[] = ["mon", "tue", "wed", "thu", "fri"];
+
 /** The day label a supplier puts before the times — dropped before parsing.
  * Anchored, so a `MON, WED, THU:` clause in the MIDDLE of a line is left in
  * place and stops the scan, which is exactly what must happen. */
 const DAY_PREFIX =
   /^\s*(?:mon|tues?|weds?|thurs?|thu|fri|sat|sun|ph|p\.h\.|public\s*holiday|weekday|weekend|daily)[a-z\s.&,–—-]*[:;]/i;
+
+/** Every spelling of a day the panel uses, including the collective words. A
+ * plural is listed because the sheet writes both (`SAT` and `SATURDAYS`). */
+const DAY_WORDS: Record<string, DayName[]> = {
+  mon: ["mon"], monday: ["mon"], mondays: ["mon"],
+  tue: ["tue"], tues: ["tue"], tuesday: ["tue"], tuesdays: ["tue"],
+  wed: ["wed"], weds: ["wed"], wednesday: ["wed"], wednesdays: ["wed"],
+  thu: ["thu"], thur: ["thu"], thurs: ["thu"], thursday: ["thu"], thursdays: ["thu"],
+  fri: ["fri"], friday: ["fri"], fridays: ["fri"],
+  sat: ["sat"], saturday: ["sat"], saturdays: ["sat"],
+  sun: ["sun"], sunday: ["sun"], sundays: ["sun"],
+  ph: ["ph"], holiday: ["ph"], holidays: ["ph"],
+  weekday: WEEKDAYS, weekdays: WEEKDAYS,
+  weekend: ["sat", "sun"], weekends: ["sat", "sun"],
+  daily: WEEK, everyday: WEEK,
+};
+
+/** `MON - THU`, and `SUN - THU` too: a span is walked forward through the week
+ * and wraps, so a backwards-looking pair is still read as the run the supplier
+ * meant rather than silently dropped. */
+function addSpan(days: Set<DayName>, from: DayName, to: DayName): void {
+  const start = WEEK.indexOf(from);
+  const end = WEEK.indexOf(to);
+  if (start < 0 || end < 0) {
+    days.add(from);
+    days.add(to);
+    return;
+  }
+  for (let i = start; ; i = (i + 1) % WEEK.length) {
+    days.add(WEEK[i]);
+    if (i === end) break;
+  }
+}
+
+/** The days the line's own prefix names, or null when it names none — in which
+ * case the line describes whichever cell it was written in and applies to all
+ * of it.
+ *
+ * This is the half of the prefix `stripDayPrefix` throws away, and it is the
+ * half that decides whether the times below may be believed today. */
+export function daysNamedBy(raw: string | null | undefined): Set<DayName> | null {
+  if (!raw) return null;
+  const prefix = raw.match(DAY_PREFIX)?.[0];
+  if (!prefix) return null;
+  // Dots go first so `P.H.` is one token; the prefix can hold no digits (the
+  // pattern's own character class excludes them), so nothing else is at risk.
+  const tokens = prefix.toLowerCase().replace(/\./g, "").match(/[a-z]+|[-–—]/g) ?? [];
+  const days = new Set<DayName>();
+  let span = false;
+  let previous: DayName | null = null;
+  for (const token of tokens) {
+    if (token === "-" || token === "–" || token === "—" || token === "to") {
+      span = true;
+      continue;
+    }
+    const mapped = DAY_WORDS[token];
+    if (!mapped) {
+      // A word we don't know ("public", "and") joins nothing to nothing.
+      span = false;
+      previous = null;
+      continue;
+    }
+    if (span && previous && mapped.length === 1) addSpan(days, previous, mapped[0]);
+    else for (const day of mapped) days.add(day);
+    previous = mapped.length === 1 ? mapped[0] : null;
+    span = false;
+  }
+  return days.size > 0 ? days : null;
+}
 
 const CLOSED = /^(?:closed|close|nil|n\.?a\.?|none|no|-{1,2})\b/i;
 const ALL_DAY = /\b24\s*(?:h|hr|hrs|hour|hours)\b/i;
@@ -105,8 +194,19 @@ export function stripDayPrefix(raw: string): string {
   return raw.replace(DAY_PREFIX, "").trim();
 }
 
-export function parseHoursLine(raw: string | null | undefined): HoursReading {
+/** Read one cell.
+ *
+ * `today` is what a day-specific line is measured against, and a line that
+ * names days is UNREADABLE without it — omitting it is not a licence to read
+ * `MON, WED, FRI: 9AM - 1PM` as a blanket session, it is the case where we
+ * cannot tell, and the answer to "cannot tell" here is always silence. */
+export function parseHoursLine(
+  raw: string | null | undefined,
+  today?: DayName,
+): HoursReading {
   if (!raw) return { kind: "unknown" };
+  const days = daysNamedBy(raw);
+  if (days && (today === undefined || !days.has(today))) return { kind: "unknown" };
   const text = stripDayPrefix(raw);
   if (!text) return { kind: "unknown" };
   if (CLOSED.test(text)) return { kind: "closed" };
@@ -163,10 +263,7 @@ function formatClock(minutes: number): string {
 }
 
 /** Singapore's own clock, whatever the device is set to. */
-export function singaporeNow(now: Date = new Date()): {
-  key: HoursKey;
-  minutes: number;
-} {
+export function singaporeNow(now: Date = new Date()): ClinicClock {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Singapore",
     weekday: "short",
@@ -175,20 +272,23 @@ export function singaporeNow(now: Date = new Date()): {
     hour12: false,
   }).formatToParts(now);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const weekday = get("weekday").toLowerCase();
+  const weekday = get("weekday").slice(0, 3).toLowerCase();
   // `hour` is "24" at midnight under hour12:false in some engines.
   const hour = Number(get("hour")) % 24;
   const minutes = hour * 60 + Number(get("minute"));
-  const key: HoursKey = weekday === "sat" ? "sat" : weekday === "sun" ? "sun" : "mon_fri";
-  return { key, minutes };
+  // One lookup feeds both, so the cell we read and the day we test it against
+  // can never come apart.
+  const day = (WEEK as string[]).includes(weekday) ? (weekday as DayName) : "mon";
+  const key: HoursKey = day === "sat" ? "sat" : day === "sun" ? "sun" : "mon_fri";
+  return { key, day, minutes };
 }
 
 /** The state to strike on the row, or null to say nothing at all. */
 export function openStateFor(
   hours: Partial<Record<HoursKey, string | undefined>> | null | undefined,
-  clock: { key: HoursKey; minutes: number },
+  clock: ClinicClock,
 ): OpenState | null {
-  const reading = parseHoursLine(hours?.[clock.key]);
+  const reading = parseHoursLine(hours?.[clock.key], clock.day);
   if (reading.kind === "closed") {
     return { tone: "shut", label: "Closed today", detail: null };
   }

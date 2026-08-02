@@ -32,6 +32,9 @@ export interface DependantRef {
   id: string;
   name?: string | null;
   relationship?: string | null;
+  /** "spouse" | "child" | null, classified by the SERVER (`DependantSummary.
+   *  role`). Optional only because a caller may pass a hand-built stub. */
+  role?: string | null;
 }
 
 export interface ProductState {
@@ -47,36 +50,44 @@ export interface ProductState {
 /** Exact money with the sign OUTSIDE the currency symbol. Interpolating
  * `$${fmtAmount(v)}` renders a credit as "$-120"; money reads "-$120".
  *
- * `symbol` exists because the member portal must print `S$2,700` (DESIGN.md's
- * Tabular-Figure Rule: money is never abbreviated and never symbol-less on a
- * member surface) while the broker page keeps its bare `$`.
+ * **BROKER surface only.** The member portal formats money through
+ * `components/portal/leaf/Figure.tsx` (`Money` / `moneyText`), which applies
+ * DESIGN.md's Tabular-Figure Rule and the scheme's own currency symbol. This
+ * used to take a `symbol` parameter for member callers; nothing passes one any
+ * more, and keeping it invited a second, subtly different member-facing
+ * formatter beside `moneyText` — which is how the recorded `$`/`S$` split
+ * happened. Bare `$` is the broker page's convention.
  *
- * **It is `fmtAmount`, not `fmtCurrency`, on BOTH surfaces, and that is
- * deliberate rather than incidental.** `fmtCurrency` compacts at a thousand,
- * so a broker reconciling a wallet read "$2.7K" for a figure they have to tie
- * back to a price tag — `fmtAmount` exists for exactly this ("editable / exact
- * figures … where the compact $1.2M form would lose precision"). What did NOT
- * survive that swap, and is restored here, is `fmtCurrency`'s sub-cent guard:
- * a residual −0.004 balance rendered as "-$0", which reads as settled while
- * `submitBlocked` is still firing on it. */
-export function signedMoney(v: number, symbol = "$"): string {
+ * **It is `fmtAmount`, not `fmtCurrency`, and that is deliberate rather than
+ * incidental.** `fmtCurrency` compacts at a thousand, so a broker reconciling a
+ * wallet read "$2.7K" for a figure they have to tie back to a price tag —
+ * `fmtAmount` exists for exactly this ("editable / exact figures … where the
+ * compact $1.2M form would lose precision"). What did NOT survive that swap,
+ * and is restored here, is `fmtCurrency`'s sub-cent guard: a residual −0.004
+ * balance rendered as "-$0", which reads as settled while `submitBlocked` is
+ * still firing on it. */
+export function signedMoney(v: number): string {
   const sign = v < 0 ? "-" : "";
   const a = Math.abs(v);
-  if (a > 0 && a < 0.01) return `${sign}${symbol}${a.toExponential(2)}`;
-  return `${sign}${symbol}${fmtAmount(a)}`;
+  if (a > 0 && a < 0.01) return `${sign}$${a.toExponential(2)}`;
+  return `${sign}$${fmtAmount(a)}`;
 }
 
-// Relationship classification — mirrors the backend's spouse/child word lists so
-// the live dependant cost matches the server's snapshot.
-const SPOUSE_WORDS = ["spouse", "husband", "wife", "partner"];
-const CHILD_WORDS = ["child", "children", "son", "daughter", "kid", "step"];
-
-export function classifyRel(rel?: string | null): "spouse" | "child" | null {
-  const s = (rel ?? "").toLowerCase();
-  if (!s) return null;
-  if (SPOUSE_WORDS.some((w) => s.includes(w))) return "spouse";
-  if (CHILD_WORDS.some((w) => s.includes(w))) return "child";
-  return null;
+/** The dependant's pricing role, as classified by the SERVER.
+ *
+ * **Read, never re-derived.** This used to mirror the backend's spouse/child
+ * word lists, and the mirror had already drifted: it carried a bare `"step"`
+ * that `flex_membership._CHILD_WORDS` deliberately omits (with a comment saying
+ * why — it would read "stepmother" as a child). A step-parent therefore priced
+ * as a child here and as unpriceable there, so the member was quoted a
+ * confident child rate and then refused at submit with `unpriced_elections` —
+ * exactly the failure `dependantPricing`'s `unresolved` flag exists to prevent.
+ *
+ * The repo's rule for a join key the server already owns is served-never-
+ * mirrored (see the claim-type key in CLAUDE.md); this is the same case. */
+export function classifyRel(dep?: DependantRef | null): "spouse" | "child" | null {
+  const role = dep?.role;
+  return role === "spouse" || role === "child" ? role : null;
 }
 
 /** What covering the selected dependants draws from the wallet, and whether we
@@ -108,7 +119,7 @@ export function dependantPricing(
   let spouse = 0;
   let child = 0;
   for (const id of selectedIds) {
-    const kind = classifyRel(deps.find((x) => x.id === id)?.relationship);
+    const kind = classifyRel(deps.find((x) => x.id === id));
     if (kind === "spouse") spouse += 1;
     else if (kind === "child") child += 1;
   }
@@ -124,7 +135,7 @@ export function dependantPricing(
     let total = 0;
     let unresolved = false;
     for (const id of selectedIds) {
-      const role = classifyRel(deps.find((x) => x.id === id)?.relationship);
+      const role = classifyRel(deps.find((x) => x.id === id));
       // **An unclassifiable relationship is UNKNOWN, not free.** `classifyRel`
       // only recognises spouse- and child-words, so a parent, a sibling or a
       // blank relationship falls through — and skipping it silently left
@@ -161,17 +172,6 @@ export function dependantPricing(
   if (!role) return unknown;
   const amount = tp.family.find((f) => f.role === role)?.amount;
   return amount == null ? unknown : known(amount);
-}
-
-/** The figure alone, for the places that only ever sum it. */
-export function dependantCost(
-  dep: ProductTierSet["dependant"],
-  tierKey: string,
-  selectedIds: string[],
-  deps: DependantRef[],
-  depOptionIds: Record<string, string> = {},
-): number {
-  return dependantPricing(dep, tierKey, selectedIds, deps, depOptionIds).total;
 }
 
 /** Baseline-only state, for a surface where no enrollment row exists yet (the
@@ -291,6 +291,7 @@ export function computeFlex(
   allowDeps: boolean,
   leaveAction: string,
   leaveDays: string,
+  leave?: MemberLeaveOptions | null,
 ): FlexSummary | null {
   if (!options || options.flex_wallet == null) return null;
   let total = 0;
@@ -315,7 +316,24 @@ export function computeFlex(
     }
   }
   const rate = options.member_leave_rate ?? 0;
-  const days = Number(leaveDays) || 0;
+  // **Only a TRADEABLE day count moves the wallet.** `leaveDays` is live,
+  // unsaved input, and its validity is checked in `leaveTrade`, which gates the
+  // leave SAVE button — not this. So a member who typed 999 into a field capped
+  // at 5 had the wallet credit 999 days: the strip showed a large "added to
+  // your allowance" and cleared `submitBlocked` over a genuine shortfall (and a
+  // stray "buy 999" fabricated one, refusing a member who could afford their
+  // elections). The server re-validates either way, so this was a misstatement
+  // and a false gate rather than a bypass — but it was a misstatement about
+  // money, on the screen the member commits from.
+  const cap =
+    leaveAction === "buy" ? leave?.max_buy_days : leaveAction === "sell" ? leave?.max_sell_days : 0;
+  const entered = Number(leaveDays);
+  const days =
+    Number.isFinite(entered) && entered > 0
+      ? cap == null
+        ? entered
+        : Math.min(entered, Math.max(cap, 0))
+      : 0;
   const leaveImpact =
     rate > 0 && days > 0 && leaveAction !== "none"
       ? (leaveAction === "buy" ? -1 : 1) * days * rate

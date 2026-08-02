@@ -75,7 +75,12 @@ def write_sob(ws: Worksheet, plans: list[Plan], cover: str | None) -> None:
     ]
     if not with_items:
         return
-    sob = sob_from_plan_items(with_items)
+    # These are RESOLVED plan schedules, not a parsed slip grid: every cell was
+    # already decided per plan, and none carries the parser's `na` flag. A blank
+    # here is therefore an explicit blank — the broker cleared the cell, or the
+    # slip said "NA" and it flattened to null on the way in — so it must NOT
+    # inherit the base column's value into an insurer-facing document.
+    sob = sob_from_plan_items(with_items, blank_inherits=False)
     columns = sob.get("columns") or []
     items = sob.get("items") or []
     if not columns or not items:

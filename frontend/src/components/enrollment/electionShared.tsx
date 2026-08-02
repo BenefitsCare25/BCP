@@ -513,9 +513,7 @@ export function ElectionProductCard({
               .filter((r) =>
                 ps.dependantIds.some(
                   (id) =>
-                    classifyRel(
-                      dependants.find((d) => d.id === id)?.relationship,
-                    ) === r.role,
+                    classifyRel(dependants.find((d) => d.id === id)) === r.role,
                 ),
               )
               .map((r) => (

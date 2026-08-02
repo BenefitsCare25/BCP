@@ -251,6 +251,7 @@ function ElectionPanel({
   // impact (buy spends, sell credits) at the member's per-day leave rate.
   const flex = computeFlex(
     options, tierSets, state, dependants, allowDeps, leaveAction, leaveDays,
+    options?.leave ?? null,
   );
 
   // The live balance mirrors the server-side wallet guard: an overdrawn
