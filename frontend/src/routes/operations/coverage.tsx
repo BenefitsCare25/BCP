@@ -20,6 +20,7 @@ import {
 import { BenefitStatement } from "@/components/benefits/BenefitStatement";
 import { UtilizationView } from "@/components/benefits/UtilizationView";
 import { EmployeePicker } from "@/components/operations/EmployeePicker";
+import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
 import { PortalFrame } from "@/components/operations/PortalFrame";
 import { cn } from "@/lib/cn";
 
@@ -59,6 +60,24 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
   if (!statement) return null;
   return (
     <div className="space-y-4">
+      {/* Portal access sits ABOVE the statement, not under it.
+       *
+       * This is the only surface in the app that can create a member's portal
+       * account, mint a set-password link or set their password — the backend
+       * endpoints have no other UI. It was previously mounted on
+       * `routes/operations/employees.tsx`, which the nav consolidation retired:
+       * that file is now imported by nothing and routed by nothing, so the
+       * whole capability shipped unreachable and a broker had no way to give
+       * an employee portal access at all.
+       *
+       * Above the coverage lines because it is an ADMIN action on the person,
+       * not a fact about their cover — and because below them it is past eight
+       * product blocks, which is a long way to scroll for the one control you
+       * came to the page to use. */}
+      <MemberAccountActions
+        employeeId={employeeId}
+        staffId={statement.employee.staff_id}
+      />
       <BenefitStatement data={statement} utilization={utilization} />
       {utilization && (
         <div>

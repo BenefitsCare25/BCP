@@ -1,3 +1,26 @@
+/** ⚠️ ORPHANED — this file is imported by nothing and routed by nothing.
+ *
+ * The nav consolidation retired `/operations/employees` (it is now a redirect
+ * to `/operations/roster?tab=employees`, see `router.tsx`) and split this page
+ * across the roster and coverage pages — but the panels below were never
+ * re-mounted on either successor, so each one shipped UNREACHABLE. The file
+ * name still reads like a live route, which is how it went unnoticed and how a
+ * reader (or an assistant) is led to give directions to a page that no longer
+ * exists.
+ *
+ * Kept, deliberately, as the record of what was lost rather than deleted:
+ *
+ *   - `MemberAccountActions`  — RESTORED on `routes/operations/coverage.tsx`.
+ *     It is the only UI for creating a portal account / minting a set-password
+ *     link / setting a member's password, so while it was orphaned no broker
+ *     could give any employee portal access at all.
+ *   - `FlexBenefitsDetail`, `FlexPriceTagDetail` — STILL UNREACHABLE. No other
+ *     file renders them.
+ *   - `CoverageRevertControls`, `CoverageHistory` — these DO have another
+ *     consumer, so they are fine.
+ *
+ * Before adding anything here, mount it on a routed page instead.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Play, RefreshCw, Save, Send, Trash2 } from "lucide-react";
 import {
