@@ -1052,8 +1052,18 @@ export interface BrokerFirmOut {
 
 export interface AdminClient {
   id: string;
+  /** The broker's internal short handle ("CDL") — what every broker-facing
+   *  list and the company switcher print. */
   name: string;
   broker_firm_id: string;
+  /** The registered company name, or null until a broker fills it in. Never
+   *  derived from `name`: a short handle is not a legal name. */
+  legal_name: string | null;
+  /** The URL alias. On this single-host deployment it is the `/portal/{slug}`
+   *  segment every emailed invite points at, so changing it invalidates live
+   *  links — see `PATCH /admin/clients/{id}`, which never moves it on a plain
+   *  rename. */
+  slug: string | null;
 }
 
 export interface AdminUser {
@@ -1110,8 +1120,11 @@ export function useCreateClient() {
     // broker_firm_id is system_admin-only and optional: the backend falls back
     // to the sole firm when the platform has exactly one, and rejects an
     // unqualified create only when there are several to choose between.
-    mutationFn: (body: { name: string; broker_firm_id?: string }) =>
-      api.post<AdminClient>("/admin/clients", body),
+    mutationFn: (body: {
+      name: string;
+      broker_firm_id?: string;
+      legal_name?: string;
+    }) => api.post<AdminClient>("/admin/clients", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] }); // switcher's accessible clients
@@ -1123,8 +1136,18 @@ export function useCreateClient() {
 export function usePatchClient() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) =>
-      api.patch<AdminClient>(`/admin/clients/${id}`, { name }),
+    // A PARTIAL patch: only the keys present are applied server-side, so a
+    // rename cannot blank the legal name and an edit that leaves the alias
+    // alone cannot move it (which would break live invite links).
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string;
+      name?: string;
+      legal_name?: string | null;
+      slug?: string;
+    }) => api.patch<AdminClient>(`/admin/clients/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] });

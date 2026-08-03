@@ -30,6 +30,7 @@ import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { formatError, isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useCompany } from "@/components/portal/useCompany";
 
 const ACCEPT = ".pdf,.png,.jpg,.jpeg";
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -68,6 +69,7 @@ export function PortalClaimDetailPage() {
   const search = useSearch({ strict: false }) as { submitted?: boolean };
   const justSubmitted = search.submitted === true;
   const navigate = useNavigate();
+  const company = useCompany();
   const claim = usePortalClaim(claimId);
   const messages = usePortalClaimMessages(claimId);
   const sendMessage = useSendClaimMessage();
@@ -168,8 +170,8 @@ export function PortalClaimDetailPage() {
       await submitClaim.mutateAsync(data.id);
       await claim.refetch();
       void navigate({
-        to: "/portal/claims/$claimId",
-        params: { claimId: data.id },
+        to: "/portal/$company/claims/$claimId",
+        params: { company, claimId: data.id },
         search: { submitted: true },
         replace: true,
       });
@@ -188,7 +190,7 @@ export function PortalClaimDetailPage() {
     <div className="mx-auto max-w-3xl space-y-3">
       <button
         type="button"
-        onClick={() => void navigate({ to: "/portal/claims" })}
+        onClick={() => void navigate({ to: "/portal/$company/claims", params: { company } })}
         className="leaf-focus -ml-2 inline-flex min-h-11 items-center gap-1.5 px-2 text-row text-label"
       >
         <ArrowLeft className="size-4" aria-hidden /> All claims

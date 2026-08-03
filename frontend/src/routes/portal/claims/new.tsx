@@ -25,9 +25,11 @@ import { Field, FormAlert, leafControl } from "@/components/portal/leaf/Field";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalNewClaimPage() {
   const navigate = useNavigate();
+  const company = useCompany();
   useDocumentTitle("Make a claim");
   const form = useNewClaimForm();
   const { options } = form;
@@ -101,7 +103,7 @@ export function PortalNewClaimPage() {
             leading={
               <button
                 type="button"
-                onClick={() => void navigate({ to: "/portal/claims" })}
+                onClick={() => void navigate({ to: "/portal/$company/claims", params: { company } })}
                 className="leaf-focus -ml-2 inline-flex min-h-11 shrink-0 items-center gap-1.5 px-2 text-row text-label"
               >
                 <ArrowLeft className="size-4" aria-hidden /> All claims

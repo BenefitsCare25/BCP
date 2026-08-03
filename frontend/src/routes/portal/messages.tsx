@@ -19,9 +19,11 @@ import { Strike } from "@/components/portal/leaf/Strike";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalMessagesPage() {
   const navigate = useNavigate();
+  const company = useCompany();
   const messages = usePortalMessagePages();
   useDocumentTitle("Messages");
 
@@ -64,8 +66,8 @@ export function PortalMessagesPage() {
         items={items}
         onOpen={(m) =>
           void navigate({
-            to: "/portal/claims/$claimId",
-            params: { claimId: m.claim_id },
+            to: "/portal/$company/claims/$claimId",
+            params: { company, claimId: m.claim_id },
           })
         }
         className="-mt-1"

@@ -179,21 +179,58 @@ class ClientCreate(BaseModel):
     broker_firm_id: str | None = None  # system_admin only
     # Optional override; derived from the name when omitted.
     slug: str | None = Field(default=None, max_length=63)
+    legal_name: str | None = Field(default=None, max_length=255)
 
 
 class ClientPatch(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    """A PARTIAL update — every field is optional and only what was SENT is
+    applied (`model_fields_set`, as on `PATCH /policy-years/{id}`).
+
+    Not a convenience. `name` used to be required and was the only field the UI
+    sent, so the moment a second nullable field exists here, a plain rename
+    posting `{name}` would read `legal_name=None` as "clear it" and silently
+    drop the registered name. The alias is already protected from exactly this
+    (a rename never moves `slug`); partial semantics extend that to every field
+    instead of re-deciding it per field."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
     slug: str | None = Field(default=None, max_length=63)
+    legal_name: str | None = Field(default=None, max_length=255)
 
 
 class ClientOut(BaseModel):
     id: str
     name: str
     broker_firm_id: str
-    # The tenant subdomain label. Surfaced so the broker UI can build absolute
-    # `{slug}.hr.<base>` / `{slug}.portal.<base>` links (set-password links are
-    # sent to people who are NOT on the broker host).
+    # The tenant label. Surfaced so the broker UI can build absolute links to
+    # the member/HR surfaces — `{slug}.portal.<base>` in subdomain mode, or the
+    # `/portal/{slug}` path on a single-host deployment. Set-password and invite
+    # links are sent to people who are NOT on the broker host.
     slug: str | None = None
+    # The registered company name; None until a broker fills it in. Never
+    # derived from `name` — a short handle is not a legal name.
+    legal_name: str | None = None
+
+
+def _client_out(client: Client) -> ClientOut:
+    """One builder for all three client endpoints — three hand-rolled copies is
+    how a newly added field ends up missing from `list` but present on `patch`,
+    which reads to the UI as the value not saving."""
+    return ClientOut(
+        id=client.id,
+        name=client.name,
+        broker_firm_id=client.broker_firm_id,
+        slug=client.slug,
+        legal_name=client.legal_name,
+    )
+
+
+def _optional_text(raw: str | None) -> str | None:
+    """Trim, and treat a blank as an explicit CLEAR rather than as the string
+    `""` — an empty legal name must read as "not filled in" everywhere, not as
+    a name that happens to render as nothing."""
+    text = (raw or "").strip()
+    return text or None
 
 
 def _load_firm_client(db: Session, user: CurrentUser, client_id: str) -> Client:
@@ -214,7 +251,11 @@ def create_client(
     firm_id = _resolve_target_firm(user, body.broker_firm_id, db)
     if db.get(BrokerFirm, firm_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Broker firm not found")
-    client = Client(name=body.name.strip(), broker_firm_id=firm_id)
+    client = Client(
+        name=body.name.strip(),
+        legal_name=_optional_text(body.legal_name),
+        broker_firm_id=firm_id,
+    )
     db.add(client)
     db.flush()
     # Always give the tenant a subdomain label: `resolve_tenant_context` looks
@@ -226,11 +267,9 @@ def create_client(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     write_audit(db, user, action="create", entity_type="client", entity_id=client.id,
                 after={"name": client.name, "broker_firm_id": firm_id,
-                       "slug": client.slug})
+                       "slug": client.slug, "legal_name": client.legal_name})
     db.commit()
-    return ClientOut(
-        id=client.id, name=client.name, broker_firm_id=firm_id, slug=client.slug
-    )
+    return _client_out(client)
 
 
 @router.get("/clients", response_model=list[ClientOut])
@@ -243,12 +282,7 @@ def list_clients(
     clients = db.execute(
         select(Client).where(Client.broker_firm_id == firm_id).order_by(Client.name)
     ).scalars().all()
-    return [
-        ClientOut(
-            id=c.id, name=c.name, broker_firm_id=c.broker_firm_id, slug=c.slug
-        )
-        for c in clients
-    ]
+    return [_client_out(c) for c in clients]
 
 
 @router.patch("/clients/{client_id}", response_model=ClientOut)
@@ -259,23 +293,34 @@ def patch_client(
     db: Session = Depends(get_db),
 ) -> ClientOut:
     client = _load_firm_client(db, user, client_id)
-    before = {"name": client.name, "slug": client.slug}
-    client.name = body.name.strip()
-    # Renaming does NOT move the subdomain — live links and bookmarks would
-    # break. Only an explicit slug changes it; a client that somehow has none
-    # (pre-slug row) gets one derived now.
+    sent = body.model_fields_set
+    before = {
+        "name": client.name,
+        "slug": client.slug,
+        "legal_name": client.legal_name,
+    }
+    if "name" in sent and body.name:
+        client.name = body.name.strip()
+    if "legal_name" in sent:
+        client.legal_name = _optional_text(body.legal_name)
+    # Renaming does NOT move the alias — live links and bookmarks would break,
+    # and on a single-host deployment the alias is the `/portal/{slug}` path
+    # that every emailed invite points at. Only an explicit slug changes it; a
+    # client that somehow has none (pre-slug row) gets one derived now.
     if body.slug or not client.slug:
         try:
             assign_slug(db, client, body.slug)
         except SlugError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    after = {
+        "name": client.name,
+        "slug": client.slug,
+        "legal_name": client.legal_name,
+    }
     write_audit(db, user, action="update", entity_type="client", entity_id=client.id,
-                before=before, after={"name": client.name, "slug": client.slug})
+                before=before, after=after)
     db.commit()
-    return ClientOut(
-        id=client.id, name=client.name, broker_firm_id=client.broker_firm_id,
-        slug=client.slug,
-    )
+    return _client_out(client)
 
 
 @router.delete("/clients/{client_id}", status_code=204)

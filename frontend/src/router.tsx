@@ -17,6 +17,7 @@ import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
 import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
+import { currentPortalTenantSlug } from "@/lib/tenant";
 import { HrShell } from "@/components/hr/HrShell";
 import { hasValidHrSession } from "@/stores/hrSession";
 import { refreshHrSession } from "@/api/hrClient";
@@ -180,15 +181,31 @@ const signInRoute = createRoute({
   component: SignInPage,
 });
 
-// ── Employee portal — a sibling surface with its OWN auth (member OTP token,
-// not MSAL). The broker shell's guard never runs for /portal/* routes.
+// ── Employee portal — a sibling surface with its OWN auth (member token, not
+// MSAL). The broker shell's guard never runs for /portal/* routes.
+//
+// **Every portal route carries the company as `/portal/$company/…`.** The
+// alias is `clients.slug`, derived from the company's name and admin-editable,
+// so nothing is hardcoded and a new company routes the moment it exists. See
+// `lib/tenant.ts` for why the path beat the `?company=` param it replaced.
+//
+// The `portalLegacyRedirect` routes below keep the OLD pathless URLs alive.
+// That is not politeness: `portal_sign_in_url()` has been emailing
+// `/portal/sign-in?company=cdl`, and an unopened invite is a live one-time
+// password for `INVITE_TTL_DAYS`. A static segment outranks a dynamic one in
+// TanStack's matcher, so `/portal/coverage` resolves here and never as a
+// company called "coverage" — and `RESERVED_SLUGS` stops such a company
+// existing in the first place.
 const portalSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/portal/sign-in",
-  beforeLoad: () => {
+  path: "/portal/$company/sign-in",
+  beforeLoad: ({ params }) => {
     // Already signed in (and not following a fresh magic link) → straight in.
     if (hasValidPortalSession() && !window.location.search.includes("code=")) {
-      throw redirect({ to: "/portal/coverage" });
+      throw redirect({
+        to: "/portal/$company/coverage",
+        params: { company: params.company },
+      });
     }
   },
   component: PortalSignInPage,
@@ -196,9 +213,73 @@ const portalSignInRoute = createRoute({
 
 const portalSetPasswordRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/portal/set-password",
+  path: "/portal/$company/set-password",
   component: PortalSetPasswordPage,
 });
+
+/** An old pathless `/portal/...` URL, forwarded to its company-scoped home.
+ *
+ * The company comes from `currentPortalTenantSlug()`, which by this point has
+ * already absorbed any `?company=` on the entry URL (`captureTenantSlugFromUrl`
+ * runs at boot, before the router) and otherwise falls back to the remembered
+ * slug. With neither, there is genuinely nothing to resolve — the member is
+ * sent to the pathless sign-in, which asks which company they belong to. Search
+ * params are carried through: `/portal/set-password?token=…` is one of these,
+ * and dropping the token would strand a member on a dead form. */
+function portalLegacyRedirect(path: string, subpath: string) {
+  return createRoute({
+    getParentRoute: () => rootRoute,
+    path,
+    beforeLoad: ({ search }) => {
+      const company = currentPortalTenantSlug();
+      if (!company) return;
+      throw redirect({
+        // Built by concatenation, so the union of literal route paths can't be
+        // inferred — the table below is the exhaustive list and every entry has
+        // a matching route, which `portalLegacyRoutes` is right beside so the
+        // two cannot drift apart unnoticed.
+        to: `/portal/$company${subpath}` as "/portal/$company",
+        params: { company },
+        search,
+      });
+    },
+    // Reached only with no resolvable company. Sign-in asks for one; every
+    // other legacy path needs a session anyway, so it is the right landing.
+    component: PortalSignInPage,
+  });
+}
+
+/** Sign-in with NO company known — declared explicitly rather than through the
+ * helper because it is the one legacy path that is also a real destination, and
+ * everything that bounces an unauthenticated member needs to name it in a typed
+ * `to:` (the helper builds its `path` from a variable, so those routes are not
+ * in the router's literal path union). It asks which company, then moves to
+ * `/portal/{slug}/sign-in`. */
+const portalRootSignInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/portal/sign-in",
+  beforeLoad: ({ search }) => {
+    const company = currentPortalTenantSlug();
+    if (!company) return;
+    throw redirect({ to: "/portal/$company/sign-in", params: { company }, search });
+  },
+  component: PortalSignInPage,
+});
+
+const portalLegacyRoutes = [
+  ["/portal/set-password", "/set-password"],
+  ["/portal/coverage", "/coverage"],
+  ["/portal/benefits", "/benefits"],
+  ["/portal/utilization", "/utilization"],
+  ["/portal/dependants", "/dependants"],
+  ["/portal/enrollment", "/enrollment"],
+  ["/portal/claims", "/claims"],
+  ["/portal/clinics", "/clinics"],
+  ["/portal/card", "/card"],
+  ["/portal/messages", "/messages"],
+  ["/portal/security", "/security"],
+  ["/portal", ""],
+].map(([path, subpath]) => portalLegacyRedirect(path, subpath));
 
 // ── HR admin — a sibling surface with its OWN credential auth (HR access
 // token + rotating refresh cookie, not MSAL). Tenant is pinned by subdomain.
@@ -263,9 +344,14 @@ const hrSecurityRoute = createRoute({
 const portalLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "portal-shell",
-  beforeLoad: ({ location }) => {
-    if (location.pathname === "/portal/sign-in") return;
+  beforeLoad: ({ params }) => {
     if (!hasValidPortalSession()) {
+      // Back to THIS company's sign-in, not the pathless one — an expired
+      // session must not cost the member the company their link named.
+      const company = (params as { company?: string }).company;
+      if (company) {
+        throw redirect({ to: "/portal/$company/sign-in", params: { company } });
+      }
       throw redirect({ to: "/portal/sign-in" });
     }
   },
@@ -277,65 +363,77 @@ const portalLayoutRoute = createRoute({
 // are reached from the tiles that summarise them.
 const portalIndexRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal",
+  path: "/portal/$company",
   component: PortalHomePage,
 });
 
 const portalCoverageRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/coverage",
+  path: "/portal/$company/coverage",
   component: PortalCoveragePage,
 });
 
 // Legacy portal paths — benefits/usage/dependants merged into "My coverage".
 const portalBenefitsRedirect = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/benefits",
-  beforeLoad: () => {
-    throw redirect({ to: "/portal/coverage", search: { tab: "benefits" } });
+  path: "/portal/$company/benefits",
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/portal/$company/coverage",
+      params: { company: params.company },
+      search: { tab: "benefits" },
+    });
   },
   component: () => null,
 });
 
 const portalUtilizationRedirect = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/utilization",
-  beforeLoad: () => {
-    throw redirect({ to: "/portal/coverage", search: { tab: "usage" } });
+  path: "/portal/$company/utilization",
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/portal/$company/coverage",
+      params: { company: params.company },
+      search: { tab: "usage" },
+    });
   },
   component: () => null,
 });
 
 const portalDependantsRedirect = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/dependants",
-  beforeLoad: () => {
-    throw redirect({ to: "/portal/coverage", search: { tab: "dependants" } });
+  path: "/portal/$company/dependants",
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/portal/$company/coverage",
+      params: { company: params.company },
+      search: { tab: "dependants" },
+    });
   },
   component: () => null,
 });
 
 const portalEnrollmentRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/enrollment",
+  path: "/portal/$company/enrollment",
   component: PortalEnrollmentPage,
 });
 
 const portalClaimsRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/claims",
+  path: "/portal/$company/claims",
   component: PortalClaimsPage,
 });
 
 const portalClinicsRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/clinics",
+  path: "/portal/$company/clinics",
   component: PortalClinicsPage,
 });
 
 const portalCardRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/card",
+  path: "/portal/$company/card",
   component: PortalCardPage,
 });
 
@@ -344,25 +442,25 @@ const portalCardRoute = createRoute({
 // the one-row desktop bar, and the phone dock is settled at five.
 const portalMessagesRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/messages",
+  path: "/portal/$company/messages",
   component: PortalMessagesPage,
 });
 
 const portalSecurityRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/security",
+  path: "/portal/$company/security",
   component: PortalSecurityPage,
 });
 
 const portalNewClaimRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/claims/new",
+  path: "/portal/$company/claims/new",
   component: PortalNewClaimPage,
 });
 
 const portalClaimDetailRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
-  path: "/portal/claims/$claimId",
+  path: "/portal/$company/claims/$claimId",
   component: PortalClaimDetailPage,
 });
 
@@ -664,6 +762,8 @@ const routeTree = rootRoute.addChildren([
   hrLayoutRoute.addChildren([hrIndexRoute, hrDashboardRoute, hrSecurityRoute]),
   portalSignInRoute,
   portalSetPasswordRoute,
+  portalRootSignInRoute,
+  ...portalLegacyRoutes,
   portalLayoutRoute.addChildren([
     portalIndexRoute,
     portalCoverageRoute,

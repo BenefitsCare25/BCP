@@ -36,6 +36,16 @@ export interface OtpVerifyResult {
 
 export interface PortalMe {
   member: PortalMember;
+  /** The member's employer, resolved server-side from the TOKEN's client — not
+   *  from the URL, which is what makes it usable to check the URL against. */
+  company: {
+    /** The URL alias. `/portal/{slug}/…` is built from this. */
+    slug: string | null;
+    /** The broker's internal short handle ("CDL") — a fallback for display. */
+    name: string;
+    /** The registered name, which is what a member actually recognises. */
+    legal_name: string | null;
+  };
   employee: { id: string; staff_id: string; employee_name: string | null } | null;
   policy_year: {
     id: string;

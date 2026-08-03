@@ -10,6 +10,7 @@ import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useCompany } from "@/components/portal/useCompany";
 
 const MIN_LENGTH = 12;
 
@@ -26,6 +27,7 @@ function strength(pw: string): { label: string; ok: boolean } {
 
 export function PortalSetPasswordPage() {
   const navigate = useNavigate();
+  const company = useCompany();
   const setPw = useMemberSetPassword();
   const mfa = useMemberMfa();
 
@@ -44,7 +46,7 @@ export function PortalSetPasswordPage() {
   const match = password.length > 0 && password === confirm;
   const canSubmit = st.ok && match && !!token;
 
-  const finish = () => void navigate({ to: "/portal/coverage" });
+  const finish = () => void navigate({ to: "/portal/$company/coverage", params: { company } });
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

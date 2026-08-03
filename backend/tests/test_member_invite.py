@@ -134,8 +134,17 @@ def test_sign_in_url_always_carries_the_tenant(_settings_env):
     _settings_env.setenv("INSPRO_TENANT_MODE", "header")
     _settings_env.setenv("INSPRO_FRONTEND_ORIGIN", "https://inspro-portal.example")
     clear_settings_cache()
+    # Single-host carries the company in the PATH, so the address the member is
+    # emailed is the one they keep using. The old `?company=` form still
+    # resolves client-side (`captureTenantSlugFromUrl` promotes it into the
+    # path) — unopened invites are live credentials for INVITE_TTL_DAYS.
     assert portal_sign_in_url("cdl") == (
-        "https://inspro-portal.example/portal/sign-in?company=cdl"
+        "https://inspro-portal.example/portal/cdl/sign-in"
+    )
+    # No slug is still a real state (a client with no alias): the link stays
+    # valid and the portal asks which company, rather than 404ing.
+    assert portal_sign_in_url(None) == (
+        "https://inspro-portal.example/portal/sign-in"
     )
 
     _settings_env.setenv("INSPRO_TENANT_MODE", "subdomain")

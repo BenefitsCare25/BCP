@@ -23,7 +23,7 @@
  *
  * Mirrored by the broker preview in `components/operations/PortalFrame` —
  * change both together. */
-import { useState, type ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import {
   Link,
   Outlet,
@@ -49,6 +49,8 @@ import { NotificationBell } from "@/components/shell/NotificationBell";
 import { BenefitYearControl } from "./BenefitYearControl";
 import { glassSurface } from "./leaf/Mount";
 import { HeadRailProvider, useHeadRailWidth } from "./leaf/HeadRail";
+import { portalPath } from "@/lib/tenant";
+import { useCompany } from "@/components/portal/useCompany";
 
 /** Six destinations on desktop, five in the phone dock — "Home" is the dock's
  * first slot and Coverage is reached from the tiles that summarise it, so the
@@ -60,38 +62,42 @@ import { HeadRailProvider, useHeadRailWidth } from "./leaf/HeadRail";
 const NAV: {
   label: string;
   short: string;
-  to: string;
+  /** Company-RELATIVE, so one table serves the href and the active test. Held
+   *  as a literal `to` it carried an unsubstituted `$company` into both: the
+   *  link resolved to a path no route matches, and `isActive` compared it
+   *  against a real pathname that can never contain it, so no tab ever lit. */
+  sub: string;
   icon: ComponentType<{ className?: string }>;
   /** In the phone dock. Coverage is not — it is one tap from the home tiles. */
   dock: boolean;
 }[] = [
-  { label: "Home", short: "Home", to: "/portal", icon: LayoutGrid, dock: true },
+  { label: "Home", short: "Home", sub: "", icon: LayoutGrid, dock: true },
   {
     label: "Coverage",
     short: "Cover",
-    to: "/portal/coverage",
+    sub: "/coverage",
     icon: Layers,
     dock: false,
   },
   {
     label: "Claims",
     short: "Claims",
-    to: "/portal/claims",
+    sub: "/claims",
     icon: FileText,
     dock: true,
   },
-  { label: "Card", short: "Card", to: "/portal/card", icon: CreditCard, dock: true },
+  { label: "Card", short: "Card", sub: "/card", icon: CreditCard, dock: true },
   {
     label: "Clinics",
     short: "Clinics",
-    to: "/portal/clinics",
+    sub: "/clinics",
     icon: MapPin,
     dock: true,
   },
   {
     label: "Enrolment",
     short: "Enrol",
-    to: "/portal/enrollment",
+    sub: "/enrollment",
     icon: CalendarCheck,
     dock: true,
   },
@@ -107,6 +113,7 @@ export function PortalShell() {
   const member = usePortalSession((s) => s.member);
   const clearSession = usePortalSession((s) => s.clearSession);
   const { data: me } = usePortalMe();
+  const company = useCompany();
   const { data: security } = useMemberSecurityStatus();
 
   // The heading row's centre slot. It only exists wide enough to seat a strip
@@ -119,32 +126,58 @@ export function PortalShell() {
   const mustEnrollMfa =
     !!security?.mfa_available &&
     security.mfa_status !== "confirmed" &&
-    location.pathname !== "/portal/security";
+    location.pathname !== portalPath(company, "/security");
 
   const signOut = () => {
     clearSession();
-    void navigate({ to: "/portal/sign-in" });
+    void navigate({ to: "/portal/$company/sign-in", params: { company } });
   };
 
-  // "/portal" would otherwise prefix-match every route and mark Home active
-  // everywhere.
-  const isActive = (to: string) =>
-    to === "/portal"
-      ? location.pathname === "/portal" || location.pathname === "/portal/"
-      : location.pathname.startsWith(to);
+  /** Resolve a NAV subpath against the company actually in the URL. */
+  const href = (sub: string) => portalPath(company, sub);
+
+  // **The path is a label, not the authority.** Tenancy resolves server-side
+  // from the member token's own `client_id`, so a hand-edited or stale alias in
+  // the URL loads the member's real data under a company name that isn't
+  // theirs — the page is right and the address bar lies, which is worse than an
+  // error. `/me` is the first thing that can tell us, so the correction happens
+  // here rather than in a route guard (which would have to block every
+  // navigation on a fetch). `replace` so Back doesn't return to the wrong URL.
+  const trueCompany = me?.company?.slug ?? null;
+  useEffect(() => {
+    if (!trueCompany || !company || trueCompany === company) return;
+    void navigate({
+      to: location.pathname.replace(
+        portalPath(company),
+        portalPath(trueCompany),
+      ),
+      replace: true,
+    });
+  }, [trueCompany, company, location.pathname, navigate]);
+
+  // Home's path is a PREFIX of every other portal route, so a plain
+  // `startsWith` marks it active everywhere. It alone is matched exactly.
+  const isActive = (sub: string) => {
+    const target = href(sub);
+    return sub === ""
+      ? location.pathname === target || location.pathname === `${target}/`
+      : location.pathname.startsWith(target);
+  };
 
   const who = member?.display_name || member?.email || "";
   const year = me?.policy_year;
+  const companyLabel = me?.company?.legal_name || me?.company?.name || "";
 
   const accountControls = (
     <>
       <NotificationBell />
       <Link
-        to="/portal/security"
+        to="/portal/$company/security"
+        params={{ company }}
         aria-label="Account security"
         className={cn(
           ICON_BUTTON,
-          isActive("/portal/security") && "text-action-ink",
+          isActive("/security") && "text-action-ink",
         )}
       >
         <ShieldCheck className="size-5" aria-hidden />
@@ -197,11 +230,11 @@ export function PortalShell() {
 
             <nav aria-label="Portal sections" className="flex items-center gap-0.5">
               {NAV.map((item) => {
-                const active = isActive(item.to);
+                const active = isActive(item.sub);
                 return (
                   <Link
-                    key={item.to}
-                    to={item.to}
+                    key={item.sub}
+                    to={href(item.sub)}
                     aria-current={active ? "page" : undefined}
                     className={cn(
                       "leaf-focus inline-flex h-10 items-center gap-2 rounded-pill px-4 text-row",
@@ -246,9 +279,26 @@ export function PortalShell() {
                   the row exactly — not merely balanced by eye. The name
                   truncates into its half rather than pushing the rail off
                   centre. */}
-              <h1 className="min-w-0 flex-1 basis-0 truncate text-2xl font-bold tracking-title text-record">
-                {who}
-              </h1>
+              {/* The member's name, with their EMPLOYER set quietly beneath it.
+                  Nothing on this surface used to name the company at all: on a
+                  single-host deployment the address bar says `inspro-portal`,
+                  so a member had no confirmation anywhere that they were
+                  looking at their own employer's benefits rather than a
+                  generic tool. It is a caption, not a heading — the page is
+                  about the member, and the company is the context they are
+                  reading them in.
+
+                  `legal_name` first because that is the name a member
+                  recognises; `name` is the broker's internal handle ("CDL")
+                  and is the fallback only. */}
+              <div className="min-w-0 flex-1 basis-0">
+                <h1 className="truncate text-2xl font-bold tracking-title text-record">
+                  {who}
+                </h1>
+                {companyLabel && (
+                  <p className="truncate text-row text-label">{companyLabel}</p>
+                )}
+              </div>
               {wideEnoughForRail && <div ref={setRail} className="shrink-0" />}
               <div className="flex flex-1 basis-0 justify-end">
                 {year && (
@@ -259,7 +309,8 @@ export function PortalShell() {
 
             {mustEnrollMfa && (
               <Link
-                to="/portal/security"
+                to="/portal/$company/security"
+                params={{ company }}
                 className={cn(
                   glassSurface,
                   "mb-4 flex items-start gap-3 rounded-tile p-4",
@@ -301,12 +352,12 @@ export function PortalShell() {
           )}
         >
           {NAV.filter((i) => i.dock).map((item) => {
-            const active = isActive(item.to);
+            const active = isActive(item.sub);
             const Icon = item.icon;
             return (
               <Link
-                key={item.to}
-                to={item.to}
+                key={item.sub}
+                to={href(item.sub)}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "leaf-focus relative flex min-h-13 flex-1 flex-col items-center justify-center gap-1 rounded-pill px-1",
@@ -323,7 +374,7 @@ export function PortalShell() {
                     member lands on. */}
                 <span className="relative">
                   <Icon className="size-5" aria-hidden />
-                  {item.to === "/portal/enrollment" && me?.enrollment_open && (
+                  {item.sub === "/enrollment" && me?.enrollment_open && (
                     <span
                       className="absolute -right-1.5 -top-0.5 size-2 rounded-pill bg-strike-pending"
                       aria-hidden
@@ -333,7 +384,7 @@ export function PortalShell() {
                 <span className="text-2xs font-semibold leading-none">
                   {item.short}
                 </span>
-                {item.to === "/portal/enrollment" && me?.enrollment_open && (
+                {item.sub === "/enrollment" && me?.enrollment_open && (
                   <span className="sr-only">(enrollment open)</span>
                 )}
               </Link>

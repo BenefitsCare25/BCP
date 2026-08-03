@@ -22,13 +22,14 @@ from app.core.portal_auth import (
 )
 from app.core.storage import get_storage
 from app.db.session import get_db
-from app.models import Dependant, PanelCard, PolicyYearCard
+from app.models import Client, Dependant, PanelCard, PolicyYearCard
 from app.models.panel_card import CARD_FACES
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import UtilizationOut
 from app.schemas.panel import ClinicSearchOut
 from app.schemas.panel_card import MemberCardsOut
 from app.schemas.portal import (
+    PortalCompanyOut,
     PortalEmployeeOut,
     PortalMe,
     PortalMemberOut,
@@ -54,13 +55,21 @@ def portal_me(
 ) -> PortalMe:
     """Member profile + their coverage context. Unlike the data endpoints,
     this never 404s on a missing roster row — the shell needs it to render."""
+    client = db.get(Client, member.client_id)
     out = PortalMe(
         member=PortalMemberOut(
             id=member.member_account_id,
             email=member.email,
             staff_id=member.staff_id,
             display_name=member.display_name,
-        )
+        ),
+        # Resolved from the TOKEN's client, never from the request URL — that is
+        # what makes it usable to check the URL against.
+        company=PortalCompanyOut(
+            slug=client.slug if client else None,
+            name=client.name if client else "",
+            legal_name=client.legal_name if client else None,
+        ),
     )
     year = active_policy_year(db, member.client_id)
     if year is None:

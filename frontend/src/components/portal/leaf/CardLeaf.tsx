@@ -20,6 +20,7 @@ import { CardCanvas, type ArtworkHook } from "@/components/portal/MemberCard";
 import { Mount, MountRow, MountRule } from "./Mount";
 import { goLinkClass, GoArrow } from "./Action";
 import { glossBeside } from "./glossary";
+import { useCompany } from "@/components/portal/useCompany";
 
 /** The insurer's own setting names, said the way a member would ask for them.
  * "Restructured SP" is the phrase on a placement slip; nobody standing at a
@@ -192,12 +193,14 @@ function MemberCardLeaf({
  * `action` is opt-out because the broker preview renders this too, where the
  * member's clinic route is not navigable. */
 function NoCards({ message, action }: { message: string; action: boolean }) {
+  const company = useCompany();
   return (
     <Mount label="No card issued yet">
       <p className="text-row text-label">{message}</p>
       {action && (
         <Link
-          to="/portal/clinics"
+          to="/portal/$company/clinics"
+          params={{ company }}
           className={goLinkClass({ className: "mt-2" })}
         >
           Find a panel clinic

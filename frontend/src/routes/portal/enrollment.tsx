@@ -21,10 +21,12 @@ import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalEnrollmentPage() {
   useDocumentTitle("My enrollment");
   const navigate = useNavigate();
+  const company = useCompany();
   const search = useSearch({ strict: false }) as { p?: string };
   const enrollment = usePortalEnrollment();
   const dependants = usePortalDependants();
@@ -106,7 +108,12 @@ export function PortalEnrollmentPage() {
         // instead of leaving the page.
         slideKey={search.p ?? null}
         onSlideKeyChange={(p) =>
-          navigate({ to: "/portal/enrollment", search: { p }, replace: true })
+          navigate({
+            to: "/portal/$company/enrollment",
+            params: { company },
+            search: { p },
+            replace: true,
+          })
         }
         onSaveElections={(elections) => saveElections.mutateAsync(elections)}
         onSaveLeave={(input) => setLeave.mutateAsync(input)}

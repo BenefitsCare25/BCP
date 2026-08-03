@@ -41,6 +41,16 @@ SURFACE_PORTAL = "portal"
 
 # Labels that must never be a tenant slug — they collide with platform hosts or
 # are conventionally reserved. Kept lowercase; comparison is case-insensitive.
+#
+# The second block is the PORTAL'S OWN PAGE NAMES. On the single-host deployment
+# the alias is a path segment (`/portal/{slug}/coverage`), so a company slugged
+# "claims" would be indistinguishable from the legacy `/portal/claims` route
+# that still redirects for links sitting in members' mailboxes. Mirrored in
+# `frontend/src/lib/tenant.ts::PORTAL_RESERVED_SEGMENTS` — that list stops an
+# old URL being MISREAD, this one stops the collision being created at all.
+#
+# Note `validate_slug` runs on WRITE only, so this cannot retro-reject a slug
+# some existing row already holds; it prevents new ones.
 RESERVED_SLUGS: frozenset[str] = frozenset(
     {
         "broker", "hr", "portal", "www", "api", "admin", "app", "auth",
@@ -48,6 +58,9 @@ RESERVED_SLUGS: frozenset[str] = frozenset(
         "smtp", "ftp", "ns", "ns1", "ns2", "mx", "test", "staging", "stg",
         "dev", "demo", "internal", "system", "root", "status", "health",
         "inspro", "support", "help", "docs",
+        # Portal page names — see above.
+        "set-password", "coverage", "benefits", "utilization", "dependants",
+        "enrollment", "claims", "clinics", "card", "messages", "security",
     }
 )
 

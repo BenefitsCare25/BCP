@@ -47,6 +47,7 @@ import { Money, currencySymbol, moneyText } from "./Figure";
 import { ClaimStrike, type ClaimBucket, claimBucket } from "./Strike";
 import { dateKey, formatDay, monthLabel } from "./date";
 import { pickChipClass } from "./pickChip";
+import { useCompany } from "@/components/portal/useCompany";
 
 /** What the claim is FOR, in the member's words. */
 export function claimTitle(claim: PortalClaim): string {
@@ -228,13 +229,14 @@ function ClaimRow({
   // preview) carry it themselves and take no hover: the response is the
   // affordance, and a row that responds and then does nothing breaks the
   // promise the surface made.
+  const company = useCompany();
   const pad = "block rounded-control px-3 py-3 sm:px-3.5";
   if (!interactive) return <li className={pad}>{body}</li>;
   return (
     <li>
       <Link
-        to="/portal/claims/$claimId"
-        params={{ claimId: claim.id }}
+        to="/portal/$company/claims/$claimId"
+        params={{ company, claimId: claim.id }}
         className={cn(
           pad,
           "leaf-focus transition-colors duration-200 ease-leaf hover:bg-shade/70",

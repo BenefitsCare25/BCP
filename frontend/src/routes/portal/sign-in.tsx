@@ -15,9 +15,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalSignInPage() {
   const navigate = useNavigate();
+  const routeCompany = useCompany();
   const login = useMemberLogin();
   const mfa = useMemberMfa();
 
@@ -30,7 +32,15 @@ export function PortalSignInPage() {
   const [company, setCompany] = useState("");
   const companyRequired = useCompanyRequired();
 
-  const finish = () => void navigate({ to: "/portal/coverage" });
+  // The company in the PATH when there is one; otherwise the code the member
+  // just typed and `commitCompany` stored. Both are needed: the pathless
+  // sign-in is still reachable from an old emailed link, and landing back on it
+  // after a successful sign-in would be a loop.
+  const finish = () =>
+    void navigate({
+      to: "/portal/$company/coverage",
+      params: { company: routeCompany || company.trim().toLowerCase() },
+    });
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();

@@ -60,6 +60,7 @@ import { MessageRows } from "./leaf/MessageMount";
 import { ClaimStrike, Strike } from "./leaf/Strike";
 import { LeafSkeleton } from "./leaf/LeafSkeleton";
 import { formatDay } from "./leaf/date";
+import { useCompany } from "./useCompany";
 
 /** How many messages the home tile shows before deferring to the inbox. Three
  * is what fits the wide tile beside the claims tile without either column
@@ -108,13 +109,13 @@ export type HomeDest =
   | "enrollment";
 
 const ROUTE: Record<HomeDest, { to: string; search?: { tab: string } }> = {
-  usage: { to: "/portal/coverage", search: { tab: "usage" } },
-  benefits: { to: "/portal/coverage", search: { tab: "benefits" } },
-  dependants: { to: "/portal/coverage", search: { tab: "dependants" } },
-  claims: { to: "/portal/claims" },
-  messages: { to: "/portal/messages" },
-  clinics: { to: "/portal/clinics" },
-  enrollment: { to: "/portal/enrollment" },
+  usage: { to: "/portal/$company/coverage", search: { tab: "usage" } },
+  benefits: { to: "/portal/$company/coverage", search: { tab: "benefits" } },
+  dependants: { to: "/portal/$company/coverage", search: { tab: "dependants" } },
+  claims: { to: "/portal/$company/claims" },
+  messages: { to: "/portal/$company/messages" },
+  clinics: { to: "/portal/$company/clinics" },
+  enrollment: { to: "/portal/$company/enrollment" },
 };
 
 /** The tile's onward link — stretched across the whole tile by default.
@@ -297,6 +298,7 @@ export function HomeMosaicView({
   const cur = currencySymbol(utilization.data?.flex?.currency);
   const hero = headline ? heroFigure(headline, cur) : null;
 
+  const company = useCompany();
   const claimItems = claims.data?.items ?? [];
   const latest = claimItems[0];
   const earlier = claimItems.slice(1, 3);
@@ -310,8 +312,8 @@ export function HomeMosaicView({
     ? undefined
     : (m: { claim_id: string }) =>
         void navigate({
-          to: "/portal/claims/$claimId",
-          params: { claimId: m.claim_id },
+          to: "/portal/$company/claims/$claimId",
+          params: { company, claimId: m.claim_id },
         });
 
   const coverage = statement.data?.coverage ?? [];

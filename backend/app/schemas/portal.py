@@ -59,8 +59,28 @@ class PortalEmployeeOut(BaseModel):
     employee_name: str | None = None
 
 
+class PortalCompanyOut(BaseModel):
+    """The member's employer, as the member should see it.
+
+    Two things need this and neither could get it before: the shell has no way
+    to name the company a member is signed in to, and on a single-host
+    deployment the URL's `/portal/{slug}` segment is unverified — a member
+    holding a valid token could sit on another company's path and nothing would
+    notice, because tenancy is resolved from the TOKEN, not the URL. Serving the
+    slug lets the client correct the address to the one it actually resolved.
+    """
+
+    slug: str | None = None
+    # The broker's internal short handle ("CDL"). Present as a FALLBACK only —
+    # `legal_name` is what a member recognises.
+    name: str
+    legal_name: str | None = None
+
+
 class PortalMe(BaseModel):
     member: PortalMemberOut
+    # Never None: a member token always resolves to a client row.
+    company: PortalCompanyOut
     # None when the client has no active policy year / the member has no
     # roster row in it (statement and claims endpoints 404 in that state).
     employee: PortalEmployeeOut | None = None

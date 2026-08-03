@@ -24,7 +24,6 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlencode
 
 from app.core import passwords as PW
 from app.core.mailer import get_mailer
@@ -143,12 +142,19 @@ def portal_sign_in_url(slug: str | None) -> str:
     cannot resolve a company from the URL alone, and a member arriving without
     it is told their details weren't recognised — indistinguishable from a wrong
     password, on the one screen where that misdiagnosis is most expensive.
+
+    Single-host puts it in the PATH (`/portal/cdl/sign-in`) rather than the old
+    `?company=cdl`, so the address a member is emailed is the same one they keep
+    using — a query param that the app strips on arrival left them holding a
+    link that worked once and then named no company. The old form still resolves
+    (`captureTenantSlugFromUrl` promotes it into the path), which it must:
+    unopened invites are live credentials for `INVITE_TTL_DAYS`.
     """
     settings = get_settings()
     if settings.tenant_mode == "subdomain" and slug:
         return f"https://{slug}.{SURFACE_PORTAL}.{settings.base_domain}/portal/sign-in"
-    base = f"{settings.frontend_origin.rstrip('/')}/portal/sign-in"
-    return f"{base}?{urlencode({'company': slug})}" if slug else base
+    origin = settings.frontend_origin.rstrip("/")
+    return f"{origin}/portal/{slug}/sign-in" if slug else f"{origin}/portal/sign-in"
 
 
 def mail_deliverable() -> bool:

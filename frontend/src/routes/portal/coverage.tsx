@@ -9,6 +9,7 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { PortalBenefitsPage } from "./benefits";
 import { PortalUtilizationPage } from "./utilization";
 import { PortalDependantsPage } from "./dependants";
+import { useCompany } from "@/components/portal/useCompany";
 
 /** Tab labels are the member's question, not the system's noun. "Usage" named
  * a database concept; "What's left" is what they came to find out. */
@@ -26,6 +27,7 @@ type CoverageTab = (typeof TABS)[number]["key"];
  * mirrors this structure — keep the two in sync. */
 export function PortalCoveragePage() {
   const navigate = useNavigate();
+  const company = useCompany();
   const search = useSearch({ strict: false }) as { tab?: string; p?: string };
   const tab: CoverageTab =
     search.tab === "usage" || search.tab === "dependants"
@@ -43,7 +45,11 @@ export function PortalCoveragePage() {
         // whole search object, so dropping it is the default and the right
         // behaviour — a stale product key on the family tab would come back the
         // next time someone returned to this one.
-        navigate({ to: "/portal/coverage", search: { tab: value } })
+        navigate({
+          to: "/portal/$company/coverage",
+          params: { company },
+          search: { tab: value },
+        })
       }
     >
       {/* At `lg` and up the strip moves into the centre of the shell's heading
@@ -73,7 +79,8 @@ export function PortalCoveragePage() {
           productKey={search.p ?? null}
           onProductKeyChange={(p) =>
             navigate({
-              to: "/portal/coverage",
+              to: "/portal/$company/coverage",
+              params: { company },
               search: { tab: "benefits", p },
               replace: true,
             })

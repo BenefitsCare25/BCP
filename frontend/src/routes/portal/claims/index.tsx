@@ -9,6 +9,7 @@ import { actionClass } from "@/components/portal/leaf/Action";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useCompany } from "@/components/portal/useCompany";
 
 /** THE primary action of the member portal, and the page's one brand fill —
  * floating, centred, and present at every scroll position.
@@ -32,6 +33,7 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
  *    same inset — and the page grows enough bottom padding that the last row
  *    can always be scrolled clear of it. */
 function MakeClaimAction() {
+  const company = useCompany();
   return (
     <div
       className={
@@ -40,7 +42,8 @@ function MakeClaimAction() {
       }
     >
       <Link
-        to="/portal/claims/new"
+        to="/portal/$company/claims/new"
+        params={{ company }}
         className={actionClass("primary", {
           className: "pointer-events-auto",
         })}
@@ -62,6 +65,7 @@ function MakeClaimAction() {
 const MEASURE = "mx-auto max-w-3xl";
 
 export function PortalClaimsPage() {
+  const company = useCompany();
   const claims = usePortalClaims();
   useDocumentTitle("My claims");
 
@@ -88,7 +92,8 @@ export function PortalClaimsPage() {
         </p>
         <div>
           <Link
-            to="/portal/claims/new"
+            to="/portal/$company/claims/new"
+            params={{ company }}
             className={actionClass("primary", { block: "phone" })}
           >
             <FilePlus2 className="size-4" aria-hidden />

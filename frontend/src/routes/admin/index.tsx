@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Loader2, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import {
+  type AdminClient,
   type AdminUser,
   useAdminClients,
   useAdminUsers,
@@ -37,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { formatError } from "@/lib/errors";
 import { toast } from "sonner";
+import { portalPath } from "@/lib/tenant";
 
 // Brokerage staff roles only. A company's HR logins (client_admin / client_hr)
 // are provisioned per-company under Company settings → Authentication → HR
@@ -155,8 +157,15 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
   const patch = usePatchClient();
   const del = useDeleteClient();
   const [name, setName] = useState("");
+  const [legalName, setLegalName] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editLegal, setEditLegal] = useState("");
+  const [editSlug, setEditSlug] = useState("");
+  // The alias before the edit began, so the confirm below can tell a change
+  // from a no-op without re-deriving it from the list mid-save.
+  const [slugWas, setSlugWas] = useState("");
+  const [aliasConfirm, setAliasConfirm] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(
     null,
   );
@@ -168,23 +177,59 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
       // resolves the sole firm, and a broker_admin may not name one at all.
       await create.mutateAsync({
         name: name.trim(),
+        ...(legalName.trim() ? { legal_name: legalName.trim() } : {}),
         ...(firmId ? { broker_firm_id: firmId } : {}),
       });
       toast.success("Client created");
       setName("");
+      setLegalName("");
     } catch (e) {
       toast.error(formatError(e));
     }
   };
 
-  const onRename = async (id: string) => {
+  const beginEdit = (c: AdminClient) => {
+    setEditing(c.id);
+    setEditName(c.name);
+    setEditLegal(c.legal_name ?? "");
+    setEditSlug(c.slug ?? "");
+    setSlugWas(c.slug ?? "");
+  };
+
+  const save = async (id: string) => {
+    const nextSlug = editSlug.trim().toLowerCase();
     try {
-      await patch.mutateAsync({ id, name: editName.trim() });
-      toast.success("Client renamed");
+      await patch.mutateAsync({
+        id,
+        name: editName.trim(),
+        // Always sent, so clearing the field clears the stored value. Safe
+        // because the PATCH is partial on the server and this form is the only
+        // thing that edits these fields.
+        legal_name: editLegal.trim() || null,
+        // Only sent when it CHANGED. Sending it unchanged would be harmless
+        // today but makes "never move the alias on a plain rename" a property
+        // of this form rather than of the server, which is the wrong place for
+        // it to live.
+        ...(nextSlug && nextSlug !== slugWas ? { slug: nextSlug } : {}),
+      });
+      toast.success("Company updated");
       setEditing(null);
+      setAliasConfirm(null);
     } catch (e) {
       toast.error(formatError(e));
     }
+  };
+
+  /** Changing the alias moves the portal address. Every invite already mailed
+   *  points at the old one and an unopened invite is a live one-time password,
+   *  so this is confirmed rather than saved silently. */
+  const onSave = (id: string) => {
+    const nextSlug = editSlug.trim().toLowerCase();
+    if (slugWas && nextSlug && nextSlug !== slugWas) {
+      setAliasConfirm(id);
+      return;
+    }
+    void save(id);
   };
 
   const onDelete = async () => {
@@ -212,10 +257,25 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex items-end gap-2">
-          <div className="flex flex-col gap-1.5 flex-1">
-            <Label>New client name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="flex min-w-40 flex-1 flex-col gap-1.5">
+            <Label>Short name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="CDL"
+            />
+          </div>
+          {/* Optional at create: a company is often set up from a slip long
+              before anyone has its registered name to hand, and blocking the
+              create on it would just get a guess typed in. */}
+          <div className="flex min-w-52 flex-1 flex-col gap-1.5">
+            <Label>Full legal name</Label>
+            <Input
+              value={legalName}
+              onChange={(e) => setLegalName(e.target.value)}
+              placeholder="City Developments Limited"
+            />
           </div>
           <FirmPicker firms={firms} value={firmId} onChange={setFirmId} />
           <Button onClick={onCreate} disabled={create.isPending || !name.trim()}>
@@ -223,18 +283,53 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
             Create
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          The short name is what you see across this tool. The full legal name
+          is what employees see in their portal, and the portal address is
+          derived from the short name — you can change it below.
+        </p>
         <ul className="divide-y divide-border rounded-md border border-border">
           {clients.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
               {editing === c.id ? (
                 <>
-                  <Input
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="h-8"
-                  />
-                  <div className="flex gap-1 shrink-0">
-                    <Button size="sm" onClick={() => onRename(c.id)} disabled={patch.isPending}>
+                  <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-3">
+                    <div className="flex flex-col gap-1">
+                      <Label>Short name</Label>
+                      <Input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label>Full legal name</Label>
+                      <Input
+                        value={editLegal}
+                        onChange={(e) => setEditLegal(e.target.value)}
+                        className="h-8"
+                        placeholder="Not set"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label>Portal address</Label>
+                      <Input
+                        value={editSlug}
+                        onChange={(e) => setEditSlug(e.target.value)}
+                        className="h-8"
+                        spellCheck={false}
+                        aria-describedby={`slug-help-${c.id}`}
+                      />
+                      <p
+                        id={`slug-help-${c.id}`}
+                        className="text-xs text-muted-foreground"
+                      >
+                        {portalPath(editSlug.trim().toLowerCase() || c.slug)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-1 self-start pt-5">
+                    <Button size="sm" onClick={() => onSave(c.id)} disabled={patch.isPending}>
                       Save
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
@@ -246,6 +341,14 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                 <>
                   <div className="min-w-0">
                     <span className="font-medium">{c.name}</span>
+                    {/* The registered name beside the handle, so this list
+                        answers "which company IS this" — "CDL" alone does not,
+                        and it is the only name the portal shows members. */}
+                    {c.legal_name && (
+                      <span className="ml-2 text-muted-foreground">
+                        {c.legal_name}
+                      </span>
+                    )}
                     {(() => {
                       const s = statsById.get(c.id);
                       if (!s) return null;
@@ -260,17 +363,22 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                         </div>
                       );
                     })()}
+                    {/* The real address, not the bare alias. A slug on its own
+                        reads as an internal code; the path is the thing a
+                        broker can check against an invite email. */}
+                    {c.slug && (
+                      <div className="text-xs text-muted-foreground">
+                        {portalPath(c.slug)}
+                      </div>
+                    )}
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => {
-                        setEditing(c.id);
-                        setEditName(c.name);
-                      }}
+                      onClick={() => beginEdit(c)}
                     >
-                      Rename
+                      Edit
                     </Button>
                     <Button
                       size="sm"
@@ -292,6 +400,22 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
         </ul>
       </CardContent>
     </Card>
+    <AlertDialog
+      open={aliasConfirm !== null}
+      onOpenChange={(open) => !open && setAliasConfirm(null)}
+      title="Change the portal address?"
+      description={`Employees will use ${portalPath(
+        editSlug.trim().toLowerCase(),
+      )} from now on. Invitation and sign-in emails already sent point at ${portalPath(
+        slugWas,
+      )} and will stop working, and so will any bookmark. Anyone who hasn't signed in yet will need a fresh invite.`}
+      confirmLabel="Change address"
+      confirmVariant="destructive"
+      loading={patch.isPending}
+      onConfirm={() => {
+        if (aliasConfirm) void save(aliasConfirm);
+      }}
+    />
     <AlertDialog
       open={deleteTarget !== null}
       onOpenChange={(open) => !open && setDeleteTarget(null)}

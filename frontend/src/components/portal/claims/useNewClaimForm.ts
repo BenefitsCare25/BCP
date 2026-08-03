@@ -49,11 +49,13 @@ import {
   type ReferralMode,
   type TypeEntry,
 } from "./claimForm";
+import { useCompany } from "@/components/portal/useCompany";
 
 export type NewClaimForm = ReturnType<typeof useNewClaimForm>;
 
 export function useNewClaimForm() {
   const navigate = useNavigate();
+  const company = useCompany();
   const options = useCoverageOptions();
   const createClaim = useCreateClaim();
   const uploadDoc = useUploadClaimDocument();
@@ -569,8 +571,8 @@ export function useNewClaimForm() {
         // every document and carries the status from here on. It replaces a
         // three-second toast that left nothing behind.
         void navigate({
-          to: "/portal/claims/$claimId",
-          params: { claimId: claim.id },
+          to: "/portal/$company/claims/$claimId",
+          params: { company, claimId: claim.id },
           search: { submitted: true },
         });
       }
