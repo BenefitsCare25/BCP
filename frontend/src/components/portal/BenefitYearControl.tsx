@@ -9,8 +9,10 @@
  * `resolve_member_employee`). Offering a chevron that opens nothing would be a
  * lie about a capability. The moment the API can list the years a member
  * actually held a record in, pass `years` and the same control becomes a menu —
- * the closed state, the menu and the past-year treatment are all designed. See
- * docs/PORTAL_REDESIGN_PLAN.md, open item 1.
+ * the closed state, the menu and the past-year treatment are all designed.
+ * What that needs: a year id threaded through the portal endpoints, statement /
+ * utilisation / claims scoped to it, and a gate so a member can only open years
+ * in which they actually had an Employee row.
  *
  * A past year must never be silently browsable: claims cannot be submitted
  * against a closed year, so selecting one is expected to surface that in the

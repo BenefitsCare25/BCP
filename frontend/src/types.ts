@@ -818,7 +818,7 @@ export type FormProfile =
   | "travel"
   | "statutory";
 
-// Basis-of-Cover column shape + Rate-table shape (see DYNAMIC_PRODUCT_FORM_PLAN).
+// Basis-of-Cover column shape + Rate-table shape (mirrors backend form_profiles.py).
 export type BasisModel = "tiered" | "per_member" | "sum_assured";
 export type RateModel =
   | "tiered"

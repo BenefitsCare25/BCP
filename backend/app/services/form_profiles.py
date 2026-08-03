@@ -35,8 +35,7 @@ DEFAULT_PROFILE: FormProfile = "tiered_medical"
 
 # ── Basis-of-Cover + Rate models ────────────────────────────────────────────
 # A product's *form profile* picks one of three Basis-of-Cover column shapes and
-# one of three Rate shapes. These are the structural axes the slips actually use
-# (see docs/DYNAMIC_PRODUCT_FORM_PLAN.md):
+# one of three Rate shapes. These are the structural axes the slips actually use:
 #   tiered      — EO/ES/EC/EF headcount columns (hospital/surgical).
 #   per_member  — a single member count; rate per member (outpatient/dental).
 #   sum_assured — Sum Insured + Basis columns; premium per S$1,000 SI (life).
