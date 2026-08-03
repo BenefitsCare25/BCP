@@ -7,11 +7,15 @@
  * is still server-side.
  *
  * Days are the member's unit and money is the consequence, so both are printed:
- * "3 days" alone does not tell anyone what leaving with them costs. */
-import { Loader2 } from "lucide-react";
+ * "3 days" alone does not tell anyone what leaving with them costs.
+ *
+ * **It has no save button of its own.** It used to, which made leave the one
+ * choice on this page that was committed separately from every other — a member
+ * could set a trade, press Save on the plans and send an enrollment their leave
+ * was not part of. Leave is now written by the same Save and Send that write the
+ * elections, from the review step. */
 import type { MemberLeaveOptions } from "@/api/enrollment";
 import { leaveTrade } from "@/components/enrollment/electionCore";
-import { Action } from "@/components/portal/leaf/Action";
 import { Field, leafControl } from "@/components/portal/leaf/Field";
 import { Money } from "@/components/portal/leaf/Figure";
 import { Mount, MountRow } from "@/components/portal/leaf/Mount";
@@ -148,10 +152,8 @@ export function LeaveMount({
   ratePerDay,
   currency,
   disabled,
-  saving,
   onActionChange,
   onDaysChange,
-  onSave,
 }: {
   action: string;
   daysValue: string;
@@ -162,10 +164,8 @@ export function LeaveMount({
   currency: string | null;
   /** Read-only: the broker preview, or an enrollment already confirmed. */
   disabled: boolean;
-  saving: boolean;
   onActionChange: (action: string) => void;
   onDaysChange: (days: string) => void;
-  onSave: () => void;
 }) {
   const t = leaveTrade(action, daysValue, leave, ratePerDay);
 
@@ -229,23 +229,6 @@ export function LeaveMount({
           )}
 
           <TradeNotices t={t} />
-
-          {/* `sm:self-start` is load-bearing, and it is the same trap
-              `Action.block` documents one level up: `block:"phone"` returns the
-              pill to `inline-flex w-auto` from `sm`, but `Mount` is a FLEX
-              COLUMN, whose default `align-items: stretch` re-stretches it — so
-              a natural-width pill still rendered as a 1040px terracotta banner
-              on desktop. Width alone cannot fix a child of a flex container;
-              the alignment has to say so. */}
-          <Action
-            block="phone"
-            className="sm:self-start"
-            disabled={disabled || saving || t.invalid}
-            onClick={onSave}
-          >
-            {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}
-            Save my leave choice
-          </Action>
         </>
       )}
     </Mount>

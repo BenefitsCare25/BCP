@@ -1,24 +1,30 @@
-/** The member's flexible-benefits allowance while they are choosing.
+/** The member's flexible-benefits allowance, as a ledger — allowance in, choices
+ * out, what is left.
  *
- * **Deliberately built to read as the same object as `leaf/FlexMount`**, which
- * states this wallet on the coverage tab: the display figure in the aside, the
- * same ledger terms in the same order, the same "Short by" for a negative. A
- * member who moves between the two tabs must not meet two presentations of one
- * wallet — that was the defect the previous 4-up stat grid ("FLEX WALLET / FLEX
- * DRAWN (CHANGES) / BALANCE REMAINING") created here, in broker vocabulary.
+ * **It is not a mount of its own.** It used to be the enrollment deck's first
+ * slide, which put a near-empty pane in front of a member who had not yet
+ * changed anything and made the page open on context instead of on a decision.
+ * The running balance now lives in the page's heading row (`DeckHeader`), where
+ * it is visible from every slide — so what is left here is the WORKING, and
+ * working belongs with the total it explains: the review step.
+ *
+ * Deliberately built to read as the same object as `leaf/FlexMount`, which
+ * states this wallet on the coverage tab: the same terms in the same order, the
+ * same "Short by" for a negative. A member who moves between the two must not
+ * meet two presentations of one wallet.
  *
  * The difference from `FlexMount` is that these figures are LIVE — they move as
- * the member changes a choice below — which is why the bar is here and not
- * there: it is the glance that says how much of the allowance the current
- * selection consumes. It is `compact`, i.e. the bar alone with no sentence,
- * because the ledger under it already states every figure the sentence would
- * (The One-Description Rule). */
-import type { FlexSummary } from "@/components/enrollment/electionCore";
+ * the member changes a choice — which is why the bar is here and not there: it
+ * is the glance that says how much of the allowance the current selection
+ * consumes. It is `compact`, i.e. the bar alone with no sentence, because the
+ * ledger under it already states every figure the sentence would (The
+ * One-Description Rule). */
+import { type FlexSummary, flexShort } from "@/components/enrollment/electionCore";
 import { FillRule } from "@/components/portal/leaf/FillRule";
 import { Money } from "@/components/portal/leaf/Figure";
-import { Mount, MountRow, MountRule } from "@/components/portal/leaf/Mount";
+import { MountRow } from "@/components/portal/leaf/Mount";
 
-export function WalletMount({
+export function WalletLedger({
   flex,
   allowOverdraft,
 }: {
@@ -26,7 +32,10 @@ export function WalletMount({
   allowOverdraft: boolean;
 }) {
   const currency = flex.currency ?? "S$";
-  const shortfall = flex.balance < 0;
+  // `flexShort`, not `balance < 0`: the same predicate the heading row's figure
+  // and the send gate use, so a sub-cent residue can't print "Short by S$0"
+  // here while those two call it settled.
+  const shortfall = flexShort(flex);
   // What the current selection NETS out of the wallet — the price tags less any
   // leave sold back. Derived from the balance rather than from `total` alone so
   // the bar and the "Left to spend" row below it are two readings of one
@@ -36,17 +45,7 @@ export function WalletMount({
   const consumed = flex.wallet - flex.balance;
 
   return (
-    <Mount
-      as="article"
-      label="Your allowance"
-      gloss="What you have to spend on the choices below."
-      aside={
-        <div className="text-right">
-          <Money value={flex.wallet} currency={currency} emphasis="display" />
-          <div className="leaf-label mt-0.5">Yearly allowance</div>
-        </div>
-      }
-    >
+    <>
       {flex.wallet > 0 && consumed > 0 && (
         <FillRule
           limit={flex.wallet}
@@ -59,6 +58,13 @@ export function WalletMount({
       )}
 
       <dl>
+        {/* The opening figure of the ledger. It was the mount's aside while this
+            was a slide of its own; as a row it sits in the same subtraction as
+            everything under it, which is what makes the four figures readable
+            as one sum rather than as a headline and three details. */}
+        <MountRow term="Your allowance" gloss="What you have to spend this year.">
+          <Money value={flex.wallet} currency={currency} />
+        </MountRow>
         {flex.total !== 0 && (
           // **The direction is in the TERM, so the term has to follow the
           // sign.** A downgrade returns money — `total` goes negative and the
@@ -111,8 +117,8 @@ export function WalletMount({
 
       {/* Said BEFORE the shortfall line, because it changes how to read every
           figure above it — a total missing a dependant's price is a floor, and a
-          balance derived from it is a ceiling. Silence here let this mount
-          contradict the product mount below it. */}
+          balance derived from it is a ceiling. Silence here let this ledger
+          contradict the product slides it summarises. */}
       {flex.incomplete && (
         <p className="text-row text-label">
           One of the people you&rsquo;ve covered doesn&rsquo;t have a price yet,
@@ -122,21 +128,16 @@ export function WalletMount({
       )}
 
       {shortfall && (
-        <>
-          <MountRule />
-          <p
-            className={
-              allowOverdraft
-                ? "text-row text-label"
-                : "text-row text-strike-pending"
-            }
-          >
-            {allowOverdraft
-              ? "Your choices cost more than your allowance. Your company allows this — your HR team can tell you how the difference is settled."
-              : "Your choices cost more than your allowance. Change one of them to bring it back, or ask your HR team."}
-          </p>
-        </>
+        <p
+          className={
+            allowOverdraft ? "text-row text-label" : "text-row text-strike-pending"
+          }
+        >
+          {allowOverdraft
+            ? "Your choices cost more than your allowance. Your company allows this — your HR team can tell you how the difference is settled."
+            : "Your choices cost more than your allowance. Change one of them to bring it back, or ask your HR team."}
+        </p>
       )}
-    </Mount>
+    </>
   );
 }

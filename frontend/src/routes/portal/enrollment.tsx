@@ -2,6 +2,7 @@
  * chooses to upgrade/downgrade, decline voluntary cover, include dependants,
  * and trade leave. Submissions await broker confirmation. */
 import { useMemo } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { FileWarning } from "lucide-react";
 import {
   usePortalDependants,
@@ -23,6 +24,8 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function PortalEnrollmentPage() {
   useDocumentTitle("My enrollment");
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { p?: string };
   const enrollment = usePortalEnrollment();
   const dependants = usePortalDependants();
   const saveElections = useSaveMyElections();
@@ -43,7 +46,15 @@ export function PortalEnrollmentPage() {
     [dependants.data],
   );
 
-  if (enrollment.isLoading) {
+  // **The dependants query gates the page, not just the family lists.**
+  // `buildElectionsPayload` persists EVERY dependant id on a product whose
+  // family cover is compulsory, so an unresolved list means it persists none —
+  // and since Send now saves before it submits, one press on a page that had
+  // rendered with `dependantRefs: []` would write "nobody is covered" for those
+  // products and project it into the member's cover at broker confirm. It is
+  // reachable on first paint through a restored `?p=review` link, where the
+  // deck opens on the step whose primary action is Send.
+  if (enrollment.isLoading || dependants.isPending) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-20 w-full" />
@@ -56,6 +67,13 @@ export function PortalEnrollmentPage() {
   // real 404 (no active coverage) gets the confident empty state.
   if (enrollment.isError && !isNotFoundError(enrollment.error)) {
     return <PortalErrorState onRetry={() => void enrollment.refetch()} />;
+  }
+  // A FAILED dependants fetch is the same hazard as an unfinished one, and it
+  // does not resolve itself (`usePortalDependants` sets `retry: false`), so it
+  // gets the retryable error state rather than a form that would silently elect
+  // on the member's behalf.
+  if (dependants.isError) {
+    return <PortalErrorState onRetry={() => void dependants.refetch()} />;
   }
   if (enrollment.isError) {
     return (
@@ -81,6 +99,15 @@ export function PortalEnrollmentPage() {
       <MemberEnrollmentPanel
         data={enrollment.data ?? { window: null, enrollment: null, options: null }}
         dependants={dependantRefs}
+        // Which step is open lives in the URL, so it survives a refresh and the
+        // back button — the same contract the coverage deck has. `replace`
+        // because stepping through nine products is filling in a form, not
+        // navigating: without it Back walks back through every product visited
+        // instead of leaving the page.
+        slideKey={search.p ?? null}
+        onSlideKeyChange={(p) =>
+          navigate({ to: "/portal/enrollment", search: { p }, replace: true })
+        }
         onSaveElections={(elections) => saveElections.mutateAsync(elections)}
         onSaveLeave={(input) => setLeave.mutateAsync(input)}
         onSubmit={(ack) => submit.mutateAsync(ack)}

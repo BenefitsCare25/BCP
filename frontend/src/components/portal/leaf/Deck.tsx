@@ -68,6 +68,20 @@ export interface DeckSlide {
   key: string;
   /** Member language, short. Never a product code — see `productShortLabel`. */
   label: string;
+  /** A one- or two-word state for this slide, shown in the rail.
+   *
+   * **A deck hides everything it is not showing, which is fine for a page you
+   * READ and not fine for a page you DECIDE on.** On the enrollment deck a
+   * member can change their hospital plan, move on, and have no way to see that
+   * they did without navigating back to it. The mark is what turns the index
+   * into a record of the decisions made: "Changed", "Declined".
+   *
+   * Printed beside the label where the rail is a vertical list, and reduced to
+   * a dot where it is a horizontal pill — a chip carrying "Hospital  Changed"
+   * on a phone is either truncated or twice as wide, and the word survives in
+   * the accessibility tree either way. Keep it SHORT; it is a mark, not a
+   * sentence. */
+  mark?: string;
   render: () => ReactNode;
 }
 
@@ -126,12 +140,29 @@ function markInert(node: HTMLDivElement | null) {
 export function Deck({
   slides,
   label,
+  railHeader,
+  itemNoun = "benefit",
   activeKey,
   onActiveKeyChange,
 }: {
   slides: DeckSlide[];
   /** Names the rail for a screen reader — "Your benefits", not "Tabs". */
   label: string;
+  /** One line pinned above the index, INSIDE the sticky container.
+   *
+   * For a fact that governs every slide rather than belonging to one — the
+   * enrollment deck's running allowance. It has to travel with the rail rather
+   * than sit above the deck, because on a phone the rail is the only part of
+   * this component that stays on screen, and a budget you can only see by
+   * scrolling back to the top is not a budget you can spend against.
+   *
+   * Keep it to a row. It is stuck to the top of the viewport on a phone, and
+   * anything taller than the chips beneath it takes the page over. */
+  railHeader?: ReactNode;
+  /** What one slide IS, for the step buttons' screen-reader labels — "benefit"
+   * on coverage, "step" on enrollment. Never rendered visually: the buttons
+   * already print the destination's own name. */
+  itemNoun?: string;
   /** Controlled: the member page drives this from the URL. Omit it entirely and
    * the deck holds its own state, which is what the broker preview needs. */
   activeKey?: string | null;
@@ -427,13 +458,25 @@ export function Deck({
       <div
         className={cn(
           glassSurface,
-          "sticky top-2 z-10",
-          wide ? "rounded-tile p-2" : "overflow-hidden rounded-pill p-1.5",
+          "sticky top-2 z-10 overflow-hidden",
+          // The pill shape belongs to a bare row of chips. Once a header sits
+          // above them the container is a card, and a pill's radius would cut
+          // the corners off its own first line.
+          wide || railHeader ? "rounded-tile p-2" : "rounded-pill p-1.5",
         )}
       >
+        {railHeader && (
+          <div className="border-b border-hairline/75 px-1.5 pb-2 pt-1">
+            {railHeader}
+          </div>
+        )}
         <div
           ref={scrollRef}
-          className={cn("leaf-deck-scroll relative", !wide && "overflow-x-auto overflow-y-hidden")}
+          className={cn(
+            "leaf-deck-scroll relative",
+            railHeader && "pt-1.5",
+            !wide && "overflow-x-auto overflow-y-hidden",
+          )}
         >
           <div
             ref={trackRef}
@@ -494,6 +537,25 @@ export function Deck({
                   <span className={cn("truncate", !wide && "max-w-44")}>
                     {slide.label}
                   </span>
+                  {slide.mark &&
+                    (wide ? (
+                      <span className="leaf-label ml-auto shrink-0">
+                        {slide.mark}
+                      </span>
+                    ) : (
+                      <>
+                        {/* Ink, not the action colour and not the pending
+                            ramp: this is an annotation on an index, and both of
+                            those already mean something else here (a brand fill
+                            is a thing to press; the pending ramp is the shell's
+                            "your window is open" dot). */}
+                        <span
+                          aria-hidden
+                          className="size-1.5 shrink-0 rounded-pill bg-record"
+                        />
+                        <span className="sr-only">{slide.mark}</span>
+                      </>
+                    ))}
                 </button>
               );
             })}
@@ -509,7 +571,14 @@ export function Deck({
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={cancelDrag}
-          className="relative scroll-mt-20 overflow-x-clip"
+          // `scroll-mt-*` keeps the sticky rail from covering the heading the
+          // correction below scrolls to — so it has to grow with the rail. With
+          // a header the phone rail is ~108px tall against ~72px without one,
+          // and at `scroll-mt-20` the incoming slide's own title landed under it.
+          className={cn(
+            "relative overflow-x-clip",
+            railHeader ? "scroll-mt-32" : "scroll-mt-20",
+          )}
         >
           {/* The outgoing slide is taken OUT OF FLOW, so the stage adopts the
               incoming height in one frame and nothing animates height. Springing
@@ -571,6 +640,7 @@ export function Deck({
           <DeckStep
             direction="prev"
             slide={prev}
+            noun={itemNoun}
             onClick={() => step(-1)}
           />
           {/* Decorative: the chips carry `aria-posinset`/`aria-setsize`, so a
@@ -579,7 +649,12 @@ export function Deck({
           <span aria-hidden className="shrink-0 px-1 text-2xs font-semibold text-label">
             {index + 1} of {slides.length}
           </span>
-          <DeckStep direction="next" slide={next} onClick={() => step(1)} />
+          <DeckStep
+            direction="next"
+            slide={next}
+            noun={itemNoun}
+            onClick={() => step(1)}
+          />
         </div>
       </div>
     </div>
@@ -589,10 +664,12 @@ export function Deck({
 function DeckStep({
   direction,
   slide,
+  noun,
   onClick,
 }: {
   direction: "prev" | "next";
   slide: DeckSlide | undefined;
+  noun: string;
   onClick: () => void;
 }) {
   const isNext = direction === "next";
@@ -604,7 +681,7 @@ function DeckStep({
       disabled={!slide}
       aria-label={
         slide
-          ? `${isNext ? "Next" : "Previous"} benefit: ${slide.label}`
+          ? `${isNext ? "Next" : "Previous"} ${noun}: ${slide.label}`
           : undefined
       }
       className={cn(

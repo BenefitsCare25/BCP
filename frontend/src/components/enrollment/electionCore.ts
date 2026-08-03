@@ -226,6 +226,90 @@ export function seedElectionState(
   return next;
 }
 
+/** What the member HOLDS today, in the same shape as their working state — the
+ * "before" side of every change the enrollment surface reports.
+ *
+ * Deliberately NOT `seedElectionState`. That one resolves the state to EDIT,
+ * which is the saved election when one exists; a member who elected an upgrade
+ * yesterday and reloads would then be told they are changing nothing, while the
+ * enrollment they are about to send does change their cover. This resolves the
+ * standing coverage instead: the tier flagged `is_current` (the server is the
+ * only side that can read a standing override — see `CohortTier.is_current`),
+ * and the window's own opening snapshot for everything else.
+ *
+ * `baseline_snapshot` is the right source for the dependant sets for the same
+ * reason: it is coverage as it stood when the window opened, whereas
+ * `enrollment.elections` is the member's unconfirmed intent. */
+export function heldElectionState(
+  enr: EnrollmentDetail | null,
+  tierSets: ProductTierSet[],
+): Record<string, ProductState> {
+  const baseProducts = enr?.baseline_snapshot?.products ?? {};
+  const next: Record<string, ProductState> = {};
+  for (const ts of tierSets) {
+    const base = baseProducts[ts.product_code];
+    const held =
+      ts.tiers.find((t) => t.is_current) ??
+      // A payload predating `is_current` still resolves through the snapshot's
+      // own (category, plan) pair before falling back to the cohort baseline.
+      (base
+        ? ts.tiers.find(
+            (t) =>
+              t.tier_category_id === base.tier_category_id &&
+              t.plan_code === base.plan_code,
+          )
+        : undefined) ??
+      ts.tiers.find((t) => t.is_baseline) ??
+      ts.tiers[0];
+    next[ts.product_code] = {
+      productCode: ts.product_code,
+      tierKey: held?.key ?? "",
+      declined: base?.declined ?? false,
+      dependantIds: base?.covered_dependant_ids ?? [],
+      depOptionIds: base?.dependant_option_ids ?? {},
+    };
+  }
+  return next;
+}
+
+/** Do two election states describe the same cover?
+ *
+ * Dependants are compared as SETS — the tick list appends, so covering A then B
+ * and covering B then A are the same election and must not be reported as a
+ * change. A declined product compares on nothing else: which tier its radio
+ * happens to be parked on is not part of the outcome.
+ *
+ * **`ignoreDependants` is for cover the member cannot elect**, and it exists
+ * because the two sides record it differently. `buildElectionsPayload` persists
+ * EVERY dependant on a product whose family cover is compulsory, while
+ * `baseline_for` stores `covered_dependant_ids: None` for a member with no
+ * override — so the first save made every such product differ from what the
+ * member holds, and it was then marked "Changed" in the rail and printed
+ * "Adding Jane" in the review under two identical plan names. Nothing about
+ * that set was ever the member's choice. */
+export function sameElection(
+  a?: ProductState,
+  b?: ProductState,
+  opts?: { ignoreDependants?: boolean },
+): boolean {
+  if (!a || !b) return a === b;
+  if (a.declined !== b.declined) return false;
+  if (a.declined) return true;
+  if (a.tierKey !== b.tierKey) return false;
+  if (opts?.ignoreDependants) return true;
+  if (a.dependantIds.length !== b.dependantIds.length) return false;
+  const ids = new Set(b.dependantIds);
+  if (a.dependantIds.some((id) => !ids.has(id))) return false;
+  const keys = new Set([
+    ...Object.keys(a.depOptionIds),
+    ...Object.keys(b.depOptionIds),
+  ]);
+  for (const k of keys) {
+    if ((a.depOptionIds[k] ?? "") !== (b.depOptionIds[k] ?? "")) return false;
+  }
+  return true;
+}
+
 /** Build the PUT /elections payload from local state — identical rules on both
  * surfaces: compulsory dependant cover persists ALL dependants; elected option
  * levels only for roles the product actually offers. */
@@ -279,6 +363,19 @@ export interface FlexSummary {
    * show what covering them costs once the level above is chosen". Two figures
    * on one screen, disagreeing about whether the price is known. */
   incomplete: boolean;
+}
+
+/** Below this a negative balance is a rounding residue, not a shortfall.
+ *
+ * Single-sourced because the surfaces that read it sit next to each other: the
+ * running balance in the enrollment rail, the "Short by" row in the wallet, and
+ * the gate on the send button. At a residual −0.004 a bare `< 0` prints
+ * "Short by S$0" — a settled-looking figure beside a refused submission — while
+ * the gate is still firing. */
+export const FLEX_EPSILON = 0.005;
+
+export function flexShort(flex: FlexSummary | null | undefined): boolean {
+  return !!flex && flex.balance < -FLEX_EPSILON;
 }
 
 /** Running flex balance: wallet − Σ coverage price tags + live buy/sell-leave

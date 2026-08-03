@@ -263,7 +263,12 @@ function EnrollmentTab({ employeeId }: { employeeId: string }) {
         })),
     [dependants.data],
   );
-  if (enrollment.isLoading) return <Skeleton className="h-48 w-full" />;
+  // The dependants query gates this too. Nothing here can save — it is a
+  // preview — but rendering before it resolves states "Nobody in your family is
+  // on this plan" to a broker reading the member's own screen, which is the one
+  // thing this frame exists to get right.
+  if (enrollment.isLoading || dependants.isPending)
+    return <Skeleton className="h-48 w-full" />;
   if (enrollment.isError && !isNotFoundError(enrollment.error)) {
     return <PortalErrorState onRetry={() => void enrollment.refetch()} />;
   }
