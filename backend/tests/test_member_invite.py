@@ -25,6 +25,7 @@ from app.services.member_invite import (
     restore_credential,
     snapshot_credential,
 )
+from app.services.member_otp import magic_link
 
 
 def _account(**kw) -> MemberAccount:
@@ -119,6 +120,32 @@ def test_username_never_renders_blank():
     assert login_username(emailless, "email") == "EM-7Q2M8K"
     assert login_username(_account(email=None), "email") == "S-1"
     assert login_username(_account(system_login_id=None), "system_id") == "a@b.test"
+
+
+def test_every_emailed_portal_link_carries_the_company(_settings_env):
+    """The two builders that put a portal URL in an email must not drift apart.
+
+    They already did once: `portal_sign_in_url` was moved to the path form and
+    `magic_link` was left on `?company=`, so a member following the one-click
+    OTP link landed on the pathless sign-in, which sends an EMPTY tenant header
+    — `require_portal_tenant` 400s and the emailed code cannot be verified at
+    all. Asserted together so the next move has to update both.
+    """
+    _settings_env.setenv("INSPRO_TENANT_MODE", "header")
+    _settings_env.setenv("INSPRO_FRONTEND_ORIGIN", "https://inspro-portal.example/")
+    clear_settings_cache()
+
+    assert portal_sign_in_url("cdl").startswith(
+        "https://inspro-portal.example/portal/cdl/"
+    )
+    link = magic_link("kam@cdl.example", "123456", "cdl")
+    assert link.startswith("https://inspro-portal.example/portal/cdl/sign-in?")
+    # The code still has to survive the move into the path.
+    assert "code=123456" in link
+    # No alias degrades the LINK, never the code: the mail must still go.
+    assert magic_link("kam@cdl.example", "123456", None).startswith(
+        "https://inspro-portal.example/portal/sign-in?"
+    )
 
 
 @pytest.fixture

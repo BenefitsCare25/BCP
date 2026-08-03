@@ -5,7 +5,7 @@
  * A 401 clears the session and sends the member back to the portal sign-in.
  */
 import { errorFromText, parseErrorText } from "@/lib/errors";
-import { currentPortalTenantSlug } from "@/lib/tenant";
+import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
@@ -28,8 +28,18 @@ function authHeader(): Record<string, string> {
 
 function handleUnauthorized(): never {
   usePortalSession.getState().clearSession();
-  if (window.location.pathname !== "/portal/sign-in") {
-    window.location.assign("/portal/sign-in");
+  // Back to THIS company's sign-in. Dropping the segment on a routine session
+  // expiry sent the member to the pathless page, which turns the company field
+  // back on and sends an EMPTY tenant header — so their re-sign-in 400s until
+  // they type a code they were never given.
+  const target = portalPath(currentPortalTenantSlug(), "/sign-in");
+  // Both forms are checked, so the guard still stops a redirect loop when the
+  // slug cannot be resolved and `target` collapses to the pathless path.
+  if (
+    window.location.pathname !== target &&
+    window.location.pathname !== "/portal/sign-in"
+  ) {
+    window.location.assign(target);
   }
   throw new PortalUnauthorizedError();
 }

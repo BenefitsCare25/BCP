@@ -44,7 +44,7 @@ from app.core.rate_limit import limiter
 from app.core.settings import get_settings
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
-from app.models import MemberAccount, MemberOtpCode
+from app.models import Client, MemberAccount, MemberOtpCode
 from app.models.auth import SUBJECT_MEMBER
 from app.models.member_account import (
     MEMBER_STATUS_ACTIVE,
@@ -98,7 +98,13 @@ def request_code(
             continue
         issued = issue_otp(db, account)
         db.commit()
-        send_otp(account, issued)
+        # The magic link must name the company, or it lands on the pathless
+        # sign-in, sends an empty tenant header and the emailed code cannot be
+        # verified at all. Resolved per ACCOUNT rather than once: this endpoint
+        # is anonymous and matches on email alone, so two accounts sharing an
+        # address can belong to different companies.
+        client = db.get(Client, account.client_id)
+        send_otp(account, issued, client.slug if client else None)
         if settings.env == "dev" and settings.auth_mode == "mock":
             debug_code = issued.code
 

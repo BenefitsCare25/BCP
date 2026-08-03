@@ -268,6 +268,11 @@ const portalRootSignInRoute = createRoute({
 
 const portalLegacyRoutes = [
   ["/portal/set-password", "/set-password"],
+  // Two-segment legacy paths. `$company` eats the first segment, so without
+  // these `/portal/claims/new` resolves to a company called "claims" with a
+  // child route `new` that does not exist, and a bookmarked claim renders the
+  // BROKER-styled not-found page inside the member's world.
+  ["/portal/claims/new", "/claims/new"],
   ["/portal/coverage", "/coverage"],
   ["/portal/benefits", "/benefits"],
   ["/portal/utilization", "/utilization"],
@@ -280,6 +285,24 @@ const portalLegacyRoutes = [
   ["/portal/security", "/security"],
   ["/portal", ""],
 ].map(([path, subpath]) => portalLegacyRedirect(path, subpath));
+
+/** A bookmarked claim, `/portal/claims/{id}`. Separate from the table because
+ *  it carries a param through to the new path rather than being a fixed
+ *  rewrite. */
+const portalLegacyClaimRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/portal/claims/$claimId",
+  beforeLoad: ({ params, search }) => {
+    const company = currentPortalTenantSlug();
+    if (!company) return;
+    throw redirect({
+      to: "/portal/$company/claims/$claimId",
+      params: { company, claimId: params.claimId },
+      search,
+    });
+  },
+  component: PortalSignInPage,
+});
 
 // ── HR admin — a sibling surface with its OWN credential auth (HR access
 // token + rotating refresh cookie, not MSAL). Tenant is pinned by subdomain.
@@ -764,6 +787,7 @@ const routeTree = rootRoute.addChildren([
   portalSetPasswordRoute,
   portalRootSignInRoute,
   ...portalLegacyRoutes,
+  portalLegacyClaimRoute,
   portalLayoutRoute.addChildren([
     portalIndexRoute,
     portalCoverageRoute,

@@ -67,12 +67,24 @@ def issue_otp(db: Session, account: MemberAccount) -> IssuedOtp:
     return IssuedOtp(code=code, expires_at=expires_at)
 
 
-def magic_link(email: str, code: str) -> str:
-    origin = get_settings().frontend_origin
-    return f"{origin}/portal/sign-in?{urlencode({'email': email, 'code': code})}"
+def magic_link(email: str, code: str, slug: str | None = None) -> str:
+    """The one-click sign-in URL mailed beside the code.
+
+    Carries the company in the PATH, like `portal_sign_in_url`. Without it the
+    link lands on the pathless sign-in, which sends an EMPTY tenant header — so
+    `require_portal_tenant` 400s and the emailed code cannot be verified at all
+    until the member types a company code, which is the exact failure the path
+    form exists to remove.
+    """
+    origin = get_settings().frontend_origin.rstrip("/")
+    query = urlencode({"email": email, "code": code})
+    base = f"{origin}/portal/{slug}/sign-in" if slug else f"{origin}/portal/sign-in"
+    return f"{base}?{query}"
 
 
-def send_otp(account: MemberAccount, issued: IssuedOtp) -> bool:
+def send_otp(
+    account: MemberAccount, issued: IssuedOtp, slug: str | None = None
+) -> bool:
     """Deliver the code; a mail failure is logged, never raised.
 
     Returns True when the mailer accepted the message. The ANONYMOUS
@@ -80,9 +92,17 @@ def send_otp(account: MemberAccount, issued: IssuedOtp) -> bool:
     reveal whether the account exists or the send worked); broker-side
     invite/resend endpoints surface it as `mail_sent` so a dead SMTP config
     doesn't masquerade as a successful rollout.
+
+    `slug` is the member's company alias, which the magic link must carry — see
+    `magic_link`. Optional so a caller with no tenant to hand still sends a
+    usable CODE; only the one-click link degrades.
     """
     try:
-        get_mailer().send_otp(account.email, issued.code, magic_link(account.email, issued.code))
+        get_mailer().send_otp(
+            account.email,
+            issued.code,
+            magic_link(account.email, issued.code, slug),
+        )
         return True
     except Exception:
         logger.exception("Failed to send portal OTP to %s", account.email)

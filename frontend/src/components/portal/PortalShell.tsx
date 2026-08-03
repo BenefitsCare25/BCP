@@ -151,6 +151,12 @@ export function PortalShell() {
         portalPath(company),
         portalPath(trueCompany),
       ),
+      // `search: true` CARRIES the existing query through. TanStack drops
+      // search entirely when this is falsy, so correcting the alias on
+      // `/portal/wrong/coverage?tab=usage` silently threw the member back to
+      // the first tab — and on a just-submitted claim it lost `?submitted=true`
+      // and with it the confirmation the member had just earned.
+      search: true,
       replace: true,
     });
   }, [trueCompany, company, location.pathname, navigate]);

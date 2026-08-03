@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCompany } from "@/components/portal/useCompany";
+import { portalPath } from "@/lib/tenant";
 
 export function PortalSignInPage() {
   const navigate = useNavigate();
@@ -58,8 +59,15 @@ export function PortalSignInPage() {
           if (isMemberToken(out)) {
             finish();
           } else if (out.status === "password_reset_required") {
+            // The COMPANY-scoped path. This is the first-sign-in flow for every
+            // invited member (the mailed one-time password stamps the account
+            // rotation-due), so emitting the pathless URL stranded exactly the
+            // people the invite was for.
             window.location.assign(
-              `/portal/set-password?token=${encodeURIComponent(out.challenge_token)}`,
+              portalPath(
+                routeCompany || company.trim().toLowerCase(),
+                `/set-password?token=${encodeURIComponent(out.challenge_token)}`,
+              ),
             );
           } else {
             setChallenge(out.challenge_token);

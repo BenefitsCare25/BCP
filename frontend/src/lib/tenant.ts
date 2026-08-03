@@ -171,6 +171,25 @@ export function forgetTenantSlug(): void {
 export function captureTenantSlugFromUrl(): void {
   if (!isHeaderMode()) return;
   const url = new URL(window.location.href);
+
+  // **A company named by the PATH is remembered too**, and this is load-bearing
+  // rather than an optimisation. Storage was previously only ever written from
+  // `?company=` or from the company field, and the field is suppressed whenever
+  // the path names a company — so a member who arrived through a path-form
+  // invite link had NOTHING stored, and the first hard navigation that dropped
+  // the segment (`window.location.assign`) lost the tenant completely.
+  //
+  // That is not a corner: an invite mails a one-time password and stamps the
+  // account rotation-due, so every newly invited member's first sign-in returns
+  // `password_reset_required` and jumps to set-password. Without this they
+  // landed on a sign-in page demanding a company code the new design promises
+  // they never need, with their challenge token stranded.
+  //
+  // The path still WINS at read time (`currentPortalTenantSlug`); this only
+  // makes it survive a full page load that drops it.
+  const fromPath = tenantSlugFromPath();
+  if (fromPath) rememberTenantSlug(fromPath);
+
   const raw = url.searchParams.get(TENANT_QUERY_PARAM);
   if (!raw) return;
   const slug = validSlug(raw);
