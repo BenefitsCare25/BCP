@@ -89,9 +89,17 @@ export function Mount({
   /** The entrance, on by default.
    *
    * Turn it OFF only where something else already owns this mount's arrival —
-   * today that is a coverage-deck slide, whose own directional transition would
-   * otherwise run underneath a second 500ms rise-and-fade of the same element.
-   * Two entrances on one object do not compose; they read as a stutter. */
+   * that is any DECK slide (coverage and enrollment both), whose own
+   * directional transition would otherwise run underneath a second 500ms
+   * rise-and-fade of the same element. Two entrances on one object do not
+   * compose; they read as a stutter.
+   *
+   * Concretely, when both run: the opacities MULTIPLY (the deck's 80ms delay
+   * holds the wrapper at 0 while the mount inside is already fading in), the
+   * travel goes diagonal (32px X from the wrapper, 12px Y from here), and the
+   * two finish 80ms apart — so the tail of the transition is a lone vertical
+   * settle after the horizontal has landed. The enrollment deck shipped this
+   * way while the coverage deck did not, which is exactly how it was found. */
   rise?: boolean;
 }) {
   return (

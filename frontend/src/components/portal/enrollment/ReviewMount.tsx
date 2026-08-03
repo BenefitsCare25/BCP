@@ -184,6 +184,7 @@ export function ReviewMount({
   saving,
   submitting,
   blocked,
+  rise = true,
   onSave,
   onSubmit,
 }: {
@@ -212,6 +213,9 @@ export function ReviewMount({
   submitting: boolean;
   /** Why sending is refused, in the member's words — null when it isn't. */
   blocked: string | null;
+  /** Off inside an enrollment-deck slide, whose own transition owns the
+   *  arrival — see `Mount`'s `rise`. */
+  rise?: boolean;
   onSave: () => void;
   onSubmit: () => void;
 }) {
@@ -220,6 +224,7 @@ export function ReviewMount({
   return (
     <Mount
       as="article"
+      rise={rise}
       label={disabled ? "What's on record" : "Review and send"}
       gloss={
         disabled

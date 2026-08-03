@@ -430,6 +430,7 @@ export function MemberEnrollmentPanel({
         <ProductElectionMount
           ts={ts}
           ps={ps}
+          rise={false}
           disabled={disabled}
           allowDeps={allowDeps}
           dependants={dependants}
@@ -446,7 +447,7 @@ export function MemberEnrollmentPanel({
     slides.push({
       key: STANDARD_KEY,
       label: "Included as standard",
-      render: () => <StandardMount lines={standard} />,
+      render: () => <StandardMount lines={standard} rise={false} />,
     });
   }
   if (win.allow_leave) {
@@ -465,6 +466,7 @@ export function MemberEnrollmentPanel({
           : undefined,
       render: () => (
         <LeaveMount
+          rise={false}
           action={leaveAction}
           daysValue={leaveDays}
           leave={options?.leave ?? null}
@@ -484,6 +486,7 @@ export function MemberEnrollmentPanel({
     mark: changeCount ? `${changeCount} change${changeCount === 1 ? "" : "s"}` : undefined,
     render: () => (
       <ReviewMount
+        rise={false}
         tierSets={tierSets}
         state={current}
         changes={changes}

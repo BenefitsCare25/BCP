@@ -25,10 +25,19 @@ export interface StandardLine {
   familyNote: string | null;
 }
 
-export function StandardMount({ lines }: { lines: StandardLine[] }) {
+export function StandardMount({
+  lines,
+  rise = true,
+}: {
+  lines: StandardLine[];
+  /** Off inside an enrollment-deck slide, whose own transition owns the
+   *  arrival — see `Mount`'s `rise`. */
+  rise?: boolean;
+}) {
   return (
     <Mount
       as="article"
+      rise={rise}
       label="Included as standard"
       gloss="Cover your company sets for you — there's nothing to choose here."
     >

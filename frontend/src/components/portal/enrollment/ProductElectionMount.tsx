@@ -23,6 +23,7 @@ export function ProductElectionMount({
   dependants,
   flexOnChange,
   currency,
+  rise = true,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -33,6 +34,9 @@ export function ProductElectionMount({
   dependants: DependantRef[];
   flexOnChange: boolean;
   currency: string | null;
+  /** Off inside an enrollment-deck slide, whose own transition owns the
+   *  arrival — see `Mount`'s `rise`. */
+  rise?: boolean;
   onChange: (next: ProductState) => void;
 }) {
   const headingId = useId();
@@ -45,6 +49,7 @@ export function ProductElectionMount({
   return (
     <Mount
       as="article"
+      rise={rise}
       label={label}
       labelId={headingId}
       gloss={gloss}

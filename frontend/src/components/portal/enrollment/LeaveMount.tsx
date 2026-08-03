@@ -152,6 +152,7 @@ export function LeaveMount({
   ratePerDay,
   currency,
   disabled,
+  rise = true,
   onActionChange,
   onDaysChange,
 }: {
@@ -164,6 +165,9 @@ export function LeaveMount({
   currency: string | null;
   /** Read-only: the broker preview, or an enrollment already confirmed. */
   disabled: boolean;
+  /** Off inside an enrollment-deck slide, whose own transition owns the
+   *  arrival — see `Mount`'s `rise`. */
+  rise?: boolean;
   onActionChange: (action: string) => void;
   onDaysChange: (days: string) => void;
 }) {
@@ -183,6 +187,7 @@ export function LeaveMount({
   return (
     <Mount
       as="article"
+      rise={rise}
       label="Buy or sell leave"
       gloss="Spend part of your allowance on extra days off, or sell days back to add to it."
     >
