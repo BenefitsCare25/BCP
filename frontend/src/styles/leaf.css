@@ -5,11 +5,17 @@
 
    The world: the portal is a record ISSUED to one person. The ground is a
    light warm surface with colour moving across it, and every unit of content
-   is a PANE OF GLASS laid on that ground — softly rounded, thin enough that
-   the colour beneath shows through, lifted by a shadow rather than outlined
-   by an ink rule. **Depth is lit, not printed.** That single sentence
-   reverses the previous system, which was printed paper: flat, rectilinear,
-   hairline-framed.
+   is a PANE OF GLASS laid on that ground — softly rounded, warm-rimmed, lifted
+   by a tinted glow rather than outlined by an ink rule, and clearing under the
+   pointer. **Depth is lit, not printed.** That single sentence reverses the
+   previous system, which was printed paper: flat, rectilinear, hairline-framed.
+
+   The pane is nearly SOLID (2026-08-03) and the ground's colour is what a
+   member sees around it, not through it — see `--color-glass`. Every surface in
+   the portal is made of it: mounts, the deck rail and its pagers, list
+   containers, the tab and filter strips, the neutral pill, the dock. There is
+   ONE card material and it lives in these tokens, so a page cannot drift by
+   styling its own surface.
 
    The device is still the MOUNT: one framed unit carrying its own label,
    showing its state by how full it is — where fullness always means
@@ -22,20 +28,29 @@
 
    Every ratio in the comments below was COMPUTED against the *composited*
    glass at its hardest case — and the hardest case is a pane UNDER THE POINTER
-   over the hottest part of the ground, `#F7E1E0`, because hover thins the glass
-   rather than brightening it. A translucent surface has no single colour, and
-   measuring against the nominal one is how a design like this ships an
-   unreadable tier; measuring against the resting one and forgetting that hover
-   moves it is the same mistake one step later. The bare ground has its own,
-   stricter hardest case (`#F1CDCC`) for the things that stand on it with no
-   pane beneath — see the ground blooms below. */
+   over the hottest part of the ground, because hover thins the glass rather
+   than brightening it. A translucent surface has no single colour, and measuring
+   against the nominal one is how a design like this ships an unreadable tier;
+   measuring against the resting one and forgetting that hover moves it is the
+   same mistake one step later. The bare ground has its own, stricter hardest
+   case (`#F1CDCC`) for the things that stand on it with no pane beneath — see
+   the ground blooms below.
+
+   Those figures were measured at 62%/40% and are now CONSERVATIVE rather than
+   exact: the pane went to 95%/50%, and more white over the same ground can only
+   raise luminance. Every quoted ratio is therefore a floor, not a reading. The
+   bare-ground figures are unchanged and are still the binding ones, which is
+   why the blooms were not touched. */
 
 @import "@fontsource-variable/archivo/wght.css";
 
 @theme {
   /* ── Ground and glass ──────────────────────────────────────────────────
-     Ground and glass sit only 1.06:1 apart, so separation comes from radius,
-     the shadow and the lit top edge — never from a fill step. */
+     A near-white ground. Over the bloomed parts of it a solid pane is now a
+     real fill step, but in the flat middle of a long page it is not — so
+     separation still comes from the radius, the warm rim and the tinted glow,
+     never from the fill. A surface that only reads where the ground happens to
+     be pink is a surface that disappears on screen five. */
   --color-ground: #fafaf9;
 
   /* The soft neutral fill: the active nav pill, the current tab, a selected
@@ -56,31 +71,75 @@
      grey, because the neutrals here descend from the logo's own grey #BCBBAD. */
   --color-shade: #e9e6df;
 
-  /* Thin on purpose. Raising the opacity makes it paint, not glass: the
-     point is that the ground's colour reads THROUGH it. A pane only reads as
-     glass if the thing behind it is worth frosting — the first revision paired
-     thin glass with a nearly flat ground, and 60% white over #F4F3F0
-     composites to #F9F8F7, which is indistinguishable from paint. Strengthening
-     the blooms below is what makes this number mean anything.
+  /* Nearly solid, and the colour lives on the ground AROUND a pane rather than
+     THROUGH it (2026-08-03, ported from the reference design). This inverts the
+     earlier composition, which held the fill at 62% so the blooms read up
+     through every card; that made a card and the page a continuous wash, and
+     the card's own edges the only thing saying where one stopped.
+
+     Both models need the blooms — this one just spends them differently. There,
+     they were what the glass frosted. Here they are the ground a member sees in
+     the margins and gutters, with the panes reading as objects laid ON it. So
+     the bloom block below is UNCHANGED and still load-bearing: strip it and
+     this becomes white cards on a white page, which is the failure the first
+     revision of the old model hit from the opposite direction.
+
+     **THE OPACITY IS TUNED TO THIS GROUND, NOT COPIED FROM THE REFERENCE.**
+     The reference card is 95%, and at 95% it still reads as glass — because it
+     sits on a saturated peach (`#FFF4EB` base, four orbs at 0.32–0.60), so 5%
+     of a strong field is still visible warmth. Copying the 95% onto THIS ground
+     (`#FAFAF9`, five blooms at 0.05–0.17 — roughly a quarter of the colour, on
+     a base that is already near-white) produces flat paint, and it was reported
+     as exactly that. The number that reproduces the LOOK here is lower than the
+     number that produces it there; matching the reference's material means
+     matching what a member sees, not its literal alpha.
 
      **HOVER CLEARS THE PANE — it does not brighten it, and the direction is the
-     whole gesture.** Under the pointer the glass thins from 62% to 40% and the
-     ground's colour comes UP through it; the pane does not whiten and float off
-     the page. Anything else is a fill changing shade, which is what a button
-     does. Glass responds by becoming more glass.
+     whole gesture.** Under the pointer the glass thins and the ground's colour
+     comes UP through it; the pane does not whiten and float off the page.
+     Anything else is a fill changing shade, which is what a button does. Glass
+     responds by becoming more glass. **This is the portal's ONLY hover
+     response** — nothing lifts, and no shadow moves; see `glassHover` in
+     `leaf/Mount.tsx`.
 
      Both values are free to be anything, and that is not luck: the ground below
      is constrained so that its OWN hardest point already clears every ratio in
      this file (see there). Compositing white over it can only raise luminance,
      so no glass opacity — resting, hover, or any future third state — can push
      a pane below the envelope. Contrast is held by the ground, which frees the
-     glass to be a purely visual decision. */
-  --color-glass: rgb(255 255 255 / 0.62);
-  --color-glass-hover: rgb(255 255 255 / 0.4);
-  /* A pane is lit along its top edge. With only 1.06:1 of fill contrast to
-     work with, this highlight is structural, not ornament. */
-  --color-glass-edge: rgb(255 255 255 / 0.92);
-  --blur-glass: 26px;
+     glass to be a purely visual decision. Raising the fill therefore only ever
+     RELAXES the ink ratios quoted below; every one of them is measured against
+     the thinnest pane a member can see, which is the hovered one. */
+  /* These are the fill UNDER the body gradient in `.leaf-specular`, not what a
+     member sees. Read them as the value at the BOTTOM of a pane — the top is
+     denser by the gradient's own 0.35. Composited: rest 0.84 → 0.75, hover
+     0.58 → 0.35. Moving either number moves both ends of that range. */
+  --color-glass: rgb(255 255 255 / 0.75);
+  --color-glass-hover: rgb(255 255 255 / 0.35);
+  /* The pane's edge, and it had to change hue when the fill went solid. A white
+     rim reads as a LIT edge only while the pane is thin enough to be darker
+     than the light hitting it — on a 95% pane, white on white is nothing, and
+     the pane loses its boundary entirely. So the edge is now a warm rim drawn
+     from the ACTION terracotta at a low alpha, the same tint the mount shadow
+     carries; the two together are what separate a pane from the ground.
+
+     It is DECORATIVE and exempt from 1.4.11 — a card edge is not a control
+     boundary. Form controls take `--color-leaf-input`, which is unrelated and
+     still measured. */
+  --color-glass-edge: rgb(180 86 54 / 0.15);
+
+  /* The reference's value. It was removed once and is back for a reason that
+     changed underneath it: the pane was 95% then, so the blur had nothing to
+     frost and its only visible contribution was an artifact — Chrome renders a
+     large-radius backdrop blur in downscaled, low-precision passes, and over a
+     nearly flat ground that quantises into grey MOTTLING. At 0.68 resting the
+     backdrop is a third of what a member sees, so the blur has real work to do.
+
+     **The banding risk did not go away, it moved.** A flat backdrop is its
+     worst case, because the quantisation step is comparable to the gradient's
+     own variation — and this ground is very flat. If mottling reappears, drop
+     the radius (8–14px bands far less) before dropping the effect. */
+  --blur-glass: 32px;
 
   /* Solid, so the mark has an uncomplicated field. */
   --color-bar: #ffffff;
@@ -212,18 +271,46 @@
   --radius-pill: 9999px;
 
   /* ── Depth ─────────────────────────────────────────────────────────────
-     Three elevations, no more: ground (none), mount (resting), floating
-     chrome (bar + dock). Each carries its own inset top highlight, because
-     that highlight is what reads as a lit edge. */
+     Two elevations now: the page (ground and every mount on it, all flat) and
+     floating chrome (the dock). Each carries an inset top highlight, because
+     that highlight is what reads as a lit edge.
+
+     **A MOUNT CASTS NO DROP SHADOW. Both outer layers are gone, deliberately.**
+     It carried the reference design's pair —
+       0 6px 32px -6px rgb(180 86 54 / 0.14)
+       0 2px 10px -2px rgb(180 86 54 / 0.08)
+     — and both are offset DOWNWARD, so they pile up along the bottom edge and
+     are densest at the bottom corners. Combined peak is ~0.21 of a mid-chroma
+     terracotta, which over this ground composites to roughly #EDD3CB against a
+     #FCF4F3 surround: a 15–40 unit step. Too dark to read as light, so it reads
+     as a smudge hugging the corner — reported as "blackish at the outer edge",
+     and isolated by turning the shadow off, at which point it vanishes.
+
+     They are the reference's own values and they work THERE because that ground
+     is a saturated peach a terracotta glow disappears into. On near-white there
+     is nothing for it to blend with. **The lesson generalises: this ground has
+     no headroom for anything painted OUTSIDE a pane.** Depth here has to come
+     from the pane itself.
+
+     So what is left is entirely inset: the lit white top rim and a 1px tinted
+     ring, which together give the pane an edge without putting a single pixel
+     of ink on the ground. Elevation is carried by the 3px hover lift instead
+     (`glassHover`) — a change in position, which needs no contrast to read. */
   --shadow-mount:
-    0 1px 2px rgb(30 28 24 / 0.05), 0 16px 38px -22px rgb(30 28 24 / 0.34),
-    inset 0 1px 0 rgb(255 255 255 / 0.9);
-  --shadow-mount-hover:
-    0 2px 4px rgb(30 28 24 / 0.06), 0 30px 56px -26px rgb(30 28 24 / 0.4),
-    inset 0 1px 0 rgb(255 255 255 / 1);
+    inset 0 1px 0 rgb(255 255 255 / 0.78),
+    inset 0 0 0 1px rgb(180 86 54 / 0.1);
+  /* Floating chrome — **the one place a drop shadow is still justified**, and
+     for a reason a mount does not share: the dock floats OVER SCROLLING
+     CONTENT, so it needs to separate from whatever is passing beneath it, not
+     from a static ground. It is phone-only (`sm:hidden`) and inset from all
+     three edges, so its shadow falls on ground a member is not reading. If it
+     ever reads as a smudge the way the mounts' did, it goes the same way — the
+     dock is opaque enough to stand on its own. The top bar takes none of this;
+     it is a solid `--color-bar` with a hairline. */
   --shadow-float:
-    0 2px 6px rgb(30 28 24 / 0.08), 0 22px 42px -18px rgb(30 28 24 / 0.44),
-    inset 0 1px 0 rgb(255 255 255 / 1);
+    0 14px 44px -8px rgb(180 86 54 / 0.24), 0 4px 14px -3px rgb(96 45 26 / 0.14),
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    inset 0 0 0 1px rgb(180 86 54 / 0.12);
   /* Tinted from the ACTION colour, not the brand — a red glow under a
      terracotta pill reads as a colour-management bug. */
   --shadow-cta:
@@ -304,21 +391,23 @@
 }
 
 /* ─── The ground blooms ────────────────────────────────────────────────────
-   THE MECHANISM, NOT DECORATION. Over a flat ground, translucent white
-   renders as nothing more than a paler flat colour — these very large washes
-   are what the glass has to frost. Remove them and the whole material fails
-   to read; that is precisely what the first revision of this design got wrong,
-   and the second revision got it wrong a subtler way: the blooms were there
-   but capped so low (9–13%) that the composited pane still landed on #F9F8F7.
-   A member reading the portal saw opaque white cards. **A bloom nobody can see
-   is the same as no bloom.**
+   THE MECHANISM, NOT DECORATION. These very large washes are the only colour
+   on the surface: they are what a pane is seen AGAINST in the margins and
+   gutters, and what rises through it on hover. Remove them and the whole
+   material fails to read — white cards on a white page. That is precisely what
+   the first revision of this design got wrong, and the second revision got it
+   wrong a subtler way: the blooms were there but capped so low (9–13%) that the
+   composited pane still landed on #F9F8F7. A member reading the portal saw
+   opaque white cards. **A bloom nobody can see is the same as no bloom.**
 
-   THE FAMILY IS THE BRAND'S. Six washes, all in the red family bar one: rose
-   top-left and upper-right, brand red through the middle, deep brand mid-right,
-   blush along the bottom, and the logo grey lower-left as the neutral anchor
-   that keeps the field from reading as a single flat pink. (The earlier cool
-   blue-grey is retired — it was the only cool note on the surface and it fought
-   the mark.)
+   THE FAMILY IS THE BRAND'S, AND NOW WITHOUT EXCEPTION. Five washes, every one
+   in the red family: rose top-left and upper-right, brand red through the
+   middle, deep brand mid-right, and blush along the bottom. Both neutral
+   exceptions have now been removed for the same reason — the earlier cool
+   blue-grey fought the mark, and the logo grey that replaced it read as a
+   shadow around the cards once the pane went solid (see the note at the end of
+   this stack). **Do not reintroduce a neutral here.** A grey wash on a warm
+   near-white ground does not read as colour, it reads as dirt.
 
    THE CEILING IS COMPUTED, AND IT IS SET BY THE BARE GROUND, NOT BY THE GLASS.
    The tempting way to size these is against the composited pane, since that is
@@ -337,7 +426,7 @@
    surface is safe at ANY glass opacity, which is what lets hover thin the glass
    freely. **Bloom 1 is a rose, not the brand fill, for exactly this reason**:
    red is dark, and the brand value at a visible alpha spends the entire
-   luminance budget before it is visible enough to frost.
+   luminance budget before it is visible at all.
 
    HOW LOUD. These sit at roughly a third of their first tuning, and both the
    alphas and the RADII came down. Scaling alpha alone would have faded the
@@ -359,10 +448,16 @@
    defect this whole block exists to fix.
 
    So: blooms 1–2 are VIEWPORT-scaled and anchored to the top, carrying the
-   concentration a member meets on arrival; blooms 3–6 are DOCUMENT-scaled and
-   quiet, carrying enough colour down the rest of the page that the glass keeps
-   something to frost. Horizontal radii stay percentages in both sets — width is
-   bounded, so it needs no such trick. */
+   concentration a member meets on arrival; blooms 3–5 are DOCUMENT-scaled and
+   quiet, carrying enough colour down the rest of the page that a pane down
+   there still has something to sit on and something to reveal. Horizontal radii
+   stay percentages in both sets — width is bounded, so it needs no such trick.
+
+   A DOCUMENT-scaled bloom is placed against a box whose height it cannot know,
+   so watch where it lands on the SHORT pages too. `at … 90%` is near the last
+   card on a one-screen page and halfway down nothing on a nine-screen one; a
+   wash tuned for the second case can sit right under the content in the first.
+   That is half of what went wrong with the grey one. */
 .leaf-ground {
   position: relative;
 }
@@ -410,45 +505,98 @@
       74% 44% at 46% 106%,
       rgb(238 138 132 / 0.07) 0%,
       rgb(238 138 132 / 0) 100%
-    ),
-    /* 6 — the logo grey, lower-left. The neutral anchor: without it the
-       lower half of a long page drifts to uniform pink. */
-    radial-gradient(
-      58% 42% at 0% 90%,
-      rgb(188 187 173 / 0.12) 0%,
-      rgb(188 187 173 / 0) 100%
     );
+
+  /* THERE IS NO SIXTH, GREY BLOOM, AND IT MUST NOT COME BACK (2026-08-03).
+     It was `radial-gradient(58% 42% at 0% 90%, rgb(188 187 173 / 0.12), …)` —
+     the logo grey, lower-left, carried as a neutral anchor against the lower
+     half of a long page drifting to uniform pink.
+
+     **It was reported three times as a "weird shadow" around the cards, and it
+     is worth knowing why it was so hard to see in the code.** It is the ONLY
+     neutral in a field of five roses, so the smudge read grey while everything
+     anyone would think to blame — the mount shadow, the pane's rim, the
+     backdrop blur — is terracotta. It was also the second-strongest wash here
+     (0.12 against 0.05–0.07 for its neighbours), and `at 0% 90%` with a 42%
+     radius puts it at the lower-left running from 48% to 132% of the box: on
+     any page that fits one screen, 90% down is exactly where the last card
+     sits, so it landed under and beside that card, fading right, with its
+     bottom clipped square by this layer's box. That is a soft grey mass hugging
+     a card with a straight edge under it — which is to say, a shadow.
+
+     The justification stopped holding when the pane went solid. It was written
+     for a 62% pane that this wash showed THROUGH, where it tinted the whole
+     field; against a 95% pane it survives only in the gutters, and a neutral
+     grey beside white reads as grime rather than as page colour. The five
+     remaining washes are all warm, so the field cannot go grey; and solid panes
+     break up the pink far better than a wash ever did.
+
+     Removing it only LIGHTENS the ground, so every ratio quoted above stays a
+     floor. */
 }
 .leaf-ground > * {
   position: relative;
   z-index: 1;
 }
 
-/* ─── The specular bloom ───────────────────────────────────────────────────
-   The lit top face of a pane. `--shadow-mount` already draws a 1px inset rim
-   along the very edge; this is the soft fall of light BELOW that rim, and the
-   pair together is what separates a sheet of glass from a rounded white box.
+/* ─── The lit face: two layers of white over the fill ──────────────────────
+   1. THE SPECULAR — the lit top face. `--shadow-mount` already draws a 1px
+      inset rim along the very edge; this is the soft fall of light BELOW that
+      rim, and the pair together is what separates a sheet of glass from a
+      rounded white box. Narrow and bright: a wide, faint version reads as a
+      flat veil over the row carrying the heading rather than as a lit edge.
 
-   It is a BACKGROUND LAYER, not a `::before` overlay, and that is the whole
+   2. THE BODY GRADIENT — a long fall of white from the top of the pane to
+      nothing at the bottom, so the glass is DENSER where the light lands and
+      THINNER as it falls away. This is what makes the pane clear unevenly
+      instead of stepping between two flat opacities.
+
+   **HOW THE GRADED HOVER ACTUALLY WORKS, because it is not obvious and it is
+   easy to "simplify" back into a flat one.** `background-image` is a DISCRETE
+   property — CSS will not tween one gradient into another, so a hover that
+   swaps gradients snaps. The gradient here is therefore FIXED, and only
+   `background-color` moves (`bg-glass` → `hover:bg-glass-hover`, which
+   `transition-colors` tweens smoothly). Compositing does the rest:
+
+       composite(y) = 1 − (1 − B(y))·(1 − A)
+       Δ(y)         = (1 − B(y)) · (A_rest − A_hover)
+
+   The CHANGE is scaled by `1 − B(y)`, so it is smallest at the top, where the
+   gradient is already dense, and largest at the bottom, where it contributes
+   nothing. One animated colour, a graded result. Measured:
+
+       rest    0.79 at the top  →  0.68 at the bottom
+       hover   0.64 at the top  →  0.45 at the bottom
+
+   so the pane clears about twice as hard along its lower edge, and the ground
+   rises into the card from below — the same direction its shadow pools.
+
+   BOTH ARE BACKGROUND LAYERS, not a `::before` overlay, and that is the whole
    trick. An overlay paints above the mount's text (a positioned pseudo-element
    with `inset: 0` wins the paint order against non-positioned in-flow content),
-   so a 45% white veil over the top third of a mount would wash out exactly the
-   row that carries its heading — and it could not be pushed behind with
-   `z-index: -1` either, because that puts it behind the glass fill itself.
-   As a background layer it sits above the fill and below every glyph, needs no
+   so a white veil over the top of a mount would wash out exactly the row that
+   carries its heading — and it could not be pushed behind with `z-index: -1`
+   either, because that puts it behind the glass fill itself. As background
+   layers they sit above the fill and below every glyph, need no
    `overflow: hidden`, and therefore cannot clip a mount's own furniture (the
    negative-margin 44px touch targets, a focus ring, the dock's pills).
 
-   Colour, radius, blur and border stay on the utilities in `glassSurface`:
-   this class sets `background-image` ONLY, so `bg-glass` / `hover:bg-glass-hover`
-   keep sole ownership of `background-color`. leaf.css is unlayered and would
-   otherwise beat Tailwind's utility layer and freeze the hover response. */
+   Colour, radius and border stay on the utilities in `glassSurface`: this class
+   sets `background-image` ONLY, so `bg-glass` / `hover:bg-glass-hover` keep sole
+   ownership of `background-color`. leaf.css is unlayered and would otherwise
+   beat Tailwind's utility layer and freeze the hover response entirely. */
 .leaf-specular {
-  background-image: linear-gradient(
-    180deg,
-    rgb(255 255 255 / 0.45) 0%,
-    rgb(255 255 255 / 0) 38%
-  );
+  background-image:
+    linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.22) 0%,
+      rgb(255 255 255 / 0) 20%
+    ),
+    linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.35) 0%,
+      rgb(255 255 255 / 0) 100%
+    );
 }
 
 /* One uppercase label tier, app-wide. Hierarchy comes from rules and spacing,
@@ -729,6 +877,14 @@
   .leaf .leaf-rise {
     opacity: 1 !important;
     transform: none !important;
+  }
+  /* The hover lift is suppressed, not merely sped up. The rules above only cut
+     transition DURATION, which would leave a 3px jump under the pointer — still
+     movement, and the abrupt kind this preference exists to avoid. The pane
+     still thins, so the surface keeps a response. `translate`, not `transform`:
+     that is the property the lift actually sets (see `glassHover`). */
+  .leaf .leaf-lift:hover {
+    translate: none !important;
   }
   .leaf .leaf-grow,
   .leaf .leaf-grow-late {

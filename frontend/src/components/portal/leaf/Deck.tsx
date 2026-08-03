@@ -61,7 +61,7 @@ import {
 import { useReducedMotion } from "motion/react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { glassSurface, glassResting } from "./Mount";
+import { glassSurface, glassHover } from "./Mount";
 
 export interface DeckSlide {
   /** Stable across renders; it is what the URL carries. */
@@ -686,7 +686,11 @@ function DeckStep({
       }
       className={cn(
         glassSurface,
-        glassResting,
+        // The same single hover every card takes — a step button is a pane you
+        // point at, so it thins like one. Its press is its own, tighter than a
+        // card's, because a pill this size reads better with a small scale than
+        // with a fill change alone.
+        glassHover,
         "leaf-focus flex min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-pill px-3.5",
         "text-row font-semibold text-record active:scale-[0.99]",
         // Invisible rather than greyed at the ends: a permanently dead control

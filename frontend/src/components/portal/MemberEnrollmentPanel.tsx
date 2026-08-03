@@ -60,7 +60,7 @@ import {
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Deck, type DeckSlide } from "@/components/portal/leaf/Deck";
 import { HeadRail, useHeadRailWidth } from "@/components/portal/leaf/HeadRail";
-import { Mount, glassSurface } from "@/components/portal/leaf/Mount";
+import { Mount, glassHover, glassSurface } from "@/components/portal/leaf/Mount";
 import { Strike } from "@/components/portal/leaf/Strike";
 import { currencySymbol } from "@/components/portal/leaf/Figure";
 import { formatDay } from "@/components/portal/leaf/date";
@@ -142,6 +142,7 @@ function StatusNote({
     <div
       className={cn(
         glassSurface,
+        glassHover,
         "flex flex-col gap-2 rounded-control p-3 sm:flex-row sm:items-baseline sm:gap-3",
       )}
     >

@@ -41,7 +41,7 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { PortalClaim } from "@/api/portal";
 import { cn } from "@/lib/cn";
-import { glassSurface } from "./Mount";
+import { glassHover, glassSurface } from "./Mount";
 import { HeadRail } from "./HeadRail";
 import { Money, currencySymbol, moneyText } from "./Figure";
 import { ClaimStrike, type ClaimBucket, claimBucket } from "./Strike";
@@ -379,6 +379,7 @@ export function ClaimList({
         <p
           className={cn(
             glassSurface,
+            glassHover,
             "leaf-rise rounded-tile px-4 py-5 text-row text-label sm:px-5",
           )}
         >

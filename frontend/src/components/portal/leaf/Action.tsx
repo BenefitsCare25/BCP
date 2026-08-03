@@ -63,9 +63,13 @@ const TONE: Record<Tone, string> = {
     "h-11 px-5 text-row text-action-ink bg-action-wash border border-action-ink " +
     "hover:bg-action hover:text-action-foreground hover:shadow-cta " +
     "active:scale-[0.99]",
+  // Made of the card material, so it takes the card's ONE hover: the pane
+  // thins, the shadow does not move. It used to deepen its shadow too, which
+  // made a pill respond differently from the card it sits on — see `glassHover`
+  // in `leaf/Mount.tsx`.
   neutral:
-    "h-11 px-5 text-row text-record bg-glass border border-glass-edge shadow-mount " +
-    "hover:bg-glass-hover hover:shadow-mount-hover active:scale-[0.99]",
+    "h-11 px-5 text-row text-record bg-glass leaf-specular border border-glass-edge shadow-mount " +
+    "hover:bg-glass-hover active:scale-[0.99]",
 };
 
 /** `block: true` is full width everywhere; `block: "phone"` is full width on a

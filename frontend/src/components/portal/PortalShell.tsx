@@ -47,7 +47,7 @@ import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
 import { NotificationBell } from "@/components/shell/NotificationBell";
 import { BenefitYearControl } from "./BenefitYearControl";
-import { glassSurface } from "./leaf/Mount";
+import { glassHover, glassSurface } from "./leaf/Mount";
 import { HeadRailProvider, useHeadRailWidth } from "./leaf/HeadRail";
 import { portalPath } from "@/lib/tenant";
 import { useCompany } from "@/components/portal/useCompany";
@@ -319,8 +319,11 @@ export function PortalShell() {
                 params={{ company }}
                 className={cn(
                   glassSurface,
-                  "mb-4 flex items-start gap-3 rounded-tile p-4",
-                  "leaf-focus transition-colors duration-200 ease-leaf hover:bg-glass-hover",
+                  // The shared hover, not a hand-rolled copy of it — this
+                  // notice spelled the same three utilities out inline and was
+                  // one of the four responses that had drifted apart.
+                  glassHover,
+                  "mb-4 flex items-start gap-3 rounded-tile p-4 leaf-focus",
                 )}
               >
                 <ShieldAlert
@@ -347,8 +350,12 @@ export function PortalShell() {
         {/* The dock. Every destination present at once, each a full 44×44
             target, and the enrollment deadline announced in the page as well as
             here — nothing a member needs on a deadline is ever reachable only by
-            horizontal scroll. Floating glass rather than a bar, so the ground
-            reads continuously beneath it. */}
+            horizontal scroll. Floating glass rather than a bar: it is inset from
+            all three edges so the ground runs past it, which is what keeps it
+            reading as an object on the page. The pane itself is near-opaque like
+            every other, and here that is the safer half of the change — this one
+            floats over SCROLLING CONTENT, and body copy travelling visibly under
+            a nav is a legibility problem the thin pane used to have. */}
         <nav
           aria-label="Portal sections"
           className={cn(

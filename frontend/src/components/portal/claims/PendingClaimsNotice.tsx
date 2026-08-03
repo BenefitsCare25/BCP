@@ -31,11 +31,18 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
       </p>
       {pendingClaims.length > 0 && (
         <>
+          {/* A HAIRLINE, not a fill. These rows used to be `bg-glass` inside
+              this `bg-bar/70` box, which worked only while the pane was thin
+              enough to be DARKER than the wash around it. With a 95% pane both
+              composite to the same near-white and the rows lose their bounds
+              entirely — and each carries a `-m-3` remove button whose 44px
+              target overhangs its neighbours, so where one row ends has to stay
+              visible. `bg-shade` would draw it but that fill means SELECTED. */}
           <ul className="space-y-1">
             {pendingClaims.map((p) => (
               <li
                 key={p.uploadIndex}
-                className="flex items-center justify-between gap-2 rounded-control bg-glass px-3 py-1.5 text-row"
+                className="flex items-center justify-between gap-2 rounded-control border border-hairline px-3 py-1.5 text-row"
               >
                 <span className="min-w-0 truncate text-record">
                   {p.fields?.invoice_number ?? p.fileName}

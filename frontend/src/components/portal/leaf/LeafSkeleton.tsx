@@ -18,7 +18,7 @@ export function LeafSkeleton({
         <div
           key={i}
           aria-hidden
-          className="rounded-tile border border-glass-edge bg-glass p-4 shadow-mount backdrop-blur-glass sm:p-5"
+          className="rounded-tile border border-glass-edge bg-glass leaf-specular p-4 shadow-mount sm:p-5"
         >
           <div className="h-3 w-1/3 animate-pulse rounded-pill bg-track" />
           <div className="mt-2 h-3 w-2/3 animate-pulse rounded-pill bg-track" />

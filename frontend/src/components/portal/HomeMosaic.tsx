@@ -52,7 +52,7 @@ import { usePortalMessages, type ClaimMessageList } from "@/api/portalMessages";
 import { cn } from "@/lib/cn";
 import { isNotFoundError } from "@/lib/errors";
 import { PortalErrorState } from "./PortalErrorState";
-import { glassInteractive, glassSurface, MountRule } from "./leaf/Mount";
+import { glassHover, glassSurface, MountRule } from "./leaf/Mount";
 import { goLinkClass, GoArrow } from "./leaf/Action";
 import { FillRule } from "./leaf/FillRule";
 import { Money, currencySymbol, moneyText } from "./leaf/Figure";
@@ -67,14 +67,18 @@ import { useCompany } from "./useCompany";
  * driving the row's height. */
 const HOME_MESSAGES = 3;
 
-/** `interactive` earns the hover lift — set it only on a tile whose onward link
- * stretches over the whole surface, so lifting always means something happens. */
+/** A home tile is a `Mount` in everything but its header furniture: the same
+ * material, the same single hover response, no private treatment.
+ *
+ * **There is no `interactive` prop and no lift.** Five of these tiles used to
+ * rise 3px on hover while every other pane in the portal did not, which made the
+ * home the one page whose cards behaved differently — see `glassHover`. What
+ * marks a tile as a target is its stretched anchor and the pointer cursor that
+ * comes with it, not the geometry. */
 function Tile({
-  interactive = false,
   className,
   children,
 }: {
-  interactive?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -82,8 +86,8 @@ function Tile({
     <div
       className={cn(
         glassSurface,
+        glassHover,
         "relative flex flex-col gap-3 rounded-tile p-4 sm:p-5",
-        interactive && glassInteractive,
         className,
       )}
     >
@@ -354,7 +358,6 @@ export function HomeMosaicView({
           strike does NOT animate here — twenty rules drawing at once is the
           uniform page-load flourish this world refuses everywhere else. */}
       <Tile
-        interactive
         className="leaf-rise col-span-2 h-full sm:col-span-1"
       >
         <TileLabel>Your claims</TileLabel>
@@ -481,7 +484,7 @@ export function HomeMosaicView({
           Rendered only when the member actually holds a limit; the empty case
           is the tile's absence. */}
       {headline && hero && (
-        <Tile interactive className="leaf-rise col-span-2 h-full sm:col-span-1">
+        <Tile className="leaf-rise col-span-2 h-full sm:col-span-1">
           <TileLabel>{hero.label}</TileLabel>
           <Money
             value={hero.value}
@@ -521,7 +524,7 @@ export function HomeMosaicView({
       )}
 
       {coverage.length > 0 && (
-        <Tile interactive className="leaf-rise h-full">
+        <Tile className="leaf-rise h-full">
           <TileLabel>What&rsquo;s covered</TileLabel>
           <p className="text-2xl font-semibold tracking-title text-record">
             {coverage.length} {coverage.length === 1 ? "benefit" : "benefits"}
@@ -540,7 +543,7 @@ export function HomeMosaicView({
       )}
 
       {activeDependants.length > 0 && (
-        <Tile interactive className="leaf-rise h-full">
+        <Tile className="leaf-rise h-full">
           <TileLabel>My family</TileLabel>
           <p className="text-2xl font-semibold tracking-title text-record">
             {activeDependants.length} covered
@@ -552,7 +555,6 @@ export function HomeMosaicView({
       )}
 
       <Tile
-        interactive
         className="leaf-rise col-span-2 h-full sm:col-span-1"
       >
         <div className="flex items-start justify-between gap-3">
@@ -582,7 +584,6 @@ export function HomeMosaicView({
           while a window is open. */}
       {source.enrollmentOpen && (
         <Tile
-          interactive
           className="leaf-rise col-span-2 sm:col-span-3"
         >
           <Strike tone="pending">Enrolment open</Strike>
