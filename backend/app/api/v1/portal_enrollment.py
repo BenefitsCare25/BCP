@@ -108,7 +108,7 @@ def _require_open_enrollment(
     window = open_window_for(db, employee)
     if window is None:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "No enrollment window is currently open."
+            status.HTTP_404_NOT_FOUND, "No enrolment period is currently open."
         )
     return employee, window, _get_or_create_enrollment(db, window, employee)
 

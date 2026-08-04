@@ -605,7 +605,7 @@ function FlexReports({
   return (
     <div className="space-y-6">
       <ReportSection
-        title="Member elections"
+        title="Member benefits selection"
         hint="What members chose, and what it costs their wallet."
         controls={<NricToggle nric={nric} setNric={setNric} />}
         rows={electionRows}

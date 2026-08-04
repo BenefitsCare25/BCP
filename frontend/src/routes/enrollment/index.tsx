@@ -24,6 +24,7 @@ import {
   useEnrollmentWindows,
   useFlexPricing,
   useOpenWindow,
+  useUpdateWindow,
 } from "@/api/enrollment";
 import { formatError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,43 @@ const STATUS_VARIANT: Record<string, "primary" | "good" | "outline"> = {
   closed: "good",
 };
 
+/** The per-product price-tag source (slip vs manual matrix) configured for the
+ * year. The source is a column on EnrollmentWindow, but it is price-tag setup,
+ * so it is edited on the Price Tag tab (which writes it to every still-editable
+ * window) and merely CARRIED by the create-window form. Both read it from here:
+ * two readings of "what source is configured" would let a new window silently
+ * revert what the Price Tag tab shows.
+ *
+ * It reads the newest window the tab can WRITE to (not `governing_flex_config`'s
+ * latest non-draft), because reading a different window than we write to makes a
+ * saved source snap straight back: on a year whose only window is still a draft,
+ * the save lands on the draft while a governing-window read falls back to
+ * "slip" — the toggle flips back, the matrix editor collapses and the Save
+ * button disappears, all reporting success. Windows are ordered `opens_at DESC`
+ * and a save writes the same map to every editable one, so [0] is both the
+ * newest and (after any save through this tab) representative. Everything closed
+ * → nothing is writable, so fall back to the governing window for display and
+ * the toggle goes read-only. */
+function configuredSourceMap(
+  windows: EnrollmentWindow[] | undefined,
+): Record<string, FlexPriceSource> {
+  return sourceWindow(windows)?.flex_price_source ?? {};
+}
+
+function editableWindowsOf(windows: EnrollmentWindow[] | undefined) {
+  // A closed window is a historical record — the server 409s a PATCH on one.
+  return (windows ?? []).filter((w) => w.status !== "closed");
+}
+
+function sourceWindow(
+  windows: EnrollmentWindow[] | undefined,
+): EnrollmentWindow | undefined {
+  return (
+    editableWindowsOf(windows)[0] ??
+    (windows ?? []).filter((w) => w.status !== "draft")[0]
+  );
+}
+
 function toLocalInput(): { opens: string; closes: string } {
   // Sensible default window: a 30-day span starting today (datetime-local format).
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -57,11 +95,10 @@ function toLocalInput(): { opens: string; closes: string } {
 export function EnrollmentDashboardPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: windows, isLoading } = useEnrollmentWindows(policyYearId);
+  // Needed only for the flex product list, which the new window's price-tag
+  // source map is built over. The tags and their source are set on the Price Tag
+  // tab — nothing here renders them.
   const { data: flexPricing } = useFlexPricing(policyYearId);
-  // Read-only here: the window form previews each product's price tags but the
-  // matrix itself is edited on the Flex tab (it is per policy year, not per
-  // window). FlexProductList still needs an editor instance to type-check.
-  const flexEditor = useFlexPricingEditor(policyYearId);
   const createWindow = useCreateWindow(policyYearId);
   const openWindow = useOpenWindow();
   const closeWindow = useCloseWindow();
@@ -74,13 +111,13 @@ export function EnrollmentDashboardPage() {
   const [closesAt, setClosesAt] = useState(defaults.closes);
   const [allowLeave, setAllowLeave] = useState(false);
   const [allowDeps, setAllowDeps] = useState(true);
-  // Whether elections may draw more flex than the member's wallet holds.
-  // Off (recommended), submit/confirm reject an overdrawn enrollment.
+  // Whether benefits selections may draw more flex than the member's wallet
+  // holds. Off (recommended), submit/confirm reject an overdrawn enrollment.
   const [allowOverdraft, setAllowOverdraft] = useState(false);
-  // Flex funding config for this window: company-wide drawdown rule + per-product
-  // price-tag source ("slip" = from placement-slip premium, else portal matrix).
+  // Flex funding config for this window: the company-wide drawdown rule. The
+  // per-product price-tag SOURCE is also a window column, but it is price-tag
+  // setup — it is chosen on the Price Tag tab and only carried here.
   const [drawdownRule, setDrawdownRule] = useState<FlexDrawdownRule>("full");
-  const [priceSource, setPriceSource] = useState<Record<string, FlexPriceSource>>({});
   const [confirmClose, setConfirmClose] = useState<EnrollmentWindow | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<EnrollmentWindow | null>(null);
 
@@ -98,14 +135,14 @@ export function EnrollmentDashboardPage() {
   if (!policyYearId) {
     return (
       <p className="text-sm text-muted-foreground">
-        Select a policy year to manage enrollment windows.
+        Select a benefit year to manage enrolment periods.
       </p>
     );
   }
 
   function handleCreate() {
     if (!name.trim()) {
-      toast.error("Give the window a name.");
+      toast.error("Give the enrolment period a name.");
       return;
     }
     // A cleared datetime-local input yields "" → new Date("").toISOString()
@@ -119,10 +156,14 @@ export function EnrollmentDashboardPage() {
       toast.error("Both open and close times are required.");
       return;
     }
-    // Send an explicit source for every product (default: from slip). A complete
-    // map means an unlisted product can't silently fall back to a different default.
+    // Carry the year's configured price-tag source onto the new window (it is a
+    // window column). Sending an explicit entry for EVERY product matters: the
+    // resolver skips building the slip premium index when every named product is
+    // priced from the matrix, so a partial map can leave an unnamed slip product
+    // unpriced.
+    const inherited = configuredSourceMap(windows);
     const sources = Object.fromEntries(
-      flexProducts.map((p) => [p.product_id, priceSource[p.product_id] ?? "slip"]),
+      flexProducts.map((p) => [p.product_id, inherited[p.product_id] ?? "slip"]),
     );
     createWindow.mutate(
       {
@@ -140,7 +181,7 @@ export function EnrollmentDashboardPage() {
       },
       {
         onSuccess: () => {
-          toast.success("Enrollment window created.");
+          toast.success("Enrolment period created.");
           setName("");
         },
       },
@@ -152,10 +193,11 @@ export function EnrollmentDashboardPage() {
       {/* Create window */}
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="flex items-center gap-1">
-          <h3 className="text-sm font-semibold text-foreground">New enrollment window</h3>
+          <h3 className="text-sm font-semibold text-foreground">New enrolment period</h3>
           <InfoHint>
-            Define when members may change elections. Opening the window pre-fills each
-            member with their current plan (reverse enrollment).
+            Define when members may change their benefits selection. Opening the
+            period pre-fills each member with their current plan (reverse
+            enrolment).
           </InfoHint>
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -208,15 +250,27 @@ export function EnrollmentDashboardPage() {
             )}
           </div>
 
-          {/* Flex funding: company-wide drawdown rule + per-product price-tag source */}
+          {/* Flex funding: how this window draws the wallet down (the price tags
+              themselves are per policy year — see the Price Tag tab) */}
           <div className="rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">
-            <div className="flex items-center gap-1">
-              <div className="text-xs font-semibold text-foreground">Flex funding</div>
-              <InfoHint>
-                How the flex wallet is drawn down for coverage in this window. The
-                wallet funds each member's coverage; changing plans or trading
-                leave adjusts what it is charged.
-              </InfoHint>
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              <div className="flex items-center gap-1">
+                <div className="text-xs font-semibold text-foreground">Flex funding</div>
+                <InfoHint>
+                  How the flex wallet is drawn down for coverage in this
+                  enrolment period. The wallet funds each member&apos;s coverage;
+                  changing plans or trading leave adjusts what it is charged.
+                </InfoHint>
+              </div>
+              {/* What each plan COSTS the wallet — the price tags and where they
+                  come from — is per policy year and lives on its own tab. */}
+              <Link
+                to="/enrollment"
+                search={{ tab: "flex" }}
+                className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Set the price tags →
+              </Link>
             </div>
 
             {/* Drawdown rule — segmented so the active choice is unambiguous */}
@@ -245,45 +299,16 @@ export function EnrollmentDashboardPage() {
               </label>
               <span className="basis-full text-2xs text-muted-foreground sm:basis-auto">
                 {allowOverdraft
-                  ? "Elections may exceed the flex wallet — the shortfall is the member's to top up (e.g. via payroll)."
-                  : "Submitting is blocked when elections draw more flex than the member's wallet holds."}
+                  ? "Benefits selections may exceed the flex wallet — the shortfall is the member's to top up (e.g. via payroll)."
+                  : "Submitting is blocked when benefits selections draw more flex than the member's wallet holds."}
               </span>
             </div>
-
-            {flexProducts.length > 0 && (
-              <div className="mt-3 border-t border-border pt-2.5">
-                <div className="flex items-center justify-between gap-2 text-2xs uppercase tracking-wider text-muted-foreground">
-                  <span>Price-tag source per product</span>
-                  {/* The SOURCE is a window column and is set here; the price
-                      tags themselves are per policy year and live on the Flex
-                      tab, so this stays a preview. */}
-                  <Link
-                    to="/enrollment"
-                    search={{ tab: "flex" }}
-                    className="normal-case underline underline-offset-2 hover:text-foreground"
-                  >
-                    Edit price tags →
-                  </Link>
-                </div>
-                <div className="mt-1.5">
-                  <FlexProductList
-                    products={flexProducts}
-                    pricing={flexPricing?.pricing}
-                    editor={flexEditor}
-                    sourceFor={(pid) => priceSource[pid] ?? "slip"}
-                    onSourceChange={(pid, v) =>
-                      setPriceSource((s) => ({ ...s, [pid]: v }))
-                    }
-                  />
-                </div>
-              </div>
-            )}
           </div>
         </div>
         <div className="mt-3">
           <Button onClick={handleCreate} disabled={createWindow.isPending}>
             {createWindow.isPending && <Loader2 className="size-4 animate-spin" />}
-            Create window
+            Create enrolment period
           </Button>
         </div>
       </div>
@@ -291,7 +316,7 @@ export function EnrollmentDashboardPage() {
       {/* Window list */}
       <div className="rounded-lg border border-border bg-card">
         <div className="border-b border-border px-4 py-2.5 text-sm font-semibold text-foreground">
-          Enrollment windows
+          Enrolment periods
         </div>
         {isLoading ? (
           <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
@@ -299,7 +324,7 @@ export function EnrollmentDashboardPage() {
           </div>
         ) : !windows?.length ? (
           <p className="px-4 py-6 text-sm text-muted-foreground">
-            No windows yet. Create one above to start an enrollment.
+            No enrolment periods yet. Create one above to start an enrolment.
           </p>
         ) : (
           <ul className="divide-y divide-border">
@@ -325,7 +350,7 @@ export function EnrollmentDashboardPage() {
                         to="/enrollment"
                         search={{ tab: "elections", window: w.id }}
                       >
-                        Elections
+                        Benefits Selection
                       </Link>
                     </Button>
                   )}
@@ -336,7 +361,7 @@ export function EnrollmentDashboardPage() {
                         openWindow.mutate(w.id, {
                           onSuccess: (r) =>
                             toast.success(
-                              `Window opened — ${r.enrollments_created.toLocaleString()} enrollment(s) created.`,
+                              `Enrolment period opened — ${r.enrollments_created.toLocaleString()} enrolment(s) created.`,
                             ),
                         })
                       }
@@ -350,13 +375,13 @@ export function EnrollmentDashboardPage() {
                       variant="outline"
                       size="sm"
                       disabled={openWindow.isPending}
-                      title="Re-runs the open step to backfill enrollment rows for employees added after the window opened (idempotent)"
+                      title="Re-runs the open step to backfill enrolment rows for employees added after the period opened (idempotent)"
                       onClick={() =>
                         openWindow.mutate(w.id, {
                           onSuccess: (r) =>
                             r.enrollments_created > 0
                               ? toast.success(
-                                  `Synced ${r.enrollments_created.toLocaleString()} new employee(s) into this window.`,
+                                  `Synced ${r.enrollments_created.toLocaleString()} new employee(s) into this enrolment period.`,
                                 )
                               : toast.info(
                                   "No new employees to sync — everyone already has an enrollment.",
@@ -377,7 +402,7 @@ export function EnrollmentDashboardPage() {
                       variant="ghost"
                       size="sm"
                       onClick={() => setConfirmDelete(w)}
-                      aria-label="Delete window"
+                      aria-label="Delete enrolment period"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -392,7 +417,7 @@ export function EnrollmentDashboardPage() {
       <AlertDialog
         open={!!confirmClose}
         onOpenChange={(o) => !o && setConfirmClose(null)}
-        title="Close this enrollment window?"
+        title="Close this enrolment period?"
         description={
           <div className="space-y-2">
             {closeSubmitted.data && closeTotal.data ? (
@@ -417,7 +442,7 @@ export function EnrollmentDashboardPage() {
                 ) === 1
                   ? ""
                   : "s"}{" "}
-                will be handled by the window's default behavior.
+                will be handled by the period's default behavior.
               </p>
             ) : (
               <p>
@@ -425,12 +450,12 @@ export function EnrollmentDashboardPage() {
               </p>
             )}
             <p>
-              All elections are projected to effective coverage. This can't be
-              undone.
+              Every benefits selection is projected to effective coverage. This
+              can't be undone.
             </p>
           </div>
         }
-        confirmLabel="Close window"
+        confirmLabel="Close period"
         confirmVariant="default"
         loading={closeWindow.isPending}
         onConfirm={() => {
@@ -449,14 +474,14 @@ export function EnrollmentDashboardPage() {
       <AlertDialog
         open={!!confirmDelete}
         onOpenChange={(o) => !o && setConfirmDelete(null)}
-        title="Delete this draft window?"
-        description="The window will be removed. Only draft windows can be deleted."
+        title="Delete this draft enrolment period?"
+        description="The enrolment period will be removed. Only a draft can be deleted."
         loading={deleteWindow.isPending}
         onConfirm={() => {
           if (!confirmDelete) return;
           deleteWindow.mutate(confirmDelete.id, {
             onSuccess: () => {
-              toast.success("Window deleted.");
+              toast.success("Enrolment period deleted.");
               setConfirmDelete(null);
             },
           });
@@ -466,10 +491,12 @@ export function EnrollmentDashboardPage() {
   );
 }
 
+// Tab KEYS ride the URL (deep links, the /elections legacy redirect, the
+// company-settings redirect), so they stay put when a label is reworded.
 const ENROLLMENT_TABS = [
-  { key: "windows", label: "Windows" },
-  { key: "elections", label: "Elections" },
-  { key: "flex", label: "Flex" },
+  { key: "windows", label: "Enrolment Period" },
+  { key: "elections", label: "Benefits Selection" },
+  { key: "flex", label: "Price Tag" },
   { key: "leave", label: "Leave" },
   { key: "bulk", label: "Bulk plan update" },
 ] as const;
@@ -482,28 +509,39 @@ const isEnrollmentTab = (v: string | undefined): v is EnrollmentTab =>
 // workflow (a window's "Leave trading" switch is what exposes it to members), so
 // it lives here rather than on the company Settings page —
 // /configuration/settings?tab=enrollment redirects to this tab.
-// Everything the flex WALLET pays for, in one place: what each plan and
-// dependant option costs, and the age-banded voluntary rates. All of it is per
-// policy YEAR — it used to live inside the create-window form, which meant the
-// year's prices were unreachable unless you were opening a window. The
-// per-window price-tag SOURCE (slip vs matrix) stays on the window form,
-// because it is a column on the window.
-function EnrollmentFlexTab() {
+// Everything the flex WALLET pays for, in one place: where each product's price
+// tag comes from (slip vs manual matrix), what each plan and dependant option
+// costs, and the age-banded voluntary rates. It used to live inside the
+// create-window form, which meant the year's prices were unreachable unless you
+// were opening a window — and left the same product list rendered on two tabs.
+//
+// The SOURCE is a column on EnrollmentWindow, so saving it writes the (complete)
+// map to every still-editable window — the OPEN one included, since a broker who
+// mis-set the source has to be able to correct it without closing the period. A
+// closed period keeps the source its enrolment actually ran under.
+//
+// Changing it mid-period does NOT retroactively reprice: each election snapshots
+// its `flex_price_tag` when saved and `enrollment_flex_draft` sums those stored
+// values, so what a member submitted under is what confirm checks. It changes
+// what the benefit statement recomputes and what the NEXT save of a selection
+// prices at.
+function EnrollmentPriceTagTab() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: flexPricing, isLoading } = useFlexPricing(policyYearId);
   const flexEditor = useFlexPricingEditor(policyYearId);
   const { data: windows } = useEnrollmentWindows(policyYearId);
+  const updateWindow = useUpdateWindow();
   const [openEditor, setOpenEditor] = useState<Record<string, boolean>>({});
+  // Unsaved source picks, over the saved map.
+  const [sourceEdits, setSourceEdits] = useState<Record<string, FlexPriceSource>>({});
 
-  // The source each product is actually priced by = the governing window's
-  // choice (latest non-draft, mirroring the backend's `governing_flex_config`),
-  // so the preview here matches what members are charged. The list endpoint
-  // already orders opens_at DESC, so the newest is [0] — taking the LAST element
-  // read the OLDEST window and could show a slip tag while members were being
-  // charged the matrix value.
-  const governing = (windows ?? []).filter((w) => w.status !== "draft")[0];
+  const savedSources = configuredSourceMap(windows);
   const sourceFor = (pid: string): FlexPriceSource =>
-    governing?.flex_price_source?.[pid] ?? "slip";
+    sourceEdits[pid] ?? savedSources[pid] ?? "slip";
+  const editableWindows = editableWindowsOf(windows);
+  const sourceDirty = Object.entries(sourceEdits).some(
+    ([pid, v]) => v !== (savedSources[pid] ?? "slip"),
+  );
 
   if (!policyYearId) {
     return (
@@ -514,6 +552,48 @@ function EnrollmentFlexTab() {
   }
 
   const products = flexPricing?.products ?? [];
+  const canEditSource = editableWindows.length > 0;
+
+  async function save() {
+    // The matrix and the source are two independent writes behind one button, so
+    // the matrix goes first and unconditionally: a failing source PATCH must not
+    // silently discard the prices typed in the same sitting.
+    if (flexEditor.dirty) flexEditor.onSave();
+    if (!sourceDirty) return;
+    // `windows` can refetch between render and click (someone else closes the
+    // last period), which leaves the button dirty with nothing to write to —
+    // Promise.all([]) would resolve and report a save that never happened.
+    if (!editableWindows.length) {
+      toast.error(
+        "No open or draft enrolment period to write the price-tag source to.",
+      );
+      return;
+    }
+    // Write an explicit entry for EVERY product, not just the edited ones —
+    // the resolver skips the slip premium index when every named product is
+    // priced from the matrix, so a partial map can leave an unnamed slip
+    // product unpriced.
+    const map = Object.fromEntries(
+      products.map((p) => [p.product_id, sourceFor(p.product_id)]),
+    ) as Record<string, FlexPriceSource>;
+    try {
+      await Promise.all(
+        editableWindows.map((w) =>
+          updateWindow.mutateAsync({ id: w.id, body: { flex_price_source: map } }),
+        ),
+      );
+      setSourceEdits({});
+      if (!flexEditor.dirty) toast.success("Price-tag source saved");
+    } catch (e) {
+      // One period can commit while another fails, leaving them priced
+      // differently. The edits are KEPT and the button stays dirty, and since a
+      // retry rewrites the same complete map to all of them, pressing Save again
+      // is what repairs the split — so say so rather than just echoing the error.
+      toast.error(
+        `Price-tag source may not have reached every enrolment period — press Save again. (${formatError(e)})`,
+      );
+    }
+  }
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -523,22 +603,34 @@ function EnrollmentFlexTab() {
           <InfoHint>
             What each plan draws from the member&apos;s flex wallet — separate
             from the insurer premium. A blank matrix cell falls back to the
-            placement-slip premium when the window prices that product
-            &ldquo;from slip&rdquo;. Buy/sell-leave is priced on the Leave tab.
+            placement-slip premium when the product is priced &ldquo;from
+            slip&rdquo;. Buy/sell-leave is priced on the Leave tab.
           </InfoHint>
         </div>
-        {flexEditor.dirty && (
+        {(flexEditor.dirty || sourceDirty) && (
           <Button
             size="sm"
             variant="outline"
-            onClick={flexEditor.onSave}
-            disabled={flexEditor.saving}
+            onClick={() => void save()}
+            disabled={flexEditor.saving || updateWindow.isPending}
           >
-            {flexEditor.saving && <Loader2 className="size-4 animate-spin" />}
+            {(flexEditor.saving || updateWindow.isPending) && (
+              <Loader2 className="size-4 animate-spin" />
+            )}
             Save price tags
           </Button>
         )}
       </div>
+      {/* The source rides the enrollment window, so with no editable window
+          there is nothing to write it to — say so rather than offering a
+          control that saves nowhere. */}
+      {!canEditSource && products.length > 0 && (
+        <p className="mt-2 text-2xs text-muted-foreground">
+          Each product is priced from the placement slip until an enrolment
+          period carries a different source. Create one on the Enrolment Period
+          tab to switch a product to its manual matrix.
+        </p>
+      )}
       <div className="mt-3">
         {isLoading ? (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
@@ -550,6 +642,11 @@ function EnrollmentFlexTab() {
             pricing={flexPricing?.pricing}
             editor={flexEditor}
             sourceFor={sourceFor}
+            onSourceChange={
+              canEditSource
+                ? (pid, v) => setSourceEdits((s) => ({ ...s, [pid]: v }))
+                : undefined
+            }
             openEditor={openEditor}
             onToggleEditor={(pid) =>
               setOpenEditor((s) => ({
@@ -616,7 +713,7 @@ export function EnrollmentPage() {
         <EnrollmentElectionsPage />
       </TabsContent>
       <TabsContent value="flex">
-        <EnrollmentFlexTab />
+        <EnrollmentPriceTagTab />
       </TabsContent>
       <TabsContent value="leave">
         <EnrollmentLeaveTab />

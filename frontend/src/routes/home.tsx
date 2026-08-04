@@ -83,7 +83,7 @@ export function HomePage() {
           tone={data.firm.underwriting_pending > 0 ? "warn" : "default"}
         />
         <Kpi
-          label="Windows open"
+          label="Enrolment periods open"
           value={data.firm.windows_open}
           icon={CalendarClock}
         />

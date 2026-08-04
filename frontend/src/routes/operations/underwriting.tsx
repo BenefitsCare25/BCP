@@ -515,7 +515,7 @@ export function UnderwritingPage() {
           {
             label: "Enrollment & roster",
             description:
-              "Cases open automatically when matching, a roster change or a confirmed election pushes someone over a limit.",
+              "Cases open automatically when matching, a roster change or a confirmed benefits selection pushes someone over a limit.",
           },
           {
             label: "Reports",

@@ -451,7 +451,7 @@ export function EmployeesPage() {
                     deleteRisk.enrollments_at_risk,
                     "in-progress or confirmed enrollment(s)",
                   ],
-                  [deleteRisk.leave_elections_at_risk, "leave election(s)"],
+                  [deleteRisk.leave_elections_at_risk, "leave selection(s)"],
                   [
                     deleteRisk.claims_at_risk,
                     "member claim(s), including retained receipts",

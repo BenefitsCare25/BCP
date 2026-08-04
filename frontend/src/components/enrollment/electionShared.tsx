@@ -148,7 +148,7 @@ export function FlexBalanceStrip({
         <p className="col-span-full text-xs">
           {allowOverdraft ? (
             <span className="text-muted-foreground">
-              This window allows overdrafts — the shortfall can be submitted
+              This enrolment period allows overdrafts — the shortfall can be submitted
               (e.g. recovered via payroll).
             </span>
           ) : (

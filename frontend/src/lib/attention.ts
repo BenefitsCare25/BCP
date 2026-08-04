@@ -110,8 +110,8 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
         days <= 0 ? "closes today" : `closes in ${days} day${plural(days)}`;
       out.push({
         key: "enroll",
-        message: `Enrollment window ${when}`,
-        short: `enrollment ${when}`,
+        message: `Enrolment period ${when}`,
+        short: `enrolment ${when}`,
         tone: "warn",
         to: "/enrollment",
       });

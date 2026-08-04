@@ -1,16 +1,16 @@
 /** The per-product flex price-tag list — one row per flex product with its plan
- * price tags, shared by BOTH surfaces so they can't disagree about what a plan
- * costs the wallet:
+ * price tags. Rendered only by the enrollment **Price Tag tab**, which owns
+ * every price-tag decision for the year: the SOURCE each product is priced from
+ * (slip vs manual matrix), the matrix itself, dependant pricing and the
+ * age-banded voluntary rates.
  *
- *  - the enrollment **Flex tab** (`editable`) owns the PRICES: the year-level
- *    matrix, dependant pricing and age-banded voluntary rates.
- *  - the **window form** (not `editable`) owns the per-window price-tag SOURCE
- *    (slip vs manual matrix — a column on EnrollmentWindow), and only previews
- *    the resulting tags.
+ * It used to render on the create-window form too — same products, same chips —
+ * which is exactly the duplication this list is not supposed to create. The
+ * window form now only carries the source it was given.
  *
- * Splitting it that way is deliberate: the matrix is per policy YEAR, so burying
- * its editor inside a create-window form made year-level prices unreachable
- * unless you were opening a window.
+ * `onSourceChange` omitted = read-only source (shown as a badge): the source is
+ * a column on EnrollmentWindow, so with no still-editable window there is
+ * nowhere to write it.
  */
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
@@ -91,8 +91,7 @@ export function FlexProductList({
   pricing: FlexPricingBag | undefined;
   editor: FlexPricingEditor;
   sourceFor: (productId: string) => FlexPriceSource;
-  /** Omit to hide the source toggle — the source is a WINDOW property, so only
-   *  the window form may change it. */
+  /** Omit to hide the source toggle and show the resolved source as a badge. */
   onSourceChange?: (productId: string, next: FlexPriceSource) => void;
   /** Omit both to render preview-only rows (no expandable editors). */
   openEditor?: Record<string, boolean>;
@@ -176,7 +175,7 @@ export function FlexProductList({
                         ? "No slip premiums for this product."
                         : editable
                           ? "No matrix prices yet — set them below."
-                          : "No matrix prices yet — set them on the Flex tab."}
+                          : "No matrix prices yet — set them on the Price Tag tab."}
                     </div>
                   ))}
               </div>

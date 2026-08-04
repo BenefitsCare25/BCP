@@ -72,6 +72,20 @@ export interface WindowCreate {
   allow_overdraft?: boolean;
 }
 
+/** Partial window edit — only the sent fields change (server reads
+ *  `model_fields_set`). Rejected on a closed window. */
+export interface WindowPatch {
+  name?: string;
+  opens_at?: string;
+  closes_at?: string;
+  allow_leave?: boolean;
+  allow_dependant_changes?: boolean;
+  product_scope?: string[] | null;
+  flex_price_source?: Record<string, FlexPriceSource> | null;
+  flex_drawdown_rule?: FlexDrawdownRule;
+  allow_overdraft?: boolean;
+}
+
 export interface WindowCloseSummary {
   confirmed: number;
   deemed_kept: number;
@@ -503,6 +517,24 @@ export function useCreateWindow(policyYearId: string | undefined) {
         body,
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["enrollment-windows"] }),
+  });
+}
+
+/** Partial window edit. Used by the Price Tag tab to write the per-product
+ *  price-tag source onto every still-editable window (a closed one is history —
+ *  the server 409s it). */
+export function useUpdateWindow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: WindowPatch }) =>
+      api.patch<EnrollmentWindow>(`/enrollment-windows/${id}`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
+      // The price-tag source decides what each plan draws from the wallet, so
+      // every surface that prices coverage has to re-read.
+      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+    },
   });
 }
 

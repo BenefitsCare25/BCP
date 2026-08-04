@@ -124,7 +124,7 @@ def patch_window(
 ) -> EnrollmentWindow:
     if window.status == WindowStatus.closed:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "A closed window can no longer be edited."
+            status.HTTP_409_CONFLICT, "A closed enrolment period can no longer be edited."
         )
     data = body.model_dump(exclude_unset=True)
     for field, value in data.items():
@@ -161,7 +161,9 @@ def open_enrollment_window(
     actually did anything (a re-uploaded roster reads as 0 existing + N created).
     """
     if window.status == WindowStatus.closed:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A closed window cannot be reopened.")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A closed enrolment period cannot be reopened."
+        )
     created = open_window(db, window, user)
     db.commit()
     db.refresh(window)
@@ -184,7 +186,7 @@ def close_enrollment_window(
     project every enrollment's elections into effective overrides."""
     if window.status != WindowStatus.open:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "Only an open window can be closed."
+            status.HTTP_409_CONFLICT, "Only an open enrolment period can be closed."
         )
     summary = close_window(db, window, user)
     # Window close projected every enrollment into overrides — elected upgrades
@@ -210,7 +212,7 @@ def delete_window(
     if window.status != WindowStatus.draft:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Only a draft window can be deleted; close it instead.",
+            "Only a draft enrolment period can be deleted; close it instead.",
         )
     db.delete(window)
     write_audit(

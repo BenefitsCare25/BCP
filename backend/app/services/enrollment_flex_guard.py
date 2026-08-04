@@ -92,8 +92,8 @@ def assert_within_wallet(
         detail={
             "code": "flex_overdrawn",
             "message": (
-                "Elections draw more flex than the member's wallet holds. "
-                "Reduce the elections, or enable overdraft on the window."
+                "The benefits selection draws more flex than the member's wallet "
+                "holds. Reduce it, or enable overdraft on the enrolment period."
             ),
             "wallet": draft.wallet,
             "total_price_tags": draft.total_price_tags,
@@ -140,7 +140,7 @@ def assert_elections_priced(
         detail={
             "code": "unpriced_elections",
             "message": (
-                "These elections change coverage but have no flex price "
+                "These benefits selections change coverage but have no flex price "
                 "configured — they would draw $0 from the wallet. Configure "
                 "pricing (or the member's date of birth for age-banded "
                 "products), or submit again acknowledging this."

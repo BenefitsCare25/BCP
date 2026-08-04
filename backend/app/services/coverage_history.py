@@ -24,13 +24,13 @@ ACTION_LABELS: dict[str, str] = {
     "update_plan_override": "Plan override updated",
     "delete_plan_override": "Reverted to cohort default",
     "bulk_plan_override": "Plan changed (bulk update)",
-    "update_enrollment_elections": "Elections updated",
+    "update_enrollment_elections": "Benefits selection updated",
     "update_enrollment_leave": "Leave trade updated (buy/sell)",
     "revert_leave": "Leave trade cleared",
     "submit_enrollment": "Enrollment submitted",
     "confirm_enrollment": "Enrollment confirmed",
-    "reset_enrollment": "Elections reset to baseline",
-    "revert_coverage_to_baseline": "Reverted to window baseline",
+    "reset_enrollment": "Benefits selection reset to baseline",
+    "revert_coverage_to_baseline": "Reverted to the enrolment-period baseline",
     "revert_coverage_to_default": "Reverted to cohort default",
 }
 

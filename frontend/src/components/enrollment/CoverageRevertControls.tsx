@@ -55,7 +55,7 @@ export function CoverageRevertControls({
           onClick={() => setTarget("baseline")}
           title={
             hasBaseline
-              ? "Restore the coverage this member had when the window opened"
+              ? "Restore the coverage this member had when the enrolment period opened"
               : "No enrollment baseline is available for this member"
           }
         >
@@ -89,12 +89,12 @@ export function CoverageRevertControls({
         onOpenChange={(o) => !o && setTarget(null)}
         title={
           target === "baseline"
-            ? "Revert to window baseline?"
+            ? "Revert to the enrolment-period baseline?"
             : "Reset to cohort default?"
         }
         description={
           target === "baseline"
-            ? "This restores the coverage this member had when the enrollment window opened, replacing any later plan changes. The change is audited."
+            ? "This restores the coverage this member had when the enrolment period opened, replacing any later plan changes. The change is audited."
             : "This removes the member's plan overrides so they return to their matched-category default plan and dependant coverage. The change is audited."
         }
         confirmLabel="Revert"

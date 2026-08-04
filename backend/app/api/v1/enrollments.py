@@ -205,7 +205,7 @@ def confirm_enrollment(
         )
     window = db.get(EnrollmentWindow, enr.window_id)
     if window is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrollment window not found.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
     assert_window_accepts_edits(window)
     # Re-check the wallet at confirm: pricing/elections could have changed
     # between submit and confirm (unpriced acknowledgment made at submit is
@@ -248,7 +248,7 @@ def reopen_enrollment(
         )
     window = db.get(EnrollmentWindow, enr.window_id)
     if window is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrollment window not found.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
     assert_window_accepts_edits(window)
     enr.status = EnrollmentStatus.in_progress
     enr.submitted_at = None

@@ -45,15 +45,16 @@ def assert_window_accepts_edits(window: EnrollmentWindow) -> None:
     if window.status != WindowStatus.open:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Window is {window.status}; elections can only change while it is open.",
+            f"The enrolment period is {window.status}; the benefits selection can "
+            "only change while it is open.",
         )
     now = datetime.now(UTC)
     opens = _aware(window.opens_at)
     closes = _aware(window.closes_at)
     if opens and now < opens:
-        raise HTTPException(status.HTTP_409_CONFLICT, "The enrollment window has not opened yet.")
+        raise HTTPException(status.HTTP_409_CONFLICT, "The enrolment period has not opened yet.")
     if closes and now > closes:
-        raise HTTPException(status.HTTP_409_CONFLICT, "The enrollment window has closed.")
+        raise HTTPException(status.HTTP_409_CONFLICT, "The enrolment period has closed.")
 
 
 def assert_not_compulsory_decline(
@@ -72,7 +73,7 @@ def assert_product_in_scope(window: EnrollmentWindow, product_code: str) -> None
     if scope and product_code not in scope:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"Product '{product_code}' is not in this window's scope.",
+            f"Product '{product_code}' is not in this enrolment period's scope.",
         )
 
 

@@ -273,7 +273,7 @@ def load_enrollment_window(
     """Load an EnrollmentWindow, proving tenant ownership via its client_id."""
     w = db.get(EnrollmentWindow, window_id)
     if w is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrollment window not found")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found")
     if not user_owns(user, w.client_id):
         raise _deny_cross_tenant(user, "Enrollment window", window_id)
     return w

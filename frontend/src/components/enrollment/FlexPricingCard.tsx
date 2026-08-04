@@ -106,8 +106,8 @@ export type FlexPricingEditor = {
 
 /**
  * Editing state for the per-policy-year flex price-tag matrix + dependant config.
- * Shared by the inline per-product editors (rendered in the Flex-funding section
- * when a window's price-tag source for that product is the manual matrix).
+ * Shared by the inline per-product editors on the enrollment Price Tag tab
+ * (expanded by default when a product is priced from the manual matrix).
  */
 export function useFlexPricingEditor(
   policyYearId: string | undefined,

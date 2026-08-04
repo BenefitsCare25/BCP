@@ -100,7 +100,7 @@ export function CompanyDashboardPage() {
           </div>
           <div className="mt-2 flex items-center gap-2">
             {company.enrollment_open ? (
-              <Badge variant="info">Window open</Badge>
+              <Badge variant="info">Enrolment period open</Badge>
             ) : (
               <Badge variant="default">Closed</Badge>
             )}

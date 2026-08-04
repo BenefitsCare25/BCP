@@ -168,12 +168,12 @@ class EnrollmentElectionIn(BaseModel):
     @model_validator(mode="after")
     def _check(self) -> Self:
         if self.declined and self.plan_code:
-            raise ValueError("A declined election cannot also name a plan_code.")
+            raise ValueError("A declined benefits selection cannot also name a plan_code.")
         if self.declined and self.tier_category_id:
-            raise ValueError("A declined election cannot also name a tier.")
+            raise ValueError("A declined benefits selection cannot also name a tier.")
         if self.declined and self.dependant_option_ids:
             raise ValueError(
-                "A declined election cannot also elect dependant option levels."
+                "A declined benefits selection cannot also elect dependant option levels."
             )
         if self.dependant_option_ids:
             bad = set(self.dependant_option_ids) - {"spouse", "child"}

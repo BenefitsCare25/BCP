@@ -350,6 +350,6 @@ def revert_to_baseline(
         changes.append(CoverageChangeOut(
             product_code=ov.product_code, outcome="skipped",
             from_plan=_effective_from_override(ov, None), to_plan=None,
-            detail="Not part of the window baseline — left unchanged.",
+            detail="Not part of the enrolment-period baseline — left unchanged.",
         ))
     return changes

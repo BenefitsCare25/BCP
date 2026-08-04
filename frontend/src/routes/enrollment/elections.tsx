@@ -83,14 +83,14 @@ export function EnrollmentElectionsPage() {
   if (!policyYearId) {
     return (
       <p className="text-sm text-muted-foreground">
-        Select a policy year to manage enrollments.
+        Select a benefit year to manage enrolments.
       </p>
     );
   }
   if (!openWindows.length) {
     return (
       <p className="text-sm text-muted-foreground">
-        No open enrollment window. Open one from the Windows tab first.
+        No open enrolment period. Open one from the Enrolment Period tab first.
       </p>
     );
   }
@@ -99,7 +99,7 @@ export function EnrollmentElectionsPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Window</span>
+          <span className="text-xs text-muted-foreground">Enrolment period</span>
           <Select value={windowId} onValueChange={(v) => { setWindowId(v); setSelected(null); }}>
             <SelectTrigger className="w-[240px]">
               <SelectValue />
@@ -146,7 +146,7 @@ export function EnrollmentElectionsPage() {
             <div className="rounded-lg border border-dashed border-border p-10 text-center">
               <Users className="mx-auto size-6 text-muted-foreground" />
               <p className="mt-2 text-sm text-muted-foreground">
-                Select a member to manage their elections.
+                Select a member to manage their benefits selection.
               </p>
             </div>
           ) : (
@@ -280,11 +280,11 @@ function ElectionPanel({
             if (e.detail.code === "flex_overdrawn") {
               const balance = e.detail.balance;
               toast.error(
-                `Elections overdraw the flex wallet${
+                `Benefits selections overdraw the flex wallet${
                   typeof balance === "number"
                     ? ` by ${fmtCurrency(Math.abs(balance))}`
                     : ""
-                }. Reduce the elections, or enable overdraft on the window.`,
+                }. Reduce the selections, or enable overdraft on the enrolment period.`,
               );
               return;
             }
@@ -299,7 +299,7 @@ function ElectionPanel({
     const elections = buildElectionsPayload(state, tierSets, dependants, allowDeps);
     setElections.mutate(
       { id: enrollmentId, elections },
-      { onSuccess: () => toast.success("Elections saved."), onError: (e) => toast.error(formatError(e)) },
+      { onSuccess: () => toast.success("Benefits selection saved."), onError: (e) => toast.error(formatError(e)) },
     );
   }
 
@@ -320,11 +320,11 @@ function ElectionPanel({
         <FlexBalanceStrip
           flex={flex}
           allowOverdraft={allowOverdraft}
-          shortfallHint="Elections exceed the flex wallet. Reduce the elections to submit, or ask an admin to allow overdrafts on this window."
+          shortfallHint="Benefits selections exceed the flex wallet. Reduce them to submit, or ask an admin to allow overdrafts on this enrolment period."
         />
       )}
 
-      {/* Per-product elections — only the member's own cohort tiers */}
+      {/* Per-product benefits selection — only the member's own cohort tiers */}
       <div className="space-y-2">
         {tierSets.map((ts) => {
           const ps = state[ts.product_code];
@@ -346,7 +346,7 @@ function ElectionPanel({
         })}
         {!tierSets.length && (
           <p className="text-sm text-muted-foreground">
-            This member has no products in their cohort to elect.
+            This member has no products in their cohort to select.
           </p>
         )}
       </div>
@@ -379,14 +379,14 @@ function ElectionPanel({
         <div className="flex items-center gap-2">
           <Button onClick={saveElections} disabled={setElections.isPending}>
             {setElections.isPending && <Loader2 className="size-4 animate-spin" />}
-            Save elections
+            Save benefits selection
           </Button>
           <Button
             variant="outline"
             disabled={submit.isPending || submitBlocked}
             title={
               submitBlocked
-                ? "Elections exceed the flex wallet — reduce them or enable overdraft on the window"
+                ? "Benefits selections exceed the flex wallet — reduce them or enable overdraft on the enrolment period"
                 : undefined
             }
             onClick={() => doSubmit(false)}
@@ -409,7 +409,7 @@ function ElectionPanel({
             variant="ghost"
             disabled={reset.isPending}
             onClick={() => setConfirmReset(true)}
-            title="Discard in-progress elections and return to the window baseline"
+            title="Discard the in-progress benefits selection and return to the enrolment-period baseline"
           >
             <RotateCcw className="size-4" /> Discard changes
           </Button>
@@ -421,8 +421,9 @@ function ElectionPanel({
       {enr.status === "confirmed" && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 p-3">
           <p className="text-xs text-muted-foreground">
-            This enrollment is confirmed. Reopen it to change plans again while the
-            window is open — coverage stays as-is until you re-submit and confirm.
+            This enrolment is confirmed. Reopen it to change plans again while
+            the enrolment period is open — coverage stays as-is until you
+            re-submit and confirm.
           </p>
           <Button
             variant="outline"
@@ -430,7 +431,7 @@ function ElectionPanel({
             disabled={reopen.isPending}
             onClick={() =>
               reopen.mutate(enrollmentId, {
-                onSuccess: () => toast.success("Reopened — you can edit elections again."),
+                onSuccess: () => toast.success("Reopened — you can edit the benefits selection again."),
                 onError: (e) => toast.error(formatError(e)),
               })
             }
@@ -460,15 +461,15 @@ function ElectionPanel({
       <AlertDialog
         open={confirmReset}
         onOpenChange={setConfirmReset}
-        title="Discard in-progress elections?"
-        description="This clears this member's unsaved plan and leave elections for the window, returning them to their baseline (pre-enrollment) coverage. Already-confirmed coverage is not affected."
+        title="Discard the in-progress benefits selection?"
+        description="This clears this member's unsaved plan and leave selections for the enrolment period, returning them to their baseline (pre-enrolment) coverage. Already-confirmed coverage is not affected."
         confirmLabel="Discard"
         confirmVariant="default"
         loading={reset.isPending}
         onConfirm={() =>
           reset.mutate(enrollmentId, {
             onSuccess: () => {
-              toast.success("Elections reset to baseline.");
+              toast.success("Benefits selection reset to baseline.");
               setConfirmReset(false);
             },
             onError: (e) => toast.error(formatError(e)),
@@ -481,7 +482,7 @@ function ElectionPanel({
         onOpenChange={(open) => {
           if (!open) setUnpricedProducts(null);
         }}
-        title="Some elections have no flex price"
+        title="Some benefits selections have no flex price"
         description={`${
           unpricedProducts?.length
             ? `These products change coverage but have no configured flex price, so they would draw $0 from the wallet: ${unpricedProducts.join(", ")}. `
