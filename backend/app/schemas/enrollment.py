@@ -465,8 +465,13 @@ class PortalEnrollmentOut(BaseModel):
 
 # ── Bulk plan update ────────────────────────────────────────────────────────
 
-BulkActionStr = Literal["set_plan", "decline"]
+BulkActionStr = Literal["set_plan", "decline", "revert_to_default"]
 DependantModeStr = Literal["include_all", "exclude_all", "set"]
+
+# A batch may touch several products at once, but not arbitrarily many: every
+# change is a full pass over the selection, and a renewal move is three or four
+# products, not thirty.
+MAX_CHANGES = 10
 
 
 class BulkSelector(MemberQuery):
@@ -506,25 +511,101 @@ class BulkDependantAction(BaseModel):
     dependant_ids: list[str] = Field(default_factory=list)
 
 
-class BulkPlanUpdateRequest(BaseModel):
-    product_code: str
+class CoverageChange(BaseModel):
+    """One product's change within a batch.
+
+    ``revert_to_default`` removes the member's override entirely, putting them
+    back on their cohort's plan. It is not the same as setting the default's plan
+    code by hand: the broker would have to know that code, and a member whose
+    cohort later changes should follow it.
+    """
+
+    product_code: str = Field(min_length=1, max_length=64)
     action: BulkActionStr = "set_plan"
-    target_plan_code: str | None = None
-    selector: BulkSelector
+    target_plan_code: str | None = Field(default=None, max_length=64)
     dependant_action: BulkDependantAction | None = None
-    # Apply only: the fingerprint the preview returned. When present, apply
-    # refuses (409 ``selection_changed``) if the population or its coverage has
-    # moved since — the guard that makes applying a RULE rather than a list of
-    # ids safe. Absent (legacy callers) = no guard.
-    selection_digest: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         if self.action == "set_plan" and not self.target_plan_code:
             raise ValueError("target_plan_code is required when action is 'set_plan'.")
-        if self.action == "decline" and self.target_plan_code:
-            raise ValueError("target_plan_code must be omitted when action is 'decline'.")
+        if self.action != "set_plan" and self.target_plan_code:
+            raise ValueError(
+                f"target_plan_code must be omitted when action is '{self.action}'."
+            )
+        # A revert restores the cohort default WHOLE — plan and dependant cover
+        # together. Accepting a dependant action alongside it would write back
+        # the override the revert exists to remove.
+        if self.action == "revert_to_default" and self.dependant_action is not None:
+            raise ValueError(
+                "dependant_action must be omitted when reverting to the cohort default."
+            )
         return self
+
+
+class BulkCoverageRequest(BaseModel):
+    """One selection, one or more coverage changes, applied as one transaction.
+
+    Also accepts the pre-change-set body (a flat ``product_code`` / ``action`` /
+    ``target_plan_code`` / ``selector``): the validator below folds it into a
+    one-change set, so ``evaluate`` has a single implementation and old callers
+    keep working with no second code path.
+    """
+
+    query: BulkSelector
+    changes: list[CoverageChange] = Field(min_length=1, max_length=MAX_CHANGES)
+    # Warning codes the broker has accepted. Apply refuses (409
+    # ``unacknowledged_warnings``) while an ack-requiring warning is outstanding.
+    acknowledge: list[str] = Field(default_factory=list, max_length=32)
+    # Apply only: the fingerprint the preview returned. When present, apply
+    # refuses (409 ``selection_changed``) if the population or its coverage has
+    # moved since — the guard that makes applying a RULE rather than a list of
+    # ids safe. Absent (legacy callers) = no guard.
+    selection_digest: str | None = Field(default=None, max_length=64)
+    # Apply only: client-generated per attempt. Replaying it returns the original
+    # batch instead of applying twice.
+    request_id: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_legacy(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("changes") is not None:
+            return data
+        if "product_code" not in data:
+            return data
+        folded = dict(data)
+        folded["changes"] = [
+            {
+                "product_code": folded.pop("product_code"),
+                "action": folded.pop("action", "set_plan"),
+                "target_plan_code": folded.pop("target_plan_code", None),
+                "dependant_action": folded.pop("dependant_action", None),
+            }
+        ]
+        if "query" not in folded and "selector" in folded:
+            folded["query"] = folded.pop("selector")
+        return folded
+
+    @model_validator(mode="after")
+    def _one_change_per_product(self) -> Self:
+        codes = [c.product_code.strip().casefold() for c in self.changes]
+        if len(set(codes)) != len(codes):
+            raise ValueError(
+                "Each product may appear once in a batch — combine the changes."
+            )
+        return self
+
+    @property
+    def primary(self) -> CoverageChange:
+        """The change the SELECTION is scoped to.
+
+        ``current_plan_codes`` / ``coverage_state`` resolve against one product's
+        effective coverage, and a member can sit on Plan 1 of GHS and Plan 3 of
+        GTL — so "everyone on Plan 1" would name two different populations if the
+        scope were per change. It is the first change's product, and the UI says
+        so.
+        """
+        return self.changes[0]
 
 
 class BulkRowOutcome(BaseModel):
@@ -536,10 +617,24 @@ class BulkRowOutcome(BaseModel):
     outcome: str
     reason: str | None = None
     employee_name: str | None = None
+    # Which change in the set produced this row. One member yields one row per
+    # product the batch touches.
+    product_code: str | None = None
     from_plan: str | None = None
     to_plan: str | None = None
     declined_before: bool = False
     declined_after: bool = False
+    # Warning codes raised for this row (see services/bulk_warnings.py).
+    warnings: list[str] = Field(default_factory=list)
+    # Per-member cover and premium, resolved by matching the target plan to a
+    # tier of the member's OWN cohort — which is the only way a bare plan code
+    # acquires a basis. ``None`` where the basis will not resolve to this member
+    # (no salary on file, a relative basis) and renders "—": a cohort aggregate
+    # printed as one person's cover is the failure this avoids.
+    sum_insured_before: float | None = None
+    sum_insured_after: float | None = None
+    annual_premium_before: float | None = None
+    annual_premium_after: float | None = None
     # The flex price tag this row would write (and what it replaces). Computed on
     # BOTH preview and apply — the dry run has to be able to state what the real
     # run will write.
@@ -553,22 +648,42 @@ class BulkRowOutcome(BaseModel):
 
 
 class BulkChangeGroup(BaseModel):
-    """Rows collapsed to ``from → to`` with a headcount — what a broker actually
-    reads before applying. The row table is the drill-down, not the summary."""
+    """Rows collapsed to ``product: from → to`` with a headcount — what a broker
+    actually reads before applying. The row table is the drill-down, not the
+    summary."""
 
+    product_code: str | None = None
     from_plan: str | None = None
     to_plan: str | None = None
     declined_after: bool = False
+    reverted: bool = False
     count: int
+
+
+class BulkWarningBucket(BaseModel):
+    """One warning code, with how many MEMBERS it applies to.
+
+    Members, not rows: a member can appear once per product in the set, and "4
+    members are outside their cohort" is the fact a broker acts on. Codes that
+    ``requires_ack`` must be listed in the apply request's ``acknowledge`` — a
+    warning never blocks, but an unacknowledged one does.
+    """
+
+    code: str
+    severity: str  # "warn" | "info"
+    requires_ack: bool
+    count: int
+    message: str
 
 
 class BulkImpact(BaseModel):
     """Totals over the rows that would change.
 
-    Deliberately flex-only: the price tag is the figure this tool WRITES, so it
-    can be stated exactly. Premium and sum-insured deltas need the target plan
-    resolved to a cohort tier per member (a bare plan_code carries no basis), so
-    they land with the cohort-aware pass rather than being estimated here.
+    The flex figures are exact — the price tag is what this tool WRITES. Cover
+    and premium are resolved by matching the target plan to a tier of each
+    member's own cohort; where a member's basis will not resolve to a personal
+    figure they are counted in ``financials_unresolved`` and left OUT of the
+    totals, rather than contributing a cohort aggregate.
     """
 
     members_changing: int = 0
@@ -578,12 +693,18 @@ class BulkImpact(BaseModel):
     # Rows whose price tag could not be resolved (no pricing configured for the
     # target tier) — a delta that quietly omits them would understate the spend.
     unpriced: int = 0
+    annual_premium_delta: float = 0.0
+    sum_insured_delta: float = 0.0
+    # Changing rows whose before OR after figure would not resolve to this
+    # member, so neither delta includes them.
+    financials_unresolved: int = 0
 
 
 class BulkPreviewResult(BaseModel):
     rows: list[BulkRowOutcome]
     counts: dict[str, int]
     groups: list[BulkChangeGroup] = Field(default_factory=list)
+    warnings: list[BulkWarningBucket] = Field(default_factory=list)
     impact: BulkImpact = Field(default_factory=BulkImpact)
     selection_digest: str | None = None
     rows_total: int = 0
@@ -596,8 +717,59 @@ class BulkApplyResult(BaseModel):
     counts: dict[str, int]
     rows: list[BulkRowOutcome]
     groups: list[BulkChangeGroup] = Field(default_factory=list)
+    warnings: list[BulkWarningBucket] = Field(default_factory=list)
     impact: BulkImpact = Field(default_factory=BulkImpact)
     rows_total: int = 0
+    # True when this response replayed an earlier batch with the same
+    # ``request_id`` instead of applying again.
+    replayed: bool = False
+
+
+# ── Batch history + undo ────────────────────────────────────────────────────
+
+
+class BulkBatchSummaryOut(_Base):
+    """One past batch, as the history list shows it."""
+
+    id: str
+    created_at: datetime | None = None
+    initiated_by: str | None = None
+    status: str
+    product_codes: list[str] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+    acknowledged: list[str] = Field(default_factory=list)
+    undo_of: str | None = None
+    # Set on a batch that has since been undone, pointing at the undo batch.
+    undone_by: str | None = None
+    # Pairs this batch could still put back (it recorded their previous state and
+    # nothing has moved them since is NOT checked here — that is resolved when
+    # the undo runs). 0 means undo has nothing to offer.
+    restorable: int = 0
+    # Pairs it wrote but did NOT record a previous state for, because the batch
+    # exceeded the storage cap. An undo cannot restore these, and a cap that
+    # isn't reported would have the confirm dialog promise the whole batch.
+    not_restorable: int = 0
+
+
+class BulkBatchDetailOut(BulkBatchSummaryOut):
+    query: dict[str, Any] | None = None
+    changes: list[dict[str, Any]] = Field(default_factory=list)
+    groups: list[BulkChangeGroup] = Field(default_factory=list)
+    impact: BulkImpact = Field(default_factory=BulkImpact)
+    rows: list[BulkRowOutcome] = Field(default_factory=list)
+    rows_total: int = 0
+    rows_offset: int = 0
+    # The stored row detail was capped — the rows above are not all of them.
+    rows_truncated: bool = False
+
+
+class BulkUndoResult(BaseModel):
+    id: str
+    counts: dict[str, int]
+    # (employee, product) pairs whose coverage has changed since the batch ran.
+    # Undo skips them: putting the old value back would silently discard whoever
+    # changed it afterwards.
+    superseded: list[BulkRowOutcome] = Field(default_factory=list)
 
 
 # ── Employee plan overrides (effective-coverage state) ──────────────────────

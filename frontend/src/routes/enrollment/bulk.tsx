@@ -1,33 +1,40 @@
 /**
- * Coverage changes — move, decline or adjust one product's coverage for many
- * members at once.
+ * Coverage changes — move, decline or revert coverage for many members at once.
  *
- * Three panels, one page: WHO (a rule over the roster), WHAT changes, and CHECK
- * & APPLY (summary first, rows as the drill-down). The page it replaces asked
- * the broker to paste every staff ID, offered only "set plan" of the three
- * actions the API has always supported, and rendered every affected member as a
- * row whether there were four of them or two thousand.
+ * Four panels, one page: WHO (a rule over the roster), WHAT changes (a set, one
+ * row per product), CHECK & APPLY (summary first, warnings, rows as the
+ * drill-down), and what has already been applied. The page it replaces asked the
+ * broker to paste every staff ID, offered only "set plan" of the actions the API
+ * supports, and rendered every affected member as a row whether there were four
+ * of them or two thousand.
  *
- * Two rules the flow depends on:
+ * Four rules the flow depends on:
  *
  * - **Apply sends the RULE, not the ticked ids.** Unticking a row adds an
  *   exclusion to the same query, so what is applied is provably the population
  *   that was previewed — and the request stays the same size at 4 members or
  *   4,000.
  * - **A preview belongs to the inputs that produced it.** Any change to the
- *   selection or the change itself clears it, because an Apply button enabled
+ *   selection or the change set clears it, because an Apply button enabled
  *   against a stale preview applies numbers nobody checked.
+ * - **An unacknowledged warning blocks Apply here as well as on the server.**
+ *   The server is the gate; doing it in the UI too means the broker meets the
+ *   decision while looking at the numbers, not as a 409 after pressing Apply.
+ * - **Every apply carries a request id.** A double-click, or a retry after a
+ *   timeout on a batch that actually committed, must not apply twice.
  */
 import { useMemo, useState } from "react";
-import { Loader2, Play, Search, TriangleAlert } from "lucide-react";
+import { History, Loader2, Play, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/stores/session";
 import { useMe, usePlans, useProducts } from "@/api/hooks";
 import { useMemberFacets } from "@/api/memberQuery";
 import {
+  type BulkBatchDetail,
   type BulkRequest,
   type BulkResult,
   useApplyBulk,
+  useBulkHistory,
   usePreviewBulk,
 } from "@/api/enrollment";
 import { ConflictDetailError, formatError } from "@/lib/errors";
@@ -35,8 +42,6 @@ import { fmtCurrency } from "@/lib/format";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import { SectionLabel } from "@/components/ui/section-label";
 import { InfoHint } from "@/components/ui/tooltip";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -45,9 +50,23 @@ import {
   EMPTY_SELECTOR,
   MemberSelector,
   type SelectorState,
+  fromQuery,
   selectorIsEmpty,
   toQuery,
 } from "@/components/enrollment/bulk/MemberSelector";
+import {
+  type ChangeDraft,
+  ChangeSetEditor,
+  EMPTY_CHANGE,
+  type ProductOption,
+  changeSetError,
+  toChanges,
+} from "@/components/enrollment/bulk/ChangeSetEditor";
+import {
+  WarningPanel,
+  outstandingWarnings,
+} from "@/components/enrollment/bulk/WarningPanel";
+import { BatchHistory } from "@/components/enrollment/bulk/BatchHistory";
 
 const OUTCOME_COLOR: Record<string, string> = {
   applied: "text-good",
@@ -65,9 +84,6 @@ const OUTCOME_LABEL: Record<string, string> = {
   error: "error",
 };
 
-type BulkAction = "set_plan" | "decline";
-type DependantMode = "" | "include_all" | "exclude_all";
-
 const ROWS_PER_PAGE = 100;
 
 export function EnrollmentBulkPage() {
@@ -76,17 +92,22 @@ export function EnrollmentBulkPage() {
   const { data: plans } = usePlans(policyYearId);
   const { data: products } = useProducts();
   const { data: facets, isLoading: facetsLoading } = useMemberFacets(policyYearId);
+  const history = useBulkHistory(policyYearId);
   const preview = usePreviewBulk(policyYearId);
   const apply = useApplyBulk(policyYearId);
 
-  const [productCode, setProductCode] = useState("");
-  const [action, setAction] = useState<BulkAction>("set_plan");
-  const [targetPlan, setTargetPlan] = useState("");
-  const [dependantMode, setDependantMode] = useState<DependantMode>("");
+  const [changes, setChanges] = useState<ChangeDraft[]>([EMPTY_CHANGE]);
   const [selector, setSelector] = useState<SelectorState>(EMPTY_SELECTOR);
+  const [acknowledged, setAcknowledged] = useState<string[]>([]);
   const [result, setResult] = useState<BulkResult | null>(null);
   const [page, setPage] = useState(0);
   const [confirmApply, setConfirmApply] = useState(false);
+  // Identifies this APPLY ATTEMPT, not this click. Minted when a preview lands
+  // and cleared whenever the inputs change, so every retry of the same checked
+  // batch carries the same id and the server can replay it instead of applying
+  // it twice.
+  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   // Rows unticked SINCE the preview ran. The server's counts include them (the
   // preview resolved before they were excluded), so the button has to subtract
   // them or it would offer to apply more changes than it will make. Reset by
@@ -121,11 +142,8 @@ export function EnrollmentBulkPage() {
    * broker could not bulk-DECLINE them even though the server accepts it:
    * `resolve_product_by_code` resolves through plans OR categories.
    */
-  const productOptions = useMemo(() => {
-    const byCode = new Map<
-      string,
-      { code: string; name: string | null; plans: string[]; hasDependants: boolean }
-    >();
+  const productOptions: ProductOption[] = useMemo(() => {
+    const byCode = new Map<string, ProductOption>();
     const meta = new Map((products ?? []).map((p) => [p.code, p]));
     for (const p of facets?.products ?? []) {
       byCode.set(p.code, {
@@ -133,6 +151,7 @@ export function EnrollmentBulkPage() {
         name: p.name,
         plans: plansByCode[p.code] ?? [],
         hasDependants: meta.get(p.code)?.has_dependants ?? false,
+        planHeadcount: new Map(p.plans.map((pl) => [pl.code, pl.count])),
       });
     }
     for (const [code, planCodes] of Object.entries(plansByCode)) {
@@ -142,18 +161,17 @@ export function EnrollmentBulkPage() {
         name: meta.get(code)?.display_name ?? null,
         plans: planCodes,
         hasDependants: meta.get(code)?.has_dependants ?? false,
+        planHeadcount: new Map(),
       });
     }
     return [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
   }, [facets, plansByCode, products]);
 
-  const selectedProduct = productOptions.find((p) => p.code === productCode);
-  const planOptions = selectedProduct?.plans ?? [];
-  const productFacet = facets?.products.find((p) => p.code === productCode);
-  const planHeadcount = useMemo(
-    () => new Map((productFacet?.plans ?? []).map((p) => [p.code, p.count])),
-    [productFacet],
-  );
+  // The FIRST change is what the coverage filters resolve against — a member can
+  // be on Plan 1 of GHS and Plan 3 of GTL, so "everyone on Plan 1" would name
+  // two populations if the scope were per change.
+  const scopeCode = changes[0]?.productCode || undefined;
+  const scopeFacet = facets?.products.find((p) => p.code === scopeCode);
 
   if (!policyYearId) {
     return (
@@ -177,15 +195,27 @@ export function EnrollmentBulkPage() {
     );
   }
 
-  /** Any input change invalidates the preview it produced. */
+  /** Any input change invalidates the preview it produced — and the warnings
+   *  that were accepted against it, which described a different population. */
   function resetResult() {
     setResult(null);
     setPage(0);
     setUntickedChanging(0);
+    setAcknowledged([]);
+    setAttemptId(null);
   }
 
   function updateSelector(next: SelectorState) {
     setSelector(next);
+    resetResult();
+  }
+
+  function updateChanges(next: ChangeDraft[]) {
+    // Switching the scoping product invalidates a plan filter chosen for the
+    // previous one — that code would silently match nobody.
+    const scopeChanged = next[0]?.productCode !== changes[0]?.productCode;
+    setChanges(next);
+    if (scopeChanged) setSelector((prev) => ({ ...prev, currentPlanCodes: [] }));
     resetResult();
   }
 
@@ -207,29 +237,17 @@ export function EnrollmentBulkPage() {
     if (changing) setUntickedChanging((n) => Math.max(0, n + (include ? -1 : 1)));
   }
 
-  function buildRequest(digest?: string | null): BulkRequest | null {
-    if (!productCode) {
-      toast.error("Pick a product.");
-      return null;
-    }
-    if (action === "set_plan" && !targetPlan) {
-      toast.error("Pick the plan to move members to.");
+  function buildRequest(extra?: Partial<BulkRequest>): BulkRequest | null {
+    const problem = changeSetError(changes);
+    if (problem) {
+      toast.error(problem);
       return null;
     }
     if (selectorIsEmpty(selector)) {
       toast.error("Select some members first.");
       return null;
     }
-    return {
-      product_code: productCode,
-      action,
-      target_plan_code: action === "set_plan" ? targetPlan : null,
-      selector: toQuery(selector),
-      dependant_action: dependantMode
-        ? { mode: dependantMode, dependant_ids: [] }
-        : null,
-      ...(digest ? { selection_digest: digest } : {}),
-    };
+    return { query: toQuery(selector), changes: toChanges(changes), ...extra };
   }
 
   function runPreview(nextPage = 0) {
@@ -241,11 +259,20 @@ export function EnrollmentBulkPage() {
         onSuccess: (r) => {
           setResult(r);
           setPage(nextPage);
+          // One id per checked batch, kept across paging so reading page 3 and
+          // then applying doesn't mint a second one.
+          setAttemptId((prev) => prev ?? crypto.randomUUID());
           // The request carried the exclusions, so the server's counts already
           // leave the unticked rows out. Not clearing this subtracted them a
           // SECOND time — paging after unticking three people quoted an Apply
           // count three lower than what apply would actually change.
           setUntickedChanging(0);
+          // Keep only acceptances the new preview still raises: a warning that
+          // no longer applies must not stay ticked, and one that has just
+          // appeared must not arrive pre-accepted.
+          setAcknowledged((prev) =>
+            prev.filter((code) => r.warnings.some((w) => w.code === code)),
+          );
         },
         onError: (e) => toast.error(formatError(e)),
       },
@@ -255,33 +282,67 @@ export function EnrollmentBulkPage() {
   function runApply() {
     // The digest from the preview rides along: if the roster moved since, the
     // server refuses rather than applying to a population nobody approved.
-    const body = buildRequest(result?.selection_digest);
+    //
+    // The request id is minted ONCE per previewed body (`attemptId`, cleared by
+    // `resetResult`) and reused by every retry of it. Generating a fresh one
+    // here made the guard unreachable for the case it exists for: a second
+    // press, or a retry after a timeout on a batch that actually committed,
+    // carried a DIFFERENT id and applied the whole thing again.
+    const body = buildRequest({
+      selection_digest: result?.selection_digest ?? null,
+      acknowledge: acknowledged,
+      request_id: attemptId,
+    });
     if (!body) return;
     apply.mutate(body, {
       onSuccess: (r) => {
         setResult(r);
         setPage(0);
         setConfirmApply(false);
-        toast.success(`Applied — ${r.counts.applied ?? 0} member(s) changed.`);
+        toast.success(`Applied — ${r.counts.applied ?? 0} change(s) written.`);
       },
       onError: (e) => {
         setConfirmApply(false);
-        if (
-          e instanceof ConflictDetailError &&
-          e.detail.code === "selection_changed"
-        ) {
-          setResult(null);
-          toast.error(
-            "The roster changed since this preview — run Preview again and check the numbers.",
-          );
-          return;
+        if (e instanceof ConflictDetailError) {
+          if (e.detail.code === "selection_changed") {
+            setResult(null);
+            toast.error(
+              "The roster changed since this preview — run Preview again and check the numbers.",
+            );
+            return;
+          }
+          if (e.detail.code === "unacknowledged_warnings") {
+            toast.error("Confirm each warning below before applying.");
+            return;
+          }
         }
         toast.error(formatError(e));
       },
     });
   }
 
+  function loadPastSelection(detail: BulkBatchDetail) {
+    setSelector(fromQuery(detail.query));
+    setChanges(
+      detail.changes.length
+        ? detail.changes.map((c) => ({
+            productCode: c.product_code,
+            action: c.action,
+            targetPlan: c.target_plan_code ?? "",
+            dependantMode:
+              c.dependant_action?.mode === "include_all" ||
+              c.dependant_action?.mode === "exclude_all"
+                ? c.dependant_action.mode
+                : "",
+          }))
+        : [EMPTY_CHANGE],
+    );
+    resetResult();
+    setShowHistory(false);
+  }
+
   const applied = !!result && (result.counts.applied ?? 0) > 0;
+  const outstanding = result ? outstandingWarnings(result.warnings, acknowledged) : [];
   const willChange = result
     ? Math.max(
         0,
@@ -290,6 +351,7 @@ export function EnrollmentBulkPage() {
           (applied ? 0 : untickedChanging),
       )
     : 0;
+  const changedProducts = [...new Set(changes.map((c) => c.productCode).filter(Boolean))];
 
   return (
     <div className="space-y-4">
@@ -310,8 +372,8 @@ export function EnrollmentBulkPage() {
             policyYearId={policyYearId}
             facets={facets}
             facetsLoading={facetsLoading}
-            productCode={productCode || undefined}
-            productId={productFacet?.id}
+            productCode={scopeCode}
+            productId={scopeFacet?.id}
             state={selector}
             onChange={updateSelector}
           />
@@ -320,122 +382,23 @@ export function EnrollmentBulkPage() {
 
       {/* ── 2. What ────────────────────────────────────────────────────── */}
       <section className="rounded-lg border border-border bg-card p-4">
-        <h3 className="text-sm font-semibold text-foreground">2. What changes</h3>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <Label htmlFor="bulk-product">Product</Label>
-            <NativeSelect
-              id="bulk-product"
-              className="w-full"
-              value={productCode}
-              onChange={(e) => {
-                const next = e.target.value;
-                const opt = productOptions.find((p) => p.code === next);
-                setProductCode(next);
-                setTargetPlan("");
-                // A product with no plans configured this year can only be
-                // declined. Switching the action here rather than leaving an
-                // impossible one selected: "Move to a plan" with an empty plan
-                // list is a control that cannot be completed.
-                if (opt && opt.plans.length === 0) setAction("decline");
-                // Dependant cover means nothing on a product that has none.
-                if (opt && !opt.hasDependants) setDependantMode("");
-                // The current-plan filter is scoped to the product — a code from
-                // the previous product would silently match nobody.
-                setSelector({ ...selector, currentPlanCodes: [] });
-                resetResult();
-              }}
-            >
-              <option value="">Select product</option>
-              {productOptions.map((p) => (
-                <option key={p.code} value={p.code}>
-                  {p.code}
-                  {p.name && p.name !== p.code ? ` — ${p.name}` : ""}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-
-          <div>
-            <Label htmlFor="bulk-action">Action</Label>
-            <NativeSelect
-              id="bulk-action"
-              className="w-full"
-              value={action}
-              onChange={(e) => {
-                setAction(e.target.value as BulkAction);
-                resetResult();
-              }}
-              disabled={!productCode}
-            >
-              <option value="set_plan" disabled={planOptions.length === 0}>
-                Move to a plan
-              </option>
-              <option value="decline">Decline the product</option>
-            </NativeSelect>
-          </div>
-
-          <div>
-            <Label htmlFor="bulk-target">Move to plan</Label>
-            <NativeSelect
-              id="bulk-target"
-              className="w-full"
-              value={targetPlan}
-              onChange={(e) => {
-                setTargetPlan(e.target.value);
-                resetResult();
-              }}
-              disabled={!productCode || action !== "set_plan" || !planOptions.length}
-            >
-              <option value="">
-                {productCode && !planOptions.length
-                  ? "No plans configured this year"
-                  : "Select plan"}
-              </option>
-              {planOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                  {planHeadcount.has(c) ? ` — ${planHeadcount.get(c)} today` : ""}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-
-          <div>
-            <div className="flex items-center gap-1">
-              <Label htmlFor="bulk-deps">Dependant cover</Label>
-              <InfoHint>
-                Leave unchanged unless you mean to move it — “Cover all” elects
-                every active dependant, “Cover none” removes them all. Disabled
-                on a product that carries no dependant cover.
-              </InfoHint>
-            </div>
-            <NativeSelect
-              id="bulk-deps"
-              className="w-full"
-              value={dependantMode}
-              onChange={(e) => {
-                setDependantMode(e.target.value as DependantMode);
-                resetResult();
-              }}
-              disabled={
-                !productCode ||
-                action === "decline" ||
-                !selectedProduct?.hasDependants
-              }
-            >
-              <option value="">
-                {selectedProduct && !selectedProduct.hasDependants
-                  ? "No dependant cover on this product"
-                  : "Leave unchanged"}
-              </option>
-              <option value="include_all">Cover all dependants</option>
-              <option value="exclude_all">Cover no dependants</option>
-            </NativeSelect>
-          </div>
+        <div className="flex items-center gap-1">
+          <h3 className="text-sm font-semibold text-foreground">2. What changes</h3>
+          <InfoHint>
+            Several products can move in one run — they apply together or not at
+            all, so a renewal never leaves the roster half-moved.
+          </InfoHint>
+        </div>
+        <div className="mt-3">
+          <ChangeSetEditor
+            drafts={changes}
+            products={productOptions}
+            disabled={apply.isPending}
+            onChange={updateChanges}
+          />
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
           <Button
             variant="outline"
             onClick={() => runPreview(0)}
@@ -450,17 +413,46 @@ export function EnrollmentBulkPage() {
           </Button>
           <Button
             onClick={() => setConfirmApply(true)}
-            disabled={apply.isPending || !result || willChange === 0 || applied}
-            title={result ? undefined : "Run Preview first"}
+            disabled={
+              apply.isPending ||
+              !result ||
+              willChange === 0 ||
+              applied ||
+              outstanding.length > 0
+            }
+            title={
+              !result
+                ? "Run Preview first"
+                : outstanding.length
+                  ? "Confirm the warnings below first"
+                  : undefined
+            }
           >
             <Play className="size-4" />
-            {result && !applied ? `Apply ${willChange} change${willChange === 1 ? "" : "s"}` : "Apply"}
+            {result && !applied
+              ? `Apply ${willChange} change${willChange === 1 ? "" : "s"}`
+              : "Apply"}
           </Button>
           {!result && (
             <span className="text-xs text-muted-foreground">
               Preview first — Apply runs against the population you just checked.
             </span>
           )}
+          {result && outstanding.length > 0 && !applied && (
+            <span className="text-xs text-warn">
+              Confirm {outstanding.length} warning
+              {outstanding.length === 1 ? "" : "s"} below to continue.
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto"
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            <History className="size-4" />
+            {showHistory ? "Hide past changes" : "Past changes"}
+          </Button>
         </div>
       </section>
 
@@ -493,12 +485,21 @@ export function EnrollmentBulkPage() {
               <div className="mt-3 flex flex-wrap gap-2">
                 {result.groups.map((g, i) => (
                   <Badge key={i} variant="outline" className="gap-1.5">
+                    {g.product_code && (
+                      <span className="font-medium text-foreground">
+                        {g.product_code}
+                      </span>
+                    )}
                     <span className="text-muted-foreground">
                       {g.from_plan ?? "—"}
                     </span>
                     <span aria-hidden>&rarr;</span>
                     <span className="text-foreground">
-                      {g.declined_after ? "Declined" : (g.to_plan ?? "—")}
+                      {g.declined_after
+                        ? "Declined"
+                        : g.reverted
+                          ? `${g.to_plan ?? "—"} (cohort default)`
+                          : (g.to_plan ?? "—")}
                     </span>
                     <span className="text-muted-foreground">· {g.count}</span>
                   </Badge>
@@ -506,30 +507,23 @@ export function EnrollmentBulkPage() {
               </div>
             )}
 
-            {(result.impact.flex_price_tag_delta !== 0 ||
-              result.impact.unpriced > 0) && (
-              <p className="mt-3 text-xs text-muted-foreground">
-                Flex price tags{" "}
-                <span
-                  className={cn(
-                    "font-medium",
-                    result.impact.flex_price_tag_delta > 0 ? "text-warn" : "text-good",
-                  )}
-                >
-                  {result.impact.flex_price_tag_delta > 0 ? "+" : ""}
-                  {fmtCurrency(result.impact.flex_price_tag_delta)}
-                </span>{" "}
-                across {result.impact.members_changing} member
-                {result.impact.members_changing === 1 ? "" : "s"}
-                {result.impact.unpriced > 0 && (
-                  <span className="text-warn">
-                    {" "}
-                    · {result.impact.unpriced} unpriced (not in the total)
-                  </span>
-                )}
-              </p>
-            )}
+            <ImpactLine result={result} />
           </div>
+
+          {result.warnings.length > 0 && (
+            <div className="border-b border-border px-4 py-3">
+              <WarningPanel
+                warnings={result.warnings}
+                acknowledged={acknowledged}
+                readOnly={applied}
+                onToggle={(code, accepted) =>
+                  setAcknowledged((prev) =>
+                    accepted ? [...prev, code] : prev.filter((c) => c !== code),
+                  )
+                }
+              />
+            </div>
+          )}
 
           <div className="px-4 py-3">
             <SectionLabel>
@@ -541,6 +535,9 @@ export function EnrollmentBulkPage() {
                   <tr>
                     <th className="py-2 pr-4 font-medium">Staff</th>
                     <th className="py-2 pr-4 font-medium">Name</th>
+                    {changedProducts.length > 1 && (
+                      <th className="py-2 pr-4 font-medium">Product</th>
+                    )}
                     <th className="py-2 pr-4 font-medium">Outcome</th>
                     <th className="py-2 pr-4 font-medium">From &rarr; To</th>
                     <th className="py-2 pr-4 font-medium">Note</th>
@@ -553,13 +550,18 @@ export function EnrollmentBulkPage() {
                       !!r.employee_id && selector.excludedIds.includes(r.employee_id);
                     return (
                       <tr
-                        key={r.employee_id ?? r.staff_id ?? i}
+                        key={`${r.employee_id ?? r.staff_id ?? i}-${r.product_code ?? ""}`}
                         className={cn(excluded && "opacity-50")}
                       >
                         <td className="py-2 pr-4 font-mono text-xs">
                           {r.staff_id ?? "—"}
                         </td>
                         <td className="py-2 pr-4">{r.employee_name ?? "—"}</td>
+                        {changedProducts.length > 1 && (
+                          <td className="py-2 pr-4 text-xs text-muted-foreground">
+                            {r.product_code ?? "—"}
+                          </td>
+                        )}
                         <td className={cn("py-2 pr-4", OUTCOME_COLOR[r.outcome])}>
                           {OUTCOME_LABEL[r.outcome] ?? r.outcome}
                         </td>
@@ -567,9 +569,18 @@ export function EnrollmentBulkPage() {
                           {r.declined_before ? "Declined" : (r.from_plan ?? "—")}
                           {" → "}
                           {r.declined_after ? "Declined" : (r.to_plan ?? "—")}
+                          {r.override_cleared && r.outcome !== "no_change" && (
+                            <span className="text-2xs"> (cohort default)</span>
+                          )}
                         </td>
                         <td className="py-2 pr-4 text-xs text-muted-foreground">
                           {r.reason ?? ""}
+                          {r.warnings.length > 0 && (
+                            <span className="text-warn">
+                              {r.reason ? " · " : ""}
+                              {r.warnings.join(", ").replace(/_/g, " ")}
+                            </span>
+                          )}
                         </td>
                         <td className="py-2 text-right">
                           {r.employee_id && r.outcome !== "error" && (
@@ -602,8 +613,8 @@ export function EnrollmentBulkPage() {
             {/* Paging re-runs the PREVIEW, so it must not be offered on an
                 applied result: it would replace the record of what just ran
                 with a fresh dry-run and re-enable Apply against a batch that
-                has already happened. Reading page 2 of a completed batch needs
-                the stored record (phase 4). */}
+                has already happened. Reading page 2 of a completed batch is
+                what "Past changes" is for. */}
             {applied ? (
               result.rows_total > result.rows.length && (
                 <p className="pt-3 text-xs text-muted-foreground">
@@ -622,14 +633,39 @@ export function EnrollmentBulkPage() {
         </section>
       )}
 
+      {/* ── 4. What has already been applied ───────────────────────────── */}
+      {showHistory && (
+        <section className="rounded-lg border border-border bg-card p-4">
+          <div className="flex items-center gap-1">
+            <h3 className="text-sm font-semibold text-foreground">Past changes</h3>
+            <InfoHint>
+              Re-run loads the stored selection back into the builder — it
+              re-resolves against today&apos;s roster and still has to be
+              previewed. Undo puts each member back to what the batch replaced,
+              skipping anyone whose coverage has moved since.
+            </InfoHint>
+          </div>
+          <div className="mt-3">
+            <BatchHistory
+              batches={history.data}
+              loading={history.isLoading}
+              onReRun={loadPastSelection}
+            />
+          </div>
+        </section>
+      )}
+
       <AlertDialog
         open={confirmApply}
         onOpenChange={setConfirmApply}
-        title={`Apply this change to ${willChange} member${willChange === 1 ? "" : "s"}?`}
+        title={`Apply ${willChange} change${willChange === 1 ? "" : "s"}?`}
         description={
-          action === "decline"
-            ? `This opts ${willChange} member(s) out of ${productCode}. Their coverage ends immediately.`
-            : `This moves ${willChange} member(s) to ${targetPlan} on ${productCode}. It updates their effective coverage immediately.`
+          `This updates effective coverage on ${changedProducts.join(", ") || "the selected products"} ` +
+          `immediately.` +
+          (acknowledged.length
+            ? ` You have accepted ${acknowledged.length} warning${acknowledged.length === 1 ? "" : "s"}, which is recorded on the change.`
+            : "") +
+          " It can be undone from Past changes."
         }
         confirmLabel="Apply"
         confirmVariant="default"
@@ -637,5 +673,73 @@ export function EnrollmentBulkPage() {
         onConfirm={runApply}
       />
     </div>
+  );
+}
+
+/**
+ * The money line. Flex is exact (the price tag is what this tool writes);
+ * cover and premium come from resolving each member's target to a tier of their
+ * own cohort, so members whose basis will not resolve are reported as excluded
+ * rather than silently counted as zero.
+ */
+function ImpactLine({ result }: { result: BulkResult }) {
+  const i = result.impact;
+  const parts: React.ReactNode[] = [];
+  if (i.flex_price_tag_delta !== 0) {
+    parts.push(
+      <span key="flex">
+        Flex price tags{" "}
+        <Delta value={i.flex_price_tag_delta} />
+      </span>,
+    );
+  }
+  if (i.annual_premium_delta !== 0) {
+    parts.push(
+      <span key="premium">
+        Annual premium <Delta value={i.annual_premium_delta} />
+      </span>,
+    );
+  }
+  if (i.sum_insured_delta !== 0) {
+    parts.push(
+      <span key="si">
+        Sum insured <Delta value={i.sum_insured_delta} invert />
+      </span>,
+    );
+  }
+  if (!parts.length && !i.unpriced && !i.financials_unresolved) return null;
+
+  return (
+    <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      {parts.map((p, idx) => (
+        <span key={idx} className="flex items-center gap-1">
+          {idx > 0 && <span aria-hidden>·</span>}
+          {p}
+        </span>
+      ))}
+      <span>
+        across {i.members_changing} change{i.members_changing === 1 ? "" : "s"}
+      </span>
+      {i.unpriced > 0 && (
+        <span className="text-warn">· {i.unpriced} unpriced (not in the total)</span>
+      )}
+      {i.financials_unresolved > 0 && (
+        <span>
+          · {i.financials_unresolved} with no per-member figure (not in the
+          premium or cover totals)
+        </span>
+      )}
+    </p>
+  );
+}
+
+/** A rise in spend is a warning; a rise in COVER is not — hence `invert`. */
+function Delta({ value, invert }: { value: number; invert?: boolean }) {
+  const bad = invert ? value < 0 : value > 0;
+  return (
+    <span className={cn("font-medium", bad ? "text-warn" : "text-good")}>
+      {value > 0 ? "+" : ""}
+      {fmtCurrency(value)}
+    </span>
   );
 }

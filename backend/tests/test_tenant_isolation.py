@@ -32,6 +32,7 @@ from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
+    BulkPlanUpdate,
     Category,
     ClaimDocType,
     ClaimReviewConfig,
@@ -192,6 +193,20 @@ def _setup_db():
             employee_id=emp_b.id,
         )
         session.add(enr_b)
+
+        # A bulk coverage batch owned by client B (history/detail/undo checks).
+        session.add(
+            BulkPlanUpdate(
+                id=BULK_B,
+                policy_year_id=py_b.id,
+                client_id=CLIENT_B_ID,
+                product_code="MED",
+                action="set_plan",
+                target_plan_code="B1",
+                selector={"employee_ids": [EMP_B]},
+                result_summary={"counts": {"applied": 0}, "restore": []},
+            )
+        )
 
         # A panel listing owned by client B (clinic-locator isolation checks).
         session.add(
@@ -354,6 +369,7 @@ CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
 PRODUCT_B_OWNED = "00000000-0000-0000-0000-0000000000bf"
 ATTR_B = "00000000-0000-0000-0000-0000000000c1"
 REVIEW_CONFIG_B = "00000000-0000-0000-0000-0000000000c2"
+BULK_B = "00000000-0000-0000-0000-0000000000c3"
 
 
 # ── PolicyYear ──────────────────────────────────────────────────────────────
@@ -1016,6 +1032,21 @@ def test_bulk_apply_cross_tenant_404(client_as_a: TestClient) -> None:
         json={"product_code": "MED", "action": "decline",
               "selector": {"employee_ids": [EMP_B]}},
     )
+    assert res.status_code == 404
+
+
+def test_bulk_history_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/bulk-plan-updates")
+    assert res.status_code == 404
+
+
+def test_bulk_detail_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/bulk-plan-updates/{BULK_B}")
+    assert res.status_code == 404
+
+
+def test_bulk_undo_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(f"/api/v1/bulk-plan-updates/{BULK_B}/undo")
     assert res.status_code == 404
 
 

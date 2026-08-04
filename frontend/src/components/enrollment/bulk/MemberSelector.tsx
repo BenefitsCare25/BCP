@@ -45,6 +45,12 @@ export type SelectorState = {
   attributes: Record<string, string[]>;
   /** Members added by pasted list, on top of whatever the filters match. */
   addedIds: string[];
+  /** Staff IDs the ORIGINAL selection named, carried through a re-run. The
+   *  pre-redesign page selected members this way, so dropping them silently
+   *  re-ran a strictly smaller population — or, on a staff-id-only batch,
+   *  reported the selection as empty. Read-only here: they are shown and can be
+   *  cleared, but new selections use the picker. */
+  staffIds: string[];
   /** Members unticked in the results table. */
   excludedIds: string[];
 };
@@ -57,6 +63,7 @@ export const EMPTY_SELECTOR: SelectorState = {
   coverageState: "any",
   attributes: {},
   addedIds: [],
+  staffIds: [],
   excludedIds: [],
 };
 
@@ -74,7 +81,31 @@ export function toQuery(state: SelectorState): MemberQuery {
     coverage_state: state.coverageState,
     attributes,
     employee_ids: state.addedIds,
+    staff_ids: state.staffIds,
     exclude_employee_ids: state.excludedIds,
+  };
+}
+
+/** The wire shape back into the builder — "re-run this selection" on a past
+ *  batch. The inverse of `toQuery`, so a stored rule is editable rather than
+ *  being replayed blind. */
+export function fromQuery(query: MemberQuery | null | undefined): SelectorState {
+  if (!query) return EMPTY_SELECTOR;
+  return {
+    q: query.q ?? "",
+    includeTerminated: query.include_terminated ?? false,
+    categoryIds: query.category_ids ?? [],
+    currentPlanCodes: query.current_plan_codes ?? [],
+    coverageState: query.coverage_state ?? "any",
+    attributes: Object.fromEntries(
+      (query.attributes ?? []).map((a) => [a.key, a.values]),
+    ),
+    addedIds: query.employee_ids ?? [],
+    staffIds: query.staff_ids ?? [],
+    // Exclusions are NOT carried back. They were ticked off a preview of a
+    // population that has since moved, so re-applying them would silently drop
+    // people the broker never looked at.
+    excludedIds: [],
   };
 }
 
@@ -85,7 +116,8 @@ export function selectorIsEmpty(state: SelectorState): boolean {
     !state.currentPlanCodes.length &&
     state.coverageState === "any" &&
     !Object.values(state.attributes).some((v) => v.length) &&
-    !state.addedIds.length
+    !state.addedIds.length &&
+    !state.staffIds.length
   );
 }
 
@@ -313,6 +345,20 @@ export function MemberSelector({
           >
             {state.excludedIds.length} excluded — undo
           </button>
+        )}
+        {state.staffIds.length > 0 && (
+          <Badge variant="outline">
+            {state.staffIds.length} staff ID
+            {state.staffIds.length === 1 ? "" : "s"} from the original selection
+            <button
+              type="button"
+              aria-label="Drop the staff IDs carried from the original selection"
+              className="ml-1"
+              onClick={() => set({ staffIds: [] })}
+            >
+              <X className="size-3" />
+            </button>
+          </Badge>
         )}
         {state.addedIds.length > 0 && (
           <Badge variant="outline">

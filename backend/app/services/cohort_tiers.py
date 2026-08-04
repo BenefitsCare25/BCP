@@ -708,6 +708,90 @@ def list_product_tiers(
     return out
 
 
+@dataclass
+class ProductTierIndex:
+    """Every baseline category of one product, mapped to its tier set.
+
+    Built ONCE per product for a whole batch, so a bulk run can ask "is this plan
+    electable for the cohort this member sits in?" without calling
+    ``electable_tiers_for_employee`` per member (which issues four queries each).
+    The answer depends only on the baseline CATEGORY, not on the member, so there
+    are tens of entries where there would have been thousands of calls.
+
+    The tier sets are built with NO age and NO roster attributes, so their
+    ``financials`` are the aggregate ones and must not be read as a member's own
+    figures. ``categories`` is here for exactly that reason: resolve the tier to
+    its Category and re-run ``member_financials`` with the member's age and
+    attribute values (see the ``member_financials`` note in CLAUDE.md).
+    """
+
+    sets: dict[str, ProductTierSet]
+    categories: dict[str, Category]
+
+    def plan_codes_for(self, baseline_category_id: str | None) -> set[str] | None:
+        """Plan codes electable from that baseline, or None when the cohort is
+        unknown — which is NOT the same as "nothing is electable" and must not be
+        reported as a member being outside their cohort."""
+        ts = self.sets.get(baseline_category_id or "")
+        if ts is None:
+            return None
+        return {t.plan_code for t in ts.tiers if t.plan_code}
+
+    def category_for_plan(
+        self, baseline_category_id: str | None, plan_code: str | None
+    ) -> Category | None:
+        """The tier Category a plan code resolves to within that cohort.
+
+        None when the cohort is unknown, the plan isn't in it, or the plan is
+        ambiguous — a plan code can repeat across tiers (GPA "(Option N)"), and
+        picking one of two would attach a basis the broker never chose.
+        """
+        ts = self.sets.get(baseline_category_id or "")
+        if ts is None or not plan_code:
+            return None
+        hits = {t.tier_category_id for t in ts.tiers if t.plan_code == plan_code}
+        if len(hits) != 1:
+            return None
+        return self.categories.get(next(iter(hits)) or "")
+
+    def can_decline(self, baseline_category_id: str | None) -> bool | None:
+        ts = self.sets.get(baseline_category_id or "")
+        return None if ts is None else ts.can_decline
+
+
+def tier_index_for_product(
+    db: Session, policy_year_id: str, product_id: str, product_code: str
+) -> ProductTierIndex:
+    """Build the per-baseline-category tier index for one product."""
+    cats = list(
+        db.execute(
+            select(Category).where(
+                Category.policy_year_id == policy_year_id,
+                Category.product_id == product_id,
+            )
+        ).scalars()
+    )
+    if not cats:
+        return ProductTierIndex(sets={}, categories={})
+    plan_codes = {
+        str(code)
+        for (code,) in db.execute(
+            select(Plan.code).where(
+                Plan.product_id == product_id, Plan.policy_year_id == policy_year_id
+            )
+        ).all()
+    }
+    sets: dict[str, ProductTierSet] = {}
+    for cat in cats:
+        # Dependant-scope categories price dependant cover standalone and are
+        # never an employee's baseline; building a tier set from one would offer
+        # dependant pricing as an employee tier.
+        if _is_dependant_scope(cat):
+            continue
+        sets[cat.id] = _build_tier_set(cat, cats, plan_codes, product_code)
+    return ProductTierIndex(sets=sets, categories={c.id: c for c in cats})
+
+
 def _group_by_cohort(cats: list[Category]) -> dict[tuple[str, str], list[Category]]:
     """Cohorts are scoped per insured entity as well as description — a
     multi-subsidiary slip repeats category names per entity block and those must

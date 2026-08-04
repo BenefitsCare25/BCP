@@ -1,11 +1,12 @@
-"""Bulk plan update — reassign (or decline) one product's plan for many members.
+"""Bulk coverage changes — apply a SET of coverage changes to a population.
 
-``evaluate`` runs the per-employee validation and returns a structured outcome;
-with ``apply=True`` it also writes the sparse ``EmployeePlanOverride`` rows and
-stamps each with the batch record id. Preview reuses the same evaluation with
-``apply=False`` so the dry-run can never diverge from the real apply.
+``evaluate`` runs the per-member validation for every change in the set and
+returns a structured outcome; with ``apply=True`` it also writes the sparse
+``EmployeePlanOverride`` rows and stamps each with the batch record id. Preview
+reuses the same evaluation with ``apply=False`` so the dry-run can never diverge
+from the real apply.
 
-Three things the module is careful about, each of which was wrong before:
+Five things the module is careful about, each of which was wrong before:
 
 - **The population comes from ``services/member_query``**, not from a list of
   ids typed by a broker. One resolver serves the live headcount, the preview and
@@ -16,10 +17,22 @@ Three things the module is careful about, each of which was wrong before:
 - **Every per-member input is loaded in ONE query.** The old loop did a
   ``db.get`` per id plus two dependant queries per member — roughly 7,000 round
   trips on a 2,300-life roster.
+- **Nothing is written until the whole batch has been evaluated.** The rows are
+  planned first, then the size / staleness / acknowledgement gates run, and only
+  then does anything execute. A batch that trips a gate must leave NOTHING
+  behind, and warnings can only be known once the rows exist — so evaluating and
+  writing in one pass would mean deciding whether to write halfway through
+  writing.
+- **A multi-product batch is one transaction.** "GHS to Plan 2 and GTL to Plan B
+  for these 300 people" applies whole or not at all; a run that moved one product
+  and failed on the next is the state nobody can reason about afterwards. This
+  module never commits — the caller owns the commit, and one fault rolls the
+  whole set back.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from sqlalchemy import select
@@ -37,12 +50,17 @@ from app.models import (
 )
 from app.models.dependant import DEPENDANT_STATUS_ACTIVE
 from app.models.employee_plan_override import OverrideSource
+from app.models.leave_election import LeaveAction, LeaveElection, LeaveElectionStatus
 from app.schemas.enrollment import (
     BulkChangeGroup,
+    BulkDependantAction,
     BulkImpact,
-    BulkPlanUpdateRequest,
     BulkRowOutcome,
+    BulkWarningBucket,
+    CoverageChange,
 )
+from app.schemas.member_query import MemberQuery
+from app.services import bulk_warnings as warn
 from app.services.cohort_tiers import first_category_per_product
 from app.services.coverage_resolver import is_sparse_default, resolve_plan
 from app.services.flex_pricing_resolver import (
@@ -67,6 +85,10 @@ from app.services.member_query import (
 )
 from app.services.override_writer import override_snapshot, upsert_override
 
+# A balance below half a cent is overdrawn — the same float-noise tolerance the
+# enrollment wallet guard uses, so the two surfaces agree on the boundary.
+_EPSILON = 0.005
+
 
 class SelectionTooLarge(Exception):
     """More members matched than one run may touch."""
@@ -88,51 +110,148 @@ class SelectionChanged(Exception):
         self.digest = digest
 
 
+class UnacknowledgedWarnings(Exception):
+    """Apply was asked to run with a decision-needing warning outstanding.
+
+    Also raised before any write: the broker is being asked to accept something,
+    and half of the batch already being applied would make that a formality.
+    """
+
+    def __init__(self, buckets: list[BulkWarningBucket]) -> None:
+        codes = ", ".join(b.code for b in buckets)
+        super().__init__(f"Unacknowledged warnings: {codes}")
+        self.buckets = buckets
+
+
+@dataclass
+class ResolvedChange:
+    """One requested change with its product resolved (the router validates the
+    product exists in the year and that the target plan is configured)."""
+
+    change: CoverageChange
+    product: Product
+
+
 @dataclass
 class BulkEvaluation:
     """The full result of one evaluation. ``rows`` is every row; the router pages
-    it. ``groups`` and ``counts`` are what the broker actually reads."""
+    it. ``groups``, ``counts`` and ``warnings`` are what the broker reads."""
 
     rows: list[BulkRowOutcome] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     groups: list[BulkChangeGroup] = field(default_factory=list)
+    warnings: list[BulkWarningBucket] = field(default_factory=list)
     impact: BulkImpact = field(default_factory=BulkImpact)
     digest: str | None = None
     selection: Selection | None = None
+    # Per written pair: what it looked like before and after. The undo source —
+    # see ``undo_batch``. Empty on a preview.
+    restore: list[dict[str, Any]] = field(default_factory=list)
+
+
+# ── Flex pricing inputs, resolved once for the whole batch ──────────────────
 
 
 @dataclass
-class _PriceContext:
-    """Flex inputs resolved once for the whole batch."""
+class _FlexContext:
+    """Everything ``member_coverage_tag`` needs, for EVERY product in the year.
+
+    Year-level (pricing, source map, drawdown rule, slip indices) plus the
+    per-(member, product) baseline category. It spans every product the selection
+    is covered by, not only the ones being changed, because the overdraft check
+    has to total a member's whole wallet draw — the products this batch does not
+    touch still spend flex.
+    """
 
     pricing: Any
-    ref: Any
+    ref: date
     source_map: dict[str, Any]
     drawdown_rule: str
     slip_idx: Any
     family_slip_idx: Any
-    baseline_cat: dict[str, str]
+    baseline_cat: dict[tuple[str, str], str]
     compulsory_dep_cats: set[str]
+    # Whether flex is configured for this year at all. Without it every changing
+    # row of a company that does not run flex was reported "unpriced", which is
+    # not a gap — the product simply has no price tag.
+    configured: bool
+    _age_limits: dict[str, dict[str, dict[str, int]] | None] = field(default_factory=dict)
+
+    def age_limits(self, product_id: str) -> dict[str, dict[str, int]] | None:
+        if product_id not in self._age_limits:
+            self._age_limits[product_id] = dependant_age_limits(self.pricing, product_id)
+        return self._age_limits[product_id]
 
 
-def _price_context(
-    db: Session, py: PolicyYear, employees: list[Employee], product_id: str
-) -> _PriceContext:
-    baseline_cat = baseline_cat_by_product(db, employees, product_id)
+def baseline_categories(
+    db: Session, employees: list[Employee]
+) -> dict[tuple[str, str], str]:
+    """``{(employee_id, product_id): matched_category_id}`` across every product.
+
+    Reuses the shared ``first_category_per_product`` selector so the price tag a
+    bulk apply snapshots is keyed on the SAME baseline category the benefit
+    statement later recomputes against (``summarize_employee``) — otherwise the
+    two surfaces would show different flex spend for the same member.
+    """
+    all_ids = {
+        m["category_id"]
+        for e in employees
+        for m in (e.matched_categories or [])
+        if m.get("category_id")
+    }
+    if not all_ids:
+        return {}
+    prod_of: dict[str, str] = {
+        cid: pid
+        for cid, pid in db.execute(
+            select(Category.id, Category.product_id).where(Category.id.in_(all_ids))
+        ).all()
+        if pid
+    }
+    out: dict[tuple[str, str], str] = {}
+    for e in employees:
+        for pid, cid in first_category_per_product(
+            e.matched_categories or [], prod_of
+        ).items():
+            out[(e.id, pid)] = cid
+    return out
+
+
+def baseline_cat_by_product(
+    db: Session, employees: list[Employee], product_id: str
+) -> dict[str, str]:
+    """``{employee_id: matched_category_id}`` for ONE product — the single-product
+    view of ``baseline_categories``, for callers (the manual override editor)
+    that price one member against one product."""
+    return {
+        emp_id: cid
+        for (emp_id, pid), cid in baseline_categories(db, employees).items()
+        if pid == product_id
+    }
+
+
+def _flex_context(
+    db: Session, py: PolicyYear, employees: list[Employee]
+) -> _FlexContext:
     source_map, drawdown_rule = governing_flex_config(db, py.id)
-    return _PriceContext(
-        pricing=get_pricing(db, py.id),
+    pricing = get_pricing(db, py.id)
+    slip_idx = maybe_slip_index(db, py.id, source_map)
+    family_slip_idx = maybe_family_slip_index(db, py.id, source_map)
+    baseline_cat = baseline_categories(db, employees)
+    return _FlexContext(
+        pricing=pricing,
         ref=reference_date(db, py.id),
         source_map=source_map,
         drawdown_rule=drawdown_rule,
-        slip_idx=maybe_slip_index(db, py.id, source_map),
-        family_slip_idx=maybe_family_slip_index(db, py.id, source_map),
+        slip_idx=slip_idx,
+        family_slip_idx=family_slip_idx,
         baseline_cat=baseline_cat,
         # Baseline categories with compulsory (employer-funded) dependant cover —
         # their dependants draw no member flex (same exemption as the statement).
         compulsory_dep_cats=compulsory_dependant_category_ids(
             db, set(baseline_cat.values())
         ),
+        configured=bool(pricing is not None or slip_idx or family_slip_idx),
     )
 
 
@@ -172,50 +291,109 @@ def _load_dependants(db: Session, employee_ids: list[str]) -> _Dependants:
     )
     active: dict[str, list[Dependant]] = {}
     for dep in rows:
-        if dep.status == DEPENDANT_STATUS_ACTIVE:
+        if dep.status == DEPENDANT_STATUS_ACTIVE and dep.employee_id:
             active.setdefault(dep.employee_id, []).append(dep)
     return _Dependants(active, {d.id: d for d in rows})
 
 
+def _load_leave(db: Session, py: PolicyYear, employee_ids: list[str]) -> dict[str, float]:
+    """``{employee_id: signed flex impact}`` of each member's effective leave trade.
+
+    The newest CONFIRMED row per member, matching ``latest_confirmed_leave`` —
+    an older window's row is superseded, never summed. Batched because the
+    overdraft check needs it for every selected member and the per-member
+    selector is a query each.
+    """
+    if not employee_ids:
+        return {}
+    rows = db.execute(
+        select(LeaveElection)
+        .where(
+            LeaveElection.policy_year_id == py.id,
+            LeaveElection.employee_id.in_(employee_ids),
+            LeaveElection.status == LeaveElectionStatus.confirmed,
+        )
+        .order_by(LeaveElection.created_at.desc())
+    ).scalars()
+    out: dict[str, float] = {}
+    for row in rows:
+        if row.employee_id in out:
+            continue  # newest wins — the query is ordered
+        if row.action == LeaveAction.none or not isinstance(
+            row.flex_amount, (int, float)
+        ):
+            continue
+        out[row.employee_id] = float(row.flex_amount)
+    return out
+
+
 def _covered_dependants(
-    owned: list[Dependant], req: BulkPlanUpdateRequest
+    owned: list[Dependant], action: BulkDependantAction | None
 ) -> tuple[list[str] | None, str | None]:
     """Resolve the dependant-coverage list for one member. Returns (ids, error).
 
     ``None`` ids means "no dependant_action was requested" — leave whatever
     coverage the member already has untouched.
     """
-    da = req.dependant_action
-    if da is None:
+    if action is None:
         return None, None
     owned_ids = {d.id for d in owned}
-    if da.mode == "include_all":
+    if action.mode == "include_all":
         return sorted(owned_ids), None
-    if da.mode == "exclude_all":
+    if action.mode == "exclude_all":
         return [], None
-    missing = [d for d in da.dependant_ids if d not in owned_ids]
+    missing = [d for d in action.dependant_ids if d not in owned_ids]
     if missing:
         return None, (
             "Dependants not owned by this member (or not active): "
             f"{', '.join(missing)}."
         )
-    return list(da.dependant_ids), None
+    return list(action.dependant_ids), None
+
+
+# ── One planned write ───────────────────────────────────────────────────────
+
+
+@dataclass
+class _Plan:
+    """A change this batch WOULD make, held until every gate has passed."""
+
+    employee: Employee
+    product: Product
+    change: CoverageChange
+    ov: EmployeePlanOverride | None
+    dep_ids: list[str] | None
+    dep_options: dict[str, Any] | None
+    tag: float | None
+    sparse: bool
+    row: BulkRowOutcome
+    # The tier quotes a cover figure that would not reduce to this member. Held
+    # here rather than derived from the row: "no figure" and "no such figure"
+    # look identical on the row, and only the first is worth reporting.
+    financials_unresolved: bool = False
 
 
 def evaluate(
     db: Session,
     py: PolicyYear,
-    product: Product,
-    req: BulkPlanUpdateRequest,
+    changes: list[ResolvedChange],
+    query: MemberQuery,
     *,
     apply: bool,
     record_id: str | None = None,
     user: CurrentUser | None = None,
     index: RosterIndex | None = None,
     expected_digest: str | None = None,
+    acknowledged: set[str] | None = None,
 ) -> BulkEvaluation:
+    if not changes:
+        raise ValueError("A bulk coverage change needs at least one change.")
+    # The coverage filters (`current_plan_codes`, `coverage_state`) resolve
+    # against ONE product's effective plan — a member can be on Plan 1 of GHS and
+    # Plan 3 of GTL, so scoping them per change would make "everyone on Plan 1"
+    # name two different populations inside one batch.
     selection = resolve_selection(
-        db, py, req.selector, product_id=product.id, index=index
+        db, py, query, product_id=changes[0].product.id, index=index
     )
     idx = selection.index
     assert idx is not None  # resolve_selection always attaches the index it used
@@ -224,12 +402,14 @@ def evaluate(
     if len(employees) > MAX_SELECTION:
         raise SelectionTooLarge(len(employees), MAX_SELECTION)
 
-    # Computed BEFORE the loop: the loop mutates the override rows this hashes,
-    # so a digest taken afterwards would fingerprint the state the batch just
-    # created rather than the state it was approved against. Over
+    # Computed BEFORE anything is written: the writes mutate the override rows
+    # this hashes, so a digest taken afterwards would fingerprint the state the
+    # batch just created rather than the state it was approved against. Over
     # ``selection.matched`` (pre-exclusion) so unticking rows in the preview
     # doesn't invalidate the broker's own preview — see ``Selection.matched``.
-    digest = selection_digest(product.code, idx, selection.matched, product.id)
+    digest = selection_digest(
+        [(c.product.code, c.product.id) for c in changes], idx, selection.matched
+    )
     if expected_digest is not None and expected_digest != digest:
         raise SelectionChanged(digest)
 
@@ -243,33 +423,120 @@ def evaluate(
         for ref in selection.unresolved
     ]
 
-    overrides = idx.overrides
-    applied_label = "applied" if apply else "would_apply"
     deps = _load_dependants(db, emp_ids)
-    price = _price_context(db, py, employees, product.id)
-    age_limits = dependant_age_limits(price.pricing, product.id)
+    flex = _flex_context(db, py, employees)
+    wctx = warn.build_context(
+        db, py, {c.product.id: c.product.code for c in changes}, emp_ids
+    )
+    codes_by_employee: dict[str, set[str]] = {}
+    plans: list[_Plan] = []
+
+    for resolved in changes:
+        _evaluate_change(
+            resolved,
+            employees=employees,
+            idx=idx,
+            deps=deps,
+            flex=flex,
+            wctx=wctx,
+            rows=rows,
+            plans=plans,
+            codes_by_employee=codes_by_employee,
+        )
+
+    _flag_overdrafts(
+        db, py, employees, plans, idx=idx, deps=deps, flex=flex,
+        codes_by_employee=codes_by_employee,
+    )
+
+    buckets = warn.buckets(codes_by_employee)
+    if apply:
+        outstanding = [
+            b
+            for b in buckets
+            if b.requires_ack and b.code not in (acknowledged or set())
+        ]
+        if outstanding:
+            raise UnacknowledgedWarnings(outstanding)
+
+    restore: list[dict[str, Any]] = []
+    if apply:
+        for planned in plans:
+            restore.append(_execute(db, py, planned, record_id, user))
+            planned.row.outcome = "applied"
+
+    counts: dict[str, int] = {
+        "applied" if apply else "would_apply": 0,
+        "no_change": 0,
+        "skipped": 0,
+        "error": 0,
+    }
+    for r in rows:
+        counts[r.outcome] = counts.get(r.outcome, 0) + 1
+
+    changing = "applied" if apply else "would_apply"
+    return BulkEvaluation(
+        rows=rows,
+        counts=counts,
+        groups=_groups(rows, changing),
+        warnings=buckets,
+        impact=_impact(
+            rows, changing, flex.configured,
+            sum(1 for p in plans if p.financials_unresolved),
+        ),
+        digest=digest,
+        selection=selection,
+        restore=restore,
+    )
+
+
+def _evaluate_change(
+    resolved: ResolvedChange,
+    *,
+    employees: list[Employee],
+    idx: RosterIndex,
+    deps: _Dependants,
+    flex: _FlexContext,
+    wctx: warn.WarningContext,
+    rows: list[BulkRowOutcome],
+    plans: list[_Plan],
+    codes_by_employee: dict[str, set[str]],
+) -> None:
+    """Plan one product's change across the whole selection. Writes nothing."""
+    product = resolved.product
+    change = resolved.change
+    age_limits = flex.age_limits(product.id)
+    revert = change.action == "revert_to_default"
+    declined_after = change.action == "decline"
 
     for emp in employees:
         if not idx.covers(emp.id, product.id):
-            rows.append(_row(emp, "skipped", "Member is not enrolled in this product."))
+            rows.append(
+                _row(
+                    emp, "skipped", "Member is not enrolled in this product.",
+                    product_code=product.code,
+                )
+            )
             continue
         default_plan = idx.default_plan(emp.id, product.id)
-        ov = overrides.get((emp.id, product.id))
+        ov = idx.overrides.get((emp.id, product.id))
         # Effective "from" plan via the canonical resolver so the preview's
         # from-column agrees with the current-plan filter (a dependant-only
         # override keeps the cohort default plan, not a blank).
         current = resolve_plan(ov, default_plan)
-        declined_after = req.action == "decline"
-        to_plan = None if declined_after else req.target_plan_code
+        # A revert restores the cohort default whole — its plan, and no
+        # dependant/option deviation. Pricing it any other way would disagree
+        # with what the benefit statement recomputes once the override is gone
+        # (``_member_flex_line`` with no override).
+        to_plan = default_plan if revert else (None if declined_after else change.target_plan_code)
 
         electable = deps.active_by_employee.get(emp.id, [])
-        dep_ids, dep_err = _covered_dependants(electable, req)
+        dep_ids, dep_err = _covered_dependants(electable, change.dependant_action)
         if dep_err:
             rows.append(
                 _row(
-                    emp,
-                    "error",
-                    dep_err,
+                    emp, "error", dep_err,
+                    product_code=product.code,
                     from_plan=current.plan_code,
                     to_plan=to_plan,
                     declined_before=current.declined,
@@ -278,24 +545,30 @@ def evaluate(
             )
             continue
 
-        base_cat = price.baseline_cat.get(emp.id)
+        base_cat = flex.baseline_cat.get((emp.id, product.id))
         # Price against the effective dependant coverage: the new list when the
         # batch sets one, otherwise the override's existing coverage (untouched).
-        covered_for_price = (
-            dep_ids if dep_ids is not None else (ov.covered_dependant_ids if ov else None)
-        )
-        # Elected dependant option LEVELS are tier-independent (attached to every
-        # tier), so a plan change preserves the member's existing choice —
-        # dropping it would silently unprice covered dependants. A decline clears
-        # them along with the coverage.
-        dep_options = None if declined_after else (ov.dependant_option_ids if ov else None)
+        # A revert drops the override, so it prices with none.
+        if revert:
+            covered_for_price: list[str] | None = None
+            dep_options: dict[str, Any] | None = None
+        else:
+            covered_for_price = (
+                dep_ids if dep_ids is not None else (ov.covered_dependant_ids if ov else None)
+            )
+            # Elected dependant option LEVELS are tier-independent (attached to
+            # every tier), so a plan change preserves the member's existing choice
+            # — dropping it would silently unprice covered dependants. A decline
+            # clears them along with the coverage.
+            dep_options = None if declined_after else (ov.dependant_option_ids if ov else None)
 
         # A bulk set_plan back to the member's cohort default with no dependant
         # deviation needs no override — keep storage sparse (delete any stale
         # override) rather than materialize a redundant default-equal row, which
         # would pin the member off future category changes and re-price flex for
-        # a no-op. Mirrors the enrollment-projection sparse rule.
-        sparse = is_sparse_default(
+        # a no-op. Mirrors the enrollment-projection sparse rule. A revert is
+        # sparse by definition: removing the override IS the change.
+        sparse = revert or is_sparse_default(
             declined=declined_after,
             plan_code=to_plan,
             tier_category_id=None,
@@ -306,9 +579,7 @@ def evaluate(
         )
 
         tag = _price_tag(
-            price,
-            product.id,
-            emp,
+            flex, product.id, emp,
             declined=declined_after,
             base_cat=base_cat,
             to_plan=to_plan,
@@ -319,59 +590,188 @@ def evaluate(
             age_limits=age_limits,
         )
 
-        if _unchanged(
-            ov, sparse, declined_after, to_plan, covered_for_price, dep_options, tag
-        ):
+        if _unchanged(ov, sparse, declined_after, to_plan, covered_for_price, dep_options, tag):
             rows.append(
                 _row(
-                    emp,
-                    "no_change",
-                    "Already on this coverage.",
+                    emp, "no_change", "Already on this coverage.",
+                    product_code=product.code,
                     from_plan=current.plan_code,
                     to_plan=to_plan,
                     declined_before=current.declined,
                     declined_after=declined_after,
-                    tag_before=ov.flex_price_tag if ov else None,
-                    tag_after=ov.flex_price_tag if ov else None,
+                    # Both sides are the same figure by definition — nothing
+                    # about this member moves. Showing the stored tag on one
+                    # side and the recomputed one on the other would render a
+                    # no-op as a price movement.
+                    tag_before=tag,
+                    tag_after=tag,
                 )
             )
             continue
 
-        if apply:
-            if sparse:
-                _clear_override(db, emp, ov, user)
-            else:
-                _write_override(
-                    db, emp, py, product, req, dep_ids, record_id, user, tag,
-                    dep_options,
-                )
-        rows.append(
-            _row(
-                emp,
-                applied_label,
-                None,
-                from_plan=current.plan_code,
-                to_plan=to_plan,
-                declined_before=current.declined,
-                declined_after=declined_after,
-                tag_before=ov.flex_price_tag if ov else None,
-                tag_after=None if sparse else tag,
-                override_cleared=sparse,
+        age = employee_age(emp, flex.ref) if flex.ref else None
+        gst = wctx.gst_multipliers.get(product.id, 1.0)
+        before_fig = warn.member_figures(
+            warn.target_category(wctx, product.id, base_cat, current.plan_code),
+            age, emp, gst,
+        )
+        after_fig = (
+            warn.MemberFigures(None, None, False)
+            if declined_after
+            else warn.member_figures(
+                warn.target_category(wctx, product.id, base_cat, to_plan), age, emp, gst
+            )
+        )
+        # A tier that quotes cover but will not reduce to THIS member is the
+        # only interesting gap. A reimbursement product quotes none by design —
+        # counting those told the broker every one of 506 rows had "no
+        # per-member figure", which reads as a data problem and is just the
+        # shape of GP/SP/dental/hospital cover.
+        unresolved = (
+            (before_fig.quoted or after_fig.quoted)
+            and not declined_after
+            and (
+                before_fig.sum_insured is None
+                or after_fig.sum_insured is None
+                or before_fig.annual_premium is None
+                or after_fig.annual_premium is None
+            )
+            and not current.declined
+        )
+
+        row = _row(
+            emp, "would_apply", None,
+            product_code=product.code,
+            from_plan=current.plan_code,
+            to_plan=to_plan,
+            declined_before=current.declined,
+            declined_after=declined_after,
+            tag_before=ov.flex_price_tag if ov else None,
+            tag_after=tag,
+            override_cleared=sparse,
+            si_before=None if current.declined else before_fig.sum_insured,
+            si_after=after_fig.sum_insured,
+            premium_before=None if current.declined else before_fig.annual_premium,
+            premium_after=after_fig.annual_premium,
+        )
+        row.warnings = warn.row_codes(
+            wctx,
+            product_id=product.id,
+            employee=emp,
+            baseline_category_id=base_cat,
+            ov_source=ov.source if ov else None,
+            action=change.action,
+            target_plan_code=to_plan,
+            sum_insured_after=after_fig.sum_insured,
+            price_tag_after=tag,
+            declined_after=declined_after,
+            flex_configured=flex.configured,
+            ineligible_dependants=_ineligible_count(
+                covered_for_price, deps.by_id, age_limits, flex.ref
+            ),
+        )
+        codes_by_employee.setdefault(emp.id, set()).update(row.warnings)
+        rows.append(row)
+        plans.append(
+            _Plan(
+                employee=emp, product=product, change=change, ov=ov,
+                dep_ids=dep_ids, dep_options=dep_options, tag=tag,
+                sparse=sparse, row=row, financials_unresolved=unresolved,
             )
         )
 
-    counts: dict[str, int] = {applied_label: 0, "no_change": 0, "skipped": 0, "error": 0}
-    for r in rows:
-        counts[r.outcome] = counts.get(r.outcome, 0) + 1
 
-    return BulkEvaluation(
-        rows=rows,
-        counts=counts,
-        groups=_groups(rows, applied_label),
-        impact=_impact(rows, applied_label),
-        digest=digest,
-        selection=selection,
-    )
+def _ineligible_count(
+    covered: list[str] | None,
+    dependants: dict[str, Dependant],
+    age_limits: dict[str, dict[str, int]] | None,
+    ref: date | None,
+) -> int:
+    """How many of the dependants being covered sit outside the product's age
+    window — the difference between profiling them with the limits and without,
+    so the eligibility rule stays the one ``dependant_profiles_of`` applies."""
+    if not covered or not age_limits or ref is None:
+        return 0
+    rows = [d for d in (dependants.get(i) for i in covered if i) if d is not None]
+    if not rows:
+        return 0
+    everyone = dependant_profiles_of(rows, age_limits=None, ref=ref)
+    eligible = dependant_profiles_of(rows, age_limits=age_limits, ref=ref)
+    return max(0, len(everyone) - len(eligible))
+
+
+def _flag_overdrafts(
+    db: Session,
+    py: PolicyYear,
+    employees: list[Employee],
+    plans: list[_Plan],
+    *,
+    idx: RosterIndex,
+    deps: _Dependants,
+    flex: _FlexContext,
+    codes_by_employee: dict[str, set[str]],
+) -> None:
+    """Mark members whose coverage AFTER the batch draws more flex than they hold.
+
+    This is the one check that cannot be made row by row: a wallet is a whole-
+    member total, so it needs every product's spend — including the products this
+    batch does not touch, which keep drawing exactly what they draw today. Their
+    tags are recomputed rather than read off the stored override, because a
+    member sitting on their cohort default has no override and therefore no
+    stored tag, yet still spends.
+    """
+    if not flex.configured:
+        return
+    changed_by_employee: dict[str, dict[str, _Plan]] = {}
+    for planned in plans:
+        changed_by_employee.setdefault(planned.employee.id, {})[
+            planned.product.id
+        ] = planned
+    if not changed_by_employee:
+        return
+
+    wallets = {
+        e.id: e.flex_wallet_amount
+        for e in employees
+        if isinstance(e.flex_wallet_amount, (int, float))
+    }
+    at_risk = [e for e in employees if e.id in wallets and e.id in changed_by_employee]
+    if not at_risk:
+        return
+    leave = _load_leave(db, py, [e.id for e in at_risk])
+
+    for emp in at_risk:
+        changed = changed_by_employee[emp.id]
+        total = 0.0
+        for product_id in idx.defaults.get(emp.id, {}):
+            on_product = changed.get(product_id)
+            if on_product is not None:
+                if on_product.change.action == "decline":
+                    continue  # declined coverage costs no flex
+                tag = on_product.tag
+            else:
+                ov = idx.overrides.get((emp.id, product_id))
+                if ov is not None and ov.declined:
+                    continue
+                tag = _price_tag(
+                    flex, product_id, emp,
+                    declined=False,
+                    base_cat=flex.baseline_cat.get((emp.id, product_id)),
+                    to_plan=(ov.plan_code if ov else None)
+                    or idx.default_plan(emp.id, product_id),
+                    default_plan=idx.default_plan(emp.id, product_id),
+                    covered=ov.covered_dependant_ids if ov else None,
+                    dependants=deps.by_id,
+                    dep_options=ov.dependant_option_ids if ov else None,
+                    age_limits=flex.age_limits(product_id),
+                )
+            total += tag or 0.0
+        balance = round(wallets[emp.id] - total + leave.get(emp.id, 0.0), 2)
+        if balance < -_EPSILON:
+            codes_by_employee.setdefault(emp.id, set()).add(warn.FLEX_OVERDRAFT)
+            for planned in changed.values():
+                if warn.FLEX_OVERDRAFT not in planned.row.warnings:
+                    planned.row.warnings.append(warn.FLEX_OVERDRAFT)
 
 
 def _row(
@@ -379,6 +779,7 @@ def _row(
     outcome: str,
     reason: str | None,
     *,
+    product_code: str | None = None,
     from_plan: str | None = None,
     to_plan: str | None = None,
     declined_before: bool = False,
@@ -386,6 +787,10 @@ def _row(
     tag_before: float | None = None,
     tag_after: float | None = None,
     override_cleared: bool = False,
+    si_before: float | None = None,
+    si_after: float | None = None,
+    premium_before: float | None = None,
+    premium_after: float | None = None,
 ) -> BulkRowOutcome:
     return BulkRowOutcome(
         employee_id=emp.id,
@@ -393,6 +798,7 @@ def _row(
         employee_name=emp.employee_name,
         outcome=outcome,
         reason=reason,
+        product_code=product_code,
         from_plan=from_plan,
         to_plan=to_plan,
         declined_before=declined_before,
@@ -400,6 +806,10 @@ def _row(
         flex_price_tag_before=tag_before,
         flex_price_tag_after=tag_after,
         override_cleared=override_cleared,
+        sum_insured_before=si_before,
+        sum_insured_after=si_after,
+        annual_premium_before=premium_before,
+        annual_premium_after=premium_after,
     )
 
 
@@ -449,7 +859,7 @@ def _unchanged(
 
 
 def _price_tag(
-    price: _PriceContext,
+    flex: _FlexContext,
     product_id: str,
     emp: Employee,
     *,
@@ -462,7 +872,7 @@ def _price_tag(
     dep_options: dict[str, Any] | None,
     age_limits: dict[str, dict[str, int]] | None,
 ) -> float | None:
-    """The flex price tag this row would write.
+    """The flex price tag this coverage draws.
 
     A bulk update carries no cohort tier, so it prices against the member's
     baseline category — the same key ``summarize_employee`` resolves to for a
@@ -479,18 +889,16 @@ def _price_tag(
         for dep in (dependants.get(i) for i in (covered or []) if i)
         if dep is not None
     ]
-    dep_profiles = dependant_profiles_of(
-        dep_rows, age_limits=age_limits, ref=price.ref
-    )
+    dep_profiles = dependant_profiles_of(dep_rows, age_limits=age_limits, ref=flex.ref)
     spouse_count, child_count = profile_counts(dep_profiles)
     return member_coverage_tag(
-        source_map=price.source_map,
-        rule=price.drawdown_rule,
-        pricing=price.pricing,
-        slip_idx=price.slip_idx,
-        family_slip_idx=price.family_slip_idx,
+        source_map=flex.source_map,
+        rule=flex.drawdown_rule,
+        pricing=flex.pricing,
+        slip_idx=flex.slip_idx,
+        family_slip_idx=flex.family_slip_idx,
         product_id=product_id,
-        age=employee_age(emp, price.ref) if price.ref else None,
+        age=employee_age(emp, flex.ref) if flex.ref else None,
         declined=declined,
         tier_category_id=base_cat,
         plan_code=to_plan,
@@ -500,78 +908,112 @@ def _price_tag(
         child_count=child_count,
         dep_profiles=dep_profiles,
         dep_option_ids=dep_options,
-        dependants_compulsory=base_cat in price.compulsory_dep_cats,
+        dependants_compulsory=base_cat in flex.compulsory_dep_cats,
     )
 
 
-def _groups(rows: list[BulkRowOutcome], applied_label: str) -> list[BulkChangeGroup]:
-    buckets: dict[tuple[str | None, str | None, bool], int] = {}
+def _groups(rows: list[BulkRowOutcome], changing: str) -> list[BulkChangeGroup]:
+    buckets: dict[tuple[str | None, str | None, str | None, bool, bool], int] = {}
     for r in rows:
-        if r.outcome != applied_label:
+        if r.outcome != changing:
             continue
-        key = (r.from_plan, r.to_plan, r.declined_after)
+        # A revert and a plain move to the same plan are different operations —
+        # one removes the override, the other writes it — so they must not
+        # collapse into one "PLAN 1 → PLAN 2" line.
+        key = (r.product_code, r.from_plan, r.to_plan, r.declined_after, r.override_cleared)
         buckets[key] = buckets.get(key, 0) + 1
     return [
-        BulkChangeGroup(from_plan=f, to_plan=t, declined_after=d, count=n)
-        for (f, t, d), n in sorted(buckets.items(), key=lambda kv: -kv[1])
+        BulkChangeGroup(
+            product_code=p, from_plan=f, to_plan=t, declined_after=d,
+            reverted=cleared, count=n,
+        )
+        for (p, f, t, d, cleared), n in sorted(buckets.items(), key=lambda kv: -kv[1])
     ]
 
 
-def _impact(rows: list[BulkRowOutcome], applied_label: str) -> BulkImpact:
+def _impact(
+    rows: list[BulkRowOutcome],
+    changing: str,
+    flex_configured: bool,
+    unresolved: int,
+) -> BulkImpact:
     impact = BulkImpact()
+    impact.financials_unresolved = unresolved
     for r in rows:
-        if r.outcome != applied_label:
+        if r.outcome != changing:
             continue
         impact.members_changing += 1
-        # "Unpriced" means the tag could not be RESOLVED. A declined row has no
-        # tag by definition, and a cleared override deliberately writes none —
-        # counting either would tell the broker a whole revert-to-default batch
-        # was unpriced.
-        if (
-            r.flex_price_tag_after is None
-            and not r.declined_after
-            and not r.override_cleared
-        ):
+        # "Unpriced" means the tag could not be RESOLVED for coverage that draws
+        # flex. A declined row has no tag by definition, and a company that does
+        # not run flex has no price tags at all — counting either would tell the
+        # broker a whole batch was unpriced when nothing was wrong.
+        if flex_configured and r.flex_price_tag_after is None and not r.declined_after:
             impact.unpriced += 1
         impact.flex_price_tag_before += r.flex_price_tag_before or 0.0
         impact.flex_price_tag_after += r.flex_price_tag_after or 0.0
+        # Cover and premium only total where BOTH sides resolved to this member.
+        # A one-sided delta would read as the whole movement while silently
+        # treating the unresolved side as zero. Declined cover is a real ZERO on
+        # its side, not an unresolved figure — dropping a decline out of the
+        # totals would report a batch that ends everyone's cover as no change in
+        # premium at all.
+        si_before = 0.0 if r.declined_before else r.sum_insured_before
+        si_after = 0.0 if r.declined_after else r.sum_insured_after
+        prem_before = 0.0 if r.declined_before else r.annual_premium_before
+        prem_after = 0.0 if r.declined_after else r.annual_premium_after
+        if None not in (si_before, si_after, prem_before, prem_after):
+            impact.sum_insured_delta += (si_after or 0.0) - (si_before or 0.0)
+            impact.annual_premium_delta += (prem_after or 0.0) - (prem_before or 0.0)
     impact.flex_price_tag_delta = round(
         impact.flex_price_tag_after - impact.flex_price_tag_before, 2
     )
     impact.flex_price_tag_before = round(impact.flex_price_tag_before, 2)
     impact.flex_price_tag_after = round(impact.flex_price_tag_after, 2)
+    impact.sum_insured_delta = round(impact.sum_insured_delta, 2)
+    impact.annual_premium_delta = round(impact.annual_premium_delta, 2)
     return impact
 
 
-def baseline_cat_by_product(
-    db: Session, employees: list[Employee], product_id: str
-) -> dict[str, str]:
-    """``{employee_id: matched_category_id}`` for one product, in one query.
+# ── Writing ─────────────────────────────────────────────────────────────────
 
-    Reuses the shared ``first_category_per_product`` selector so the price tag a
-    bulk apply snapshots is keyed on the SAME baseline category the benefit
-    statement later recomputes against (``summarize_employee``) — otherwise the two
-    surfaces would show different flex spend for the same member.
+
+def _restore_snapshot(row: EmployeePlanOverride | None) -> dict[str, Any] | None:
+    """The override's full restorable state.
+
+    ``override_snapshot`` (the audit projection) plus ``source_ref``: an undo has
+    to put back WHERE the coverage came from, not just what it was. Restoring an
+    enrollment-projected override as a bulk one would lose the link to the
+    election that produced it.
     """
-    all_ids = {
-        m["category_id"]
-        for e in employees
-        for m in (e.matched_categories or [])
-        if m.get("category_id")
+    snap = override_snapshot(row)
+    if snap is None or row is None:
+        return None
+    return {**snap, "source_ref": row.source_ref}
+
+
+def _execute(
+    db: Session,
+    py: PolicyYear,
+    planned: _Plan,
+    record_id: str | None,
+    user: CurrentUser | None,
+) -> dict[str, Any]:
+    emp, product = planned.employee, planned.product
+    before = _restore_snapshot(planned.ov)
+    if planned.sparse:
+        _clear_override(db, emp, planned.ov, user)
+        after = None
+    else:
+        after = _write_override(db, emp, py, planned, record_id, user)
+    return {
+        "employee_id": emp.id,
+        "product_id": product.id,
+        "product_code": product.code,
+        "staff_id": emp.staff_id,
+        "employee_name": emp.employee_name,
+        "before": before,
+        "after": after,
     }
-    if not all_ids:
-        return {}
-    prod_of = dict(
-        db.execute(
-            select(Category.id, Category.product_id).where(Category.id.in_(all_ids))
-        ).all()
-    )
-    out: dict[str, str] = {}
-    for e in employees:
-        cid = first_category_per_product(e.matched_categories or [], prod_of).get(product_id)
-        if cid:
-            out[e.id] = cid
-    return out
 
 
 def _clear_override(
@@ -580,9 +1022,9 @@ def _clear_override(
     ov: EmployeePlanOverride | None,
     user: CurrentUser | None,
 ) -> None:
-    """The bulk target equals the member's cohort default — remove any existing
-    override so coverage reverts to (and stays) the sparse default. No-op when
-    there's no override to clear."""
+    """The bulk target equals the member's cohort default (or the change is an
+    explicit revert) — remove any existing override so coverage reverts to (and
+    stays) the sparse default. No-op when there's no override to clear."""
     if ov is None:
         return
     before = override_snapshot(ov)
@@ -601,14 +1043,10 @@ def _write_override(
     db: Session,
     emp: Employee,
     py: PolicyYear,
-    product: Product,
-    req: BulkPlanUpdateRequest,
-    dep_ids: list[str] | None,
+    planned: _Plan,
     record_id: str | None,
     user: CurrentUser | None,
-    flex_price_tag: float | None,
-    dependant_option_ids: dict[str, Any] | None,
-) -> None:
+) -> dict[str, Any] | None:
     # dep_ids is None only when no dependant_action was requested — leave any
     # existing dependant coverage untouched in that case.
     row, before = upsert_override(
@@ -616,10 +1054,10 @@ def _write_override(
         employee_id=emp.id,
         policy_year_id=py.id,
         client_id=emp.client_id,
-        product_id=product.id,
-        product_code=product.code,
-        declined=req.action == "decline",
-        plan_code=req.target_plan_code,
+        product_id=planned.product.id,
+        product_code=planned.product.code,
+        declined=planned.change.action == "decline",
+        plan_code=planned.change.target_plan_code,
         # A bulk update sets a plan_code directly, not a specific cohort tier —
         # clear any stale tier_category_id left by a prior enrollment election
         # so the override's tier can't contradict its new plan_code. Elected
@@ -627,12 +1065,12 @@ def _write_override(
         # priced the tag above). The flex price tag is re-resolved against the
         # member's baseline category.
         tier_category_id=None,
-        dependant_option_ids=dependant_option_ids,
-        flex_price_tag=flex_price_tag,
+        dependant_option_ids=planned.dep_options,
+        flex_price_tag=planned.tag,
         source=OverrideSource.bulk_update,
         source_ref=record_id,
         modified_by=user.user_id if user else None,
-        **({"covered_dependant_ids": dep_ids} if dep_ids is not None else {}),
+        **({"covered_dependant_ids": planned.dep_ids} if planned.dep_ids is not None else {}),
     )
     # Per-employee audit row (tagged with employee_id) so a bulk change is visible
     # in the member's coverage-history timeline, not only in the batch record.
@@ -640,6 +1078,159 @@ def _write_override(
         db.flush()
         write_audit(
             db, user, action="bulk_plan_override",
+            entity_type="employee_plan_override", entity_id=row.id,
+            before=before, after=override_snapshot(row), employee_id=emp.id,
+        )
+    return _restore_snapshot(row)
+
+
+# ── Undo ────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class UndoOutcome:
+    rows: list[BulkRowOutcome] = field(default_factory=list)
+    superseded: list[BulkRowOutcome] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+    employee_ids: set[str] = field(default_factory=set)
+
+
+def undo_batch(
+    db: Session,
+    py: PolicyYear,
+    restore: list[dict[str, Any]],
+    *,
+    record_id: str,
+    user: CurrentUser | None,
+) -> UndoOutcome:
+    """Put back what a batch replaced. Flushes; the caller commits.
+
+    A pair whose override no longer matches what the batch LEFT is reported
+    ``superseded`` and skipped — somebody has moved that member since, and
+    restoring the old value would silently discard their work. That comparison
+    is the whole safety of undo, so it is a full field-for-field match of the
+    stored ``after`` snapshot, not a plan-code check.
+    """
+    out = UndoOutcome()
+    if not restore:
+        out.counts = {"applied": 0, "skipped": 0, "error": 0}
+        return out
+
+    product_ids = {e.get("product_id") for e in restore if e.get("product_id")}
+    products = {
+        p.id: p
+        for p in db.execute(select(Product).where(Product.id.in_(product_ids))).scalars()
+    }
+    employees = {
+        e.id: e
+        for e in db.execute(
+            select(Employee).where(
+                Employee.id.in_({e.get("employee_id") for e in restore})
+            )
+        ).scalars()
+    }
+    overrides = {
+        (o.employee_id, o.product_id): o
+        for o in db.execute(
+            select(EmployeePlanOverride).where(
+                EmployeePlanOverride.policy_year_id == py.id,
+                EmployeePlanOverride.employee_id.in_(list(employees)),
+            )
+        ).scalars()
+    }
+
+    for entry in restore:
+        emp = employees.get(entry.get("employee_id") or "")
+        product = products.get(entry.get("product_id") or "")
+        if emp is None or product is None:
+            out.rows.append(
+                BulkRowOutcome(
+                    employee_id=entry.get("employee_id"),
+                    staff_id=entry.get("staff_id"),
+                    employee_name=entry.get("employee_name"),
+                    product_code=entry.get("product_code"),
+                    outcome="error",
+                    reason="The member or product no longer exists in this benefit year.",
+                )
+            )
+            continue
+        ov = overrides.get((emp.id, product.id))
+        before, after = entry.get("before"), entry.get("after")
+        if _restore_snapshot(ov) != after:
+            out.superseded.append(
+                _row(
+                    emp, "skipped",
+                    "Coverage has changed since this batch — left as it is.",
+                    product_code=product.code,
+                    from_plan=ov.plan_code if ov else None,
+                    declined_before=bool(ov.declined) if ov else False,
+                )
+            )
+            continue
+
+        if before is None:
+            _clear_override(db, emp, ov, user)
+        else:
+            _restore_override(db, emp, py, product, before, record_id, user)
+        out.employee_ids.add(emp.id)
+        out.rows.append(
+            _row(
+                emp, "applied", None,
+                product_code=product.code,
+                from_plan=(after or {}).get("plan_code"),
+                to_plan=(before or {}).get("plan_code"),
+                declined_before=bool((after or {}).get("declined")),
+                declined_after=bool((before or {}).get("declined")),
+                tag_before=(after or {}).get("flex_price_tag"),
+                tag_after=(before or {}).get("flex_price_tag"),
+                override_cleared=before is None,
+            )
+        )
+
+    rows = out.rows + out.superseded
+    out.counts = {"applied": 0, "skipped": 0, "error": 0}
+    for r in rows:
+        out.counts[r.outcome] = out.counts.get(r.outcome, 0) + 1
+    return out
+
+
+def _restore_override(
+    db: Session,
+    emp: Employee,
+    py: PolicyYear,
+    product: Product,
+    snapshot: dict[str, Any],
+    record_id: str,
+    user: CurrentUser | None,
+) -> None:
+    """Write a stored snapshot back onto the (employee, product) override.
+
+    The snapshot's OWN ``source`` and ``source_ref`` are restored, not this undo
+    batch's: coverage that came from a confirmed enrolment has to read as
+    enrolment coverage again, or the member's history would say a bulk tool
+    chose it.
+    """
+    row, before = upsert_override(
+        db,
+        employee_id=emp.id,
+        policy_year_id=py.id,
+        client_id=emp.client_id,
+        product_id=product.id,
+        product_code=product.code,
+        declined=bool(snapshot.get("declined")),
+        plan_code=snapshot.get("plan_code"),
+        tier_category_id=snapshot.get("tier_category_id"),
+        covered_dependant_ids=snapshot.get("covered_dependant_ids"),
+        dependant_option_ids=snapshot.get("dependant_option_ids"),
+        flex_price_tag=snapshot.get("flex_price_tag"),
+        source=snapshot.get("source") or OverrideSource.bulk_update,
+        source_ref=snapshot.get("source_ref"),
+        modified_by=user.user_id if user else None,
+    )
+    if user is not None:
+        db.flush()
+        write_audit(
+            db, user, action="bulk_plan_override_undone",
             entity_type="employee_plan_override", entity_id=row.id,
             before=before, after=override_snapshot(row), employee_id=emp.id,
         )

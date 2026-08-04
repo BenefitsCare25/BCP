@@ -29,7 +29,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -131,7 +131,7 @@ def _merged_attrs(emp: Employee) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class UnresolvedRef:
-    kind: str  # "employee_id" | "staff_id"
+    kind: Literal["employee_id", "staff_id"]
     value: str
     reason: str
 
@@ -234,26 +234,26 @@ def resolve_selection(
 
     unresolved: list[UnresolvedRef] = []
     for emp_id in dict.fromkeys(query.employee_ids):
-        emp = by_id.get(emp_id)
-        if emp is None:
+        found = by_id.get(emp_id)
+        if found is None:
             unresolved.append(
                 UnresolvedRef("employee_id", emp_id, _missing_reason(db, py, emp_id))
             )
         else:
-            picked[emp.id] = emp
+            picked[found.id] = found
 
     if query.staff_ids:
         by_staff = {_norm(e.staff_id): e for e in idx.employees}
         for staff in dict.fromkeys(query.staff_ids):
-            emp = by_staff.get(_norm(staff))
-            if emp is None:
+            hit = by_staff.get(_norm(staff))
+            if hit is None:
                 unresolved.append(
                     UnresolvedRef(
                         "staff_id", staff, _missing_staff_reason(db, py, staff)
                     )
                 )
             else:
-                picked[emp.id] = emp
+                picked[hit.id] = hit
 
     def _ordered(rows: list[Employee]) -> list[Employee]:
         return sorted(rows, key=lambda e: (e.staff_id or "", e.id))
@@ -382,7 +382,9 @@ def _attributes_match(emp: Employee, filters: list[AttributeFilter]) -> bool:
 
 
 def selection_digest(
-    product_code: str, index: RosterIndex, employees: list[Employee], product_id: str
+    products: list[tuple[str, str]],
+    index: RosterIndex,
+    employees: list[Employee],
 ) -> str:
     """Fingerprint of WHO is selected and WHAT their coverage is right now.
 
@@ -390,15 +392,22 @@ def selection_digest(
     hash, not just the id set: the population can be identical while somebody
     else has already moved two of them, and the broker approved neither that
     change nor its consequence.
+
+    ``products`` is every ``(code, id)`` the batch touches — a change set has to
+    prove the state of ALL of them, or a second product's coverage could move
+    between preview and apply unnoticed. Sorted, so reordering the changes (which
+    cannot change the outcome) doesn't force a re-preview.
     """
     h = hashlib.sha256()
-    h.update(product_code.encode("utf-8"))
-    for emp in sorted(employees, key=lambda e: e.id):
-        ov = index.overrides.get((emp.id, product_id))
-        resolved = resolve_plan(ov, index.default_plan(emp.id, product_id))
-        state = "declined" if resolved.declined else (resolved.plan_code or "")
-        h.update(b"\x1f")
-        h.update(f"{emp.id}={state}".encode())
+    for product_code, product_id in sorted(products):
+        h.update(b"\x1e")
+        h.update(product_code.encode("utf-8"))
+        for emp in sorted(employees, key=lambda e: e.id):
+            ov = index.overrides.get((emp.id, product_id))
+            resolved = resolve_plan(ov, index.default_plan(emp.id, product_id))
+            state = "declined" if resolved.declined else (resolved.plan_code or "")
+            h.update(b"\x1f")
+            h.update(f"{emp.id}={state}".encode())
     return h.hexdigest()[:32]
 
 
@@ -593,27 +602,27 @@ def resolve_member_list(
     idx = load_roster(db, py.id, include_terminated=include_terminated)
     by_staff = {_norm(e.staff_id): e for e in idx.employees}
     by_nric: dict[str, Employee] = {}
-    for emp in idx.employees:
+    for row in idx.employees:
         nric = normalize_nric(
             next(
                 (
-                    (emp.attribute_values or {}).get(k)
+                    (row.attribute_values or {}).get(k)
                     for k in EMPLOYEE_ID_KEYS
-                    if (emp.attribute_values or {}).get(k)
+                    if (row.attribute_values or {}).get(k)
                 ),
                 None,
             )
         )
         if nric:
-            by_nric.setdefault(nric, emp)
+            by_nric.setdefault(nric, row)
 
     matched: list[ResolvedMemberOut] = []
     seen: set[str] = set()
     unmatched: list[str] = []
     duplicates = 0
     for token in split_member_tokens(text):
-        emp = by_staff.get(_norm(token))
-        how = "staff_id"
+        emp: Employee | None = by_staff.get(_norm(token))
+        how: Literal["staff_id", "nric"] = "staff_id"
         if emp is None:
             nric = normalize_nric(token)
             emp = by_nric.get(nric) if nric else None
@@ -633,7 +642,7 @@ def resolve_member_list(
                 id=emp.id,
                 staff_id=emp.staff_id,
                 employee_name=emp.employee_name,
-                matched_on=how,  # type: ignore[arg-type]
+                matched_on=how,
             )
         )
     return matched, unmatched, duplicates

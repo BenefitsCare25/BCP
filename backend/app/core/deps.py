@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
 from app.db.session import get_db
 from app.models import (
+    BulkPlanUpdate,
     Category,
     Claim,
     Dependant,
@@ -277,6 +278,20 @@ def load_enrollment_window(
     if not user_owns(user, w.client_id):
         raise _deny_cross_tenant(user, "Enrollment window", window_id)
     return w
+
+
+def load_bulk_plan_update(
+    batch_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BulkPlanUpdate:
+    """Load a bulk coverage batch, proving tenant ownership via its client_id."""
+    b = db.get(BulkPlanUpdate, batch_id)
+    if b is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Coverage change not found")
+    if not user_owns(user, b.client_id):
+        raise _deny_cross_tenant(user, "Bulk plan update", batch_id)
+    return b
 
 
 def load_enrollment(

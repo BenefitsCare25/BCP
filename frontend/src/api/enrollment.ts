@@ -468,19 +468,42 @@ export interface BulkRowOutcome {
    *  `no_change` is separate so "applied 412" means 412 real changes. */
   outcome: string;
   reason: string | null;
+  /** Which change produced this row: one member yields one row per product. */
+  product_code: string | null;
   from_plan: string | null;
   to_plan: string | null;
   declined_before: boolean;
   declined_after: boolean;
+  warnings: string[];
   flex_price_tag_before: number | null;
   flex_price_tag_after: number | null;
+  /** The row REMOVES the override (revert / target equals the cohort default). */
+  override_cleared?: boolean;
+  /** `null` where the member's basis will not resolve to a personal figure —
+   *  render "—", never a number, per the member_financials rule. */
+  sum_insured_before: number | null;
+  sum_insured_after: number | null;
+  annual_premium_before: number | null;
+  annual_premium_after: number | null;
 }
 
 export interface BulkChangeGroup {
+  product_code: string | null;
   from_plan: string | null;
   to_plan: string | null;
   declined_after: boolean;
+  reverted: boolean;
   count: number;
+}
+
+/** One warning code, counted in MEMBERS (a member can appear once per product,
+ *  and "4 members outside their cohort" is the fact a broker acts on). */
+export interface BulkWarningBucket {
+  code: string;
+  severity: "warn" | "info";
+  requires_ack: boolean;
+  count: number;
+  message: string;
 }
 
 export interface BulkImpact {
@@ -489,12 +512,18 @@ export interface BulkImpact {
   flex_price_tag_after: number;
   flex_price_tag_delta: number;
   unpriced: number;
+  annual_premium_delta: number;
+  sum_insured_delta: number;
+  /** Changing rows left OUT of the two deltas above because a figure would not
+   *  resolve to that member. */
+  financials_unresolved: number;
 }
 
 export interface BulkResult {
   rows: BulkRowOutcome[];
   counts: Record<string, number>;
   groups: BulkChangeGroup[];
+  warnings: BulkWarningBucket[];
   impact: BulkImpact;
   /** Fingerprint of who is selected and what their coverage is. Sent back on
    *  apply; the server refuses (409 `selection_changed`) if either moved. */
@@ -506,16 +535,72 @@ export interface BulkResult {
 export interface BulkApplyResult extends BulkResult {
   id: string;
   status: string;
+  /** True when this replayed an earlier attempt with the same `request_id`
+   *  instead of applying a second time. */
+  replayed?: boolean;
+}
+
+export type BulkAction = "set_plan" | "decline" | "revert_to_default";
+
+export interface BulkDependantAction {
+  mode: "include_all" | "exclude_all" | "set";
+  dependant_ids: string[];
+}
+
+export interface BulkCoverageChange {
+  product_code: string;
+  action: BulkAction;
+  target_plan_code?: string | null;
+  dependant_action?: BulkDependantAction | null;
 }
 
 export interface BulkRequest {
-  product_code: string;
-  action: "set_plan" | "decline";
-  target_plan_code?: string | null;
   /** A rule, not a list of people — see `api/memberQuery.ts`. */
-  selector: MemberQuery;
-  dependant_action?: { mode: "include_all" | "exclude_all" | "set"; dependant_ids: string[] } | null;
+  query: MemberQuery;
+  /** One entry per product. The FIRST one scopes the selection's coverage
+   *  filters, because "everyone on Plan 1" names a different population per
+   *  product. */
+  changes: BulkCoverageChange[];
+  /** Warning codes the broker accepted. Apply 409s while one is outstanding. */
+  acknowledge?: string[];
   selection_digest?: string | null;
+  /** Generated per apply attempt; replaying it returns the original batch. */
+  request_id?: string | null;
+}
+
+export interface BulkBatchSummary {
+  id: string;
+  created_at: string | null;
+  initiated_by: string | null;
+  status: string;
+  product_codes: string[];
+  counts: Record<string, number>;
+  acknowledged: string[];
+  undo_of: string | null;
+  undone_by: string | null;
+  /** Pairs this batch recorded a previous state for — 0 means undo has nothing
+   *  to offer. */
+  restorable: number;
+  /** Pairs it wrote but did NOT record, because the batch exceeded the storage
+   *  cap. An undo cannot put these back. */
+  not_restorable: number;
+}
+
+export interface BulkBatchDetail extends BulkBatchSummary {
+  query: MemberQuery | null;
+  changes: BulkCoverageChange[];
+  groups: BulkChangeGroup[];
+  impact: BulkImpact;
+  rows: BulkRowOutcome[];
+  rows_total: number;
+  rows_offset: number;
+  rows_truncated: boolean;
+}
+
+export interface BulkUndoResult {
+  id: string;
+  counts: Record<string, number>;
+  superseded: BulkRowOutcome[];
 }
 
 // ── Windows ─────────────────────────────────────────────────────────────────
@@ -927,20 +1012,66 @@ export function usePreviewBulk(policyYearId: string | undefined) {
   });
 }
 
+/** Everything a coverage change rewrites. Shared by apply and undo — an undo
+ *  moves exactly the same state back, so it has to refresh the same screens. */
+function invalidateCoverage(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+  qc.invalidateQueries({ queryKey: ["coverage-summary"] });
+  // Bulk updates rewrite overrides directly — refresh everything that
+  // renders an employee's effective coverage.
+  qc.invalidateQueries({ queryKey: ["enrollment"] });
+  qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+  qc.invalidateQueries({ queryKey: ["coverage-history"] });
+  qc.invalidateQueries({ queryKey: ["plan-overrides"] });
+  qc.invalidateQueries({ queryKey: ["bulk-updates"] });
+  // The picker's plan headcounts are effective coverage, which just moved.
+  qc.invalidateQueries({ queryKey: ["member-facets"] });
+  qc.invalidateQueries({ queryKey: ["underwriting"] });
+}
+
 export function useApplyBulk(policyYearId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: BulkRequest) =>
       api.post<BulkApplyResult>(`/policy-years/${policyYearId}/bulk-plan-updates/apply`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-      qc.invalidateQueries({ queryKey: ["coverage-summary"] });
-      // Bulk updates rewrite overrides directly — refresh everything that
-      // renders an employee's effective coverage.
-      qc.invalidateQueries({ queryKey: ["enrollment"] });
-      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
-      qc.invalidateQueries({ queryKey: ["coverage-history"] });
-      qc.invalidateQueries({ queryKey: ["plan-overrides"] });
-    },
+    onSuccess: () => invalidateCoverage(qc),
+  });
+}
+
+export function useBulkHistory(policyYearId: string | undefined) {
+  const cid = useClientId();
+  return useQuery({
+    queryKey: ["bulk-updates", policyYearId, cid],
+    queryFn: () =>
+      api.get<BulkBatchSummary[]>(`/policy-years/${policyYearId}/bulk-plan-updates`),
+    enabled: !!policyYearId,
+  });
+}
+
+export function useBulkBatch(batchId: string | undefined) {
+  const cid = useClientId();
+  return useQuery({
+    queryKey: ["bulk-updates", "detail", batchId, cid],
+    queryFn: () => api.get<BulkBatchDetail>(`/bulk-plan-updates/${batchId}`),
+    enabled: !!batchId,
+  });
+}
+
+/** Load one batch on demand — "re-run this selection" needs the stored query,
+ *  which the history list deliberately doesn't carry (it would ship every past
+ *  batch's rule to render a date and a headcount). */
+export function useFetchBulkBatch() {
+  return useMutation({
+    mutationFn: (batchId: string) =>
+      api.get<BulkBatchDetail>(`/bulk-plan-updates/${batchId}`),
+  });
+}
+
+export function useUndoBulk() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: string) =>
+      api.post<BulkUndoResult>(`/bulk-plan-updates/${batchId}/undo`, {}),
+    onSuccess: () => invalidateCoverage(qc),
   });
 }
