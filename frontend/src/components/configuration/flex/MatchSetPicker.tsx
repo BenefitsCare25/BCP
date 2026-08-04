@@ -32,6 +32,15 @@ interface Props {
   unknownNote?: string;
   /** Noun used in chip tooltips ("employee" → "3 employees on the roster"). */
   countNoun?: string;
+  /**
+   * Display text for a stored value, when the two differ.
+   *
+   * Default is identity — a roster vocabulary IS its own label. The member
+   * selector stores cohort IDs and must show cohort names, and the search has
+   * to match what the broker can see, so the label (not the opaque id) is what
+   * both the chip and the filter use.
+   */
+  renderValue?: (value: string) => string;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -63,6 +72,7 @@ export function MatchSetPicker({
   emptyHint = "No roster values yet — upload a roster first.",
   unknownNote = "Not found on the current roster",
   countNoun = "employee",
+  renderValue = (v) => v,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
@@ -73,12 +83,14 @@ export function MatchSetPicker({
   const countFor = (v: string) =>
     options.find((o) => norm(o.value) === norm(v))?.count;
 
-  // Roster options not already selected, filtered by the search text.
+  // Roster options not already selected, filtered by the search text. The
+  // search runs over the DISPLAYED text: where value and label differ (cohort
+  // ids), typing a cohort's name has to find it.
   const matches = useMemo(() => {
     const q = norm(draft);
     return options
       .filter((o) => !has(o.value))
-      .filter((o) => !q || norm(o.value).includes(q));
+      .filter((o) => !q || norm(renderValue(o.value)).includes(q));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options, draft, sel]);
   const shown = matches.slice(0, MAX_VISIBLE);
@@ -169,7 +181,9 @@ export function MatchSetPicker({
                       i === active ? "bg-muted" : "hover:bg-muted/60"
                     }`}
                   >
-                    <span className="truncate text-foreground">{o.value}</span>
+                    <span className="truncate text-foreground">
+                      {renderValue(o.value)}
+                    </span>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {o.count} staff{o.claimed ? claimedNote : ""}
                     </span>
@@ -204,12 +218,12 @@ export function MatchSetPicker({
                     : unknownNote
                 }
               >
-                <span className="text-foreground">{v}</span>
+                <span className="text-foreground">{renderValue(v)}</span>
                 {inRoster && <span className="text-muted-foreground">· {c}</span>}
                 <button
                   type="button"
                   onClick={() => remove(v)}
-                  aria-label={`Remove ${v}`}
+                  aria-label={`Remove ${renderValue(v)}`}
                   className="text-muted-foreground hover:text-error"
                 >
                   <X className="size-3" />

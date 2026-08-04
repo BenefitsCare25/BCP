@@ -7,6 +7,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.api import PlanFinancials
+from app.schemas.member_query import MemberQuery
 
 
 class _Base(BaseModel):
@@ -468,31 +469,36 @@ BulkActionStr = Literal["set_plan", "decline"]
 DependantModeStr = Literal["include_all", "exclude_all", "set"]
 
 
-class BulkSelector(BaseModel):
-    employee_ids: list[str] = Field(default_factory=list)
-    staff_ids: list[str] = Field(default_factory=list)
-    # Cohort filter: every active employee whose matched categories include this
-    # Category id (their baseline tier) — lets a broker bulk-select "everyone in
-    # cohort X" instead of typing individual staff IDs.
+class BulkSelector(MemberQuery):
+    """The bulk tool's selector — a full ``MemberQuery`` plus the two singular
+    fields the original API shipped with.
+
+    The legacy fields are folded into their plural counterparts by the validator
+    below, so ``services/member_query`` only ever sees one shape and old request
+    bodies (and the tests pinning them) keep working with no adapter.
+    """
+
+    # Legacy: superseded by ``category_ids`` / ``current_plan_codes``.
     category_id: str | None = None
-    # Coverage filter: every active employee whose EFFECTIVE plan for this
-    # request's product (override-aware, not just the cohort default) equals
-    # this plan code — the common "move everyone from Plan A to Plan B" case.
     current_plan_code: str | None = None
 
-    @model_validator(mode="after")
-    def _nonempty(self) -> Self:
-        if not (
-            self.employee_ids
-            or self.staff_ids
-            or self.category_id
-            or self.current_plan_code
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_legacy(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        folded = dict(data)
+        for legacy, plural in (
+            ("category_id", "category_ids"),
+            ("current_plan_code", "current_plan_codes"),
         ):
-            raise ValueError(
-                "Provide at least one of employee_ids, staff_ids, category_id, "
-                "or current_plan_code."
-            )
-        return self
+            value = folded.get(legacy)
+            if value:
+                existing = list(folded.get(plural) or [])
+                if value not in existing:
+                    existing.append(value)
+                folded[plural] = existing
+        return folded
 
 
 class BulkDependantAction(BaseModel):
@@ -506,6 +512,11 @@ class BulkPlanUpdateRequest(BaseModel):
     target_plan_code: str | None = None
     selector: BulkSelector
     dependant_action: BulkDependantAction | None = None
+    # Apply only: the fingerprint the preview returned. When present, apply
+    # refuses (409 ``selection_changed``) if the population or its coverage has
+    # moved since — the guard that makes applying a RULE rather than a list of
+    # ids safe. Absent (legacy callers) = no guard.
+    selection_digest: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -519,15 +530,64 @@ class BulkPlanUpdateRequest(BaseModel):
 class BulkRowOutcome(BaseModel):
     employee_id: str | None
     staff_id: str | None
-    outcome: str  # "applied" | "would_apply" | "skipped" | "error"
+    # "applied" | "would_apply" | "no_change" | "skipped" | "error".
+    # ``no_change`` is its own outcome because folding it into "applied" made
+    # "applied 412" mean anything between 8 and 412 real changes.
+    outcome: str
     reason: str | None = None
+    employee_name: str | None = None
     from_plan: str | None = None
     to_plan: str | None = None
+    declined_before: bool = False
+    declined_after: bool = False
+    # The flex price tag this row would write (and what it replaces). Computed on
+    # BOTH preview and apply — the dry run has to be able to state what the real
+    # run will write.
+    flex_price_tag_before: float | None = None
+    flex_price_tag_after: float | None = None
+    # The row REMOVES the member's override (the target equals their cohort
+    # default), so there is no tag to write. Distinct from a tag that could not
+    # be resolved — without the flag a "move everyone back to the default" run
+    # reports every row as unpriced.
+    override_cleared: bool = False
+
+
+class BulkChangeGroup(BaseModel):
+    """Rows collapsed to ``from → to`` with a headcount — what a broker actually
+    reads before applying. The row table is the drill-down, not the summary."""
+
+    from_plan: str | None = None
+    to_plan: str | None = None
+    declined_after: bool = False
+    count: int
+
+
+class BulkImpact(BaseModel):
+    """Totals over the rows that would change.
+
+    Deliberately flex-only: the price tag is the figure this tool WRITES, so it
+    can be stated exactly. Premium and sum-insured deltas need the target plan
+    resolved to a cohort tier per member (a bare plan_code carries no basis), so
+    they land with the cohort-aware pass rather than being estimated here.
+    """
+
+    members_changing: int = 0
+    flex_price_tag_before: float = 0.0
+    flex_price_tag_after: float = 0.0
+    flex_price_tag_delta: float = 0.0
+    # Rows whose price tag could not be resolved (no pricing configured for the
+    # target tier) — a delta that quietly omits them would understate the spend.
+    unpriced: int = 0
 
 
 class BulkPreviewResult(BaseModel):
     rows: list[BulkRowOutcome]
     counts: dict[str, int]
+    groups: list[BulkChangeGroup] = Field(default_factory=list)
+    impact: BulkImpact = Field(default_factory=BulkImpact)
+    selection_digest: str | None = None
+    rows_total: int = 0
+    rows_offset: int = 0
 
 
 class BulkApplyResult(BaseModel):
@@ -535,6 +595,9 @@ class BulkApplyResult(BaseModel):
     status: str
     counts: dict[str, int]
     rows: list[BulkRowOutcome]
+    groups: list[BulkChangeGroup] = Field(default_factory=list)
+    impact: BulkImpact = Field(default_factory=BulkImpact)
+    rows_total: int = 0
 
 
 # ── Employee plan overrides (effective-coverage state) ──────────────────────

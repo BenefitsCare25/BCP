@@ -1019,6 +1019,27 @@ def test_bulk_apply_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_member_facets_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/member-facets")
+    assert res.status_code == 404
+
+
+def test_member_query_count_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/member-query/count",
+        json={"query": {"employee_ids": [EMP_B]}},
+    )
+    assert res.status_code == 404
+
+
+def test_member_query_resolve_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/member-query/resolve",
+        json={"text": "B-1"},
+    )
+    assert res.status_code == 404
+
+
 def test_orphan_overrides_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/plan-overrides/orphans")
     assert res.status_code == 404

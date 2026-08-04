@@ -498,7 +498,8 @@ const ENROLLMENT_TABS = [
   { key: "elections", label: "Benefits Selection" },
   { key: "flex", label: "Price Tag" },
   { key: "leave", label: "Leave" },
-  { key: "bulk", label: "Bulk plan update" },
+  // Key stays "bulk" — the /enrollment/bulk legacy redirect targets it.
+  { key: "bulk", label: "Coverage changes" },
 ] as const;
 
 type EnrollmentTab = (typeof ENROLLMENT_TABS)[number]["key"];

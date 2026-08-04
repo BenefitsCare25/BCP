@@ -174,6 +174,22 @@ def test_apply_include_all_dependants(client: TestClient) -> None:
         assert ov.covered_dependant_ids == [DEP1]
 
 
+def test_apply_exclude_all_dependants(client: TestClient) -> None:
+    """The third dependant option. An explicit empty list is NOT the same as "no
+    opinion": it means "cover no dependants" and must persist as `[]`, or the
+    sparse rule reads it as the cohort default and drops the deviation."""
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"employee_ids": [EMP1]},
+              "dependant_action": {"mode": "exclude_all"}},
+    )
+    assert res.status_code == 200, res.text
+    with SessionLocal() as s:
+        ov = load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)]
+        assert ov.covered_dependant_ids == []
+
+
 def test_apply_snapshots_flex_price_tag(client: TestClient) -> None:
     # With a pricing matrix, a bulk apply snapshots the resolved price tag onto
     # the override (keyed by the member's baseline category + the new plan).
@@ -208,6 +224,94 @@ def test_apply_snapshots_flex_price_tag(client: TestClient) -> None:
             s.commit()
 
 
+def test_price_tag_counts_dependants_already_covered(client: TestClient) -> None:
+    """A plain plan move (no dependant_action) must still price the dependants
+    the member's EXISTING override covers.
+
+    The ids being priced come from the override, not from the request, so a
+    batch that loads dependants only when a dependant action is present prices
+    every such member as if they covered nobody — writing an understated tag
+    onto the override and into the preview's flex impact."""
+    from app.models import FlexPricing
+    from app.services.cohort_tiers import tier_key
+
+    with SessionLocal() as s:
+        s.get(Employee, EMP1).attribute_values = {"date_of_birth": "1980-03-15"}
+        s.add(EmployeePlanOverride(
+            employee_id=EMP1, policy_year_id=PY_ID, client_id=CLIENT_ID,
+            product_id=PROD_ID, product_code="MED", plan_code="SILVER",
+            covered_dependant_ids=[DEP1], source="manual",
+        ))
+        s.add(FlexPricing(
+            policy_year_id=PY_ID, client_id=CLIENT_ID,
+            pricing={"products": {PROD_ID: {
+                "age_bands": [{"label": "all", "min": 0, "max": 200}],
+                "price_tags": {tier_key(CAT_ID, "GOLD"): {"all": 1000}},
+                "dependant": {
+                    "mode": "family_group", "scheme": "ec_es_ef",
+                    "family_tags": {tier_key(CAT_ID, "GOLD"): {"spouse": 400}},
+                },
+            }}},
+        ))
+        s.commit()
+    try:
+        body = client.post(
+            f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview",
+            json={"product_code": "MED", "action": "set_plan",
+                  "target_plan_code": "GOLD",
+                  "selector": {"employee_ids": [EMP1]}},
+        ).json()
+        # The spouse must be in the tag: employee 1000 + spouse 400.
+        assert body["rows"][0]["flex_price_tag_after"] == 1400.0
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).delete()
+            s.query(EmployeePlanOverride).delete()
+            s.get(Employee, EMP1).attribute_values = {}
+            s.commit()
+
+
+def test_skipped_members_do_not_mark_the_batch_failed(client: TestClient) -> None:
+    """A roster-wide rule necessarily sweeps in members the product doesn't
+    cover, so `skipped` is the normal case, not a failure. Filing every
+    filter-driven run as partially_failed would make the status meaningless."""
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"employee_ids": [EMP1, EMP_NO_PROD]}},
+    )
+    body = res.json()
+    assert body["counts"]["skipped"] == 1 and body["counts"]["applied"] == 1
+    assert body["status"] == "applied"
+
+
+def test_clearing_an_override_is_not_reported_as_unpriced(client: TestClient) -> None:
+    """Moving members back to their cohort default writes NO tag by design.
+    Counting those rows as unpriced told the broker the whole batch had no
+    price when every row was a deliberate override deletion."""
+    with SessionLocal() as s:
+        s.add(EmployeePlanOverride(
+            employee_id=EMP1, policy_year_id=PY_ID, client_id=CLIENT_ID,
+            product_id=PROD_ID, product_code="MED", plan_code="GOLD",
+            source="manual",
+        ))
+        s.commit()
+    try:
+        body = client.post(
+            f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview",
+            json={"product_code": "MED", "action": "set_plan",
+                  "target_plan_code": "SILVER",  # == the cohort default
+                  "selector": {"employee_ids": [EMP1]}},
+        ).json()
+        assert body["counts"]["would_apply"] == 1
+        assert body["rows"][0]["override_cleared"] is True
+        assert body["impact"]["unpriced"] == 0
+    finally:
+        with SessionLocal() as s:
+            s.query(EmployeePlanOverride).delete()
+            s.commit()
+
+
 def test_unknown_staff_id_reported_as_error(client: TestClient) -> None:
     res = client.post(
         f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
@@ -235,6 +339,188 @@ def test_unknown_product_404(client: TestClient) -> None:
               "selector": {"employee_ids": [EMP1]}},
     )
     assert res.status_code == 404
+
+
+def test_no_change_is_not_reported_as_applied(client: TestClient) -> None:
+    """Folding no-ops into "applied" made "applied 412" mean anything between 8
+    and 412 real changes — the number a broker checks the run against."""
+    body = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "SILVER",
+              "selector": {"employee_ids": [EMP1, EMP2]}},
+    ).json()
+    # SILVER is already their cohort default and no override exists.
+    assert body["counts"]["no_change"] == 2
+    assert body["counts"]["would_apply"] == 0
+
+
+def test_preview_states_the_price_tag_apply_will_write(client: TestClient) -> None:
+    """The dry run used to compute no tag at all, so it structurally could not
+    show what the real run would write."""
+    from app.models import FlexPricing
+    from app.services.cohort_tiers import tier_key
+
+    with SessionLocal() as s:
+        s.get(Employee, EMP1).attribute_values = {"date_of_birth": "1980-03-15"}
+        s.add(FlexPricing(
+            policy_year_id=PY_ID, client_id=CLIENT_ID,
+            pricing={"products": {PROD_ID: {
+                "age_bands": [{"label": "all", "min": 0, "max": 200}],
+                "price_tags": {tier_key(CAT_ID, "GOLD"): {"all": 900}},
+            }}},
+        ))
+        s.commit()
+    try:
+        body = client.post(
+            f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview",
+            json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+                  "selector": {"employee_ids": [EMP1]}},
+        ).json()
+        assert body["rows"][0]["flex_price_tag_after"] == 900.0
+        assert body["impact"]["flex_price_tag_delta"] == 900.0
+        assert body["impact"]["members_changing"] == 1
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).delete()
+            s.get(Employee, EMP1).attribute_values = {}
+            s.commit()
+
+
+def test_preview_groups_rows_by_from_to(client: TestClient) -> None:
+    body = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"employee_ids": [EMP1, EMP2]}},
+    ).json()
+    assert body["groups"] == [
+        {"from_plan": "SILVER", "to_plan": "GOLD", "declined_after": False, "count": 2}
+    ]
+
+
+def test_preview_pages_its_rows(client: TestClient) -> None:
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview?offset=1&limit=1",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"employee_ids": [EMP1, EMP2]}},
+    )
+    body = res.json()
+    assert body["rows_total"] == 2 and len(body["rows"]) == 1
+    assert body["rows_offset"] == 1
+
+
+def test_apply_refuses_a_stale_selection(client: TestClient) -> None:
+    """The digest fingerprints WHO is selected and WHAT their coverage is, so an
+    apply cannot land on a population that moved after the broker approved it."""
+    preview = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"current_plan_codes": ["SILVER"]}},
+    ).json()
+    digest = preview["selection_digest"]
+    assert digest
+
+    # Somebody else moves one of them in the meantime.
+    with SessionLocal() as s:
+        s.add(EmployeePlanOverride(
+            employee_id=EMP2, policy_year_id=PY_ID, client_id=CLIENT_ID,
+            product_id=PROD_ID, product_code="MED", plan_code="GOLD", source="manual",
+        ))
+        s.commit()
+
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"current_plan_codes": ["SILVER"]},
+              "selection_digest": digest},
+    )
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "selection_changed"
+    with SessionLocal() as s:  # nothing was written by the refused apply
+        assert (EMP1, PROD_ID) not in load_overrides(s, PY_ID, [EMP1])
+
+
+def test_apply_accepts_a_fresh_digest(client: TestClient) -> None:
+    body = {"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+            "selector": {"current_plan_codes": ["SILVER"]}}
+    digest = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview", json=body
+    ).json()["selection_digest"]
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json={**body, "selection_digest": digest},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["counts"]["applied"] == 2
+
+
+def test_unticking_a_row_does_not_invalidate_the_preview(client: TestClient) -> None:
+    """The digest is taken BEFORE exclusions are subtracted.
+
+    Otherwise removing three people from a 400-member preview would 409 the
+    broker's own preview and cost a full re-run each time. Applying to a SUBSET
+    of an approved population is safe; applying to one that moved underneath is
+    what the guard is for."""
+    base = {"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+            "selector": {"current_plan_codes": ["SILVER"]}}
+    digest = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview", json=base
+    ).json()["selection_digest"]
+
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json={**base,
+              "selector": {"current_plan_codes": ["SILVER"],
+                           "exclude_employee_ids": [EMP2]},
+              "selection_digest": digest},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["counts"]["applied"] == 1
+    with SessionLocal() as s:
+        ovs = load_overrides(s, PY_ID, [EMP1, EMP2])
+        assert (EMP1, PROD_ID) in ovs and (EMP2, PROD_ID) not in ovs
+
+
+def test_filter_selection_needs_no_ids(client: TestClient) -> None:
+    """The whole point: a rule, not a list of people keyed one by one."""
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json={"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD",
+              "selector": {"category_ids": [CAT_ID],
+                           "exclude_employee_ids": [EMP2]}},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["counts"]["applied"] == 1
+    with SessionLocal() as s:
+        ovs = load_overrides(s, PY_ID, [EMP1, EMP2])
+        assert (EMP1, PROD_ID) in ovs and (EMP2, PROD_ID) not in ovs
+
+
+def test_apply_resyncs_underwriting(monkeypatch) -> None:
+    """A bulk plan change moves eligible sum insured, which is what the NEL
+    gates key on — it used to leave the underwriting queue stale. Scoped to the
+    batch's members, never the whole roster."""
+    import app.api.v1.bulk_plan_updates as router_mod
+
+    seen: dict[str, object] = {}
+
+    def _fake(db, policy_year, employee_ids=None):
+        seen["ids"] = employee_ids
+        return None
+
+    monkeypatch.setattr(router_mod, "refresh_underwriting_cases", _fake)
+    app.dependency_overrides[get_current_user] = _user
+    try:
+        with TestClient(app) as c:
+            res = c.post(
+                f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+                json={"product_code": "MED", "action": "set_plan",
+                      "target_plan_code": "GOLD",
+                      "selector": {"employee_ids": [EMP1]}},
+            )
+        assert res.status_code == 200, res.text
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert seen["ids"] == {EMP1}
 
 
 def test_apply_preserves_elected_dependant_option_levels(client: TestClient) -> None:

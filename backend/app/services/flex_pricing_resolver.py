@@ -750,6 +750,23 @@ def covered_dependant_profiles(
     if not ids:
         return []
     deps = list(db.execute(select(Dependant).where(Dependant.id.in_(ids))).scalars().all())
+    return dependant_profiles_of(deps, age_limits=age_limits, ref=ref)
+
+
+def dependant_profiles_of(
+    dependants: list[Dependant],
+    *,
+    age_limits: dict[str, dict[str, int]] | None = None,
+    ref: date | None = None,
+) -> list[tuple[str, int | None]]:
+    """``covered_dependant_profiles`` over ALREADY-LOADED rows.
+
+    Bulk paths load every selected member's dependants in one query and then
+    price member by member; without this they would re-SELECT the same rows once
+    per employee. Same filtering, one implementation — the DB-hitting variant
+    above delegates here so the two can't drift.
+    """
+    deps = dependants
     if age_limits is not None and ref is not None:
         deps = [d for d in deps if _dependant_eligible(d, age_limits, ref)]
     return [p for p in (_dependant_role_age(d, ref) for d in deps) if p is not None]

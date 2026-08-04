@@ -14,6 +14,7 @@ import {
 import { api } from "./client";
 import { isNotFoundError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
+import type { MemberQuery } from "@/api/memberQuery";
 import type { InsuranceLine, PlanFinancials, VoluntaryRateBand } from "@/types";
 
 // Re-exported for existing importers — the canonical declarations live in
@@ -462,15 +463,44 @@ export interface ElectionIn {
 export interface BulkRowOutcome {
   employee_id: string | null;
   staff_id: string | null;
+  employee_name: string | null;
+  /** "applied" | "would_apply" | "no_change" | "skipped" | "error" —
+   *  `no_change` is separate so "applied 412" means 412 real changes. */
   outcome: string;
   reason: string | null;
   from_plan: string | null;
   to_plan: string | null;
+  declined_before: boolean;
+  declined_after: boolean;
+  flex_price_tag_before: number | null;
+  flex_price_tag_after: number | null;
+}
+
+export interface BulkChangeGroup {
+  from_plan: string | null;
+  to_plan: string | null;
+  declined_after: boolean;
+  count: number;
+}
+
+export interface BulkImpact {
+  members_changing: number;
+  flex_price_tag_before: number;
+  flex_price_tag_after: number;
+  flex_price_tag_delta: number;
+  unpriced: number;
 }
 
 export interface BulkResult {
   rows: BulkRowOutcome[];
   counts: Record<string, number>;
+  groups: BulkChangeGroup[];
+  impact: BulkImpact;
+  /** Fingerprint of who is selected and what their coverage is. Sent back on
+   *  apply; the server refuses (409 `selection_changed`) if either moved. */
+  selection_digest?: string | null;
+  rows_total: number;
+  rows_offset?: number;
 }
 
 export interface BulkApplyResult extends BulkResult {
@@ -482,18 +512,10 @@ export interface BulkRequest {
   product_code: string;
   action: "set_plan" | "decline";
   target_plan_code?: string | null;
-  selector: {
-    employee_ids?: string[];
-    staff_ids?: string[];
-    /** Cohort filter: every employee whose matched categories include this
-     *  Category id (their baseline tier). */
-    category_id?: string | null;
-    /** Coverage filter: every employee whose EFFECTIVE plan for this
-     *  request's product equals this plan code — selects "everyone currently
-     *  on Plan A" without typing staff ids. */
-    current_plan_code?: string | null;
-  };
+  /** A rule, not a list of people — see `api/memberQuery.ts`. */
+  selector: MemberQuery;
   dependant_action?: { mode: "include_all" | "exclude_all" | "set"; dependant_ids: string[] } | null;
+  selection_digest?: string | null;
 }
 
 // ── Windows ─────────────────────────────────────────────────────────────────
@@ -887,8 +909,21 @@ export function useDeletePlanOverride() {
 
 export function usePreviewBulk(policyYearId: string | undefined) {
   return useMutation({
-    mutationFn: (body: BulkRequest) =>
-      api.post<BulkResult>(`/policy-years/${policyYearId}/bulk-plan-updates/preview`, body),
+    // Rows are paged: a whole-plan sweep on a real roster is thousands of them,
+    // and the summary (counts + groups) is what a broker reads before applying.
+    mutationFn: ({
+      body,
+      offset = 0,
+      limit = 100,
+    }: {
+      body: BulkRequest;
+      offset?: number;
+      limit?: number;
+    }) =>
+      api.post<BulkResult>(
+        `/policy-years/${policyYearId}/bulk-plan-updates/preview?offset=${offset}&limit=${limit}`,
+        body,
+      ),
   });
 }
 
