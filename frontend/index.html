@@ -3,6 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- One index.html serves all three surfaces (broker, /portal, /hr), so
+         these icons cover every one of them. Files live in public/ and are
+         copied to the bundle root, which core/spa.py serves as real files. -->
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/icon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#c11a2b" />
     <!-- Fonts are self-hosted (see styles.css). The Google Fonts stylesheet
          that used to sit here was render-blocking on every route and made the
          first paint wait on a third-party round trip. -->
