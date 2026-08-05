@@ -56,9 +56,18 @@ export function formatValue(
 ): string | null {
   if (value == null || value === "") return null;
   const v = value.trim();
-  const numeric = /^\d{1,3}(,\d{3})*$/.test(v) || /^\d+$/.test(v);
+  // A DECIMAL part counts as numeric. Excel hands the parser floats, so a
+  // money cell reaches us as "500000.0" / "1000.0" — which the integer-only
+  // test rejected, printing the raw float (trailing ".0" and all) instead of
+  // "$500,000". Six distinct values in CDL's schedules alone rendered that way,
+  // on the member's page as well as the broker's.
+  const numeric = /^\d{1,3}(,\d{3})*(\.\d+)?$/.test(v) || /^\d+(\.\d+)?$/.test(v);
   const asCurrency = () =>
-    numeric ? `${symbol}${Number(v.replace(/,/g, "")).toLocaleString()}` : v;
+    numeric
+      ? `${symbol}${Number(v.replace(/,/g, "")).toLocaleString(undefined, {
+          maximumFractionDigits: 2,
+        })}`
+      : v;
 
   // A kind that states the type outright wins over the digits.
   if (kind === "percent") return v.endsWith("%") ? v : `${v}%`;
