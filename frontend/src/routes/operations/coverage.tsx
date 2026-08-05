@@ -18,8 +18,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BenefitStatement } from "@/components/benefits/BenefitStatement";
-import { EmployeeLogCases } from "@/components/claims/EmployeeLogCases";
-import { UtilizationView } from "@/components/benefits/UtilizationView";
+import {
+  LogCaseStrip,
+  NewLogCaseButton,
+} from "@/components/claims/EmployeeLogCases";
 import { EmployeePicker } from "@/components/operations/EmployeePicker";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
 import { PortalFrame } from "@/components/operations/PortalFrame";
@@ -61,39 +63,31 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
   if (!statement) return null;
   return (
     <div className="space-y-4">
-      {/* Portal access sits ABOVE the statement, not under it.
+      {/* The two administrative acts on this PERSON — granting portal access
+       * and recording a request that arrived outside the portal — ride in the
+       * statement's identity strip rather than as cards above it.
        *
-       * This is the only surface in the app that can create a member's portal
-       * account, mint a set-password link or set their password — the backend
-       * endpoints have no other UI. It was previously mounted on
-       * `routes/operations/employees.tsx`, which the nav consolidation retired:
-       * that file is now imported by nothing and routed by nothing, so the
-       * whole capability shipped unreachable and a broker had no way to give
-       * an employee portal access at all.
-       *
-       * Above the coverage lines because it is an ADMIN action on the person,
-       * not a fact about their cover — and because below them it is past eight
-       * product blocks, which is a long way to scroll for the one control you
-       * came to the page to use. */}
-      <MemberAccountActions
-        employeeId={employeeId}
-        staffId={statement.employee.staff_id}
+       * Portal access is the only surface in the app that can create a member's
+       * portal account, mint a set-password link or set their password: the
+       * backend endpoints have no other UI, and it shipped unreachable once
+       * already when the nav consolidation retired the page that hosted it (see
+       * docs/ORPHANED_UI_RECOVERY.md). It stays on the first screenful, with
+       * the account's state printed on the button, so nothing about it is
+       * hidden — only the controls that change it. */}
+      <BenefitStatement
+        data={statement}
+        utilization={utilization}
+        actions={
+          <>
+            <MemberAccountActions
+              employeeId={employeeId}
+              staffId={statement.employee.staff_id}
+            />
+            <NewLogCaseButton employeeId={employeeId} />
+          </>
+        }
       />
-      {/* LOG cases sit beside portal access, above the coverage lines: both are
-       * ADMIN actions on the person rather than facts about their cover, and
-       * this is the screen an assessor is already on when an emailed request
-       * needs recording — the statement and the utilization that decide the
-       * amount are right below. */}
-      <EmployeeLogCases employeeId={employeeId} />
-      <BenefitStatement data={statement} utilization={utilization} />
-      {utilization && (
-        <div>
-          <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-2">
-            Claims utilization
-          </div>
-          <UtilizationView data={utilization} />
-        </div>
-      )}
+      <LogCaseStrip employeeId={employeeId} />
     </div>
   );
 }
@@ -191,8 +185,11 @@ export function EmployeeCoveragePage() {
 
   return (
     <div className="space-y-4">
-      {/* Toolbar — filters on the left, view toggle on the right */}
-      <div className="rounded-lg border border-border bg-card p-3">
+      {/* Toolbar — filters on the left, view toggle on the right. Deliberately
+       * NOT a card: a bordered panel around three controls is a container
+       * standing in for grouping that alignment already does, and this pane had
+       * enough boxes. */}
+      <div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="flex flex-1 items-center gap-2">
             <span className="whitespace-nowrap text-xs text-muted-foreground">
@@ -274,7 +271,12 @@ export function EmployeeCoveragePage() {
           }
         />
 
-        <div>
+        {/* `min-w-0` is load-bearing: a grid item defaults to `min-width:auto`,
+         * so the coverage table's own `min-w-[40rem]` pushed this 1fr column
+         * WIDER than its track instead of scrolling inside it — and the card
+         * around it clips its corners with `overflow-hidden`, so at laptop
+         * widths the Claims column was simply cut off with no way to reach it. */}
+        <div className="min-w-0">
           {!selectedId ? (
             <div className="rounded-lg border border-dashed border-border p-10 text-center">
               <UserSearch className="mx-auto size-6 text-muted-foreground" />

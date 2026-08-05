@@ -18,6 +18,26 @@ export function fmtAmount(v: number): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+// Exact money for broker surfaces: thousands separators, never compacted, with
+// the broker app's "$" mark (the member portal writes "S$" — see
+// `lib/benefitSchedule.ts::formatValue`, which owns that split). Use this
+// wherever a figure sits in a column beside another figure; `fmtAmount` alone
+// leaves a bare number that reads as a count rather than an amount.
+export function fmtMoney(v: number): string {
+  // Cents only when there are cents. A premium of 7.2 printed as "$7.2" reads
+  // as a truncated figure; "$7.20" reads as money. A sum insured of 50000 does
+  // not want ".00" after it in a column of six-figure amounts.
+  // The sign goes OUTSIDE the mark. Prepending "$" to a negative produced
+  // "$-1,200", which is reachable: an approval pushed past a limit with
+  // `acknowledge=true` leaves `remaining` negative.
+  const a = Math.abs(v);
+  const hasCents = Math.round(a * 100) % 100 !== 0;
+  return `${v < 0 ? "-" : ""}$${a.toLocaleString(undefined, {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 // Strip time portion from date strings like "1986-04-29 00:00:00" → "1986-04-29".
 export function fmtDate(v: string | null | undefined): string {
   if (!v) return "—";

@@ -1,4 +1,11 @@
-/** Portal access for ONE employee — Coverage & Members, above the statement.
+/** Portal access for ONE employee — Coverage & Members.
+ *
+ * It is a BUTTON IN THE IDENTITY STRIP that opens a sheet, not a card above the
+ * benefit statement. Granting portal access is an administrative act on the
+ * person; it is not a fact about their cover, and as a card it pushed the eight
+ * coverage rows a broker came for below the fold. The button carries the
+ * account's state, so nothing about "can this person get in?" is hidden behind
+ * the click — only the controls that change it.
  *
  * Bulk rollout lives on Company settings → Authentication. This panel is the
  * individual case: the person the bulk send couldn't reach (no email address),
@@ -17,13 +24,11 @@
  * which grants nothing on its own and is single-use.
  */
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
   CheckCircle2,
   Clock,
   Copy,
-  Eye,
   KeyRound,
   Loader2,
   Mail,
@@ -46,12 +51,21 @@ import {
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
 import { tenantSurfaceUrl } from "@/lib/tenant";
+import { cn } from "@/lib/cn";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SectionLabel } from "@/components/ui/section-label";
-import { InfoHint } from "@/components/ui/tooltip";
+import {
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 
 type Phase =
   | "none"          // no account at all
@@ -88,15 +102,22 @@ function phaseOf(account: MemberAccount | undefined): Phase {
 
 const PHASE_BADGE: Record<
   Phase,
-  { variant: "good" | "warn" | "error" | "default"; label: string }
+  {
+    variant: "good" | "warn" | "error" | "default";
+    label: string;
+    /** Text tone for the trigger button, which states the phase in words
+     * rather than in a lozenge — a badge inside a button is two controls'
+     * worth of chrome for one control. */
+    tone: string;
+  }
 > = {
-  none: { variant: "default", label: "No account" },
-  no_email: { variant: "warn", label: "Needs a link" },
-  not_sent: { variant: "warn", label: "Not invited" },
-  invited: { variant: "warn", label: "Invited" },
-  expired: { variant: "error", label: "Invite expired" },
-  active: { variant: "good", label: "Active" },
-  disabled: { variant: "error", label: "Disabled" },
+  none: { variant: "default", label: "No account", tone: "text-muted-foreground" },
+  no_email: { variant: "warn", label: "Needs a link", tone: "text-warn" },
+  not_sent: { variant: "warn", label: "Not invited", tone: "text-warn" },
+  invited: { variant: "warn", label: "Invited", tone: "text-warn" },
+  expired: { variant: "error", label: "Invite expired", tone: "text-error" },
+  active: { variant: "good", label: "Active", tone: "text-good" },
+  disabled: { variant: "error", label: "Disabled", tone: "text-error" },
 };
 
 function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase }) {
@@ -240,14 +261,21 @@ function SignInDetails({ account }: { account: MemberAccount }) {
   );
 }
 
-export function MemberAccountActions({
+/** The controls themselves. Rendered inside the sheet, so it has no frame,
+ * no heading and no card of its own. */
+function AccountPanel({
   employeeId,
-  staffId,
+  account,
+  minLength,
+  linkTtlHours,
+  phase,
 }: {
   employeeId: string;
-  staffId: string;
+  account: MemberAccount | undefined;
+  minLength: number;
+  linkTtlHours: number;
+  phase: Phase;
 }) {
-  const { data } = useMemberAccounts();
   const createAccount = useCreateMemberAccount();
   const resendInvite = useResendMemberInvite();
   const setStatus = useSetMemberAccountStatus();
@@ -263,12 +291,6 @@ export function MemberAccountActions({
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [confirmResend, setConfirmResend] = useState(false);
 
-  const account = data?.items.find((a) => a.staff_id === staffId);
-  // Server-owned rules, not constants duplicated here: the password floor the
-  // API will actually enforce, and the real lifetime of a set-password link.
-  const minLength = data?.password_min_length ?? 0;
-  const linkTtlHours = data?.set_password_ttl_hours ?? 0;
-  const phase = phaseOf(account);
   const badge = PHASE_BADGE[phase];
   const busy =
     createAccount.isPending || resendInvite.isPending || makeLink.isPending;
@@ -395,17 +417,7 @@ export function MemberAccountActions({
   );
 
   return (
-    <div>
-      <div className="mb-2 flex items-center gap-1">
-        <SectionLabel>Portal access</SectionLabel>
-        <InfoHint>
-          The member is emailed a one-time password and chooses their own at
-          first sign-in — nobody else ever sees it. Employees with no email
-          address are given a single-use set-password link instead.
-        </InfoHint>
-      </div>
-
-      <div className="space-y-2.5 rounded-md border border-border bg-card p-3">
+    <div className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <StatusLine account={account} phase={phase} />
           <Badge variant={badge.variant}>{badge.label}</Badge>
@@ -475,7 +487,10 @@ export function MemberAccountActions({
             {!showSet ? (
               <button
                 type="button"
-                className="text-xs text-subtle underline-offset-2 hover:underline"
+                // Underlined at rest, not only on hover: it is the sole
+                // affordance for this action, and as unadorned subtle text
+                // beside three real buttons it read as a caption.
+                className="text-xs text-subtle underline underline-offset-2 hover:text-foreground"
                 onClick={() => {
                   setShowSet(true);
                   setPasswordError(null);
@@ -539,15 +554,10 @@ export function MemberAccountActions({
 
         {account && <SignInDetails account={account} />}
 
-        <Button asChild size="sm" variant="ghost" className="w-full justify-start">
-          <Link
-            to="/operations/coverage"
-            search={{ employee: employeeId, view: "employee" }}
-          >
-            <Eye className="size-4" /> Preview what this employee sees
-          </Link>
-        </Button>
-      </div>
+        {/* No "preview what this employee sees" link here. The page this panel
+         * opens from carries a Broker view / Employee view toggle in its
+         * toolbar, and the same jump offered twice in one screen reads as two
+         * different destinations. */}
 
       {account && (
         <>
@@ -605,5 +615,62 @@ export function MemberAccountActions({
         </>
       )}
     </div>
+  );
+}
+
+export function MemberAccountActions({
+  employeeId,
+  staffId,
+}: {
+  employeeId: string;
+  staffId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const { data } = useMemberAccounts();
+  const account = data?.items.find((a) => a.staff_id === staffId);
+  const phase = phaseOf(account);
+  const badge = PHASE_BADGE[phase];
+  // Server-owned rules, not constants duplicated here: the password floor the
+  // API will actually enforce, and the real lifetime of a set-password link.
+  const minLength = data?.password_min_length ?? 0;
+  const linkTtlHours = data?.set_password_ttl_hours ?? 0;
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-1.5"
+          aria-label={`Portal access — ${badge.label}`}
+        >
+          <KeyRound className="size-4" aria-hidden />
+          Portal access
+          <span aria-hidden className="text-subtle">
+            ·
+          </span>
+          <span className={cn("font-medium", badge.tone)}>{badge.label}</span>
+        </Button>
+      </SheetTrigger>
+      <SheetContent className="sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>Portal access</SheetTitle>
+          <SheetDescription>
+            The member is emailed a one-time password and chooses their own at
+            first sign-in — nobody else ever sees it. Employees with no email
+            address are given a single-use set-password link instead.
+          </SheetDescription>
+        </SheetHeader>
+        <SheetBody>
+          <AccountPanel
+            employeeId={employeeId}
+            account={account}
+            phase={phase}
+            minLength={minLength}
+            linkTtlHours={linkTtlHours}
+          />
+        </SheetBody>
+      </SheetContent>
+    </Sheet>
   );
 }
