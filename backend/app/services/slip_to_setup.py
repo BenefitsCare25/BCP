@@ -180,6 +180,10 @@ def _slip_values_by_plan(slip: ProductSlip) -> dict[str, dict[str, dict[str, Any
             }
             by_number[num] = {
                 "name": _s(item.name),
+                # Only set where the PARSER could tell (a nested reference
+                # list); None everywhere else, so `_infer_extra_kind` still
+                # decides from the value's shape.
+                "kind": _s(getattr(item, "kind", "")) or None,
                 "value": _s(item.value),
                 "note": _s(item.note) or None,
                 "limits": _limits(item.limits),
@@ -242,7 +246,15 @@ def _overlay_for(
 
 
 def _infer_extra_kind(ov: dict[str, Any]) -> str:
-    """Editor kind for a slip-extracted line the template doesn't declare."""
+    """Editor kind for a slip-extracted line the template doesn't declare.
+
+    A kind the PARSER declared wins outright: it saw the sheet's structure (a
+    nested reference list's own enumerator column), which is not recoverable
+    from the flat row this function is looking at.
+    """
+    declared = _s(ov.get("kind"))
+    if declared:
+        return declared
     if _is_copay_props(ov.get("properties") or {}):
         return "copay"
     if _s(ov.get("value")).upper() in {"YES", "NO", "NA"}:

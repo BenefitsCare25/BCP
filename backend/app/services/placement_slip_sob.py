@@ -112,6 +112,49 @@ _VALUE_COL_SCAN_ROWS = 80
 _VALUE_COL_MIN_FILL_RATIO = 0.25
 _VALUE_COL_MIN_AVG_LEN = 3
 
+# --- Nested reference lists -------------------------------------------------
+#
+# A schedule may embed a REFERENCE LIST: a heading in the name column followed
+# by its own enumerated entries, numbered in a column of their own rather than
+# in the benefit key column. CDL's and Hartree's GCI sheets both do it:
+#
+#     [0] 5   [1] Above subject to max. limit per insured person   [4] 500000
+#     [0] —   [1] List of Dread Diseases            [3] 1   [4] Major Cancers
+#     [0] —   [1] —                                 [3] 2   [4] Heart Attack…
+#     [0] —   [1] —                                 [3] 3   [4] Stroke     (and 30 more)
+#
+# With the key column empty, every one of those entries looked like a
+# continuation of benefit 5 and was appended to its VALUE, so the schedule
+# reported the max limit as "500000.0 Heart Attack of Specified Severity Stroke
+# Coronary Artery By-pass Surgery …" — on the member's own coverage page as well
+# as the broker's.
+#
+# The rule is deliberately strict, because a false positive silently rewrites a
+# benefit into a list: the enumerator must sit in a column carrying NO
+# structural role, the opening row must read exactly "1" AND name the list, and
+# each entry must increment by one. Anything else ends the list and falls
+# through to the ordinary continuation handling.
+_LIST_ENUM_RE = re.compile(r"^\(?(\d{1,3})(?:\.0)?\)?[.)]?$")
+
+
+def _list_enumerator(row: list[Cell], col: int | None) -> int | None:
+    """The bare ordinal at ``row[col]`` ("1", "1.0", "(1)", "1."), else None."""
+    if col is None or col < 0:
+        return None
+    match = _LIST_ENUM_RE.match(_cell_text(row, col))
+    return int(match.group(1)) if match else None
+
+
+def _nested_list_column(row: list[Cell], skip: set[int]) -> int | None:
+    """Column where a nested list OPENS on this row — an enumerator reading
+    exactly "1" outside every structural column — else None."""
+    for col in range(len(row)):
+        if col in skip:
+            continue
+        if _list_enumerator(row, col) == 1:
+            return col
+    return None
+
 
 def _is_stop_row(row: list[Cell]) -> bool:
     """True when a row marks the end of the benefit schedule.
@@ -818,7 +861,12 @@ def _parse_descriptive_items(
     value: str | None = None
     note: str | None = None
     subs: list[ExtractedSubItem] = []
+    kind: str | None = None
     consec_blank = 0
+    # Column an open nested list is enumerated in, and the ordinal its next
+    # entry must carry. See _nested_list_column.
+    list_col: int | None = None
+    list_next = 0
 
     def _flush() -> None:
         if not (number and name):
@@ -835,7 +883,7 @@ def _parse_descriptive_items(
         used_numbers.add(num)
         items.append(ExtractedBenefitItem(
             number=num, name=name.strip(), value=value, note=note,
-            sub_items=tuple(subs),
+            sub_items=tuple(subs), kind=kind,
         ))
 
     for i in range(data_start, len(rows)):
@@ -852,7 +900,18 @@ def _parse_descriptive_items(
 
         key_cell = _cell_text(row, key_col) if key_col is not None else ""
         name_cell = _cell_text(row, name_col)
-        cell_val = _cell_text(row, value_col) or None
+        # A FLOAT cell is normalized the way the per-plan parser has always
+        # normalized it; everything else keeps the existing text path, so "NA"
+        # and prose are untouched. xlrd yields every numeric cell as a float, so
+        # without this a money value arrived as "500000.0" / "2000.0" and was
+        # stored — and rendered to members — with the artifact intact. It is why
+        # every descriptive product (GTL/GCI/GPA/WICI) carried them.
+        raw_val = row[value_col] if 0 <= value_col < len(row) else None
+        cell_val = (
+            _fmt_value(raw_val)
+            if isinstance(raw_val, float)
+            else (_cell_text(row, value_col) or None)
+        )
 
         if key_col is None:
             # Key-less (GPA): each name row is its own benefit; value-only rows
@@ -868,6 +927,7 @@ def _parse_descriptive_items(
                 number, name, value, note, subs = (
                     str(len(items) + 1), name_cell, cell_val, None, [],
                 )
+                kind = None
             elif number and cell_val:
                 value = " ".join(p for p in (value, cell_val) if p).strip() or None
             continue
@@ -876,7 +936,36 @@ def _parse_descriptive_items(
         if key:
             _flush()
             number, name, value, note, subs = (key, name_cell, cell_val, None, [])
+            kind, list_col = None, None
             continue
+
+        # An open nested list consumes its own entries, in order. A row that
+        # doesn't continue the sequence closes the list and is handled below as
+        # it would have been otherwise.
+        if list_col is not None:
+            if not name_cell and _list_enumerator(row, list_col) == list_next:
+                subs.append(
+                    ExtractedSubItem(key=str(list_next), name=cell_val or "", value=None)
+                )
+                list_next += 1
+                continue
+            list_col = None
+
+        # …and a row naming a list AND enumerating its first entry opens one.
+        # The heading becomes a benefit row of its own rather than a qualifier
+        # of whatever preceded it — the list is reference material, not a limit
+        # on the benefit above it.
+        if not key_cell and name_cell and cell_val:
+            opened = _nested_list_column(
+                row, {c for c in (key_col, name_col, value_col) if c is not None}
+            )
+            if opened is not None:
+                _flush()
+                list_col, list_next = opened, 2
+                number, name, value, note = str(len(items) + 1), name_cell, None, None
+                subs = [ExtractedSubItem(key="1", name=cell_val, value=None)]
+                kind = "list"
+                continue
 
         if key_cell == "-" and number:
             # Bulleted sub-benefit under the current item.

@@ -103,6 +103,17 @@ class ExtractedBenefitItem:
     limits: tuple[ExtractedLimit, ...] = ()
     sub_items: tuple[ExtractedSubItem, ...] = ()
     properties: dict[str, str] = field(default_factory=dict)
+    # Editor/renderer type for this row, when the PARSER can tell. Left None for
+    # ordinary benefits, where the value's own shape is the better signal and
+    # `slip_to_setup._infer_extra_kind` decides.
+    #
+    # Set to "list" for a nested REFERENCE LIST — a heading ("List of Dread
+    # Diseases") followed by its own enumerated entries. Nothing downstream can
+    # infer that reliably: by the time a schedule is a flat row set, a thirty-
+    # entry list is indistinguishable from thirty benefits, and it is the parser
+    # that saw the second enumerator column. Both read-only renderers collapse
+    # `kind: "list"` to one disclosure line (`lib/benefitSchedule.ts`).
+    kind: str | None = None
     # The cell EXPLICITLY read "NA", as opposed to being blank. Both normalize
     # to ``value=None`` for display — nobody wants "NA" printed at a member —
     # but they mean OPPOSITE things when the per-plan grids are folded into the

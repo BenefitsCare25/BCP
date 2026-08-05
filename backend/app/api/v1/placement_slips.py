@@ -457,6 +457,14 @@ async def parse_upload(
                     {
                         "number": item.number,
                         "name": item.name,
+                        # `kind` is the only type signal the read-only renderers
+                        # have (see CLAUDE.md, "kind IS persisted"). This path
+                        # dropped it, so every slip-loaded row stored
+                        # `kind: null` and a 37-entry reference list rendered as
+                        # a benefit with no value instead of collapsing to one
+                        # disclosure line. Omitted entirely when the parser has
+                        # no opinion, so nothing is claimed that wasn't read.
+                        **({"kind": item.kind} if item.kind else {}),
                         "value": item.value,
                         "note": item.note,
                         "limits": [

@@ -405,6 +405,61 @@ def test_descriptive_layout_autodetects_value_column() -> None:
     assert all(it.value not in ("O.K", "to check") for it in items)
 
 
+def test_nested_reference_list_is_its_own_item_not_a_value_continuation() -> None:
+    # A schedule may embed a reference list — a heading in the name column and
+    # its own enumerated entries, numbered in a column of their own. With the
+    # benefit key column empty those entries looked like continuations of the
+    # benefit above and were appended to its VALUE, so CDL's and Hartree's GCI
+    # reported the max limit as "500000 Heart Attack of Specified Severity
+    # Stroke Coronary Artery By-pass Surgery …" on the member's page and the
+    # broker's alike.
+    rows = _pad([
+        ["Cover : ", "Payment of accepted sum insured as per schedule of benefits"],
+        ["SCHEDULE OF BENEFITS / INSURER"],
+        [1.0, "On diagnosis of a dread disease", "", "", "Pays sum insured"],
+        [5.0, "Above subject to max. limit per insured person", "", "", 500000.0],
+        ["", "List of Dread Diseases", "", 1.0, "Major Cancers"],
+        ["", "", "", 2.0, "Heart Attack of Specified Severity"],
+        ["", "", "", 3.0, "Stroke"],
+    ])
+    items = _extract_plans_from_sheet(rows)[0].items
+    by_name = {it.name: it for it in items}
+
+    limit = by_name["Above subject to max. limit per insured person"]
+    assert limit.value == "500000"
+    assert limit.sub_items == ()
+
+    listed = by_name["List of Dread Diseases"]
+    # `kind` is what makes both read-only renderers collapse this to one
+    # disclosure line instead of printing 37 valueless benefit rows.
+    assert listed.kind == "list"
+    assert not listed.value
+    assert [(s.key, s.name) for s in listed.sub_items] == [
+        ("1", "Major Cancers"),
+        ("2", "Heart Attack of Specified Severity"),
+        ("3", "Stroke"),
+    ]
+
+
+def test_value_continuation_still_extends_a_prose_benefit() -> None:
+    # The nested-list rule must not swallow the ordinary case it sits beside:
+    # a wrapped prose value with NO enumerator of its own still extends the
+    # benefit above it (GTL's death-benefit clauses depend on this).
+    rows = _pad([
+        ["Cover : ", "Payment of accepted sum insured as per schedule of benefits"],
+        ["SCHEDULE OF BENEFITS / INSURER"],
+        [1.0, "Death Benefit", "", "", "Upon due proof of the death of any insured"],
+        ["", "", "", "", "in a form satisfactory to the insurer."],
+        [2.0, "TPD Benefit", "", "", "Pays lump sum after 6 months"],
+    ])
+    item = _extract_plans_from_sheet(rows)[0].items[0]
+    assert item.value == (
+        "Upon due proof of the death of any insured "
+        "in a form satisfactory to the insurer."
+    )
+    assert item.kind is None
+
+
 def test_descriptive_sub_bullets_and_numbered_stop_row() -> None:
     # "-" rows are sub-benefits under the current item; a numbered "List of
     # exclusions" heading terminates the schedule rather than becoming a benefit
