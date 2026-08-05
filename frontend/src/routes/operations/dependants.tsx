@@ -5,7 +5,6 @@ import {
   useBulkDeleteDependants,
   useDependants,
   useUpdateDependant,
-  useUploadDependants,
 } from "@/api/hooks";
 import { api } from "@/api/client";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
@@ -40,7 +39,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { UploadRoster } from "@/components/operations/UploadRoster";
+import {
+  ListingCount,
+  ListingExceptionLink,
+  ListingImportBar,
+} from "@/components/operations/ListingImportBar";
 import { DependantApprovals } from "@/components/operations/DependantApprovals";
 import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
@@ -58,7 +61,6 @@ const LINK_HINT_KEYS = new Set(["employee_staff_id", "employee_name", "employee_
 
 export function DependantsPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const upload = useUploadDependants();
   const bulkDelete = useBulkDeleteDependants();
   const updateDependant = useUpdateDependant();
   const autoMatch = useAutoMatchDependants();
@@ -78,6 +80,13 @@ export function DependantsPage() {
     unlinkedOnly,
     debouncedSearch,
   );
+  // Unfiltered counts for the header bar. `data.total` follows the active
+  // search + "Unlinked only" filter, so it cannot state what is on file. Both
+  // are limit=1 — the page of rows is never fetched, only the total.
+  const { data: onFile } = useDependants(policyYearId ?? undefined, 0, 1);
+  const { data: unlinkedSet } = useDependants(policyYearId ?? undefined, 0, 1, true);
+  const dependantsTotal = onFile?.total ?? 0;
+  const unlinkedTotal = unlinkedSet?.total ?? 0;
   const selected = useMemo(
     () => data?.items.find((d) => d.id === selectedId) ?? null,
     [data, selectedId],
@@ -108,18 +117,46 @@ export function DependantsPage() {
     <div className="space-y-5">
       <DependantApprovals policyYearId={policyYearId} />
 
-      <UploadRoster
-        title="Upload dependant roster"
-        description="STM template — Staff ID, Employee Name, Dependant Name, Relationship, DOB."
+      <ListingImportBar
         policyYearId={policyYearId}
-        upload={upload}
+        hasRows={onFile ? dependantsTotal > 0 : undefined}
+        stats={
+          <ListingCount
+            value={dependantsTotal}
+            noun={dependantsTotal === 1 ? "dependant" : "dependants"}
+          >
+            {dependantsTotal === 0 ? (
+              <span>Nothing uploaded yet</span>
+            ) : !unlinkedSet ? (
+              // Two independent queries: "all linked" must be a RESULT, never
+              // the default while the unlinked count is still in flight (or
+              // failed) — this line is the only surface reporting that
+              // exception, so guessing it away hides it.
+              <span>Checking links…</span>
+            ) : unlinkedTotal > 0 ? (
+              <>
+                <span className="tabular-nums">
+                  {(dependantsTotal - unlinkedTotal).toLocaleString()}
+                </span>{" "}
+                linked ·
+                <ListingExceptionLink
+                  count={unlinkedTotal}
+                  label="unlinked"
+                  onClick={() => setUnlinkedOnly(true)}
+                />
+              </>
+            ) : (
+              <span>All linked to an employee</span>
+            )}
+          </ListingCount>
+        }
       />
 
       <RosterTabActions>
         <ReportDownloadButton
           path={`/dependants/coverage-report/export?policy_year_id=${policyYearId}`}
           filename="dependant-coverage.xlsx"
-          label="Dependant report"
+          label="Dependant listing"
           disabled={!total}
         />
         <Button
@@ -489,7 +526,7 @@ export function DependantsPage() {
       </Sheet>
 
       <PageGuide
-        purpose="Upload and manage the dependant roster. Dependants are automatically linked to employees via staff ID, NRIC, or name matching. Only products flagged 'has dependants' include dependant coverage."
+        purpose="Upload and manage the dependant listing. Dependants are automatically linked to employees via staff ID, NRIC, or name matching. Only products flagged 'has dependants' include dependant coverage."
         connections={[
           { label: "← Employees", description: "Dependants link to employee records for family plan eligibility" },
           { label: "← Products catalog", description: "Only products with 'has dependants' enabled support dependant enrolment" },

@@ -16,7 +16,7 @@
  * both here and on `routes/operations/coverage.tsx`.
  */
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Play, RefreshCw, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Play, RefreshCw, Save, Trash2 } from "lucide-react";
 import {
   useBenefitStatement,
   useBulkDeleteEmployees,
@@ -28,7 +28,6 @@ import {
   useRunMatching,
   useSetMatchOverride,
   useUpdateEmployee,
-  useUploadEmployees,
 } from "@/api/hooks";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
@@ -52,7 +51,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { StatTile } from "@/components/ui/stat-tile";
 import {
   Table,
   TableBody,
@@ -61,8 +59,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { UploadRoster } from "@/components/operations/UploadRoster";
-import { AdcCard } from "@/components/operations/AdcCard";
+import {
+  ListingCount,
+  ListingExceptionLink,
+  ListingImportBar,
+} from "@/components/operations/ListingImportBar";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { RosterTabActions } from "./rosterTabActions";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
@@ -81,7 +82,12 @@ import { ConflictDetailError, formatError } from "@/lib/errors";
 import { formatWallet } from "@/lib/flex";
 import { fmtCurrency } from "@/lib/format";
 import { FAMILY_STATUS_LABELS } from "@/types";
-import type { FlexCoverageLine, FlexEmployeeAssignment, MatchMethod } from "@/types";
+import type {
+  FlexCoverageLine,
+  FlexEmployeeAssignment,
+  MatchMethod,
+  MatchResults,
+} from "@/types";
 import { toast } from "sonner";
 
 const METHOD_LABEL: Record<MatchMethod, string> = {
@@ -95,7 +101,6 @@ const PAGE_SIZE = 50;
 
 export function EmployeesPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const upload = useUploadEmployees();
   const bulkDelete = useBulkDeleteEmployees();
   const runMatching = useRunMatching();
   const [page, setPage] = useState(0);
@@ -177,7 +182,7 @@ export function EmployeesPage() {
         <ReportDownloadButton
           path={`/employees/coverage-report/export?policy_year_id=${policyYearId}`}
           filename="employee-coverage.xlsx"
-          label="Employee report"
+          label="Employee listing"
           disabled={!employeesTotal}
         />
         {/* "Invite all to portal" moved to Company settings → Authentication,
@@ -193,38 +198,24 @@ export function EmployeesPage() {
         </Button>
       </RosterTabActions>
 
-      <UploadRoster
-        title="Upload employee roster"
-        description="Member-listing template — Staff ID, Name, NRIC/FIN, DOB, Category, bank details, insurer member IDs, etc."
+      <ListingImportBar
         policyYearId={policyYearId}
-        upload={upload}
-        templatePath={`/policy-years/${policyYearId}/reports/member-listing-template`}
-        templateFilename="member-listing-template.xlsx"
+        hasRows={matchData ? employeesTotal > 0 : undefined}
+        stats={
+          <ListingCount
+            value={employeesTotal}
+            noun={employeesTotal === 1 ? "employee" : "employees"}
+          >
+            <MatchState
+              data={matchData}
+              onShowUnmatched={() => {
+                setPage(0);
+                setMatchStatus("unmatched");
+              }}
+            />
+          </ListingCount>
+        }
       />
-
-      <AdcCard policyYearId={policyYearId} />
-
-      {matchData && !pending && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <StatTile
-            label="Total employees"
-            value={matchData.employees_total}
-            formatNumber
-          />
-          <StatTile
-            label="Matched"
-            value={matchData.employees_matched}
-            variant="good"
-            formatNumber
-          />
-          <StatTile
-            label="Unmatched"
-            value={matchData.employees_unmatched}
-            variant="warn"
-            formatNumber
-          />
-        </div>
-      )}
 
       {/* How the roster splits across legal entities — hidden when it carries
           no Entity column. */}
@@ -241,7 +232,7 @@ export function EmployeesPage() {
         <CardHeader>
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <CardTitle>Roster</CardTitle>
+              <CardTitle>Member listing</CardTitle>
               <CardDescription>
                 {total.toLocaleString()} employee{total === 1 ? "" : "s"} on file
               </CardDescription>
@@ -868,14 +859,67 @@ export function EmployeesPage() {
       </Sheet>
 
       <PageGuide
-        purpose="Upload the employee roster, then run category matching. Matching uses a tiered approach: exact name → fuzzy Jaccard (≥0.6) → rule evaluation. Click any row to view plans, financials, and derived attributes."
+        purpose="Upload the member listing, then run category matching. Matching uses a tiered approach: exact name → fuzzy Jaccard (≥0.6) → rule evaluation. Click any row to view plans, financials, and derived attributes."
         connections={[
-          { label: "← Roster upload", description: "Employees are imported from STM-format Excel files" },
+          { label: "← Listing upload", description: "Employees are imported from STM-format Excel files" },
           { label: "← Product categories", description: "Confirmed categories with rules drive the matching engine" },
           { label: "→ Dependants", description: "Dependants are linked to employees via staff ID or NRIC" },
         ]}
       />
     </div>
+  );
+}
+
+/**
+ * One line of match state under the headcount.
+ *
+ * It also surfaces `MatchResults.reason`, which nothing rendered before: the
+ * page showed only a "Run matching" / "Re-run matching" button, so a broker
+ * whose results had gone STALE (a category edited after the last run — see
+ * `api/v1/matches.py`) saw the identical screen to one whose results were
+ * current, and the counts beside it were quietly out of date.
+ */
+function MatchState({
+  data,
+  onShowUnmatched,
+}: {
+  data?: MatchResults;
+  onShowUnmatched: () => void;
+}) {
+  if (!data) return <span>Loading…</span>;
+  if (data.employees_total === 0) return <span>Nothing uploaded yet</span>;
+  if (!data.last_run_at) return <span>Matching not run yet</span>;
+
+  const stale = data.pending;
+  return (
+    <>
+      {data.employees_unmatched > 0 ? (
+        <>
+          <span className="tabular-nums">
+            {data.employees_matched.toLocaleString()}
+          </span>{" "}
+          matched ·
+          <ListingExceptionLink
+            count={data.employees_unmatched}
+            label="unmatched"
+            onClick={onShowUnmatched}
+          />
+        </>
+      ) : (
+        <span>All {data.employees_matched.toLocaleString()} matched</span>
+      )}
+      {stale && (
+        // Amber lives in the glyph, never in 12px text: --color-warn is 3.19:1
+        // on card — fine for a graphic (1.4.11), short of 4.5:1 for body copy.
+        <span
+          className="inline-flex items-center gap-1 text-foreground"
+          title={data.reason ?? undefined}
+        >
+          <AlertTriangle className="size-3.5 text-warn" />
+          may be stale
+        </span>
+      )}
+    </>
   );
 }
 

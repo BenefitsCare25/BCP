@@ -1,45 +1,55 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import { triggerDownload } from "@/lib/download";
 import type { AdcApplyResult, AdcPreview } from "@/types";
 
-/** Download the current active roster as a prefilled ADC movement template. */
-export async function downloadAdcTemplate(policyYearId: string): Promise<void> {
-  const blob = await api.download(`/policy-years/${policyYearId}/adc/template`);
-  triggerDownload(blob, "adc-template.xlsx");
-}
-
-interface AdcArgs {
+interface PreviewArgs {
   file: File;
   policyYearId: string;
 }
 
-function formData(file: File): FormData {
-  const fd = new FormData();
-  fd.append("file", file);
-  return fd;
+interface ApplyArgs extends PreviewArgs {
+  /** Terminate people absent from the file. Off unless the broker ticks it. */
+  terminateMissing: boolean;
+  /** The preview's fingerprint of that set — the server 409s if it moved. */
+  missingDigest: string | null;
 }
 
-/** Dry-run: classify + diff a movement file without mutating. */
-export function useAdcPreview() {
+/** Dry-run: diff an uploaded member listing against the roster, no mutation. */
+export function useListingPreview() {
   return useMutation({
-    mutationFn: ({ file, policyYearId }: AdcArgs) =>
-      api.upload<AdcPreview>(
+    mutationFn: ({ file, policyYearId }: PreviewArgs) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return api.upload<AdcPreview>(
         `/policy-years/${policyYearId}/adc/preview`,
-        formData(file),
-      ),
+        fd,
+      );
+    },
   });
 }
 
-/** Apply a movement file (adds/changes/soft-deletes) + re-match + re-flex. */
-export function useAdcApply() {
+/** Apply the listing (adds / changes / soft-deletes) + re-match + re-flex. */
+export function useListingApply() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ file, policyYearId }: AdcArgs) =>
-      api.upload<AdcApplyResult>(
+    mutationFn: ({
+      file,
+      policyYearId,
+      terminateMissing,
+      missingDigest,
+    }: ApplyArgs) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      // Always sent explicitly — an omitted field would fall to the server
+      // default, which is the same `false`, but a silent default is not
+      // something a termination should ever depend on.
+      fd.append("terminate_missing", terminateMissing ? "true" : "false");
+      if (missingDigest) fd.append("missing_digest", missingDigest);
+      return api.upload<AdcApplyResult>(
         `/policy-years/${policyYearId}/adc/apply`,
-        formData(file),
-      ),
+        fd,
+      );
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["dependants"] });

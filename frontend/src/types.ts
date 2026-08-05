@@ -681,16 +681,28 @@ export interface AdcIssue {
 export interface AdcPreview {
   additions: AdcOp[];
   changes: AdcOp[];
+  /** Terminations the file STATES, via a past leaving date on the row. */
   deletions: AdcOp[];
+  /**
+   * On file but named nowhere in the upload. Not a deletion — a partial export
+   * looks identical to a full census that dropped people, so these terminate
+   * only on the broker's explicit tick. `counts.roster_total` is the
+   * denominator for "is this a partial file?".
+   */
+  missing: AdcOp[];
   issues: AdcIssue[];
   counts: Record<string, number>;
+  /** Fingerprint of `missing`, returned with apply so a roster that moved in
+   *  between can't terminate a different set than the one reviewed. */
+  missing_digest: string | null;
 }
 
 export interface AdcApplyResult {
   added: number;
   changed: number;
   deleted: number;
-  skipped: number;
+  missing_terminated: number;
+  unchanged: number;
   rematched: number;
   issues: AdcIssue[];
   flex_errors: string[];

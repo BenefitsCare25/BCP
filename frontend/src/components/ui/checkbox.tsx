@@ -10,7 +10,12 @@ export const Checkbox = React.forwardRef<
   <CheckboxPrimitive.Root
     ref={ref}
     className={cn(
-      "size-4 shrink-0 rounded border border-input bg-card shadow-sm",
+      // `rounded` resolves to --radius (0.5rem), which on a 16px box is exactly
+      // half its width — every checkbox in the app was drawing as a circle, i.e.
+      // as a RADIO. That inverts the affordance: a radio says "pick one of a
+      // set", a checkbox says "switch this on independently". `rounded-sm`
+      // (6px) is the smallest token and reads as a rounded square.
+      "size-4 shrink-0 rounded-sm border border-input bg-card shadow-sm",
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
       "data-[state=checked]:bg-primary data-[state=checked]:border-primary data-[state=checked]:text-primary-foreground",
       "disabled:cursor-not-allowed disabled:opacity-50",

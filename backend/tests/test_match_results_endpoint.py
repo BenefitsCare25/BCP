@@ -408,3 +408,57 @@ def test_patch_dependant_updates_and_unlinks(client: TestClient) -> None:
     assert unlinked.status_code == 200
     assert unlinked.json()["employee_id"] is None
     assert unlinked.json()["link_method"] == "unlinked"
+
+
+def test_match_counts_exclude_terminated_employees(client: TestClient) -> None:
+    """The match readout counts the population matching actually evaluates.
+
+    `match_policy_year` never re-evaluates a soft-terminated leaver, and
+    `GET /employees` hides them by default — so counting them here made the
+    endpoint disagree with both surfaces beside it, and left a never-matched
+    leaver stuck in `employees_unmatched` with no way to clear it: the filter
+    link it drives opens an active-only table that shows nothing.
+    """
+    py_id = _policy_year_id(client)
+    before = client.get(
+        "/api/v1/match-results", params={"policy_year_id": py_id, "limit": 1}
+    ).json()
+
+    # A leaver who was never matched — the exact row that used to inflate
+    # `employees_unmatched` permanently.
+    db = SessionLocal()
+    try:
+        leaver = Employee(
+            client_id=DEMO_CLIENT_ID,
+            policy_year_id=py_id,
+            staff_id="TEST-GONE",
+            employee_name="Dana Departed",
+            attribute_values={"category": "Zzzz Nothing Like Any Category Xyz"},
+            status="terminated",
+        )
+        db.add(leaver)
+        db.commit()
+        leaver_id = leaver.id
+    finally:
+        db.close()
+
+    try:
+        after = client.get(
+            "/api/v1/match-results", params={"policy_year_id": py_id, "limit": 200}
+        ).json()
+        assert after["employees_total"] == before["employees_total"]
+        assert after["employees_unmatched"] == before["employees_unmatched"]
+        assert not any(it["staff_id"] == "TEST-GONE" for it in after["items"])
+
+        # ...and the headline agrees with the roster the broker actually sees.
+        listed = client.get(
+            "/api/v1/employees", params={"policy_year_id": py_id, "limit": 200}
+        ).json()
+        assert after["employees_total"] == listed["total"]
+    finally:
+        db = SessionLocal()
+        try:
+            db.delete(db.get(Employee, leaver_id))
+            db.commit()
+        finally:
+            db.close()

@@ -1,8 +1,10 @@
-"""ADC (Additions / Deletions / Changes) roster movement — preview + apply.
+"""Roster movement (Additions / Changes / Deletions) — preview + apply.
 
-The template round-trips the current roster with an ``Action`` column; the
-preview classifies + validates + diffs each movement without mutating, and apply
-re-evaluates the same file (so the dry-run can't diverge) before committing.
+Movements are DERIVED by diffing an uploaded member listing against the roster;
+there is no ``Action`` column. The preview classifies + validates + diffs
+without mutating, and apply re-evaluates the same file (so the dry-run can't
+diverge) before committing. See `services/adc.py` for why `missing` is its own
+bucket and not a deletion.
 """
 from __future__ import annotations
 
@@ -29,8 +31,8 @@ class AdcOp(BaseModel):
 
 
 class AdcIssue(BaseModel):
-    """A row that can't be applied — unknown action, unresolved target, or a
-    duplicate addition. Reported, never silently dropped."""
+    """A row that can't be applied — no identifying column, or repeated within
+    the file. Reported, never silently dropped."""
 
     row: int
     record_type: str
@@ -40,16 +42,28 @@ class AdcIssue(BaseModel):
 class AdcPreview(BaseModel):
     additions: list[AdcOp] = Field(default_factory=list)
     changes: list[AdcOp] = Field(default_factory=list)
+    #: Terminations the FILE states, via a past leaving date on the row.
     deletions: list[AdcOp] = Field(default_factory=list)
+    #: On file but named nowhere in the upload. NOT a deletion — applied only
+    #: when the caller opts in, because a partial export looks identical to a
+    #: full census that dropped people. `counts["roster_total"]` is the
+    #: denominator the UI needs to tell those two apart.
+    missing: list[AdcOp] = Field(default_factory=list)
     issues: list[AdcIssue] = Field(default_factory=list)
     counts: dict[str, int] = Field(default_factory=dict)
+    #: Fingerprint of the `missing` set. The client returns it with apply so a
+    #: roster that moved in between can't quietly terminate a different group.
+    missing_digest: str | None = None
 
 
 class AdcApplyResult(BaseModel):
     added: int = 0
     changed: int = 0
     deleted: int = 0
-    skipped: int = 0  # additions that resolved to an existing record
+    #: Terminated because they were absent from the file (opt-in only), kept
+    #: apart from `deleted` so the report says which evidence ended cover.
+    missing_terminated: int = 0
+    unchanged: int = 0
     rematched: int = 0
     issues: list[AdcIssue] = Field(default_factory=list)
     flex_errors: list[str] = Field(default_factory=list)

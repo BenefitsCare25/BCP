@@ -29,6 +29,7 @@ from app.services.roster_attributes import (
     first_value,
     mask_nric,
 )
+from app.services.roster_parser import _FORMULA_LEADERS
 
 # Report vocabulary for the "Status" column, keyed by Enrollment.status.
 # confirmed and deemed both read "Processed" — the insurer only cares that the
@@ -187,9 +188,11 @@ last_day_of_service = _last_day_of_service
 # ``=HYPERLINK(...)`` or ``=cmd|...`` would execute in the insurer's Excel when
 # they open our deliverable. Prefix such strings with an apostrophe so Excel
 # treats them as literal text. Applied to every cell in the insurer workbooks.
-_FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r", "\n")
-
-
+#
+# The tuple lives in `roster_parser` because that module owns the READ half
+# (`unescape_formula_guard`): the member-listing template is exported through
+# here and uploaded back through there, so an escape with no matching unescape
+# turns "+60186448967" into a phantom change on every upload.
 def safe_cell(value: object) -> object:
     if isinstance(value, str) and value and value[0] in _FORMULA_LEADERS:
         return "'" + value

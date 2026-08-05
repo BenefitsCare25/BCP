@@ -53,7 +53,6 @@ import type {
   SetupAnswers,
   SetupProductSummary,
   SlipTemplateProfileSave,
-  UploadResult,
 } from "@/types";
 
 // ── Queries ─────────────────────────────────────────────────────────────────
@@ -715,24 +714,12 @@ export function useSaveTemplateProfile() {
   });
 }
 
-export function useUploadEmployees() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ file, policyYearId }: { file: File; policyYearId: string }) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("policy_year_id", policyYearId);
-      return api.upload<UploadResult>("/employees/upload", fd);
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["employees"] });
-      qc.invalidateQueries({ queryKey: ["match-results"] });
-      qc.invalidateQueries({ queryKey: ["flex-membership"] });
-      qc.invalidateQueries({ queryKey: ["flex-coverage"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-    },
-  });
-}
+// `useUploadEmployees` / `useUploadDependants` were removed here. The roster is
+// changed through the listing SYNC (`api/adc.ts` → preview/apply), which adds,
+// updates AND terminates; the old insert-only upload silently discarded every
+// edit to a person already on file. `POST /employees/upload` and
+// `/dependants/upload` still exist server-side as the low-level insert
+// primitive their dedup regression suites exercise — no UI calls them.
 
 export function useSetCurrentPolicyYear() {
   const qc = useQueryClient();
@@ -746,24 +733,6 @@ export function useSetCurrentPolicyYear() {
     // (Safe here unlike a tenant switch — the active client is unchanged, so no
     // in-flight query can be refetched against the wrong tenant.)
     onSuccess: () => qc.invalidateQueries(),
-  });
-}
-
-export function useUploadDependants() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ file, policyYearId }: { file: File; policyYearId: string }) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("policy_year_id", policyYearId);
-      return api.upload<UploadResult>("/dependants/upload", fd);
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["dependants"] });
-      qc.invalidateQueries({ queryKey: ["flex-membership"] });
-      qc.invalidateQueries({ queryKey: ["flex-coverage"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-    },
   });
 }
 

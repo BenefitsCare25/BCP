@@ -490,6 +490,18 @@ async def upload_dependants(
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         records = parse_dependant_workbook(tmp_path)
 
+    # Nothing parsed is almost always the wrong file or the wrong tab (an
+    # employee listing dropped on the Dependants upload). The parser drops those
+    # rows rather than importing them, which without this reads as a successful
+    # "0 rows added" and looks like the file was accepted.
+    no_dependant_rows = (
+        ["No dependant rows found — the file needs a Dependant Name or "
+         "Dependant's Identification No. column. An employee listing uploaded "
+         "here has neither; upload it on the Employees tab instead."]
+        if not records
+        else []
+    )
+
     # Build employee lookup indexes for linking.
     employees = list(
         db.execute(
@@ -529,7 +541,7 @@ async def upload_dependants(
             existing_keys.setdefault(k, did)
 
     inserted = 0
-    errors: list[str] = []
+    errors: list[str] = list(no_dependant_rows)
     duplicates: list[DuplicateEntry] = []
     seen: set[str] = set()
     for rec in records:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.services.excel_reader import Cell, open_workbook
+from app.services.excel_reader import Cell, Sheet, open_workbook
 
 # Column-name → attribute_id mapping for STM employee template.
 EMPLOYEE_COLUMN_MAP: dict[str, str] = {
@@ -91,6 +91,17 @@ DEPENDANT_COLUMN_MAP: dict[str, str] = {
 }
 
 
+# Attribute keys that only a DEPENDANT sheet can produce — every one of them is
+# absent from EMPLOYEE_COLUMN_MAP, so their presence is what tells a dependant
+# listing apart from an employee listing handed to the wrong parser.
+DEPENDANT_MARKER_KEYS = (
+    "dependant_name",
+    "dependant_id_no",
+    "relationship",
+    "date_of_marriage",
+)
+
+
 @dataclass(frozen=True)
 class EmployeeRecord:
     staff_id: str
@@ -130,6 +141,36 @@ def _normalize_name(s: Any) -> str | None:
     return re.sub(r"[,\s]+", " ", str(s)).strip()
 
 
+# Characters that make Excel treat a string cell as a live formula. The WRITE
+# half of this contract is `insurer_reports.safe_cell`, which imports this tuple
+# — the escape and the unescape must never drift apart, or exported values stop
+# round-tripping through an upload.
+_FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def unescape_formula_guard(value: Any) -> Any:
+    """Undo `insurer_reports.safe_cell` on the way back in.
+
+    Our own exports prefix a value starting with ``= + - @`` with an apostrophe
+    so Excel can't execute it as a formula. The listing template is now
+    RE-UPLOADED (see `services/adc.py`), so that guard round-trips as data: a
+    Malaysian mobile ``+60186448967`` came back as ``'+60186448967``, which the
+    diff reported as a change on every upload and would have written the stray
+    apostrophe into the roster on apply.
+
+    Only strips when the next character is one the guard actually escapes, so a
+    value legitimately beginning with an apostrophe is untouched.
+    """
+    if (
+        isinstance(value, str)
+        and len(value) > 1
+        and value[0] == "'"
+        and value[1] in _FORMULA_LEADERS
+    ):
+        return value[1:]
+    return value
+
+
 def _normalize_code(raw: Any) -> str:
     """Identifier-shaped value → clean string ('081' text stays '081'; a numeric
     cell 81 / 81.0 becomes '81' rather than '81.0')."""
@@ -156,6 +197,12 @@ def _normalize_flag(raw: Any) -> Any:
 
 
 def _coerce_attr(attr_id: str, value: Any) -> Any:
+    # Undo our own export's formula guard FIRST, so the apostrophe never reaches
+    # a normalizer or the stored value. This has to happen on ingest rather than
+    # only in the diff: the listing template is round-tripped now, and hiding
+    # the artifact from the comparison would still write "'+60186448967" into
+    # the roster the first time that row genuinely changes.
+    value = unescape_formula_guard(value)
     if attr_id in _CODE_KEYS:
         return _normalize_code(value)
     if attr_id in _FLAG_KEYS:
@@ -188,12 +235,59 @@ def _collect_member_ids(
         attrs[INSURER_MEMBER_ID_KEY] = ids
 
 
-def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
+def _read_sheet(path: Path | str, preferred: str) -> Sheet | None:
+    """The sheet named ``preferred`` when the workbook has one, else the first.
+
+    Both downloadable templates are TWO-sheet workbooks (``Employees`` /
+    ``Dependants``) — the member listing (``member_listing_template``) and the
+    ADC movement file — and both roster tabs offer them. Reading sheet 0
+    unconditionally meant a dependant upload of either file parsed the
+    *employee* sheet through ``DEPENDANT_COLUMN_MAP``: Staff ID and Employee
+    Name resolve on that sheet, so the "no identifying column" guard passes and
+    the roster imports one nameless, DOB-less dependant per employee.
+
+    Single-sheet rosters in the wild (whatever their sheet is called) keep the
+    old behaviour, so nothing that parses today stops parsing.
+    """
     with open_workbook(path) as wb:
-        sheet = wb.sheet(wb.sheet_names[0])
-    if not sheet.rows:
+        names = wb.sheet_names
+        if not names:
+            return None
+        by_name = {n.strip().lower(): n for n in names}
+        return wb.sheet(by_name.get(preferred.strip().lower(), names[0]))
+
+
+def has_sheet(path: Path | str, name: str) -> bool:
+    """Whether the workbook really carries a sheet of this name.
+
+    Distinct from `_read_sheet`, which FALLS BACK to the first sheet — callers
+    that need to know "does this file cover dependants at all" must not read a
+    fallback as a yes.
+    """
+    with open_workbook(path) as wb:
+        return name.strip().lower() in {n.strip().lower() for n in wb.sheet_names}
+
+
+# Columns only a DEPENDANT sheet has. Unlike `DEPENDANT_MARKER_KEYS` this is the
+# narrow, unambiguous pair: a "Relationship" or "Date of Marriage" column can
+# plausibly appear on an employee roster, but a Dependant Name / Dependant's
+# Identification No. cannot.
+_DEPENDANT_ONLY_COLUMNS = ("dependant_name", "dependant_id_no")
+
+
+def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
+    sheet = _read_sheet(path, "Employees")
+    if sheet is None or not sheet.rows:
         return []
     header_row = sheet.rows[0]
+    # Mirror of the dependant guard: a single-sheet DEPENDANT roster dropped on
+    # the Employees upload falls back to sheet 0 here, and Staff ID + Employee
+    # Name resolve on it — so each row would import as an employee carrying the
+    # DEPENDANT's date of birth and gender, and (through the listing sync) merge
+    # that onto the sponsoring employee as a change.
+    dependant_cols = set(_build_column_map(header_row, DEPENDANT_COLUMN_MAP).values())
+    if any(c in dependant_cols for c in _DEPENDANT_ONLY_COLUMNS):
+        return []
     col_map = _build_column_map(header_row, EMPLOYEE_COLUMN_MAP)
     member_id_cols = _member_id_columns(header_row)
 
@@ -228,9 +322,8 @@ def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
 
 
 def parse_dependant_workbook(path: Path | str) -> list[DependantRecord]:
-    with open_workbook(path) as wb:
-        sheet = wb.sheet(wb.sheet_names[0])
-    if not sheet.rows:
+    sheet = _read_sheet(path, "Dependants")
+    if sheet is None or not sheet.rows:
         return []
     header_row = sheet.rows[0]
     col_map = _build_column_map(header_row, DEPENDANT_COLUMN_MAP)
@@ -252,6 +345,18 @@ def parse_dependant_workbook(path: Path | str) -> list[DependantRecord]:
         employee_name = _normalize_name(attrs.pop("employee_name", None))
         employee_id_no = attrs.pop("employee_id_no", None)
         if not (staff_id or employee_name or employee_id_no):
+            continue
+        # The row must say something about the DEPENDANT, not only about their
+        # sponsor. Without this an EMPLOYEE sheet fed to this parser clears the
+        # guard above on Staff ID / Employee Name alone and imports one row per
+        # employee. `_read_sheet` stops that for the two-sheet templates; this
+        # stops it for a single-sheet employee roster uploaded on the Dependants
+        # tab, where nothing else stands in the way.
+        #
+        # The test is a dependant-only COLUMN, not a name: a row carrying just
+        # relationship + DOB is a legitimate dependant (regression-tested in
+        # test_roster_dedup) and an employee sheet has none of these four.
+        if not any(k in attrs for k in DEPENDANT_MARKER_KEYS):
             continue
         # Persist employee-identifying info in attribute_values so the auto-match
         # endpoint can re-run linking without re-uploading the roster.

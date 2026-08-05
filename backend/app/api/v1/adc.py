@@ -1,20 +1,23 @@
-"""ADC (Additions / Deletions / Changes) roster movement endpoints.
+"""Roster movement endpoints — upload the member listing, preview, apply.
 
-Template download → preview (dry-run diff) → apply. Operational writes (like
-roster upload): no activation-editable lock, tenant-scoped via the policy year.
+Upload → preview (dry-run diff) → apply. There is no movement template and no
+``Action`` column: the movements are derived from the listing itself
+(`services/adc.py`). Operational writes (like roster upload): no
+activation-editable lock, tenant-scoped via the policy year.
 """
 from __future__ import annotations
 
-from io import BytesIO
 from typing import Annotated
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
+    HTTPException,
     Request,
-    Response,
     UploadFile,
+    status,
 )
 from sqlalchemy.orm import Session
 
@@ -24,64 +27,55 @@ from app.core.rate_limit import limiter
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
 from app.schemas.adc import AdcApplyResult, AdcPreview
-from app.services.adc import apply_adc, build_adc_template_workbook, preview_adc
+from app.services.adc import StaleListingPreview, apply_listing, preview_listing
 
 router = APIRouter(prefix="/policy-years", tags=["adc"])
-
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-
-
-@router.get("/{policy_year_id}/adc/template")
-def download_adc_template(
-    policy_year_id: str,
-    user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Response:
-    """The current active roster round-tripped into an ADC template (.xlsx).
-
-    Carries full NRIC (own-tenant working file used to resolve Change/Delete
-    rows); the download is not audited here as it exposes no more than the
-    broker already sees in the roster — but see apply for per-movement audit.
-    """
-    assert_policy_year_for_user(policy_year_id, user, db)
-    wb = build_adc_template_workbook(db, policy_year_id)
-    buf = BytesIO()
-    wb.save(buf)
-    return Response(
-        content=buf.getvalue(),
-        media_type=XLSX_MIME,
-        headers={"Content-Disposition": 'attachment; filename="adc-template.xlsx"'},
-    )
 
 
 @router.post("/{policy_year_id}/adc/preview", response_model=AdcPreview)
 @limiter.limit("20/minute")
-async def preview_adc_upload(
+async def preview_listing_upload(
     request: Request,
     policy_year_id: str,
     file: Annotated[UploadFile, File()],
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdcPreview:
-    """Classify + validate + diff a movement file. No mutation."""
+    """Diff an uploaded member listing against the roster. No mutation."""
     client_id = require_client_id(user)
     assert_policy_year_for_user(policy_year_id, user, db)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
-        return preview_adc(db, policy_year_id, client_id, tmp_path)
+        return preview_listing(db, policy_year_id, client_id, tmp_path)
 
 
 @router.post("/{policy_year_id}/adc/apply", response_model=AdcApplyResult)
 @limiter.limit("10/minute")
-async def apply_adc_upload(
+async def apply_listing_upload(
     request: Request,
     policy_year_id: str,
     file: Annotated[UploadFile, File()],
+    # Defaults to FALSE, and the default is the safety property: a caller that
+    # forgets the flag can add and change, never end anyone's cover.
+    terminate_missing: Annotated[bool, Form()] = False,
+    missing_digest: Annotated[str | None, Form()] = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdcApplyResult:
-    """Apply the movement file: insert Adds, merge Changes, soft-terminate
-    Deletes, then re-match + re-assign flex. Per-row audited."""
+    """Apply the listing: insert Adds, merge Changes, soft-terminate rows
+    carrying a past leaving date, and — only with ``terminate_missing`` —
+    those absent from the file. Then re-match + re-assign flex. Per-row audited.
+    """
     client_id = require_client_id(user)
     assert_policy_year_for_user(policy_year_id, user, db)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
-        return apply_adc(db, user, policy_year_id, client_id, tmp_path)
+        try:
+            return apply_listing(
+                db, user, policy_year_id, client_id, tmp_path,
+                terminate_missing=terminate_missing,
+                expected_missing_digest=missing_digest,
+            )
+        except StaleListingPreview as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {"code": "stale_listing_preview", "message": str(exc)},
+            ) from exc

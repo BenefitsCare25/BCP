@@ -19,6 +19,7 @@ from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import AuditLog, Category, Employee
+from app.models.employee import EMPLOYEE_STATUS_TERMINATED
 from app.models.product import Product
 from app.schemas.api import (
     MatchOverridePayload,
@@ -43,11 +44,23 @@ def get_match_results(
     db: Session = Depends(get_db),
 ) -> MatchResultsOut:
     assert_policy_year_for_user(policy_year_id, user, db)
+    # ACTIVE employees only — the same population `match_policy_year` evaluates
+    # and `list_employees` shows by default. Counting soft-terminated leavers
+    # here made this endpoint disagree with both: the headline said more
+    # employees than the roster listed, and because matching deliberately never
+    # re-evaluates a leaver, a terminated employee who was never matched stayed
+    # in `employees_unmatched` FOREVER — an unmatched count that no amount of
+    # re-running could clear, and whose filter link opened a table that (also
+    # active-only) showed nothing.
+    live = [
+        Employee.policy_year_id == policy_year_id,
+        Employee.status != EMPLOYEE_STATUS_TERMINATED,
+    ]
     counts = db.execute(
         select(
             func.count(Employee.id),
             func.count(Employee.matched_category_id),
-        ).where(Employee.policy_year_id == policy_year_id)
+        ).where(*live)
     ).one()
     total, matched = counts[0] or 0, counts[1] or 0
 
@@ -88,7 +101,7 @@ def get_match_results(
             db.execute(
                 select(Employee, Category)
                 .join(Category, Employee.matched_category_id == Category.id, isouter=True)
-                .where(Employee.policy_year_id == policy_year_id)
+                .where(*live)
                 .order_by(Employee.matched_category_id.is_(None).desc(), Employee.staff_id)
                 .offset(offset)
                 .limit(limit)

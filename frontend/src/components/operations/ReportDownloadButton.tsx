@@ -14,6 +14,8 @@ interface Props {
   label: string;
   disabled?: boolean;
   size?: "default" | "sm";
+  /** `ghost` for a download that is the quiet half of a paired action. */
+  variant?: "outline" | "ghost";
 }
 
 /** Outline button that downloads an .xlsx export, mirroring the coverage
@@ -24,6 +26,7 @@ export function ReportDownloadButton({
   label,
   disabled,
   size = "default",
+  variant = "outline",
 }: Props) {
   const [busy, setBusy] = useState(false);
 
@@ -43,7 +46,7 @@ export function ReportDownloadButton({
   return (
     <Button
       type="button"
-      variant="outline"
+      variant={variant}
       size={size}
       onClick={onClick}
       disabled={busy || disabled}
