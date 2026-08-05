@@ -8,7 +8,7 @@ member actions (submit claim, add dependant) stay portal-only.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from app.core.pagination import MAX_LIMIT
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
 from app.models import Claim, Dependant, Employee, MemberAccount, PolicyYear
+from app.models.claim import member_visible_claims
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import (
     ClaimList,
@@ -41,7 +42,7 @@ from app.services.claim_messages import (
     member_unread_count,
     thread_for_claim,
 )
-from app.services.claims import claims_to_out
+from app.services.claims import claims_to_out, load_member_claim
 from app.services.enrollment_elections import (
     build_portal_enrollment,
     open_window_for,
@@ -225,6 +226,11 @@ def portal_preview_claims(
     conditions = [
         Claim.employee_id == employee.id,
         Claim.policy_year_id == employee.policy_year_id,
+        # IDENTICAL to the member's own filter in `portal_claims.list_my_claims`
+        # — origin, never case type. This endpoint is asserted to return exactly
+        # what the member sees, so a broker-created LOG case must be absent here
+        # too, and a reclassified member submission must still be present.
+        member_visible_claims(),
     ]
     total = db.scalar(select(func.count(Claim.id)).where(*conditions)) or 0
     rows = db.execute(
@@ -274,7 +280,7 @@ def portal_preview_claim_messages(
     the previewed employee — `load_employee` proves tenant access, not that this
     claim is theirs, and without the second check a broker could read one
     member's thread through another member's preview URL."""
-    claim = db.get(Claim, claim_id)
-    if claim is None or claim.employee_id != employee.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
+    # Same loader the member's own endpoint uses, so a broker-recorded case is
+    # absent from the preview exactly as it is from the portal.
+    claim = load_member_claim(db, claim_id, employee.id)
     return [member_message_out(m) for m in thread_for_claim(db, claim.id)]

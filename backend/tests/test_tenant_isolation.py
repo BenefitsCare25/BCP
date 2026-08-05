@@ -1395,6 +1395,37 @@ def test_claim_messages_read_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_log_case_create_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/employees/{EMP_B}/log-cases",
+        json={
+            "claim_kind": "insured",
+            "product_code": "GHS",
+            "incurred_date": "2026-06-01",
+            "amount_claimed": 100.0,
+        },
+    )
+    assert res.status_code == 404
+
+
+def test_claim_case_type_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.patch(
+        f"/api/v1/claims/{CLAIM_B}/case-type",
+        json={"case_type": "log", "reason": "cross-tenant"},
+    )
+    assert res.status_code == 404
+
+
+def test_claim_document_upload_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.post(
+        f"/api/v1/claims/{CLAIM_B}/documents",
+        files={"file": ("x.pdf", b"%PDF-1.4 cross tenant", "application/pdf")},
+    )
+    assert res.status_code == 404
+
+
 def test_portal_preview_messages_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/employees/{EMP_B}/portal-preview/messages")
     assert res.status_code == 404

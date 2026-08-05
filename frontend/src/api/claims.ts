@@ -15,6 +15,19 @@ export const DOC_TYPE_LABELS: Record<string, string> = {
   discharge_summary: "Discharge summary",
 };
 
+/** Claim category — mirrors `models/claim.CASE_TYPE_*`. */
+export type CaseType = "claim" | "log";
+
+/** How a LOG request reached the assessor (`services/log_cases.RECEIVED_VIA`).
+ *  Display/reporting only — nothing branches on it. */
+export const RECEIVED_VIA_LABELS: Record<string, string> = {
+  email: "Email",
+  phone: "Phone",
+  hr: "HR",
+  hospital: "Hospital",
+  other: "Other",
+};
+
 export interface StoredDocumentMeta {
   id: string;
   file_name: string;
@@ -82,6 +95,17 @@ export interface BrokerClaim {
   staff_id: string | null;
   employee_name: string | null;
   claim_kind: "insured" | "flex";
+  /** Claim category. "log" = a case an assessor recorded, usually from an
+   *  emailed request — same queue, same statuses, same decision. */
+  case_type: CaseType;
+  /** Who filed it. The member portal shows only `portal` rows, so a case an
+   *  assessor created is invisible to them while one they submitted stays
+   *  visible even after it is reclassified. */
+  origin: "portal" | "broker";
+  /** Provenance of a broker-entered case (all optional). */
+  received_via: string | null;
+  received_on: string | null;
+  requested_by: string | null;
   product_code: string | null;
   /** Legacy claims only — the Benefit picker was removed from the form. */
   benefit_key: string | null;
@@ -129,10 +153,14 @@ export function useBrokerClaims(
   status: string,
   offset: number,
   limit: number,
+  /** "" = both categories, which is what the server defaults to. */
+  caseType: CaseType | "" = "",
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
-    queryKey: ["claims", cid, policyYearId, status, offset, limit],
+    // caseType is part of the key: without it, switching the filter would serve
+    // the previous category's page from cache.
+    queryKey: ["claims", cid, policyYearId, status, caseType, offset, limit],
     queryFn: () => {
       const params = new URLSearchParams({
         policy_year_id: policyYearId!,
@@ -140,9 +168,102 @@ export function useBrokerClaims(
         limit: String(limit),
       });
       if (status) params.set("status", status);
+      if (caseType) params.set("case_type", caseType);
       return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
     },
     enabled: !!policyYearId,
+  });
+}
+
+/** One employee's LOG cases — the employee-level card on Coverage & Members. */
+export function useEmployeeLogCases(
+  policyYearId: string | undefined,
+  employeeId: string | null,
+) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claims", cid, policyYearId, "log", employeeId],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        policy_year_id: policyYearId!,
+        employee_id: employeeId!,
+        case_type: "log",
+        limit: "50",
+      });
+      return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
+    },
+    enabled: !!policyYearId && !!employeeId,
+  });
+}
+
+export interface LogCaseInput {
+  employeeId: string;
+  claim_kind: "insured" | "flex";
+  product_code?: string | null;
+  flex_category_name?: string | null;
+  dependant_id?: string | null;
+  sub_type?: string | null;
+  incurred_date: string;
+  provider_name?: string | null;
+  invoice_number?: string | null;
+  diagnosis?: string | null;
+  remarks?: string | null;
+  amount_claimed: number;
+  currency: string;
+  received_via?: string | null;
+  received_on?: string | null;
+  requested_by?: string | null;
+  /** Attached after creation, one call each — optional by design. */
+  files?: File[];
+}
+
+export function useCreateLogCase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ employeeId, files, ...body }: LogCaseInput) => {
+      const claim = await api.post<BrokerClaim>(
+        `/employees/${employeeId}/log-cases`,
+        body,
+      );
+      // Documents ride separately and are optional: a failed upload must not
+      // discard the case that was just recorded, so each is reported on its own
+      // and the case survives regardless.
+      const failed: string[] = [];
+      for (const file of files ?? []) {
+        const form = new FormData();
+        form.append("file", file);
+        try {
+          await api.upload<StoredDocumentMeta>(
+            `/claims/${claim.id}/documents`,
+            form,
+          );
+        } catch {
+          failed.push(file.name);
+        }
+      }
+      return { claim, failedUploads: failed };
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useSetCaseType() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { claimId: string; caseType: CaseType; reason: string }) =>
+      api.patch<BrokerClaim>(`/claims/${input.claimId}/case-type`, {
+        case_type: input.caseType,
+        reason: input.reason,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+    },
+    meta: { localErrorHandling: true },
   });
 }
 

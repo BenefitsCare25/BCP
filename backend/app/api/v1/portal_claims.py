@@ -41,6 +41,7 @@ from app.models.claim import (
     CLAIM_KIND_FLEX,
     CLAIM_STATUS_AI_REVIEW_PENDING,
     MEMBER_EDITABLE_STATUSES,
+    member_visible_claims,
 )
 from app.models.claim_message import EVENT_SUBMITTED
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
@@ -84,6 +85,7 @@ from app.services.claims import (
     create_claim,
     delete_documents,
     delete_stored_document,
+    load_member_claim,
     submit_claim,
 )
 from app.services.claims_review.pipeline import run_review
@@ -113,10 +115,10 @@ options_router = APIRouter(
 
 
 def _own_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
-    claim = db.get(Claim, claim_id)
-    if claim is None or claim.employee_id != employee_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
-    return claim
+    """Delegates to `services.claims.load_member_claim` — the ONE loader shared
+    with `portal_messages.py`. Kept as a local alias so the call sites here read
+    unchanged."""
+    return load_member_claim(db, claim_id, employee_id)
 
 
 @options_router.get("/coverage-options", response_model=CoverageOptionsOut)
@@ -545,6 +547,18 @@ def list_my_claims(
     conditions = [
         Claim.employee_id == employee.id,
         Claim.policy_year_id == employee.policy_year_id,
+        # The member's own submissions only.
+        #
+        # This filters on ORIGIN, not on `case_type`, and the difference is the
+        # whole point: filtering on case type would make a claim the member
+        # submitted DISAPPEAR from their portal the moment an assessor
+        # reclassified it as a LOG case — they'd watch their own record vanish
+        # mid-review with no notice and no way to ask about it. Origin hides
+        # only the cases they never knew about.
+        #
+        # `api/v1/portal_preview.py` must apply the identical filter — the
+        # preview is asserted to return exactly what the member sees.
+        member_visible_claims(),
     ]
     if status_filter:
         conditions.append(Claim.status == status_filter)

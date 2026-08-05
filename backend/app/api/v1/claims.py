@@ -13,10 +13,13 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
+    File,
+    Form,
     HTTPException,
     Query,
     Request,
     Response,
+    UploadFile,
     status,
 )
 from sqlalchemy import func, select
@@ -24,18 +27,30 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_for_user, load_claim
+from app.core.deps import (
+    assert_policy_year_for_user,
+    load_claim,
+    load_employee,
+)
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.core.storage import get_storage
 from app.db.session import get_db
-from app.models import Claim, ClaimAIReview, ClaimMessage, Employee, StoredDocument
+from app.models import (
+    Claim,
+    ClaimAIReview,
+    ClaimMessage,
+    Employee,
+    PolicyYear,
+    StoredDocument,
+)
 from app.models.claim import (
     CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_APPROVED,
     CLAIM_STATUS_NEEDS_INFO,
     CLAIM_STATUS_REJECTED,
     LIVE_STATUSES,
+    ORIGIN_PORTAL,
 )
 from app.models.claim_message import (
     AUTHOR_MEMBER,
@@ -50,10 +65,14 @@ from app.schemas.claims import (
     BrokerMessageIn,
     ClaimAIReviewOut,
     ClaimAIReviewSummary,
+    ClaimCaseTypeIn,
     ClaimDecisionIn,
     ClaimMessageOut,
+    LogCaseCreateIn,
     MessagesReadOut,
+    StoredDocumentOut,
 )
+from app.services.claim_intake import DOC_SLOT_LABELS
 from app.services.claim_messages import (
     broker_message_out,
     mark_broker_read,
@@ -63,14 +82,26 @@ from app.services.claim_messages import (
 )
 from app.services.claims import (
     assert_transition,
+    attach_document,
     populate_claim_out,
     prefetch_claim_relations,
 )
 from app.services.claims_register import build_claims_register_workbook
 from app.services.claims_review.pipeline import run_review
+from app.services.log_cases import (
+    case_type_or_400,
+    create_log_case,
+    intake_date,
+    intake_field,
+    set_case_type,
+)
 from app.services.utilization import remaining_for_claim
 
 router = APIRouter(prefix="/claims", tags=["claims"])
+# Employee-scoped claim entry (LOG cases). A separate router so the path can be
+# `/employees/{id}/…` while the handlers stay beside the rest of the claims
+# surface — same split as `panel_listings.year_router`.
+employee_router = APIRouter(prefix="/employees/{employee_id}", tags=["claims"])
 
 _DECISION_STATUS = {
     "approve": CLAIM_STATUS_APPROVED,
@@ -141,6 +172,11 @@ def _broker_out(
     if employee is not None:
         out.staff_id = employee.staff_id
         out.employee_name = employee.employee_name
+    # Flattened out of the untyped `intake_meta` through the defensive readers,
+    # so a malformed value renders as absent instead of failing the whole page.
+    out.received_via = intake_field(claim, "received_via")
+    out.received_on = intake_date(claim, "received_on")
+    out.requested_by = intake_field(claim, "requested_by")
     review = _latest_review(db, claim.id)
     if review is not None:
         out.ai_review = ClaimAIReviewSummary.model_validate(review)
@@ -157,17 +193,27 @@ def list_claims(
     policy_year_id: str,
     status_filter: str | None = Query(default=None, alias="status"),
     employee_id: str | None = Query(default=None),
+    case_type: str | None = Query(default=None),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BrokerClaimList:
+    """Claims in a policy year.
+
+    ``case_type`` defaults to None = BOTH categories. Defaulting it to `claim`
+    would silently change what every existing caller receives; the queue and the
+    employee-level card pass it explicitly.
+    """
     assert_policy_year_for_user(policy_year_id, user, db)
     conditions = [Claim.policy_year_id == policy_year_id]
     if status_filter:
         conditions.append(Claim.status == status_filter)
     if employee_id:
         conditions.append(Claim.employee_id == employee_id)
+    wanted_case_type = case_type_or_400(case_type)
+    if wanted_case_type:
+        conditions.append(Claim.case_type == wanted_case_type)
     total = db.scalar(select(func.count(Claim.id)).where(*conditions)) or 0
     rows = db.execute(
         select(Claim, Employee)
@@ -307,7 +353,14 @@ def decide_claim(
     # rolled-back decision must not leave a member reading that their claim was
     # approved. Written from the claim as it stands NOW: the notice is the
     # record of what they were told, not a template re-rendered on read.
-    post_system_message(db, claim, _DECISION_EVENT[body.action], note=body.note)
+    #
+    # NOT posted for a case the member never filed. They have no view of it, so
+    # a notice addressed to them is at best dead data and at worst a "your claim
+    # needs more information" badge on something they cannot open. The inbox
+    # filters these out anyway (`member_visible_claims`); not writing them is
+    # the belt to that braces.
+    if claim.origin == ORIGIN_PORTAL:
+        post_system_message(db, claim, _DECISION_EVENT[body.action], note=body.note)
 
     write_audit(
         db, user, f"claim.{body.action}", "claim", claim.id,
@@ -322,6 +375,133 @@ def decide_claim(
     db.commit()
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
+
+
+@employee_router.post(
+    "/log-cases",
+    response_model=BrokerClaimOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("20/minute")
+def create_employee_log_case(
+    request: Request,
+    body: LogCaseCreateIn,
+    employee: Employee = Depends(load_employee),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Record a LOG case for one employee, from an emailed request.
+
+    Lands in the queue at `submitted` — no draft, and no AI review is dispatched
+    (there is usually no document to extract; the assessor can still re-run one
+    from the detail sheet after attaching something).
+    """
+    year = db.get(PolicyYear, employee.policy_year_id)
+    if year is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Policy year not found")
+    claim = create_log_case(db, employee, body, year, user_id=user.user_id)
+    write_audit(
+        db, user, "claim.log_case_created", "claim", claim.id,
+        after={
+            "case_type": claim.case_type,
+            "product_code": claim.product_code,
+            "flex_category_name": claim.flex_category_name,
+            "amount": claim.amount_claimed,
+            "currency": claim.currency,
+            "incurred_date": claim.incurred_date.isoformat(),
+            "received_via": body.received_via,
+        },
+        employee_id=employee.id,
+    )
+    db.commit()
+    return _broker_out(db, claim, employee)
+
+
+@router.patch("/{claim_id}/case-type", response_model=BrokerClaimOut)
+def change_claim_case_type(
+    body: ClaimCaseTypeIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Reclassify a case between an ordinary claim and a LOG case.
+
+    Keeps status, documents, messages, amounts and any AI review. A case the
+    member submitted stays visible to them either way — the portal filters on
+    `origin`, not on case type, precisely so that reclassifying can never
+    retract someone's own record from their view.
+    """
+    before = {"case_type": claim.case_type, "claim_type": claim.claim_type}
+    changed = set_case_type(
+        claim,
+        case_type=body.case_type,
+        reason=body.reason,
+        user_id=user.user_id,
+    )
+    if changed:
+        write_audit(
+            db, user, "claim.case_type_changed", "claim", claim.id,
+            before=before,
+            after={
+                "case_type": claim.case_type,
+                "claim_type": claim.claim_type,
+                "reason": body.reason,
+            },
+            employee_id=claim.employee_id,
+        )
+        db.commit()
+    employee = db.get(Employee, claim.employee_id)
+    return _broker_out(db, claim, employee)
+
+
+@router.post(
+    "/{claim_id}/documents",
+    response_model=StoredDocumentOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("20/minute")
+async def upload_claim_document(
+    request: Request,
+    file: UploadFile = File(...),
+    doc_type: str | None = Form(default=None),
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StoredDocumentOut:
+    """Attach a document to a case as the broker — the forwarded email, a
+    hospital estimate, anything that arrived outside the portal.
+
+    Unlike the member's upload this is not gated on `MEMBER_EDITABLE_STATUSES`:
+    an assessor legitimately files correspondence against a case that is already
+    in review. The slot tag is still validated, because the submit-time
+    requirement check trusts these values.
+    """
+    if doc_type is not None and doc_type not in DOC_SLOT_LABELS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"'{doc_type}' is not a recognised document type.",
+        )
+    doc = await attach_document(
+        db,
+        client_id=claim.client_id,
+        broker_firm_id=user.broker_firm_id,
+        entity_type=DOC_ENTITY_CLAIM,
+        entity_id=claim.id,
+        file=file,
+        uploaded_by_user_id=user.user_id,
+        doc_type=doc_type,
+    )
+    write_audit(
+        db, user, "claim.document_added", "claim", claim.id,
+        after={
+            "file_name": doc.file_name,
+            "sha256": doc.sha256,
+            "doc_type": doc.doc_type,
+        },
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return StoredDocumentOut.model_validate(doc)
 
 
 @router.get("/{claim_id}/messages", response_model=list[ClaimMessageOut])

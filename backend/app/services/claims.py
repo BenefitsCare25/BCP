@@ -5,7 +5,7 @@ rules live in one place.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
@@ -21,10 +21,12 @@ from app.core.storage import (
 from app.core.uploads import saved_upload
 from app.models import Claim, Dependant, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
+    CASE_TYPE_CLAIM,
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
     CLAIM_STATUS_SUBMITTED,
     LIVE_STATUSES,
+    ORIGIN_PORTAL,
     VALID_TRANSITIONS,
 )
 from app.models.policy_year import PolicyYearStatus
@@ -69,6 +71,24 @@ def _sniff_mime(head: bytes, suffix: str) -> str:
         if head.startswith(magic):
             return mime
     return _SUFFIX_MIME.get(suffix, "application/octet-stream")
+
+
+def load_member_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
+    """The member's own claim, or 404. THE point-load chokepoint for every
+    member-facing endpoint that takes a claim id — the claim surface and the
+    message surface both go through this one function, because they used to
+    have a copy each and only one of them learned about broker-created cases.
+
+    A claim belonging to a co-worker, and a case an assessor recorded from an
+    email, are both simply "not found" — the same not-403 convention as tenant
+    scoping, so the portal can't be used to discover what exists.
+    """
+    claim = db.get(Claim, claim_id)
+    if claim is None or claim.employee_id != employee_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
+    if claim.origin != ORIGIN_PORTAL:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
+    return claim
 
 
 def claim_documents(db: Session, claim: Claim) -> list[StoredDocument]:
@@ -415,7 +435,7 @@ def _apply_gp_rider_benefit_key(statement: BenefitStatementOut, claim: Claim) ->
     """TCM/Physio claims ride on GP coverage: bind the claim to the plan's
     matching schedule row — 422 when the member's plan doesn't carry one — so
     utilization and the broker's over-limit approve guard track that row's
-    limit. Runs before `_assert_coverage_claimable`, which then re-validates
+    limit. Runs before `assert_coverage_claimable`, which then re-validates
     the stamped `benefit_key` against the schedule like any other."""
     if claim.claim_kind != CLAIM_KIND_INSURED or claim.sub_type not in GP_SUB_TYPES:
         return
@@ -435,8 +455,13 @@ def _apply_gp_rider_benefit_key(statement: BenefitStatementOut, claim: Claim) ->
     claim.benefit_key = row
 
 
-def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> None:
-    """The claimed coverage must exist in the member's own resolved statement."""
+def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> None:
+    """The claimed coverage must exist in the member's own resolved statement.
+
+    Shared by member submit and broker LOG-case creation, so the two can never
+    disagree about what a member is covered for. The ONE rule that differs
+    between them is `member_claimable`, gated on the case type below.
+    """
     if claim.claim_kind == CLAIM_KIND_INSURED:
         line = next(
             (c for c in statement.coverage if c.product_code == claim.product_code),
@@ -450,7 +475,16 @@ def _assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> 
         # Products settled outside the portal (Major Medical, term life,
         # personal accident, critical illness) aren't member-filed — reject
         # even a hand-crafted request that bypassed the hidden picker.
-        if not claim_profile_for(claim.product_code).member_claimable:
+        #
+        # A LOG case is EXEMPT: this gate exists to stop members self-filing
+        # products the insurer settles directly, and an assessor recording a
+        # case on the member's behalf is precisely what it was written to
+        # exclude. Gated on the case type rather than on who called, because the
+        # exemption is a property of the case, not of the request.
+        if (
+            claim.case_type == CASE_TYPE_CLAIM
+            and not claim_profile_for(claim.product_code).member_claimable
+        ):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 f"{claim.product_code} claims aren't submitted through the "
@@ -552,6 +586,43 @@ def _assert_no_duplicate_receipt(
         )
 
 
+def claim_period_window(
+    db: Session, year: PolicyYear, claim_kind: str
+) -> tuple[date, date, str]:
+    """The window a claim's incurred date must fall inside, and its label.
+
+    Flex claims are bounded by the flex scheme's effective window (which
+    defaults to the policy year's span); insured claims by the policy year.
+    ONE implementation, shared by member submit and broker LOG-case creation —
+    two copies would eventually disagree about which dates are claimable.
+    """
+    if claim_kind == CLAIM_KIND_FLEX:
+        start, end = flex_effective_window(db, year)
+        return start, end, "flex scheme's effective period"
+    return year.start_date, year.end_date, "policy year"
+
+
+def assert_incurred_in_period(
+    db: Session, year: PolicyYear, claim: Claim
+) -> tuple[date, date, str]:
+    """422 unless the claim's incurred date sits inside its period.
+
+    Returns the window AND its label so a caller applying a deadline anchored to
+    the same end date doesn't have to resolve the window a second time — for a
+    flex claim that repeat costs another `flex_effective_window` read on every
+    submit."""
+    window_start, window_end, period_label = claim_period_window(
+        db, year, claim.claim_kind
+    )
+    if not (window_start <= claim.incurred_date <= window_end):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"The incurred date must fall within the {period_label} "
+            f"({window_start.isoformat()} to {window_end.isoformat()}).",
+        )
+    return window_start, window_end, period_label
+
+
 def submit_claim(
     db: Session,
     claim: Claim,
@@ -568,20 +639,7 @@ def submit_claim(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Claims can only be submitted against the active policy year.",
         )
-    # Flex claims are bounded by the flex scheme's effective window (which
-    # defaults to the policy year's span); insured claims by the policy year.
-    if claim.claim_kind == CLAIM_KIND_FLEX:
-        window_start, window_end = flex_effective_window(db, year)
-        period_label = "flex scheme's effective period"
-    else:
-        window_start, window_end = year.start_date, year.end_date
-        period_label = "policy year"
-    if not (window_start <= claim.incurred_date <= window_end):
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"The incurred date must fall within the {period_label} "
-            f"({window_start.isoformat()} to {window_end.isoformat()}).",
-        )
+    _, window_end, period_label = assert_incurred_in_period(db, year, claim)
 
     # Submission grace period: once configured, claims can only be submitted up
     # to N days after the enforced period ends. Anchored to `window_end` (the
@@ -632,7 +690,7 @@ def submit_claim(
     )
     statement = build_member_statement(db, employee)
     _apply_gp_rider_benefit_key(statement, claim)
-    _assert_coverage_claimable(statement, claim)
+    assert_coverage_claimable(statement, claim)
     # Every required document slot must be filled (tagged uploads); the
     # generic invoice/receipt slot accepts any attached document. Load the
     # documents once and share with the duplicate-receipt check.

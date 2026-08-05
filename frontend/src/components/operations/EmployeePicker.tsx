@@ -23,6 +23,7 @@ export function EmployeePicker({
   searchPlaceholder = "Search name or staff ID",
   header,
   emptyText = "No employees match these filters.",
+  listMaxHeight = "max-h-[70vh]",
 }: {
   items: EmployeePickerItem[];
   selectedId: string | null;
@@ -33,6 +34,9 @@ export function EmployeePicker({
   searchPlaceholder?: string;
   header?: ReactNode;
   emptyText?: string;
+  /** Height of the scrolling list. The page-column default is too tall inside
+   * a sheet, where the list is one field among several. */
+  listMaxHeight?: string;
 }) {
   return (
     <div className="rounded-lg border border-border bg-card p-3">
@@ -48,7 +52,7 @@ export function EmployeePicker({
         </div>
       )}
       {header}
-      <div className="max-h-[70vh] space-y-0.5 overflow-y-auto">
+      <div className={cn("space-y-0.5 overflow-y-auto", listMaxHeight)}>
         {isLoading ? (
           <div className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" /> Loading…

@@ -61,9 +61,59 @@ class ClaimCreateIn(BaseModel):
     referral_not_applicable: bool = False
 
 
+class LogCaseCreateIn(BaseModel):
+    """A LOG case entered by an assessor from an emailed request.
+
+    Deliberately laxer than `ClaimCreateIn`: `provider_name`, `invoice_number`
+    and `diagnosis` are optional, because an admission-guarantee email routinely
+    carries none of them and a form that refuses to save without them means the
+    request never gets recorded at all. Documents are attached afterwards
+    through `POST /claims/{id}/documents`, and are optional too.
+    """
+
+    claim_kind: str = Field(default="insured", pattern="^(insured|flex)$")
+    product_code: str | None = Field(default=None, max_length=64)
+    flex_category_name: str | None = Field(default=None, max_length=255)
+    dependant_id: str | None = None
+    sub_type: str | None = Field(default=None, max_length=64)
+    incurred_date: date
+    provider_name: str | None = Field(default=None, max_length=255)
+    invoice_number: str | None = Field(default=None, max_length=128)
+    diagnosis: str | None = Field(default=None, max_length=512)
+    remarks: str | None = Field(default=None, max_length=2000)
+    amount_claimed: float = Field(gt=0, le=1_000_000)
+    currency: str = Field(default="SGD", min_length=3, max_length=8)
+    # Provenance of the request — all optional, stored on `intake_meta`.
+    received_via: str | None = Field(
+        default=None, pattern="^(email|phone|hr|hospital|other)$"
+    )
+    received_on: date | None = None
+    requested_by: str | None = Field(default=None, max_length=255)
+
+
+class ClaimCaseTypeIn(BaseModel):
+    """Reclassify a case. The reason is mandatory: this is a correction to the
+    record and the record should say why it was made."""
+
+    case_type: Literal["claim", "log"]
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        cleaned = " ".join(v.split())
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
 class ClaimOut(_Base):
     id: str
     claim_kind: str
+    # Claim category (models/claim.py CASE_TYPE_*). Members only ever see their
+    # own submissions, so this is display context, never a gate on their side.
+    case_type: str = "claim"
+    origin: str = "portal"
     product_code: str | None = None
     benefit_key: str | None = None
     flex_category_name: str | None = None
@@ -138,6 +188,11 @@ class BrokerClaimOut(ClaimOut):
     staff_id: str | None = None
     employee_name: str | None = None
     ai_review: ClaimAIReviewSummary | None = None
+    # Provenance of a broker-entered case, flattened out of `intake_meta` (which
+    # is untyped JSON and is read defensively — see services/log_cases.py).
+    received_via: str | None = None
+    received_on: date | None = None
+    requested_by: str | None = None
     # Remaining amount in the claim's tightest utilization bucket (see
     # `remaining_for_claim`); None = no numeric limit known. Computed on the
     # single-claim detail only — the list stays cheap.

@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Claim, ClaimMessage, User
+from app.models.claim import member_visible_claims
 from app.models.claim_message import (
     AUTHOR_BROKER,
     AUTHOR_MEMBER,
@@ -245,6 +246,11 @@ def member_inbox(
     owned = (
         Claim.employee_id == employee_id,
         Claim.policy_year_id == policy_year_id,
+        # The inbox reaches claims through a JOIN, so it needs the member
+        # visibility rule just as much as the claim list does — without it a
+        # decision notice on a broker-recorded case badges the member for a
+        # claim they never filed and whose page 404s when they tap it.
+        member_visible_claims(),
     )
     total = (
         db.scalar(
@@ -277,6 +283,7 @@ def member_unread_count(db: Session, employee_id: str, policy_year_id: str) -> i
             .where(
                 Claim.employee_id == employee_id,
                 Claim.policy_year_id == policy_year_id,
+                member_visible_claims(),
                 ClaimMessage.author_type != AUTHOR_MEMBER,
                 ClaimMessage.member_read_at.is_(None),
             )

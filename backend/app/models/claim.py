@@ -118,6 +118,45 @@ VALID_TRANSITIONS: dict[str, frozenset[str]] = {
 CLAIM_KIND_INSURED = "insured"
 CLAIM_KIND_FLEX = "flex"
 
+# ── Case type ────────────────────────────────────────────────────────────────
+#
+# LOG is another claim CATEGORY, not another workflow: a LOG case runs the same
+# status machine, the same broker decision and the same utilization maths as a
+# reimbursement claim. What differs is who creates it (an assessor, from an
+# emailed request), which intake rules apply (see `services/log_cases.py`) and
+# who may see it (see `origin` below).
+#
+# This is a TYPED column and not the free-text `claim_type` on purpose:
+# `claim_type` arrives FROM THE MEMBER in `ClaimCreateIn`, so a string check
+# would let a member classify their own claim as a broker-internal LOG case and
+# skip the document rules. Only broker endpoints write this column.
+CASE_TYPE_CLAIM = "claim"
+CASE_TYPE_LOG = "log"
+CASE_TYPES = frozenset({CASE_TYPE_CLAIM, CASE_TYPE_LOG})
+
+# The `claim_type` display value a LOG case carries (the broker queue's "Claim"
+# column). Broker vocabulary — members never see the string "LOG".
+LOG_CLAIM_TYPE = "LOG"
+
+# ── Origin ───────────────────────────────────────────────────────────────────
+#
+# Who put this row here, which is a DIFFERENT question from what kind of case it
+# is — and it is the one the portal filters on. Filtering the member's claim list
+# on `case_type` would make a member's own submission vanish from their portal
+# the moment an assessor reclassified it as a LOG case; filtering on `origin`
+# hides only the cases they never knew about. See `api/v1/portal_claims.py`.
+ORIGIN_PORTAL = "portal"
+ORIGIN_BROKER = "broker"
+ORIGINS = frozenset({ORIGIN_PORTAL, ORIGIN_BROKER})
+
+# States a case may be RECLASSIFIED in. Identical to `DECIDABLE_STATUSES` by
+# construction rather than by coincidence: a case can be reclassified for
+# exactly as long as it can still be decided. A decided claim is not
+# reclassifiable — the money is settled, and relabelling it rewrites history
+# rather than correcting it. A draft is excluded because it is still the
+# member's to edit.
+RELABELLABLE_STATUSES = DECIDABLE_STATUSES
+
 
 class Claim(Base, TimestampMixin):
     __tablename__ = "claims"
@@ -128,6 +167,15 @@ class Claim(Base, TimestampMixin):
             "policy_year_id",
             "status",
         ),
+        # The broker queue and the employee-level card both filter on case type
+        # within a policy year.
+        #
+        # Declared HERE and not only in the migration: `db/tenancy.sync_firm_schema`
+        # reconciles indexes from MODEL METADATA (`for idx in tbl.indexes`), and
+        # alembic runs against `public` alone. A migration-only index therefore
+        # lands on `public.claims` — which holds no rows on Postgres — while
+        # every real query runs in `firm_<id>` without it.
+        Index("ix_claims_year_case_type", "policy_year_id", "case_type"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -147,6 +195,23 @@ class Claim(Base, TimestampMixin):
     claim_kind: Mapped[str] = mapped_column(
         String(16), nullable=False, default=CLAIM_KIND_INSURED
     )
+    # Claim category — see CASE_TYPE_* above. Server-defaulted so every existing
+    # row reads as an ordinary claim, which is what they all are.
+    case_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=CASE_TYPE_CLAIM,
+        server_default=CASE_TYPE_CLAIM,
+    )
+    # Who created the row — see ORIGIN_* above. The portal's visibility filter.
+    origin: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=ORIGIN_PORTAL,
+        server_default=ORIGIN_PORTAL,
+    )
+    # Broker author of a broker-created case (mirror of submitted_by_member_id).
+    created_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Provenance of an emailed request + the reclassification trail:
+    # {received_via, received_on, requested_by, conversions: [...]}. Read
+    # DEFENSIVELY — untyped JSON, and legacy rows carry None.
+    intake_meta: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
     # Insured claims: which coverage line + SOB benefit item the claim draws on.
     product_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     benefit_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -189,3 +254,17 @@ class Claim(Base, TimestampMixin):
     decision_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Member-entered claim-form snapshot the AI review compares documents against.
     form_fields: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
+
+
+def member_visible_claims():
+    """The SQL condition selecting claims a MEMBER may see: their own
+    submissions, never a case an assessor recorded from an email.
+
+    **Every member-facing query over `claims` must apply this**, including the
+    ones that reach claims through a JOIN (the message inbox, the unread count).
+    It lives here rather than in one router because it was originally written in
+    `portal_claims` alone — and the message surfaces, which hang off the very
+    same rows, silently kept serving the cases the claim list had started
+    hiding. `services/claims.load_member_claim` is the point-load counterpart.
+    """
+    return Claim.origin == ORIGIN_PORTAL

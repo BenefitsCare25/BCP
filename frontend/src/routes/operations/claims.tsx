@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2, Plus, RefreshCw, Tag } from "lucide-react";
 import {
   DOC_TYPE_LABELS,
+  RECEIVED_VIA_LABELS,
   downloadClaimDocument,
   useBrokerClaimDetail,
   useBrokerClaims,
   useDecideClaim,
   useRerunReview,
+  useSetCaseType,
   type BrokerClaim,
+  type CaseType,
 } from "@/api/claims";
 import { ConflictDetailError } from "@/api/client";
 import { useSession } from "@/stores/session";
@@ -47,6 +50,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ClaimGracePeriodField } from "@/components/claims/ClaimGracePeriodField";
 import { ClaimMessages } from "@/components/claims/ClaimMessages";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
+import { LogCaseForm } from "@/components/claims/LogCaseForm";
+import { NativeSelect } from "@/components/ui/native-select";
 import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
 import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
 import { InfoHint } from "@/components/ui/tooltip";
@@ -89,6 +94,15 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
 }
 
+// The case-type axis is coarser than the status rail and changes what the queue
+// is ABOUT, so it reads as a select rather than a second chip rail — the status
+// rail is already eight chips wide and scrolls on a narrow viewport.
+const CASE_TYPE_FILTERS: { value: CaseType | ""; label: string }[] = [
+  { value: "", label: "All cases" },
+  { value: "claim", label: "Claims" },
+  { value: "log", label: "LOG cases" },
+];
+
 function VerdictBadge({ claim }: { claim: BrokerClaim }) {
   const r = claim.ai_review;
   if (!r) return <span className="text-xs text-subtle">—</span>;
@@ -112,6 +126,10 @@ const DECIDABLE = new Set([
   "ai_flagged",
   "needs_info",
 ]);
+// Mirrors `models/claim.RELABELLABLE_STATUSES`: a case is reclassifiable for
+// exactly as long as it is decidable. The server is the authority — this only
+// decides whether the control is offered.
+const RELABELLABLE = DECIDABLE;
 // ai_review_pending is rerunnable (self-transition) so stuck reviews can be
 // re-queued from the sheet.
 const RERUNNABLE = new Set([
@@ -161,44 +179,66 @@ function DetailSection({
   );
 }
 
-function QueueTab() {
+function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const [status, setStatus] = useState<string>("");
+  const [caseType, setCaseType] = useState<CaseType | "">("");
   const [page, setPage] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Deep link (`?claim=`) from the employee-level LOG card. Read once as the
+  // initial value: syncing selection back into the URL on every row click would
+  // churn history for no benefit.
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialClaimId ?? null,
+  );
   const [decision, setDecision] = useState<DecisionAction | null>(null);
   const [note, setNote] = useState("");
   const [approvedAmount, setApprovedAmount] = useState("");
   // Set from a 409 limit_exceeded — the dialog re-arms as "Approve anyway".
   const [limitWarning, setLimitWarning] = useState<string | null>(null);
+  const [logFormOpen, setLogFormOpen] = useState(false);
+  // Target of the reclassify dialog; null = closed.
+  const [relabelTo, setRelabelTo] = useState<CaseType | null>(null);
+  const [relabelReason, setRelabelReason] = useState("");
 
   const decide = useDecideClaim();
   const rerun = useRerunReview();
+  const setCaseTypeMutation = useSetCaseType();
   const { data, isLoading } = useBrokerClaims(
     policyYearId ?? undefined,
     status,
     page * PAGE_SIZE,
     PAGE_SIZE,
+    caseType,
   );
 
-  const selected = useMemo(
-    () => data?.items.find((c) => c.id === selectedId) ?? null,
-    [data, selectedId],
-  );
   // Detail fetch rides alongside the list item for the fields the list omits
   // (the remaining benefit limit for this claim's bucket).
   const detail = useBrokerClaimDetail(selectedId);
   const remainingLimit = detail.data?.remaining_limit ?? null;
 
+  // Prefer the list row (already rendered, no wait), but FALL BACK to the
+  // detail fetch: a deep-linked case — or one that just left the filtered list
+  // because it was decided or reclassified — is not on the current page, and
+  // without the fallback the sheet would open over nothing.
+  const selected = useMemo(() => {
+    const fromList = data?.items.find((c) => c.id === selectedId) ?? null;
+    if (fromList) return fromList;
+    return detail.data?.id === selectedId ? detail.data : null;
+  }, [data, selectedId, detail.data]);
+
   useEffect(() => {
     setPage(0);
-  }, [status]);
+  }, [status, caseType]);
 
   useEffect(() => {
     setNote("");
     setApprovedAmount("");
     setLimitWarning(null);
   }, [selectedId, decision]);
+
+  useEffect(() => {
+    setRelabelReason("");
+  }, [relabelTo, selectedId]);
 
   if (!policyYearId) return null;
   const total = data?.total ?? 0;
@@ -251,18 +291,39 @@ function QueueTab() {
             <div className="min-w-0 space-y-1">
               <CardTitle>Claims review queue</CardTitle>
               <CardDescription>
-                {total.toLocaleString()} claim{total === 1 ? "" : "s"}
+                {total.toLocaleString()} case{total === 1 ? "" : "s"}
+                {caseType
+                  ? ` · ${CASE_TYPE_FILTERS.find((f) => f.value === caseType)?.label}`
+                  : ""}
                 {status ? ` · ${STATUS_FILTERS.find((f) => f.value === status)?.label}` : ""}
               </CardDescription>
             </div>
-            {/* Eight filters overflow a narrow viewport — scroll the rail
-                rather than reflowing it into a second ragged line. */}
-            <div className="-mx-1 max-w-full overflow-x-auto px-1 py-0.5">
-              <Segmented
-                value={status}
-                onChange={setStatus}
-                options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
-              />
+            <div className="flex flex-wrap items-center gap-2">
+              <NativeSelect
+                aria-label="Case type"
+                className="h-8"
+                value={caseType}
+                onChange={(e) => setCaseType(e.target.value as CaseType | "")}
+              >
+                {CASE_TYPE_FILTERS.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              {/* Eight filters overflow a narrow viewport — scroll the rail
+                  rather than reflowing it into a second ragged line. */}
+              <div className="-mx-1 max-w-full overflow-x-auto px-1 py-0.5">
+                <Segmented
+                  value={status}
+                  onChange={setStatus}
+                  options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
+                />
+              </div>
+              <Button size="sm" onClick={() => setLogFormOpen(true)}>
+                <Plus className="size-4" />
+                New LOG case
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -271,7 +332,9 @@ function QueueTab() {
             <SkeletonTable rows={6} columns={7} />
           ) : total === 0 ? (
             <div className="text-sm text-muted-foreground p-8 text-center border border-dashed border-border rounded-md">
-              No claims{status ? " with this status" : " submitted yet"}.
+              {caseType === "log"
+                ? "No LOG cases recorded yet. Use “New LOG case” when a request arrives by email."
+                : `No claims${status ? " with this status" : " submitted yet"}.`}
             </div>
           ) : (
             <>
@@ -329,7 +392,14 @@ function QueueTab() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {c.claim_type}
+                        <span className="inline-flex flex-wrap items-center gap-1.5">
+                          {c.claim_type}
+                          {/* Visible in the default "All cases" view, so the
+                              category reads without switching the filter. */}
+                          {c.case_type === "log" && (
+                            <Badge variant="info">LOG</Badge>
+                          )}
+                        </span>
                         <div className="text-2xs text-muted-foreground">
                           {c.claim_kind === "flex"
                             ? `Flex · ${c.flex_category_name}`
@@ -382,8 +452,14 @@ function QueueTab() {
                     the scrolling body. */}
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusBadge status={selected.status} />
+                  {selected.case_type === "log" && <Badge variant="info">LOG</Badge>}
                   <VerdictBadge claim={selected} />
-                  {RERUNNABLE.has(selected.status) && (
+                  {/* The pipeline compares a claim form against its documents,
+                      so a case with none can only fail and bounce back to
+                      manual review. Offering the control there spends an AI
+                      call to produce "review failed". */}
+                  {RERUNNABLE.has(selected.status) &&
+                    selected.documents.length > 0 && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -561,6 +637,55 @@ function QueueTab() {
                     claimStatus={selected.status}
                   />
                 </DetailSection>
+
+                {/* Classification sits last, and the control inside it is
+                    secondary: reclassifying is a rare correction, and a rare
+                    correction that looks like a primary action gets pressed by
+                    accident. It keeps company with the provenance it explains. */}
+                <DetailSection title="Classification">
+                  <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                    <DetailField label="Case type">
+                      {selected.case_type === "log" ? "LOG case" : "Claim"}
+                      <span className="text-muted-foreground">
+                        {selected.origin === "broker"
+                          ? " · recorded here"
+                          : " · submitted by the member"}
+                      </span>
+                    </DetailField>
+                    {selected.received_via && (
+                      <DetailField label="Received via">
+                        {RECEIVED_VIA_LABELS[selected.received_via] ??
+                          selected.received_via}
+                        {selected.received_on
+                          ? ` · ${fmtDate(selected.received_on)}`
+                          : ""}
+                      </DetailField>
+                    )}
+                    {selected.requested_by && (
+                      <DetailField label="Requested by" wide>
+                        {selected.requested_by}
+                      </DetailField>
+                    )}
+                  </dl>
+                  {RELABELLABLE.has(selected.status) ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setRelabelTo(selected.case_type === "log" ? "claim" : "log")
+                      }
+                    >
+                      <Tag className="size-4" />
+                      {selected.case_type === "log"
+                        ? "Change to an ordinary claim"
+                        : "Change to a LOG case"}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      The outcome is recorded, so the case type is fixed.
+                    </p>
+                  )}
+                </DetailSection>
               </SheetBody>
 
               {/* Pinned: deciding is why this sheet is open, but the buttons sat
@@ -672,6 +797,84 @@ function QueueTab() {
         onConfirm={confirmDecision}
       />
 
+      <LogCaseForm
+        open={logFormOpen}
+        onOpenChange={setLogFormOpen}
+        onCreated={(claimId) => {
+          // Show it where it landed rather than leaving the assessor to find
+          // it: the new case is a LOG case, and the queue may be filtered to
+          // claims only.
+          setCaseType("log");
+          setStatus("");
+          setPage(0);
+          setSelectedId(claimId);
+        }}
+      />
+
+      <AlertDialog
+        open={relabelTo !== null}
+        onOpenChange={(o) => {
+          if (!o) setRelabelTo(null);
+        }}
+        title={
+          relabelTo === "log"
+            ? "Record this as a LOG case?"
+            : "Change this back to an ordinary claim?"
+        }
+        tone="info"
+        description={
+          <div className="space-y-4">
+            <p>
+              It keeps its status, documents, messages and amounts — only the
+              category changes.
+              {selected?.origin === "portal"
+                ? " The member submitted this one, so it stays visible to them either way."
+                : ""}
+            </p>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-muted-foreground">
+                Reason (recorded on the case)
+              </span>
+              <Input
+                value={relabelReason}
+                onChange={(e) => setRelabelReason(e.target.value)}
+                placeholder={
+                  relabelTo === "log"
+                    ? "e.g. Hospital sent this as a LOG request by email"
+                    : "e.g. Logged in error — it's an ordinary reimbursement"
+                }
+              />
+            </label>
+          </div>
+        }
+        confirmLabel={relabelTo === "log" ? "Record as LOG case" : "Change to claim"}
+        loading={setCaseTypeMutation.isPending}
+        onConfirm={async () => {
+          if (!selected || !relabelTo) return;
+          const reason = relabelReason.trim();
+          if (!reason) {
+            toast.error("Give a reason so the record says why");
+            return;
+          }
+          try {
+            await setCaseTypeMutation.mutateAsync({
+              claimId: selected.id,
+              caseType: relabelTo,
+              reason,
+            });
+            toast.success(
+              relabelTo === "log" ? "Recorded as a LOG case" : "Changed to a claim",
+            );
+            setRelabelTo(null);
+            // With a case-type filter active the case leaves the filtered list,
+            // which would strand the sheet open over nothing.
+            if (caseType && caseType !== relabelTo) setSelectedId(null);
+          } catch (err) {
+            toast.error(formatError(err));
+          }
+        }}
+      />
+
       <PageGuide
         purpose="Review member-submitted claims. Each submission runs through an AI pipeline (document extraction → field comparison → rule checks → selective vision verification) that orders this queue; the broker always makes the final decision."
         connections={[
@@ -695,7 +898,7 @@ const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
 
 export function ClaimsQueuePage() {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { tab?: string };
+  const search = useSearch({ strict: false }) as { tab?: string; claim?: string };
   const tab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
 
   return (
@@ -712,7 +915,7 @@ export function ClaimsQueuePage() {
       </TabsList>
 
       <TabsContent value="queue">
-        <QueueTab />
+        <QueueTab initialClaimId={search.claim} />
       </TabsContent>
 
       <TabsContent value="ai-extraction">

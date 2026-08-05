@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BenefitStatement } from "@/components/benefits/BenefitStatement";
+import { EmployeeLogCases } from "@/components/claims/EmployeeLogCases";
 import { UtilizationView } from "@/components/benefits/UtilizationView";
 import { EmployeePicker } from "@/components/operations/EmployeePicker";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
@@ -78,6 +79,12 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
         employeeId={employeeId}
         staffId={statement.employee.staff_id}
       />
+      {/* LOG cases sit beside portal access, above the coverage lines: both are
+       * ADMIN actions on the person rather than facts about their cover, and
+       * this is the screen an assessor is already on when an emailed request
+       * needs recording — the statement and the utilization that decide the
+       * amount are right below. */}
+      <EmployeeLogCases employeeId={employeeId} />
       <BenefitStatement data={statement} utilization={utilization} />
       {utilization && (
         <div>

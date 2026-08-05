@@ -15,7 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Claim, Employee, PolicyYear
-from app.models.claim import CLAIM_KIND_FLEX, CLAIM_STATUS_DRAFT
+from app.models.claim import (
+    CASE_TYPE_LOG,
+    CLAIM_KIND_FLEX,
+    CLAIM_STATUS_DRAFT,
+    LOG_CLAIM_TYPE,
+)
 from app.services.claims import prefetch_claim_relations
 from app.services.insurer_reports import (
     append_safe,
@@ -26,6 +31,7 @@ from app.services.insurer_reports import (
 
 CLAIMS_REGISTER_HEADER = [
     "Claim ID",
+    "Case Type",
     "Status",
     "Staff ID",
     "Employee Name",
@@ -88,6 +94,9 @@ def build_claims_register_workbook(
         ) or ""
         append_safe(ws, [
             claim.id,
+            # A LOG case is a claim under this model, so it belongs in the
+            # register with the rest — marked, not segregated into its own sheet.
+            LOG_CLAIM_TYPE if claim.case_type == CASE_TYPE_LOG else "Claim",
             _status_label(claim.status),
             employee.staff_id,
             employee.employee_name or "",

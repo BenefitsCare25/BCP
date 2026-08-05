@@ -38,6 +38,7 @@ from app.services.claim_messages import (
     post_member_message,
     thread_for_claim,
 )
+from app.services.claims import load_member_claim
 
 router = APIRouter(
     prefix="/portal",
@@ -47,10 +48,14 @@ router = APIRouter(
 
 
 def _own_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
-    claim = db.get(Claim, claim_id)
-    if claim is None or claim.employee_id != employee_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
-    return claim
+    """Delegates to the ONE member claim loader.
+
+    This used to be an independent copy of `portal_claims._own_claim`, which is
+    how the broker-created exclusion reached the claim surface and not this one:
+    a member could read (and post to) the thread of a case that 404s everywhere
+    else. A thread hangs off a claim, so it inherits that claim's visibility.
+    """
+    return load_member_claim(db, claim_id, employee_id)
 
 
 @router.get("/messages", response_model=ClaimMessageList)

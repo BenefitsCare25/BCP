@@ -206,6 +206,7 @@ def create_app() -> FastAPI:
         claim_doc_types.router,
         claim_review_configs.router,
         claims.router,
+        claims.employee_router,
         matches.router,
         audit_log.router,
         system.router,
