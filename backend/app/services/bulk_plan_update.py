@@ -61,6 +61,7 @@ from app.schemas.enrollment import (
 )
 from app.schemas.member_query import MemberQuery
 from app.services import bulk_warnings as warn
+from app.services import dual_coverage
 from app.services.cohort_tiers import first_category_per_product
 from app.services.coverage_resolver import is_sparse_default, resolve_plan
 from app.services.flex_pricing_resolver import (
@@ -428,6 +429,15 @@ def evaluate(
     wctx = warn.build_context(
         db, py, {c.product.id: c.product.code for c in changes}, emp_ids
     )
+    # Lives already doubled on the roster, so electing one of them here can
+    # be flagged. Grouping only — the full detector's coverage enrichment is
+    # not needed to answer "is this life on two payrolls". Skipped entirely
+    # unless a change elects dependants: it is a whole-roster load, and every
+    # plan-only batch would otherwise pay for a set nothing reads.
+    if any(c.change.dependant_action is not None for c in changes):
+        wctx.dual_covered_dependant_ids = dual_coverage.duplicated_dependant_ids(
+            db, py
+        )
     codes_by_employee: dict[str, set[str]] = {}
     plans: list[_Plan] = []
 
@@ -669,6 +679,13 @@ def _evaluate_change(
             ineligible_dependants=_ineligible_count(
                 covered_for_price, deps.by_id, age_limits, flex.ref
             ),
+            # `dep_ids`, NOT `covered_for_price`: the latter falls back to the
+            # override's EXISTING coverage, so a plain plan move for a member
+            # who already covers a doubled life would raise an ack-required
+            # warning and 409 the apply — the opposite of the rule this code
+            # states (having one is the roster's problem; electing one here
+            # is this batch's).
+            covered_dependant_ids=dep_ids,
         )
         codes_by_employee.setdefault(emp.id, set()).update(row.warnings)
         rows.append(row)

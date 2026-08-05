@@ -54,6 +54,7 @@ FLEX_OVERDRAFT = "flex_overdraft"
 DEPENDANT_INELIGIBLE = "dependant_ineligible"
 UNPRICED = "unpriced"
 UNDERWRITING_TRIGGERED = "underwriting_triggered"
+DUAL_COVERAGE = "dual_coverage"
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,12 @@ WARNING_SPECS: dict[str, WarningSpec] = {
         "warn",
         True,
         "A dependant being covered is outside the product's age window.",
+    ),
+    DUAL_COVERAGE: WarningSpec(
+        "warn",
+        True,
+        "A dependant being covered is also on the roster under another "
+        "employee, so this change may pay for the same life twice.",
     ),
     UNPRICED: WarningSpec(
         "info",
@@ -151,6 +158,9 @@ class WarningContext:
     year_start: date
     # Members with an enrolment sitting in a window that is OPEN right now.
     open_enrollment_ids: set[str] = field(default_factory=set)
+    # Dependant ids that are the SAME life as a dependant under another
+    # employee. Covering one of these may pay for that life twice.
+    dual_covered_dependant_ids: set[str] = field(default_factory=set)
     # product_id -> the cohort tier index (see ``ProductTierIndex``).
     tier_indexes: dict[str, ProductTierIndex] = field(default_factory=dict)
     free_cover_limits: dict[str, float] = field(default_factory=dict)
@@ -266,6 +276,7 @@ def row_codes(
     declined_after: bool,
     flex_configured: bool,
     ineligible_dependants: int,
+    covered_dependant_ids: list[str] | None = None,
 ) -> list[str]:
     """Every warning for one (member, product) row except the flex overdraft,
     which is a whole-member total and is resolved after all the rows exist."""
@@ -294,6 +305,14 @@ def row_codes(
     if ineligible_dependants:
         codes.append(DEPENDANT_INELIGIBLE)
 
+    # Only when this change actually elects one of them — a member merely
+    # HAVING a dual-covered dependant is the roster's problem to fix on the
+    # Member Listing, not a reason to gate every plan move they make.
+    if covered_dependant_ids and ctx.dual_covered_dependant_ids.intersection(
+        covered_dependant_ids
+    ):
+        codes.append(DUAL_COVERAGE)
+
     if flex_configured and not declined_after and price_tag_after is None:
         codes.append(UNPRICED)
 
@@ -318,6 +337,7 @@ def row_codes(
 
 __all__ = [
     "DEPENDANT_INELIGIBLE",
+    "DUAL_COVERAGE",
     "ENROLLMENT_CONFIRMED",
     "FLEX_OVERDRAFT",
     "OPEN_ENROLLMENT",

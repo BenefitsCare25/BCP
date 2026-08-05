@@ -57,12 +57,14 @@ class AgeFilter(BaseModel):
         return self
 
 
-class MemberQuery(BaseModel):
-    """A population, described as a rule.
+class MemberFilters(BaseModel):
+    """A population, described as a rule — the fields, without the guard.
 
-    Resolution order (``services/member_query.resolve_selection``): the filters
-    are ANDed, the explicit ids are ADDED, and ``exclude_employee_ids`` is
-    SUBTRACTED last.
+    Split from ``MemberQuery`` so the roster LISTING can reuse the identical
+    predicate set while accepting an empty query, which for a list means "the
+    default view" and for a bulk apply means "the whole roster". One field set
+    and one predicate chain (``services/member_query._filtered``) serve both, so
+    the listing and the bulk tool can never disagree about who is in a cohort.
     """
 
     q: str | None = Field(default=None, max_length=255)
@@ -76,6 +78,10 @@ class MemberQuery(BaseModel):
     # Members whose EFFECTIVE plan for the request's product is one of these.
     current_plan_codes: list[str] = Field(default_factory=list, max_length=100)
     coverage_state: CoverageStateStr = "any"
+    # Whether roster matching found the member a cohort. An unmatched member has
+    # no coverage at all, so this is the roster's most-used triage filter — and
+    # it is a legitimate bulk selection too ("everyone matching nothing").
+    match_status: Literal["any", "matched", "unmatched"] = "any"
     attributes: list[AttributeFilter] = Field(default_factory=list, max_length=20)
     age: AgeFilter | None = None
     # Explicit ADDITIONS to whatever the filters match.
@@ -95,7 +101,22 @@ class MemberQuery(BaseModel):
             or self.attributes
             or self.age
             or self.coverage_state != "any"
+            or self.match_status != "any"
         )
+
+
+class MemberQuery(MemberFilters):
+    """A population to ACT on.
+
+    Resolution order (``services/member_query.resolve_selection``): the filters
+    are ANDed, the explicit ids are ADDED, and ``exclude_employee_ids`` is
+    SUBTRACTED last.
+
+    Identical to ``MemberFilters`` but for the empty-query guard, which is what
+    separates acting on a population from listing one. Keep this the type on
+    every write path (``BulkSelector`` subclasses it); a listing takes
+    ``MemberFilters``.
+    """
 
     @model_validator(mode="after")
     def _nonempty(self) -> Self:
@@ -175,6 +196,22 @@ class MemberQueryCountIn(BaseModel):
 class MemberQueryCountOut(BaseModel):
     total: int
     unresolved: list[UnresolvedRefOut] = Field(default_factory=list)
+
+
+class MemberQueryListIn(BaseModel):
+    """A page of the roster, filtered by a rule.
+
+    Takes ``MemberFilters``, not ``MemberQuery``: an empty body is the roster's
+    default view, and the explicit ``employee_ids`` / ``exclude_employee_ids``
+    fields are ignored here (a listing has no preview to narrow, and honouring
+    exclusions would let a URL silently hide members from a roster view).
+    """
+
+    query: MemberFilters = Field(default_factory=MemberFilters)
+    # Scopes ``current_plan_codes`` / ``coverage_state``; ignored otherwise.
+    product_code: str | None = None
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=200)
 
 
 class MemberListResolveIn(BaseModel):

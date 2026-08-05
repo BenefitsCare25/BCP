@@ -22,13 +22,19 @@ import {
   useBulkDeleteEmployees,
   useCategoriesGrouped,
   useEmployee,
-  useEmployees,
   useFlexMembership,
   useMatchResults,
   useRunMatching,
   useSetMatchOverride,
   useUpdateEmployee,
 } from "@/api/hooks";
+import { useMemberFacets, useMemberQueryList } from "@/api/memberQuery";
+import {
+  EMPTY_MEMBER_FILTERS,
+  type MemberFilterState,
+  memberFiltersAreEmpty,
+  toMemberQuery,
+} from "@/lib/memberFilters";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -65,6 +71,7 @@ import {
   ListingImportBar,
 } from "@/components/operations/ListingImportBar";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
+import { RosterFilterBar } from "@/components/operations/RosterFilterBar";
 import { RosterTabActions } from "./rosterTabActions";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
 import { BenefitScheduleView } from "@/components/configuration/BenefitScheduleView";
@@ -104,11 +111,11 @@ export function EmployeesPage() {
   const bulkDelete = useBulkDeleteEmployees();
   const runMatching = useRunMatching();
   const [page, setPage] = useState(0);
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 250);
-  const [matchStatus, setMatchStatus] = useState<"all" | "matched" | "unmatched">(
-    "all",
-  );
+  // One filter state for the whole bar, serialized to the SAME `MemberFilters`
+  // the bulk tool sends — so the roster view and a bulk selection can never
+  // describe different populations for the same rule.
+  const [filters, setFilters] = useState<MemberFilterState>(EMPTY_MEMBER_FILTERS);
+  const debouncedQ = useDebouncedValue(filters.q, 250);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
@@ -122,12 +129,22 @@ export function EmployeesPage() {
   } | null>(null);
   const [showRunConfirm, setShowRunConfirm] = useState(false);
   const updateEmployee = useUpdateEmployee();
-  const { data, isLoading } = useEmployees(
+  // Only the SEARCH text is debounced; a picker change is a deliberate click
+  // and should move the table at once.
+  const query = useMemo(
+    () => toMemberQuery({ ...filters, q: debouncedQ }),
+    [filters, debouncedQ],
+  );
+  const soleProduct =
+    filters.productCodes.length === 1 ? filters.productCodes[0] : undefined;
+  const { data, isLoading } = useMemberQueryList(
     policyYearId ?? undefined,
-    page * PAGE_SIZE,
-    PAGE_SIZE,
-    debouncedSearch,
-    matchStatus,
+    query,
+    { offset: page * PAGE_SIZE, limit: PAGE_SIZE },
+    soleProduct,
+  );
+  const { data: facets, isLoading: facetsLoading } = useMemberFacets(
+    policyYearId ?? undefined,
   );
   const { data: matchData } = useMatchResults(policyYearId ?? undefined, 0, 1);
   const { data: membership } = useFlexMembership(policyYearId ?? undefined);
@@ -171,7 +188,11 @@ export function EmployeesPage() {
   }, [detail?.id]);
 
   if (!policyYearId) return null;
+  // `data.total` follows the active filters, so it cannot state what is on
+  // file — the facets carry the unfiltered headcount. Conflating the two is
+  // what makes a filtered roster claim the company shrank.
   const total = data?.total ?? 0;
+  const onFile = facets?.employees_total ?? total;
   const pages = Math.ceil(total / PAGE_SIZE);
   const pending = matchData?.pending ?? true;
   const employeesTotal = matchData?.employees_total ?? 0;
@@ -209,8 +230,9 @@ export function EmployeesPage() {
             <MatchState
               data={matchData}
               onShowUnmatched={() => {
+                // Same state the bar drives, so the link and the chips agree.
                 setPage(0);
-                setMatchStatus("unmatched");
+                setFilters((f) => ({ ...f, matchStatus: "unmatched" }));
               }}
             />
           </ListingCount>
@@ -234,65 +256,38 @@ export function EmployeesPage() {
             <div>
               <CardTitle>Member listing</CardTitle>
               <CardDescription>
-                {total.toLocaleString()} employee{total === 1 ? "" : "s"} on file
+                {onFile.toLocaleString()} employee{onFile === 1 ? "" : "s"} on file
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1">
-                <FilterChip
-                  label="All"
-                  active={matchStatus === "all"}
-                  onClick={() => {
-                    setPage(0);
-                    setMatchStatus("all");
-                  }}
-                />
-                <FilterChip
-                  label="Matched"
-                  active={matchStatus === "matched"}
-                  onClick={() => {
-                    setPage(0);
-                    setMatchStatus("matched");
-                  }}
-                />
-                <FilterChip
-                  label="Unmatched"
-                  active={matchStatus === "unmatched"}
-                  onClick={() => {
-                    setPage(0);
-                    setMatchStatus("unmatched");
-                  }}
-                />
-              </div>
-              <Input
-                placeholder="Search by staff ID or name…"
-                value={search}
-                onChange={(e) => {
-                  setPage(0);
-                  setSearch(e.target.value);
-                }}
-                className="w-[240px]"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!total}
-                onClick={() => setShowDeleteAll(true)}
-                className="text-error hover:text-error"
-              >
-                <Trash2 className="size-4" /> Clear all
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!total}
+              onClick={() => setShowDeleteAll(true)}
+              className="text-error hover:text-error shrink-0"
+            >
+              <Trash2 className="size-4" /> Clear all
+            </Button>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <RosterFilterBar
+            state={filters}
+            onChange={(next) => {
+              setPage(0);
+              setFilters(next);
+            }}
+            facets={facets}
+            facetsLoading={facetsLoading}
+            total={data?.total}
+          />
           {isLoading ? (
             <SkeletonTable rows={8} columns={7} />
           ) : total === 0 ? (
             <div className="text-sm text-muted-foreground p-8 text-center border border-dashed border-border rounded-md">
-              {matchStatus === "all"
+              {memberFiltersAreEmpty(filters)
                 ? "No employees uploaded yet."
-                : `No ${matchStatus} employees.`}
+                : "No employees match these filters."}
             </div>
           ) : (
             <>
@@ -1011,26 +1006,3 @@ function FlexPriceTagDetail({ flex }: { flex: FlexCoverageLine | null }) {
   );
 }
 
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        active
-          ? "rounded-full bg-primary text-primary-foreground text-xs font-medium px-3 py-1"
-          : "rounded-full bg-card text-foreground text-xs font-medium px-3 py-1 border border-border hover:bg-muted"
-      }
-    >
-      {label}
-    </button>
-  );
-}

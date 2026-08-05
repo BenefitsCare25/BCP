@@ -514,11 +514,16 @@ async def upload_dependants(
         .all()
     )
     by_staff, by_name, ambiguous_names = _employee_link_indexes(employees)
+    staff_by_emp = {e.id: e.staff_id for e in employees}
     ambiguous_hits: set[str] = set()
 
     # Existing dependant identity keys — dedup fixes the historical bug where a
     # re-uploaded dependant file blindly doubled every row.
     existing_keys: dict[str, str] = {}
+    # dependant id -> the employee it already hangs off. A collision with
+    # ANOTHER employee's dependant is dual coverage, not a re-upload, and the
+    # manifest has to say which.
+    existing_owner: dict[str, str | None] = {}
     for did, d_emp_id, d_nid, d_attrs in db.execute(
         select(
             Dependant.id,
@@ -530,6 +535,7 @@ async def upload_dependants(
             Dependant.policy_year_id == policy_year_id,
         )
     ).all():
+        existing_owner[did] = d_emp_id
         if d_nid:
             existing_keys.setdefault(f"nric:{d_nid}", did)
         # Emit the employee-agnostic key only for currently-unlinked existing
@@ -570,14 +576,28 @@ async def upload_dependants(
         existing_hit = next((existing_keys[k] for k in keys if k in existing_keys), None)
         in_file_hit = any(k in seen for k in keys)
         if existing_hit or in_file_hit:
+            # Whose row did it collide with? A hit under a DIFFERENT employee
+            # is the same life on two payrolls — reporting that as a bare
+            # "duplicate" is what made dual coverage invisible at upload.
+            other_emp = existing_owner.get(existing_hit) if existing_hit else None
+            cross = bool(other_emp) and other_emp != emp_id
             duplicates.append(
                 DuplicateEntry(
                     row=rec.row,
                     name=first_value(rec.attributes, ("dependant_name", "name")),
                     staff_id=rec.employee_staff_id,
                     nric_masked=mask_nric(dependant_nric(rec.attributes)) or None,
-                    reason="existing" if existing_hit else "in_file",
+                    reason=(
+                        "existing_other_employee"
+                        if cross
+                        else "existing"
+                        if existing_hit
+                        else "in_file"
+                    ),
                     existing_id=existing_hit,
+                    existing_staff_id=(
+                        staff_by_emp.get(other_emp or "") if cross else None
+                    ),
                 )
             )
             continue

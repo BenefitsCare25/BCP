@@ -643,8 +643,14 @@ export interface DuplicateEntry {
   name: string | null;
   staff_id: string | null;
   nric_masked: string | null;
-  reason: "in_file" | "existing";
+  /** `existing_other_employee` means the same life is already a dependant of a
+   *  DIFFERENT employee — dual coverage, not a re-upload. Anything switching on
+   *  this must handle it, or a cross-employee collision reads as an ordinary
+   *  duplicate, which is what made dual coverage invisible at upload. */
+  reason: "in_file" | "existing" | "existing_other_employee";
   existing_id: string | null;
+  /** The other employee's staff id, when the collision crosses employees. */
+  existing_staff_id?: string | null;
 }
 
 export interface UploadResult {
@@ -1287,12 +1293,15 @@ export interface FlexCoverage {
   preview_cap: number;
 }
 
-/** A distinct roster value (designation or grade) for the tier match-set pickers. */
+/** A distinct roster value with its headcount, for the match-set pickers. */
 export interface VocabValue {
   value: string;
   count: number;
-  /** Already selected by some tier's match set. */
-  claimed: boolean;
+  /** Already selected by some tier's match set. Optional because "claimed" is a
+   *  FLEX-TIER notion — a value may only belong to one tier — and means nothing
+   *  to the roster filter bars, which reuse the same picker. The picker only
+   *  ever reads it as a truthy flag. */
+  claimed?: boolean;
 }
 
 /** Distinct employee-type + job-grade values present on the active roster. */

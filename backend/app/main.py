@@ -27,7 +27,9 @@ from app.api.v1 import (
     claim_review_configs,
     claims,
     dashboard,
+    dependant_query,
     dependants,
+    dual_coverage,
     employees,
     enrollment_windows,
     enrollments,
@@ -183,7 +185,7 @@ def create_app() -> FastAPI:
         enrollments.router,
         leave_policies.router,
         bulk_plan_updates.router,
-        member_query.router,
+        dual_coverage.router,
         product_setups.router,
         product_terms.router,
         flex_pricing.router,
@@ -223,6 +225,16 @@ def create_app() -> FastAPI:
             prefix=api_prefix,
             dependencies=[Depends(require_write_access)],
         )
+
+    # Roster QUERIES are reads that happen to be POST — `attributes[]` and the
+    # nested employee filter do not survive a query string. `require_write_access`
+    # gates on the HTTP METHOD, so leaving them in the loop above 403s every
+    # `broker_viewer` out of the Member Listing and Dependants tables (and out
+    # of the bulk picker's headcount, which has always been POST). Registered
+    # here instead; every endpoint on both routers is read-only, and each still
+    # authenticates + tenant-checks through `load_policy_year`.
+    for read_router in (member_query.router, dependant_query.router):
+        app.include_router(read_router, prefix=api_prefix)
 
     # Employee portal — a SEPARATE auth surface. Deliberately registered
     # OUTSIDE the broker loop: `require_write_access` (broker identity) must

@@ -87,18 +87,23 @@ def _setup_db():
             client_id=CLIENT_ID, attribute_id="department",
             display_name="Department", data_type="string",
         ))
+        # Realistic SG NRIC shapes — the search's identifier leg only fires on
+        # something that actually looks like one, so "S<7 digits><letter>".
         rows = (
-            (E_SALES1, "Q-1", CAT_SALES, "Sales", "1985-06-01", "active"),
-            (E_SALES2, "Q-2", CAT_SALES, "Sales", "1995-06-01", "active"),
-            (E_OPS1, "Q-3", CAT_OPS, "Ops", "1975-06-01", "active"),
-            (E_GONE, "Q-4", CAT_SALES, "Sales", "1990-06-01", "terminated"),
+            (E_SALES1, "Q-1", CAT_SALES, "Sales", "1985-06-01", "active", "S1000001A"),
+            (E_SALES2, "Q-2", CAT_SALES, "Sales", "1995-06-01", "active", "S1000002B"),
+            (E_OPS1, "Q-3", CAT_OPS, "Ops", "1975-06-01", "active", "S1000003C"),
+            (E_GONE, "Q-4", CAT_SALES, "Sales", "1990-06-01", "terminated", "S1000004D"),
         )
-        for eid, staff, cat, dept, dob, status in rows:
+        for eid, staff, cat, dept, dob, status, nric in rows:
             s.add(Employee(
                 id=eid, client_id=CLIENT_ID, policy_year_id=PY_ID,
                 staff_id=staff, employee_name=f"Emp {staff}",
                 attribute_values={"department": dept, "date_of_birth": dob,
-                                  "id_no": f"S{staff.replace('-', '')}0000A"},
+                                  "id_no": nric},
+                # Written by the upload/parse path in real life; set here so the
+                # NRIC leg of the search is exercised.
+                national_id_normalized=nric,
                 derived_attribute_values={},
                 matched_categories=[{"category_id": cat, "product_code": "MED",
                                      "method": "rule", "confidence": 1.0}],
@@ -290,7 +295,7 @@ def test_pasted_list_resolves_staff_ids_and_nric(client: TestClient) -> None:
     res = client.post(
         f"/api/v1/policy-years/{PY_ID}/member-query/resolve",
         # A column copied out of Excel, a comma list, and an NRIC in one paste.
-        json={"text": "Q-1\nQ-2, SQ30000A\nNOBODY"},
+        json={"text": "Q-1\nQ-2, S1000003C\nNOBODY"},
     )
     assert res.status_code == 200, res.text
     body = res.json()
@@ -305,3 +310,92 @@ def test_pasted_duplicates_are_counted(client: TestClient) -> None:
     )
     body = res.json()
     assert len(body["matched"]) == 2 and body["duplicates"] == 1
+
+
+# ── Listing (the Member Listing page) ───────────────────────────────────────
+
+
+def _list(client: TestClient, body: dict | None = None) -> dict:
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/member-query/list", json=body or {}
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_listing_accepts_an_empty_query_while_selection_still_refuses_one() -> None:
+    """The whole reason ``MemberFilters`` was split out of ``MemberQuery``.
+
+    For a bulk apply an empty query would silently target the roster, so it is
+    refused; for a list it is simply the default view. Both must stay true, or
+    one of the two surfaces breaks.
+    """
+    import pydantic
+
+    from app.schemas.member_query import MemberFilters, MemberQuery
+
+    assert MemberFilters().has_filters() is False
+    with pytest.raises(pydantic.ValidationError):
+        MemberQuery()
+
+
+def test_listing_defaults_to_the_active_roster(client: TestClient) -> None:
+    body = _list(client)
+    assert body["total"] == 3  # the leaver stays out until asked for
+    assert {i["staff_id"] for i in body["items"]} == {"Q-1", "Q-2", "Q-3"}
+    assert _list(client, {"query": {"include_terminated": True}})["total"] == 4
+
+
+def test_listing_and_count_resolve_the_same_rule(client: TestClient) -> None:
+    """The listing and the bulk headcount share ``_filtered``. If these ever
+    disagree, a broker is filtering one population and acting on another."""
+    for query in (
+        {"attributes": [{"key": "department", "values": ["Sales"]}]},
+        {"current_plan_codes": ["GOLD"]},
+        {"coverage_state": "default"},
+        {"category_ids": [CAT_OPS]},
+        {"age": {"min": 40}},
+    ):
+        listed = _list(client, {"query": query, "product_code": "MED"})["total"]
+        assert listed == _count(client, query)["total"], query
+
+
+def test_listing_pages_without_changing_the_total(client: TestClient) -> None:
+    page = _list(client, {"offset": 1, "limit": 1})
+    assert page["total"] == 3 and len(page["items"]) == 1
+    assert page["items"][0]["staff_id"] == "Q-2"  # ordered by staff id
+
+
+def test_listing_filters_by_match_state(client: TestClient) -> None:
+    """The All/Matched/Unmatched chips the roster page has always had, now
+    resolved through the shared chain rather than a second SQL predicate."""
+    assert _list(client, {"query": {"match_status": "matched"}})["total"] == 0
+    assert _list(client, {"query": {"match_status": "unmatched"}})["total"] == 3
+
+
+def test_search_finds_a_member_by_nric(client: TestClient) -> None:
+    """The Dependants tab has always searched NRIC and this one did not, so the
+    same search text found a person on one tab only."""
+    assert _list(client, {"query": {"q": "S1000001A"}})["total"] == 1
+    # Typed with punctuation the roster doesn't store.
+    assert _list(client, {"query": {"q": "s100-0001a"}})["total"] == 1
+    # A name search must not fish through NRICs.
+    assert _list(client, {"query": {"q": "Emp Q-3"}})["total"] == 1
+
+
+def test_a_short_numeric_search_does_not_fish_through_nrics(
+    client: TestClient,
+) -> None:
+    """`normalize_nric` strips punctuation and returns non-empty for ANY text,
+    so without a shape test a partial staff-id search like "100" would also
+    match every member whose NRIC happens to contain it."""
+    assert _list(client, {"query": {"q": "100"}})["total"] == 0
+
+
+def test_listing_ignores_explicit_id_add_and_subtract(client: TestClient) -> None:
+    """A listing has no preview to narrow. Honouring ``exclude_employee_ids``
+    here would let a URL hide members from a roster view without saying so."""
+    body = _list(client, {"query": {"exclude_employee_ids": [E_SALES1]}})
+    assert body["total"] == 3
+    body = _list(client, {"query": {"employee_ids": [E_GONE]}})
+    assert body["total"] == 3  # the leaver is still out

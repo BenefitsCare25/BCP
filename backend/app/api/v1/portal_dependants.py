@@ -20,6 +20,7 @@ from app.models.stored_document import DOC_ENTITY_DEPENDANT
 from app.schemas.api import DependantOut
 from app.schemas.claims import PortalDependantCreateIn, StoredDocumentOut
 from app.services.claims import attach_document
+from app.services.roster_attributes import normalize_nric
 
 router = APIRouter(
     prefix="/portal/dependants",
@@ -56,6 +57,12 @@ def add_my_dependant(
         attribute_values=attribute_values,
         link_method="member_portal",
         status=DEPENDANT_STATUS_PENDING,
+        # Stamp the identity column the rest of the platform matches on. This
+        # path used to leave it NULL (and approval does not backfill it), so a
+        # self-added dependant was invisible to every NRIC-keyed check —
+        # including the dual-coverage detector, and this is the one path with no
+        # dedup of its own.
+        national_id_normalized=normalize_nric(body.id_no) or None,
     )
     db.add(dependant)
     db.flush()

@@ -3,10 +3,21 @@ import { Link2, Loader2, Save, Sparkles, Trash2, Unlink } from "lucide-react";
 import {
   useAutoMatchDependants,
   useBulkDeleteDependants,
-  useDependants,
   useUpdateDependant,
 } from "@/api/hooks";
 import { api } from "@/api/client";
+import {
+  useDependantFacets,
+  useDependantQueryList,
+} from "@/api/dependantQuery";
+import { useMemberFacets } from "@/api/memberQuery";
+import {
+  DependantFilterBar,
+  type DependantFilterState,
+  EMPTY_DEPENDANT_FILTERS,
+  dependantFiltersAreEmpty,
+  toDependantQuery,
+} from "@/components/operations/DependantFilterBar";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -45,6 +56,7 @@ import {
   ListingImportBar,
 } from "@/components/operations/ListingImportBar";
 import { DependantApprovals } from "@/components/operations/DependantApprovals";
+import { DualCoveragePanel } from "@/components/operations/DualCoveragePanel";
 import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
 import { coerceAttrs } from "@/lib/attrs";
@@ -65,28 +77,39 @@ export function DependantsPage() {
   const updateDependant = useUpdateDependant();
   const autoMatch = useAutoMatchDependants();
   const [page, setPage] = useState(0);
-  const [unlinkedOnly, setUnlinkedOnly] = useState(false);
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search, 300);
+  const [filters, setFilters] = useState<DependantFilterState>(
+    EMPTY_DEPENDANT_FILTERS,
+  );
+  const debouncedSearch = useDebouncedValue(filters.q, 300);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteRisk, setDeleteRisk] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
   const [linkStaffId, setLinkStaffId] = useState("");
-  const { data, isLoading } = useDependants(
+  // Only the SEARCH text is debounced; a picker click should move the table
+  // at once.
+  const query = useMemo(
+    () => toDependantQuery({ ...filters, q: debouncedSearch }),
+    [filters, debouncedSearch],
+  );
+  const { data, isLoading } = useDependantQueryList(
     policyYearId ?? undefined,
-    page * PAGE_SIZE,
-    PAGE_SIZE,
-    unlinkedOnly,
-    debouncedSearch,
+    query,
+    { offset: page * PAGE_SIZE, limit: PAGE_SIZE },
   );
   // Unfiltered counts for the header bar. `data.total` follows the active
-  // search + "Unlinked only" filter, so it cannot state what is on file. Both
-  // are limit=1 — the page of rows is never fetched, only the total.
-  const { data: onFile } = useDependants(policyYearId ?? undefined, 0, 1);
-  const { data: unlinkedSet } = useDependants(policyYearId ?? undefined, 0, 1, true);
-  const dependantsTotal = onFile?.total ?? 0;
-  const unlinkedTotal = unlinkedSet?.total ?? 0;
+  // filters, so it cannot state what is on file — the facets carry both
+  // unfiltered totals in one request (the page used to spend two extra
+  // limit=1 queries on them).
+  const { data: facets } = useDependantFacets(policyYearId ?? undefined);
+  const { data: memberFacets } = useMemberFacets(policyYearId ?? undefined);
+  const dependantsTotal = facets?.active_total ?? 0;
+  const unlinkedTotal = facets?.unlinked ?? 0;
+  // Whether anything has EVER been uploaded spans every status: a roster
+  // whose dependants were all soft-terminated by an ADC run still has rows,
+  // and gating on the active count alone flips the page back into its
+  // first-upload state and reports "Nothing uploaded yet".
+  const anyOnFile = facets?.all_statuses_total ?? 0;
   const selected = useMemo(
     () => data?.items.find((d) => d.id === selectedId) ?? null,
     [data, selectedId],
@@ -94,7 +117,7 @@ export function DependantsPage() {
 
   useEffect(() => {
     setPage(0);
-  }, [unlinkedOnly, debouncedSearch]);
+  }, [debouncedSearch]);
 
   useEffect(() => {
     if (!selected) return;
@@ -117,21 +140,23 @@ export function DependantsPage() {
     <div className="space-y-5">
       <DependantApprovals policyYearId={policyYearId} />
 
+      {/* Lives insured twice — renders nothing when the roster is clean. */}
+      <DualCoveragePanel policyYearId={policyYearId} />
+
       <ListingImportBar
         policyYearId={policyYearId}
-        hasRows={onFile ? dependantsTotal > 0 : undefined}
+        hasRows={facets ? anyOnFile > 0 : undefined}
         stats={
           <ListingCount
             value={dependantsTotal}
             noun={dependantsTotal === 1 ? "dependant" : "dependants"}
           >
-            {dependantsTotal === 0 ? (
+            {anyOnFile === 0 ? (
               <span>Nothing uploaded yet</span>
-            ) : !unlinkedSet ? (
-              // Two independent queries: "all linked" must be a RESULT, never
-              // the default while the unlinked count is still in flight (or
-              // failed) — this line is the only surface reporting that
-              // exception, so guessing it away hides it.
+            ) : !facets ? (
+              // "All linked" must be a RESULT, never the default while the
+              // counts are still in flight (or failed) — this line is the only
+              // surface reporting that exception, so guessing it away hides it.
               <span>Checking links…</span>
             ) : unlinkedTotal > 0 ? (
               <>
@@ -142,7 +167,9 @@ export function DependantsPage() {
                 <ListingExceptionLink
                   count={unlinkedTotal}
                   label="unlinked"
-                  onClick={() => setUnlinkedOnly(true)}
+                  onClick={() =>
+                    setFilters((f) => ({ ...f, linkState: "unlinked" }))
+                  }
                 />
               </>
             ) : (
@@ -191,44 +218,39 @@ export function DependantsPage() {
             <div>
               <CardTitle>Dependants</CardTitle>
               <CardDescription>
-                {total.toLocaleString()} dependant{total === 1 ? "" : "s"}{unlinkedOnly ? " unlinked" : " on file"}
+                {dependantsTotal.toLocaleString()} active dependant
+                {dependantsTotal === 1 ? "" : "s"} on file
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2 flex-wrap justify-end">
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name, NRIC, staff ID…"
-                aria-label="Search dependants"
-                className="h-8 w-52"
-              />
-              <Button
-                variant={unlinkedOnly ? "default" : "outline"}
-                size="sm"
-                onClick={() => setUnlinkedOnly((v) => !v)}
-              >
-                Unlinked only
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!total}
-                onClick={() => setShowDeleteAll(true)}
-                className="text-error hover:text-error"
-              >
-                <Trash2 className="size-4" /> Clear all
-              </Button>
-            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!total}
+              onClick={() => setShowDeleteAll(true)}
+              className="text-error hover:text-error shrink-0"
+            >
+              <Trash2 className="size-4" /> Clear all
+            </Button>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <DependantFilterBar
+            state={filters}
+            onChange={(next) => {
+              setPage(0);
+              setFilters(next);
+            }}
+            facets={facets}
+            memberFacets={memberFacets}
+            total={data?.total}
+          />
           {isLoading ? (
             <SkeletonTable rows={6} columns={5} />
           ) : total === 0 ? (
             <div className="text-sm text-muted-foreground p-8 text-center border border-dashed border-border rounded-md">
-              {debouncedSearch.trim() || unlinkedOnly
-                ? "No dependants match the current search or filter."
-                : "No dependants uploaded yet."}
+              {dependantFiltersAreEmpty(filters)
+                ? "No dependants uploaded yet."
+                : "No dependants match these filters."}
             </div>
           ) : (
             <>
@@ -389,9 +411,10 @@ export function DependantsPage() {
                               relink: true,
                             });
                             toast.success("Unlinked");
-                            // With "Unlinked only" active the row set changes
-                            // under the sheet — close it so it can't go blank.
-                            if (unlinkedOnly) setSelectedId(null);
+                            // With the Unlinked filter active the row set
+                            // changes under the sheet — close it so it can't
+                            // go blank.
+                            if (filters.linkState === "linked") setSelectedId(null);
                           } catch (err) {
                             toast.error(formatError(err));
                           }
@@ -454,9 +477,9 @@ export function DependantsPage() {
                             `Linked to ${match.employee_name ?? match.staff_id}`,
                           );
                           setLinkStaffId("");
-                          // Linking removes the row from the "Unlinked only"
+                          // Linking removes the row from an Unlinked-filtered
                           // list — close the sheet so it can't go blank.
-                          if (unlinkedOnly) setSelectedId(null);
+                          if (filters.linkState === "unlinked") setSelectedId(null);
                         } catch (err) {
                           toast.error(formatError(err));
                         }

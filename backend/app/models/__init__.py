@@ -18,6 +18,7 @@ from app.models.claim_review_config import ClaimReviewConfig
 from app.models.client import BrokerFirm, Client
 from app.models.client_ai_config import ClientAIConfig
 from app.models.dependant import Dependant
+from app.models.dual_coverage_decision import DualCoverageDecision
 from app.models.employee import Employee
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment import Enrollment, EnrollmentElection
@@ -65,6 +66,7 @@ __all__ = [
     "ClientAIConfig",
     "ClientAuthPolicy",
     "Dependant",
+    "DualCoverageDecision",
     "Employee",
     "EmployeeAttributeSchema",
     "EmployeePlanOverride",

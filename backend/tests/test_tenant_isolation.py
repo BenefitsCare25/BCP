@@ -1069,12 +1069,66 @@ def test_member_query_count_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_member_query_list_cross_tenant_404(client_as_a: TestClient) -> None:
+    # An EMPTY body is the listing's default view, so this endpoint would happily
+    # return another tenant's whole roster if the year guard ever came off.
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/member-query/list",
+        json={},
+    )
+    assert res.status_code == 404
+
+
 def test_member_query_resolve_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.post(
         f"/api/v1/policy-years/{PY_B}/member-query/resolve",
         json={"text": "B-1"},
     )
     assert res.status_code == 404
+
+
+def test_dependant_facets_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/dependant-facets")
+    assert res.status_code == 404
+
+
+def test_dependant_query_list_cross_tenant_404(client_as_a: TestClient) -> None:
+    # As with the member listing, an EMPTY body is the default view — so a
+    # missing year guard would hand over another tenant's dependants wholesale.
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/dependant-query/list",
+        json={},
+    )
+    assert res.status_code == 404
+
+
+def test_dual_coverage_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/dual-coverage")
+    assert res.status_code == 404
+
+
+def test_dual_coverage_decision_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.post(
+        f"/api/v1/policy-years/{PY_B}/dual-coverage/decisions",
+        json={"subject_key": "whatever", "decision": "intentional_both"},
+    )
+    assert res.status_code == 404
+    res = client_as_a.delete(
+        f"/api/v1/policy-years/{PY_B}/dual-coverage/decisions/whatever"
+    )
+    assert res.status_code == 404
+
+
+def test_dual_coverage_decisions_is_a_tenant_table() -> None:
+    """A model missing from `models/__init__` is invisible to Alembic
+    autogenerate AND to `sync_firm_schema` — so on Postgres every firm's queries
+    fall through `search_path` to the `public` copy and SILENTLY SHARE ROWS.
+    No error, just cross-tenant data. This is the cheap guard against that."""
+    import app.models  # noqa: F401 — registers every model in Base.metadata
+    from app.db.tenancy import CONTROL_TABLES, tenant_tables
+
+    assert "dual_coverage_decisions" in {t.name for t in tenant_tables()}
+    assert "dual_coverage_decisions" not in CONTROL_TABLES
 
 
 def test_orphan_overrides_cross_tenant_404(client_as_a: TestClient) -> None:

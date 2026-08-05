@@ -42,11 +42,11 @@ from app.services.flex_pricing_resolver import summarize_employee
 from app.services.plan_hydration import basis_amount, hydrate_plans
 from app.services.roster_attributes import (
     DOB_KEYS,
-    NAME_KEYS,
     REL_KEYS,
     first_value,
     iso_date,
 )
+from app.services.roster_dedup import DEP_NAME_KEYS
 
 # Attributes surfaced on the statement, in display order. Raw `category` plus the
 # derived attributes the matching rules key on (see services/derivation_engine).
@@ -63,7 +63,13 @@ _NEG_DEPENDANT = re.compile(
 )
 
 # Tolerant attribute-key lookup shared with the fact-find form.
-_NAME_KEYS = NAME_KEYS
+#
+# A DEPENDANT's name must be read through `DEP_NAME_KEYS`, never `NAME_KEYS`:
+# the latter includes `employee_name`, and dependant rows genuinely carry that
+# column (the parser writes it — `roster_parser.DEPENDANT_COLUMN_MAP`). So a row
+# with no `dependant_name` was displaying the PARENT's name as the dependant's,
+# to brokers and to the member on their own statement.
+_NAME_KEYS = DEP_NAME_KEYS
 _REL_KEYS = REL_KEYS
 _DOB_KEYS = DOB_KEYS
 _first = first_value

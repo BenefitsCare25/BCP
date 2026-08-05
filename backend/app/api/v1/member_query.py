@@ -5,10 +5,12 @@ to find out who a rule matches:
 
 - GET  /policy-years/{id}/member-facets        — filter vocabulary + headcounts
 - POST /policy-years/{id}/member-query/count   — live "N members match"
+- POST /policy-years/{id}/member-query/list    — a filtered page of the roster
 - POST /policy-years/{id}/member-query/resolve — pasted list → members
 
 They are deliberately independent of the bulk-update module: a selection is a
-general capability, and Coverage & Members is the next surface that wants it.
+general capability. ``/list`` is the Member Listing page using it, so the roster
+view and the bulk tool resolve the same rule through the same predicate chain.
 """
 from __future__ import annotations
 
@@ -18,15 +20,18 @@ from sqlalchemy.orm import Session
 from app.core.deps import load_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear
+from app.schemas.api import EmployeeList, EmployeeOut
 from app.schemas.member_query import (
     MemberFacetsOut,
     MemberListResolveIn,
     MemberListResolveOut,
     MemberQueryCountIn,
     MemberQueryCountOut,
+    MemberQueryListIn,
 )
 from app.services import member_query as svc
 from app.services.enrollment_products import resolve_product_by_code
+from app.services.plan_hydration import hydrate_plans
 
 router = APIRouter(tags=["member-query"])
 
@@ -68,6 +73,46 @@ def member_query_count(
     return MemberQueryCountOut(
         total=len(selection.employees),
         unresolved=[u.out() for u in selection.unresolved],
+    )
+
+
+@router.post(
+    "/policy-years/{policy_year_id}/member-query/list",
+    response_model=EmployeeList,
+)
+def member_query_list(
+    policy_year_id: str,
+    body: MemberQueryListIn,
+    py: PolicyYear = Depends(load_policy_year),
+    db: Session = Depends(get_db),
+) -> EmployeeList:
+    """A page of the roster, filtered by the SAME rule the bulk tool resolves.
+
+    POST rather than GET because ``attributes[]`` and ``age`` are nested and do
+    not survive query-string encoding — the sibling ``/count`` and ``/resolve``
+    endpoints are POST for the same reason.
+
+    Paging is a Python slice, not SQL ``OFFSET/LIMIT``: the attribute filters
+    read JSON columns whose querying differs between SQLite and Postgres, so
+    ``member_query`` filters one roster load in Python (see its module
+    docstring). The total is therefore the filtered count, which is what the
+    page needs to state anyway.
+    """
+    product = (
+        resolve_product_by_code(db, py, body.product_code) if body.product_code else None
+    )
+    rows, _idx = svc.resolve_listing(
+        db, py, body.query, product_id=product.id if product else None
+    )
+    page = rows[body.offset : body.offset + body.limit]
+    plans_by_emp = hydrate_plans(page, db, py.id)
+    items: list[EmployeeOut] = []
+    for emp in page:
+        out = EmployeeOut.model_validate(emp)
+        out.matched_plans = plans_by_emp.get(emp.id, [])
+        items.append(out)
+    return EmployeeList(
+        total=len(rows), offset=body.offset, limit=body.limit, items=items
     )
 
 

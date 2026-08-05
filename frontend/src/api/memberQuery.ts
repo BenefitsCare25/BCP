@@ -10,8 +10,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useSession } from "@/stores/session";
+import type { EmployeeList } from "@/types";
 
 export type CoverageState = "any" | "default" | "overridden" | "declined";
+export type MatchStatus = "any" | "matched" | "unmatched";
 
 export interface AttributeFilter {
   key: string;
@@ -26,6 +28,8 @@ export interface MemberQuery {
   product_codes?: string[];
   current_plan_codes?: string[];
   coverage_state?: CoverageState;
+  /** Whether roster matching found the member a cohort. */
+  match_status?: MatchStatus;
   attributes?: AttributeFilter[];
   age?: { min?: number | null; max?: number | null } | null;
   /** Explicit additions (ticked rows, a pasted list). */
@@ -111,9 +115,52 @@ export function isQueryEmpty(query: MemberQuery): boolean {
     query.attributes?.length ||
     query.age ||
     (query.coverage_state && query.coverage_state !== "any") ||
+    (query.match_status && query.match_status !== "any") ||
     query.employee_ids?.length ||
     query.staff_ids?.length
   );
+}
+
+/**
+ * A filtered page of the roster.
+ *
+ * POST-for-read because `attributes[]` and `age` are nested and don't survive a
+ * query string — the count and resolve endpoints are POST for the same reason.
+ * Unlike `useMemberQueryCount` this accepts an EMPTY query: for a listing that
+ * is the default view, not a footgun.
+ */
+export function useMemberQueryList(
+  policyYearId: string | undefined,
+  query: MemberQuery,
+  page: { offset: number; limit: number },
+  productCode?: string,
+) {
+  const clientId = useSession((s) => s.activeClientId);
+  return useQuery({
+    // Prefixed "employees" so every existing
+    // `invalidateQueries({queryKey: ["employees"]})` in api/hooks.ts also
+    // refreshes this listing. Without the prefix the table silently kept
+    // showing stale rows after a save, a delete or a matching run.
+    queryKey: [
+      "employees",
+      "query",
+      clientId,
+      policyYearId,
+      productCode ?? null,
+      page.offset,
+      page.limit,
+      query,
+    ],
+    queryFn: () =>
+      api.post<EmployeeList>(
+        `/policy-years/${policyYearId}/member-query/list`,
+        { query, product_code: productCode ?? null, ...page },
+      ),
+    enabled: !!policyYearId,
+    // Keep the previous page on screen while the next one loads, so changing a
+    // filter doesn't blank the table under the broker.
+    placeholderData: (prev) => prev,
+  });
 }
 
 export function useMemberFacets(policyYearId: string | undefined) {
@@ -121,7 +168,7 @@ export function useMemberFacets(policyYearId: string | undefined) {
   return useQuery({
     // The active client is in the key: every tenant-scoped query must be, or a
     // company switch serves the previous company's roster from cache.
-    queryKey: ["member-facets", clientId, policyYearId],
+    queryKey: ["employees", "facets", clientId, policyYearId],
     queryFn: () =>
       api.get<MemberFacets>(`/policy-years/${policyYearId}/member-facets`),
     enabled: !!policyYearId,
@@ -137,7 +184,7 @@ export function useMemberQueryCount(
   const clientId = useSession((s) => s.activeClientId);
   const enabled = !!policyYearId && !isQueryEmpty(query);
   return useQuery({
-    queryKey: ["member-query-count", clientId, policyYearId, productCode, query],
+    queryKey: ["employees", "count", clientId, policyYearId, productCode, query],
     queryFn: () =>
       api.post<MemberQueryCount>(
         `/policy-years/${policyYearId}/member-query/count`,

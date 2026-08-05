@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from openpyxl import Workbook
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -60,8 +60,9 @@ from app.services.coverage_summary import build_coverage_items
 from app.services.derivation_engine import derive
 from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
+from app.services.member_query import looks_like_nric
 from app.services.plan_hydration import hydrate_plans as _hydrate_plans
-from app.services.roster_attributes import mask_nric
+from app.services.roster_attributes import mask_nric, normalize_nric
 from app.services.roster_dedup import employee_candidate_keys, employee_nric
 from app.services.roster_parser import parse_employee_workbook
 from app.services.roster_reports import build_employee_report_workbook
@@ -101,10 +102,21 @@ def list_employees(
         filters.append(Employee.status != EMPLOYEE_STATUS_TERMINATED)
     if q:
         like = f"%{_escape_like(q)}%"
-        filters.append(
-            (Employee.staff_id.ilike(like, escape="\\"))
-            | (Employee.employee_name.ilike(like, escape="\\"))
-        )
+        legs = [
+            Employee.staff_id.ilike(like, escape="\\"),
+            Employee.employee_name.ilike(like, escape="\\"),
+        ]
+        # NRIC too — the Dependants tab has always matched on it and this one
+        # did not, so the same search text found a person on one tab only.
+        # Normalized both sides, so typed punctuation still matches.
+        nric = normalize_nric(q)
+        if looks_like_nric(nric):
+            legs.append(
+                Employee.national_id_normalized.ilike(
+                    f"%{_escape_like(nric)}%", escape="\\"
+                )
+            )
+        filters.append(or_(*legs))
     if match_status == "matched":
         filters.append(Employee.matched_category_id.isnot(None))
     elif match_status == "unmatched":

@@ -50,6 +50,7 @@ from app.schemas.member_query import (
     CategoryFacet,
     FacetValue,
     MemberFacetsOut,
+    MemberFilters,
     MemberQuery,
     PlanFacet,
     ProductFacet,
@@ -103,6 +104,10 @@ _DATE_VALUE = re.compile(
 # whole column is treated as one. Not 1.0: a roster column routinely carries a
 # stray "N/A" or "-" beside real dates.
 _DATE_COLUMN_SHARE = 0.8
+
+# A search term worth testing against an NRIC: an optional series letter and
+# at least five digits, optionally with the checksum letter.
+_NRIC_SHAPE = re.compile(r"^[A-Z]?\d{5,7}[A-Z]?$")
 
 
 def _is_date_column(bucket: dict[str, int]) -> bool:
@@ -270,6 +275,38 @@ def resolve_selection(
     )
 
 
+def resolve_listing(
+    db: Session,
+    py: PolicyYear,
+    filters: MemberFilters,
+    *,
+    product_id: str | None = None,
+    index: RosterIndex | None = None,
+) -> tuple[list[Employee], RosterIndex]:
+    """Every member matching ``filters``, in roster order — the LISTING path.
+
+    Shares ``_filtered`` with :func:`resolve_selection`, so the Member Listing
+    page and the bulk coverage tool can never disagree about who is in a cohort.
+    It differs in exactly two ways, both deliberate:
+
+    - **An empty query is legal and means everyone.** For a bulk *apply* that is
+      a footgun — it would silently target the whole roster — which is why
+      ``MemberQuery`` refuses one. For a *list* it is the default view.
+    - **The explicit id add/subtract fields are ignored.** A listing has no
+      preview to narrow, and honouring ``exclude_employee_ids`` here would let a
+      URL hide members from a roster view without saying so.
+    """
+    idx = index or load_roster(
+        db, py.id, include_terminated=filters.include_terminated
+    )
+    rows = (
+        _filtered(idx, filters, product_id, py.start_date)
+        if filters.has_filters()
+        else list(idx.employees)
+    )
+    return sorted(rows, key=lambda e: (e.staff_id or "", e.id)), idx
+
+
 def _missing_reason(db: Session, py: PolicyYear, employee_id: str) -> str:
     """Distinguish "not in this benefit year" from "excluded as a leaver" — the
     second is a one-checkbox fix and the first is not."""
@@ -294,20 +331,28 @@ def _missing_staff_reason(db: Session, py: PolicyYear, staff_id: str) -> str:
 
 def _filtered(
     idx: RosterIndex,
-    query: MemberQuery,
+    query: MemberFilters,
     product_id: str | None,
     year_start: date,
 ) -> list[Employee]:
+    """The one predicate chain. Shared by the bulk selection and the listing —
+    never copy it, or the two surfaces start disagreeing silently."""
     needle = _norm(query.q) if query.q else None
+    # A broker searching "S1234567A" types the punctuation the roster may not
+    # store, so the NRIC leg compares normalized forms. The Dependants tab has
+    # always searched NRIC; the Employees tab did not, which brokers hit at once.
+    nric_needle = normalize_nric(query.q) if query.q else ""
     categories = set(query.category_ids)
     products = {c.strip().casefold() for c in query.product_codes if c.strip()}
     plans = {p.strip().casefold() for p in query.current_plan_codes if p.strip()}
     out: list[Employee] = []
 
     for emp in idx.employees:
-        if needle and needle not in _norm(emp.staff_id) and needle not in _norm(
-            emp.employee_name
-        ):
+        if needle and not _matches_needle(emp, needle, nric_needle):
+            continue
+        if query.match_status == "matched" and emp.matched_category_id is None:
+            continue
+        if query.match_status == "unmatched" and emp.matched_category_id is not None:
             continue
         if categories and not _in_categories(emp, categories):
             continue
@@ -328,6 +373,27 @@ def _filtered(
                 continue
         out.append(emp)
     return out
+
+
+def looks_like_nric(value: str) -> bool:
+    """Enough of an NRIC/FIN to be worth matching identifiers on.
+
+    Deliberately loose — brokers paste partial numbers — but it must not fire on
+    a short numeric fragment that is really a staff id.
+    """
+    return bool(_NRIC_SHAPE.match(value))
+
+
+def _matches_needle(emp: Employee, needle: str, nric_needle: str) -> bool:
+    if needle in _norm(emp.staff_id) or needle in _norm(emp.employee_name):
+        return True
+    # Only when the search text actually LOOKS like an NRIC. `normalize_nric`
+    # merely strips punctuation, so it returns non-empty for anything — without
+    # this shape test, a partial staff-id search like "123" would also pull in
+    # every unrelated member whose NRIC happens to contain "123".
+    return looks_like_nric(nric_needle) and nric_needle in (
+        emp.national_id_normalized or ""
+    )
 
 
 def _in_categories(emp: Employee, category_ids: set[str]) -> bool:
