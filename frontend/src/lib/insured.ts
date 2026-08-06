@@ -12,8 +12,3 @@ export function insuredNames(raw: unknown): string[] {
   const parts = Array.isArray(raw) ? raw : String(raw).split(",");
   return parts.map((p) => String(p).trim()).filter(Boolean);
 }
-
-/** Display form — the legal spellings, joined for a badge or summary line. */
-export function insuredLabel(raw: unknown): string {
-  return insuredNames(raw).join(", ");
-}

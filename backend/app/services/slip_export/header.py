@@ -13,7 +13,6 @@ a field to a template and it appears on the slip with no change here.
 """
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from openpyxl.worksheet.worksheet import Worksheet
@@ -177,7 +176,3 @@ def write_header_block(
         rows.extend(unique_extras)
 
     label_value_rows(ws, rows)
-
-
-def today_text() -> str:
-    return f"{date.today():%d %b %Y}"

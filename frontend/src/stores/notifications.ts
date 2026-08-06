@@ -78,7 +78,3 @@ export function notify(input: {
 }): void {
   useNotifications.getState().notify(input);
 }
-
-export function unreadCount(items: AppNotification[]): number {
-  return items.filter((n) => !n.read).length;
-}

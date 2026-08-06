@@ -230,13 +230,6 @@ export interface CategoryGroup {
   categories: Category[];
 }
 
-export interface CoverageStats {
-  total: number;
-  confirmed: number;
-  needs_review: number;
-  high_confidence: number;
-}
-
 export interface ProductDiagnostic {
   sheet: string;
   product_code: string;
@@ -636,28 +629,6 @@ export interface AuditLogEntry {
 export interface AuditLogPage {
   total: number;
   items: AuditLogEntry[];
-}
-
-export interface DuplicateEntry {
-  row: number;
-  name: string | null;
-  staff_id: string | null;
-  nric_masked: string | null;
-  /** `existing_other_employee` means the same life is already a dependant of a
-   *  DIFFERENT employee — dual coverage, not a re-upload. Anything switching on
-   *  this must handle it, or a cross-employee collision reads as an ordinary
-   *  duplicate, which is what made dual coverage invisible at upload. */
-  reason: "in_file" | "existing" | "existing_other_employee";
-  existing_id: string | null;
-  /** The other employee's staff id, when the collision crosses employees. */
-  existing_staff_id?: string | null;
-}
-
-export interface UploadResult {
-  inserted: number;
-  skipped: number;
-  errors: string[];
-  duplicates: DuplicateEntry[];
 }
 
 // ── ADC (Additions / Deletions / Changes) roster movement ──

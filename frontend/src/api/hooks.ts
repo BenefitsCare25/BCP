@@ -25,9 +25,7 @@ import type {
   ConfigRecommendation,
   AutoMatchResult,
   Dependant,
-  DependantList,
   Employee,
-  EmployeeList,
   FieldSuggestions,
   FlexAssignResult,
   FlexScheme,
@@ -167,30 +165,6 @@ export function useCategoriesGrouped(policyYearId: string | undefined) {
   });
 }
 
-export function useEmployees(
-  policyYearId: string | undefined,
-  offset = 0,
-  limit = 50,
-  q = "",
-  matchStatus: "all" | "matched" | "unmatched" = "all",
-) {
-  const cid = useActiveClientId();
-  return useQuery({
-    queryKey: ["employees", policyYearId, offset, limit, q, matchStatus, cid],
-    queryFn: () => {
-      const params = new URLSearchParams({
-        policy_year_id: policyYearId ?? "",
-        offset: String(offset),
-        limit: String(limit),
-      });
-      if (q) params.set("q", q);
-      if (matchStatus !== "all") params.set("match_status", matchStatus);
-      return api.get<EmployeeList>(`/employees?${params}`);
-    },
-    enabled: Boolean(policyYearId),
-  });
-}
-
 export function useCoverageSummary(policyYearId: string | undefined) {
   const cid = useActiveClientId();
   return useQuery({
@@ -219,30 +193,6 @@ export function useBenefitStatement(employeeId: string | null) {
     queryFn: () =>
       api.get<BenefitStatement>(`/employees/${employeeId}/benefit-statement`),
     enabled: Boolean(employeeId),
-  });
-}
-
-export function useDependants(
-  policyYearId: string | undefined,
-  offset = 0,
-  limit = 50,
-  unlinkedOnly = false,
-  q = "",
-) {
-  const cid = useActiveClientId();
-  return useQuery({
-    queryKey: ["dependants", policyYearId, offset, limit, unlinkedOnly, q, cid],
-    queryFn: () => {
-      const params = new URLSearchParams({
-        policy_year_id: policyYearId ?? "",
-        offset: String(offset),
-        limit: String(limit),
-      });
-      if (unlinkedOnly) params.set("unlinked_only", "true");
-      if (q.trim()) params.set("q", q.trim());
-      return api.get<DependantList>(`/dependants?${params}`);
-    },
-    enabled: Boolean(policyYearId),
   });
 }
 

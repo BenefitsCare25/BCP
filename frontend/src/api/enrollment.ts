@@ -1048,15 +1048,6 @@ export function useBulkHistory(policyYearId: string | undefined) {
   });
 }
 
-export function useBulkBatch(batchId: string | undefined) {
-  const cid = useClientId();
-  return useQuery({
-    queryKey: ["bulk-updates", "detail", batchId, cid],
-    queryFn: () => api.get<BulkBatchDetail>(`/bulk-plan-updates/${batchId}`),
-    enabled: !!batchId,
-  });
-}
-
 /** Load one batch on demand — "re-run this selection" needs the stored query,
  *  which the history list deliberately doesn't carry (it would ship every past
  *  batch's rule to render a date and a headcount). */

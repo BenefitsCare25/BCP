@@ -7,7 +7,6 @@ consumers don't branch.
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from anthropic.types import ToolUseBlock
@@ -200,19 +199,6 @@ def generate_rule_via_ai(
         "reasoning": str(payload.get("reasoning", "")),
     }
     return envelope, metadata
-
-
-async def generate_rule_via_ai_async(
-    description: str,
-    schema: list[AttributeSchemaOut],
-    config: AIConfig | None = None,
-) -> tuple[RuleEnvelope, dict[str, Any]]:
-    """Async wrapper that delegates to a thread so the event loop isn't blocked.
-
-    The Anthropic SDK's sync client is fine inside `asyncio.to_thread`; using
-    the async client directly would require a different lifecycle.
-    """
-    return await asyncio.to_thread(generate_rule_via_ai, description, schema, config)
 
 
 # ── Roster derivation-rule proposal ──────────────────────────────────────────
