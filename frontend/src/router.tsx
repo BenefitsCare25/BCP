@@ -543,99 +543,69 @@ const dashboardRoute = createRoute({
   component: CompanyDashboardPage,
 });
 
-const schemaLayoutRoute = createRoute({
+// Broker routes are grouped by the SIDEBAR GROUP that owns them, so a URL and
+// the nav entry that reaches it always agree (`/policy-admin/member-listing` is
+// Policy Admin → Member Listing). `components/shell/nav.ts` is the single source
+// of the labels; these paths mirror its groups. There are deliberately NO legacy
+// redirects — the old `/operations/*` and `/configuration/*` paths are gone.
+
+// ── Client Relations ─────────────────────────────────────────────────────────
+const crLayoutRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/schema",
+  path: "/client-relations",
   component: () => <Outlet />,
 });
 
-const schemaIndexRoute = createRoute({
-  getParentRoute: () => schemaLayoutRoute,
+const crIndexRoute = createRoute({
+  getParentRoute: () => crLayoutRoute,
   path: "/",
-  component: SchemaPage,
-});
-
-// Legacy schema paths — attributes/products are tabs of one page now.
-const schemaAttributesRedirect = createRoute({
-  getParentRoute: () => schemaLayoutRoute,
-  path: "/attributes",
   beforeLoad: () => {
-    throw redirect({ to: "/schema", search: { tab: "attributes" } });
+    throw redirect({ to: "/client-relations/company-benefits" });
   },
   component: () => null,
 });
 
-const schemaProductsRedirect = createRoute({
-  getParentRoute: () => schemaLayoutRoute,
-  path: "/products",
-  beforeLoad: () => {
-    throw redirect({ to: "/schema", search: { tab: "products" } });
-  },
-  component: () => null,
-});
-
-const configLayoutRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
-  path: "/configuration",
-  component: () => <Outlet />,
-});
-
-const configIndexRoute = createRoute({
-  getParentRoute: () => configLayoutRoute,
-  path: "/",
-  // `tab` is optional deep-link state (?tab=flex) — return it as an optional
-  // key so navigations to /configuration without a tab aren't forced to pass one.
+const crCompanyBenefitsRoute = createRoute({
+  getParentRoute: () => crLayoutRoute,
+  path: "/company-benefits",
+  // `tab` is optional deep-link state (?tab=flex) — return it as an optional key
+  // so navigations without a tab aren't forced to pass one.
   validateSearch: (search: Record<string, unknown>): { tab?: string } =>
     typeof search.tab === "string" ? { tab: search.tab } : {},
   component: ConfigurationPage,
 });
 
-const configSettingsRoute = createRoute({
-  getParentRoute: () => configLayoutRoute,
-  path: "/settings",
-  // Tab is optional deep-link state (?tab=aliases); return it optional so bare
-  // /configuration/settings navigations aren't forced to pass one.
-  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
-    typeof search.tab === "string" ? { tab: search.tab } : {},
-  component: CompanySettingsPage,
+const crEnrollmentRoute = createRoute({
+  getParentRoute: () => crLayoutRoute,
+  path: "/enrollment",
+  component: EnrollmentPage,
 });
 
-const configAIProviderRoute = createRoute({
-  getParentRoute: () => configLayoutRoute,
-  path: "/ai-provider",
-  component: AIProviderPage,
-});
-
-const configPanelClinicsRoute = createRoute({
-  getParentRoute: () => configLayoutRoute,
-  path: "/panel-clinics",
-  component: PanelClinicsPage,
-});
-
-const opsLayoutRoute = createRoute({
+// ── Policy Admin ─────────────────────────────────────────────────────────────
+const paLayoutRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/operations",
+  path: "/policy-admin",
   component: () => <Outlet />,
 });
 
-const opsIndexRoute = createRoute({
-  getParentRoute: () => opsLayoutRoute,
+const paIndexRoute = createRoute({
+  getParentRoute: () => paLayoutRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/operations/roster" });
+    throw redirect({ to: "/policy-admin/member-listing" });
   },
   component: () => null,
 });
 
-const opsRosterRoute = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/roster",
+const paMemberListingRoute = createRoute({
+  getParentRoute: () => paLayoutRoute,
+  path: "/member-listing",
   component: RosterPage,
 });
 
-const opsCoverageRoute = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/coverage",
+const paCoverageRoute = createRoute({
+  getParentRoute: () => paLayoutRoute,
+  path: "/coverage-members",
   validateSearch: (search: Record<string, unknown>) => ({
     employee: typeof search.employee === "string" ? search.employee : undefined,
     view:
@@ -648,81 +618,44 @@ const opsCoverageRoute = createRoute({
   component: EmployeeCoveragePage,
 });
 
-// Legacy operations paths — employees/dependants merged into the roster page,
-// benefit-statement/employee-view merged into the coverage page.
-const opsEmployeesRedirect = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/employees",
-  beforeLoad: () => {
-    throw redirect({ to: "/operations/roster", search: { tab: "employees" } });
-  },
-  component: () => null,
+const paPanelClinicsRoute = createRoute({
+  getParentRoute: () => paLayoutRoute,
+  path: "/panel-clinics",
+  component: PanelClinicsPage,
 });
 
-const opsDependantsRedirect = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/dependants",
-  beforeLoad: () => {
-    throw redirect({ to: "/operations/roster", search: { tab: "dependants" } });
-  },
-  component: () => null,
+const paUnderwritingRoute = createRoute({
+  getParentRoute: () => paLayoutRoute,
+  path: "/underwriting",
+  component: UnderwritingPage,
 });
 
-const opsBenefitStatementRedirect = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/benefit-statement",
-  beforeLoad: () => {
-    throw redirect({
-      to: "/operations/coverage",
-      search: { employee: undefined, view: undefined },
-    });
-  },
-  component: () => null,
-});
-
-const opsEmployeeViewRedirect = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/employee-view",
-  beforeLoad: ({ location }) => {
-    const search = location.search as { employee?: string };
-    throw redirect({
-      to: "/operations/coverage",
-      search: { view: "employee", employee: search.employee },
-    });
-  },
-  component: () => null,
-});
-
-// Policy-year management moved into the Configuration page. Keep the old path
-// as a redirect so bookmarks/links don't 404.
-const opsActivationsRoute = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/activations",
-  beforeLoad: () => {
-    throw redirect({ to: "/configuration" });
-  },
-  component: () => null,
-});
-
-const opsClaimsRoute = createRoute({
-  getParentRoute: () => opsLayoutRoute,
+// ── Claims ───────────────────────────────────────────────────────────────────
+const claimsLayoutRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
   path: "/claims",
+  component: () => <Outlet />,
+});
+
+const claimsIndexRoute = createRoute({
+  getParentRoute: () => claimsLayoutRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/claims/review" });
+  },
+  component: () => null,
+});
+
+const claimsReviewRoute = createRoute({
+  getParentRoute: () => claimsLayoutRoute,
+  path: "/review",
   component: ClaimsQueuePage,
 });
 
-// Reports Center moved to a top-level company-scoped route with team tabs.
-// Keep the old operations path as a redirect so bookmarks don't 404.
-const opsReportsRedirect = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/reports",
-  beforeLoad: () => {
-    throw redirect({ to: "/reports", search: { tab: "pa" } });
-  },
-  component: () => null,
-});
-
-const reportsRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
+// Reports Center spans every team (Policy Admin / Claims / Flex tabs); it lives
+// under /claims because that is the sidebar group it is listed in.
+const claimsReportsRoute = createRoute({
+  getParentRoute: () => claimsLayoutRoute,
   path: "/reports",
   validateSearch: (search: Record<string, unknown>) => ({
     tab: typeof search.tab === "string" ? search.tab : undefined,
@@ -730,50 +663,62 @@ const reportsRoute = createRoute({
   component: ReportsPage,
 });
 
-const opsUnderwritingRoute = createRoute({
-  getParentRoute: () => opsLayoutRoute,
-  path: "/underwriting",
-  component: UnderwritingPage,
-});
-
-const enrollmentLayoutRoute = createRoute({
+// ── Settings ─────────────────────────────────────────────────────────────────
+const settingsLayoutRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/enrollment",
+  path: "/settings",
   component: () => <Outlet />,
 });
 
-const enrollmentIndexRoute = createRoute({
-  getParentRoute: () => enrollmentLayoutRoute,
+const settingsIndexRoute = createRoute({
+  getParentRoute: () => settingsLayoutRoute,
   path: "/",
-  component: EnrollmentPage,
-});
-
-// Legacy enrollment paths — elections/bulk are tabs of the enrollment page.
-const enrollmentElectionsRedirect = createRoute({
-  getParentRoute: () => enrollmentLayoutRoute,
-  path: "/elections",
-  beforeLoad: ({ location }) => {
-    const search = location.search as { window?: string };
-    throw redirect({
-      to: "/enrollment",
-      search: { tab: "elections", window: search.window },
-    });
-  },
-  component: () => null,
-});
-
-const enrollmentBulkRedirect = createRoute({
-  getParentRoute: () => enrollmentLayoutRoute,
-  path: "/bulk",
   beforeLoad: () => {
-    throw redirect({ to: "/enrollment", search: { tab: "bulk" } });
+    throw redirect({ to: "/settings/company" });
   },
   component: () => null,
 });
 
-const adminRoute = createRoute({
+const settingsCompanyRoute = createRoute({
+  getParentRoute: () => settingsLayoutRoute,
+  path: "/company",
+  // Tab is optional deep-link state (?tab=aliases).
+  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
+    typeof search.tab === "string" ? { tab: search.tab } : {},
+  component: CompanySettingsPage,
+});
+
+const settingsAIRoute = createRoute({
+  getParentRoute: () => settingsLayoutRoute,
+  path: "/ai",
+  component: AIProviderPage,
+});
+
+// ── Firm-wide ────────────────────────────────────────────────────────────────
+const firmLayoutRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/admin",
+  path: "/firm",
+  component: () => <Outlet />,
+});
+
+const firmIndexRoute = createRoute({
+  getParentRoute: () => firmLayoutRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/firm/schema" });
+  },
+  component: () => null,
+});
+
+const firmSchemaRoute = createRoute({
+  getParentRoute: () => firmLayoutRoute,
+  path: "/schema",
+  component: SchemaPage,
+});
+
+const firmAccessRoute = createRoute({
+  getParentRoute: () => firmLayoutRoute,
+  path: "/access",
   component: AdminPage,
 });
 
@@ -807,37 +752,33 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     homeRoute,
     dashboardRoute,
-    reportsRoute,
-    schemaLayoutRoute.addChildren([
-      schemaIndexRoute,
-      schemaAttributesRedirect,
-      schemaProductsRedirect,
+    crLayoutRoute.addChildren([
+      crIndexRoute,
+      crCompanyBenefitsRoute,
+      crEnrollmentRoute,
     ]),
-    configLayoutRoute.addChildren([
-      configIndexRoute,
-      configSettingsRoute,
-      configAIProviderRoute,
-      configPanelClinicsRoute,
+    paLayoutRoute.addChildren([
+      paIndexRoute,
+      paMemberListingRoute,
+      paCoverageRoute,
+      paPanelClinicsRoute,
+      paUnderwritingRoute,
     ]),
-    opsLayoutRoute.addChildren([
-      opsIndexRoute,
-      opsRosterRoute,
-      opsCoverageRoute,
-      opsEmployeesRedirect,
-      opsDependantsRedirect,
-      opsBenefitStatementRedirect,
-      opsEmployeeViewRedirect,
-      opsClaimsRoute,
-      opsReportsRedirect,
-      opsUnderwritingRoute,
-      opsActivationsRoute,
+    claimsLayoutRoute.addChildren([
+      claimsIndexRoute,
+      claimsReviewRoute,
+      claimsReportsRoute,
     ]),
-    enrollmentLayoutRoute.addChildren([
-      enrollmentIndexRoute,
-      enrollmentElectionsRedirect,
-      enrollmentBulkRedirect,
+    settingsLayoutRoute.addChildren([
+      settingsIndexRoute,
+      settingsCompanyRoute,
+      settingsAIRoute,
     ]),
-    adminRoute,
+    firmLayoutRoute.addChildren([
+      firmIndexRoute,
+      firmSchemaRoute,
+      firmAccessRoute,
+    ]),
   ]),
 ]);
 

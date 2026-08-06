@@ -48,7 +48,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
         message: "No current benefit year — set one in Company & Benefits",
         short: "no current benefit year",
         tone: "error",
-        to: "/configuration",
+        to: "/client-relations/company-benefits",
       },
     ];
   }
@@ -61,7 +61,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
       message: `${c.claims_to_review} claim${plural(c.claims_to_review)} awaiting review`,
       short: `${c.claims_to_review} claim${plural(c.claims_to_review)} to review`,
       tone: "warn",
-      to: "/operations/claims",
+      to: "/claims/review",
     });
   }
   if (c.employees_unmatched > 0) {
@@ -70,7 +70,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
       message: `${c.employees_unmatched} member${plural(c.employees_unmatched)} not matched to a category`,
       short: `${c.employees_unmatched} unmatched member${plural(c.employees_unmatched)}`,
       tone: "warn",
-      to: "/operations/roster",
+      to: "/policy-admin/member-listing",
     });
   }
   if (c.matching_stale) {
@@ -79,7 +79,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
       message: "Categories changed since the last matching run — re-run matching",
       short: "matching is stale",
       tone: "warn",
-      to: "/operations/roster",
+      to: "/policy-admin/member-listing",
     });
   }
   if (c.dependants_pending > 0) {
@@ -90,7 +90,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
       tone: "warn",
       // The approval UI lives on the roster's Dependants tab, not the default
       // Employees tab.
-      to: "/operations/roster",
+      to: "/policy-admin/member-listing",
       search: { tab: "dependants" },
     });
   }
@@ -100,7 +100,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
       message: `${c.underwriting_pending} underwriting case${plural(c.underwriting_pending)} pending`,
       short: `${c.underwriting_pending} U/W case${plural(c.underwriting_pending)} pending`,
       tone: "warn",
-      to: "/operations/underwriting",
+      to: "/policy-admin/underwriting",
     });
   }
   if (c.enrollment_closes_at) {
@@ -113,7 +113,7 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
         message: `Enrolment period ${when}`,
         short: `enrolment ${when}`,
         tone: "warn",
-        to: "/enrollment",
+        to: "/client-relations/enrollment",
       });
     }
   }

@@ -241,7 +241,7 @@ export function EnrollmentDashboardPage() {
                 that decide what members can actually do live on the Leave tab. */}
             {allowLeave && (
               <Link
-                to="/enrollment"
+                to="/client-relations/enrollment"
                 search={{ tab: "leave" }}
                 className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
@@ -265,7 +265,7 @@ export function EnrollmentDashboardPage() {
               {/* What each plan COSTS the wallet — the price tags and where they
                   come from — is per policy year and lives on its own tab. */}
               <Link
-                to="/enrollment"
+                to="/client-relations/enrollment"
                 search={{ tab: "flex" }}
                 className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
@@ -347,7 +347,7 @@ export function EnrollmentDashboardPage() {
                   {w.status === "open" && (
                     <Button asChild variant="outline" size="sm">
                       <Link
-                        to="/enrollment"
+                        to="/client-relations/enrollment"
                         search={{ tab: "elections", window: w.id }}
                       >
                         Benefits Selection
@@ -697,7 +697,7 @@ export function EnrollmentPage() {
     <Tabs
       value={tab}
       onValueChange={(value) =>
-        navigate({ to: "/enrollment", search: { tab: value } })
+        navigate({ to: "/client-relations/enrollment", search: { tab: value } })
       }
     >
       <TabsList>

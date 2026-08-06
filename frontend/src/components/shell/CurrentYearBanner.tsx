@@ -109,7 +109,7 @@ export function CurrentYearBanner() {
           <SetCurrentButton year={candidate} />
         ) : (
           <Link
-            to="/configuration"
+            to="/client-relations/company-benefits"
             className="font-medium text-primary underline-offset-2 hover:underline"
           >
             Choose one in Company &amp; Benefits →
@@ -154,7 +154,7 @@ export function NoCurrentYearNotice() {
         <SetCurrentButton year={candidate} />
       ) : (
         <Button asChild size="sm" variant="outline" className="h-7">
-          <Link to="/configuration">Open Company &amp; Benefits</Link>
+          <Link to="/client-relations/company-benefits">Open Company &amp; Benefits</Link>
         </Button>
       )}
     </div>

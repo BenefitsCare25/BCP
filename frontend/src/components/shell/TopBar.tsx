@@ -24,7 +24,7 @@ export function TopBar({
   // Firm-wide surfaces live in the top bar as icon shortcuts (not the sidebar,
   // which is company-scoped). Access & Companies stays broker-admin gated.
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
-  const firmItems = FIRM_NAV.items.filter((i) => i.to !== "/admin" || canAdmin);
+  const firmItems = FIRM_NAV.items.filter((i) => i.to !== "/firm/access" || canAdmin);
 
   // The per-page year picker was removed: the session policy year always tracks
   // the CURRENT (active) benefit year, and every page follows it. The

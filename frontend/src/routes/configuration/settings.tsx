@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useMe } from "@/api/hooks";
@@ -13,10 +13,14 @@ import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 //
 // Claims configuration is deliberately NOT here any more — the grace period,
 // document vocabulary and the per-claim-type AI review rules all live on the
-// Claims page (/operations/claims, Settings + AI extraction tabs) beside the
-// review queue they govern; `?tab=claims` redirects there. The leave policy
-// likewise reads as part of the enrollment workflow, so `?tab=enrollment`
-// redirects to /enrollment?tab=leave rather than falling back silently.
+// Claims page (/claims/review, Settings + AI extraction tabs) beside the review
+// queue they govern. The leave policy likewise reads as part of the enrollment
+// workflow and lives on /client-relations/enrollment?tab=leave.
+//
+// The `?tab=claims` / `?tab=enrollment` forwarding effect that used to sit here
+// was removed with the URL cutover: its only entry point was the old
+// `/configuration/settings?tab=…`, which no longer resolves, so it could never
+// fire for the case it existed to handle.
 const SETTINGS_TABS = ["aliases", "hr"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const isTab = (v: string | undefined): v is SettingsTab =>
@@ -27,18 +31,6 @@ export function CompanySettingsPage() {
   const search = useSearch({ strict: false }) as { tab?: string };
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
-  // Old deep links follow their content to its new home.
-  useEffect(() => {
-    if (search.tab === "enrollment") {
-      void navigate({ to: "/enrollment", search: { tab: "leave" }, replace: true });
-    } else if (search.tab === "claims") {
-      void navigate({
-        to: "/operations/claims",
-        search: { tab: "settings" },
-        replace: true,
-      });
-    }
-  }, [search.tab, navigate]);
   const requested: SettingsTab = isTab(search.tab) ? search.tab : "aliases";
   // The Authentication tab is admin-only (firm-admin `/hr-admin` endpoints);
   // fall back to aliases if a viewer deep-links it.
@@ -51,7 +43,7 @@ export function CompanySettingsPage() {
       <Tabs
         value={tab}
         onValueChange={(v) =>
-          navigate({ to: "/configuration/settings", search: { tab: v } })
+          navigate({ to: "/settings/company", search: { tab: v } })
         }
       >
         <TabsList>

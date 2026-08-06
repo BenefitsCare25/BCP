@@ -40,9 +40,10 @@ export type NavGroup = {
   items: NavItem[];
 };
 
-// Grouped by the internal team that owns the work, NOT by the URL prefix — a
-// team's pages can span several route prefixes (e.g. Policy Admin mixes
-// /operations/* with /configuration/panel-clinics).
+// Grouped by the internal team that owns the work, and the ROUTE PREFIX MIRRORS
+// THE GROUP — Policy Admin pages all live under /policy-admin/*, Claims under
+// /claims/*, and so on. A nav label and the URL it reaches always agree, so
+// renaming an item here means renaming its route in router.tsx to match.
 export const COMPANY_NAV: NavGroup[] = [
   {
     label: "Client Relations",
@@ -51,13 +52,13 @@ export const COMPANY_NAV: NavGroup[] = [
     items: [
       {
         label: "Company & Benefits",
-        to: "/configuration",
+        to: "/client-relations/company-benefits",
         title: "Company & Benefits",
         icon: Boxes,
       },
       {
         label: "Enrollment",
-        to: "/enrollment",
+        to: "/client-relations/enrollment",
         title: "Benefits Selection",
         icon: CalendarCheck,
       },
@@ -70,25 +71,25 @@ export const COMPANY_NAV: NavGroup[] = [
     items: [
       {
         label: "Member Listing",
-        to: "/operations/roster",
+        to: "/policy-admin/member-listing",
         title: "Member Listing / Upload",
         icon: Upload,
       },
       {
         label: "Coverage & Members",
-        to: "/operations/coverage",
+        to: "/policy-admin/coverage-members",
         title: "Coverage & Members",
         icon: UserCheck,
       },
       {
         label: "Panel & Clinics",
-        to: "/configuration/panel-clinics",
+        to: "/policy-admin/panel-clinics",
         title: "Panel Clinic Locations",
         icon: Stethoscope,
       },
       {
         label: "Underwriting",
-        to: "/operations/underwriting",
+        to: "/policy-admin/underwriting",
         title: "Underwriting Queue",
         icon: ClipboardCheck,
       },
@@ -101,13 +102,13 @@ export const COMPANY_NAV: NavGroup[] = [
     items: [
       {
         label: "Claims Review",
-        to: "/operations/claims",
+        to: "/claims/review",
         title: "Claims Review",
         icon: ReceiptText,
       },
       {
         label: "Reports Center",
-        to: "/reports",
+        to: "/claims/reports",
         title: "Reports Center",
         icon: BarChart3,
       },
@@ -120,13 +121,13 @@ export const COMPANY_NAV: NavGroup[] = [
     items: [
       {
         label: "Company settings",
-        to: "/configuration/settings",
+        to: "/settings/company",
         title: "Company settings",
         icon: Cog,
       },
       {
         label: "AI Setting",
-        to: "/configuration/ai-provider",
+        to: "/settings/ai",
         title: "AI Setting",
         icon: Sparkles,
       },
@@ -143,13 +144,13 @@ export const FIRM_NAV: NavGroup = {
   items: [
     {
       label: "Schema & Reference",
-      to: "/schema",
+      to: "/firm/schema",
       title: "Schema & Reference",
       icon: SlidersHorizontal,
     },
     {
       label: "Access & Companies",
-      to: "/admin",
+      to: "/firm/access",
       title: "Access & Companies",
       icon: Building2,
     },
@@ -159,10 +160,10 @@ export const FIRM_NAV: NavGroup = {
 // The firm-wide route prefixes — pages that span every company and therefore
 // show the "Firm-wide" context instead of a company chip. Everything else in
 // the app shell acts on the active company.
-const FIRM_PREFIXES = ["/home", "/schema", "/admin"];
+const FIRM_PREFIXES = ["/home", "/firm"];
 
 /** True when the path is a company-scoped page (shows the company context).
- * Firm-wide pages (/home, /schema, /admin and their children) return false. */
+ * Firm-wide pages (/home, /firm/* and their children) return false. */
 export function isCompanyPath(pathname: string): boolean {
   return !FIRM_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),

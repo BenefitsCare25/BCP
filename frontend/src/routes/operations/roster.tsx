@@ -34,7 +34,7 @@ export function RosterPage() {
     <Tabs
       value={tab}
       onValueChange={(value) =>
-        navigate({ to: "/operations/roster", search: { tab: value } })
+        navigate({ to: "/policy-admin/member-listing", search: { tab: value } })
       }
     >
       <div className="flex items-center justify-between gap-3">

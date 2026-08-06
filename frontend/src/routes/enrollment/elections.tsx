@@ -67,7 +67,7 @@ export function EnrollmentElectionsPage() {
       setWindowId(fallback);
       if (search.window && search.window !== fallback) {
         void navigate({
-          to: "/enrollment",
+          to: "/client-relations/enrollment",
           search: { tab: "elections", window: fallback },
           replace: true,
         });

@@ -49,7 +49,7 @@ export function SchemaPage() {
     <Tabs
       value={tab}
       onValueChange={(value) =>
-        navigate({ to: "/schema", search: { tab: value } })
+        navigate({ to: "/firm/schema", search: { tab: value } })
       }
     >
       <div className="flex items-center justify-between gap-3">

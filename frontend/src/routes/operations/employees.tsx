@@ -1,15 +1,15 @@
 /** The Employees TAB of the roster page — NOT a route of its own.
  *
- * `/operations/employees` was retired by the nav consolidation and redirects to
- * `/operations/roster?tab=employees` (`router.tsx`); this file is imported by
- * `roster.tsx:8` and rendered as that tab, so everything here IS reachable —
- * under the nav item labelled **Member Listing**.
+ * This file is imported by `roster.tsx:8` and rendered as that tab, so
+ * everything here IS reachable — at `/policy-admin/member-listing?tab=employees`,
+ * under the nav item labelled **Member Listing**. The folder name is historical:
+ * routes live under `routes/operations/` but no longer serve an `/operations/*`
+ * URL, so never infer a path from this file's location.
  *
  * The file previously carried a banner claiming it was orphaned. It was not:
  * the check that produced that conclusion excluded this file from its own
- * search, and `docs/ORPHANED_UI_RECOVERY.md` still repeats it. Run matching,
- * match results, the per-employee override, bulk delete and the flex detail
- * blocks are all live on the tab.
+ * search. Run matching, match results, the per-employee override, bulk delete
+ * and the flex detail blocks are all live on the tab.
  *
  * Bulk portal invites DID move out — to Company settings → Authentication,
  * beside the sign-in policy that governs them. `MemberAccountActions` renders

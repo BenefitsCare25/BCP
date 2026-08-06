@@ -913,7 +913,7 @@ export function ClaimsQueuePage() {
     <Tabs
       value={tab}
       onValueChange={(v) =>
-        navigate({ to: "/operations/claims", search: { tab: v } })
+        navigate({ to: "/claims/review", search: { tab: v } })
       }
     >
       <TabsList>

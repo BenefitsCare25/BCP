@@ -441,7 +441,7 @@ function PaReports({
               : `${missingInsurer.length === 1 ? "it is" : "they are"} left out of every insurer submission`}
             . Set it on{" "}
             <Link
-              to="/configuration"
+              to="/client-relations/company-benefits"
               className="font-medium underline underline-offset-2 hover:text-primary"
             >
               Company &amp; Benefits
@@ -460,7 +460,7 @@ function PaReports({
             No products are configured for this benefit year, so there is
             nothing to submit to an insurer yet. Add them on{" "}
             <Link
-              to="/configuration"
+              to="/client-relations/company-benefits"
               className="font-medium underline underline-offset-2 hover:text-primary"
             >
               Company &amp; Benefits
@@ -580,7 +580,7 @@ function FlexReports({
       format: "Interactive",
       action: (
         <OpenLink
-          to="/enrollment"
+          to="/client-relations/enrollment"
           search={{ tab: "flex" }}
           label="Open flex pricing"
         />
@@ -594,7 +594,7 @@ function FlexReports({
       format: "Interactive",
       action: (
         <OpenLink
-          to="/configuration"
+          to="/client-relations/company-benefits"
           search={{ tab: "flex" }}
           label="Open flex overview"
         />
@@ -645,7 +645,7 @@ function ClaimsReports({ year }: { year: PolicyYear }) {
       format: "Interactive",
       action: (
         <OpenLink
-          to="/operations/coverage"
+          to="/policy-admin/coverage-members"
           search={{ view: "broker" }}
           label="Open in Coverage"
         />
@@ -666,7 +666,7 @@ function ItReports() {
       description:
         "Recent activity for this company — configuration changes, matching runs, exports and member actions.",
       format: "Interactive",
-      action: <OpenLink to="/configuration" label="Open audit feed" />,
+      action: <OpenLink to="/client-relations/company-benefits" label="Open audit feed" />,
     },
     {
       icon: Sparkles,
@@ -674,7 +674,7 @@ function ItReports() {
       description:
         "Token usage and cost for AI extraction and claim review, with the circuit-breaker status.",
       format: "Interactive",
-      action: <OpenLink to="/configuration/ai-provider" label="Open AI usage" />,
+      action: <OpenLink to="/settings/ai" label="Open AI usage" />,
     },
   ];
   if (canAdmin) {
@@ -684,7 +684,7 @@ function ItReports() {
       description:
         "Users, roles and company access across the firm — invite, disable and manage grants.",
       format: "Interactive",
-      action: <OpenLink to="/admin" label="Open access admin" />,
+      action: <OpenLink to="/firm/access" label="Open access admin" />,
     });
   }
   return <ReportTable rows={rows} />;
@@ -769,7 +769,7 @@ export function ReportsPage() {
       <Tabs
         value={tab}
         onValueChange={(value) =>
-          navigate({ to: "/reports", search: { tab: value } })
+          navigate({ to: "/claims/reports", search: { tab: value } })
         }
       >
         <TabsList>

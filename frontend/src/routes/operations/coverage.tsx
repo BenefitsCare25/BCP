@@ -131,7 +131,7 @@ export function EmployeeCoveragePage() {
 
   const setSearchParams = (next: { employee?: string; view?: CoverageView }) =>
     void navigate({
-      to: "/operations/coverage",
+      to: "/policy-admin/coverage-members",
       search: {
         employee: next.employee ?? selectedId ?? undefined,
         view: next.view ?? view,
