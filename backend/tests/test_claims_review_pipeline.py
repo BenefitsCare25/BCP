@@ -1468,3 +1468,81 @@ def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
                 y.status = PolicyYearStatus.active
             s.query(FlexScheme).filter(FlexScheme.policy_year_id == PY).delete()
             s.commit()
+
+
+# ── Duplicate detection: the INVOICE NUMBER, not the document hash ───────────
+
+
+def _rule(claim_id: str, name: str) -> dict:
+    from app.services.claims_review.rules import deterministic_rule_results
+
+    with SessionLocal() as s:
+        claim = s.get(Claim, claim_id)
+        results = deterministic_rule_results(s, claim, _statement(s.get(Employee, EMP)))
+    return next(r for r in results if name in r["rule"])
+
+
+def _set_invoice(claim_id: str, number: str | None) -> None:
+    with SessionLocal() as s:
+        claim = s.get(Claim, claim_id)
+        claim.invoice_number = number
+        s.commit()
+
+
+def test_duplicate_invoice_rule_fails_on_the_members_own_claim():
+    first, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"dupe-a")
+    second, _ = _mk_claim(marker=b"dupe-b")
+    _set_invoice(first, "INV-777")
+    _set_invoice(second, "inv 777")  # same bill, typed differently
+
+    result = _rule(second, "invoice number")
+    assert result["status"] == "fail"
+    assert first in result["evidence"]
+
+
+def test_the_same_document_on_two_invoices_is_not_a_duplicate():
+    """The multi-invoice split shares one discharge summary across an episode's
+    claims — the old SHA-256 rule failed every claim after the first."""
+    shared = b"one-episode"
+    first, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=shared)
+    second, _ = _mk_claim(marker=shared)
+    _set_invoice(first, "EP-1")
+    _set_invoice(second, "EP-2")
+
+    assert _rule(second, "invoice number")["status"] == "pass"
+
+
+def test_another_members_identical_invoice_number_is_a_warning_not_a_failure():
+    """Short receipt numbers collide across providers, so a stranger's matching
+    number is for a broker to weigh — never an automatic flag on a member."""
+    other_emp = new_uuid()
+    with SessionLocal() as s:
+        s.add(
+            Employee(
+                id=other_emp, client_id=DEMO_CLIENT_ID, policy_year_id=PY,
+                staff_id="CR-9", employee_name="Other", attribute_values={},
+                derived_attribute_values={}, source="csv_import", status="active",
+            )
+        )
+        s.commit()
+    theirs, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"theirs")
+    with SessionLocal() as s:
+        s.get(Claim, theirs).employee_id = other_emp
+        s.commit()
+    _set_invoice(theirs, "0001")
+
+    mine, _ = _mk_claim(marker=b"mine")
+    _set_invoice(mine, "0001")
+
+    result = _rule(mine, "invoice number")
+    assert result["status"] == "warning"
+    assert theirs in result["evidence"]
+
+
+def test_a_claim_with_no_invoice_number_never_matches():
+    first, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"blank-a")
+    second, _ = _mk_claim(marker=b"blank-b")
+    _set_invoice(first, None)
+    _set_invoice(second, "  ")
+
+    assert _rule(second, "invoice number")["status"] == "pass"

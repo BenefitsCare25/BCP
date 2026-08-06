@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Claim, Dependant, PolicyYear, StoredDocument
 from app.models.claim import CLAIM_KIND_FLEX, LIVE_STATUSES
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
+from app.services.claim_intake import normalize_invoice_number
 from app.services.utilization import parse_limit_amount
 
 
@@ -40,38 +41,111 @@ def _check_period(db: Session, claim: Claim) -> dict[str, Any]:
     )
 
 
-def _check_duplicate_receipts(db: Session, claim: Claim) -> dict[str, Any]:
-    rule = "No receipt is reused from another live claim."
-    docs = db.execute(
-        select(StoredDocument).where(
+def _check_has_documents(db: Session, claim: Claim) -> dict[str, Any]:
+    rule = "The claim carries at least one document."
+    count = db.execute(
+        select(func.count())
+        .select_from(StoredDocument)
+        .where(
+            StoredDocument.entity_type == DOC_ENTITY_CLAIM,
+            StoredDocument.entity_id == claim.id,
+        )
+    ).scalar_one()
+    if not count:
+        return _result(rule, "fail", "The claim has no attached documents.")
+    return _result(rule, "pass", f"{count} document(s) attached.")
+
+
+def _check_duplicate_invoice(db: Session, claim: Claim) -> dict[str, Any]:
+    """The invoice number — not the document hash — is what identifies the bill
+    being claimed twice (see `services/claims.duplicate_invoice_claim_ids`).
+
+    Two scopes, deliberately different: the member's OWN live claims are a
+    duplicate and FAIL (submit blocks them, so one reaching here came in through
+    a broker-entered case or a claim that went live concurrently); the same
+    number on ANOTHER member's live claim is a WARNING — short receipt numbers
+    collide across providers, so it is a signal for the broker to weigh, never
+    an automatic flag on a member who did nothing wrong.
+    """
+    from app.services.claims import duplicate_invoice_claim_ids
+
+    rule = "The invoice number is not already claimed."
+    key = normalize_invoice_number(claim.invoice_number)
+    if not key:
+        return _result(rule, "pass", "No invoice number recorded on this claim.")
+
+    own = duplicate_invoice_claim_ids(db, claim)
+    if own:
+        return _result(
+            rule, "fail",
+            f"Invoice {claim.invoice_number} is already on live claim(s): "
+            f"{', '.join(own)}.",
+        )
+
+    rows = db.execute(
+        select(Claim.id, Claim.invoice_number).where(
+            Claim.client_id == claim.client_id,
+            # Same benefit year only: an invoice has to be incurred in period,
+            # so a match in another year cannot be the same bill — and it keeps
+            # the scan bounded as the company's claim history grows.
+            Claim.policy_year_id == claim.policy_year_id,
+            Claim.employee_id != claim.employee_id,
+            Claim.status.in_(LIVE_STATUSES),
+        )
+    ).all()
+    others = sorted(
+        cid for cid, number in rows if normalize_invoice_number(number) == key
+    )
+    if others:
+        return _result(
+            rule, "warning",
+            f"Invoice {claim.invoice_number} also appears on another member's "
+            f"live claim(s): {', '.join(others)}. Confirm these are different "
+            "bills before approving.",
+        )
+    return _result(rule, "pass", f"Invoice {claim.invoice_number} is not claimed elsewhere.")
+
+
+def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """A document byte-identical to one on ANOTHER MEMBER's live claim.
+
+    The hash test is no longer what decides a duplicate CLAIM (the invoice
+    number is — see above), because within one member a shared document is the
+    normal case: the multi-invoice intake flow attaches one episode's discharge
+    summary to every claim of that episode. Across members it is nothing of the
+    kind — two people cannot legitimately hold the same file — so the signal is
+    kept here, scoped to where it means something, as a WARNING rather than the
+    blanket `fail` it used to be. Returns None (no row at all) when clean: a
+    mark that fires on nothing useful is better left unprinted.
+    """
+    hashes = db.execute(
+        select(StoredDocument.sha256).where(
             StoredDocument.entity_type == DOC_ENTITY_CLAIM,
             StoredDocument.entity_id == claim.id,
         )
     ).scalars().all()
-    if not docs:
-        return _result(rule, "fail", "The claim has no attached documents.")
-    dupes = db.execute(
-        select(StoredDocument).where(
-            StoredDocument.client_id == claim.client_id,
+    if not hashes:
+        return None
+    others = db.execute(
+        select(Claim.id)
+        .join(StoredDocument, StoredDocument.entity_id == Claim.id)
+        .where(
             StoredDocument.entity_type == DOC_ENTITY_CLAIM,
-            StoredDocument.entity_id != claim.id,
-            StoredDocument.sha256.in_([d.sha256 for d in docs]),
+            StoredDocument.sha256.in_(hashes),
+            Claim.client_id == claim.client_id,
+            Claim.employee_id != claim.employee_id,
+            Claim.status.in_(LIVE_STATUSES),
         )
+        .distinct()
     ).scalars().all()
-    if dupes:
-        live = db.execute(
-            select(Claim.id).where(
-                Claim.id.in_({d.entity_id for d in dupes}),
-                Claim.status.in_(LIVE_STATUSES),
-            )
-        ).scalars().all()
-        if live:
-            return _result(
-                rule, "fail",
-                "A receipt with an identical SHA-256 is attached to live "
-                f"claim(s): {', '.join(sorted(live))}.",
-            )
-    return _result(rule, "pass", f"{len(docs)} document(s), no hash reuse across live claims.")
+    if not others:
+        return None
+    return _result(
+        "No document is shared with another member's live claim.",
+        "warning",
+        "A document here is byte-identical to one on another member's live "
+        f"claim(s): {', '.join(sorted(others))}.",
+    )
 
 
 def _check_amount_vs_limit(claim: Claim, statement: BenefitStatementOut) -> dict[str, Any]:
@@ -202,11 +276,13 @@ def deterministic_rule_results(
 ) -> list[dict[str, Any]]:
     results = [
         _check_period(db, claim),
-        _check_duplicate_receipts(db, claim),
+        _check_has_documents(db, claim),
+        _check_duplicate_invoice(db, claim),
         _check_amount_vs_limit(claim, statement),
         _check_currency(claim),
     ]
     for extra in (
+        _check_shared_documents(db, claim),
         _check_referral(claim),
         _check_future_date(claim),
         _check_dependant_age(db, claim),

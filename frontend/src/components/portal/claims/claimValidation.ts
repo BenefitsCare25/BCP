@@ -29,6 +29,9 @@ export interface ClaimValues {
   hospital: string;
   provider: string;
   invoiceNumber: string;
+  /** Pre-/post-hospitalisation claims must name the treating doctor. */
+  requiresDoctorName: boolean;
+  doctorName: string;
   amount: string;
   docSlots: DocSlot[];
   slotFiles: Record<string, File | null>;
@@ -101,6 +104,10 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
 
   if (!v.invoiceNumber.trim()) {
     errs.invoice = "Enter the invoice or receipt number.";
+  }
+
+  if (v.requiresDoctorName && !v.doctorName.trim()) {
+    errs.doctor_name = "Enter the name of the doctor you saw.";
   }
 
   const amount = Number(v.amount);

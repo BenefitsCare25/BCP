@@ -8,6 +8,7 @@ claimable category).
 """
 from __future__ import annotations
 
+import itertools
 import os
 from datetime import date
 from pathlib import Path
@@ -263,6 +264,16 @@ def _auth(account_id: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+# A claim is a duplicate when another live claim of the member's already
+# carries its INVOICE NUMBER, so every draft needs its own unless the test is
+# about duplicates (which passes `invoice_number=` explicitly).
+_invoice_seq = itertools.count(1)
+
+
+def _next_invoice() -> str:
+    return f"INV-{next(_invoice_seq):05d}"
+
+
 def _draft(
     anon: TestClient,
     account: str = ACC_A,
@@ -277,7 +288,7 @@ def _draft(
         "sub_type": "Emergency Accidental Outpatient Treatment",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
-        "invoice_number": "INV-00123",
+        "invoice_number": _next_invoice(),
         "diagnosis": "Dengue fever",
         "amount_claimed": 85.0,
         "currency": "SGD",
@@ -471,7 +482,7 @@ def _draft_res(anon: TestClient, account: str = ACC_A, **overrides):
         "sub_type": "Emergency Accidental Outpatient Treatment",
         "incurred_date": "2027-06-15",
         "provider_name": "Raffles Medical",
-        "invoice_number": "INV-00123",
+        "invoice_number": _next_invoice(),
         "diagnosis": "Dengue fever",
         "amount_claimed": 85.0,
         "currency": "SGD",
@@ -644,6 +655,62 @@ def test_plain_gp_claim_needs_no_sub_type(anon: TestClient):
     assert claim["sub_type"] is None
     assert _upload(anon, claim["id"], PDF + b" gp-1").status_code == 200
     assert _submit(anon, claim["id"]).status_code == 200
+
+
+PRE_POST = "Follow up Pre-/Post-Hospitalisation"
+
+
+def test_pre_post_hospitalisation_requires_the_doctor_422(anon: TestClient):
+    """The consult is claimed against the admission it follows, and the doctor
+    is what ties the two together — nothing else on the bill identifies the
+    episode."""
+    res = _draft_res(anon, sub_type=PRE_POST)
+    assert res.status_code == 422
+    assert "doctor" in res.text.lower()
+
+
+def test_pre_post_hospitalisation_with_the_doctor_submits(anon: TestClient):
+    claim = _draft(anon, sub_type=PRE_POST, doctor_name="Dr Lim Wei Sheng")
+    assert claim["doctor_name"] == "Dr Lim Wei Sheng"
+    assert _upload(anon, claim["id"]).status_code == 200
+    res = _submit(anon, claim["id"])
+    assert res.status_code == 200, res.text
+
+
+def test_a_needs_info_claim_without_a_doctor_can_still_be_resent(anon: TestClient):
+    """The doctor can only be entered on the claim FORM — a needs_info
+    resubmission's only control is attaching documents. Re-checking the rule
+    there would permanently strand any pre-/post- claim recorded before the
+    field existed, with no member-side way to satisfy the refusal."""
+    claim = _draft(anon, sub_type=PRE_POST, doctor_name="Dr Lim Wei Sheng")
+    assert _upload(anon, claim["id"]).status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+    with SessionLocal() as s:
+        row = s.get(Claim, claim["id"])
+        row.status = "needs_info"
+        row.doctor_name = None  # as a claim filed before the field existed
+        s.commit()
+
+    assert _submit(anon, claim["id"]).status_code == 200
+
+
+def test_other_claim_types_need_no_doctor(anon: TestClient):
+    # Emergency A&E — same product, different sub-type.
+    claim = _draft(anon)
+    assert claim["doctor_name"] is None
+    assert _upload(anon, claim["id"]).status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+
+
+def test_the_form_is_told_which_claim_types_need_a_doctor(anon: TestClient):
+    """SERVED, never mirrored: the frontend must not have to match on the
+    sub-type label to know whether to render the field."""
+    res = anon.get("/api/v1/portal/coverage-options", headers=_auth(ACC_A))
+    assert res.status_code == 200
+    ghs = next(o for o in res.json()["insured"] if o["product_code"] == "GHS")
+    by_sub = {t["sub_type"]: t["requires_doctor_name"] for t in ghs["claim_types"]}
+    assert by_sub[PRE_POST] is True
+    assert all(v is False for k, v in by_sub.items() if k != PRE_POST)
 
 
 def test_specialist_requires_visit_type_422(anon: TestClient):
@@ -884,17 +951,58 @@ def test_claim_diagnoses_search(anon: TestClient):
     assert res.json()["items"] == []
 
 
-def test_duplicate_receipt_409(anon: TestClient):
-    receipt = PDF + b" duplicate-me"
-    first = _draft(anon)
-    assert _upload(anon, first["id"], receipt).status_code == 200
+def test_duplicate_invoice_number_409(anon: TestClient):
+    first = _draft(anon, invoice_number="INV-DUPE-1")
+    assert _upload(anon, first["id"], PDF + b" first").status_code == 200
     assert _submit(anon, first["id"]).status_code == 200
 
-    second = _draft(anon)
-    assert _upload(anon, second["id"], receipt).status_code == 200
+    # Different receipt file, different amount — same invoice number.
+    second = _draft(anon, invoice_number="INV-DUPE-1", amount_claimed=120.0)
+    assert _upload(anon, second["id"], PDF + b" second").status_code == 200
     res = _submit(anon, second["id"])
     assert res.status_code == 409
-    assert res.json()["detail"]["code"] == "duplicate_receipt"
+    detail = res.json()["detail"]
+    assert detail["code"] == "duplicate_invoice_number"
+    assert detail["conflicting_claim_ids"] == [first["id"]]
+
+
+def test_duplicate_invoice_number_ignores_punctuation_and_case(anon: TestClient):
+    first = _draft(anon, invoice_number="INV-2027/44")
+    assert _upload(anon, first["id"]).status_code == 200
+    assert _submit(anon, first["id"]).status_code == 200
+
+    second = _draft(anon, invoice_number="inv 2027 44")
+    assert _upload(anon, second["id"]).status_code == 200
+    assert _submit(anon, second["id"]).status_code == 409
+
+
+def test_same_receipt_on_two_invoices_is_not_a_duplicate(anon: TestClient):
+    """The multi-invoice split attaches ONE discharge summary (or itemised
+    bill) to every claim of an episode — the exact set the intake flow tells
+    the member to upload together. Keying duplicates on the document hash
+    blocked the second and third submissions of that set."""
+    shared = PDF + b" shared discharge summary"
+    first = _draft(anon, invoice_number="EPISODE-INV-1")
+    assert _upload(anon, first["id"], shared).status_code == 200
+    assert _submit(anon, first["id"]).status_code == 200
+
+    second = _draft(anon, invoice_number="EPISODE-INV-2")
+    assert _upload(anon, second["id"], shared).status_code == 200
+    assert _submit(anon, second["id"]).status_code == 200
+
+
+def test_duplicate_invoice_number_is_scoped_to_the_member(anon: TestClient):
+    """A stranger's identically-numbered receipt must never make a member's own
+    claim unfileable — short receipt numbers collide across providers, and the
+    member has no way to override the block. Cross-member reuse is surfaced to
+    the broker by the review's deterministic rule instead."""
+    mine = _draft(anon, account=ACC_A, invoice_number="0001")
+    assert _upload(anon, mine["id"], account=ACC_A).status_code == 200
+    assert _submit(anon, mine["id"], account=ACC_A).status_code == 200
+
+    theirs = _draft(anon, account=ACC_C, invoice_number="0001")
+    assert _upload(anon, theirs["id"], account=ACC_C).status_code == 200
+    assert _submit(anon, theirs["id"], account=ACC_C).status_code == 200
 
 
 def test_insured_claim_requires_product_422(anon: TestClient):
@@ -1299,3 +1407,39 @@ def test_preview_messages_match_the_member(anon: TestClient, broker: TestClient)
         ).status_code
         == 404
     )
+
+
+def test_a_duplicate_invoice_has_no_member_side_override(anon: TestClient):
+    """A HARD refusal: the portal will not take a second submission of a number
+    it already holds, and there is no acknowledge escape. The cases where two
+    legitimate claims share a number — one family receipt covering the member
+    AND their child — are recorded broker-side as LOG cases, which never reach
+    this path."""
+    first = _draft(anon, invoice_number="FAM-1")
+    assert _upload(anon, first["id"]).status_code == 200
+    assert _submit(anon, first["id"]).status_code == 200
+
+    # Same number, different claimant: still refused.
+    second = _draft(anon, invoice_number="FAM-1", dependant_id=DEP_A)
+    assert _upload(anon, second["id"]).status_code == 200
+    assert _submit(anon, second["id"]).status_code == 409
+
+    # No body, flag or spelling gets past it.
+    for body in ({"acknowledge_duplicate": True}, {"acknowledge": True}, {}):
+        res = anon.post(
+            f"/api/v1/portal/claims/{second['id']}/submit",
+            json=body,
+            headers=_auth(ACC_A),
+        )
+        assert res.status_code == 409, f"{body} got past the block"
+        assert res.json()["detail"]["code"] == "duplicate_invoice_number"
+
+    # The member must be TOLD, and told which invoice. `detail.message` is what
+    # reaches the screen verbatim: the portal fetch wrapper promotes a coded 409
+    # to `ConflictDetailError(message)`, `formatError` returns that message, and
+    # the claim form renders it in its `FormAlert`. A message that didn't name
+    # the number would leave them re-reading a form with nothing marked wrong.
+    detail = res.json()["detail"]
+    assert "FAM-1" in detail["message"]
+    assert "already been claimed" in detail["message"]
+    assert detail["conflicting_claim_ids"] == [first["id"]]

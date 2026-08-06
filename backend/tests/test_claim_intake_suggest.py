@@ -17,7 +17,7 @@ from app.schemas.claims import (
     FlexClaimOptions,
     InsuredClaimOption,
 )
-from app.services.claim_intake import GHS_SUB_TYPES
+from app.services.claim_intake import GHS_SUB_TYPES, requires_doctor_name
 from app.services.claim_intake_suggest import suggest_from_extraction
 
 YEAR = PolicyYear(
@@ -57,8 +57,56 @@ def _ghs_option() -> InsuredClaimOption:
         product_code="GHS",
         product_name="Group Hospital & Surgical",
         category="inpatient",
-        claim_types=[ClaimTypeOption(label=s, sub_type=s) for s in GHS_SUB_TYPES],
+        claim_types=[
+            # `requires_doctor_name` is resolved the way the endpoint resolves
+            # it, so the fixture can't claim a shape the API never serves.
+            ClaimTypeOption(
+                label=s,
+                sub_type=s,
+                requires_doctor_name=requires_doctor_name("GHS", s),
+            )
+            for s in GHS_SUB_TYPES
+        ],
     )
+
+
+def _sp_option() -> InsuredClaimOption:
+    return InsuredClaimOption(
+        product_code="SP",
+        product_name="Group Outpatient Specialist",
+        category="outpatient",
+        requires_referral=True,
+        claim_types=[ClaimTypeOption(label="SP (Specialist)")],
+    )
+
+
+def _specialist_invoice(
+    *,
+    provider: str = "Novena Orthopaedic Specialist Clinic",
+    description: str = "Post-operative review following knee arthroscopy",
+    doctor_label: str = "Attending Doctor",
+    doctor: str = "Dr Lim Wei Sheng",
+    doctor_confidence: float = 0.93,
+):
+    return {
+        "document_type": "tax invoice",
+        "fields": [
+            {"id": "f1", "label": "Patient Name", "value": "John Tan",
+             "field_type": "name", "confidence": 0.95},
+            {"id": "f2", "label": "Clinic Name", "value": provider,
+             "field_type": "name", "confidence": 0.9},
+            {"id": "f3", "label": doctor_label, "value": doctor,
+             "field_type": "name", "confidence": doctor_confidence},
+            {"id": "f4", "label": "Description", "value": description,
+             "field_type": "text", "confidence": 0.9},
+            {"id": "f5", "label": "Total Amount", "value": "SGD 180.00",
+             "field_type": "currency", "confidence": 0.94},
+            {"id": "f6", "label": "Invoice No", "value": "SP-9001",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "f7", "label": "Invoice Date", "value": "2027-03-20",
+             "field_type": "date", "confidence": 0.9},
+        ],
+    }
 
 
 def _hospital_bill_document():
@@ -736,3 +784,164 @@ def test_custom_sector_neutral_type_does_not_shadow_invoice():
     ]
     defn = classify_document("tax invoice", fields, definitions=defs)
     assert defn is not None and defn.key == "finalised_tax_invoice"
+
+
+# ── Surgical specialist invoice → pre-/post-hospitalisation ──────────────────
+
+
+def test_surgical_specialist_invoice_routes_to_pre_post_hospitalisation():
+    """A specialist clinic bills the CONSULT, never the admission — so an
+    operation referenced on its invoice is the follow-up (or work-up) around a
+    hospitalisation, which is the inpatient product's pre-/post- sub-type and
+    not the outpatient specialist benefit it would otherwise be filed under."""
+    s = suggest_from_extraction(
+        _specialist_invoice(),
+        _coverage([_sp_option(), _ghs_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert s.claim_selection == "insured:GHS:0"  # Follow up Pre-/Post-Hospitalisation
+    assert s.claim_candidates == []
+    assert s.fields.doctor_name == "Dr Lim Wei Sheng"
+
+
+def test_surgical_specialist_invoice_falls_back_to_sp_without_inpatient_cover():
+    """Nothing to route TO: a member holding only specialist cover still gets
+    their specialist claim type, not an unresolved list."""
+    s = suggest_from_extraction(
+        _specialist_invoice(),
+        _coverage([_sp_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert s.claim_selection == "insured:SP:0"
+
+
+def test_specialist_invoice_without_surgery_stays_specialist():
+    s = suggest_from_extraction(
+        _specialist_invoice(description="Consultation for chronic lower back pain"),
+        _coverage([_sp_option(), _ghs_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert s.claim_selection == "insured:SP:0"
+
+
+def test_clinic_named_surgery_is_not_a_surgical_context():
+    """In Singapore (as in British usage) a "surgery" is what a doctor's
+    practice is CALLED. Matching the word inside the provider's own name would
+    file every visit to "Ang Mo Kio Family Surgery" as a hospitalisation
+    follow-up."""
+    s = suggest_from_extraction(
+        _specialist_invoice(
+            provider="Ang Mo Kio Family Surgery",
+            description="Consultation and medication",
+        ),
+        _coverage([_sp_option(), _ghs_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert s.claim_selection != "insured:GHS:0"
+
+
+def test_pre_post_wording_alone_routes_to_pre_post():
+    s = suggest_from_extraction(
+        _specialist_invoice(description="Specialist post-hospitalisation follow up"),
+        _coverage([_sp_option(), _ghs_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert s.claim_selection == "insured:GHS:0"
+
+
+def test_attending_doctor_beats_the_referring_one():
+    doc = _specialist_invoice()
+    doc["fields"].append(
+        {"id": "f8", "label": "Referring Doctor", "value": "Dr Referrer",
+         "field_type": "name", "confidence": 0.99}
+    )
+    s = suggest_from_extraction(
+        doc, _coverage([_sp_option(), _ghs_option()]), _employee(), YEAR
+    )
+    assert s.fields.doctor_name == "Dr Lim Wei Sheng"
+
+
+def test_doctor_registration_number_is_not_read_as_the_doctor():
+    doc = _specialist_invoice(doctor_label="Doctor MCR No.", doctor="M12345B")
+    s = suggest_from_extraction(
+        doc, _coverage([_sp_option(), _ghs_option()]), _employee(), YEAR
+    )
+    assert s.fields.doctor_name is None
+
+
+def test_low_confidence_doctor_flagged_only_when_the_claim_type_asks_for_it():
+    doc = _specialist_invoice(doctor_confidence=0.4)
+    # Pre/post resolved → the form renders the field, so warn about it.
+    pre_post = suggest_from_extraction(
+        doc, _coverage([_sp_option(), _ghs_option()]), _employee(), YEAR
+    )
+    assert pre_post.claim_selection == "insured:GHS:0"
+    assert "doctor_name" in pre_post.low_confidence
+
+    # Specialist-only cover → the field is never rendered, so naming it in the
+    # "double-check these" hint would send the member hunting for a control
+    # that isn't on screen.
+    sp_only = suggest_from_extraction(
+        doc, _coverage([_sp_option()]), _employee(), YEAR
+    )
+    assert sp_only.claim_selection == "insured:SP:0"
+    assert "doctor_name" not in sp_only.low_confidence
+
+
+def test_clinic_named_surgery_with_no_extractable_provider():
+    """The weak markers ("surgery"/"surgical") are scanned over the fields that
+    do NOT name the provider — rebuilt from the document, not string-replaced
+    out of the concatenated reading — so a letterhead the extractor failed to
+    label still can't route a GP consult to a hospitalisation claim type."""
+    doc = {
+        "document_type": "receipt",
+        "fields": [
+            # No "clinic"/"provider" keyword anywhere: the practice name rides
+            # in an unlabelled header field.
+            {"id": "f1", "label": "", "value": "Ang Mo Kio Family Surgery",
+             "field_type": "name", "confidence": 0.9},
+            {"id": "f2", "label": "Patient Name", "value": "John Tan",
+             "field_type": "name", "confidence": 0.95},
+            {"id": "f3", "label": "Description", "value": "Consultation",
+             "field_type": "text", "confidence": 0.9},
+            {"id": "f4", "label": "Total Amount", "value": "SGD 40.00",
+             "field_type": "currency", "confidence": 0.94},
+        ],
+    }
+    s = suggest_from_extraction(
+        doc, _coverage([_sp_option(), _ghs_option()]), _employee(), YEAR
+    )
+    assert s.claim_selection != "insured:GHS:0"
+
+
+def test_day_surgery_line_item_on_a_surgery_named_clinic_still_detected():
+    """The mirror case: a real "Day Surgery" line item must survive a provider
+    whose own name contains the word — which a global string-replace of the
+    provider out of the reading would have deleted."""
+    s = suggest_from_extraction(
+        _specialist_invoice(
+            provider="Novena Surgery Specialist Centre",
+            description="Day surgery follow-up review",
+        ),
+        _coverage([_sp_option(), _ghs_option()]),
+        _employee(),
+        YEAR,
+    )
+    assert s.claim_selection == "insured:GHS:0"
+
+
+def test_doctor_notes_prose_is_not_read_as_the_doctor():
+    doc = _specialist_invoice(
+        doctor_label="Doctor's Notes",
+        doctor="Patient reviewed post-operatively and is recovering well; "
+               "advised to continue physiotherapy for six more weeks.",
+    )
+    s = suggest_from_extraction(
+        doc, _coverage([_sp_option(), _ghs_option()]), _employee(), YEAR
+    )
+    assert s.fields.doctor_name is None

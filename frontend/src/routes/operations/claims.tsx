@@ -535,6 +535,14 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
                   <DetailField label="Provider">
                     {selected.provider_name ?? "—"}
                   </DetailField>
+                  {/* Pre-/post-hospitalisation consults carry the treating
+                      doctor — the link back to the admission being claimed
+                      against. Absent on every other claim type. */}
+                  {selected.doctor_name && (
+                    <DetailField label="Doctor seen">
+                      {selected.doctor_name}
+                    </DetailField>
+                  )}
                   {selected.diagnosis && (
                     <DetailField label="Diagnosis / description" wide>
                       {selected.diagnosis}

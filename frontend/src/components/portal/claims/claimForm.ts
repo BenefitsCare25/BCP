@@ -42,6 +42,7 @@ export const LOW_CONF_LABELS: Record<string, string> = {
   incurred_date: "date",
   invoice_number: "invoice number",
   diagnosis: "diagnosis",
+  doctor_name: "doctor's name",
 };
 
 export const GROUP_LABELS = {

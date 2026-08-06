@@ -118,6 +118,8 @@ export interface BrokerClaim {
   incurred_date: string;
   provider_name: string | null;
   invoice_number: string | null;
+  /** The treating doctor — pre-/post-hospitalisation claims must name one. */
+  doctor_name: string | null;
   diagnosis: string | null;
   remarks: string | null;
   amount_claimed: number;

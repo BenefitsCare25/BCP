@@ -34,6 +34,7 @@ from app.services.claim_intake import (
     SUB_TYPE_PHYSIO,
     SUB_TYPE_TCM,
     claim_profile_for,
+    normalize_invoice_number,
 )
 from app.services.matching_engine import jaccard, tokenize
 from app.services.roster_attributes import (
@@ -79,6 +80,38 @@ _NON_PATIENT_NAME = (
     "hospital", "clinic", "doctor", "physician", "provider", "company",
     "guarantor", "kin", "payer", "referring", "practitioner", "account",
     "contact", "employer",
+)
+
+# Field labels naming the treating doctor (the mirror image of the list above).
+_DOCTOR_KEYWORDS = (
+    "doctor", "physician", "surgeon", "consultant", "practitioner",
+    "attending", "specialist name",
+)
+# …but not the doctor's credentials, their signature line, or free prose ABOUT
+# the doctor: those carry a registration number, nothing at all, or a
+# paragraph. The member is REQUIRED to submit this field on a pre/post claim,
+# so a wrong prefill is one they have to notice and undo.
+_NON_DOCTOR_LABEL = (
+    "signature", "mcr", "licence", "license", "registration", "stamp",
+    "note", "remark", "comment", "advice", "instruction", "fee", "charge",
+)
+# A name has letters in it. Registration numbers, amounts and codes don't.
+_HAS_LETTERS_RE = re.compile(r"[A-Za-z]{2,}")
+
+# Words that mean an OPERATION took place. Split by how a PRACTICE NAME can
+# carry them: in Singapore (as in British usage) a "surgery" is what a doctor's
+# practice is called — "Ang Mo Kio Family Surgery" is a GP clinic, not an
+# operating theatre — so those two tokens prove nothing inside the provider's
+# name and are scanned only OUTSIDE the fields that carry it. No practice is
+# ever called an "operation" or a "post-op", so the strong set is scanned
+# everywhere.
+_WEAK_SURGICAL_MARKERS = ("surgery", "surgical")
+_STRONG_SURGICAL_MARKERS = (
+    "operation", "operative",
+    "post-op", "post op", "postop", "pre-op", "pre op", "preop",
+    # The claim type named outright on the bill.
+    "pre-hospitalis", "post-hospitalis", "pre and post", "pre/post", "pre-/post",
+    "pre-admission", "pre admission", "post-discharge", "post discharge",
 )
 
 
@@ -271,6 +304,35 @@ def _invoice_number(fields: list[dict[str, Any]]) -> tuple[str | None, float]:
     return _val(best) or None, _conf(best)
 
 
+def _doctor_name(fields: list[dict[str, Any]]) -> tuple[str | None, float]:
+    """The treating doctor named on the document.
+
+    Prefers the attending/treating doctor over a REFERRING one: on a specialist
+    invoice both appear, and the claim is about the doctor who provided the
+    treatment — the referrer is already evidenced by the referral letter."""
+    cands = [
+        f for f in fields
+        if any(k in _label(f) for k in _DOCTOR_KEYWORDS)
+        and not any(k in _label(f) for k in _NON_DOCTOR_LABEL)
+        and not _ID_LABEL_RE.search(_label(f))
+        and _ftype(f) in ("name", "text", "other", "")
+        # A name, not a registration number and not a paragraph about one.
+        and _HAS_LETTERS_RE.search(_val(f))
+        and len(_val(f)) <= 80
+    ]
+    if not cands:
+        return None, 0.0
+    best = max(
+        cands,
+        key=lambda f: (
+            "referring" not in _label(f),
+            any(k in _label(f) for k in ("attending", "surgeon", "consultant")),
+            _conf(f),
+        ),
+    )
+    return _val(best) or None, _conf(best)
+
+
 def _is_patient_name_field(f: dict[str, Any]) -> bool:
     """A field naming the PATIENT — excludes the other "…Name" fields on a bill
     (hospital / doctor / guarantor / next-of-kin …) so they can't be mistaken
@@ -364,22 +426,50 @@ def _entry_setting(opt: InsuredClaimOption, sub_type: str | None, label: str) ->
     return "other"
 
 
+def _surgical_context(document: dict[str, Any], text: str) -> bool:
+    """Whether the reading evidences an operation (or names the pre/post claim
+    type outright) — see the marker lists above for the weak/strong split.
+
+    The weak tokens are scanned over the fields that do NOT name the provider,
+    rebuilt from the document rather than string-replaced out of ``text``.
+    Both details matter: a global replace of the provider's name would also
+    delete a genuine "Day Surgery Charges" line item from a clinic called
+    "… Surgery" (suppressing detection in the other direction), and a reading
+    where the provider was never extracted — an unlabelled letterhead — would
+    keep the practice name in the scan and route an ordinary consult to a
+    hospitalisation claim type.
+    """
+    if any(k in text for k in _STRONG_SURGICAL_MARKERS):
+        return True
+    body = " ".join(
+        f"{_label(f)} {_val(f)}"
+        for f in _fields(document)
+        if not any(k in _label(f) for k in _PROVIDER_KEYWORDS)
+        # An unlabelled name field is a letterhead until proven otherwise.
+        and not (_ftype(f) == "name" and not _label(f))
+    ).lower()
+    return any(k in body for k in _WEAK_SURGICAL_MARKERS)
+
+
 def _target_settings(
     document: dict[str, Any],
     text: str,
     provider: str | None,
     doc_types: Sequence[DocTypeDefinition] | None,
-) -> set[str]:
+) -> tuple[set[str], bool]:
+    """The claim settings this document could belong to, and whether it is an
+    OUTPATIENT SPECIALIST bill evidencing surgery (which the caller pins to the
+    pre-/post-hospitalisation sub-type)."""
     dt = (document.get("document_type") or "").lower()
     text = text.lower()
     if "dental" in text or "dentist" in text:
-        return {"dental"}
+        return {"dental"}, False
     if "physio" in text:
-        return {"physio"}
+        return {"physio"}, False
     if any(k in text for k in ("tcm", "traditional chinese", "chinese physician")):
-        return {"tcm"}
+        return {"tcm"}, False
     if "referral" in dt:
-        return {"specialist"}
+        return {"specialist"}, False
     # Broker document-type registry: an alias title ("After Visit Summary",
     # "Endoscopy Report") or an invoice with inpatient markers (admission/
     # discharge/HRN/case/schemes) identifies an inpatient document even when
@@ -390,26 +480,37 @@ def _target_settings(
         definitions=doc_types,
         sector_hint=hospital_sector(provider),
     ) is not None:
-        return {"inpatient_hosp", "inpatient_other"}
+        return {"inpatient_hosp", "inpatient_other"}, False
     if any(k in dt for k in ("discharge", "hospital bill", "medical report")):
-        return {"inpatient_hosp", "inpatient_other"}
+        return {"inpatient_hosp", "inpatient_other"}, False
     # A provider in the SG hospital registry (incl. day-surgery centres and
     # names without a "hospital" token — NCCS, Thomson Medical) is an
     # inpatient setting; without this, "Novena Surgery Centre" would fall
     # through to the specialist branch on its "surgery" token.
     if hospital_sector(provider) is not None:
-        return {"inpatient_hosp", "inpatient_other"}
+        return {"inpatient_hosp", "inpatient_other"}, False
     if "hospital" in text and "clinic" not in text:
-        return {"inpatient_hosp", "inpatient_other"}
+        return {"inpatient_hosp", "inpatient_other"}, False
     if any(k in text for k in ("specialist", "surgery", "surgical")):
-        return {"specialist"}
+        # A SPECIALIST invoice that evidences an operation is the consult
+        # BEFORE or AFTER an admission, not an outpatient specialist visit: the
+        # hospital bills the stay itself, so an operation can never appear on
+        # the specialist clinic's own invoice except as the reason for the
+        # visit. That is the pre-/post-hospitalisation sub-type of the
+        # inpatient product — a different benefit, with a different limit, from
+        # the SP cover the bill would otherwise be filed against.
+        if _surgical_context(document, text):
+            return {"specialist", "inpatient_other"}, True
+        return {"specialist"}, False
     if "prescription" in dt:
-        return {"gp"}
+        return {"gp"}, False
     # Plain receipt / tax invoice — an outpatient bill with no strong signal.
-    return {"gp", "dental"}
+    return {"gp", "dental"}, False
 
 
-def _inpatient_subtype_from_text(text: str) -> str | None:
+def _inpatient_subtype_from_text(
+    text: str, *, specialist_surgical: bool = False
+) -> str | None:
     """Narrow an inpatient/GHS claim to ONE of the four GHS sub-types from the
     bill wording. Returns a `GHS_SUB_TYPES` label, or None when nothing points
     clearly at one (leave it for the member). Order matters — the specific
@@ -422,6 +523,15 @@ def _inpatient_subtype_from_text(text: str) -> str | None:
         return GHS_SUB_TYPES[2]  # Emergency Accidental Outpatient Treatment
     if any(k in t for k in ("pre-hospitalis", "post-hospitalis", "pre and post",
                             "pre/post", "pre-/post", "follow up", "follow-up")):
+        return GHS_SUB_TYPES[0]  # Follow up Pre-/Post-Hospitalisation
+    if specialist_surgical:
+        # Established by `_target_settings`: an outpatient specialist bill
+        # referencing an operation. It must NOT fall into the hospitalisation
+        # catch-all below — that sub-type is the admission itself, which this
+        # bill by definition is not. Checked before the catch-all because a
+        # "post-operative review" carries no keyword the catch-all matches
+        # either, and leaving it unresolved would drop the claim back to an
+        # ambiguous list.
         return GHS_SUB_TYPES[0]  # Follow up Pre-/Post-Hospitalisation
     if any(k in t for k in ("day surgery", "surgery", "operation", "admission",
                             "admitted", "ward", "inpatient", "warded", "hospitalis")):
@@ -457,13 +567,19 @@ def _infer_claim_type(
 
     labels = " ".join(_label(f) + " " + _val(f) for f in _fields(document))
     text = " ".join(filter(None, [document.get("document_type") or "", provider or "", labels]))
-    targets = _target_settings(document, text, provider, doc_types)
+    targets, specialist_surgical = _target_settings(document, text, provider, doc_types)
     matched = [(v, setting, st) for v, setting, st in entries if setting in targets]
 
     # Inpatient bills match all four GHS sub-types by setting — narrow to the
     # one the wording points at (A&E → emergency, "day surgery" → hospitalisation…).
+    # A surgical specialist bill narrows to pre-/post-hospitalisation, which
+    # DROPS the specialist entries that also matched: that is the point of the
+    # detection, and a member whose cover has no inpatient product never gets
+    # here (nothing matched an inpatient setting) so they still resolve to SP.
     if any(s in ("inpatient_hosp", "inpatient_other") for _, s, _ in matched):
-        sub = _inpatient_subtype_from_text(text)
+        sub = _inpatient_subtype_from_text(
+            text, specialist_surgical=specialist_surgical
+        )
         narrowed = [v for v, _, st in matched if st == sub] if sub else []
         values = narrowed or [v for v, _, _ in matched]
     else:
@@ -483,6 +599,28 @@ def _infer_claim_type(
     if len(values) == 1:
         return values[0], []
     return None, values
+
+
+def _selection_requires_doctor(
+    selection: str | None, coverage_opts: CoverageOptionsOut
+) -> bool:
+    """Whether the resolved claim type asks for the treating doctor — read off
+    the SERVED `ClaimTypeOption.requires_doctor_name`, never re-derived from the
+    sub-type label here."""
+    if not selection or not selection.startswith("insured:"):
+        return False
+    parts = selection.split(":")
+    if len(parts) < 3:
+        return False
+    opt = next(
+        (o for o in coverage_opts.insured if o.product_code == parts[1]), None
+    )
+    if opt is None:
+        return False
+    try:
+        return opt.claim_types[int(parts[2])].requires_doctor_name
+    except (ValueError, IndexError):
+        return False
 
 
 def _diagnosis_group_for(selection: str | None) -> str | None:
@@ -554,6 +692,7 @@ def suggest_from_extraction(
     incurred_date, date_conf = _date_field(fields, year)
     invoice_number, invoice_conf = _invoice_number(fields)
     diagnosis, diag_conf = _keyworded(fields, ("diagnosis", "condition"))
+    doctor, doctor_conf = _doctor_name(fields)
     currency = _currency(fields)
 
     out_fields = IntakeFields(
@@ -563,6 +702,7 @@ def suggest_from_extraction(
         amount=amount,
         currency=currency,
         diagnosis=diagnosis,
+        doctor_name=doctor,
     )
 
     low: list[str] = []
@@ -586,6 +726,17 @@ def suggest_from_extraction(
     # free text — the whole reason a diagnosis reads back empty when only a
     # bill (no diagnosis) was uploaded.
     out_fields.diagnosis = _resolve_diagnosis(diagnosis, selection)
+
+    # The doctor is warned about only on the claim types that ASK for it: the
+    # form renders that field for pre-/post-hospitalisation alone, and naming a
+    # field in the double-check hint that isn't on screen sends the member
+    # looking for a control that doesn't exist.
+    if (
+        doctor is not None
+        and doctor_conf < _CONFIDENCE_FLOOR
+        and _selection_requires_doctor(selection, coverage_opts)
+    ):
+        low.append("doctor_name")
 
     # Broker document-type registry: which recognised document this is, and —
     # when unambiguous — the required-document slot it fills, so the form can
@@ -617,11 +768,14 @@ def _billing_identity(
     fields: list[dict[str, Any]],
 ) -> tuple[str | None, float | None]:
     """A document's billing identity — normalized invoice number + amount — used
-    to detect distinct invoices. Cheap (no provider/date/diagnosis reads)."""
+    to detect distinct invoices. Cheap (no provider/date/diagnosis reads).
+
+    The number is normalized by `claim_intake.normalize_invoice_number`, the
+    same key the duplicate-claim check uses, so a set this splits into two
+    claims can never be two claims the submit gate then reads as one bill."""
     number, _ = _invoice_number(fields)
     amount, _ = _amount(fields)
-    key = re.sub(r"\s+", "", number).upper() if number else None
-    return key, amount
+    return (normalize_invoice_number(number) or None), amount
 
 
 def _doc_reading(
@@ -643,6 +797,10 @@ def _doc_reading(
         amount=amount,
         currency=_currency(fields),
         diagnosis=diagnosis,
+        # Prefilled, but deliberately never listed in `low` below: this reading
+        # belongs to a queued invoice whose claim type isn't resolved here, so
+        # the hint could name a field the form won't render.
+        doctor_name=_doctor_name(fields)[0],
     )
     low = [
         name

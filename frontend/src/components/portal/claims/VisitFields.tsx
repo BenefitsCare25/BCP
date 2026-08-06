@@ -104,6 +104,29 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
           )}
         </Field>
 
+        {/* Pre-/post-hospitalisation only. The consult is claimed against the
+            admission it belongs to, and the doctor's name is how the insurer
+            ties the two together — nothing else on the bill identifies the
+            episode. Whether to ask is the SERVED `requires_doctor_name`. */}
+        {form.requiresDoctorName && (
+          <Field
+            label="Doctor seen"
+            required
+            error={form.fieldErrors.doctor_name}
+          >
+            {(p) => (
+              <input
+                {...p}
+                className={leafControl}
+                placeholder="e.g. Dr Tan Wei Ming"
+                value={form.doctorName}
+                maxLength={255}
+                onChange={(e) => form.setDoctorName(e.target.value)}
+              />
+            )}
+          </Field>
+        )}
+
         <Field label="Currency" required>
           {(p) => (
             <select

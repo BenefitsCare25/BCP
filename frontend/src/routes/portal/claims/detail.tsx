@@ -255,6 +255,9 @@ export function PortalClaimDetailPage() {
           {data.dependant_name && (
             <MountRow term="Who it's for">{data.dependant_name}</MountRow>
           )}
+          {data.doctor_name && (
+            <MountRow term="Doctor seen">{data.doctor_name}</MountRow>
+          )}
           {data.diagnosis && <MountRow term="Diagnosis">{data.diagnosis}</MountRow>}
           {data.invoice_number && (
             <MountRow term="Invoice number">{data.invoice_number}</MountRow>

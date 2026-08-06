@@ -19,6 +19,7 @@ slip through):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -108,6 +109,25 @@ def normalize_sub_type(sub_type: str | None) -> str | None:
     if not sub_type:
         return sub_type
     return LEGACY_SUB_TYPES.get(sub_type.strip().lower(), sub_type)
+
+
+# Everything that isn't a letter or a digit. An invoice number is transcribed
+# by hand as often as it is autofilled, so "INV-00123", "inv 00123" and
+# "INV/00123" are the same bill.
+_INVOICE_NOISE_RE = re.compile(r"[^0-9A-Za-z]+")
+
+
+def normalize_invoice_number(value: str | None) -> str:
+    """The comparison key for an invoice/receipt number — the ONE definition of
+    when two claims name the same bill.
+
+    Used by the submit-time duplicate check (`services/claims.py`), the review's
+    deterministic duplicate rule (`claims_review/rules.py`) and the multi-invoice
+    intake split (`claim_intake_suggest._billing_identity`), so those three can
+    never disagree about which readings are the same invoice. Empty (no
+    alphanumerics at all) means "no number stated" — never a match.
+    """
+    return _INVOICE_NOISE_RE.sub("", value or "").upper()
 
 
 def benefit_row_for_sub_type(
@@ -239,6 +259,35 @@ def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
 # The inpatient sub-type whose documents depend on the hospital sector.
 SUB_TYPE_HOSPITALISATION = GHS_SUB_TYPES[1]
 
+# The consult that sits BEFORE or AFTER an admission — billed by the specialist
+# clinic, not the hospital, and claimed against the inpatient product rather
+# than the outpatient specialist benefit.
+SUB_TYPE_PRE_POST = GHS_SUB_TYPES[0]
+
+
+def requires_doctor_name(
+    product_code: str | None,
+    sub_type: str | None,
+    *,
+    claim_kind: str = CLAIM_KIND_INSURED,
+) -> bool:
+    """Whether the claim must name the treating doctor.
+
+    Only pre-/post-hospitalisation consults do: the insurer ties the consult to
+    the admission through the attending doctor, and unlike every other claim
+    field that link is not derivable from the bill's amount, date or provider.
+    Served to the form on `ClaimTypeOption.requires_doctor_name` rather than
+    re-derived in TypeScript — the sub-type label is a string the frontend must
+    never have to match on.
+    """
+    if claim_kind != CLAIM_KIND_INSURED:
+        return False
+    profile = claim_profile_for(product_code)
+    return (
+        profile.category == CATEGORY_INPATIENT
+        and normalize_sub_type(sub_type) == SUB_TYPE_PRE_POST
+    )
+
 # Hospitalisation/Day Surgery document sets by hospital sector — also exposed
 # through /portal/coverage-options so the form can switch slots as the member
 # picks the hospital. Unlisted/overseas hospitals get the private set (the
@@ -353,6 +402,37 @@ def resolve_sp_referral(
     )
 
 
+def assert_doctor_name_valid(
+    product_code: str | None,
+    sub_type: str | None,
+    doctor_name: str | None,
+    *,
+    claim_kind: str = CLAIM_KIND_INSURED,
+) -> None:
+    """Pre-/post-hospitalisation claims must name the treating doctor.
+
+    Its OWN function, and not just a clause of `assert_intake_valid`, because
+    it is the one intake rule whose enforcement point is narrower than "create
+    and submit": the doctor can only be entered on the claim FORM, so a
+    `needs_info` resubmission — where the member's only control is attaching
+    documents — must not be refused for want of it. See `submit_claim`.
+
+    Deliberately NOT rejected on the other claim types the way `visit_type` is:
+    this is a free-text fact about the visit, not a mode switch, so a client
+    that sends one elsewhere is harmless — whereas an unexpected referral or
+    visit type changes which rules apply.
+    """
+    if requires_doctor_name(
+        product_code, sub_type, claim_kind=claim_kind
+    ) and not (doctor_name or "").strip():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Name the doctor you saw — a pre- or post-hospitalisation "
+            "follow-up is claimed against your hospital admission, and the "
+            "doctor's name is how it's matched to it.",
+        )
+
+
 def assert_intake_valid(
     db: Session,
     employee: Employee,
@@ -405,6 +485,9 @@ def assert_intake_valid(
             "Select the diagnosis for this claim (choose 'Other' and describe "
             "it if it isn't listed).",
         )
+
+    # NOTE: the doctor-name rule is deliberately NOT here — it has a narrower
+    # enforcement point than the rest. See `assert_doctor_name_valid`.
 
     if profile.requires_referral:
         # 2026-07-21: the "not applicable" declaration was removed for SP —

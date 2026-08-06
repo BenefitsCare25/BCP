@@ -347,6 +347,7 @@ export interface PortalClaim {
   incurred_date: string;
   provider_name: string | null;
   invoice_number: string | null;
+  doctor_name: string | null;
   diagnosis: string | null;
   remarks: string | null;
   amount_claimed: number;
@@ -382,6 +383,7 @@ export interface ClaimCreateInput {
   incurred_date: string;
   provider_name: string;
   invoice_number: string;
+  doctor_name?: string | null;
   diagnosis?: string | null;
   remarks?: string | null;
   amount_claimed: number;
@@ -401,6 +403,11 @@ export interface DocSlot {
 export interface ClaimTypeOption {
   label: string;
   sub_type: string | null;
+  /** Pre-/post-hospitalisation consults must name the treating doctor. SERVED
+   * by `claim_intake.requires_doctor_name`, never re-derived from the sub-type
+   * label here — a relabel there would silently stop the form asking for a
+   * field the server still requires. */
+  requires_doctor_name: boolean;
   /** Required-document slots (unlisted-hospital default for inpatient). */
   doc_slots: DocSlot[];
   /** Hospitalisation/Day Surgery only: govt/private slot sets. */
@@ -471,6 +478,9 @@ export interface IntakeSuggestFields {
   amount: number | null;
   currency: string | null;
   diagnosis: string | null;
+  /** Always suggested when the document names a doctor; only asked for on
+   * pre-/post-hospitalisation claims. */
+  doctor_name: string | null;
 }
 
 /** One uploaded document in the autofill set. `claim_index` is set when the

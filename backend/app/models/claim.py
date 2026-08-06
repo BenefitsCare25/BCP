@@ -230,6 +230,10 @@ class Claim(Base, TimestampMixin):
     referral_document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     incurred_date: Mapped[date] = mapped_column(Date, nullable=False)
     provider_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The treating doctor. Required only on pre-/post-hospitalisation consults
+    # (`claim_intake.requires_doctor_name`) — the insurer matches the consult to
+    # the admission through it — and extracted from the bill at intake.
+    doctor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Receipt / tax-invoice number the member transcribes — cross-checked against
     # the uploaded documents by the AI review (see field_maps.py).
     invoice_number: Mapped[str | None] = mapped_column(String(128), nullable=True)

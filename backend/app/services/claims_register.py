@@ -42,6 +42,9 @@ CLAIMS_REGISTER_HEADER = [
     "Sub-type",
     "Incurred Date",
     "Provider",
+    # Pre-/post-hospitalisation claims name the treating doctor — the link back
+    # to the admission they are claimed against. Blank on every other type.
+    "Doctor",
     "Invoice No.",
     "Currency",
     "Amount Claimed",
@@ -107,6 +110,7 @@ def build_claims_register_workbook(
             claim.sub_type or "",
             claim.incurred_date,
             claim.provider_name or "",
+            claim.doctor_name or "",
             claim.invoice_number or "",
             claim.currency,
             claim.amount_claimed,

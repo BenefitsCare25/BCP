@@ -75,6 +75,7 @@ from app.services.claim_intake import (
     benefit_row_for_sub_type,
     claim_profile_for,
     required_doc_slots,
+    requires_doctor_name,
 )
 from app.services.claim_intake_suggest import build_intake_suggestion
 from app.services.claim_messages import post_system_message
@@ -152,6 +153,7 @@ def _claim_type_option(
     return ClaimTypeOption(
         label=label,
         sub_type=sub_type,
+        requires_doctor_name=requires_doctor_name(line.product_code, sub_type),
         doc_slots=_slots(required_doc_slots(line.product_code, sub_type)),
         doc_slots_by_sector=by_sector,
     )

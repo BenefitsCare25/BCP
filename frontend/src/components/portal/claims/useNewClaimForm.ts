@@ -83,6 +83,9 @@ export function useNewClaimForm() {
   const [hospital, setHospital] = useState("");
   const [visitType, setVisitType] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
+  // Pre-/post-hospitalisation only (the claim type says so — see
+  // `requiresDoctorName` below).
+  const [doctorName, setDoctorName] = useState("");
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("SGD");
   const [diagnosis, setDiagnosis] = useState("");
@@ -135,6 +138,10 @@ export function useNewClaimForm() {
   );
   const selectedClaimType = selectedProduct?.claim_types[claimTypeIndex] ?? null;
   const subType = selectedClaimType?.sub_type ?? null;
+  // Served by the backend's intake profile, never derived from the sub-type
+  // label here: the label is broker-facing wording and a relabel would
+  // silently stop this field being asked for while submit still requires it.
+  const requiresDoctorName = selectedClaimType?.requires_doctor_name ?? false;
 
   // Hospitalisation/Day Surgery: the provider is a hospital picked from the
   // registry, and its sector (govt/private) decides the document slots. An
@@ -277,6 +284,7 @@ export function useNewClaimForm() {
   // Fields that depend on the chosen claim type — reset when the type changes.
   const resetTypeFields = () => {
     setDiagnosis("");
+    setDoctorName("");
     setVisitType("");
     setHospital("");
     setSlotFiles({});
@@ -338,6 +346,7 @@ export function useNewClaimForm() {
     // The backend returns the diagnosis in its final form — a catalog label to
     // select, or "Other: <text>" free text — so set it directly.
     if (f.diagnosis) setDiagnosis(f.diagnosis);
+    if (f.doctor_name) setDoctorName(f.doctor_name);
     setLowConfidence(s.low_confidence);
     const parts = [
       "We filled in what we could read from your documents — please check everything before submitting.",
@@ -402,6 +411,7 @@ export function useNewClaimForm() {
     setAmount(f?.amount != null ? String(f.amount) : "");
     if (f?.currency && effectiveKind === "insured") setCurrency(f.currency);
     setDiagnosis(f?.diagnosis ?? "");
+    setDoctorName(f?.doctor_name ?? "");
     setAutofillDocs(
       next.file
         ? [{ file: next.file, slot: next.slot, detectedType: next.detectedType }]
@@ -468,6 +478,8 @@ export function useNewClaimForm() {
       hospital,
       provider,
       invoiceNumber,
+      requiresDoctorName,
+      doctorName,
       amount,
       docSlots,
       slotFiles,
@@ -547,6 +559,7 @@ export function useNewClaimForm() {
         incurred_date: incurredDate,
         provider_name: effectiveProvider.trim(),
         invoice_number: invoiceNumber.trim(),
+        doctor_name: requiresDoctorName ? doctorName.trim() : null,
         diagnosis: diagnosis.trim() || null,
         remarks: remarks.trim() || null,
         amount_claimed: Number(amount),
@@ -577,6 +590,10 @@ export function useNewClaimForm() {
         });
       }
     } catch (err) {
+      // Includes the duplicate-invoice 409, which is a HARD refusal with no
+      // member-side override — `ConflictDetailError` carries the server's own
+      // message, so it reads as the specific reason rather than a generic
+      // failure.
       setError(formatError(err));
       // Roll the draft back so a failed validation doesn't strand it — before
       // the referral, so the letter is no longer referenced when we delete it.
@@ -641,6 +658,7 @@ export function useNewClaimForm() {
     subType,
     isHospitalisation,
     needsReferral,
+    requiresDoctorName,
     showDiagnosisPicker:
       effectiveKind === "insured" &&
       (selectedProduct?.diagnosis_group ?? null) !== null,
@@ -656,6 +674,8 @@ export function useNewClaimForm() {
     visitType,
     invoiceNumber,
     setInvoiceNumber,
+    doctorName,
+    setDoctorName,
     amount,
     setAmount,
     setCurrency,

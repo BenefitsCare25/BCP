@@ -50,6 +50,9 @@ class ClaimCreateIn(BaseModel):
     incurred_date: date
     provider_name: str = Field(min_length=2, max_length=255)
     invoice_number: str = Field(min_length=1, max_length=128)
+    # Required for pre-/post-hospitalisation consults only (validated against
+    # the intake profile — `claim_intake.requires_doctor_name`).
+    doctor_name: str | None = Field(default=None, max_length=255)
     diagnosis: str | None = Field(default=None, max_length=512)
     remarks: str | None = Field(default=None, max_length=500)
     amount_claimed: float = Field(gt=0, le=1_000_000)
@@ -123,6 +126,7 @@ class ClaimOut(_Base):
     incurred_date: date
     provider_name: str | None = None
     invoice_number: str | None = None
+    doctor_name: str | None = None
     diagnosis: str | None = None
     remarks: str | None = None
     referral_document_id: str | None = None
@@ -350,6 +354,11 @@ class HospitalOut(BaseModel):
 class ClaimTypeOption(BaseModel):
     label: str
     sub_type: str | None = None
+    # Whether this entry must name the treating doctor (pre-/post-hospitalisation
+    # only). SERVED, never mirrored: the frontend would otherwise have to match
+    # on the sub-type LABEL, and a relabel there is silent — the field would
+    # simply stop being asked for while the server kept requiring it.
+    requires_doctor_name: bool = False
     # Required-document slots for this claim type. When the requirement
     # depends on the hospital (Hospitalisation/Day Surgery), `doc_slots` is
     # the unlisted-hospital default and `doc_slots_by_sector` carries the
@@ -429,6 +438,9 @@ class IntakeFields(BaseModel):
     amount: float | None = None
     currency: str | None = None
     diagnosis: str | None = None
+    # The treating doctor read off the bill. Always suggested when the document
+    # names one; the form only asks for it on pre-/post-hospitalisation claims.
+    doctor_name: str | None = None
 
 
 class IntakeDocument(BaseModel):

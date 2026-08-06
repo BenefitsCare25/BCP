@@ -24,6 +24,7 @@ from app.models.claim import (
     CASE_TYPE_CLAIM,
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
+    CLAIM_STATUS_DRAFT,
     CLAIM_STATUS_SUBMITTED,
     LIVE_STATUSES,
     ORIGIN_PORTAL,
@@ -36,10 +37,12 @@ from app.schemas.claims import ClaimCreateIn, ClaimOut, DocSlotOut, StoredDocume
 from app.services.claim_intake import (
     DOC_SLOT_LABELS,
     GP_SUB_TYPES,
+    assert_doctor_name_valid,
     assert_documents_satisfy_slots,
     assert_intake_valid,
     benefit_row_for_sub_type,
     claim_profile_for,
+    normalize_invoice_number,
     normalize_sub_type,
     required_doc_slots,
     resolve_sp_referral,
@@ -319,6 +322,11 @@ def create_claim(
         currency=body.currency,
         visit_type=body.visit_type,
     )
+    assert_doctor_name_valid(
+        body.product_code, sub_type, body.doctor_name, claim_kind=body.claim_kind
+    )
+
+    doctor_name = (body.doctor_name or "").strip() or None
 
     claim = Claim(
         client_id=employee.client_id,
@@ -334,6 +342,7 @@ def create_claim(
         incurred_date=body.incurred_date,
         provider_name=body.provider_name,
         invoice_number=body.invoice_number,
+        doctor_name=doctor_name,
         diagnosis=body.diagnosis,
         remarks=body.remarks,
         amount_claimed=body.amount_claimed,
@@ -350,6 +359,10 @@ def create_claim(
             "incurred_date": body.incurred_date.isoformat(),
             "provider_name": body.provider_name,
             "invoice_number": body.invoice_number,
+            # Only when stated — an empty key on every GP receipt would give the
+            # review's rules a blank to reason about on claims that never ask
+            # for one.
+            **({"doctor_name": doctor_name} if doctor_name else {}),
             "diagnosis": body.diagnosis,
             "amount_claimed": body.amount_claimed,
             "currency": body.currency.upper(),
@@ -546,42 +559,79 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
         )
 
 
-def _assert_no_duplicate_receipt(
+def duplicate_invoice_claim_ids(db: Session, claim: Claim) -> list[str]:
+    """Live claims of the same member already claiming this claim's INVOICE.
+
+    **The invoice number is what makes a claim a duplicate**, not the documents
+    attached to it. The two are not the same test, and keying on the documents
+    was wrong in both directions: a multi-invoice upload legitimately attaches
+    ONE discharge summary (or itemised bill) to every claim of the same episode
+    — the exact set the intake flow tells the member to upload together — so
+    hash reuse blocked the second and third submissions of a genuine split;
+    while a member who photographs the same bill twice produces two different
+    hashes and sailed straight through.
+
+    Scope is the member's OWN claims. `Employee` rows are per policy year, so
+    that is this year's claims for their household (their own and their
+    dependants'). Widening it to the whole company would let a stranger's
+    identically-numbered receipt — short numeric receipt numbers do collide
+    across providers — make a member's real claim unfileable, with no way for
+    them to override it. Cross-member reuse is a fraud signal, not a member
+    error, so it is surfaced to the broker by the review's deterministic rule
+    (`claims_review/rules.py`) instead of blocking a submission.
+
+    Shared by the submit gate and that rule so the two can't disagree.
+    """
+    key = normalize_invoice_number(claim.invoice_number)
+    if not key:
+        return []
+    rows = db.execute(
+        select(Claim.id, Claim.invoice_number).where(
+            Claim.employee_id == claim.employee_id,
+            Claim.id != claim.id,
+            Claim.status.in_(LIVE_STATUSES),
+        )
+    ).all()
+    return sorted(
+        cid for cid, number in rows if normalize_invoice_number(number) == key
+    )
+
+
+def _assert_no_duplicate_invoice(
     db: Session, claim: Claim, documents: list[StoredDocument] | None = None
 ) -> None:
-    """A receipt already attached to another LIVE claim of this client is a
-    resubmission signal → structured 409 the UI can explain. ``documents`` may
-    be passed by a caller that already loaded them to avoid a second query."""
+    """Structured 409 when this claim's invoice number is already on another
+    live claim of the member's. ``documents`` may be passed by a caller that
+    already loaded them to avoid a second query.
+
+    **A hard refusal — there is deliberately no member-side override.** One
+    invoice is one claim, full stop. The cost of that is real and worth knowing:
+    a family clinic visit seen by the member AND their child is a single receipt
+    that would have to be filed as two claims (the claimant is per-claim), and
+    the member cannot change the number printed on the bill. That case now has
+    no portal route at all — an assessor records it broker-side as a LOG case,
+    which does not go through this path.
+    """
     docs = documents if documents is not None else claim_documents(db, claim)
     if not docs:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Attach at least one receipt before submitting.",
         )
-    hashes = [d.sha256 for d in docs]
-    dupes = db.execute(
-        select(StoredDocument).where(
-            StoredDocument.client_id == claim.client_id,
-            StoredDocument.entity_type == DOC_ENTITY_CLAIM,
-            StoredDocument.entity_id != claim.id,
-            StoredDocument.sha256.in_(hashes),
-        )
-    ).scalars().all()
-    if not dupes:
-        return
-    dupe_claim_ids = {d.entity_id for d in dupes}
-    live = db.execute(
-        select(Claim.id).where(
-            Claim.id.in_(dupe_claim_ids), Claim.status.in_(LIVE_STATUSES)
-        )
-    ).scalars().all()
+    live = duplicate_invoice_claim_ids(db, claim)
     if live:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={
-                "code": "duplicate_receipt",
-                "message": "One of these receipts was already submitted on another claim.",
-                "conflicting_claim_ids": sorted(live),
+                "code": "duplicate_invoice_number",
+                "message": (
+                    f"Invoice {claim.invoice_number} has already been claimed. "
+                    "Check the number against your receipt — if it's right, "
+                    "that claim is already with us and there's nothing more to "
+                    "send."
+                ),
+                "invoice_number": claim.invoice_number,
+                "conflicting_claim_ids": live,
             },
         )
 
@@ -688,12 +738,25 @@ def submit_claim(
         currency=claim.currency,
         visit_type=claim.visit_type,
     )
+    # DRAFTS only. A `needs_info` resubmission cannot reach this field — the
+    # member's only control on that screen is attaching documents — so
+    # re-checking it there would permanently strand any pre-/post- claim
+    # recorded before the doctor became required, with no member-side way to
+    # satisfy the refusal. Nothing real escapes: a claim created since cleared
+    # the rule at create, and a draft can always be deleted and refiled.
+    if claim.status == CLAIM_STATUS_DRAFT:
+        assert_doctor_name_valid(
+            claim.product_code,
+            claim.sub_type,
+            claim.doctor_name,
+            claim_kind=claim.claim_kind,
+        )
     statement = build_member_statement(db, employee)
     _apply_gp_rider_benefit_key(statement, claim)
     assert_coverage_claimable(statement, claim)
     # Every required document slot must be filled (tagged uploads); the
     # generic invoice/receipt slot accepts any attached document. Load the
-    # documents once and share with the duplicate-receipt check.
+    # documents once and share with the duplicate-invoice check.
     documents = claim_documents(db, claim)
     assert_documents_satisfy_slots(
         required_doc_slots(
@@ -704,7 +767,7 @@ def submit_claim(
         ),
         documents,
     )
-    _assert_no_duplicate_receipt(db, claim, documents)
+    _assert_no_duplicate_invoice(db, claim, documents)
 
     claim.status = CLAIM_STATUS_SUBMITTED
     claim.submitted_at = datetime.now(UTC)
