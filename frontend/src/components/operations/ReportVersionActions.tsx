@@ -23,6 +23,7 @@ import {
   downloadReportVersion,
   useCreateReportVersion,
   useReportVersions,
+  useMovementSummary,
   useReportVersionStatus,
 } from "@/api/reports";
 import { api } from "@/api/client";
@@ -148,6 +149,21 @@ function VersionedActions({
 
   const latest = status.data?.latest ?? null;
   const isStale = status.data?.is_stale ?? false;
+  // Only asked for once the badge is already showing — see useMovementSummary.
+  const movement = useMovementSummary(latest?.id ?? null, isStale && hasMovement);
+  const moved = movement.data;
+  // Zeros are omitted rather than printed: "0 left" is noise on a badge, and
+  // the counts can legitimately be all-zero (a change the diff does not model),
+  // in which case the original wording is still true.
+  const movedLabel =
+    moved &&
+    [
+      moved.added ? `${moved.added} added` : null,
+      moved.removed ? `${moved.removed} left` : null,
+      moved.changed ? `${moved.changed} updated` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
 
   const onSave = () =>
     create.mutate(createInput, {
@@ -172,8 +188,23 @@ function VersionedActions({
       <div className="flex items-center gap-2">
         {isStale &&
           (hasMovement ? (
-            <button type="button" onClick={onMovementSinceLive} title="Download what changed">
-              <Badge variant="warn">Roster changed ›</Badge>
+            <button
+              type="button"
+              onClick={onMovementSinceLive}
+              title={
+                movedLabel
+                  ? "Roster membership changes since this version. Plan and " +
+                    "category edits also mark it changed but are not counted " +
+                    "here. Click to download."
+                  : "Download what changed"
+              }
+            >
+              {/* Prefixed "Roster" because the counts are membership diffs
+                  only, while `is_stale` also fires on plan/category edits —
+                  an unqualified "2 updated" would assert more than it knows. */}
+              <Badge variant="warn">
+                {movedLabel ? `Roster: ${movedLabel}` : "Roster changed"} ›
+              </Badge>
             </button>
           ) : (
             <Badge variant="warn">Changed</Badge>

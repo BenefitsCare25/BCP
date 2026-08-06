@@ -49,7 +49,11 @@ from app.schemas.api import (
 )
 from app.schemas.claims import DependantApprovalIn, StoredDocumentOut
 from app.services.flex_assignment import assign_flex_safe
-from app.services.roster_attributes import first_value, mask_nric
+from app.services.roster_attributes import (
+    first_value,
+    mask_nric,
+    suspect_nric_warning,
+)
 from app.services.roster_dedup import dependant_candidate_keys, dependant_nric
 from app.services.roster_parser import parse_dependant_workbook
 from app.services.roster_reports import build_dependant_report_workbook
@@ -548,6 +552,11 @@ async def upload_dependants(
 
     inserted = 0
     errors: list[str] = list(no_dependant_rows)
+    warnings: list[str] = []
+
+    nric_warning = suspect_nric_warning(dependant_nric(r.attributes) for r in records)
+    if nric_warning:
+        warnings.append(nric_warning)
     duplicates: list[DuplicateEntry] = []
     seen: set[str] = set()
     for rec in records:
@@ -647,5 +656,6 @@ async def upload_dependants(
         inserted=inserted,
         skipped=len(duplicates),
         errors=errors,
+        warnings=warnings,
         duplicates=duplicates,
     )

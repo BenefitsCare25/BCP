@@ -146,14 +146,6 @@ export function rememberTenantSlug(slug: string): boolean {
   return true;
 }
 
-export function forgetTenantSlug(): void {
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* nothing to clean up */
-  }
-}
-
 /**
  * Capture `?company=<slug>` from the entry URL. Call once at boot, before the
  * router renders.

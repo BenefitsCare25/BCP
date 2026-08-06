@@ -535,3 +535,81 @@ def test_idle_timeout_kills_refresh(api: TestClient):
     stale = client.post("/api/v1/hr/auth/refresh", headers=_tenant())
     assert stale.status_code == 401
     _set_policy(api, session_idle_minutes=30)
+
+
+# ── Auth audit trail ───────────────────────────────────────────────────────────
+def _events(event_type: str, subject_id: str | None = None) -> list:
+    from app.models import AuthEvent
+
+    with SessionLocal() as db:
+        rows = db.query(AuthEvent).filter(AuthEvent.event_type == event_type).all()
+        return [r for r in rows if subject_id is None or r.subject_id == subject_id]
+
+
+def test_logout_is_recorded_in_the_auth_trail(api: TestClient):
+    """A sign-out has to leave a record. `EVENT_LOGOUT` existed as a constant
+    for the whole life of the surface and nothing ever emitted it, so the trail
+    showed sessions beginning and never ending."""
+    acct = _provision_hr(api, "hr.logout@democo.test")
+    api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": acct["set_password_token"], "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    api.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": "hr.logout@democo.test", "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    user_id = acct["user_id"]
+    assert _events("logout", user_id) == []
+
+    assert api.post("/api/v1/hr/auth/logout").status_code == 200
+    rows = _events("logout", user_id)
+    assert len(rows) == 1
+    assert rows[0].outcome == "success"
+    assert rows[0].surface == "hr"
+    assert rows[0].client_id == DEMO_CLIENT_ID
+
+
+def test_a_spent_logout_cookie_records_nothing(api: TestClient):
+    """Only a session we actually revoked is a sign-out. A repeat POST with a
+    dead cookie changed nothing, and logging it would put unattributable rows
+    in the trail that a reviewer cannot tell from real sign-outs."""
+    acct = _provision_hr(api, "hr.logout2@democo.test")
+    api.post(
+        "/api/v1/hr/auth/set-password",
+        json={"token": acct["set_password_token"], "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    api.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": "hr.logout2@democo.test", "password": STRONG_PW},
+        headers=_tenant(),
+    )
+    refresh = api.cookies.get("inspro_hr_refresh")
+    api.post("/api/v1/hr/auth/logout")
+    before = len(_events("logout", acct["user_id"]))
+
+    # Replay the same, now-revoked, cookie.
+    api.post("/api/v1/hr/auth/logout", cookies={"inspro_hr_refresh": refresh})
+    assert len(_events("logout", acct["user_id"])) == before
+
+
+def test_admin_password_reset_is_recorded_with_its_actor(api: TestClient):
+    """`EVENT_PASSWORD_RESET_REQUEST` was the other never-emitted constant: the
+    trail recorded resets COMPLETING with no record of one being asked for."""
+    acct = _provision_hr(api, "hr.reset@democo.test")
+    user_id = acct["user_id"]
+    assert _events("password_reset_request", user_id) == []
+
+    res = api.post(f"/api/v1/hr-admin/accounts/{user_id}/reset-password")
+    assert res.status_code == 200, res.text
+    rows = _events("password_reset_request", user_id)
+    assert len(rows) == 1
+    assert rows[0].surface == "hr"
+    # The subject is the account reset; the admin who did it is in `detail`, so
+    # "who reset whom" is answerable without joining the broker audit log.
+    assert rows[0].detail["reason"] == "admin_reset"
+    assert rows[0].detail["actor_user_id"]
+

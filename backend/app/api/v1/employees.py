@@ -62,7 +62,11 @@ from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
 from app.services.member_query import looks_like_nric
 from app.services.plan_hydration import hydrate_plans as _hydrate_plans
-from app.services.roster_attributes import mask_nric, normalize_nric
+from app.services.roster_attributes import (
+    mask_nric,
+    normalize_nric,
+    suspect_nric_warning,
+)
 from app.services.roster_dedup import employee_candidate_keys, employee_nric
 from app.services.roster_parser import parse_employee_workbook
 from app.services.roster_reports import build_employee_report_workbook
@@ -502,7 +506,14 @@ async def upload_employees(
 
     inserted = 0
     errors: list[str] = []
+    warnings: list[str] = []
     duplicates: list[DuplicateEntry] = []
+
+    # Checked across EVERY parsed row, duplicates included: a mistyped NRIC is
+    # worth reporting whether or not that row was the one imported.
+    nric_warning = suspect_nric_warning(employee_nric(r.attributes) for r in records)
+    if nric_warning:
+        warnings.append(nric_warning)
 
     # Existing identity keys in this policy year (both NRIC and staff), including
     # terminated leavers — re-adding a terminated person's exact roster row is a
@@ -603,5 +614,6 @@ async def upload_employees(
     )
 
     return UploadResult(
-        inserted=inserted, skipped=skipped, errors=errors, duplicates=duplicates
+        inserted=inserted, skipped=skipped, errors=errors, warnings=warnings,
+        duplicates=duplicates,
     )

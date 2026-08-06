@@ -62,11 +62,24 @@ from app.models.employee import (
     EMPLOYEE_STATUS_ACTIVE,
     EMPLOYEE_STATUS_TERMINATED,
 )
-from app.schemas.adc import AdcApplyResult, AdcFieldDiff, AdcIssue, AdcOp, AdcPreview
+from app.schemas.adc import (
+    AdcApplyResult,
+    AdcFieldDiff,
+    AdcIssue,
+    AdcOp,
+    AdcPreview,
+    AdcWarning,
+)
 from app.services.derivation_engine import derive
 from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
-from app.services.roster_attributes import first_value, mask_nric, parse_dob
+from app.services.roster_attributes import (
+    first_value,
+    is_valid_sg_nric,
+    looks_like_sg_nric,
+    mask_nric,
+    parse_dob,
+)
 from app.services.roster_dedup import (
     dependant_candidate_keys,
     dependant_nric,
@@ -159,6 +172,8 @@ class _Plan:
     emp_missing: list[Employee] = field(default_factory=list)
     dep_missing: list[Dependant] = field(default_factory=list)
     issues: list[AdcIssue] = field(default_factory=list)
+    # Rows that ARE applied but look wrong (see AdcWarning).
+    warnings: list[AdcWarning] = field(default_factory=list)
     unchanged: int = 0
     # Matched rows already terminated. An upload never resurrects anyone (and
     # never duplicates them either), but the count is surfaced so the no-op is
@@ -403,6 +418,17 @@ def _plan_employees(
                 )
                 continue
             run_nric[nric] = row_key
+            # Advisory, never a skip: a checksum failure is evidence of a
+            # transcription typo, not proof, and the roster is the customer's
+            # record. The masked form is enough to find the row.
+            if looks_like_sg_nric(nric) and not is_valid_sg_nric(nric):
+                plan.warnings.append(
+                    AdcWarning(
+                        row=rec.row, record_type="employee",
+                        message=(f"Identification number {mask_nric(nric)} fails its "
+                                 "NRIC/FIN checksum — check for a typo"),
+                    )
+                )
         if target is None:
             seen_file_keys.update(keys)
             plan.emp_add.append(
@@ -538,6 +564,17 @@ def _plan_dependants(
                 )
                 continue
             run_nric[nric] = row_key
+            # Advisory, never a skip: a checksum failure is evidence of a
+            # transcription typo, not proof, and the roster is the customer's
+            # record. The masked form is enough to find the row.
+            if looks_like_sg_nric(nric) and not is_valid_sg_nric(nric):
+                plan.warnings.append(
+                    AdcWarning(
+                        row=rec.row, record_type="dependant",
+                        message=(f"Identification number {mask_nric(nric)} fails its "
+                                 "NRIC/FIN checksum — check for a typo"),
+                    )
+                )
         if target is None:
             if any(k in seen_file_keys for k in keys):
                 plan.issues.append(
@@ -698,6 +735,7 @@ def _to_preview(plan: _Plan) -> AdcPreview:
         deletions=deletions,
         missing=missing,
         issues=plan.issues,
+        warnings=plan.warnings,
         counts={
             "additions": len(additions),
             "changes": len(changes),

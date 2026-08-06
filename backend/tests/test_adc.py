@@ -697,3 +697,45 @@ def test_apply_refuses_a_stale_termination_set(client: TestClient) -> None:
         data={"terminate_missing": "true", "missing_digest": digest},
     )
     assert res.status_code == 200, res.text
+
+
+# ── Advisory checks ─────────────────────────────────────────────────────────
+
+
+def test_a_mistyped_nric_warns_without_blocking_the_row(client: TestClient) -> None:
+    """The checksum advisory has to reach the path brokers actually USE.
+
+    It was first wired only into `POST /employees/upload`, which no UI calls —
+    the roster is changed through this listing sync — so it was unreachable in
+    practice. A warning is also not an issue: the row still applies.
+    """
+    py = _py(client)
+    content = _listing([
+        # S2222222H is the valid form, so H -> Q is a single-character typo.
+        ["A-8", "Typo Tan", "S2222222Q", "1990-02-02", "Executive", ""],
+        # Correct checksum — must NOT warn.
+        ["A-9", "Clean Chua", "S1111111D", "1991-03-03", "Executive", ""],
+    ])
+    body = _preview(client, py, content).json()
+
+    warnings = [w for w in body["warnings"] if w["record_type"] == "employee"]
+    assert len(warnings) == 1, warnings
+    assert "checksum" in warnings[0]["message"]
+    # Masked in transit — a wrong ID is still personal data.
+    assert "S2222222Q" not in warnings[0]["message"]
+    # Advisory, not a refusal: the row is still proposed, and it is NOT an issue.
+    assert any(op["staff_id"] == "A-8" for op in body["additions"])
+    assert all("checksum" not in i["message"] for i in body["issues"])
+
+
+def test_a_non_nric_identifier_never_warns(client: TestClient) -> None:
+    """A foreign passport or work-pass number is not an NRIC at all, so it fails
+    the checksum for a reason that is not an error. Warning on those would fire
+    for every foreign hire and train brokers to ignore the advisory."""
+    py = _py(client)
+    content = _listing([
+        ["A-7", "Overseas Ong", "E1234567X", "1992-04-04", "Executive", ""],
+    ])
+    body = _preview(client, py, content).json()
+    assert body["warnings"] == []
+

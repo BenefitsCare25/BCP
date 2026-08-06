@@ -767,6 +767,11 @@ class UploadResult(BaseModel):
     inserted: int
     skipped: int
     errors: list[str]
+    #: Advisory notes about rows that WERE imported (e.g. an identification
+    #: number that fails its checksum). Separate from `errors` on purpose: a
+    #: consumer gating on `errors == []` must not read a successful import of
+    #: staff with one mistyped digit as a failed one.
+    warnings: list[str] = Field(default_factory=list)
     duplicates: list[DuplicateEntry] = Field(default_factory=list)
 
 
@@ -820,13 +825,6 @@ class MatchResultsOut(BaseModel):
     items_total: int = 0
     offset: int = 0
     limit: int = 50
-
-
-class ActivationResult(BaseModel):
-    policy_year_id: str
-    status: str
-    activated_at: datetime
-    snapshot_counts: dict[str, int]
 
 
 class SnapshotOut(BaseModel):

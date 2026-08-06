@@ -54,11 +54,3 @@ export function SkeletonTable({
   );
 }
 
-export function SkeletonStat() {
-  return (
-    <div className="flex flex-col gap-2 p-4 border border-border rounded-lg bg-card">
-      <Skeleton className="h-3 w-20" />
-      <Skeleton className="h-7 w-16" />
-    </div>
-  );
-}

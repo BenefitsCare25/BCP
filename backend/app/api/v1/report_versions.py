@@ -35,6 +35,7 @@ from app.services.report_versions import (
     create_version,
     list_versions,
     load_version_blob,
+    movement_summary,
     previous_version,
     report_status,
     version_out,
@@ -220,6 +221,39 @@ def download_report_version(
     )
     db.commit()
     return _blob_response(rv, content)
+
+
+@item_router.get("/{version_id}/movement-summary")
+@limiter.limit("60/minute")
+def movement_counts(
+    request: Request,
+    version_id: str,
+    rv: ReportVersion = Depends(load_report_version),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """How much the roster moved since this version — counts only.
+
+    Deliberately its OWN endpoint rather than a field on `/status`: the counts
+    come from the same full baseline-vs-target diff `compute_movement` runs, and
+    `/status` is polled by every report row whether stale or not. Splitting it
+    out narrows the diff to stale, movement-capable rows — a reduction, NOT an
+    elimination: staleness is the steady state for a live roster, so expect
+    this to run for most rows on the page. Do not fold it back into `/status`.
+
+    Unlike the blob and workbook downloads it does NOT call
+    `_assert_version_readable`. That gate exists to keep a retained listing's
+    raw NRIC/FIN away from a `broker_viewer`; three integers carry no
+    identifier, and gating them would blank the staleness banner for exactly
+    the read-only users most likely to be looking at it.
+    """
+    spec = _spec_or_404(rv.report_type)
+    if not spec.has_movement:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This report type has no movement report.",
+        )
+    return movement_summary(db, rv, "live")
 
 
 @item_router.get("/{version_id}/movement")

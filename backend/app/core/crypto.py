@@ -27,15 +27,12 @@ key sees the new value once it calls ``reset_crypto_cache_for_tests()``.
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import secrets
 from dataclasses import dataclass
 from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
-
-logger = logging.getLogger(__name__)
 
 _ENV_CURRENT = "INSPRO_AI_KEY_ENCRYPTION_KEY"
 _ENV_PREVIOUS = "INSPRO_AI_KEY_ENCRYPTION_KEY_PREVIOUS"

@@ -655,6 +655,14 @@ export interface AdcIssue {
   message: string;
 }
 
+/** A row that IS applied but looks wrong — distinct from `AdcIssue`, which is
+ *  a row that could not be applied at all. */
+export interface AdcWarning {
+  row: number;
+  record_type: string;
+  message: string;
+}
+
 export interface AdcPreview {
   additions: AdcOp[];
   changes: AdcOp[];
@@ -668,6 +676,9 @@ export interface AdcPreview {
    */
   missing: AdcOp[];
   issues: AdcIssue[];
+  /** Applied anyway — advisory. Rendered apart from `issues` so an advisory
+   *  note is never read as a refusal. */
+  warnings: AdcWarning[];
   counts: Record<string, number>;
   /** Fingerprint of `missing`, returned with apply so a roster that moved in
    *  between can't terminate a different set than the one reviewed. */

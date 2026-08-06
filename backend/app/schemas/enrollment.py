@@ -15,7 +15,6 @@ class _Base(BaseModel):
 
 
 WindowTypeStr = Literal["open", "new_hire", "life_event"]
-WindowStatusStr = Literal["draft", "open", "closed"]
 DefaultBehaviorStr = Literal["deemed_keep_current", "deemed_decline"]
 # Per-product flex price-tag source + company-wide drawdown rule (set at window
 # creation). "slip" = price tag derived from the placement slip's premiums;

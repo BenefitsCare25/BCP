@@ -705,33 +705,6 @@ def _dependant_eligible(dep: Dependant, limits: dict[str, dict[str, int]], ref: 
     return role_age_eligible(prof[0], prof[1], limits)
 
 
-def covered_dependant_counts(
-    db: Session,
-    covered_dependant_ids: list[str] | None,
-    *,
-    age_limits: dict[str, dict[str, int]] | None = None,
-    ref: date | None = None,
-) -> tuple[int, int]:
-    """``(spouse_count, child_count)`` for a set of covered dependant ids.
-
-    Reuses ``flex_membership.count_dependants`` so the spouse/child classification
-    matches the Flex-membership + benefit-statement views. Empty/None → (0, 0)
-    with no query.
-
-    When ``age_limits`` + ``ref`` are given, dependants outside their role's age
-    window are dropped first — they are not eligible, so they draw no flex and add
-    no premium."""
-    from app.services.flex_membership import count_dependants
-
-    ids = [i for i in (covered_dependant_ids or []) if i]
-    if not ids:
-        return (0, 0)
-    deps = list(db.execute(select(Dependant).where(Dependant.id.in_(ids))).scalars().all())
-    if age_limits is not None and ref is not None:
-        deps = [d for d in deps if _dependant_eligible(d, age_limits, ref)]
-    return count_dependants(deps)
-
-
 def covered_dependant_profiles(
     db: Session,
     covered_dependant_ids: list[str] | None,
@@ -743,9 +716,8 @@ def covered_dependant_profiles(
     ``slip_options`` pricing needs (each dependant draws its own option rate,
     age-banded rates resolve on the DEPENDANT's age).
 
-    Same classification and age-window filtering as ``covered_dependant_counts``
-    (unclassifiable dependants are dropped in both). Derive counts from the
-    profiles via ``profile_counts`` so a caller loads the dependants once."""
+    Unclassifiable dependants are dropped. Derive counts from the profiles via
+    ``profile_counts`` so a caller loads the dependants once."""
     ids = [i for i in (covered_dependant_ids or []) if i]
     if not ids:
         return []
@@ -805,18 +777,6 @@ def _dependant_block(pricing: dict[str, Any] | None, product_id: str) -> dict:
     block = _product_block(pricing, product_id) or {}
     dep = block.get("dependant")
     return dep if isinstance(dep, dict) else {}
-
-
-def dependant_mode(pricing: dict[str, Any] | None, product_id: str) -> str:
-    """The EXPLICITLY-configured dependant pricing mode for a product (``none`` when
-    unset). For the resolution mode that also applies the slip default, see
-    ``_effective_dependant_mode``."""
-    mode = _dependant_block(pricing, product_id).get("mode")
-    return (
-        mode
-        if mode in (DependantMode.family_group, DependantMode.per_pax)
-        else DependantMode.none
-    )
 
 
 def _effective_dependant_mode(

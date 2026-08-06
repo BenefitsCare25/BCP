@@ -514,6 +514,18 @@ def test_report_version_movement_cross_tenant_404(client_as_a: TestClient) -> No
     assert res.status_code == 404
 
 
+def test_report_version_movement_summary_cross_tenant_404(
+    client_as_a: TestClient,
+) -> None:
+    """The counts endpoint is ungated for masking (three integers leak no
+    identifier) but must still be tenant-scoped like every other resource."""
+    _ensure_report_version_b()
+    res = client_as_a.get(
+        f"/api/v1/report-versions/{REPORT_VERSION_B}/movement-summary"
+    )
+    assert res.status_code == 404
+
+
 def test_reports_member_listing_template_cross_tenant_404(
     client_as_a: TestClient,
 ) -> None:

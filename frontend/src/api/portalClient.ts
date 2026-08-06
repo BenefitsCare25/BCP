@@ -4,7 +4,7 @@
  * never `X-Inspro-Client` — a member is pinned to one client server-side).
  * A 401 clears the session and sends the member back to the portal sign-in.
  */
-import { errorFromText, parseErrorText } from "@/lib/errors";
+import { errorFromText, parseResponseError } from "@/lib/errors";
 import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
 
@@ -98,7 +98,7 @@ export const portalApi = {
     const res = await fetch(`${API_BASE}${path}`, { headers: authHeader() });
     if (res.status === 401) return handleUnauthorized();
     if (!res.ok) {
-      throw new Error(parseErrorText(await res.text(), res.statusText));
+      throw new Error(await parseResponseError(res));
     }
     return await res.blob();
   },
@@ -111,7 +111,7 @@ export const portalApi = {
     });
     if (res.status === 401) return handleUnauthorized();
     if (!res.ok) {
-      throw new Error(parseErrorText(await res.text(), res.statusText));
+      throw new Error(await parseResponseError(res));
     }
     return (await res.json()) as T;
   },

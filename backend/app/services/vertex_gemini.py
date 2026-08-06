@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,8 +39,6 @@ from anthropic import (
 from anthropic.types import ToolUseBlock
 
 from app.core.ai_config import AIConfig
-
-logger = logging.getLogger(__name__)
 
 # JSON-Schema primitive → Gemini Schema Type enum name.
 _TYPE_MAP = {

@@ -40,7 +40,6 @@ DEPENDANT_TIER_KEYS: frozenset[str] = frozenset(
     for canon in scheme.token_map.values()
 )
 
-_TIER_NAMES = tuple(_TIER_TOKEN_TO_CANON)
 # A tier name as a standalone token (word boundary) — matches "EO", "EO Premium",
 # "EO / ES" but not the letters inside "EMPLOYEES".
 _TIER_TOKEN = re.compile(

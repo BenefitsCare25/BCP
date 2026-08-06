@@ -35,9 +35,6 @@ SUBJECT_USER = "user"
 SUBJECT_MEMBER = "member"
 
 # auth_events surfaces
-SURFACE_BROKER = "broker"
-SURFACE_HR = "hr"
-SURFACE_PORTAL = "portal"
 
 
 class AuthCredential(Base, TimestampMixin):

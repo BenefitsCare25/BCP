@@ -151,7 +151,6 @@ def benefit_row_for_sub_type(
 # Free-text fallback the UI offers when no catalog entry fits. Anything the
 # member types rides behind this prefix so brokers can spot unlisted
 # conditions at a glance.
-DIAGNOSIS_OTHER = "Other"
 _OTHER_PREFIX = "other:"
 
 

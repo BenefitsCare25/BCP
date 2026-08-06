@@ -249,18 +249,6 @@ def _party_for(roster: ResolvedRoster, dep: Dependant) -> Party:
     )
 
 
-def _collect(roster: ResolvedRoster) -> tuple[dict[str, list[Dependant]], dict[str, Identity]]:
-    """Group dependants by every key their identity offers."""
-    by_key: dict[str, list[Dependant]] = {}
-    idents: dict[str, Identity] = {}
-    for dep in roster.dependants:
-        ident = dependant_identity(dep)
-        idents[dep.id] = ident
-        for key in ident.keys:
-            by_key.setdefault(key, []).append(dep)
-    return by_key, idents
-
-
 def _employee_key_index(roster: ResolvedRoster) -> dict[str, str]:
     """key → employee id, with AMBIGUOUS keys dropped.
 

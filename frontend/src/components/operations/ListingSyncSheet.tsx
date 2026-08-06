@@ -254,6 +254,19 @@ export function ListingSyncSheet({
             </div>
           )}
 
+          {preview && (preview.warnings?.length ?? 0) > 0 && (
+            <Section title="Check these (still applied)">
+              {preview.warnings.map((w, i) => (
+                <div
+                  key={`w${i}`}
+                  className="border-t border-border px-3 py-2 text-sm text-foreground/80"
+                >
+                  Row {w.row} ({w.record_type}): {w.message}
+                </div>
+              ))}
+            </Section>
+          )}
+
           {preview && preview.issues.length > 0 && (
             <Section title="Issues (skipped)">
               {preview.issues.map((issue, i) => (

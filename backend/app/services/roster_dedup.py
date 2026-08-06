@@ -50,28 +50,6 @@ def dependant_nric(attrs: dict[str, Any] | None) -> str | None:
     return normalize_nric(first_value(attrs or {}, DEPENDANT_ID_KEYS))
 
 
-def employee_key(attrs: dict[str, Any] | None, staff_id: str | None) -> str | None:
-    """Dedup key for an employee: ``nric:<n>`` else ``staff:<id>`` (lowercased).
-
-    None only when a row has neither an NRIC nor a staff_id (unidentifiable —
-    the parser already drops such rows before this point).
-    """
-    nric = employee_nric(attrs)
-    if nric:
-        return f"nric:{nric}"
-    if staff_id and str(staff_id).strip():
-        return f"staff:{str(staff_id).strip().lower()}"
-    return None
-
-
-def dependant_key(
-    attrs: dict[str, Any] | None, employee_id: str | None
-) -> str | None:
-    """Dedup key for a dependant: ``nric:<n>`` else a composite of the linked
-    employee + name + DOB + relationship. None when there's nothing to key on."""
-    return next(iter(dependant_candidate_keys(attrs, employee_id)), None)
-
-
 def employee_candidate_keys(
     attrs: dict[str, Any] | None, staff_id: str | None
 ) -> list[str]:

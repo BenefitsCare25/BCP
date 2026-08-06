@@ -9,9 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
 import jwt
-from cachetools import LRUCache, TTLCache
+from cachetools import LRUCache
 from jwt import PyJWKClient
 
 from app.core.settings import Settings
@@ -22,13 +21,9 @@ logger = logging.getLogger(__name__)
 # occasionally arrive within a few seconds of issuance; 30s is safe.
 _CLOCK_SKEW_SECONDS = 30
 
-JWKS_TTL_SECONDS = 24 * 60 * 60
 _MAX_JWKS_ENDPOINTS = 8
 
 _jwks_client_cache: LRUCache[str, PyJWKClient] = LRUCache(maxsize=_MAX_JWKS_ENDPOINTS)
-_jwks_raw_cache: TTLCache[str, dict[str, Any]] = TTLCache(
-    maxsize=_MAX_JWKS_ENDPOINTS, ttl=JWKS_TTL_SECONDS
-)
 
 
 class EntraAuthError(RuntimeError):
@@ -39,20 +34,6 @@ def _jwk_client(jwks_url: str) -> PyJWKClient:
     if jwks_url not in _jwks_client_cache:
         _jwks_client_cache[jwks_url] = PyJWKClient(jwks_url)
     return _jwks_client_cache[jwks_url]
-
-
-def fetch_jwks(jwks_url: str) -> dict[str, Any]:
-    """Fetch and cache the raw JWKS document. Used by callers that want to
-    validate against a specific key set rather than PyJWKClient's network path.
-    """
-    cached = _jwks_raw_cache.get(jwks_url)
-    if cached is not None:
-        return cached
-    resp = httpx.get(jwks_url, timeout=5.0)
-    resp.raise_for_status()
-    doc = resp.json()
-    _jwks_raw_cache[jwks_url] = doc
-    return doc
 
 
 def verify_entra_token(

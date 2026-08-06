@@ -39,6 +39,16 @@ class AdcIssue(BaseModel):
     message: str
 
 
+class AdcWarning(BaseModel):
+    """A row that IS applied but looks wrong. Distinct from `AdcIssue`, which
+    is a row that cannot be applied at all — conflating them would make an
+    advisory note read as a refusal."""
+
+    row: int
+    record_type: str
+    message: str
+
+
 class AdcPreview(BaseModel):
     additions: list[AdcOp] = Field(default_factory=list)
     changes: list[AdcOp] = Field(default_factory=list)
@@ -50,6 +60,7 @@ class AdcPreview(BaseModel):
     #: denominator the UI needs to tell those two apart.
     missing: list[AdcOp] = Field(default_factory=list)
     issues: list[AdcIssue] = Field(default_factory=list)
+    warnings: list[AdcWarning] = Field(default_factory=list)
     counts: dict[str, int] = Field(default_factory=dict)
     #: Fingerprint of the `missing` set. The client returns it with apply so a
     #: roster that moved in between can't quietly terminate a different group.

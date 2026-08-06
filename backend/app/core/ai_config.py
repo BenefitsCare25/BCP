@@ -314,18 +314,3 @@ def load_ai_config(
     return _load_from_env()
 
 
-def is_configured() -> bool:
-    """Env-only check — kept zero-arg for backward compatibility.
-
-    Tenant-aware code should use ``load_ai_config(db, client_id) is not None``
-    or ``resolve_ai_source`` instead.
-    """
-    return _load_from_env() is not None
-
-
-def resolve_ai_source(
-    db: Session | None = None, client_id: str | None = None
-) -> AISource:
-    """Which source backs ``load_ai_config(db, client_id)`` right now."""
-    cfg = load_ai_config(db, client_id)
-    return cfg.source if cfg else "none"

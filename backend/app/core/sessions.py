@@ -12,9 +12,13 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.models import AuthSession
 
 _REFRESH_BYTES = 32
 
@@ -196,8 +200,14 @@ def rotate_session(
     return RotationResult(child, False)
 
 
-def revoke_token(db: Session, token: str) -> None:
-    """Logout: revoke the single session identified by this token. No commit."""
+def revoke_token(db: Session, token: str) -> AuthSession | None:
+    """Logout: revoke the single session identified by this token. No commit.
+
+    Returns the row it revoked, else None (unknown token, or one already
+    revoked). The caller needs it to attribute the logout audit event: an
+    auth event with no subject is unattributable and therefore useless, and a
+    repeat POST with a spent cookie is not a second sign-out to record.
+    """
     from app.models import AuthSession  # lazy
 
     row = db.execute(
@@ -205,3 +215,5 @@ def revoke_token(db: Session, token: str) -> None:
     ).scalar_one_or_none()
     if row is not None and row.revoked_at is None:
         row.revoked_at = datetime.now(UTC)
+        return row
+    return None

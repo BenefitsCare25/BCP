@@ -20,8 +20,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-logger = logging.getLogger(__name__)
-
 _request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 _REQUEST_ID_HEADER = "X-Request-ID"
@@ -44,6 +42,15 @@ def _coerce_inbound_id(raw: str | None) -> str:
     if not all(c.isalnum() or c in "-_" for c in candidate):
         return uuid.uuid4().hex
     return candidate
+
+
+def client_ip(request: Request) -> str | None:
+    """Caller IP for an audit row, or None behind a proxy that strips it."""
+    return request.client.host if request.client else None
+
+
+def user_agent(request: Request) -> str | None:
+    return request.headers.get("user-agent")
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):

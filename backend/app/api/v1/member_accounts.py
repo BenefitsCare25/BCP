@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import auth_events as EV
 from app.core import passwords as PW
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
@@ -44,9 +45,11 @@ from app.core.portal_auth import (
     issue_member_set_password_token,
 )
 from app.core.rate_limit import limiter
+from app.core.request_context import client_ip, user_agent
 from app.core.settings import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import Client, Employee, MemberAccount
+from app.models.auth import SUBJECT_MEMBER
 from app.models.member_account import (
     MEMBER_STATUS_ACTIVE,
     MEMBER_STATUS_DISABLED,
@@ -84,6 +87,12 @@ def _tenant_slug(db: Session, client_id: str | None) -> str | None:
 
     client = db.get(Client, client_id) if client_id else None
     return client.slug if client else None
+
+
+def _broker_firm_for(db: Session, client_id: str | None) -> str | None:
+    """The firm owning a company. `MemberAccount` has no firm of its own."""
+    client = db.get(Client, client_id) if client_id else None
+    return client.broker_firm_id if client else None
 
 
 def _login_source(db: Session, client_id: str | None) -> str | None:
@@ -321,6 +330,7 @@ class MemberSetPasswordIn(BaseModel):
     "/member-accounts/{account_id}/password-setup", response_model=MemberAccountOut
 )
 def member_password_setup(
+    request: Request,
     account_id: str,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -334,6 +344,21 @@ def member_password_setup(
     if not account.system_login_id:
         account.system_login_id = _unique_member_login_id(db, account.client_id)
     token = issue_member_set_password_token(account.id, credential_version(account))
+    # Broker-initiated: the security trail records the MEMBER as subject and the
+    # staff member who asked for it in `detail`, so a reset can be traced to a
+    # person. `write_audit` below is the broker-facing log, a separate record.
+    EV.write_auth_event(
+        db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
+        surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
+        client_id=account.client_id,
+        # The company's OWN firm, not the actor's — `_load_account` lets a
+        # `system_admin` act across firms, and an event filed under the actor's
+        # firm is invisible to the firm whose member was actually reset.
+        broker_firm_id=_broker_firm_for(db, account.client_id),
+        ip=client_ip(request), user_agent=user_agent(request),
+        subdomain=request.headers.get("host"),
+        detail={"reason": "broker_link", "actor_user_id": user.user_id},
+    )
     write_audit(db, user, "member_account.password_setup", "member_account", account.id)
     db.commit()
     out = _account_out(db, account)

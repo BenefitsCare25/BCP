@@ -9,22 +9,23 @@ a single-use set-password token (returned here; emailed in production).
 """
 from __future__ import annotations
 
-import logging
 import secrets
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import auth_events as EV
 from app.core import hr_auth as HR
 from app.core import passwords as PW
 from app.core import sessions as SESS
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.deps import require_firm_admin
+from app.core.request_context import client_ip, user_agent
 from app.db.session import get_db
 from app.models import AuthCredential, Client, User, UserClientAccess
 from app.models.auth import SUBJECT_USER
@@ -33,8 +34,6 @@ from app.models.user import (
     USER_STATUS_DISABLED,
     USER_STATUS_INVITED,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/hr-admin", tags=["hr-admin"])
 
@@ -263,6 +262,7 @@ def regenerate_login_id(
 
 @router.post("/accounts/{user_id}/reset-password", response_model=HrAccountCreated)
 def reset_password(
+    request: Request,
     user_id: str,
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
@@ -273,6 +273,28 @@ def reset_password(
     # than whenever the user happens to redeem the link, otherwise an attacker
     # already signed in keeps their session for its full absolute lifetime.
     revoked = SESS.revoke_all_for_subject(db, SUBJECT_USER, target.id)
+    # Subject is the account being reset; the admin who did it goes in `detail`,
+    # so the security trail answers "who reset whom" on its own rather than
+    # having to be joined against the broker audit log written below.
+    EV.write_auth_event(
+        db,
+        event_type=EV.EVENT_PASSWORD_RESET_REQUEST,
+        outcome=EV.OUTCOME_SUCCESS,
+        surface="hr",
+        subject_type=SUBJECT_USER,
+        subject_id=target.id,
+        client_id=_client_id_for(db, target.id),
+        # The TARGET's firm, not the actor's. `_load_hr_user` lets a
+        # `system_admin` cross firms, so stamping the actor's would file the
+        # event under the wrong firm — invisible to the firm whose account was
+        # actually reset, and mis-attributed in another.
+        broker_firm_id=target.broker_firm_id,
+        ip=client_ip(request),
+        user_agent=user_agent(request),
+        subdomain=request.headers.get("host"),
+        detail={"reason": "admin_reset", "actor_user_id": user.user_id,
+                "sessions_revoked": revoked},
+    )
     write_audit(db, user, action="reset_password", entity_type="hr_account",
                 entity_id=target.id, after={"sessions_revoked": revoked})
     db.commit()

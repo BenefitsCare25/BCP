@@ -155,10 +155,3 @@ def insurer_map_for_ids(
     return insurer_map(db, policy_year_id, products)
 
 
-def insurer_for(
-    db: Session, policy_year_id: str, product: Product | None
-) -> str:
-    """Single-product convenience — "" when no insurer is configured."""
-    if product is None:
-        return ""
-    return insurer_map(db, policy_year_id, [product]).get(product.id, "")

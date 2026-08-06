@@ -59,44 +59,6 @@ export function monthLabel(iso: string | null | undefined): string {
   return name ? `${name} ${year}` : "";
 }
 
-/** The date rail beside a message: month over day.
- *
- * Takes the same defensive path as `formatDay` — a message's `created_at` is a
- * real timestamp, but this is also handed plain dates, and a bare "2026-07-12"
- * through `new Date()` lands a day early west of Greenwich. */
-export function dayStamp(iso: string | null | undefined): {
-  month: string;
-  day: string;
-} {
-  if (!iso) return { month: "", day: "—" };
-  const [datePart] = String(iso).split(/[ T]/);
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
-  if (!m) return { month: "", day: datePart };
-  const [, , month, day] = m;
-  return { month: MONTHS[Number(month) - 1] ?? "", day: String(Number(day)) };
-}
-
-/** A timestamp as a person reads it: "11 Feb 2026, 2:00 pm".
- *
- * Only for values that genuinely carry a time (message `created_at`), rendered
- * in the BROWSER's zone — which is right here and wrong for a bare date, hence
- * the split from `formatDay`, which must never go near it.
- *
- * **Through `parseServerDate`, never bare `new Date()`.** The backend writes
- * UTC but SQLite serializes it with no offset, and JS reads an offset-less
- * string as LOCAL — so a message posted at 18:56 SGT printed as 10:56 on both
- * this thread and the broker's. Eight hours, on the one surface whose whole
- * job is to be a record of what was said and when. */
-export function formatMoment(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const when = parseServerDate(iso);
-  if (Number.isNaN(when.getTime())) return formatDay(iso);
-  const time = when
-    .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-    .toLowerCase();
-  return `${when.getDate()} ${MONTHS[when.getMonth()]} ${when.getFullYear()}, ${time}`;
-}
-
 /** Today, as the calendar on the member's own wall reads it.
  *
  * `new Date().toISOString().slice(0, 10)` is UTC, so anywhere east of Greenwich
@@ -121,8 +83,8 @@ export function todayISO(): string {
  *
  * Three grades, because a stamp competing with the title for width is a stamp
  * nobody reads: today is a clock time, this year drops the year, and anything
- * older carries it. Through `parseServerDate` for the reason `formatMoment`
- * gives — an offset-less SQLite timestamp read as local is eight hours out in
+ * older carries it. Through `parseServerDate`, never a bare `new Date()` — an
+ * offset-less SQLite timestamp read as local is eight hours out in
  * Singapore, and "8 hours ago" vs "just now" is exactly the distinction a queue
  * is sorted on.
  */

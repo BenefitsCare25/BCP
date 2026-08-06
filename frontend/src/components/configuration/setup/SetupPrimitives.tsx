@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -121,40 +121,6 @@ function TagListControl({
         placeholder={tags.length ? "" : "Type an ID and press Enter…"}
         className="min-w-[8rem] flex-1 bg-transparent px-1 py-0.5 text-sm focus:outline-none"
       />
-    </div>
-  );
-}
-
-export function Section({
-  title,
-  subtitle,
-  defaultOpen = false,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="rounded-lg border border-border bg-card">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left"
-      >
-        {open ? (
-          <ChevronDown className="size-4 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="size-4 text-muted-foreground" />
-        )}
-        <span className="text-sm font-semibold text-foreground">{title}</span>
-        {subtitle && (
-          <span className="text-xs text-muted-foreground">· {subtitle}</span>
-        )}
-      </button>
-      {open && <div className="border-t border-border p-4">{children}</div>}
     </div>
   );
 }

@@ -7,7 +7,6 @@ muddle the "which tenant am I configuring" semantics here.
 from __future__ import annotations
 
 import json
-import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -33,8 +32,6 @@ from app.schemas.api import (
     AIConfigUpsert,
 )
 from app.services.vertex_probe import probe_vertex, project_id_from_service_account
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-config", tags=["ai-config"])
 

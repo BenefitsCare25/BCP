@@ -19,7 +19,6 @@ tenants).
 from __future__ import annotations
 
 import hmac
-import logging
 import secrets
 import string
 from dataclasses import dataclass
@@ -44,8 +43,6 @@ from app.core.tenancy_host import (
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 from app.models.auth import SUBJECT_USER
-
-logger = logging.getLogger(__name__)
 
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TYPE_HR = "hr"

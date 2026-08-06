@@ -16,6 +16,17 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
+# Run directly (as the docstring above says to), Python puts THIS directory on
+# sys.path, not the backend root, and the project isn't installed — so the app
+# import below fails with ModuleNotFoundError. Under pytest it works via
+# PYTHONPATH=., which is why the suite never noticed. Bootstrap the root so the
+# documented invocation keeps working.
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
+from app.services.roster_attributes import sg_nric_check_letter  # noqa: E402
+
 OUTPUT_DIR = Path(__file__).parent / "rosters"
 DEFAULT_ROWS = 100
 SEED = 20260512
@@ -48,7 +59,17 @@ def _name(rng: random.Random) -> str:
 
 
 def _nric(rng: random.Random, prefix: str = "S") -> str:
-    return f"{prefix}{rng.randint(1000000, 9999999)}{rng.choice('ABCDEFGHJZ')}"
+    """A CHECKSUM-VALID synthetic NRIC.
+
+    The check letter used to be picked at random, so ~90% of generated IDs were
+    invalid. That was invisible until the upload started warning about IDs that
+    look like an NRIC and fail their checksum — at which point every synthetic
+    roster would have tripped the warning, training everyone to ignore it. The
+    letter comes from `roster_attributes.sg_nric_check_letter`, the same
+    function the validator uses, so fixtures cannot drift from the checker.
+    """
+    digits = f"{rng.randint(1000000, 9999999)}"
+    return f"{prefix}{digits}{sg_nric_check_letter(prefix, digits)}"
 
 
 def _date_offset_iso(base: date, rng: random.Random, low: int, high: int) -> str:

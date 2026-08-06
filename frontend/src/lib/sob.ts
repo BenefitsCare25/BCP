@@ -464,18 +464,6 @@ export function setCell(
   });
 }
 
-/** Revert a column's cell back to the row's base value. */
-export function clearCell(
-  sob: SobSchedule,
-  idx: number,
-  columnId: string,
-): SobSchedule {
-  return mapItem(sob, idx, (it) => {
-    const { [columnId]: _drop, ...rest } = it.overrides;
-    return { ...it, overrides: rest };
-  });
-}
-
 /**
  * Split a clipboard payload into one value per row.
  *
@@ -636,18 +624,6 @@ export function removeSub(
   return mapItem(sob, idx, (it) => ({
     ...it,
     sub_items: it.sub_items.filter((_, j) => j !== subIdx),
-  }));
-}
-
-export function setProperty(
-  sob: SobSchedule,
-  idx: number,
-  key: string,
-  value: string,
-): SobSchedule {
-  return mapItem(sob, idx, (it) => ({
-    ...it,
-    properties: { ...it.properties, [key]: value },
   }));
 }
 

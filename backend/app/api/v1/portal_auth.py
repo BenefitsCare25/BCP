@@ -41,6 +41,7 @@ from app.core.portal_auth import (
     verify_member_set_password_token,
 )
 from app.core.rate_limit import limiter
+from app.core.request_context import client_ip
 from app.core.settings import get_settings
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
@@ -174,6 +175,12 @@ def verify_code(
         token = issue_member_set_password_token(
             matched.id, CRED.credential_version(matched)
         )
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
+            surface="portal", subject_type=SUBJECT_MEMBER, subject_id=matched.id,
+            client_id=matched.client_id, ip=_client_ip(request),
+            subdomain=request.headers.get("host"), detail={"reason": "rotation_due"},
+        )
         db.commit()
         return MemberChallengeOut(
             status="password_reset_required", challenge_token=token
@@ -214,8 +221,8 @@ class MemberChallengeOut(BaseModel):
 _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
 
 
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+# Aliased rather than re-implemented — see core/request_context.
+_client_ip = client_ip
 
 
 def _member_out(token: str, expires_at, account: MemberAccount) -> OtpVerifyOut:
@@ -308,6 +315,12 @@ def member_login(
     if CRED.rotation_due(account):
         token = issue_member_set_password_token(
             account.id, CRED.credential_version(account)
+        )
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
+            surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
+            client_id=tenant.client_id, ip=_client_ip(request),
+            subdomain=request.headers.get("host"), detail={"reason": "rotation_due"},
         )
         db.commit()
         return MemberChallengeOut(

@@ -11,7 +11,6 @@ token in the body + rotating refresh token in a host-only cookie. See
 """
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 
 import jwt
@@ -27,24 +26,20 @@ from app.core import passwords as PW
 from app.core import sessions as SESS
 from app.core.breach_check import is_breached
 from app.core.rate_limit import limiter
+from app.core.request_context import client_ip, user_agent
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
 from app.models.auth import SUBJECT_USER
 from app.models.user import USER_STATUS_ACTIVE
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/hr/auth", tags=["hr-auth"])
 
 _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
 
 
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
-
-
-def _ua(request: Request) -> str | None:
-    return request.headers.get("user-agent")
+# Aliased rather than re-implemented — see core/request_context.
+_client_ip = client_ip
+_ua = user_agent
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -239,6 +234,20 @@ def login(
     # Forced rotation — the password is past its configured rotation deadline.
     if HR.rotation_due(cred, now):
         token = HR.issue_set_password_token(user.id, HR.credential_version(cred))
+        EV.write_auth_event(
+            db,
+            event_type=EV.EVENT_PASSWORD_RESET_REQUEST,
+            outcome=EV.OUTCOME_SUCCESS,
+            surface="hr",
+            subject_type=SUBJECT_USER,
+            subject_id=user.id,
+            client_id=tenant.client_id,
+            broker_firm_id=tenant.broker_firm_id,
+            ip=_client_ip(request),
+            user_agent=_ua(request),
+            subdomain=request.headers.get("host"),
+            detail={"reason": "rotation_due"},
+        )
         db.commit()
         return LoginChallengeOut(status="password_reset_required", challenge_token=token)
 
@@ -464,7 +473,24 @@ def logout(
 ):
     token = request.cookies.get(HR.REFRESH_COOKIE_NAME)
     if token:
-        SESS.revoke_token(db, token)
+        revoked = SESS.revoke_token(db, token)
+        # Only a session we actually revoked is a sign-out. A spent or unknown
+        # cookie changed nothing, and logging it would put unattributable rows
+        # in the trail that reviewers cannot distinguish from real sign-outs.
+        if revoked is not None:
+            EV.write_auth_event(
+                db,
+                event_type=EV.EVENT_LOGOUT,
+                outcome=EV.OUTCOME_SUCCESS,
+                surface="hr",
+                subject_type=revoked.subject_type,
+                subject_id=revoked.subject_id,
+                client_id=revoked.client_id,
+                broker_firm_id=revoked.broker_firm_id,
+                ip=_client_ip(request),
+                user_agent=_ua(request),
+                subdomain=request.headers.get("host"),
+            )
         db.commit()
     HR.clear_refresh_cookie(response)
     return {"status": "signed_out"}

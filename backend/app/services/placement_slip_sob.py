@@ -301,25 +301,6 @@ def _split_value_note(cell: Cell) -> tuple[str | None, str | None, bool]:
     return value, note, _is_na(cell)
 
 
-def _infer_kind(value: str | None) -> str:
-    """Best-effort value type for the employee-facing renderer.
-
-    currency for plain integers, percent for decimals <= 1 / "%" strings,
-    days for "N days", else text. Kept conservative — anything ambiguous stays
-    text so a broker reviews it before it reaches an employee.
-    """
-    if not value:
-        return "text"
-    v = value.strip()
-    if re.fullmatch(r"\d{1,3}(?:,\d{3})*(?:\.\d+)?", v):
-        return "currency"
-    if v.endswith("%") or re.fullmatch(r"0?\.\d+", v):
-        return "percent"
-    if re.search(r"\bdays?\b", v, re.IGNORECASE):
-        return "days"
-    return "text"
-
-
 def _parse_sob_items(
     rows: list[list[Cell]],
     data_start: int,

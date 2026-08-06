@@ -17,7 +17,6 @@ TITLE = Font(bold=True, size=13)
 SECTION = Font(bold=True, size=11)
 HEADER = Font(bold=True)
 NOTE = Font(italic=True, size=9)
-PLAIN = Font(bold=False)
 WRAP = Alignment(wrap_text=True, vertical="top")
 CENTER = Alignment(horizontal="center", vertical="center")
 

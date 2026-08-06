@@ -83,10 +83,6 @@ _MAX_SAMPLE_CATEGORIES = 6
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 
-def _norm_code(code: str) -> str:
-    return code.upper().replace(" ", "").replace("-", "")
-
-
 def _canon_code(code: str) -> str:
     # Alias codes (WICI → WICA) resolve via the product registry.
     return product_registry.resolve_code(code)

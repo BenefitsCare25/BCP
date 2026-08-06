@@ -9,6 +9,7 @@ so a new column alias only has to be added in one place.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from datetime import date, datetime
 from typing import Any
 
@@ -114,27 +115,82 @@ _NRIC_WEIGHTS = (2, 7, 6, 5, 4, 3, 2)
 _NRIC_CHECK = {"ST": "JZIHGFEDCBA", "FG": "XWUTRQPNMLK", "M": "XWUTRQPNJLK"}
 
 
-def is_valid_sg_nric(raw: object | None) -> bool:
-    """True when ``raw`` passes the Singapore NRIC/FIN checksum.
+def looks_like_sg_nric(raw: object | None) -> bool:
+    """True when ``raw`` has the SHAPE of an SG NRIC/FIN — S/T/F/G/M series,
+    ``<letter><7 digits><letter>`` — whether or not the checksum passes.
 
-    Used only to *warn* about likely-malformed IDs on upload — never to block a
-    row (foreign/blank IDs are legitimate). Validates S/T/F/G/M-series numbers;
-    anything not matching the ``<letter><7 digits><letter>`` shape is treated as
-    not-an-NRIC (returns False) so the caller can decide whether to warn.
+    Split from ``is_valid_sg_nric`` because only the PAIR can produce a usable
+    warning. A foreign passport or work-pass number fails the checksum test for
+    a reason that is not an error — it simply is not an NRIC — so warning on
+    every failure would fire for each foreign hire and be ignored. A value that
+    looks like an NRIC and fails is the one that is probably a typo.
     """
     canon = normalize_nric(raw)
     if not canon or len(canon) != 9:
         return False
     prefix, digits, suffix = canon[0], canon[1:8], canon[8]
-    if prefix not in "STFGM" or not digits.isdigit() or not suffix.isalpha():
-        return False
+    return prefix in "STFGM" and digits.isdigit() and suffix.isalpha()
+
+
+def sg_nric_check_letter(prefix: str, digits: str) -> str | None:
+    """The trailing checksum letter for an S/T/F/G/M-series number (None when
+    the inputs are not that shape).
+
+    Public so test fixtures can MINT valid IDs from the very algorithm that
+    validates them: a generator carrying its own copy is how fixture data comes
+    to disagree with the checker it is meant to exercise.
+    """
+    if prefix not in "STFGM" or len(digits) != 7 or not digits.isdigit():
+        return None
     total = sum(int(d) * w for d, w in zip(digits, _NRIC_WEIGHTS, strict=True))
     if prefix in "TG":
         total += 4
     elif prefix == "M":
         total += 3
     table = next(t for k, t in _NRIC_CHECK.items() if prefix in k)
-    return table[total % 11] == suffix
+    return table[total % 11]
+
+
+def is_valid_sg_nric(raw: object | None) -> bool:
+    """True when ``raw`` passes the Singapore NRIC/FIN checksum.
+
+    Used only to *warn* about likely-malformed IDs on upload — never to block a
+    row (foreign/blank IDs are legitimate). Anything not matching the NRIC shape
+    returns False, so pair it with ``looks_like_sg_nric`` to tell "not an NRIC"
+    from "a wrong NRIC" — which is what ``suspect_nric_warning`` does.
+    """
+    if not looks_like_sg_nric(raw):
+        return False
+    canon = normalize_nric(raw)
+    return sg_nric_check_letter(canon[0], canon[1:8]) == canon[8]
+
+
+# Enough masked samples to start looking; the count carries the scale.
+_NRIC_WARN_SAMPLE = 5
+
+
+def suspect_nric_warning(values: Iterable[object | None]) -> str | None:
+    """One advisory line for IDs shaped like an NRIC that fail its checksum.
+
+    ADVISORY ONLY, by design: the roster is the customer's record of their own
+    staff, a checksum is evidence of a typo rather than proof, and refusing the
+    row would turn one bad digit into a failed upload. Samples are MASKED — the
+    message is rendered in a browser, and an ID being wrong does not make it
+    any less personal data.
+    """
+    bad = [
+        mask_nric(v)
+        for v in values
+        if looks_like_sg_nric(v) and not is_valid_sg_nric(v)
+    ]
+    if not bad:
+        return None
+    shown = ", ".join(bad[:_NRIC_WARN_SAMPLE])
+    more = f" (+{len(bad) - _NRIC_WARN_SAMPLE} more)" if len(bad) > _NRIC_WARN_SAMPLE else ""
+    return (
+        f"{len(bad)} identification number(s) look like an NRIC/FIN but fail its "
+        f"checksum — likely a typo. The rows were imported unchanged: {shown}{more}"
+    )
 
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d")

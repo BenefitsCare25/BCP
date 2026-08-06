@@ -65,6 +65,34 @@ export interface ReportVersionStatus {
   has_movement: boolean;
 }
 
+export interface MovementSummary {
+  added: number;
+  removed: number;
+  changed: number;
+}
+
+/** How much the roster moved since a saved version.
+ *
+ * Its own endpoint rather than a field on the status poll: the counts come
+ * from the same full diff the movement workbook runs, and `/status` is polled
+ * by EVERY report row whether stale or not. This narrows that to stale rows
+ * only — which on a live roster is not rare, so it is a reduction rather than
+ * an elimination. Keep it off `/status`. */
+export function useMovementSummary(versionId: string | null, enabled: boolean) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["movement-summary", versionId, cid],
+    queryFn: () =>
+      api.get<MovementSummary>(`/report-versions/${versionId}/movement-summary`),
+    enabled: enabled && Boolean(versionId),
+    staleTime: 30_000,
+    // The badge degrades to its old wording if this fails, so the failure is
+    // already handled; without this the global QueryCache.onError would still
+    // push it into the notification centre — an alert about nothing.
+    meta: { localErrorHandling: true },
+  });
+}
+
 export interface CreateReportVersionInput {
   report_type: string;
   insurer?: string;

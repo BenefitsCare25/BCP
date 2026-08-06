@@ -6,13 +6,9 @@ a logical combinator ({and|or|not: ...}) or a comparison ({op: [attr, value]}).
 """
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-ComparisonOp = Literal["=", "==", "!=", ">=", "<=", ">", "<", "between", "in", "not_in"]
-LogicalOp = Literal["and", "or", "not"]
-
 
 # We model Rule as a permissive dict for now — the spike's job is to validate
 # that round-tripping works. Tightening to a discriminated union happens in
