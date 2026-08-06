@@ -48,7 +48,11 @@ import {
   usePortalUtilization,
   type PortalClaim,
 } from "@/api/portal";
-import { usePortalMessages, type ClaimMessageList } from "@/api/portalMessages";
+import {
+  usePortalConversations,
+  type Conversation,
+  type ConversationList,
+} from "@/api/portalMessages";
 import { cn } from "@/lib/cn";
 import { isNotFoundError } from "@/lib/errors";
 import { PortalErrorState } from "./PortalErrorState";
@@ -56,7 +60,10 @@ import { glassHover, glassSurface, MountRule } from "./leaf/Mount";
 import { goLinkClass, GoArrow } from "./leaf/Action";
 import { FillRule } from "./leaf/FillRule";
 import { Money, currencySymbol, moneyText } from "./leaf/Figure";
-import { MessageRows } from "./leaf/MessageMount";
+import { ConversationRows } from "./leaf/ConversationMount";
+// One rule names a claim on every member surface — including the guard
+// against the broker-side `LOG` sentinel, which this tile printed raw.
+import { claimTitle } from "./leaf/ClaimMount";
 import { ClaimStrike, Strike } from "./leaf/Strike";
 import { LeafSkeleton } from "./leaf/LeafSkeleton";
 import { formatDay } from "./leaf/date";
@@ -243,7 +250,7 @@ export interface HomeMosaicSource {
   claims: Loadable<{ items: PortalClaim[] }>;
   statement: Loadable<BenefitStatement>;
   dependants: Loadable<Dependant[]>;
-  messages: Loadable<ClaimMessageList>;
+  messages: Loadable<ConversationList>;
   /** Refetch every query behind the mosaic. Wired by the surface that owns the
    * hooks, so the error state can offer the one useful action. */
   onRetry?: () => void;
@@ -256,7 +263,7 @@ export function HomeMosaic() {
   const claims = usePortalClaims();
   const statement = usePortalStatement();
   const dependants = usePortalDependants();
-  const messages = usePortalMessages();
+  const messages = usePortalConversations();
 
   return (
     <HomeMosaicView
@@ -282,10 +289,19 @@ export function HomeMosaic() {
 export function HomeMosaicView({
   source,
   onGo,
+  onOpenClaim,
+  onOpenQuestion,
 }: {
   source: HomeMosaicSource;
   /** Supplied by the broker preview, which navigates by switching its own tabs. */
   onGo?: (dest: HomeDest) => void;
+  /** Opens ONE claim without navigating — the broker preview's drill-in. A
+   *  message row's destination is its claim, and `onGo` only names tabs. */
+  onOpenClaim?: (claimId: string) => void;
+  /** The question half of the same drill-in. Paired with `onOpenClaim`:
+   *  a Messages row is one of two kinds and the tile must not send an
+   *  enquiry id to a claim view. */
+  onOpenQuestion?: (enquiryId: string) => void;
 }) {
   const navigate = useNavigate();
   const { utilization, claims, statement, dependants, messages } = source;
@@ -308,17 +324,37 @@ export function HomeMosaicView({
   const earlier = claimItems.slice(1, 3);
 
   const messageItems = messages.data?.items ?? [];
-  const unread = messages.data?.unread ?? 0;
-  // A message row lands on its own claim. Only on the MEMBER surface: `onGo`
-  // means this is the broker's preview frame, which has no claim detail to open
-  // and must never navigate a broker into the live member portal.
-  const openMessage = onGo
-    ? undefined
-    : (m: { claim_id: string }) =>
-        void navigate({
-          to: "/portal/$company/claims/$claimId",
-          params: { company, claimId: m.claim_id },
-        });
+  const unread = messages.data?.unread_total ?? 0;
+  // A message row lands on its own claim, on BOTH surfaces — the member by
+  // route, the broker's preview frame by drilling into its own claim detail.
+  // It must never navigate a broker into the live member portal, so `onGo`
+  // (which marks that frame) falls back to an inert row if no drill-in handler
+  // was passed rather than to a `<Link>`.
+  // **A row opens what it is ABOUT, and the two kinds are not the same thing.**
+  // This sent every row to the claim route with `subject.id` — so a question,
+  // which sorts to the top of this tile the moment it is asked, loaded the
+  // claim page with an enquiry id and rendered "We couldn't find that claim".
+  // Both the Messages page and the preview frame branch on `kind`; only this
+  // did not.
+  const openMessage = onOpenClaim
+    ? (c: Conversation) =>
+        c.subject.kind === "enquiry"
+          ? onOpenQuestion?.(c.subject.id)
+          : onOpenClaim(c.subject.id)
+    : onGo
+      ? undefined
+      : (c: Conversation) =>
+          void navigate(
+            c.subject.kind === "enquiry"
+              ? {
+                  to: "/portal/$company/questions/$enquiryId",
+                  params: { company, enquiryId: c.subject.id },
+                }
+              : {
+                  to: "/portal/$company/claims/$claimId",
+                  params: { company, claimId: c.subject.id },
+                },
+          );
 
   const coverage = statement.data?.coverage ?? [];
   const activeDependants = (dependants.data ?? []).filter(
@@ -374,7 +410,7 @@ export function HomeMosaicView({
                 {formatDay(latest.incurred_date)}
               </span>
             </div>
-            <p className="text-row text-label">{latest.claim_type}</p>
+            <p className="text-row text-label">{claimTitle(latest)}</p>
             {earlier.length > 0 && (
               <>
                 <MountRule />
@@ -392,7 +428,7 @@ export function HomeMosaicView({
                           />
                         </span>
                         <span className="block truncate text-2xs text-label">
-                          {c.claim_type} · {formatDay(c.incurred_date)}
+                          {claimTitle(c)} · {formatDay(c.incurred_date)}
                         </span>
                       </span>
                       <ClaimStrike status={c.status} />
@@ -444,12 +480,11 @@ export function HomeMosaicView({
         </div>
         {messageItems.length > 0 ? (
           <>
-            <MessageRows
+            <ConversationRows
               items={messageItems.slice(0, HOME_MESSAGES)}
               className="-mt-1"
-              // Inert in the broker preview (`onGo`), which has no claim-detail
-              // surface to land on — a row that jumped to a tab showing
-              // something else would be worse than one that does nothing.
+              // Opens the message's own claim on either surface — see
+              // `openMessage`, which resolves the two ways of getting there.
               onOpen={openMessage}
             />
             <Go dest="messages" onGo={onGo} stretch={false}>

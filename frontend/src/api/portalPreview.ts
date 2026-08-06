@@ -3,8 +3,13 @@
  * member token. Same response shapes as the portal hooks in api/portal.ts. */
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { PortalClaimList, PortalEnrollmentData } from "@/api/portal";
-import type { ClaimMessage, ClaimMessageList } from "@/api/portalMessages";
+import type {
+  PortalClaim,
+  PortalClaimList,
+  PortalEnrollmentData,
+} from "@/api/portal";
+import type { ClaimMessage, ConversationList } from "@/api/portalMessages";
+import type { Enquiry } from "@/api/portalEnquiries";
 import type { MemberAccount } from "@/api/memberAccounts";
 import type { MemberCards } from "@/api/panelCards";
 import {
@@ -80,10 +85,75 @@ export function usePreviewClaims(employeeId: string | null) {
   );
 }
 
-/** The member's inbox as the MEMBER sees it — the preview endpoint runs the
- * member serializer, so a broker's name never appears here either. */
-export function usePreviewMessages(employeeId: string | null) {
-  return usePreviewQuery<ClaimMessageList>(employeeId, "/messages", "messages");
+/** ONE claim, as its own claimant reads it — the mirror of `usePortalClaim`.
+ *
+ * The broker's own claim record (`api/claims.ts`) is a DIFFERENT shape carrying
+ * assessor fields, so it can never be substituted here: the frame's job is to
+ * show the member's screen, and half of what makes that screen the member's is
+ * what it leaves out. */
+export function usePreviewClaim(
+  employeeId: string | null,
+  claimId: string | null,
+) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["portal-preview", "claim", employeeId, claimId, cid],
+    queryFn: () =>
+      api.get<PortalClaim>(
+        `/employees/${employeeId}/portal-preview/claims/${claimId}`,
+      ),
+    enabled: Boolean(employeeId && claimId),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+/** The member's conversations as the MEMBER sees them — the preview endpoint
+ * runs the member serializer over the same projection, so a broker's name never
+ * appears here and neither does a thread the member cannot see. */
+export function usePreviewConversations(employeeId: string | null) {
+  return usePreviewQuery<ConversationList>(
+    employeeId,
+    "/conversations",
+    "conversations",
+  );
+}
+
+/** ONE question, and its thread, as the MEMBER reads them — the preview
+ * endpoints run the member serializer over the same loaders, so a broker's name
+ * never appears and another employee's question 404s. */
+export function usePreviewEnquiry(
+  employeeId: string | null,
+  enquiryId: string | null,
+) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["portal-preview", "enquiry", employeeId, enquiryId, cid],
+    queryFn: () =>
+      api.get<Enquiry>(
+        `/employees/${employeeId}/portal-preview/enquiries/${enquiryId}`,
+      ),
+    enabled: Boolean(employeeId && enquiryId),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+export function usePreviewEnquiryMessages(
+  employeeId: string | null,
+  enquiryId: string | null,
+) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["portal-preview", "enquiry-messages", employeeId, enquiryId, cid],
+    queryFn: () =>
+      api.get<ClaimMessage[]>(
+        `/employees/${employeeId}/portal-preview/enquiries/${enquiryId}/messages`,
+      ),
+    enabled: Boolean(employeeId && enquiryId),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
 }
 
 export function usePreviewClaimMessages(

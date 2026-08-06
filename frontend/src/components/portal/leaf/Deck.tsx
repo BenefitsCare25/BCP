@@ -56,12 +56,12 @@ import {
   useRef,
   useState,
   type ReactNode,
-  type RefObject,
 } from "react";
 import { useReducedMotion } from "motion/react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { glassSurface, glassHover } from "./Mount";
+import { useContainerWide } from "./useContainerWide";
 
 export interface DeckSlide {
   /** Stable across renders; it is what the URL carries. */
@@ -95,25 +95,6 @@ const SWIPE_COMMIT_PX = 80;
 /** The OS back-swipe lives in the left edge; a drag starting there is not ours. */
 const EDGE_GUARD_PX = 24;
 
-function useIsWide(ref: RefObject<HTMLElement>): boolean {
-  const [wide, setWide] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // Measured SYNCHRONOUSLY first. Left to the observer alone, the deck paints
-    // its phone layout for a commit before flipping — on a desktop mount and on
-    // every return to this tab, the rail visibly reflows from a horizontal pill
-    // to a vertical list. A layout effect runs before paint, so setting the
-    // right answer here means there is nothing to see.
-    setWide(el.getBoundingClientRect().width >= WIDE_AT);
-    const ro = new ResizeObserver(([entry]) => {
-      setWide(entry.contentRect.width >= WIDE_AT);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ref]);
-  return wide;
-}
 
 /** The outgoing slide's lifetime. Matches `deck-out-*` in leaf.css, plus a frame
  * so the last painted state is the animation's end rather than a snap. */
@@ -168,13 +149,14 @@ export function Deck({
   activeKey?: string | null;
   onActiveKeyChange?: (key: string) => void;
 }) {
-  const deckRef = useRef<HTMLDivElement>(null);
+  // The deck's own width decides its layout — see `useContainerWide`, which
+  // holds the rationale and the synchronous first measure this used to own.
+  const [measureDeck, wide] = useContainerWide(WIDE_AT);
   const stageRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const chipRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const wide = useIsWide(deckRef);
   const reduceMotion = useReducedMotion();
 
   const controlled = activeKey !== undefined;
@@ -451,7 +433,7 @@ export function Deck({
 
   return (
     <div
-      ref={deckRef}
+      ref={measureDeck}
       className={cn("grid items-start gap-3.5", wide && "grid-cols-[236px_minmax(0,1fr)] gap-5")}
     >
       {/* ── The index ──────────────────────────────────────────────────── */}

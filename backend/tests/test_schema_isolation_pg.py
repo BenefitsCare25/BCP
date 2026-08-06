@@ -53,6 +53,49 @@ def pg_engine():
     engine.dispose()
 
 
+def test_claim_id_is_nullable_in_every_schema(pg_engine) -> None:
+    """A question's message has no claim, so `claim_messages.claim_id` must be
+    nullable in EVERY schema — not just `public`.
+
+    Scope, precisely: this builds schemas from the MODELS
+    (`Base.metadata.create_all` + `provision_firm_schema`), so what it guards is
+    that provisioning carries the nullable column into a firm schema — model and
+    provisioning agreeing. It does NOT exercise the migration.
+
+    The migration path is the other half and cannot be asserted here: a
+    nullability change reaches only the schema Alembic ran against, which is why
+    `a3f7c9d21b48` walks the firm schemas itself. That walk was verified by
+    running the chain against a real Postgres with a firm schema present
+    (`ALTER … DROP NOT NULL` applied to both, downgrade restoring both, and the
+    downgrade refusing while claim-less messages exist). Re-run that by hand
+    when touching it — an upgrade-from-real-data test needs a seeded database
+    this module deliberately does not build.
+    """
+    from app.db.tenancy import provision_firm_schema, schema_for_firm
+    from app.models import BrokerFirm
+
+    with sessionmaker(bind=pg_engine)() as s:
+        for fid, name in ((FIRM_A, "Firm A"), (FIRM_B, "Firm B")):
+            if s.get(BrokerFirm, fid) is None:
+                s.add(BrokerFirm(id=fid, name=name))
+        s.commit()
+    for fid in (FIRM_A, FIRM_B):
+        provision_firm_schema(pg_engine, fid)
+
+    schemas = ["public", *(schema_for_firm(f) for f in (FIRM_A, FIRM_B))]
+    with pg_engine.connect() as c:
+        for schema in schemas:
+            nullable = c.execute(
+                text(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_schema = :s AND table_name = 'claim_messages' "
+                    "AND column_name = 'claim_id'"
+                ),
+                {"s": schema},
+            ).scalar()
+            assert nullable == "YES", f"{schema}.claim_messages.claim_id is NOT NULL"
+
+
 def test_two_firms_are_physically_isolated(pg_engine) -> None:
     from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
     from app.models import BrokerFirm, Client, PolicyYear

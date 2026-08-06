@@ -124,6 +124,10 @@ const PortalClaimDetailPage = lazyRouteComponent(
   () => import("@/routes/portal/claims/detail"),
   "PortalClaimDetailPage",
 );
+const PortalQuestionDetailPage = lazyRouteComponent(
+  () => import("@/routes/portal/questions/detail"),
+  "PortalQuestionDetailPage",
+);
 const HrSignInPage = lazyRouteComponent(
   () => import("@/routes/hr/sign-in"),
   "HrSignInPage",
@@ -467,6 +471,12 @@ const portalMessagesRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
   path: "/portal/$company/messages",
   component: PortalMessagesPage,
+  // Which conversation is on stage, as `claim:<id>` / `enquiry:<id>`. Validated
+  // loosely on purpose: the page matches it against the conversations it
+  // actually holds, so a stale or hand-edited value selects nothing and falls
+  // back to the newest rather than erroring on a URL somebody was sent.
+  validateSearch: (search: Record<string, unknown>): { open?: string } =>
+    typeof search.open === "string" ? { open: search.open } : {},
 });
 
 const portalSecurityRoute = createRoute({
@@ -485,6 +495,20 @@ const portalClaimDetailRoute = createRoute({
   getParentRoute: () => portalLayoutRoute,
   path: "/portal/$company/claims/$claimId",
   component: PortalClaimDetailPage,
+});
+
+// Questions — a thread that hangs off no claim. Reached from the Messages page,
+// not the nav: the desktop bar is one row and the phone dock is settled at
+// five, which is why Messages itself is an icon in the account cluster.
+//
+// There is deliberately NO `questions/new` route: composing one is a dialog on
+// the Messages page (`AskQuestionDialog`), so the member never leaves the list
+// their answer may already be in. That also removes the `new`-before-
+// `$enquiryId` ordering trap this pair used to carry.
+const portalQuestionDetailRoute = createRoute({
+  getParentRoute: () => portalLayoutRoute,
+  path: "/portal/$company/questions/$enquiryId",
+  component: PortalQuestionDetailPage,
 });
 
 const appLayoutRoute = createRoute({
@@ -747,6 +771,7 @@ const routeTree = rootRoute.addChildren([
     portalSecurityRoute,
     portalNewClaimRoute,
     portalClaimDetailRoute,
+    portalQuestionDetailRoute,
   ]),
   appLayoutRoute.addChildren([
     indexRoute,

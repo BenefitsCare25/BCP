@@ -22,9 +22,11 @@ from app.models.claim import member_visible_claims
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import (
     ClaimList,
-    ClaimMessageList,
     ClaimMessageOut,
+    ClaimOut,
+    ConversationList,
     CoverageOptionsOut,
+    EnquiryOut,
     UtilizationOut,
 )
 from app.schemas.enrollment import PortalEnrollmentOut
@@ -37,16 +39,19 @@ from app.schemas.portal import (
     PortalPreviewOut,
 )
 from app.services.claim_messages import (
-    member_inbox,
+    member_conversation_out,
+    member_conversations,
     member_message_out,
     member_unread_count,
     thread_for_claim,
+    thread_for_enquiry,
 )
-from app.services.claims import claims_to_out, load_member_claim
+from app.services.claims import claim_to_out, claims_to_out, load_member_claim
 from app.services.enrollment_elections import (
     build_portal_enrollment,
     open_window_for,
 )
+from app.services.member_enquiries import enquiry_out, load_member_enquiry
 from app.services.member_statement import build_member_statement
 from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
@@ -248,26 +253,71 @@ def portal_preview_claims(
     )
 
 
-@router.get("/messages", response_model=ClaimMessageList)
-def portal_preview_messages(
+@router.get("/claims/{claim_id}", response_model=ClaimOut)
+def portal_preview_claim(
+    claim_id: str,
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> ClaimOut:
+    """Mirror of `GET /portal/claims/{id}` — one claim, as its own claimant
+    reads it.
+
+    TWO checks, not one: `load_employee` proves the broker may read this
+    EMPLOYEE, and `load_member_claim` proves the claim is that employee's.
+    Without the second, a broker could read one member's claim through another
+    member's preview URL. The loader is also the point-load counterpart of
+    `member_visible_claims()`, so a broker-recorded LOG case 404s here exactly
+    as it does in the portal.
+    """
+    return claim_to_out(db, load_member_claim(db, claim_id, employee.id))
+
+
+@router.get("/conversations", response_model=ConversationList)
+def portal_preview_conversations(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     employee: Employee = Depends(load_employee),
     db: Session = Depends(get_db),
-) -> ClaimMessageList:
-    """Mirror of `GET /portal/messages`. Built through `member_message_out`,
-    the same serializer the member gets — so the preview can't show a broker's
-    name where the member reads "Claims team"."""
-    total, rows = member_inbox(
+) -> ConversationList:
+    """Mirror of `GET /portal/conversations`. Built through the SAME projection
+    and the member serializer, so the preview can't show a broker's name where
+    the member reads "Claims team", or a thread the member cannot see."""
+    total, rows = member_conversations(
         db, employee.id, employee.policy_year_id, offset=offset, limit=limit
     )
-    return ClaimMessageList(
+    return ConversationList(
         total=total,
         offset=offset,
         limit=limit,
-        unread=member_unread_count(db, employee.id, employee.policy_year_id),
-        items=[member_message_out(m, c) for m, c in rows],
+        unread_total=member_unread_count(db, employee.id, employee.policy_year_id),
+        items=[member_conversation_out(r) for r in rows],
     )
+
+
+@router.get("/enquiries/{enquiry_id}", response_model=EnquiryOut)
+def portal_preview_enquiry(
+    enquiry_id: str,
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> EnquiryOut:
+    """Mirror of `GET /portal/enquiries/{id}` — the question header as its own
+    author reads it. TWO checks: `load_employee` proves the broker may read this
+    EMPLOYEE, `load_member_enquiry` proves the question is theirs."""
+    return enquiry_out(db, load_member_enquiry(db, enquiry_id, employee.id))
+
+
+@router.get(
+    "/enquiries/{enquiry_id}/messages", response_model=list[ClaimMessageOut]
+)
+def portal_preview_enquiry_messages(
+    enquiry_id: str,
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> list[ClaimMessageOut]:
+    """Mirror of `GET /portal/enquiries/{id}/messages`, through the MEMBER
+    serializer — so the preview reads "Claims team" where the member does."""
+    enquiry = load_member_enquiry(db, enquiry_id, employee.id)
+    return [member_message_out(m) for m in thread_for_enquiry(db, enquiry.id)]
 
 
 @router.get("/claims/{claim_id}/messages", response_model=list[ClaimMessageOut])

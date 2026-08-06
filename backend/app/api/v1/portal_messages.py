@@ -25,14 +25,15 @@ from app.db.session import get_db
 from app.models import Claim
 from app.models.claim import CLAIM_STATUS_DRAFT
 from app.schemas.claims import (
-    ClaimMessageList,
     ClaimMessageOut,
+    ConversationList,
     MemberMessageIn,
     MessagesReadOut,
 )
 from app.services.claim_messages import (
     mark_member_read,
-    member_inbox,
+    member_conversation_out,
+    member_conversations,
     member_message_out,
     member_unread_count,
     post_member_message,
@@ -58,29 +59,36 @@ def _own_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
     return load_member_claim(db, claim_id, employee_id)
 
 
-@router.get("/messages", response_model=ClaimMessageList)
-def list_my_messages(
+@router.get("/conversations", response_model=ConversationList)
+def list_my_conversations(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
-) -> ClaimMessageList:
-    """The member's whole inbox for the current benefit year, newest first.
+) -> ConversationList:
+    """The member's THREADS for the current benefit year, most recently active
+    first.
 
-    `unread` is the count across the WHOLE inbox, not just this page — it is
-    what the home tile and the shell badge state, and a page-local count would
-    shrink as the member paged forward.
+    This replaced a flat list of messages. On a real roster a claim type is not
+    unique, so a stream of messages printed the same title for two different
+    claims and separated them only by a date inside a clamped body snippet —
+    the member could not tell which receipt a message was about without opening
+    it. A thread is the unit they think in, so it is the unit served.
+
+    `unread_total` counts unread MESSAGES across the whole inbox, not just this
+    page: it is what the shell badge and the home tile state, and a page-local
+    figure would shrink as the member paged forward.
     """
     employee = resolve_member_employee(db, member)
-    total, rows = member_inbox(
+    total, rows = member_conversations(
         db, employee.id, employee.policy_year_id, offset=offset, limit=limit
     )
-    return ClaimMessageList(
+    return ConversationList(
         total=total,
         offset=offset,
         limit=limit,
-        unread=member_unread_count(db, employee.id, employee.policy_year_id),
-        items=[member_message_out(m, c) for m, c in rows],
+        unread_total=member_unread_count(db, employee.id, employee.policy_year_id),
+        items=[member_conversation_out(r) for r in rows],
     )
 
 
@@ -148,6 +156,6 @@ def mark_my_claim_messages_read(
     trail that matters."""
     employee = resolve_member_employee(db, member)
     claim = _own_claim(db, claim_id, employee.id)
-    marked = mark_member_read(db, claim.id)
+    marked = mark_member_read(db, claim_id=claim.id)
     db.commit()
     return MessagesReadOut(marked=marked)

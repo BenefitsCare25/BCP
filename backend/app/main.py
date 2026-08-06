@@ -26,11 +26,13 @@ from app.api.v1 import (
     claim_doc_types,
     claim_review_configs,
     claims,
+    conversations,
     dashboard,
     dependant_query,
     dependants,
     dual_coverage,
     employees,
+    enquiries,
     enrollment_windows,
     enrollments,
     entity_aliases,
@@ -55,6 +57,7 @@ from app.api.v1 import (
     portal_auth,
     portal_claims,
     portal_dependants,
+    portal_enquiries,
     portal_enrollment,
     portal_messages,
     portal_preview,
@@ -209,6 +212,8 @@ def create_app() -> FastAPI:
         claim_review_configs.router,
         claims.router,
         claims.employee_router,
+        conversations.router,
+        enquiries.router,
         matches.router,
         audit_log.router,
         system.router,
@@ -251,6 +256,7 @@ def create_app() -> FastAPI:
     app.include_router(portal_dependants.router, prefix=api_prefix)
     app.include_router(portal_enrollment.router, prefix=api_prefix)
     app.include_router(portal_messages.router, prefix=api_prefix)
+    app.include_router(portal_enquiries.router, prefix=api_prefix)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

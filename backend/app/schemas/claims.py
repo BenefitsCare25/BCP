@@ -227,7 +227,10 @@ class ClaimMessageOut(BaseModel):
     """
 
     id: str
-    claim_id: str
+    # Exactly one of these is set — a message belongs to a claim's thread or to
+    # a question's, never both (`services/claim_messages._post`).
+    claim_id: str | None = None
+    enquiry_id: str | None = None
     author_type: str  # system | broker | member
     author_name: str | None = None
     subject: str
@@ -237,18 +240,172 @@ class ClaimMessageOut(BaseModel):
     created_at: datetime
     mine: bool = False
     unread: bool = False
-    # Claim context, populated only in the cross-claim inbox list (the thread
-    # already sits on its claim's page).
+    # NOTE: no `claim_type` / `claim_status` here. They existed to give a row of
+    # the old flat cross-claim inbox the context a thread doesn't need — and
+    # that inbox is gone, replaced by conversations, where the context is the
+    # thread's SUBJECT and belongs to the conversation rather than to each
+    # message inside it.
+
+
+# ── Conversations ─────────────────────────────────────────────────────────────
+
+
+class ConversationSubjectOut(BaseModel):
+    """What a thread is ABOUT — the fields that let one conversation be told
+    from another.
+
+    Claim titles are composed CLIENT-side by the portal's existing `claimTitle`,
+    which reads only the four naming fields below: the portal names a claim in
+    one place and this list must not become a second. What the list adds under
+    the title is the DATE and the AMOUNT, because a claim type is not unique on
+    a real roster — one CDL member holds two "Emergency Accidental Outpatient
+    Treatment" conversations and two "Follow up Pre-/Post-Hospitalisation" ones,
+    and in the flat inbox this replaces the only thing separating them was a
+    date inside a body snippet clamped to one line.
+    """
+
+    kind: str  # claim | enquiry
+    id: str
+    # ── claim ────────────────────────────────────────────────────────────────
+    claim_kind: str | None = None
     claim_type: str | None = None
-    claim_status: str | None = None
+    sub_type: str | None = None
+    product_code: str | None = None
+    flex_category_name: str | None = None
+    incurred_date: date | None = None
+    amount_claimed: float | None = None
+    currency: str | None = None
+    # A claim's own status, or a question's `open | answered | closed`.
+    status: str | None = None
+    # ── question ─────────────────────────────────────────────────────────────
+    # The member's own headline, which is a question's title.
+    subject: str | None = None
+    topic: str | None = None
+    # The topic's member-facing name, SERVED rather than title-cased by each
+    # client. The vocabulary has one home (`models.member_enquiry`), and the two
+    # surfaces that print it were both getting it wrong from opposite ends: the
+    # broker's queue rendered the raw key (`Question · clinics · answered`) and
+    # the member's row dropped it entirely, so every question they had asked
+    # read `Question` and nothing told two of them apart.
+    topic_label: str | None = None
+    # BROKER-side triage. A Letter of Guarantee request is the one topic where
+    # the delay is the harm — the member is usually at an admissions counter —
+    # so it sorts to the top of the queue and is marked there. Served on the
+    # shared subject because both surfaces read one serializer; the member's own
+    # screen deliberately does not render it (see models/member_enquiry.py).
+    topic_urgent: bool = False
+    # A question may NAME a claim without belonging to one. It is the same
+    # shape nested, so the client composes its label with the same helper —
+    # a reference, never a second thread on that claim. See the design doc.
+    about_claim: ConversationSubjectOut | None = None
 
 
-class ClaimMessageList(BaseModel):
+class EnquiryTopicOut(BaseModel):
+    """One row of the "What's it about?" picker.
+
+    `routes_to_claim` is the option that does NOT create a question: it sends
+    the member to the claim's own thread. A claim question answered anywhere
+    else would be a second conversation about one claim, each readable while
+    the other still shows unread. Served rather than hardcoded in TS so the
+    vocabulary — and which option routes — has one home.
+    """
+
+    key: str
+    label: str
+    routes_to_claim: bool = False
+
+
+class EnquiryCreateIn(BaseModel):
+    topic: str = Field(min_length=1, max_length=32)
+    subject: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=2000)
+    # Optional CONTEXT — offered only on non-claim topics. Validated through
+    # `load_member_claim`, so a claim the member does not own 404s exactly as it
+    # does everywhere else and this cannot be used to probe.
+    about_claim_id: str | None = None
+
+    # A SUBJECT is one line by definition, so its whitespace is collapsed.
+    @field_validator("subject")
+    @classmethod
+    def _one_line(cls, v: str) -> str:
+        cleaned = " ".join(v.split())
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+    # A BODY keeps the author's line breaks. Both surfaces render it
+    # `whitespace-pre-line`, and the collapse used to be applied here too —
+    # under a length branch, so a 200-character two-paragraph question arrived
+    # flattened while a 300-character one did not, and the member's own later
+    # replies (validated by `MemberMessageIn`, which only strips) kept theirs.
+    # One member, one thread, two different treatments of the same key.
+    @field_validator("body")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+
+class EnquiryStatusIn(BaseModel):
+    action: str = Field(pattern="^(close|reopen)$")
+
+
+class EnquiryOut(BaseModel):
+    """A question's header — the thread page, and the broker's sheet."""
+
+    id: str
+    topic: str
+    # Served for the same reason `ConversationSubjectOut.topic_label` is — the
+    # vocabulary has one home, and neither surface should be title-casing a key.
+    topic_label: str | None = None
+    topic_urgent: bool = False
+    subject: str
+    status: str
+    about_claim: ConversationSubjectOut | None = None
+    created_at: datetime
+    # Broker surfaces only.
+    employee: ConversationEmployeeOut | None = None
+
+
+class ConversationEmployeeOut(BaseModel):
+    """Whose thread it is. BROKER surfaces only — the member's own list has no
+    business naming them to themselves, and this is the whole point of the
+    broker's queue: knowing WHO is waiting without opening anything."""
+
+    id: str
+    staff_id: str
+    employee_name: str | None = None
+
+
+class ConversationOut(BaseModel):
+    """One thread, as a work item.
+
+    There is deliberately no `awaiting` field: who a thread is waiting on IS
+    `last_message.author_type`, and a second spelling of one fact is a second
+    thing that has to be kept true. Nor is there a "waiting since" — that is
+    `last_message.created_at`, read by whoever wants to print it.
+    """
+
+    subject: ConversationSubjectOut
+    last_message: ClaimMessageOut
+    message_count: int
+    unread: int
+    # Broker surfaces only; absent on the member's own conversations.
+    employee: ConversationEmployeeOut | None = None
+
+
+class ConversationList(BaseModel):
     total: int
     offset: int
     limit: int
-    unread: int = 0
-    items: list[ClaimMessageOut] = Field(default_factory=list)
+    # Unread MESSAGES across every conversation, not just this page — it is what
+    # the shell badge and the home tile state. Named apart from
+    # `ConversationOut.unread` (which counts one thread) so a payload carrying
+    # both cannot be misread.
+    unread_total: int = 0
+    items: list[ConversationOut] = Field(default_factory=list)
 
 
 class MemberMessageIn(BaseModel):

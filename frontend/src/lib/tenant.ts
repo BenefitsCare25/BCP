@@ -62,6 +62,7 @@ const PORTAL_RESERVED_SEGMENTS: ReadonlySet<string> = new Set([
   "clinics",
   "card",
   "messages",
+  "questions",
   "security",
 ]);
 /** Entry-link param naming the company. "company" reads better than "slug" in

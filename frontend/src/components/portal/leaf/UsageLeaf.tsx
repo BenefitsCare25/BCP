@@ -18,6 +18,7 @@ import type {
 } from "@/types";
 import type { PortalClaim } from "@/api/portal";
 import { Mount, MountRule } from "./Mount";
+import { insuredClaimTitle } from "./ClaimMount";
 import { Limit, Money, currencySymbol } from "./Figure";
 import { FillRule } from "./FillRule";
 import { glossBeside } from "./glossary";
@@ -88,7 +89,7 @@ function PendingBreakdown({
             className="flex items-baseline justify-between gap-4 py-1.5"
           >
             <dt className="min-w-0 text-row text-record">
-              {c.provider_name?.trim() || c.claim_type}
+              {c.provider_name?.trim() || insuredClaimTitle(c.claim_type, null)}
               <span className="block text-row text-label">
                 {formatDay(c.incurred_date)}
                 {c.dependant_name ? ` · for ${c.dependant_name}` : ""}

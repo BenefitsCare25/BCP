@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { isNotFoundError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
+import type { ConversationSubject } from "@/api/portalMessages";
 import type { Utilization } from "@/types";
 
 /** Display labels for document-slot tags (claim_intake.DOC_SLOT_LABELS). */
@@ -150,6 +151,29 @@ export interface BrokerClaimList {
   items: BrokerClaim[];
 }
 
+/** A thread as WORK. Shares the member's shape (`api/portalMessages`) plus the
+ * employee, which the member's own list has no business carrying. */
+export interface BrokerConversation {
+  /** The SAME shape the member's own list gets — one served subject, two
+   *  surfaces. Re-declaring a claim-only copy here is how the broker queue
+   *  ended up unable to see a question's topic at all. */
+  subject: ConversationSubject;
+  last_message: ClaimMessage;
+  message_count: number;
+  /** Member messages nobody here has opened — the opposite sense to the
+   *  member's own `unread`, filled server-side per surface. */
+  unread: number;
+  employee: { id: string; staff_id: string; employee_name: string | null } | null;
+}
+
+export interface BrokerConversationList {
+  total: number;
+  offset: number;
+  limit: number;
+  unread_total: number;
+  items: BrokerConversation[];
+}
+
 export function useBrokerClaims(
   policyYearId: string | undefined,
   status: string,
@@ -174,6 +198,120 @@ export function useBrokerClaims(
       return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
     },
     enabled: !!policyYearId,
+  });
+}
+
+/** The broker's message queue.
+ *
+ * `awaiting: "us"` is the work — threads whose last word is the member's. It is
+ * the default on the server too, because the alternative was scrolling the
+ * claims queue looking for unread badges: `GET /claims` filters on status,
+ * employee and case type, and nothing there could ask who is waiting.
+ *
+ * Shares the `["claims", cid, …]` key prefix, so replying to a member (which
+ * invalidates `["claims"]`) refreshes this list without naming it. */
+export function useBrokerConversations(
+  policyYearId: string | undefined,
+  awaiting: "us" | "any",
+  offset: number,
+  limit: number,
+) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claims", cid, policyYearId, "conversations", awaiting, offset, limit],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        policy_year_id: policyYearId!,
+        awaiting,
+        offset: String(offset),
+        limit: String(limit),
+      });
+      return api.get<BrokerConversationList>(
+        `/conversations?${params.toString()}`,
+      );
+    },
+    enabled: !!policyYearId,
+  });
+}
+
+/** A member's question, broker side. Its own sheet rather than a branch in the
+ *  claim one — a question has no amount, no documents and no decision. */
+export interface BrokerEnquiry {
+  id: string;
+  topic: string;
+  /** Served labels — the vocabulary has one home on the backend. `topic_urgent`
+   *  marks a Letter of Guarantee request, which the queue lifts to the top. */
+  topic_label: string | null;
+  topic_urgent: boolean;
+  subject: string;
+  status: "open" | "answered" | "closed";
+  about_claim: ConversationSubject | null;
+  created_at: string;
+  employee: { id: string; staff_id: string; employee_name: string | null } | null;
+}
+
+export function useBrokerEnquiry(enquiryId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claims", cid, "enquiry", enquiryId],
+    queryFn: () => api.get<BrokerEnquiry>(`/enquiries/${enquiryId}`),
+    enabled: Boolean(enquiryId),
+  });
+}
+
+export function useBrokerEnquiryMessages(enquiryId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-messages", cid, "enquiry", enquiryId],
+    queryFn: () => api.get<ClaimMessage[]>(`/enquiries/${enquiryId}/messages`),
+    enabled: Boolean(enquiryId),
+  });
+}
+
+export function useSendBrokerEnquiryMessage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { enquiryId: string; body: string }) =>
+      api.post<ClaimMessage>(`/enquiries/${input.enquiryId}/messages`, {
+        body: input.body,
+        subject: null,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claim-messages"] });
+      // Answering changes who the thread is WAITING ON, which decides whether
+      // it appears in the Messages queue at all — the same reason the claim
+      // send mutation invalidates this prefix.
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useSetEnquiryStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { enquiryId: string; action: "close" | "reopen" }) =>
+      api.post<BrokerEnquiry>(`/enquiries/${input.enquiryId}/status`, {
+        action: input.action,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useMarkEnquiryRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enquiryId: string) =>
+      api.post<{ marked: number }>(`/enquiries/${enquiryId}/messages/read`, {}),
+    onSuccess: (out) => {
+      if (out.marked === 0) return;
+      void qc.invalidateQueries({ queryKey: ["claim-messages"] });
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+    },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -377,8 +515,11 @@ export interface ClaimMessage {
   created_at: string;
   mine: boolean;
   unread: boolean;
-  claim_type: string | null;
-  claim_status: string | null;
+  // NOTE: no `claim_type` / `claim_status`. They were dropped from
+  // `ClaimMessageOut` when the flat inbox became conversations — that context
+  // is the thread's SUBJECT now. Left declared here they would type a value the
+  // API never sends, which the next consumer reads as `string | null` and gets
+  // `undefined`.
 }
 
 export function useClaimMessages(claimId: string | null) {
@@ -402,6 +543,17 @@ export function useSendClaimMessage() {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claim-messages"] });
+      // `["claims"]` too, and it is load-bearing: replying changes who the
+      // thread is WAITING ON, and that decides whether it appears in the
+      // Messages queue at all (`useBrokerConversations`, whose key sits under
+      // this prefix). Without it a broker replies from the sheet and the thread
+      // stays listed under "Needs reply" with the tab still counting it — the
+      // queue reporting work that has just been done.
+      //
+      // `useMarkClaimMessagesRead` cannot cover this: it early-returns when
+      // nothing was marked, which is exactly the case once the sheet has
+      // already been opened.
+      void qc.invalidateQueries({ queryKey: ["claims"] });
     },
     meta: { localErrorHandling: true },
   });

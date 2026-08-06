@@ -496,9 +496,9 @@ def test_broker_created_case_is_invisible_on_the_MESSAGE_surfaces_too(broker, an
         json={"body": "how is this going?"},
     ).status_code == 404
 
-    inbox = anon.get("/api/v1/portal/messages", headers=_auth()).json()
+    inbox = anon.get("/api/v1/portal/conversations", headers=_auth()).json()
     assert inbox["total"] == 0
-    assert inbox["unread"] == 0
+    assert inbox["unread_total"] == 0
 
     # And the notice was never written in the first place.
     thread = broker.get(f"/api/v1/claims/{claim_id}/messages").json()
@@ -520,9 +520,9 @@ def test_a_members_own_claim_keeps_its_thread_after_reclassification(broker, ano
     assert anon.get(
         f"/api/v1/portal/claims/{claim_id}/messages", headers=_auth()
     ).status_code == 200
-    inbox = anon.get("/api/v1/portal/messages", headers=_auth()).json()
+    inbox = anon.get("/api/v1/portal/conversations", headers=_auth()).json()
     assert inbox["total"] >= 1
-    assert any(m["claim_id"] == claim_id for m in inbox["items"])
+    assert any(c["subject"]["id"] == claim_id for c in inbox["items"])
 
 
 def test_preview_messages_mirror_the_member_exactly(broker, anon):
@@ -542,12 +542,11 @@ def test_preview_messages_mirror_the_member_exactly(broker, anon):
         f"/api/v1/employees/{EMP_A}/portal-preview/claims/{own_id}/messages"
     ).status_code == 200
 
-    preview = broker.get(f"/api/v1/employees/{EMP_A}/portal-preview/messages").json()
-    member = anon.get("/api/v1/portal/messages", headers=_auth()).json()
-    assert preview["total"] == member["total"]
-    assert {m["claim_id"] for m in preview["items"]} == {
-        m["claim_id"] for m in member["items"]
-    }
+    preview = broker.get(
+        f"/api/v1/employees/{EMP_A}/portal-preview/conversations"
+    ).json()
+    member = anon.get("/api/v1/portal/conversations", headers=_auth()).json()
+    assert preview == member
 
 
 def test_broker_created_case_is_absent_from_the_employee_view_preview(broker):

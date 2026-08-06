@@ -49,6 +49,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ClaimGracePeriodField } from "@/components/claims/ClaimGracePeriodField";
 import { ClaimMessages } from "@/components/claims/ClaimMessages";
+import {
+  ConversationQueue,
+  useAwaitingReplyCount,
+} from "@/components/claims/ConversationQueue";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
 import { LogCaseForm } from "@/components/claims/LogCaseForm";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -895,11 +899,12 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
   );
 }
 
-// The Claims page: the review queue plus everything that governs it — the
-// per-claim-type AI review rule setup (AI extraction) and the company claim
-// settings (grace period + document vocabulary, moved here from Company
-// settings so the whole claims surface lives in one place).
-const CLAIMS_TABS = ["queue", "ai-extraction", "settings"] as const;
+// The Claims page: the review queue, the member conversations waiting on a
+// reply, and everything that governs both — the per-claim-type AI review rule
+// setup (AI extraction) and the company claim settings (grace period +
+// document vocabulary, moved here from Company settings so the whole claims
+// surface lives in one place).
+const CLAIMS_TABS = ["queue", "messages", "ai-extraction", "settings"] as const;
 type ClaimsTab = (typeof CLAIMS_TABS)[number];
 const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
   CLAIMS_TABS.includes(v as ClaimsTab);
@@ -908,6 +913,7 @@ export function ClaimsQueuePage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string; claim?: string };
   const tab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
+  const awaiting = useAwaitingReplyCount();
 
   return (
     <Tabs
@@ -918,12 +924,27 @@ export function ClaimsQueuePage() {
     >
       <TabsList>
         <TabsTrigger value="queue">Queue</TabsTrigger>
+        {/* The count is the whole point: with no email in prod, this badge is
+            the ONLY signal a broker gets that a member has written. It has to
+            be visible from the page, not inside the tab. */}
+        <TabsTrigger value="messages">
+          Messages
+          {awaiting > 0 && (
+            <Badge variant="warn" className="ml-2">
+              {awaiting}
+            </Badge>
+          )}
+        </TabsTrigger>
         <TabsTrigger value="ai-extraction">AI extraction</TabsTrigger>
         <TabsTrigger value="settings">Settings</TabsTrigger>
       </TabsList>
 
       <TabsContent value="queue">
         <QueueTab initialClaimId={search.claim} />
+      </TabsContent>
+
+      <TabsContent value="messages">
+        <ConversationQueue />
       </TabsContent>
 
       <TabsContent value="ai-extraction">

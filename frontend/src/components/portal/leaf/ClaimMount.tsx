@@ -49,12 +49,37 @@ import { dateKey, formatDay, monthLabel } from "./date";
 import { pickChipClass } from "./pickChip";
 import { useCompany } from "@/components/portal/useCompany";
 
+/** The sentinel `claim_type` a broker-recorded LOG case carries
+ * (`models/claim.py::LOG_CLAIM_TYPE`).
+ *
+ * It is broker vocabulary and it must never reach a member. `log_cases.py`
+ * already refuses to stamp it when a claim is RECLASSIFIED, with a comment
+ * saying why — "they opened their claims and found one of them renamed to an
+ * acronym they have never been given" — but a case CREATED as a LOG still
+ * carries it, so the member's claims list and message index both printed a
+ * conversation titled `LOG`. Guarded on the way out rather than in the data,
+ * because the rows already written carry it and nothing rewrites them. */
+const LOG_CLAIM_TYPE = "LOG";
+
+/** What an insured claim is called, from its two name fields.
+ *
+ * ONE implementation, shared with the message index — which re-derived it and
+ * so did not inherit the guard above. The rule is the same everywhere the
+ * portal names a claim, which is the whole reason it is a function. */
+export function insuredClaimTitle(
+  claimType: string | null | undefined,
+  productCode: string | null | undefined,
+): string {
+  const named = claimType && claimType !== LOG_CLAIM_TYPE ? claimType : null;
+  return named || productCode || "Claim";
+}
+
 /** What the claim is FOR, in the member's words. */
 export function claimTitle(claim: PortalClaim): string {
   if (claim.claim_kind === "flex") {
     return claim.flex_category_name || "Flexible benefit";
   }
-  return claim.claim_type || claim.product_code || "Claim";
+  return insuredClaimTitle(claim.claim_type, claim.product_code);
 }
 
 /** Who, where, when and how much evidence — the facts that let a member
@@ -175,9 +200,11 @@ function buildGroups(rows: PortalClaim[]): Group[] {
 function ClaimRow({
   claim,
   interactive,
+  onOpen,
 }: {
   claim: PortalClaim;
   interactive?: boolean;
+  onOpen?: (claim: PortalClaim) => void;
 }) {
   // An approved figure is the OUTCOME, so it takes the headline and the
   // requested one moves beneath it — a member whose claim was partly approved
@@ -231,16 +258,32 @@ function ClaimRow({
   // promise the surface made.
   const company = useCompany();
   const pad = "block rounded-control px-3 py-3 sm:px-3.5";
+  const open =
+    "leaf-focus transition-colors duration-200 ease-leaf hover:bg-shade/70";
+  // `onOpen` WINS over `interactive`. The broker's employee view needs rows
+  // that open a claim without a `<Link>`: a portal route there would walk the
+  // broker out of their own application. Same escape hatch `ConversationRows`
+  // carries, for the same surface and the same reason.
+  if (onOpen) {
+    return (
+      <li>
+        <button
+          type="button"
+          onClick={() => onOpen(claim)}
+          className={cn(pad, open, "w-full text-left")}
+        >
+          {body}
+        </button>
+      </li>
+    );
+  }
   if (!interactive) return <li className={pad}>{body}</li>;
   return (
     <li>
       <Link
         to="/portal/$company/claims/$claimId"
         params={{ company, claimId: claim.id }}
-        className={cn(
-          pad,
-          "leaf-focus transition-colors duration-200 ease-leaf hover:bg-shade/70",
-        )}
+        className={cn(pad, open)}
       >
         {body}
       </Link>
@@ -329,11 +372,16 @@ function FilterStrip({
 export function ClaimList({
   items,
   interactive = false,
+  onOpen,
   total,
 }: {
   items: PortalClaim[];
-  /** Omitted on the broker preview, where rows are inert. */
+  /** Routes a row to the member's own claim page. Ignored when `onOpen` is
+   *  given, and omitted with neither on a surface where rows are inert. */
   interactive?: boolean;
+  /** Opens a row WITHOUT navigating — the broker's employee view, which
+   *  drills into the claim inside its own frame. */
+  onOpen?: (claim: PortalClaim) => void;
   /** The server's count. The request asks for the whole year (200, the API's
    * cap), so this only differs on a member who has claimed more than that —
    * and then the ledger is a window onto their year, which it has to say. */
@@ -402,7 +450,12 @@ export function ClaimList({
             )}
           >
             {group.items.map((claim) => (
-              <ClaimRow key={claim.id} claim={claim} interactive={interactive} />
+              <ClaimRow
+                key={claim.id}
+                claim={claim}
+                interactive={interactive}
+                onOpen={onOpen}
+              />
             ))}
           </ul>
         </section>

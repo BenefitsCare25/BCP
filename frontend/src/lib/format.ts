@@ -44,6 +44,32 @@ export function fmtDate(v: string | null | undefined): string {
   return String(v).split(/[ T]/)[0];
 }
 
+const MONTHS_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** A calendar date as a person reads it: "27 Jun 2026".
+ *
+ * `fmtDate` above returns the ISO string unchanged, which is the one date
+ * format natural to nobody — the claims message queue printed rows reading
+ * `Emergency Accidental Outpatient Treatment · 2026-06-27 · SGD 165.83`.
+ *
+ * Parsed by SPLITTING, never through `new Date()`: a bare "2026-06-27" parsed
+ * that way is midnight UTC and renders a day early west of Greenwich. This is
+ * the same defensive path the portal's `leaf/date.ts::formatDay` takes, and it
+ * is now that function's implementation too — one formatter, so a date cannot
+ * read one way to a broker and another to the member it belongs to. */
+export function fmtDay(v: string | null | undefined): string {
+  if (!v) return "—";
+  const [datePart] = String(v).split(/[ T]/);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!m) return datePart;
+  const [, year, month, day] = m;
+  const name = MONTHS_SHORT[Number(month) - 1];
+  return name ? `${Number(day)} ${name} ${year}` : datePart;
+}
+
 /** Parse a server timestamp. The backend emits UTC, but on SQLite the value is
  * serialized WITHOUT an offset (`2026-08-01T10:56:48.080711`), and `new Date()`
  * reads an offset-less string as browser-LOCAL. In Singapore that is an

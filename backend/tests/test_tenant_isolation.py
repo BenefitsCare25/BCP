@@ -1371,6 +1371,7 @@ def test_member_account_bulk_invite_cross_tenant_404(client_as_a: TestClient) ->
 
 # ── Claims (employee-portal claims module) ───────────────────────────────────
 CLAIM_B = "00000000-0000-0000-0000-0000000000bc"
+ENQUIRY_B = "00000000-0000-0000-0000-0000000000q9"
 
 
 def _ensure_claim_b() -> None:
@@ -1401,6 +1402,15 @@ def _ensure_claim_b() -> None:
 def test_claims_list_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/claims?policy_year_id={PY_B}")
     assert res.status_code == 404
+
+
+def test_conversations_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    for suffix in ("", "&awaiting=any", f"&employee_id={EMP_B}"):
+        res = client_as_a.get(
+            f"/api/v1/conversations?policy_year_id={PY_B}{suffix}"
+        )
+        assert res.status_code == 404, suffix
 
 
 def test_claim_get_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1486,8 +1496,66 @@ def test_claim_document_upload_cross_tenant_404(client_as_a: TestClient) -> None
     assert res.status_code == 404
 
 
-def test_portal_preview_messages_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/employees/{EMP_B}/portal-preview/messages")
+def test_enquiry_cross_tenant_404(client_as_a: TestClient) -> None:
+    """A question belonging to client B, through client A's session. 404 on
+    every verb — read, write, read-marker and status — so a broker cannot map
+    another tenant's records, and cannot answer into them either."""
+    from app.models import MemberEnquiry
+
+    with SessionLocal() as s:
+        if s.get(MemberEnquiry, ENQUIRY_B) is None:
+            s.add(
+                MemberEnquiry(
+                    id=ENQUIRY_B,
+                    client_id=CLIENT_B_ID,
+                    employee_id=EMP_B,
+                    policy_year_id=PY_B,
+                    topic="coverage",
+                    subject="B's question",
+                    status="open",
+                )
+            )
+            s.commit()
+
+    assert client_as_a.get(f"/api/v1/enquiries/{ENQUIRY_B}").status_code == 404
+    assert (
+        client_as_a.get(f"/api/v1/enquiries/{ENQUIRY_B}/messages").status_code == 404
+    )
+    assert (
+        client_as_a.post(
+            f"/api/v1/enquiries/{ENQUIRY_B}/messages", json={"body": "hello"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client_as_a.post(
+            f"/api/v1/enquiries/{ENQUIRY_B}/messages/read"
+        ).status_code
+        == 404
+    )
+    assert (
+        client_as_a.post(
+            f"/api/v1/enquiries/{ENQUIRY_B}/status", json={"action": "close"}
+        ).status_code
+        == 404
+    )
+
+
+def test_portal_preview_enquiry_cross_tenant_404(client_as_a: TestClient) -> None:
+    res = client_as_a.get(
+        f"/api/v1/employees/{EMP_B}/portal-preview/enquiries/{ENQUIRY_B}"
+    )
+    assert res.status_code == 404
+    res = client_as_a.get(
+        f"/api/v1/employees/{EMP_B}/portal-preview/enquiries/{ENQUIRY_B}/messages"
+    )
+    assert res.status_code == 404
+
+
+def test_portal_preview_conversations_cross_tenant_404(
+    client_as_a: TestClient,
+) -> None:
+    res = client_as_a.get(f"/api/v1/employees/{EMP_B}/portal-preview/conversations")
     assert res.status_code == 404
 
 
@@ -1497,6 +1565,14 @@ def test_portal_preview_claim_messages_cross_tenant_404(
     _ensure_claim_b()
     res = client_as_a.get(
         f"/api/v1/employees/{EMP_B}/portal-preview/claims/{CLAIM_B}/messages"
+    )
+    assert res.status_code == 404
+
+
+def test_portal_preview_claim_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.get(
+        f"/api/v1/employees/{EMP_B}/portal-preview/claims/{CLAIM_B}"
     )
     assert res.status_code == 404
 

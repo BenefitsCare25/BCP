@@ -10,7 +10,7 @@
  * one day early. A claim's incurred date deciding it happened yesterday is the
  * kind of bug nobody reports and everybody distrusts.
  */
-import { parseServerDate } from "@/lib/format";
+import { fmtDay, parseServerDate } from "@/lib/format";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -31,16 +31,11 @@ export function dateKey(iso: string | null | undefined): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : "";
 }
 
-export function formatDay(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const [datePart] = String(iso).split(/[ T]/);
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
-  if (!m) return datePart;
-  const [, year, month, day] = m;
-  const monthName = MONTHS[Number(month) - 1];
-  if (!monthName) return datePart;
-  return `${Number(day)} ${monthName} ${year}`;
-}
+/** Re-exported rather than reimplemented: `lib/format.ts::fmtDay` is the same
+ * defensive split, and the broker surfaces needed it too. Two copies is how a
+ * date comes to read one way on a claim queue and another on the member's own
+ * record of that claim. */
+export const formatDay = fmtDay;
 
 const MONTHS_FULL = [
   "January", "February", "March", "April", "May", "June",
@@ -115,4 +110,71 @@ export function formatMoment(iso: string | null | undefined): string {
  * `en-CA` because it is the locale whose short date format is ISO. */
 export function todayISO(): string {
   return new Date().toLocaleDateString("en-CA");
+}
+
+/** A conversation's last-activity stamp, at the size a list row can carry.
+ *
+ * An inbox with no time on its rows cannot answer the first question a member
+ * brings to it — *is this still live?* Every row in the portal's message list
+ * shipped without one, so a notice from March and one from this morning read
+ * identically.
+ *
+ * Three grades, because a stamp competing with the title for width is a stamp
+ * nobody reads: today is a clock time, this year drops the year, and anything
+ * older carries it. Through `parseServerDate` for the reason `formatMoment`
+ * gives — an offset-less SQLite timestamp read as local is eight hours out in
+ * Singapore, and "8 hours ago" vs "just now" is exactly the distinction a queue
+ * is sorted on.
+ */
+export function shortMoment(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const when = parseServerDate(iso);
+  if (Number.isNaN(when.getTime())) return formatDay(iso);
+  const now = new Date();
+  const sameDay =
+    when.getFullYear() === now.getFullYear() &&
+    when.getMonth() === now.getMonth() &&
+    when.getDate() === now.getDate();
+  if (sameDay) {
+    return when
+      .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      .toLowerCase();
+  }
+  const month = MONTHS[when.getMonth()] ?? "";
+  return when.getFullYear() === now.getFullYear()
+    ? `${when.getDate()} ${month}`
+    : `${when.getDate()} ${month} ${when.getFullYear()}`;
+}
+
+/** The heading over a run of messages sent on one day.
+ *
+ * A thread prints its full date on every message, so six replies exchanged in
+ * one afternoon repeated "1 Aug 2026" six times and the eye had to read all of
+ * them to find where a new day started. The rail carries the date once; the
+ * messages beneath it keep only their clock time. */
+export function dayHeading(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const when = parseServerDate(iso);
+  if (Number.isNaN(when.getTime())) return formatDay(iso);
+  const now = new Date();
+  const midnight = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(now) - midnight(when)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  const month = MONTHS[when.getMonth()] ?? "";
+  return when.getFullYear() === now.getFullYear()
+    ? `${when.getDate()} ${month}`
+    : `${when.getDate()} ${month} ${when.getFullYear()}`;
+}
+
+/** Just the clock, for a message sitting under a day heading that already
+ *  carries its date. */
+export function clockTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const when = parseServerDate(iso);
+  if (Number.isNaN(when.getTime())) return "";
+  return when
+    .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    .toLowerCase();
 }

@@ -61,6 +61,7 @@ RESERVED_SLUGS: frozenset[str] = frozenset(
         # Portal page names — see above.
         "set-password", "coverage", "benefits", "utilization", "dependants",
         "enrollment", "claims", "clinics", "card", "messages", "security",
+        "questions",
     }
 )
 

@@ -5,21 +5,27 @@
  * Any nav/tab change in components/portal/PortalShell must be mirrored here. */
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
   Eye,
   FilePlus2,
   FileWarning,
   Loader2,
   LogOut,
+  MessageSquare,
   UserPlus,
 } from "lucide-react";
 import {
   usePortalPreviewContext,
   usePreviewCards,
+  usePreviewClaim,
+  usePreviewClaimMessages,
   usePreviewClaims,
   usePreviewClinics,
   usePreviewDependants,
   usePreviewEnrollment,
-  usePreviewMessages,
+  usePreviewConversations,
+  usePreviewEnquiry,
+  usePreviewEnquiryMessages,
   usePreviewStatement,
   usePreviewUtilization,
 } from "@/api/portalPreview";
@@ -32,12 +38,22 @@ import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
 import type { DependantRef } from "@/components/enrollment/electionCore";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
+import { ClaimDetailLeaf } from "@/components/portal/leaf/ClaimDetailLeaf";
+import { MessageThread } from "@/components/portal/leaf/MessageMount";
 import {
   HomeMosaicView,
   type HomeDest,
 } from "@/components/portal/HomeMosaic";
 import { Mount } from "@/components/portal/leaf/Mount";
-import { MessageRows } from "@/components/portal/leaf/MessageMount";
+import {
+  UnreadBadge,
+  messagesLabel,
+} from "@/components/portal/leaf/MessageMount";
+import {
+  ConversationRows,
+  EnquiryStrike,
+  subjectTitle,
+} from "@/components/portal/leaf/ConversationMount";
 import { Strike } from "@/components/portal/leaf/Strike";
 import { Action } from "@/components/portal/leaf/Action";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
@@ -66,14 +82,15 @@ const TABS = [
   { key: "card", label: "Card" },
   { key: "clinics", label: "Clinics" },
   { key: "enrollment", label: "Enrolment" },
-  // Messages is NOT in the live shell's nav — the member reaches it from the
-  // home tile (see router.tsx). It gets a tab here because this frame has only
-  // tabs to navigate with, and without one the home tile's "See all messages"
-  // would be the one tile whose link goes nowhere.
-  { key: "messages", label: "Messages" },
 ] as const;
 
-type TabKey = (typeof TABS)[number]["key"];
+/** Messages is deliberately absent from TABS: on the live shell it is an ICON
+ * in the account cluster, not a nav pill, so a labelled tab here would show a
+ * broker a destination the member does not have. It is still a REACHABLE view —
+ * the icon below opens it, and so does the home tile's "See all messages" —
+ * which is exactly the shape of the member's own shell, where `/portal/messages`
+ * is a real route with no entry in `NAV`. */
+type TabKey = (typeof TABS)[number]["key"] | "messages";
 
 // Mirrors the sub-tabs of routes/portal/coverage.
 const COVERAGE_TABS = [
@@ -83,6 +100,13 @@ const COVERAGE_TABS = [
 ] as const;
 
 type CoverageTabKey = (typeof COVERAGE_TABS)[number]["key"];
+
+/** Mirrors `PortalShell`'s ICON_BUTTON. Spelled out rather than imported for
+ * the same reason the nav pills below are — this frame replicates the shell's
+ * chrome, and the two are kept in step by the note at the top of both files. */
+const ICON_BUTTON =
+  "leaf-focus relative inline-flex size-11 shrink-0 items-center justify-center rounded-pill " +
+  "text-label transition-colors duration-200 ease-leaf hover:bg-shade hover:text-record";
 
 const ACCOUNT_BADGE = {
   invited: { variant: "warn" as const, label: "Portal: invited" },
@@ -127,6 +151,69 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
   return <CoverageLeaf data={statement.data} />;
 }
 
+const CLAIM_DISABLED_TITLE =
+  "Disabled in preview — members submit claims from their own sign-in";
+
+/** ONE claim, as its own claimant reads it — the member's own body
+ * (`leaf/ClaimDetailLeaf`), with every action arriving as `undefined` so the
+ * whole surface is read-only by construction rather than by discipline.
+ *
+ * The thread is the point of it. Until this existed, `usePreviewClaimMessages`
+ * had no consumer and the frame's inbox rows had nowhere to land, so a broker
+ * could not read what a member had actually been told about a claim without
+ * opening the broker queue and reading a different rendering of it. */
+function ClaimDetailTab({
+  employeeId,
+  claimId,
+  onBack,
+}: {
+  employeeId: string;
+  claimId: string;
+  onBack: () => void;
+}) {
+  const claim = usePreviewClaim(employeeId, claimId);
+  const messages = usePreviewClaimMessages(employeeId, claimId);
+  const back = (
+    <button
+      type="button"
+      onClick={onBack}
+      className="leaf-focus -ml-2 inline-flex min-h-11 items-center gap-1.5 px-2 text-row text-label"
+    >
+      <ArrowLeft className="size-4" aria-hidden /> All claims
+    </button>
+  );
+  if (claim.isLoading) return <LeafSkeleton label="Loading claim" mounts={2} />;
+  if (claim.isError && !isNotFoundError(claim.error)) {
+    return <PortalErrorState onRetry={() => void claim.refetch()} />;
+  }
+  if (claim.isError || !claim.data) {
+    return (
+      <div className="space-y-3">
+        {back}
+        <Mount label="We couldn't find that claim">
+          <p className="text-row text-label">
+            It may have been removed. Your other claims are on the claims page.
+          </p>
+        </Mount>
+      </div>
+    );
+  }
+  return (
+    <ClaimDetailLeaf
+      claim={claim.data}
+      messages={messages.data}
+      messagesLoading={messages.isLoading}
+      messagesError={messages.isError}
+      back={back}
+      disabledTitle={CLAIM_DISABLED_TITLE}
+      // No `onSend`, so `MessageThread` states this in place of the composer.
+      // The preview also has no read endpoint to call: opening a thread here is
+      // a broker looking, and must never clear the member's unread mark.
+      replyDisabledReason="Members reply from their own sign-in. To write to this member, use the claims queue."
+    />
+  );
+}
+
 /** Mirrors routes/portal/claims: the member's own ledger, their filter strip,
  * their empty-state wording — a broker reading this needs to see the screen the
  * employee sees, not a broker summary of it.
@@ -135,15 +222,19 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
  * (fixed, bottom-centre); a fixed element inside this bounded frame would
  * escape it and hang over the broker's own app, so here it stays in the flow
  * above the ledger — disabled, because members submit from their own sign-in. */
-function ClaimsTab({ employeeId }: { employeeId: string }) {
+function ClaimsTab({
+  employeeId,
+  onOpenClaim,
+}: {
+  employeeId: string;
+  onOpenClaim: (claimId: string) => void;
+}) {
   const claims = usePreviewClaims(employeeId);
   if (claims.isLoading) return <LeafSkeleton label="Loading claims" />;
   if (claims.isError && !isNotFoundError(claims.error)) {
     return <PortalErrorState onRetry={() => void claims.refetch()} />;
   }
   const rows = claims.data?.items ?? [];
-  const disabledTitle =
-    "Disabled in preview — members submit claims from their own sign-in";
   if (rows.length === 0) {
     return (
       <Mount label="No claims yet">
@@ -152,7 +243,12 @@ function ClaimsTab({ employeeId }: { employeeId: string }) {
           receipt here and we&rsquo;ll tell you where it&rsquo;s up to.
         </p>
         <div>
-          <Action tone="primary" block="phone" disabled title={disabledTitle}>
+          <Action
+            tone="primary"
+            block="phone"
+            disabled
+            title={CLAIM_DISABLED_TITLE}
+          >
             <FilePlus2 className="size-4" aria-hidden />
             Make a claim
           </Action>
@@ -162,11 +258,18 @@ function ClaimsTab({ employeeId }: { employeeId: string }) {
   }
   return (
     <div className="space-y-3">
-      <Action tone="primary" block="phone" disabled title={disabledTitle}>
+      <Action tone="primary" block="phone" disabled title={CLAIM_DISABLED_TITLE}>
         <FilePlus2 className="size-4" aria-hidden />
         Make a claim
       </Action>
-      <ClaimList items={rows} total={claims.data?.total} />
+      {/* `onOpen`, never `interactive`: the member's row is a `<Link>` into the
+          live portal, which from here would walk the broker out of their own
+          application. */}
+      <ClaimList
+        items={rows}
+        onOpen={(c) => onOpenClaim(c.id)}
+        total={claims.data?.total}
+      />
     </div>
   );
 }
@@ -303,16 +406,20 @@ function HomeTab({
   employeeId,
   enrollmentOpen,
   onGo,
+  onOpenQuestion,
+  onOpenClaim,
 }: {
   employeeId: string;
   enrollmentOpen: boolean;
   onGo: (dest: HomeDest) => void;
+  onOpenClaim: (claimId: string) => void;
+  onOpenQuestion: (enquiryId: string) => void;
 }) {
   const utilization = usePreviewUtilization(employeeId);
   const claims = usePreviewClaims(employeeId);
   const statement = usePreviewStatement(employeeId);
   const dependants = usePreviewDependants(employeeId);
-  const messages = usePreviewMessages(employeeId);
+  const messages = usePreviewConversations(employeeId);
   return (
     <HomeMosaicView
       source={{
@@ -337,22 +444,95 @@ function HomeTab({
         },
       }}
       onGo={onGo}
+      onOpenClaim={onOpenClaim}
+      onOpenQuestion={onOpenQuestion}
     />
   );
 }
 
-/** Mirrors routes/portal/messages. Rows are INERT here: the member's inbox
- * navigates to the claim, and this frame's Claims tab is a list, not a detail
- * — a row that jumped to a tab showing something else would be worse than one
- * that does nothing. */
-function MessagesTab({ employeeId }: { employeeId: string }) {
-  const messages = usePreviewMessages(employeeId);
+/** ONE question, read-only — the member's own thread component with no
+ * composer, exactly like the claim detail beside it. */
+function QuestionDetailTab({
+  employeeId,
+  enquiryId,
+  onBack,
+}: {
+  employeeId: string;
+  enquiryId: string;
+  onBack: () => void;
+}) {
+  const enquiry = usePreviewEnquiry(employeeId, enquiryId);
+  const messages = usePreviewEnquiryMessages(employeeId, enquiryId);
+  const back = (
+    <button
+      type="button"
+      onClick={onBack}
+      className="leaf-focus -ml-2 inline-flex min-h-11 items-center gap-1.5 px-2 text-row text-label"
+    >
+      <ArrowLeft className="size-4" aria-hidden /> Messages
+    </button>
+  );
+  if (enquiry.isLoading) return <LeafSkeleton label="Loading" mounts={2} />;
+  if (enquiry.isError && !isNotFoundError(enquiry.error)) {
+    return <PortalErrorState onRetry={() => void enquiry.refetch()} />;
+  }
+  if (enquiry.isError || !enquiry.data) {
+    return (
+      <div className="space-y-3">
+        {back}
+        <Mount label="We couldn't find that question" />
+      </div>
+    );
+  }
+  return (
+    <div className="mx-auto max-w-3xl space-y-3">
+      {back}
+      <Mount
+        label={enquiry.data.subject}
+        // The topic, and the claim it names if it names one — the same line the
+        // member's own pane prints. `topic_label` is served; the raw key never
+        // reaches a screen.
+        gloss={[
+          enquiry.data.topic_label ?? enquiry.data.topic,
+          enquiry.data.about_claim
+            ? `About ${subjectTitle(enquiry.data.about_claim)}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        aside={<EnquiryStrike status={enquiry.data.status} />}
+      >
+        <MessageThread
+          messages={messages.data ?? []}
+          // Without this the answer reprints the question's own title directly
+          // beneath the frame heading that already carries it.
+          threadSubject={enquiry.data.subject}
+          replyDisabledReason="Members reply from their own sign-in. To answer this question, use the Messages tab on the claims page."
+        />
+      </Mount>
+    </div>
+  );
+}
+
+/** Mirrors routes/portal/messages: a row opens what it is ABOUT — a claim, or a
+ * question's own thread. On the member's page those are routes; here they drill
+ * into the frame's own detail views. */
+function MessagesTab({
+  employeeId,
+  onOpenClaim,
+  onOpenQuestion,
+}: {
+  employeeId: string;
+  onOpenClaim: (claimId: string) => void;
+  onOpenQuestion: (enquiryId: string) => void;
+}) {
+  const messages = usePreviewConversations(employeeId);
   if (messages.isLoading) return <LeafSkeleton label="Loading messages" />;
   if (messages.isError && !isNotFoundError(messages.error)) {
     return <PortalErrorState onRetry={() => void messages.refetch()} />;
   }
   const items = messages.data?.items ?? [];
-  const unread = messages.data?.unread ?? 0;
+  const unread = messages.data?.unread_total ?? 0;
   if (items.length === 0) {
     return (
       <Mount label="No messages yet">
@@ -366,12 +546,20 @@ function MessagesTab({ employeeId }: { employeeId: string }) {
   }
   return (
     <Mount
-      label={`${messages.data?.total ?? items.length} message${
+      label={`${messages.data?.total ?? items.length} conversation${
         (messages.data?.total ?? items.length) === 1 ? "" : "s"
       }`}
       aside={unread > 0 ? <Strike tone="pending">{unread} unread</Strike> : undefined}
     >
-      <MessageRows items={items} className="-mt-1" />
+      <ConversationRows
+        items={items}
+        onOpen={(c) =>
+          c.subject.kind === "enquiry"
+            ? onOpenQuestion(c.subject.id)
+            : onOpenClaim(c.subject.id)
+        }
+        className="-mt-1"
+      />
     </Mount>
   );
 }
@@ -416,23 +604,62 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
   const { data: ctx } = usePortalPreviewContext(employeeId);
   const [tab, setTab] = useState<TabKey>("home");
   const [coverageTab, setCoverageTab] = useState<CoverageTabKey>("benefits");
+  // The Claims tab's drill-in. The frame has tabs where the portal has routes,
+  // so "which claim am I reading" has to be state — and it is the frame's, not
+  // the tab's, because the inbox and the home tile both open a claim too.
+  const [claimId, setClaimId] = useState<string | null>(null);
+  const [enquiryId, setEnquiryId] = useState<string | null>(null);
 
   // Re-selecting a different employee restarts the walkthrough at the home
   // screen — the same place the member lands when they sign in.
   useEffect(() => {
     setTab("home");
     setCoverageTab("benefits");
+    setClaimId(null);
+    setEnquiryId(null);
   }, [employeeId]);
+
+  /** Move to a tab the way the member's NAV moves: a claim being read is left
+   *  behind. On the portal, tapping "Claims" always lands on the ledger — a
+   *  frame that resumed the last claim instead would be showing a screen the
+   *  member cannot reach that way. */
+  const showTab = (key: TabKey) => {
+    setClaimId(null);
+    setEnquiryId(null);
+    setTab(key);
+  };
 
   /** A home tile's destination, mapped onto this frame's tabs. */
   const goFromHome = (dest: HomeDest) => {
     if (dest === "usage" || dest === "benefits" || dest === "dependants") {
       setCoverageTab(dest);
-      setTab("coverage");
+      showTab("coverage");
       return;
     }
-    setTab(dest);
+    showTab(dest);
   };
+
+  /** A message row, a home row or a ledger row opening one claim. Always lands
+   *  on the Claims tab, so the "All claims" control below it goes somewhere the
+   *  broker recognises. */
+  const openClaim = (id: string) => {
+    setEnquiryId(null);
+    setClaimId(id);
+    setTab("claims");
+  };
+
+  /** A question has no claim to open, so it stays on the Messages tab and
+   *  replaces the list — the member's own surface is a route off Messages
+   *  too. */
+  const openQuestion = (id: string) => {
+    setClaimId(null);
+    setEnquiryId(id);
+    setTab("messages");
+  };
+
+  // Same query key the Home and Messages tabs read, so the badge is the count
+  // those screens show and costs no extra request.
+  const unread = usePreviewConversations(employeeId).data?.unread_total ?? 0;
 
   const memberLabel =
     ctx?.member_account?.display_name ||
@@ -511,7 +738,7 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 <button
                   key={item.key}
                   type="button"
-                  onClick={() => setTab(item.key)}
+                  onClick={() => showTab(item.key)}
                   className={cn(
                     "leaf-focus inline-flex h-10 items-center gap-1.5 rounded-pill px-4 text-row",
                     "transition-colors duration-200 ease-leaf",
@@ -525,6 +752,22 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
               ))}
             </nav>
             <div className="ml-auto flex shrink-0 items-center gap-3 pl-4">
+              {/* The member's Messages icon, in the member's own place. A
+                  BUTTON, not a `<Link>`: this frame navigates by switching its
+                  own tabs, and a portal route here would walk the broker out of
+                  their own application. */}
+              <button
+                type="button"
+                onClick={() => showTab("messages")}
+                aria-label={messagesLabel(unread)}
+                className={cn(
+                  ICON_BUTTON,
+                  tab === "messages" && "text-action-ink",
+                )}
+              >
+                <MessageSquare className="size-5" aria-hidden />
+                <UnreadBadge count={unread} />
+              </button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -559,6 +802,8 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 employeeId={employeeId}
                 enrollmentOpen={Boolean(ctx?.enrollment_open)}
                 onGo={goFromHome}
+                onOpenClaim={openClaim}
+                onOpenQuestion={openQuestion}
               />
             )}
             {tab === "coverage" && (
@@ -568,8 +813,30 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 setTab={setCoverageTab}
               />
             )}
-            {tab === "claims" && <ClaimsTab employeeId={employeeId} />}
-            {tab === "messages" && <MessagesTab employeeId={employeeId} />}
+            {tab === "claims" &&
+              (claimId ? (
+                <ClaimDetailTab
+                  employeeId={employeeId}
+                  claimId={claimId}
+                  onBack={() => setClaimId(null)}
+                />
+              ) : (
+                <ClaimsTab employeeId={employeeId} onOpenClaim={openClaim} />
+              ))}
+            {tab === "messages" &&
+              (enquiryId ? (
+                <QuestionDetailTab
+                  employeeId={employeeId}
+                  enquiryId={enquiryId}
+                  onBack={() => setEnquiryId(null)}
+                />
+              ) : (
+                <MessagesTab
+                  employeeId={employeeId}
+                  onOpenClaim={openClaim}
+                  onOpenQuestion={openQuestion}
+                />
+              ))}
             {tab === "card" && <CardTab employeeId={employeeId} />}
             {tab === "clinics" && <ClinicsTab employeeId={employeeId} />}
             {tab === "enrollment" && <EnrollmentTab employeeId={employeeId} />}

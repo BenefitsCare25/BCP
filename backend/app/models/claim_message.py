@@ -1,4 +1,16 @@
-"""One message on a claim's conversation (tenant table).
+"""One message on a conversation (tenant table).
+
+**The table name under-describes it.** It holds the messages of claim threads
+AND of member questions (`member_enquiries`), which is deliberate — the rules
+below are written once, and a parallel `enquiry_messages` table would
+re-implement every one of them. Renaming is not done: `op.rename_table` reaches
+no per-firm Postgres schema (`scripts/provision_tenants.py` syncs new tables and
+new columns only), so the name is cosmetic while the rename is a live-data risk.
+
+**Exactly one of `claim_id` / `enquiry_id` is set**, and that is enforced in
+`services/claim_messages._post`, not as a DB CHECK — `sync_firm_schema` does not
+propagate constraints to firm schemas either, so a CHECK would hold in `public`
+and nowhere else, which is worse than no constraint at all.
 
 A claim carries ONE thread that both surfaces read and write:
 
@@ -48,17 +60,27 @@ EVENT_NEEDS_INFO = "needs_info"
 class ClaimMessage(Base, TimestampMixin):
     __tablename__ = "claim_messages"
     __table_args__ = (
-        # The thread read (claim, chronological) and the member's inbox read
-        # (newest across their claims) are the only two access patterns.
+        # A thread read is (owner, chronological) on either side, and the
+        # conversation projection groups and windows by the same key — so one
+        # index per owner is what keeps that projection off a table scan.
         Index("ix_claim_messages_claim_created", "claim_id", "created_at"),
+        Index("ix_claim_messages_enquiry_created", "enquiry_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     client_id: Mapped[str] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    claim_id: Mapped[str] = mapped_column(
-        ForeignKey("claims.id", ondelete="CASCADE"), nullable=False, index=True
+    # Which thread this message belongs to — exactly one of the two, never both
+    # and never neither. Nullable since questions arrived; every row written
+    # before that carries a claim.
+    claim_id: Mapped[str | None] = mapped_column(
+        ForeignKey("claims.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    enquiry_id: Mapped[str | None] = mapped_column(
+        ForeignKey("member_enquiries.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     author_type: Mapped[str] = mapped_column(String(16), nullable=False)
     # Whichever identity applies; both NULL for a system message.

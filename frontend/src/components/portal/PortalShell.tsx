@@ -38,10 +38,13 @@ import {
   Layers,
   LogOut,
   MapPin,
+  MessageSquare,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { usePortalMe, useMemberSecurityStatus } from "@/api/portal";
+import { usePortalConversations } from "@/api/portalMessages";
+import { UnreadBadge, messagesLabel } from "./leaf/MessageMount";
 import { usePortalSession } from "@/stores/portalSession";
 import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
@@ -103,8 +106,9 @@ const NAV: {
   },
 ];
 
+// `relative` so an unread badge can hang off the icon it belongs to.
 const ICON_BUTTON =
-  "leaf-focus inline-flex size-11 shrink-0 items-center justify-center rounded-pill " +
+  "leaf-focus relative inline-flex size-11 shrink-0 items-center justify-center rounded-pill " +
   "text-label transition-colors duration-200 ease-leaf hover:bg-shade hover:text-record";
 
 export function PortalShell() {
@@ -115,6 +119,17 @@ export function PortalShell() {
   const { data: me } = usePortalMe();
   const company = useCompany();
   const { data: security } = useMemberSecurityStatus();
+  // The badge's figure. Deliberately NOT a new field on `PortalMe` — that was
+  // tried and removed (schemas/portal.py), because it puts a COUNT query on the
+  // hottest endpoint in the portal. This is the same query key the home
+  // Messages tile already reads, so on the screen a member lands on it costs
+  // nothing, and every other page serves the cached count while it revalidates.
+  // A 404 here is "no active coverage" and resolves to no badge, which is right.
+  //
+  // `unread_total` counts unread MESSAGES across every conversation, not
+  // conversations — a member with one thread holding three unread notices is
+  // owed "3", not "1".
+  const unread = usePortalConversations().data?.unread_total ?? 0;
 
   // The heading row's centre slot. It only exists wide enough to seat a strip
   // beside the name and the year control; below that a route renders its own
@@ -176,6 +191,24 @@ export function PortalShell() {
 
   const accountControls = (
     <>
+      {/* Messages is an ICON, not a seventh nav pill. The desktop bar is one
+          row and is already tight at 1180px with the mark, six destinations and
+          three controls — which is why Messages had no entry at all and was
+          reachable only through a home tile. An icon costs 44px and puts it on
+          every screen, including the phone header where the dock is full.
+
+          It leads the cluster because it is the only thing here addressed to
+          the member personally: correspondence, then the system's own notices
+          (the bell), then the account, then the way out. */}
+      <Link
+        to="/portal/$company/messages"
+        params={{ company }}
+        aria-label={messagesLabel(unread)}
+        className={cn(ICON_BUTTON, isActive("/messages") && "text-action-ink")}
+      >
+        <MessageSquare className="size-5" aria-hidden />
+        <UnreadBadge count={unread} />
+      </Link>
       <NotificationBell />
       <Link
         to="/portal/$company/security"

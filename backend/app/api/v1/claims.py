@@ -551,7 +551,7 @@ def mark_claim_messages_read(
 ) -> MessagesReadOut:
     """Clear the queue's unread badge for this claim. Not audited — opening a
     thread is not an action on the record."""
-    marked = mark_broker_read(db, claim.id)
+    marked = mark_broker_read(db, claim_id=claim.id)
     db.commit()
     return MessagesReadOut(marked=marked)
 

@@ -207,11 +207,13 @@ def test_messages_scoped_to_own_employee(anon: TestClient):
     accepts a client/employee id. A member of a client with no active year gets
     the same 404 every other data endpoint gives — not an empty inbox, which
     would read as "you have no messages"."""
-    res = anon.get("/api/v1/portal/messages", headers=_auth(ACC_ALICE))
+    res = anon.get("/api/v1/portal/conversations", headers=_auth(ACC_ALICE))
     assert res.status_code == 200
-    assert res.json()["items"] == [] and res.json()["unread"] == 0
+    assert res.json()["items"] == [] and res.json()["unread_total"] == 0
 
-    res = anon.get("/api/v1/portal/messages", headers=_auth(ACC_BOB_B, CLIENT_B_ID))
+    res = anon.get(
+        "/api/v1/portal/conversations", headers=_auth(ACC_BOB_B, CLIENT_B_ID)
+    )
     assert res.status_code == 404
 
 

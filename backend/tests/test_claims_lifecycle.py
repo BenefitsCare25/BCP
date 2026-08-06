@@ -1236,8 +1236,8 @@ def _thread(anon: TestClient, claim_id: str, account: str = ACC_A) -> list[dict]
     return res.json()
 
 
-def _inbox(anon: TestClient, account: str = ACC_A) -> dict:
-    res = anon.get("/api/v1/portal/messages", headers=_auth(account))
+def _conversations(anon: TestClient, account: str = ACC_A) -> dict:
+    res = anon.get("/api/v1/portal/conversations", headers=_auth(account))
     assert res.status_code == 200, res.text
     return res.json()
 
@@ -1252,14 +1252,19 @@ def test_submit_posts_the_acknowledgement(anon: TestClient):
     assert thread[0]["unread"] is True
     assert thread[0]["mine"] is False
 
-    # The inbox carries the claim context the thread doesn't need.
-    inbox = _inbox(anon)
-    assert inbox["unread"] >= 1
-    # The inbox row carries the claim it belongs to, which is what makes the
-    # home tile able to send the member to that claim rather than to a longer
-    # list of the same rows.
-    mine = next(m for m in inbox["items"] if m["claim_id"] == claim_id)
-    assert mine["claim_type"] == "Group Hospital & Surgical"
+    # The conversation carries the SUBJECT the thread doesn't need — which is
+    # what lets the member tell one of their claims from another, and what
+    # sends the home tile to that claim rather than to a longer list.
+    inbox = _conversations(anon)
+    assert inbox["unread_total"] >= 1
+    mine = next(c for c in inbox["items"] if c["subject"]["id"] == claim_id)
+    assert mine["subject"]["kind"] == "claim"
+    assert mine["subject"]["claim_type"] == "Group Hospital & Surgical"
+    # Date and amount are what separate two claims of the SAME type.
+    assert mine["subject"]["incurred_date"] and mine["subject"]["amount_claimed"]
+    assert mine["last_message"]["id"] == thread[-1]["id"]
+    assert mine["message_count"] == len(thread)
+    assert mine["unread"] == sum(1 for m in thread if m["unread"])
 
 
 def test_decision_posts_a_notice_carrying_the_note(
@@ -1331,15 +1336,198 @@ def test_member_never_sees_which_broker_wrote(anon: TestClient, broker: TestClie
 
 def test_member_read_receipt_clears_their_own_count(anon: TestClient):
     claim_id = _submitted_claim(anon, b" msg-read")
-    before = _inbox(anon)["unread"]
+    before = _conversations(anon)["unread_total"]
     assert before >= 1
 
     res = anon.post(
         f"/api/v1/portal/claims/{claim_id}/messages/read", headers=_auth(ACC_A)
     )
     assert res.status_code == 200 and res.json()["marked"] >= 1
-    assert _inbox(anon)["unread"] == before - res.json()["marked"]
+    assert _conversations(anon)["unread_total"] == before - res.json()["marked"]
     assert all(not m["unread"] for m in _thread(anon, claim_id))
+
+
+def test_a_conversation_is_a_thread_not_a_stream(
+    anon: TestClient, broker: TestClient
+):
+    """The defect this list replaced, in miniature.
+
+    Two claims of the SAME type differ only by date and amount. In the flat
+    inbox they printed the same subject ("We have your claim"), the same grey
+    claim-type sub-line, and the only thing telling them apart was a date
+    inside a body snippet clamped to one line — a real CDL member holds two
+    such pairs. As conversations they are one row each, and each row names its
+    own claim.
+    """
+    first = _draft(anon, incurred_date="2027-06-01", amount_claimed=165.83)
+    assert _upload(anon, first["id"], PDF + b" conv-a").status_code == 200
+    assert _submit(anon, first["id"]).status_code == 200
+    second = _draft(anon, incurred_date="2027-06-20", amount_claimed=49.25)
+    assert _upload(anon, second["id"], PDF + b" conv-b").status_code == 200
+    assert _submit(anon, second["id"]).status_code == 200
+
+    # A reply on the FIRST, so its thread is both longer and more recent.
+    assert broker.post(
+        f"/api/v1/claims/{first['id']}/messages", json={"body": "One moment."}
+    ).status_code == 201
+
+    rows = _conversations(anon)["items"]
+    by_id = {c["subject"]["id"]: c for c in rows}
+    a, b = by_id[first["id"]], by_id[second["id"]]
+
+    # Same title; told apart by the subject's own fields, which is the whole
+    # reason the subject carries a date and an amount.
+    assert a["subject"]["claim_type"] == b["subject"]["claim_type"]
+    assert a["subject"]["incurred_date"] != b["subject"]["incurred_date"]
+    assert a["subject"]["amount_claimed"] != b["subject"]["amount_claimed"]
+
+    # ONE row per thread, not one per message.
+    assert a["message_count"] == 2 and b["message_count"] == 1
+    assert a["last_message"]["body"] == "One moment."
+    # Whoever wrote last is who the thread is waiting on — derived, not stored.
+    assert a["last_message"]["author_type"] == "broker"
+    assert a["last_message"]["author_name"] == "Claims team"
+
+    # Most recently active first.
+    assert [c["subject"]["id"] for c in rows][:2] == [first["id"], second["id"]]
+
+
+def test_a_message_must_belong_to_exactly_one_thread() -> None:
+    """The owner invariant, enforced in `_post` because it cannot be a DB CHECK.
+
+    `sync_firm_schema` propagates new tables and new columns to firm schemas,
+    never constraints — so a CHECK would hold in `public` and nowhere else,
+    which reads as enforced and is not. A message with NEITHER owner belongs to
+    no thread and is invisible on every surface; one with BOTH would appear in
+    two.
+    """
+    import pytest
+
+    from app.db.session import SessionLocal
+    from app.models import ClaimMessage
+    from app.services.claim_messages import _post
+
+    with SessionLocal() as db:
+        for kwargs in (
+            {},  # neither
+            {"claim_id": "c", "enquiry_id": "q"},  # both
+        ):
+            with pytest.raises(ValueError, match="exactly one thread"):
+                _post(
+                    db,
+                    ClaimMessage(
+                        client_id="x",
+                        author_type="member",
+                        subject="s",
+                        body="b",
+                        **kwargs,
+                    ),
+                )
+        db.rollback()
+
+
+def test_the_broker_queue_is_who_is_waiting_on_us(
+    anon: TestClient, broker: TestClient
+):
+    """The complaint this tab answers: the claims queue could only be SCROLLED
+    for unread badges — `GET /claims` filters on status, employee and case type
+    and nothing else, so there was no way to ask who is waiting on a reply."""
+    quiet = _submitted_claim(anon, b" queue-quiet")
+    waiting = _submitted_claim(anon, b" queue-waiting")
+    assert anon.post(
+        f"/api/v1/portal/claims/{waiting}/messages",
+        json={"body": "Any news on this one?"},
+        headers=_auth(ACC_A),
+    ).status_code == 201
+
+    q = broker.get(f"/api/v1/conversations?policy_year_id={PY}")
+    assert q.status_code == 200, q.text
+    ids = [c["subject"]["id"] for c in q.json()["items"]]
+    # Only threads whose LAST word is the member's. `quiet` ends on our own
+    # submission notice, so it is not work.
+    assert waiting in ids and quiet not in ids
+    row = next(c for c in q.json()["items"] if c["subject"]["id"] == waiting)
+    assert row["last_message"]["body"] == "Any news on this one?"
+    assert row["last_message"]["author_type"] == "member"
+    # The broker reads it as unread-from-the-member, and `mine` is FALSE here
+    # where it is true on the member's own surface — same row, opposite sense.
+    assert row["unread"] == 1 and row["last_message"]["mine"] is False
+    # WHO is waiting, without opening anything. This is the point of the tab.
+    assert row["employee"]["staff_id"] == "CL-1"
+    assert row["employee"]["employee_name"]
+
+    # `any` is for lookup and carries the quiet thread too.
+    everything = broker.get(
+        f"/api/v1/conversations?policy_year_id={PY}&awaiting=any"
+    ).json()
+    every_id = [c["subject"]["id"] for c in everything["items"]]
+    assert waiting in every_id and quiet in every_id
+
+    # The two views sort in opposite directions, each right for its own job.
+    def stamps(body):
+        return [c["last_message"]["created_at"] for c in body["items"]]
+
+    assert stamps(q.json()) == sorted(stamps(q.json()))
+    assert stamps(everything) == sorted(stamps(everything), reverse=True)
+
+
+def test_the_broker_queues_unread_total_is_the_whole_view(
+    anon: TestClient, broker: TestClient
+):
+    """`unread_total` means the same thing on every surface: unread messages
+    across the whole VIEW, never just the page returned. It was briefly
+    page-local here, which put two meanings on one shared schema field — a
+    badge wired to it would then undercount silently on page 1 of many."""
+    for marker in (b" ut-a", b" ut-b"):
+        cid = _submitted_claim(anon, marker)
+        anon.post(
+            f"/api/v1/portal/claims/{cid}/messages",
+            json={"body": "Checking in on this one."},
+            headers=_auth(ACC_A),
+        )
+
+    whole = broker.get(f"/api/v1/conversations?policy_year_id={PY}").json()
+    assert whole["unread_total"] == sum(c["unread"] for c in whole["items"])
+    assert whole["unread_total"] >= 2
+
+    one = broker.get(f"/api/v1/conversations?policy_year_id={PY}&limit=1").json()
+    assert len(one["items"]) == 1
+    assert one["total"] == whole["total"]
+    # The page shrank; the figure describing the view did not.
+    assert one["unread_total"] == whole["unread_total"]
+
+
+def test_the_broker_queue_names_the_real_author(
+    anon: TestClient, broker: TestClient
+):
+    """A broker surface shows who actually replied; only the member's side is
+    substituted with the team label. The two serializers are the reason."""
+    claim_id = _submitted_claim(anon, b" queue-author")
+    broker.post(f"/api/v1/claims/{claim_id}/messages", json={"body": "Looking."})
+    anon.post(
+        f"/api/v1/portal/claims/{claim_id}/messages",
+        json={"body": "Thanks."},
+        headers=_auth(ACC_A),
+    )
+    row = next(
+        c
+        for c in broker.get(
+            f"/api/v1/conversations?policy_year_id={PY}&awaiting=any"
+        ).json()["items"]
+        if c["subject"]["id"] == claim_id
+    )
+    assert row["message_count"] == 3  # submitted notice + ours + theirs
+    thread = broker.get(f"/api/v1/claims/{claim_id}/messages").json()
+    assert any(m["author_name"] == "Demo Broker Admin" for m in thread)
+
+
+def test_a_members_conversation_never_names_the_employee(anon: TestClient):
+    """`employee` is broker-only furniture. The member's own list must not
+    carry it — naming them to themselves is noise, and the field existing on
+    their payload is how it ends up rendered on the wrong surface."""
+    _submitted_claim(anon, b" no-employee")
+    for c in _conversations(anon)["items"]:
+        assert c["employee"] is None
 
 
 def test_messages_are_member_scoped(anon: TestClient):
@@ -1360,7 +1548,9 @@ def test_messages_are_member_scoped(anon: TestClient):
         ).status_code
         == 404
     )
-    assert all(m["claim_id"] != claim_id for m in _inbox(anon, ACC_C)["items"])
+    assert all(
+        c["subject"]["id"] != claim_id for c in _conversations(anon, ACC_C)["items"]
+    )
 
 
 def test_reply_on_a_draft_409_and_blank_body_422(anon: TestClient):
@@ -1396,9 +1586,15 @@ def test_preview_messages_match_the_member(anon: TestClient, broker: TestClient)
     assert preview.status_code == 200, preview.text
     assert preview.json() == member_thread
 
-    inbox = broker.get(f"/api/v1/employees/{EMP_A}/portal-preview/messages")
+    inbox = broker.get(f"/api/v1/employees/{EMP_A}/portal-preview/conversations")
     assert inbox.status_code == 200
-    assert {m["id"] for m in member_thread} <= {m["id"] for m in inbox.json()["items"]}
+    mine = next(
+        c for c in inbox.json()["items"] if c["subject"]["id"] == claim_id
+    )
+    # A conversation carries only the LAST word; the whole thread is on the
+    # claim, which the preview now drills into.
+    assert mine["last_message"]["id"] == member_thread[-1]["id"]
+    assert mine["message_count"] == len(member_thread)
 
     # Another member's claim is not reachable through this employee's preview.
     assert (
