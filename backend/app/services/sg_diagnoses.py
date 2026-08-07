@@ -254,6 +254,47 @@ CATALOG: tuple[Diagnosis, ...] = (
     _d("Cracked or fractured tooth", "K03.8", _D),
     _d("Bruxism / Teeth grinding", "F45.8", _D),
     _d("Temporomandibular joint (TMJ) disorder", "K07.6", _D | _SP),
+    # ── Paediatric / congenital ───────────────────────────────────────────────
+    # Dependant children are claimable, so chapters P (perinatal) and Q
+    # (congenital) belong here even though no employee ever files against them.
+    _d("Bronchiolitis (infant)", "J21", _GSH),
+    _d("Croup / Acute laryngotracheitis", "J05.0", _GSH),
+    _d("Febrile seizure / Febrile convulsion", "R56.0", _GSH),
+    _d("Measles", "B05", _GS),
+    _d("Mumps", "B26", _GS),
+    # Rubella gets a row per lay name rather than the usual "A / B" label.
+    # `claim_intake_suggest._resolve_diagnosis` matches a label whose tokens are
+    # CONTAINED in the reading, so a 3-token "Rubella / German measles" can never
+    # match the 2-token reading "German measles" — while 1-token "Measles" can,
+    # and would resolve a rubella document to the wrong disease.
+    _d("Rubella", "B06", _GS),
+    _d("German measles", "B06", _GS),
+    _d("Kawasaki disease", "M30.3", _H),
+    _d("G6PD deficiency", "D55.0", _GSH),
+    _d("Speech and language delay", "F80", _SP),
+    _d("Developmental delay", "F88", _SP),
+    _d("Autism spectrum disorder", "F84.0", _SP),
+    _d("Neonatal jaundice", "P59", _H),
+    _d("Preterm birth / Low birth weight (newborn care)", "P07", _H),
+    _d("Neonatal respiratory distress", "P22", _H),
+    _d("Neonatal infection / Sepsis", "P36", _H),
+    _d("Tongue-tie / Ankyloglossia", "Q38.1", _GSH),
+    _d("Congenital heart disease", "Q24.9", _SH),
+    _d("Ventricular septal defect (VSD)", "Q21.0", _SH),
+    _d("Atrial septal defect (ASD)", "Q21.1", _SH),
+    _d("Patent ductus arteriosus (PDA)", "Q25.0", _SH),
+    _d("Cleft lip / Cleft palate", "Q37", _SH),
+    _d("Congenital hydrocephalus", "Q03", _SH),
+    _d("Spina bifida", "Q05", _SH),
+    _d("Congenital pyloric stenosis", "Q40.0", _H),
+    _d("Hirschsprung's disease", "Q43.1", _SH),
+    _d("Undescended testis / Cryptorchidism", "Q53", _SH),
+    _d("Hypospadias", "Q54", _SH),
+    _d("Developmental dysplasia of the hip", "Q65.9", _SH),
+    _d("Talipes / Clubfoot", "Q66.0", _SH),
+    _d("Polydactyly / Extra digits", "Q69", _SH),
+    _d("Syndactyly / Fused digits", "Q70", _SH),
+    _d("Down syndrome", "Q90", _SH),
     # ── Injuries / others ─────────────────────────────────────────────────────
     _d("Road traffic accident injury", "V89", _GSH),
     _d("Fall injury", "W19", _GSH),

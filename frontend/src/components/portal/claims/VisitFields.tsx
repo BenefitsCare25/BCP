@@ -83,7 +83,6 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
               <input
                 {...p}
                 className={leafControl}
-                placeholder="e.g. Raffles Medical"
                 value={form.provider}
                 onChange={(e) => form.setProvider(e.target.value)}
               />
@@ -96,7 +95,6 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
             <input
               {...p}
               className={leafControl}
-              placeholder="e.g. INV-00123"
               value={form.invoiceNumber}
               maxLength={128}
               onChange={(e) => form.setInvoiceNumber(e.target.value)}
