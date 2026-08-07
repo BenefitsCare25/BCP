@@ -100,6 +100,46 @@ Write-Host "[dev] port $Port is free." -ForegroundColor Green
 
 if ($NoStart) { return }
 
+# Warn when the dev database is behind the migration head.
+#
+# A local DB whose `alembic_version` has fallen behind fails in a way that reads
+# like a code bug, not a schema one: the model declares a column the table does
+# not have, so EVERY query touching that table 500s while `/health` stays green
+# and the tests (which build their schema from the models) all pass. That cost
+# real debugging time — the Member Coverage pane rendered blank with no error.
+# Warn, never block: a drifted DB is still usable for most work, and a dev
+# server that refuses to start is worse than one that tells you why.
+Push-Location $BackendDir
+try {
+    $env:PYTHONPATH = "."
+    # Alembic logs its INFO lines to STDERR and prints the revision to STDOUT.
+    # Two Windows-PowerShell traps here, and both silently turned this check into
+    # a permanent "couldn't check":
+    #   1. `2>&1` wraps each stderr line in an ErrorRecord (NativeCommandError).
+    #   2. This script sets `$ErrorActionPreference = "Stop"`, which promotes that
+    #      to a TERMINATING error — so even `2>$null` throws.
+    # Relaxing the preference for the duration of the two calls fixes both; only
+    # stdout is parsed, so the INFO noise is irrelevant either way.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $current = (& uv run alembic current 2>$null | Select-String -Pattern '^[0-9a-f]{12}' |
+        Select-Object -First 1 | ForEach-Object { $_.ToString().Split(' ')[0] })
+    $head = (& uv run alembic heads 2>$null | Select-String -Pattern '^[0-9a-f]{12}' |
+        Select-Object -First 1 | ForEach-Object { $_.ToString().Split(' ')[0] })
+    $ErrorActionPreference = $prevEap
+    if ($current -and $head -and ($current -ne $head)) {
+        Write-Host "[dev] WARNING: database is BEHIND the migration head." -ForegroundColor Red
+        Write-Host "        db:   $current" -ForegroundColor Yellow
+        Write-Host "        head: $head" -ForegroundColor Yellow
+        Write-Host "        Run 'uv run alembic upgrade head'. Symptoms of ignoring this:" -ForegroundColor DarkGray
+        Write-Host "        endpoints 500 with 'no such column' while /health stays 200." -ForegroundColor DarkGray
+    }
+} catch {
+    Write-Host "[dev] (couldn't check migration state: $_)" -ForegroundColor DarkGray
+} finally {
+    Pop-Location
+}
+
 Write-Host "[dev] starting uvicorn (app.main:app --reload) on port $Port ..." -ForegroundColor Cyan
 Push-Location $BackendDir
 try {
