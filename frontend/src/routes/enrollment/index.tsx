@@ -103,6 +103,7 @@ export function EnrollmentDashboardPage() {
   const openWindow = useOpenWindow();
   const closeWindow = useCloseWindow();
   const deleteWindow = useDeleteWindow();
+  const updateWindow = useUpdateWindow();
 
   const flexProducts = flexPricing?.products ?? [];
   const defaults = toLocalInput();
@@ -111,6 +112,9 @@ export function EnrollmentDashboardPage() {
   const [closesAt, setClosesAt] = useState(defaults.closes);
   const [allowLeave, setAllowLeave] = useState(false);
   const [allowDeps, setAllowDeps] = useState(true);
+  // Members may enrol themselves. Off runs the period broker-managed: open for
+  // brokers, dark in the portal.
+  const [memberSelfService, setMemberSelfService] = useState(true);
   // Whether benefits selections may draw more flex than the member's wallet
   // holds. Off (recommended), submit/confirm reject an overdrawn enrollment.
   const [allowOverdraft, setAllowOverdraft] = useState(false);
@@ -175,6 +179,7 @@ export function EnrollmentDashboardPage() {
         allow_plan_change: true,
         allow_leave: allowLeave,
         allow_dependant_changes: allowDeps,
+        member_self_service: memberSelfService,
         allow_overdraft: allowOverdraft,
         flex_drawdown_rule: drawdownRule,
         flex_price_source: Object.keys(sources).length ? sources : null,
@@ -236,6 +241,19 @@ export function EnrollmentDashboardPage() {
             <label className="flex items-center gap-2 text-sm text-foreground">
               <Switch checked={allowDeps} onCheckedChange={setAllowDeps} />
               Dependants
+            </label>
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <Switch
+                checked={memberSelfService}
+                onCheckedChange={setMemberSelfService}
+              />
+              Members enrol themselves
+              <InfoHint>
+                Off, the period runs broker-managed: it opens normally and
+                brokers elect on members&apos; behalf, but the portal shows no
+                enrolment and members cannot submit. You can switch this at any
+                time while the period is open.
+              </InfoHint>
             </label>
             {/* The switch only EXPOSES trading — the day caps and per-day rate
                 that decide what members can actually do live on the Leave tab. */}
@@ -342,6 +360,35 @@ export function EnrollmentDashboardPage() {
                     {new Date(w.opens_at).toLocaleDateString()} —{" "}
                     {new Date(w.closes_at).toLocaleDateString()}
                   </div>
+                  {/* Portal visibility is a MID-PERIOD decision — the whole
+                      point is to take the member surface dark while the period
+                      stays open for brokers — so it is editable on the row, not
+                      only at creation. A closed period gets no control: nothing
+                      it says would change what members can do. */}
+                  {w.status !== "closed" && (
+                    <label className="mt-1 flex items-center gap-2 text-2xs text-muted-foreground">
+                      <Switch
+                        checked={w.member_self_service}
+                        disabled={updateWindow.isPending}
+                        onCheckedChange={(v) =>
+                          updateWindow.mutate(
+                            { id: w.id, body: { member_self_service: v } },
+                            {
+                              onSuccess: () =>
+                                toast.success(
+                                  v
+                                    ? "Members can now enrol themselves in the portal."
+                                    : "Portal enrolment hidden — this period is now broker-managed.",
+                                ),
+                            },
+                          )
+                        }
+                      />
+                      {w.member_self_service
+                        ? "Members enrol themselves"
+                        : "Broker-managed — hidden from the portal"}
+                    </label>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5">
                   {w.status === "open" && (

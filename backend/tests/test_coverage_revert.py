@@ -111,6 +111,12 @@ def _reset_rows():
         s.query(Enrollment).delete()
         s.query(EnrollmentWindow).delete()
         s.query(EmployeePlanOverride).delete()
+        # Every revert now records a batch (that is what makes it undoable), so
+        # these accumulate across tests unless cleared — and a test asserting on
+        # the year's batch list would then see the previous test's reverts.
+        from app.models.bulk_plan_update import BulkPlanUpdate
+
+        s.query(BulkPlanUpdate).delete()
         s.commit()
 
 
@@ -321,3 +327,248 @@ def test_bulk_update_appears_in_coverage_history(client: TestClient) -> None:
     hist = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()["entries"]
     bulk = [e for e in hist if e["action"] == "bulk_plan_override"]
     assert bulk and bulk[0]["product_code"] == "MED"
+
+
+# ── baseline_differs_from_default (gates the two-button pair) ────────────────
+#
+# The two revert actions only diverge when the member was ALREADY off their
+# cohort default when the period opened — which happens because neither the
+# bulk coverage change nor `PUT /plan-overrides` is window-gated. When the
+# baseline IS the default, both buttons perform the same operation, and the UI
+# offers only "Reset to default".
+
+
+def test_baseline_matching_the_cohort_default_reports_no_difference(
+    client: TestClient,
+) -> None:
+    # SILVER is the matched category's plan, so reverting to this baseline and
+    # resetting to default land in the same place.
+    _add_enrollment({"products": {"MED": {"plan_code": "SILVER"}}})
+    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
+    assert body["has_baseline"] is True
+    assert body["baseline_differs_from_default"] is False
+
+
+def test_baseline_off_the_default_reports_a_difference(client: TestClient) -> None:
+    # The member was on GOLD when the period opened (a pre-period bulk change).
+    # Reverting to baseline restores GOLD; resetting to default gives SILVER.
+    _add_enrollment({"products": {"MED": {"plan_code": "GOLD"}}})
+    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
+    assert body["baseline_differs_from_default"] is True
+
+
+def test_a_declined_baseline_differs_from_the_default(client: TestClient) -> None:
+    _add_enrollment({"products": {"MED": {"declined": True}}})
+    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
+    assert body["baseline_differs_from_default"] is True
+
+
+def test_a_product_that_left_the_cohort_is_not_a_difference(client: TestClient) -> None:
+    """The revert reports such a product `skipped` and touches nothing, so
+    offering the baseline button for it would promise a change that cannot
+    happen — the gate must agree with what the action actually does."""
+    _add_enrollment({"products": {"GONE": {"plan_code": "PLATINUM"}}})
+    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
+    assert body["has_baseline"] is True
+    assert body["baseline_differs_from_default"] is False
+
+
+def test_an_empty_baseline_reports_no_difference(client: TestClient) -> None:
+    _add_enrollment({"products": {}})
+    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
+    assert body["baseline_differs_from_default"] is False
+
+
+def test_an_override_the_baseline_would_skip_is_a_difference(
+    client: TestClient,
+) -> None:
+    """`revert_to_baseline` LEAVES an override whose product is absent from the
+    snapshot; `revert_to_default` deletes every override. So the two actions
+    genuinely differ even when every snapshot product sits at cohort default —
+    and the gate has to say so, or the broker is left with only the action that
+    wipes the override they just set."""
+    _add_enrollment({"products": {"MED": {"plan_code": "SILVER"}}})
+    _add_override(plan_code="GOLD")
+    with SessionLocal() as s:  # the override's product is not in the snapshot
+        s.query(Enrollment).filter(Enrollment.id == ENROLL_ID).update(
+            {"baseline_snapshot": {"products": {}}}
+        )
+        s.commit()
+    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
+    assert body["baseline_differs_from_default"] is True
+
+    # And the difference is real: baseline leaves it, default removes it.
+    res = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
+    assert res.status_code == 200, res.text
+    with SessionLocal() as s:
+        assert (EMP1, PROD_ID) in load_overrides(s, PY_ID, [EMP1])
+
+
+# ── The underwriting resync must not read pre-delete coverage ────────────────
+#
+# `SessionLocal` is built `autoflush=False`, and `refresh_underwriting_cases`
+# re-reads effective coverage with its own `select()`. A PENDING `db.delete()`
+# is therefore invisible to it, so the NEL case for coverage just removed is
+# re-derived as still in force and never retired — and because undecided cases
+# hold a guaranteed-SI snapshot nothing else re-reads, the queue stays wrong
+# until some unrelated trigger fires.
+
+
+def _spy_on_resync(monkeypatch) -> dict:
+    """Capture the overrides visible to the resync at the moment it runs."""
+    import app.api.v1.plan_overrides as mod
+
+    seen: dict = {}
+
+    def spy(db, py, employee_ids=None):
+        seen["overrides"] = load_overrides(db, PY_ID, [EMP1])
+
+    monkeypatch.setattr(mod, "refresh_underwriting_cases", spy)
+    return seen
+
+
+def test_resync_does_not_see_a_deleted_override(client: TestClient, monkeypatch) -> None:
+    _add_override(plan_code="GOLD")
+    seen = _spy_on_resync(monkeypatch)
+    assert client.delete(f"/api/v1/employees/{EMP1}/plan-overrides/MED").status_code == 204
+    assert (EMP1, PROD_ID) not in seen["overrides"]
+
+
+def test_resync_does_not_see_an_override_dropped_by_revert(
+    client: TestClient, monkeypatch
+) -> None:
+    """`revert_to_default` only deletes — it never flushes — so this path relied
+    entirely on the helper's own flush."""
+    _add_override(plan_code="GOLD")
+    seen = _spy_on_resync(monkeypatch)
+    res = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
+    assert res.status_code == 200, res.text
+    assert (EMP1, PROD_ID) not in seen["overrides"]
+
+
+# ── A per-member revert is undoable, through the bulk undo endpoint ──────────
+#
+# Reverting deletes overrides outright. The bulk path — doing the same thing to
+# many members at once — has had undo all along; this closes the gap without a
+# second restore mechanism, which is what let the two paths drift apart on
+# underwriting in the first place.
+
+
+def test_revert_to_default_is_undoable(client: TestClient) -> None:
+    _add_override(plan_code="GOLD")
+    res = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
+    assert res.status_code == 200, res.text
+    batch_id = res.json()["batch_id"]
+    assert batch_id
+    with SessionLocal() as s:  # gone
+        assert (EMP1, PROD_ID) not in load_overrides(s, PY_ID, [EMP1])
+
+    undo = client.post(f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={})
+    assert undo.status_code == 200, undo.text
+    with SessionLocal() as s:  # back, with its plan
+        ov = load_overrides(s, PY_ID, [EMP1]).get((EMP1, PROD_ID))
+        assert ov is not None and ov.plan_code == "GOLD"
+
+
+def test_revert_to_baseline_is_undoable(client: TestClient) -> None:
+    _add_enrollment({"products": {"MED": {
+        "plan_code": "GOLD", "tier_category_id": CAT_ID, "declined": False,
+    }}})
+    _add_override(plan_code="SILVER")
+    res = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
+    assert res.status_code == 200, res.text
+    batch_id = res.json()["batch_id"]
+    assert batch_id
+    with SessionLocal() as s:
+        assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "GOLD"
+
+    assert client.post(
+        f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
+    ).status_code == 200
+    with SessionLocal() as s:  # the pre-revert override is restored
+        assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "SILVER"
+
+
+def test_a_no_op_revert_records_no_batch(client: TestClient) -> None:
+    """Nothing changed → nothing to undo. A record here would offer an Undo
+    button that does nothing."""
+    res = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
+    assert res.status_code == 200
+    assert res.json()["batch_id"] is None
+
+
+def test_undo_refuses_to_clobber_a_later_change(client: TestClient) -> None:
+    """`undo_batch`'s superseded detection has to apply here too — the whole
+    reason for reusing it rather than writing a second restore path."""
+    _add_override(plan_code="GOLD")
+    batch_id = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    ).json()["batch_id"]
+    _add_override(plan_code="SILVER")  # somebody moves them again afterwards
+
+    undo = client.post(f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={})
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["counts"].get("skipped") == 1
+    with SessionLocal() as s:  # the later change stands
+        assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "SILVER"
+
+
+def test_revert_batch_is_listed_but_not_re_runnable(client: TestClient) -> None:
+    """A revert IS a coverage change and belongs in the year's history — but it
+    names no product, so replaying it as a selection would 404. The flag is what
+    lets the history offer Undo without offering Re-run."""
+    _add_override(plan_code="GOLD")
+    batch_id = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    ).json()["batch_id"]
+
+    rows = client.get(f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates").json()
+    row = next(r for r in rows if r["id"] == batch_id)
+    assert row["is_revert"] is True
+    assert row["restorable"] == 1  # undo still has something to put back
+    # A real bulk batch is unaffected.
+    assert all(not r["is_revert"] for r in rows if r["id"] != batch_id)
+
+
+def test_the_batch_records_which_revert_it_was(client: TestClient) -> None:
+    """It used to hardcode `revert_to_default`, so a baseline revert was stored
+    as the wrong action."""
+    _add_enrollment({"products": {"MED": {
+        "plan_code": "GOLD", "tier_category_id": CAT_ID, "declined": False,
+    }}})
+    _add_override(plan_code="SILVER")
+    batch_id = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    ).json()["batch_id"]
+    with SessionLocal() as s:
+        from app.models.bulk_plan_update import BulkPlanUpdate
+
+        assert s.get(BulkPlanUpdate, batch_id).action == "revert_to_baseline"
+
+
+def test_undoing_a_revert_shows_in_the_coverage_timeline(client: TestClient) -> None:
+    """The Undo button lives inside the card that renders this timeline, so an
+    undo missing from it left the history contradicting the coverage above it."""
+    _add_override(plan_code="GOLD")
+    batch_id = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    ).json()["batch_id"]
+    assert client.post(
+        f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
+    ).status_code == 200
+
+    actions = [
+        e["action"]
+        for e in client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()["entries"]
+    ]
+    assert "bulk_plan_override_undone" in actions

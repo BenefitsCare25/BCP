@@ -82,6 +82,7 @@ def create_window(
         allow_plan_change=body.allow_plan_change,
         allow_leave=body.allow_leave,
         allow_dependant_changes=body.allow_dependant_changes,
+        member_self_service=body.member_self_service,
         product_scope=body.product_scope,
         flex_price_source=body.flex_price_source,
         flex_drawdown_rule=body.flex_drawdown_rule,

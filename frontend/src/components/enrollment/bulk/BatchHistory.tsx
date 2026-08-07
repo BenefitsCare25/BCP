@@ -92,7 +92,12 @@ export function BatchHistory({
               className="flex flex-wrap items-center gap-x-3 gap-y-2 py-3 first:pt-0 last:pb-0"
             >
               <span className="text-sm text-foreground">
-                {b.product_codes.join(", ") || "—"}
+                {/* A revert's product_code is a sentinel, not a product —
+                    printing it raw put "(coverage revert)" in the product
+                    column. Name the row for what it is instead. */}
+                {b.is_revert
+                  ? "Coverage revert"
+                  : b.product_codes.join(", ") || "—"}
               </span>
               <span className="text-xs text-muted-foreground">
                 {b.created_at ? fmtDateTime(b.created_at) : "—"}
@@ -103,6 +108,9 @@ export function BatchHistory({
                 {b.counts.error ? ` · ${b.counts.error} error` : ""}
               </span>
               {isUndo && <Badge variant="outline">Undo</Badge>}
+              {b.is_revert && !isUndo && (
+                <Badge variant="outline">Per member</Badge>
+              )}
               {b.undone_by && <Badge variant="outline">Undone</Badge>}
               {b.acknowledged.length > 0 && (
                 <Badge variant="outline">
@@ -122,7 +130,13 @@ export function BatchHistory({
                     (that is what makes its detail readable), so re-running it
                     would load the very change that was just reversed — under a
                     row badged "Undo". Re-run the original instead. */}
-                {!isUndo && (
+                {/* A per-member coverage revert is a real coverage change and
+                    belongs in this history — but it is not a SELECTION. It names
+                    no product (its `product_code` is a sentinel), so re-running
+                    it looks up a product called "(coverage revert)" and 404s.
+                    Undo below still works: that reads the stored restore list,
+                    which a revert does record. */}
+                {!isUndo && !b.is_revert && (
                   <Button
                     variant="ghost"
                     size="sm"

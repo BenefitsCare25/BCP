@@ -84,7 +84,11 @@ from app.services.member_query import (
     resolve_selection,
     selection_digest,
 )
-from app.services.override_writer import override_snapshot, upsert_override
+from app.services.override_writer import (
+    override_snapshot,
+    restore_snapshot,
+    upsert_override,
+)
 
 # A balance below half a cent is overdrawn — the same float-noise tolerance the
 # enrollment wallet guard uses, so the two surfaces agree on the boundary.
@@ -994,20 +998,6 @@ def _impact(
 # ── Writing ─────────────────────────────────────────────────────────────────
 
 
-def _restore_snapshot(row: EmployeePlanOverride | None) -> dict[str, Any] | None:
-    """The override's full restorable state.
-
-    ``override_snapshot`` (the audit projection) plus ``source_ref``: an undo has
-    to put back WHERE the coverage came from, not just what it was. Restoring an
-    enrollment-projected override as a bulk one would lose the link to the
-    election that produced it.
-    """
-    snap = override_snapshot(row)
-    if snap is None or row is None:
-        return None
-    return {**snap, "source_ref": row.source_ref}
-
-
 def _execute(
     db: Session,
     py: PolicyYear,
@@ -1016,7 +1006,7 @@ def _execute(
     user: CurrentUser | None,
 ) -> dict[str, Any]:
     emp, product = planned.employee, planned.product
-    before = _restore_snapshot(planned.ov)
+    before = restore_snapshot(planned.ov)
     if planned.sparse:
         _clear_override(db, emp, planned.ov, user)
         after = None
@@ -1098,7 +1088,7 @@ def _write_override(
             entity_type="employee_plan_override", entity_id=row.id,
             before=before, after=override_snapshot(row), employee_id=emp.id,
         )
-    return _restore_snapshot(row)
+    return restore_snapshot(row)
 
 
 # ── Undo ────────────────────────────────────────────────────────────────────
@@ -1173,7 +1163,7 @@ def undo_batch(
             continue
         ov = overrides.get((emp.id, product.id))
         before, after = entry.get("before"), entry.get("after")
-        if _restore_snapshot(ov) != after:
+        if restore_snapshot(ov) != after:
             out.superseded.append(
                 _row(
                     emp, "skipped",

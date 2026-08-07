@@ -35,7 +35,7 @@ from app.schemas.portal import (
     PortalMemberOut,
     PortalPolicyYearOut,
 )
-from app.services.enrollment_elections import open_window_for
+from app.services.enrollment_elections import member_window_for
 from app.services.member_statement import build_member_statement
 from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
@@ -91,7 +91,7 @@ def portal_me(
             employee_name=employee.employee_name,
         )
         out.flex_eligible = employee.flex_tier_name is not None
-        out.enrollment_open = open_window_for(db, employee) is not None
+        out.enrollment_open = member_window_for(db, employee) is not None
     return out
 
 

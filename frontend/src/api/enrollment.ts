@@ -49,6 +49,9 @@ export interface EnrollmentWindow {
   allow_plan_change: boolean;
   allow_leave: boolean;
   allow_dependant_changes: boolean;
+  /** Members may see + use this period in the portal. Off = broker-managed:
+   *  open for brokers, dark in the portal. */
+  member_self_service: boolean;
   product_scope: string[] | null;
   flex_price_source: Record<string, FlexPriceSource> | null;
   flex_drawdown_rule: FlexDrawdownRule;
@@ -67,6 +70,7 @@ export interface WindowCreate {
   allow_plan_change: boolean;
   allow_leave: boolean;
   allow_dependant_changes: boolean;
+  member_self_service?: boolean;
   product_scope?: string[] | null;
   flex_price_source?: Record<string, FlexPriceSource> | null;
   flex_drawdown_rule?: FlexDrawdownRule;
@@ -81,6 +85,7 @@ export interface WindowPatch {
   closes_at?: string;
   allow_leave?: boolean;
   allow_dependant_changes?: boolean;
+  member_self_service?: boolean;
   product_scope?: string[] | null;
   flex_price_source?: Record<string, FlexPriceSource> | null;
   flex_drawdown_rule?: FlexDrawdownRule;
@@ -578,6 +583,9 @@ export interface BulkBatchSummary {
   acknowledged: string[];
   undo_of: string | null;
   undone_by: string | null;
+  /** A per-member coverage revert (or its undo). Still a real coverage change,
+   *  but NOT a re-runnable selection — it names no product to replay. */
+  is_revert: boolean;
   /** Pairs this batch recorded a previous state for — 0 means undo has nothing
    *  to offer. */
   restorable: number;
@@ -873,6 +881,9 @@ export interface CoverageHistory {
   entries: CoverageHistoryEntry[];
   /** Whether a window baseline exists — gates the 'Revert to baseline' control. */
   has_baseline: boolean;
+  /** Whether that baseline lands anywhere other than the cohort default. False
+   *  means both revert actions do the same thing, so only one is offered. */
+  baseline_differs_from_default: boolean;
 }
 
 export interface CoverageChange {
@@ -893,6 +904,9 @@ export interface CoverageRevertResult {
   employee_id: string;
   target: string;
   changes: CoverageChange[];
+  /** The batch this revert recorded, undoable via `useUndoBulk`. Null when the
+   *  revert changed nothing — there is nothing to undo. */
+  batch_id: string | null;
 }
 
 export function useCoverageHistory(employeeId: string | null) {
@@ -928,6 +942,13 @@ export function useRevertCoverage(employeeId: string | undefined) {
       // + its options so the tier markers and price tags there aren't left stale.
       qc.invalidateQueries({ queryKey: ["enrollment"] });
       qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+      // A revert moves the member's eligible sum insured, and the server now
+      // re-derives their NEL cases in the same transaction — so the underwriting
+      // queue on screen is stale the moment this returns.
+      qc.invalidateQueries({ queryKey: ["underwriting"] });
+      // A revert now RECORDS a batch (that is what makes it undoable), so the
+      // Coverage changes tab's "Past changes" list has a new row.
+      qc.invalidateQueries({ queryKey: ["bulk-updates"] });
     },
   });
 }
@@ -995,6 +1016,11 @@ export function useDeletePlanOverride() {
       qc.invalidateQueries({ queryKey: ["plan-overrides"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["coverage-summary"] });
+      qc.invalidateQueries({ queryKey: ["coverage-history"] });
+      // Dropping an override moves eligible SI, and the server re-derives the
+      // member's NEL cases in the same transaction — same staleness the revert
+      // path documents.
+      qc.invalidateQueries({ queryKey: ["underwriting"] });
     },
   });
 }
@@ -1036,6 +1062,11 @@ function invalidateCoverage(qc: ReturnType<typeof useQueryClient>) {
   // The picker's plan headcounts are effective coverage, which just moved.
   qc.invalidateQueries({ queryKey: ["member-facets"] });
   qc.invalidateQueries({ queryKey: ["underwriting"] });
+  // `FlexPanel` draws ONE ledger from two queries — allowance + price tags from
+  // the statement, approved/pending + `available` from the utilization — so
+  // refreshing only the statement leaves the printed terms reconciling against
+  // a total from before the change.
+  qc.invalidateQueries({ queryKey: ["employee-utilization"] });
 }
 
 export function useApplyBulk(policyYearId: string | undefined) {

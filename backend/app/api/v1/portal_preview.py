@@ -49,7 +49,7 @@ from app.services.claim_messages import (
 from app.services.claims import claim_to_out, claims_to_out, load_member_claim
 from app.services.enrollment_elections import (
     build_portal_enrollment,
-    open_window_for,
+    member_window_for,
 )
 from app.services.member_enquiries import enquiry_out, load_member_enquiry
 from app.services.member_statement import build_member_statement
@@ -110,7 +110,7 @@ def portal_preview_context(
         member_account=(
             MemberAccountOut.model_validate(account) if account is not None else None
         ),
-        enrollment_open=open_window_for(db, employee) is not None,
+        enrollment_open=member_window_for(db, employee) is not None,
     )
 
 

@@ -423,3 +423,65 @@ def test_preview_also_hides_premiums(broker: TestClient) -> None:
     portal = broker.get("/api/v1/portal/enrollment", headers=_member_auth())
     assert preview.status_code == 200
     assert preview.json() == portal.json()
+
+
+# ── Broker-managed periods (member_self_service off) ─────────────────────────
+#
+# The period stays OPEN — brokers elect on members' behalf and confirm as
+# normal — while the portal's enrolment surface goes dark. Every member-facing
+# read AND write has to honour it: hiding only the marker would leave a member
+# who bookmarked /portal/enrollment able to elect.
+
+
+def test_broker_managed_window_is_invisible_to_the_member(broker: TestClient) -> None:
+    wid = _make_window(broker, member_self_service=False)
+
+    # No marker in the shell, and the payload is the same empty shape as
+    # "no period open" — not an error, so the page renders its empty state.
+    me = broker.get("/api/v1/portal/me", headers=_member_auth()).json()
+    assert me["enrollment_open"] is False
+    res = broker.get("/api/v1/portal/enrollment", headers=_member_auth())
+    assert res.status_code == 200
+    assert res.json() == {"window": None, "enrollment": None, "options": None}
+
+    # Writes are refused, not merely hidden.
+    for path, body in (
+        (
+            "/api/v1/portal/enrollment/elections",
+            {"elections": [{"product_code": "MED", "plan_code": "GOLD"}]},
+        ),
+        ("/api/v1/portal/enrollment/leave", {"action": "buy", "days": 2}),
+    ):
+        assert broker.put(path, json=body, headers=_member_auth()).status_code == 404
+    assert broker.post(
+        "/api/v1/portal/enrollment/submit", json={}, headers=_member_auth()
+    ).status_code == 404
+
+    # The broker still owns the period: it is open and listed.
+    assert broker.get(f"/api/v1/enrollment-windows/{wid}").json()["status"] == "open"
+
+
+def test_hiding_is_reversible_mid_period(broker: TestClient) -> None:
+    """The toggle is a mid-period control, so flipping it back must restore the
+    member's surface — including the enrollment row already created at open."""
+    wid = _make_window(broker, member_self_service=False)
+    assert broker.patch(
+        f"/api/v1/enrollment-windows/{wid}", json={"member_self_service": True}
+    ).status_code == 200
+
+    me = broker.get("/api/v1/portal/me", headers=_member_auth()).json()
+    assert me["enrollment_open"] is True
+    body = broker.get("/api/v1/portal/enrollment", headers=_member_auth()).json()
+    assert body["window"]["id"] == wid
+
+
+def test_employee_view_preview_mirrors_a_hidden_period(broker: TestClient) -> None:
+    """The preview's whole contract is "exactly what the member sees" — so it
+    must go dark too. A preview still showing the enrolment would be the one
+    screen a broker checks to confirm the toggle worked."""
+    _make_window(broker, member_self_service=False)
+    res = broker.get(f"/api/v1/employees/{EMP1}/portal-preview/enrollment")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"window": None, "enrollment": None, "options": None}
+    me = broker.get(f"/api/v1/employees/{EMP1}/portal-preview").json()
+    assert me["enrollment_open"] is False

@@ -121,6 +121,27 @@ def open_window_for(db: Session, employee: Employee) -> EnrollmentWindow | None:
     return None
 
 
+def member_window_for(db: Session, employee: Employee) -> EnrollmentWindow | None:
+    """The open window a MEMBER may see and act in.
+
+    `open_window_for` answers "is a period open at all"; this answers "may the
+    member use it". They differ by ``member_self_service``: a broker can run a
+    period broker-managed — open, with brokers electing on members' behalf and
+    confirming as normal — while the portal's enrolment surface stays dark.
+
+    **Every member-facing call site, and the broker's employee-view preview,
+    must use THIS one.** Reaching for `open_window_for` re-exposes exactly the
+    surface the toggle exists to hide, and does it silently: the member sees the
+    "enrolment open" marker and the page loads. Broker paths keep
+    `open_window_for` — hiding the portal must never hide the period from the
+    people running it.
+    """
+    window = open_window_for(db, employee)
+    if window is None or not window.member_self_service:
+        return None
+    return window
+
+
 def find_enrollment(
     db: Session, window: EnrollmentWindow, employee: Employee
 ) -> Enrollment | None:
@@ -211,7 +232,7 @@ def build_portal_enrollment(
     the same shape as `build_member_statement`."""
     if employee is None:
         return PortalEnrollmentOut()
-    window = open_window_for(db, employee)
+    window = member_window_for(db, employee)
     if window is None:
         return PortalEnrollmentOut()
     enr = enrollment or find_enrollment(db, window, employee)

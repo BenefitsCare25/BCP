@@ -46,7 +46,7 @@ from app.services.enrollment_elections import (
     build_portal_enrollment,
     enrollment_detail,
     find_enrollment,
-    open_window_for,
+    member_window_for,
     perform_submit,
 )
 from app.services.enrollment_lifecycle import baseline_for
@@ -105,7 +105,7 @@ def _require_open_enrollment(
     db: Session, member: CurrentMember
 ) -> tuple[Employee, EnrollmentWindow, Enrollment]:
     employee = resolve_member_employee(db, member)
-    window = open_window_for(db, employee)
+    window = member_window_for(db, employee)
     if window is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "No enrolment period is currently open."
@@ -122,7 +122,7 @@ def my_enrollment(
     options. Everything None when no window is open (the page renders an
     informational empty state, not an error)."""
     employee = resolve_member_employee(db, member)
-    window = open_window_for(db, employee)
+    window = member_window_for(db, employee)
     if window is None:
         return PortalEnrollmentOut()
     enr = _get_or_create_enrollment(db, window, employee)

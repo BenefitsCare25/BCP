@@ -63,9 +63,14 @@ export function CoverageChanges({ employeeId }: { employeeId: string }) {
           id={`coverage-changes-${employeeId}`}
           className="flex flex-col gap-3 border-t border-border px-4 py-3.5"
         >
+          {/* This card's revert is UNSCOPED (no window_id), so the server's flag
+              — computed for the same newest baseline the revert would use — is
+              exact here, and a false hides a button that could only duplicate
+              "Reset to default". */}
           <CoverageRevertControls
             employeeId={employeeId}
             hasBaseline={data?.has_baseline ?? false}
+            baselineDiffers={data?.baseline_differs_from_default}
           />
           <div className="border-t border-border pt-3">
             <CoverageHistory employeeId={employeeId} />

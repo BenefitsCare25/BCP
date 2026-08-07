@@ -57,6 +57,7 @@ from app.services.bulk_plan_update import (
 )
 from app.services.enrollment_products import available_plan_codes, resolve_product_by_code
 from app.services.enrollment_validation import assert_plan_available
+from app.services.override_writer import is_revert_batch
 from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["bulk-plan-updates"])
@@ -161,6 +162,7 @@ def _summary(record: BulkPlanUpdate, undone_by: str | None = None) -> BulkBatchS
         acknowledged=record.acknowledged or [],
         undo_of=record.undo_of,
         undone_by=undone_by,
+        is_revert=is_revert_batch(record.product_code),
         restorable=len(stored.get("restore") or []),
         # Written pairs beyond the stored cap, which an undo canNOT put back.
         not_restorable=max(

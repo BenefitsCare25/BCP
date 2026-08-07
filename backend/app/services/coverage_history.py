@@ -32,6 +32,13 @@ ACTION_LABELS: dict[str, str] = {
     "reset_enrollment": "Benefits selection reset to baseline",
     "revert_coverage_to_baseline": "Reverted to the enrolment-period baseline",
     "revert_coverage_to_default": "Reverted to cohort default",
+    # Undo, from either the bulk tab or the per-member revert card. Both write
+    # per-employee audit rows and both MUST appear here: the revert card renders
+    # this very timeline, so leaving them out had the page show "Reverted to
+    # cohort default" as the last word while the coverage above it already read
+    # as the restored plan — the history contradicting the statement beside it.
+    "bulk_plan_override_undone": "Change put back (undo)",
+    "bulk_plan_override_cleared": "Override removed (undo)",
 }
 
 

@@ -39,6 +39,8 @@ class EnrollmentWindowOut(_Base):
     allow_plan_change: bool
     allow_leave: bool
     allow_dependant_changes: bool
+    # Members may see + use this period in the portal. Off = broker-managed.
+    member_self_service: bool = True
     product_scope: list[Any] | None
     flex_price_source: dict[str, str] | None = None
     flex_drawdown_rule: str = "full"
@@ -55,6 +57,8 @@ class EnrollmentWindowCreate(BaseModel):
     allow_plan_change: bool = True
     allow_leave: bool = False
     allow_dependant_changes: bool = True
+    # Off runs the period broker-managed: open for brokers, dark in the portal.
+    member_self_service: bool = True
     product_scope: list[str] | None = None
     # {product_id: "slip" | "manual"} — products omitted fall back to "manual".
     flex_price_source: dict[str, FlexPriceSourceStr] | None = None
@@ -87,6 +91,7 @@ class EnrollmentWindowPatch(BaseModel):
     allow_plan_change: bool | None = None
     allow_leave: bool | None = None
     allow_dependant_changes: bool | None = None
+    member_self_service: bool | None = None
     product_scope: list[str] | None = None
     flex_price_source: dict[str, FlexPriceSourceStr] | None = None
     flex_drawdown_rule: FlexDrawdownRuleStr | None = None
@@ -740,6 +745,10 @@ class BulkBatchSummaryOut(_Base):
     undo_of: str | None = None
     # Set on a batch that has since been undone, pointing at the undo batch.
     undone_by: str | None = None
+    # A per-member coverage revert (and its undo). It is a real coverage change
+    # and belongs in the history — but it is NOT a re-runnable selection: it has
+    # no product to replay, so offering "Re-run selection" 404s.
+    is_revert: bool = False
     # Pairs this batch could still put back (it recorded their previous state and
     # nothing has moved them since is NOT checked here — that is resolved when
     # the undo runs). 0 means undo has nothing to offer.
@@ -813,6 +822,11 @@ class CoverageHistoryOut(BaseModel):
     # Whether a window baseline exists for this member (gates the revert-to-baseline
     # control so the UI doesn't offer an action the server would 409).
     has_baseline: bool = False
+    # Whether reverting to that baseline would land anywhere OTHER than the
+    # cohort default. When false the two revert actions are the same operation,
+    # and the UI shows only "Reset to default" rather than two buttons that
+    # differ in wording alone.
+    baseline_differs_from_default: bool = False
 
 
 class CoverageRevertRequest(BaseModel):
@@ -837,6 +851,10 @@ class CoverageRevertResult(BaseModel):
     employee_id: str
     target: str
     changes: list[CoverageChangeOut]
+    # The batch record this revert wrote, so the UI can offer Undo through the
+    # SAME endpoint a bulk change uses (POST /bulk-plan-updates/{id}/undo).
+    # None when the revert changed no coverage — there is nothing to undo.
+    batch_id: str | None = None
 
 
 class PlanOverrideUpsert(BaseModel):

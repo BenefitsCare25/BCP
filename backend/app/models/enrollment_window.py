@@ -93,6 +93,17 @@ class EnrollmentWindow(Base, TimestampMixin):
     allow_dependant_changes: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
+    # Whether MEMBERS may see and use this enrolment period in the portal. Off,
+    # the period runs broker-managed: the window is still open (brokers elect on
+    # members' behalf, confirm, and close it as normal) but the portal's
+    # enrolment surface stays dark — no "enrolment open" marker, no
+    # /portal/enrollment payload, and every member write is refused. Resolved
+    # through ``enrollment_elections.member_window_for``, which is what every
+    # member-facing and preview call site must use; ``open_window_for`` answers
+    # the different question "is a window open at all" and does NOT honour this.
+    member_self_service: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
     # Which products are in scope. NULL = all confirmed products for the year.
     product_scope: Mapped[list[Any] | None] = mapped_column(JSON(), nullable=True)
     # Per-product flex price-tag source: {product_id: "slip" | "manual"}. A product

@@ -44,7 +44,12 @@ from app.services.flex_pricing_resolver import (
     profile_counts,
     reference_date,
 )
-from app.services.override_writer import override_snapshot, upsert_override
+from app.services.override_writer import (
+    override_snapshot,
+    restore_entry,
+    restore_snapshot,
+    upsert_override,
+)
 
 
 def latest_enrollment_with_baseline(
@@ -63,6 +68,63 @@ def latest_enrollment_with_baseline(
         stmt = stmt.where(Enrollment.window_id == window_id)
     stmt = stmt.order_by(Enrollment.created_at.desc())
     return db.execute(stmt).scalars().first()
+
+
+def baseline_differs_from_default(
+    db: Session, employee: Employee, enrollment: Enrollment
+) -> bool:
+    """Would reverting to this baseline land anywhere other than the cohort default?
+
+    Gates the "Revert to baseline" control. The two revert actions only diverge
+    when the member was already deviating from their cohort when the period
+    opened — i.e. someone had bulk-changed or hand-set their coverage BEFORE the
+    window (neither of which is window-gated; see `bulk_plan_update`). When the
+    baseline is all-default the two buttons are the same operation described two
+    ways, which is what made the pair unreadable.
+
+    It mirrors ``revert_to_baseline``'s own two loops, so the gate and the
+    action cannot disagree. There are two ways they diverge, and BOTH matter:
+
+    1. **A snapshot product whose baseline is not the cohort default** — the
+       baseline revert writes an override there, the default revert removes it.
+       Decided by ``is_sparse_default``, the same predicate the action writes
+       with.
+    2. **An override the baseline revert would SKIP** — its product is absent
+       from the snapshot (it entered the cohort after window-open) or has since
+       left the cohort. ``revert_to_baseline`` deliberately leaves those in
+       place; ``revert_to_default`` deletes every override. Missing this case
+       hid the button in exactly the situation it was needed: a hand-set
+       override on a newly-matched product, with every snapshot product at
+       default, left the broker only the action that also wipes it.
+    """
+    snapshot = enrollment.baseline_snapshot or {}
+    raw = snapshot.get("products", {}) if isinstance(snapshot, dict) else {}
+    products: dict[str, Any] = raw if isinstance(raw, dict) else {}
+    defaults, baseline_cat = _defaults_and_baseline(db, employee)
+    pid_by_code = {code: pid for pid, (code, _plan) in defaults.items()}
+
+    touched_pids: set[str] = set()
+    for code, bp in products.items():
+        if not isinstance(bp, dict):
+            continue
+        pid = pid_by_code.get(code)
+        if pid is None:  # left the cohort → the action reports it `skipped`
+            continue
+        touched_pids.add(pid)
+        if not is_sparse_default(
+            declined=bool(bp.get("declined")),
+            plan_code=bp.get("plan_code"),
+            tier_category_id=bp.get("tier_category_id"),
+            covered_dependant_ids=bp.get("covered_dependant_ids"),
+            default_plan=defaults[pid][1],
+            base_tier=baseline_cat.get(pid),
+            dependant_option_ids=bp.get("dependant_option_ids"),
+        ):
+            return True
+
+    # Case 2 — anything the baseline revert would leave standing.
+    overrides = load_overrides(db, employee.policy_year_id, [employee.id])
+    return any(pid not in touched_pids for (_emp_id, pid) in overrides)
 
 
 def revert_leave(
@@ -116,12 +178,18 @@ def revert_to_default(
     employee: Employee,
     user: CurrentUser,
     product_codes: list[str] | None = None,
+    restore: list[dict[str, Any]] | None = None,
 ) -> list[CoverageChangeOut]:
     """Drop overrides so the member reverts to their cohort default plan.
 
     ``product_codes`` limits the revert to those products; ``None`` reverts every
     overridden product. Idempotent — a product with no override is "unchanged".
+
+    ``restore`` collects undo entries in ``bulk_plan_update.undo_batch``'s shape
+    — the per-member revert is undoable through that one mechanism rather than a
+    second restore path of its own.
     """
+    restore = [] if restore is None else restore
     wanted = {c.strip() for c in product_codes} if product_codes else None
 
     overrides = (
@@ -146,6 +214,10 @@ def revert_to_default(
             continue
         default_plan = default_by_code.get(ov.product_code)
         before = override_snapshot(ov)
+        restore.append(restore_entry(
+            employee, product_id=ov.product_id, product_code=ov.product_code,
+            before=restore_snapshot(ov), after=None,
+        ))
         db.delete(ov)
         write_audit(
             db, user, action="revert_coverage_to_default",
@@ -179,6 +251,7 @@ def revert_to_baseline(
     enrollment: Enrollment,
     user: CurrentUser,
     product_codes: list[str] | None = None,
+    restore: list[dict[str, Any]] | None = None,
 ) -> list[CoverageChangeOut]:
     """Rewrite overrides to the coverage captured at window-open (baseline_snapshot).
 
@@ -190,6 +263,7 @@ def revert_to_baseline(
     member's cohort after a re-match) are surfaced as ``skipped``, not silently
     left — so the broker knows the revert didn't cover them.
     """
+    restore = [] if restore is None else restore
     snapshot = enrollment.baseline_snapshot or {}
     products: dict[str, Any] = snapshot.get("products", {}) if isinstance(snapshot, dict) else {}
     wanted = {c.strip() for c in product_codes} if product_codes else None
@@ -264,6 +338,10 @@ def revert_to_baseline(
         ):
             if ov is not None:
                 before = override_snapshot(ov)
+                restore.append(restore_entry(
+                    employee, product_id=pid, product_code=code,
+                    before=restore_snapshot(ov), after=None,
+                ))
                 db.delete(ov)
                 write_audit(
                     db, user, action="revert_coverage_to_baseline",
@@ -309,6 +387,7 @@ def revert_to_baseline(
             dep_option_ids=dep_option_ids,
             dependants_compulsory=base_tier in ctx["compulsory_dep_cats"],
         )
+        restore_before = restore_snapshot(ov)
         row, before = upsert_override(
             db,
             employee_id=employee.id,
@@ -327,6 +406,10 @@ def revert_to_baseline(
             modified_by=user.user_id,
         )
         db.flush()
+        restore.append(restore_entry(
+            employee, product_id=pid, product_code=code,
+            before=restore_before, after=restore_snapshot(row),
+        ))
         write_audit(
             db, user, action="revert_coverage_to_baseline",
             entity_type="employee_plan_override", entity_id=row.id,
