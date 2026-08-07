@@ -645,9 +645,9 @@ function ClaimsReports({ year }: { year: PolicyYear }) {
       format: "Interactive",
       action: (
         <OpenLink
-          to="/policy-admin/coverage-members"
+          to="/policy-admin/member-coverage"
           search={{ view: "broker" }}
-          label="Open in Coverage"
+          label="Open in Member Coverage"
         />
       ),
     },

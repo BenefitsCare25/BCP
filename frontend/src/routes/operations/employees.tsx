@@ -8,17 +8,43 @@
  *
  * The file previously carried a banner claiming it was orphaned. It was not:
  * the check that produced that conclusion excluded this file from its own
- * search. Run matching, match results, the per-employee override, bulk delete
- * and the flex detail blocks are all live on the tab.
+ * search. Run matching, match results, the per-employee override and bulk
+ * delete are all live on the tab.
  *
- * Bulk portal invites DID move out — to Company settings → Authentication,
- * beside the sign-in policy that governs them. `MemberAccountActions` renders
- * both here and on `routes/operations/coverage.tsx`.
+ * WHAT THIS PAGE OWNS (2026-08-07). Member Listing owns the data going IN —
+ * who is on file, what the roster says about them, and which category they
+ * matched. **Member Coverage owns everything matching PRODUCES**: cover,
+ * financials, schedules of benefits, the flex wallet, claims and portal access.
+ *
+ * The row sheet used to rebuild the entire benefit statement inside a 480px
+ * drawer — assigned plans with sum insured / rate / premium / rate tiers, a
+ * schedule of benefits for each of a CDL employee's eight products (each in its
+ * own 64px-tall scroller, with no claims merged in), the flex wallet twice, and
+ * portal access. All of it renders better on `coverage.tsx`. One of those
+ * copies was not merely redundant: `FlexPriceTagSummary` computed
+ * `wallet − price tags = balance` while `FlexPanel` computes
+ * `allowance − tags ± leave − claims approved = left`, so the same member's
+ * wallet read differently on the two pages by whatever they had claimed.
+ *
+ * So the sheet is now: what matching CONCLUDED (a status strip of product
+ * codes, linking to the coverage record) → the matching controls → the roster
+ * fields those controls run on. Nothing here prices anything.
+ *
+ * Bulk portal invites live on Company settings → Authentication;
+ * `MemberAccountActions` renders on `routes/operations/coverage.tsx` only.
  */
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Play, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
-  useBenefitStatement,
+  AlertTriangle,
+  ArrowUpRight,
+  Loader2,
+  Play,
+  RefreshCw,
+  Save,
+  Trash2,
+} from "lucide-react";
+import {
   useBulkDeleteEmployees,
   useCategoriesGrouped,
   useEmployee,
@@ -73,12 +99,6 @@ import {
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { RosterFilterBar } from "@/components/operations/RosterFilterBar";
 import { RosterTabActions } from "./rosterTabActions";
-import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
-import { BenefitScheduleView } from "@/components/configuration/BenefitScheduleView";
-import { useCoverageHistory } from "@/api/enrollment";
-import { FlexPriceTagSummary } from "@/components/benefits/FlexPriceTagSummary";
-import { CoverageHistory } from "@/components/enrollment/CoverageHistory";
-import { CoverageRevertControls } from "@/components/enrollment/CoverageRevertControls";
 import { EntityBreakdownCard } from "@/components/configuration/EntityBreakdownCard";
 import { EntityReconciliationPanel } from "@/components/configuration/EntityReconciliationPanel";
 import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
@@ -86,11 +106,8 @@ import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
 import { coerceAttrs } from "@/lib/attrs";
 import { ConflictDetailError, formatError } from "@/lib/errors";
-import { formatWallet } from "@/lib/flex";
-import { fmtCurrency } from "@/lib/format";
 import { FAMILY_STATUS_LABELS } from "@/types";
 import type {
-  FlexCoverageLine,
   FlexEmployeeAssignment,
   MatchMethod,
   MatchResults,
@@ -106,17 +123,39 @@ const METHOD_LABEL: Record<MatchMethod, string> = {
 
 const PAGE_SIZE = 50;
 
+/** Separator between facts in the identity strip's meta run. Decorative, so it
+ *  is hidden from assistive tech — a screen reader announcing "middle dot"
+ *  between every value is noise, and the values read fine as a list without it. */
+function MetaDot() {
+  return (
+    <span aria-hidden className="mx-1.5 text-subtle">
+      ·
+    </span>
+  );
+}
+
 export function EmployeesPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const bulkDelete = useBulkDeleteEmployees();
   const runMatching = useRunMatching();
+  const navigate = useNavigate();
+  // The open row rides the URL, so a roster record is a shareable link and
+  // Member Coverage can link back to the row it came from. `replace` because
+  // clicking down a table shouldn't fill the back stack with people.
+  const search = useSearch({ strict: false }) as { employee?: string };
+  const selectedId = search.employee ?? null;
+  const setSelectedId = (id: string | null) =>
+    void navigate({
+      to: "/policy-admin/member-listing",
+      search: { tab: "employees", ...(id ? { employee: id } : {}) },
+      replace: true,
+    });
   const [page, setPage] = useState(0);
   // One filter state for the whole bar, serialized to the SAME `MemberFilters`
   // the bulk tool sends — so the roster view and a bulk selection can never
   // describe different populations for the same rule.
   const [filters, setFilters] = useState<MemberFilterState>(EMPTY_MEMBER_FILTERS);
   const debouncedQ = useDebouncedValue(filters.q, 250);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
@@ -153,12 +192,9 @@ export function EmployeesPage() {
     membership?.assignments.forEach((a) => m.set(a.employee_id, a));
     return m;
   }, [membership]);
-  const { data: detail } = useEmployee(selectedId);
-  // Benefit statement of the open employee — for the flex price-tag / balance block.
-  const { data: detailStatement } = useBenefitStatement(selectedId);
-  // Shared (cached) with the CoverageHistory timeline below; drives whether the
-  // 'Revert to baseline' control is offered for this member.
-  const { data: coverageHistory } = useCoverageHistory(selectedId);
+  // `isError` is load-bearing now that the open row comes from the URL: a
+  // shared link can name a member this roster no longer has.
+  const { data: detail, isError: detailFailed } = useEmployee(selectedId);
   const { data: categoryGroups = [] } = useCategoriesGrouped(
     policyYearId ?? undefined,
   );
@@ -512,19 +548,170 @@ export function EmployeesPage() {
         }}
       >
         <SheetContent>
-          {selectedId && !detail && (
-            <div className="flex justify-center p-8">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          )}
+          {/* A FAILED fetch must have its own branch. The open row rides the
+            * URL, so the id can arrive from a shared link, a bookmark or a
+            * browser Back after a listing sync — and `retryQuery` deliberately
+            * doesn't retry a 4xx, so a 404 settles with `data === undefined`
+            * forever. Without this the drawer sat on "Loading member…"
+            * indefinitely, describing a fetch that had already finished. */}
+          {selectedId && detailFailed ? (
+            <>
+              <SheetHeader className="pr-12">
+                <SheetTitle>Member not on this roster</SheetTitle>
+              </SheetHeader>
+              <SheetBody className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  This link points at an employee the current benefit year
+                  doesn&rsquo;t have. They may have been removed by a listing
+                  sync, or the link belongs to a different company.
+                </p>
+                <Button variant="outline" onClick={() => setSelectedId(null)}>
+                  Back to the listing
+                </Button>
+              </SheetBody>
+            </>
+          ) : selectedId && !detail ? (
+            /* The loading state carries a TITLE. Without one the open dialog
+             * has no accessible name — Radix warns, and a screen reader
+             * announces an unnamed dialog for however long the fetch takes. */
+            <>
+              <SheetHeader className="pr-12">
+                <SheetTitle>Loading member…</SheetTitle>
+              </SheetHeader>
+              <SheetBody className="flex justify-center pt-10">
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              </SheetBody>
+            </>
+          ) : null}
           {detail && (
             <>
-              <SheetHeader>
-                <SheetTitle>{detail.employee_name ?? detail.staff_id}</SheetTitle>
-                <p className="text-xs font-mono text-muted-foreground">
-                  {detail.staff_id}
+              {/* ONE identity strip: who this is, what matching READ (the
+                * derived values), and what it CONCLUDED (the plans it resolved
+                * to). They were three stacked blocks — a sheet header, a
+                * bordered status card directly beneath it, and a grid of
+                * derived-attribute boxes further down — which is one fact told
+                * in three places, and a box inside a box at the top of a drawer.
+                *
+                * The language is `components/benefits/StatementHeader`'s, so the
+                * same person reads the same way on both pages: name + verdict
+                * badge, then a dot-separated meta run, then the list. Facts are
+                * meta, NOT pills — bordering every value is what turned this
+                * into a field of lozenges.
+                *
+                * It sits in the HEADER, not the body, so the person and their
+                * match stay on screen while the mapping list below scrolls.
+                * `pr-12` clears the sheet's own close button. */}
+              <SheetHeader className="gap-2.5 pr-12">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                  <SheetTitle>{detail.employee_name ?? detail.staff_id}</SheetTitle>
+                  {detail.matched_category_id ? (
+                    <Badge variant="good">Matched</Badge>
+                  ) : (
+                    <Badge variant="warn">Unmatched</Badge>
+                  )}
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  <span className="font-mono">{detail.staff_id}</span>
+                  {detail.match_method && (
+                    <>
+                      <MetaDot />
+                      {METHOD_LABEL[detail.match_method as MatchMethod] ??
+                        detail.match_method}
+                      {detail.match_confidence !== null &&
+                        ` ${Math.round(detail.match_confidence * 100)}%`}
+                    </>
+                  )}
+                  {/* The derived values the rules evaluated. The EMPTY case is
+                    * printed too: on an unmatched row "nothing was derived" is
+                    * usually the reason, and silence there reads as no fact. */}
+                  {Object.keys(detail.derived_attribute_values).length > 0 ? (
+                    Object.entries(detail.derived_attribute_values).map(
+                      ([k, v]) => (
+                        <Fragment key={k}>
+                          <MetaDot />
+                          {k}{" "}
+                          <span className="text-foreground">{String(v)}</span>
+                        </Fragment>
+                      ),
+                    )
+                  ) : (
+                    <>
+                      <MetaDot />
+                      no derived attributes
+                    </>
+                  )}
                 </p>
+
+                {detail.matched_plans.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {detail.matched_plans.map((p, i) => (
+                      <span
+                        // `product_code` repeats across matched categories,
+                        // so the position disambiguates the key.
+                        key={`${p.product_code}~${i}`}
+                        className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-foreground"
+                        title={[
+                          p.product_name ?? p.product_code,
+                          p.plan_code ? `Plan ${p.plan_code}` : null,
+                          p.category_display,
+                          // `override_source` has no other render site in the
+                          // app, and "which enrolment/bulk run put them here?"
+                          // is the first question an overridden plan raises.
+                          p.plan_overridden
+                            ? p.override_source
+                              ? `Overridden · ${p.override_source.replace(/_/g, " ")}`
+                              : "Overridden"
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      >
+                        {p.product_code}
+                        {p.plan_code && (
+                          // Separated, or "GCGP 2" reads as a quantity of
+                          // GCGP rather than the plan the member is on.
+                          <span className="text-muted-foreground">
+                            <span aria-hidden className="mr-1 text-subtle">
+                              ·
+                            </span>
+                            {p.plan_code}
+                          </span>
+                        )}
+                        {p.plan_overridden && (
+                          // `aria-label` on a bare span is not exposed — the
+                          // element has no role for it to name, so the marker
+                          // was announced as an asterisk or not at all. The
+                          // glyph is decorative; the word is the content.
+                          <>
+                            <span aria-hidden className="text-warn">
+                              *
+                            </span>
+                            <span className="sr-only">(overridden)</span>
+                          </>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No product categories matched.
+                  </p>
+                )}
+
+                <div>
+                  <Button asChild size="sm" variant="outline">
+                    <Link
+                      to="/policy-admin/member-coverage"
+                      search={{ employee: detail.id, view: "broker" as const }}
+                    >
+                      <ArrowUpRight className="size-4" />
+                      Open coverage record
+                    </Link>
+                  </Button>
+                </div>
               </SheetHeader>
+
               <SheetBody className="space-y-4">
                 <div>
                   <div className="flex items-center gap-1 mb-2">
@@ -600,150 +787,12 @@ export function EmployeesPage() {
                     </Button>
                   </div>
                 </div>
-                {detail.matched_plans.length > 0 && (
-                  <div>
-                    <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-2">
-                      Assigned plans
-                    </div>
-                    <div className="space-y-1.5">
-                      {detail.matched_plans.map((p) => (
-                        <div
-                          key={p.product_code}
-                          className="rounded-md border border-border p-2.5 bg-card"
-                        >
-                          <div className="flex items-start gap-2.5">
-                            <span className="inline-flex shrink-0 items-center rounded-md bg-muted px-1.5 py-0.5 text-xs font-semibold text-foreground mt-0.5">
-                              {p.product_code}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 text-sm font-medium">
-                                <span className="truncate">
-                                  {p.product_name ?? p.product_code}
-                                </span>
-                                {p.plan_overridden && (
-                                  <Badge
-                                    variant="warn"
-                                    title={
-                                      p.override_source
-                                        ? `Override source: ${p.override_source.replace(/_/g, " ")}`
-                                        : "Plan overridden from the category default"
-                                    }
-                                  >
-                                    Overridden
-                                  </Badge>
-                                )}
-                              </div>
-                              {p.category_display && (
-                                <div className="text-xs text-muted-foreground truncate">
-                                  {p.category_display}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          {p.financials && (
-                            <div className="mt-2 pt-2 border-t border-border grid grid-cols-2 gap-x-3 gap-y-1">
-                              {p.financials.sum_insured != null && (
-                                <div>
-                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                                    Sum insured
-                                  </div>
-                                  <div className="text-xs font-medium">
-                                    {fmtCurrency(p.financials.sum_insured)}
-                                  </div>
-                                </div>
-                              )}
-                              {p.financials.premium_rate != null && (
-                                <div>
-                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                                    Rate{p.financials.rate_basis === "per_1000_si" ? " (per $1k SI)" : ""}
-                                  </div>
-                                  <div className="text-xs font-medium">
-                                    {p.financials.premium_rate}
-                                  </div>
-                                </div>
-                              )}
-                              {p.financials.annual_premium != null && (
-                                <div>
-                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                                    Annual premium
-                                  </div>
-                                  <div className="text-xs font-medium">
-                                    {fmtCurrency(p.financials.annual_premium)}
-                                  </div>
-                                </div>
-                              )}
-                              {/* Show Basis only when it's a non-numeric expression
-                                  (e.g. "12 times monthly salary"); a plain amount
-                                  already shows under Sum insured (the member's own). */}
-                              {p.financials.basis &&
-                                isNaN(Number(p.financials.basis)) && (
-                                <div>
-                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                                    Basis
-                                  </div>
-                                  <div className="text-xs font-medium truncate" title={p.financials.basis}>
-                                    {p.financials.basis}
-                                  </div>
-                                </div>
-                              )}
-                              {p.financials.rate_tiers && (
-                                <div className="col-span-2 mt-1">
-                                  <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-1">
-                                    Rate tiers
-                                  </div>
-                                  <div className="grid grid-cols-4 gap-1 text-xs">
-                                    {Object.entries(p.financials.rate_tiers).map(([tier, vals]) => (
-                                      <div key={tier} className="text-center rounded bg-muted px-1 py-0.5">
-                                        <div className="font-medium">{tier}</div>
-                                        <div className="text-muted-foreground">{fmtCurrency(vals.rate)}</div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          {p.benefit_schedule?.items && p.benefit_schedule.items.length > 0 && (
-                            <div className="mt-2 pt-2 border-t border-border">
-                              <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-1.5">
-                                Schedule of Benefits
-                              </div>
-                              <div className="max-h-64 overflow-y-auto">
-                                <BenefitScheduleView
-                                  schedule={p.benefit_schedule}
-                                  annualPolicyLimit={p.annual_policy_limit}
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <MemberAccountActions
-                  employeeId={detail.id}
-                  staffId={detail.staff_id}
-                />
-                <FlexBenefitsDetail fa={flexByEmp.get(detail.id)} />
-                <FlexPriceTagDetail flex={detailStatement?.flex ?? null} />
-                <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-                  <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                    Coverage flexibility
-                  </div>
-                  <CoverageRevertControls
-                    employeeId={detail.id}
-                    hasBaseline={coverageHistory?.has_baseline ?? false}
-                  />
-                  <div className="border-t border-border pt-3">
-                    <CoverageHistory employeeId={selectedId} />
-                  </div>
-                </div>
+
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="flex items-center gap-1">
                       <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                        Details (editable)
+                        Roster data (editable)
                       </div>
                       <InfoHint>
                         Editing re-derives matching fields. Run matching to
@@ -805,48 +854,6 @@ export function EmployeesPage() {
                     ))}
                   </div>
                 </div>
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                      Derived attributes
-                    </div>
-                    {detail.matched_category_id && detail.match_method && (
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="outline">
-                          {METHOD_LABEL[detail.match_method as MatchMethod]}
-                        </Badge>
-                        {detail.match_confidence !== null && (
-                          <Badge variant="good">
-                            {Math.round(detail.match_confidence * 100)}%
-                          </Badge>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  {Object.keys(detail.derived_attribute_values).length > 0 ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      {Object.entries(detail.derived_attribute_values).map(
-                        ([k, v]) => (
-                          <div
-                            key={k}
-                            className="rounded-md border border-border p-2.5 bg-card"
-                          >
-                            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                              {k}
-                            </div>
-                            <div className="text-sm font-medium mt-0.5 break-words">
-                              {String(v)}
-                            </div>
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-sm text-muted-foreground rounded-md border border-dashed border-border p-3">
-                      No derived attributes — run matching to populate.
-                    </div>
-                  )}
-                </div>
               </SheetBody>
             </>
           )}
@@ -854,7 +861,7 @@ export function EmployeesPage() {
       </Sheet>
 
       <PageGuide
-        purpose="Upload the member listing, then run category matching. Matching uses a tiered approach: exact name → fuzzy Jaccard (≥0.6) → rule evaluation. Click any row to view plans, financials, and derived attributes."
+        purpose="Upload the member listing, then run category matching. Matching uses a tiered approach: exact name → fuzzy Jaccard (≥0.6) → rule evaluation. Click any row to review what it matched to and correct the mapping; cover, premiums and schedules are on Member Coverage."
         connections={[
           { label: "← Listing upload", description: "Employees are imported from STM-format Excel files" },
           { label: "← Product categories", description: "Confirmed categories with rules drive the matching engine" },
@@ -936,73 +943,3 @@ function FamilyStatusCell({ fa }: { fa?: FlexEmployeeAssignment }) {
     </span>
   );
 }
-
-/** Detail-sheet block: an employee's flex tier, wallet, and family makeup. */
-function FlexBenefitsDetail({ fa }: { fa?: FlexEmployeeAssignment }) {
-  if (!fa) return null;
-  return (
-    <div>
-      <div className="flex items-center gap-1 mb-2">
-        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-          Flexible benefits
-        </div>
-        <InfoHint>
-          Family status is taken from this employee's linked dependants when
-          available, else the roster.
-        </InfoHint>
-      </div>
-      <div className="rounded-md border border-border p-2.5 bg-card space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium text-foreground">
-            {fa.family_status
-              ? FAMILY_STATUS_LABELS[fa.family_status]
-              : "No family status"}
-          </span>
-          <Badge variant={fa.source === "dependants" ? "good" : "warn"}>
-            {fa.source === "dependants"
-              ? "from dependants"
-              : fa.source === "roster"
-                ? "from roster"
-                : "unresolved"}
-          </Badge>
-        </div>
-        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <div>
-            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Eligibility tier
-            </div>
-            <div className="font-medium">{fa.tier_name ?? "—"}</div>
-          </div>
-          <div>
-            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Flexi wallet
-            </div>
-            <div className="font-medium">
-              {formatWallet(fa.wallet_amount, fa.currency)}
-            </div>
-          </div>
-          <div>
-            <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Spouse / children
-            </div>
-            <div className="font-medium">
-              {fa.spouse_count} / {fa.child_count}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Detail-sheet block: flex wallet spent on coverage (price tags) + net balance.
- *  Distinct from the insurer premium; only shown when a price-tag matrix exists. */
-function FlexPriceTagDetail({ flex }: { flex: FlexCoverageLine | null }) {
-  if (!flex || flex.price_tags_total == null) return null;
-  return (
-    <div className="rounded-md border border-border p-2.5 bg-card">
-      <FlexPriceTagSummary flex={flex} />
-    </div>
-  );
-}
-

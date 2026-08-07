@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
-import { Download, Loader2, UserSearch } from "lucide-react";
-import { toast } from "sonner";
-import { api } from "@/api/client";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Loader2, TableProperties, UserSearch } from "lucide-react";
 import { useEmployeeUtilization } from "@/api/claims";
 import { useBenefitStatement, useCoverageSummary } from "@/api/hooks";
-import { formatError } from "@/lib/errors";
-import { triggerDownload } from "@/lib/download";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
@@ -18,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { BenefitStatement } from "@/components/benefits/BenefitStatement";
+import { CoverageChanges } from "@/components/benefits/CoverageChanges";
 import {
   LogCaseStrip,
   NewLogCaseButton,
@@ -73,7 +70,11 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
        * already when the nav consolidation retired the page that hosted it (see
        * docs/ORPHANED_UI_RECOVERY.md). It stays on the first screenful, with
        * the account's state printed on the button, so nothing about it is
-       * hidden — only the controls that change it. */}
+       * hidden — only the controls that change it.
+       *
+       * "Roster record" is the other half of the pair: this page owns what
+       * matching PRODUCED, Member Listing owns what it ran ON, so the roster
+       * row is one click away rather than something to go and find by name. */}
       <BenefitStatement
         data={statement}
         utilization={utilization}
@@ -84,18 +85,31 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
               staffId={statement.employee.staff_id}
             />
             <NewLogCaseButton employeeId={employeeId} />
+            <Button asChild variant="outline" size="sm">
+              <Link
+                to="/policy-admin/member-listing"
+                search={{ tab: "employees", employee: employeeId }}
+                title="Open this member's roster row — attributes, matching and manual mapping"
+              >
+                <TableProperties className="size-4" />
+                Roster record
+              </Link>
+            </Button>
           </>
         }
       />
+      {/* Overrides and the history behind them — moved off the roster sheet,
+       * because an override changes the cover this page is showing. */}
+      <CoverageChanges employeeId={employeeId} />
       <LogCaseStrip employeeId={employeeId} />
     </div>
   );
 }
 
-/** Employee coverage — one "pick an employee, see their coverage" page.
- * The Broker view shows the full statement (financials + utilization + Excel
- * export); the Employee view shows the read-only portal replica. Both ride
- * the URL (?employee=&view=) so links stay shareable. */
+/** Member coverage — one "pick an employee, see their coverage" page.
+ * The Broker view shows the full statement (financials, utilization, schedules
+ * and the flex wallet); the Employee view shows the read-only portal replica.
+ * Both ride the URL (?employee=&view=) so links stay shareable. */
 export function EmployeeCoveragePage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const navigate = useNavigate();
@@ -108,7 +122,6 @@ export function EmployeeCoveragePage() {
 
   const [query, setQuery] = useState("");
   const [countFilter, setCountFilter] = useState<string>(ANY);
-  const [exporting, setExporting] = useState(false);
 
   const { data: summary, isLoading: listLoading } =
     useCoverageSummary(policyYearId ?? undefined);
@@ -131,7 +144,7 @@ export function EmployeeCoveragePage() {
 
   const setSearchParams = (next: { employee?: string; view?: CoverageView }) =>
     void navigate({
-      to: "/policy-admin/coverage-members",
+      to: "/policy-admin/member-coverage",
       search: {
         employee: next.employee ?? selectedId ?? undefined,
         view: next.view ?? view,
@@ -165,30 +178,17 @@ export function EmployeeCoveragePage() {
     return true;
   });
 
-  async function handleExport() {
-    if (!policyYearId) return;
-    setExporting(true);
-    try {
-      const params = new URLSearchParams({ policy_year_id: policyYearId });
-      if (needle) params.set("q", query.trim());
-      if (countFilter !== ANY) params.set("product_count", countFilter);
-      const blob = await api.download(
-        `/employees/coverage-summary/export?${params}`,
-      );
-      triggerDownload(blob, "benefit-coverage.xlsx");
-    } catch (e) {
-      toast.error(formatError(e));
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
     <div className="space-y-4">
-      {/* Toolbar — filters on the left, view toggle on the right. Deliberately
-       * NOT a card: a bordered panel around three controls is a container
-       * standing in for grouping that alignment already does, and this pane had
-       * enough boxes. */}
+      {/* Toolbar — the picker's filter on the left, view toggle on the right.
+       * Deliberately NOT a card: a bordered panel around two controls is a
+       * container standing in for grouping that alignment already does.
+       *
+       * There is no export here. The one that lived on this toolbar wrote four
+       * columns (staff ID, name, product count, product names) that the
+       * Employee listing report on Member Listing already carries alongside the
+       * resolved plans, financials and flex — one artifact, two depths, on two
+       * pages. Export lives with the roster. */}
       <div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="flex flex-1 items-center gap-2">
@@ -208,19 +208,6 @@ export function EmployeeCoveragePage() {
                 ))}
               </SelectContent>
             </Select>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleExport}
-              disabled={exporting || filtered.length === 0}
-            >
-              {exporting ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Download className="size-4" />
-              )}
-              Export Excel
-            </Button>
           </div>
           <Segmented<CoverageView>
             value={view}

@@ -818,13 +818,6 @@ def test_employee_coverage_summary_cross_tenant_404(client_as_a: TestClient) -> 
     assert res.status_code == 404
 
 
-def test_employee_coverage_export_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(
-        "/api/v1/employees/coverage-summary/export", params={"policy_year_id": PY_B}
-    )
-    assert res.status_code == 404
-
-
 def test_employee_coverage_report_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(
         "/api/v1/employees/coverage-report/export", params={"policy_year_id": PY_B}

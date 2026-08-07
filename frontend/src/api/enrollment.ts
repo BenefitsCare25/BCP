@@ -915,6 +915,15 @@ export function useRevertCoverage(employeeId: string | undefined) {
       qc.invalidateQueries({ queryKey: ["plan-overrides"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["coverage-summary"] });
+      // The statement and the utilization MUST refetch together. `FlexPanel`
+      // draws one ledger from both — the allowance and price tags come from the
+      // statement, the approved/pending claims and `available` from the
+      // utilization — so refreshing only the statement leaves the printed terms
+      // reconciling against a total from before the revert. The coverage
+      // table's Claims column reads the same stale response. This didn't bite
+      // while the revert controls lived on the roster sheet, which showed no
+      // utilization; they now render beside both.
+      qc.invalidateQueries({ queryKey: ["employee-utilization"] });
       // The revert controls live inside the elections panel; refresh the enrollment
       // + its options so the tier markers and price tags there aren't left stale.
       qc.invalidateQueries({ queryKey: ["enrollment"] });

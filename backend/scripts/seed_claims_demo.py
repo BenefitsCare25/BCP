@@ -557,7 +557,7 @@ if __name__ == "__main__":
         "(2026-01-01 to 2026-12-31, ACTIVE)\n"
         "  - /claims/review            -> queue with flagged/manual/needs-info/"
         "submitted claims + AI review panel\n"
-        "  - /policy-admin/coverage-members -> pick 'Demo Member' -> statement + "
+        "  - /policy-admin/member-coverage -> pick 'Demo Member' -> statement + "
         "utilization panel\n"
         "  - /policy-admin/member-listing?tab=dependants -> 'Pending dependant "
         "approvals' card (Demo Junior)\n"

@@ -624,12 +624,24 @@ const paIndexRoute = createRoute({
 const paMemberListingRoute = createRoute({
   getParentRoute: () => paLayoutRoute,
   path: "/member-listing",
+  // `employee` opens the roster record for one member. It rides the URL so a
+  // row is shareable and so Member Coverage can link back to the roster row it
+  // came from — the sheet used to be local state, reachable only by finding the
+  // person again by hand.
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: string; employee?: string } => ({
+    ...(typeof search.tab === "string" ? { tab: search.tab } : {}),
+    ...(typeof search.employee === "string"
+      ? { employee: search.employee }
+      : {}),
+  }),
   component: RosterPage,
 });
 
-const paCoverageRoute = createRoute({
+const paMemberCoverageRoute = createRoute({
   getParentRoute: () => paLayoutRoute,
-  path: "/coverage-members",
+  path: "/member-coverage",
   validateSearch: (search: Record<string, unknown>) => ({
     employee: typeof search.employee === "string" ? search.employee : undefined,
     view:
@@ -785,7 +797,7 @@ const routeTree = rootRoute.addChildren([
     paLayoutRoute.addChildren([
       paIndexRoute,
       paMemberListingRoute,
-      paCoverageRoute,
+      paMemberCoverageRoute,
       paPanelClinicsRoute,
       paUnderwritingRoute,
     ]),

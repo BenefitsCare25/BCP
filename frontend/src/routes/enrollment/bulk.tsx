@@ -190,7 +190,7 @@ export function EnrollmentBulkPage() {
     return (
       <p className="text-sm text-muted-foreground">
         Changing coverage in bulk needs write access — your role is read-only.
-        Coverage &amp; Members shows each member&apos;s current plan.
+        Member Coverage shows each member&apos;s current plan.
       </p>
     );
   }

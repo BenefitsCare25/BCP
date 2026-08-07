@@ -17,7 +17,6 @@ from fastapi import (
     UploadFile,
     status,
 )
-from openpyxl import Workbook
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -172,52 +171,10 @@ def coverage_summary(
     return CoverageSummary(total=len(items), items=items)
 
 
-@router.get("/coverage-summary/export")
-def coverage_summary_export(
-    policy_year_id: str,
-    q: str | None = None,
-    product_count: int | None = Query(None, ge=0),
-    user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Export the (optionally filtered) coverage summary as an .xlsx workbook."""
-    assert_policy_year_for_user(policy_year_id, user, db)
-    items = build_coverage_items(db, policy_year_id)
-
-    if q:
-        needle = q.lower()
-        items = [
-            it
-            for it in items
-            if needle in (it.employee_name or "").lower()
-            or needle in it.staff_id.lower()
-        ]
-    if product_count is not None:
-        items = [it for it in items if it.product_count == product_count]
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Coverage"
-    ws.append(["Staff ID", "Employee Name", "Products Covered", "Products"])
-    for it in items:
-        ws.append([
-            it.staff_id,
-            it.employee_name or "",
-            it.product_count,
-            ", ".join(p.product_name or p.product_code for p in it.products),
-        ])
-
-    buf = BytesIO()
-    wb.save(buf)
-    return Response(
-        content=buf.getvalue(),
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-        headers={
-            "Content-Disposition": 'attachment; filename="benefit-coverage.xlsx"'
-        },
-    )
+# The four-column `/coverage-summary/export` (staff ID, name, product count,
+# product names) was deleted: every column of it is in the employee coverage
+# report below, which also carries the resolved plans, financials and flex —
+# so the two sheets were the same artifact at two depths, on two pages.
 
 
 @router.get("/coverage-report/export")

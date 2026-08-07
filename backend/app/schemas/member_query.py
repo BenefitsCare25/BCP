@@ -3,7 +3,7 @@
 ``MemberQuery`` is the request half; the facet models are the vocabulary the
 picker offers. Both are deliberately independent of the bulk-update module so a
 selection can be reused by any surface that acts on a population (the bulk
-coverage tool today; Coverage & Members next).
+coverage tool today; Member Coverage next).
 """
 from __future__ import annotations
 

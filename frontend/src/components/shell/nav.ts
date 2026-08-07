@@ -76,9 +76,9 @@ export const COMPANY_NAV: NavGroup[] = [
         icon: Upload,
       },
       {
-        label: "Coverage & Members",
-        to: "/policy-admin/coverage-members",
-        title: "Coverage & Members",
+        label: "Member Coverage",
+        to: "/policy-admin/member-coverage",
+        title: "Member Coverage",
         icon: UserCheck,
       },
       {

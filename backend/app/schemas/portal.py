@@ -115,7 +115,7 @@ class MemberAccountOut(_Base):
     has_password: bool = False
     # What THIS member should be told to type, resolved from the company's
     # `portal_login_source` setting. SERVED, never re-derived in the UI: the
-    # setting lives behind a firm-admin-only endpoint that Coverage & Members
+    # setting lives behind a firm-admin-only endpoint that Member Coverage
     # cannot call, so a client-side guess there silently ignored the setting and
     # printed the email for a company signing in by system ID.
     login_username: str | None = None

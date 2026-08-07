@@ -79,7 +79,7 @@ function disabledReason(rollout: PortalRollout): string | null {
   if (rollout.employees_total === 0)
     return "No employees on this benefit year yet — upload the roster first.";
   if (!rollout.mail_deliverable)
-    return "Email delivery is misconfigured, so nothing would actually be sent. Members can still be given access one at a time from Coverage & Members.";
+    return "Email delivery is misconfigured, so nothing would actually be sent. Members can still be given access one at a time from Member Coverage.";
   if (rollout.invite_pending === 0) {
     return rollout.no_email + rollout.duplicate > 0
       ? "Everyone reachable by email has been invited. The rest are listed below."
@@ -233,8 +233,8 @@ export function PortalRolloutCard() {
               <SectionLabel>Couldn't be reached</SectionLabel>
               <p className="text-xs text-muted-foreground">
                 Fix the roster row and they're picked up by the next send — or
-                give them a set-password link individually from Coverage &amp;
-                Members.
+                give them a set-password link individually from Member
+                Coverage.
               </p>
             </div>
             <div className="max-h-64 overflow-y-auto rounded-md border border-border">
