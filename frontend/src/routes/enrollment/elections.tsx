@@ -451,7 +451,7 @@ function ElectionPanel({
         {finalized && empId && (
           <CoverageRevertControls
             employeeId={empId}
-            hasBaseline={!!enr.baseline_snapshot?.products}
+            offerBaseline={!!enr.baseline_snapshot?.products}
             windowId={enr.window_id}
           />
         )}

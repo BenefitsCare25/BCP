@@ -63,15 +63,12 @@ export function CoverageChanges({ employeeId }: { employeeId: string }) {
           id={`coverage-changes-${employeeId}`}
           className="flex flex-col gap-3 border-t border-border px-4 py-3.5"
         >
-          {/* This card's revert is UNSCOPED (no window_id), so the server's flag
-              — computed for the same newest baseline the revert would use — is
-              exact here, and a false hides a button that could only duplicate
-              "Reset to default". */}
-          <CoverageRevertControls
-            employeeId={employeeId}
-            hasBaseline={data?.has_baseline ?? false}
-            baselineDiffers={data?.baseline_differs_from_default}
-          />
+          {/* One button here, deliberately. This card names no enrolment period,
+              so "revert to baseline" had nothing on screen to mean — and on real
+              data the baseline predates the latest slip re-upload, so restoring
+              it would pin the member to a superseded plan. The per-period revert
+              lives on the elections panel, where the period IS the context. */}
+          <CoverageRevertControls employeeId={employeeId} />
           <div className="border-t border-border pt-3">
             <CoverageHistory employeeId={employeeId} />
           </div>

@@ -822,11 +822,6 @@ class CoverageHistoryOut(BaseModel):
     # Whether a window baseline exists for this member (gates the revert-to-baseline
     # control so the UI doesn't offer an action the server would 409).
     has_baseline: bool = False
-    # Whether reverting to that baseline would land anywhere OTHER than the
-    # cohort default. When false the two revert actions are the same operation,
-    # and the UI shows only "Reset to default" rather than two buttons that
-    # differ in wording alone.
-    baseline_differs_from_default: bool = False
 
 
 class CoverageRevertRequest(BaseModel):

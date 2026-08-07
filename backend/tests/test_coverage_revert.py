@@ -329,83 +329,6 @@ def test_bulk_update_appears_in_coverage_history(client: TestClient) -> None:
     assert bulk and bulk[0]["product_code"] == "MED"
 
 
-# ── baseline_differs_from_default (gates the two-button pair) ────────────────
-#
-# The two revert actions only diverge when the member was ALREADY off their
-# cohort default when the period opened — which happens because neither the
-# bulk coverage change nor `PUT /plan-overrides` is window-gated. When the
-# baseline IS the default, both buttons perform the same operation, and the UI
-# offers only "Reset to default".
-
-
-def test_baseline_matching_the_cohort_default_reports_no_difference(
-    client: TestClient,
-) -> None:
-    # SILVER is the matched category's plan, so reverting to this baseline and
-    # resetting to default land in the same place.
-    _add_enrollment({"products": {"MED": {"plan_code": "SILVER"}}})
-    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
-    assert body["has_baseline"] is True
-    assert body["baseline_differs_from_default"] is False
-
-
-def test_baseline_off_the_default_reports_a_difference(client: TestClient) -> None:
-    # The member was on GOLD when the period opened (a pre-period bulk change).
-    # Reverting to baseline restores GOLD; resetting to default gives SILVER.
-    _add_enrollment({"products": {"MED": {"plan_code": "GOLD"}}})
-    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
-    assert body["baseline_differs_from_default"] is True
-
-
-def test_a_declined_baseline_differs_from_the_default(client: TestClient) -> None:
-    _add_enrollment({"products": {"MED": {"declined": True}}})
-    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
-    assert body["baseline_differs_from_default"] is True
-
-
-def test_a_product_that_left_the_cohort_is_not_a_difference(client: TestClient) -> None:
-    """The revert reports such a product `skipped` and touches nothing, so
-    offering the baseline button for it would promise a change that cannot
-    happen — the gate must agree with what the action actually does."""
-    _add_enrollment({"products": {"GONE": {"plan_code": "PLATINUM"}}})
-    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
-    assert body["has_baseline"] is True
-    assert body["baseline_differs_from_default"] is False
-
-
-def test_an_empty_baseline_reports_no_difference(client: TestClient) -> None:
-    _add_enrollment({"products": {}})
-    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
-    assert body["baseline_differs_from_default"] is False
-
-
-def test_an_override_the_baseline_would_skip_is_a_difference(
-    client: TestClient,
-) -> None:
-    """`revert_to_baseline` LEAVES an override whose product is absent from the
-    snapshot; `revert_to_default` deletes every override. So the two actions
-    genuinely differ even when every snapshot product sits at cohort default —
-    and the gate has to say so, or the broker is left with only the action that
-    wipes the override they just set."""
-    _add_enrollment({"products": {"MED": {"plan_code": "SILVER"}}})
-    _add_override(plan_code="GOLD")
-    with SessionLocal() as s:  # the override's product is not in the snapshot
-        s.query(Enrollment).filter(Enrollment.id == ENROLL_ID).update(
-            {"baseline_snapshot": {"products": {}}}
-        )
-        s.commit()
-    body = client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()
-    assert body["baseline_differs_from_default"] is True
-
-    # And the difference is real: baseline leaves it, default removes it.
-    res = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
-    )
-    assert res.status_code == 200, res.text
-    with SessionLocal() as s:
-        assert (EMP1, PROD_ID) in load_overrides(s, PY_ID, [EMP1])
-
-
 # ── The underwriting resync must not read pre-delete coverage ────────────────
 #
 # `SessionLocal` is built `autoflush=False`, and `refresh_underwriting_cases`
@@ -572,3 +495,23 @@ def test_undoing_a_revert_shows_in_the_coverage_timeline(client: TestClient) -> 
         for e in client.get(f"/api/v1/employees/{EMP1}/coverage-history").json()["entries"]
     ]
     assert "bulk_plan_override_undone" in actions
+
+
+def test_revert_to_baseline_drops_a_dangling_tier_id(client: TestClient) -> None:
+    """A slip re-upload REPLACES categories, so a baseline's `tier_category_id`
+    usually points at a row that is gone (87% of them on CDL). Writing that dead
+    id back would pin the member to a category that no longer exists — precisely
+    what `find_orphan_overrides` exists to flag — so it is read as "no tier
+    opinion" and the override is written without one."""
+    _add_enrollment({"products": {"MED": {
+        "plan_code": "GOLD", "tier_category_id": "deleted-by-a-re-upload",
+        "declined": False, "covered_dependant_ids": None,
+    }}})
+    res = client.post(
+        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
+    assert res.status_code == 200, res.text
+    with SessionLocal() as s:
+        ov = load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)]
+        assert ov.plan_code == "GOLD"          # the plan IS restored
+        assert ov.tier_category_id is None     # the dead category id is not

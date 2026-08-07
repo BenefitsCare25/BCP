@@ -70,61 +70,34 @@ def latest_enrollment_with_baseline(
     return db.execute(stmt).scalars().first()
 
 
-def baseline_differs_from_default(
-    db: Session, employee: Employee, enrollment: Enrollment
-) -> bool:
-    """Would reverting to this baseline land anywhere other than the cohort default?
+def _live_category_ids(db: Session, ids: set[str]) -> set[str]:
+    """Which of these baseline category ids still exist.
 
-    Gates the "Revert to baseline" control. The two revert actions only diverge
-    when the member was already deviating from their cohort when the period
-    opened — i.e. someone had bulk-changed or hand-set their coverage BEFORE the
-    window (neither of which is window-gated; see `bulk_plan_update`). When the
-    baseline is all-default the two buttons are the same operation described two
-    ways, which is what made the pair unreadable.
+    A baseline snapshot records the CATEGORY the member sat in at window-open,
+    but a slip re-upload REPLACES categories — new rows, new ids — so on a real
+    roster most snapshot tier ids point at rows that are gone (87% of them on
+    CDL). A dangling id is **not a coverage difference and cannot be restored**,
+    so it must be read as "no tier opinion", exactly as `hydrate_plans` skips
+    dangling `matched_categories` entries.
 
-    It mirrors ``revert_to_baseline``'s own two loops, so the gate and the
-    action cannot disagree. There are two ways they diverge, and BOTH matter:
-
-    1. **A snapshot product whose baseline is not the cohort default** — the
-       baseline revert writes an override there, the default revert removes it.
-       Decided by ``is_sparse_default``, the same predicate the action writes
-       with.
-    2. **An override the baseline revert would SKIP** — its product is absent
-       from the snapshot (it entered the cohort after window-open) or has since
-       left the cohort. ``revert_to_baseline`` deliberately leaves those in
-       place; ``revert_to_default`` deletes every override. Missing this case
-       hid the button in exactly the situation it was needed: a hand-set
-       override on a newly-matched product, with every snapshot product at
-       default, left the broker only the action that also wipes it.
+    Without this every member looked like they deviated from their cohort:
+    `is_sparse_default` compares `tier_category_id in (None, base_tier)`, a dead
+    id matches neither, and the revert gate showed BOTH buttons for all 982
+    members with a baseline while their plan codes were identical.
     """
-    snapshot = enrollment.baseline_snapshot or {}
-    raw = snapshot.get("products", {}) if isinstance(snapshot, dict) else {}
-    products: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    defaults, baseline_cat = _defaults_and_baseline(db, employee)
-    pid_by_code = {code: pid for pid, (code, _plan) in defaults.items()}
+    if not ids:
+        return set()
+    from app.models.category import Category  # local import avoids a cycle
 
-    touched_pids: set[str] = set()
-    for code, bp in products.items():
-        if not isinstance(bp, dict):
-            continue
-        pid = pid_by_code.get(code)
-        if pid is None:  # left the cohort → the action reports it `skipped`
-            continue
-        touched_pids.add(pid)
-        if not is_sparse_default(
-            declined=bool(bp.get("declined")),
-            plan_code=bp.get("plan_code"),
-            tier_category_id=bp.get("tier_category_id"),
-            covered_dependant_ids=bp.get("covered_dependant_ids"),
-            default_plan=defaults[pid][1],
-            base_tier=baseline_cat.get(pid),
-            dependant_option_ids=bp.get("dependant_option_ids"),
-        ):
-            return True
+    return set(db.execute(select(Category.id).where(Category.id.in_(ids))).scalars())
 
-    # Case 2 — anything the baseline revert would leave standing.
-    overrides = load_overrides(db, employee.policy_year_id, [employee.id])
-    return any(pid not in touched_pids for (_emp_id, pid) in overrides)
+
+def _snapshot_tier_ids(products: dict[str, Any]) -> set[str]:
+    return {
+        t
+        for bp in products.values()
+        if isinstance(bp, dict) and (t := bp.get("tier_category_id"))
+    }
 
 
 def revert_leave(
@@ -271,6 +244,11 @@ def revert_to_baseline(
     defaults, baseline_cat = _defaults_and_baseline(db, employee)
     pid_by_code = {code: pid for pid, (code, _plan) in defaults.items()}
     overrides = load_overrides(db, employee.policy_year_id, [employee.id])
+    # A snapshot tier id whose category was replaced by a re-upload cannot be
+    # restored — read it as "no tier opinion". Writing the dead id back would pin
+    # the member to a category that no longer exists, which is exactly what
+    # `find_orphan_overrides` exists to flag.
+    live_tiers = _live_category_ids(db, _snapshot_tier_ids(products))
 
     # Flex pricing + age + the policy year's flex config are only needed when a
     # non-default override is written; resolve them lazily so an idempotent revert
@@ -321,7 +299,8 @@ def revert_to_baseline(
         base_tier = baseline_cat.get(pid)
         declined = bool(bp.get("declined"))
         plan_code = bp.get("plan_code")
-        tier = bp.get("tier_category_id")
+        snap_tier = bp.get("tier_category_id")
+        tier = snap_tier if snap_tier in live_tiers else None
         deps = bp.get("covered_dependant_ids")
         dep_option_ids = bp.get("dependant_option_ids")
         ov = overrides.get((employee.id, pid))

@@ -41,7 +41,6 @@ from app.services.cohort_tiers import tier_key
 from app.services.coverage_history import coverage_history
 from app.services.coverage_resolver import batch_category_defaults, find_orphan_overrides
 from app.services.coverage_revert import (
-    baseline_differs_from_default,
     latest_enrollment_with_baseline,
     revert_leave,
     revert_to_baseline,
@@ -384,14 +383,10 @@ def get_coverage_history(
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
 ) -> CoverageHistoryOut:
     """Newest-first timeline of this member's coverage changes (the 'track' view)."""
-    enr = latest_enrollment_with_baseline(db, emp)
     return CoverageHistoryOut(
         employee_id=emp.id,
         entries=coverage_history(db, emp, limit=limit),
-        has_baseline=enr is not None,
-        baseline_differs_from_default=(
-            enr is not None and baseline_differs_from_default(db, emp, enr)
-        ),
+        has_baseline=latest_enrollment_with_baseline(db, emp) is not None,
     )
 
 

@@ -32,33 +32,33 @@ function Explain({ text, children }: { text: ReactNode; children: ReactNode }) {
 }
 
 /**
- * Revert a member's coverage to the window baseline or the cohort default.
- * Both actions confirm first (they overwrite effective coverage) and are fully
- * audited server-side. Shown on the employee detail sheet and the elections panel.
+ * Revert a member's coverage — to the cohort default, and (only where a specific
+ * enrolment period is on screen) to that period's baseline. Both confirm first
+ * and are fully audited server-side; both are undoable.
+ *
+ * **"Revert to baseline" is opt-in, and the default surface shows ONE button.**
+ * The pair read as synonyms wherever the period was not named: both say "put
+ * this back", and a broker had no way to tell them apart. A gate that hid the
+ * baseline action when it would land on the cohort default was tried and
+ * removed — on real data it never fired (982/982 members differed), because a
+ * slip re-upload moves the whole company's plan assignment and every baseline
+ * then predates it. Which is also why the baseline is the WRONG default: it
+ * restores the superseded plan (CDL's GCGP baseline is plan 1, the cohort has
+ * since moved to plan 2) as a fresh override, silently pinning the member off
+ * their cohort. Reopening the period re-elects against CURRENT plans instead.
  */
 export function CoverageRevertControls({
   employeeId,
-  hasBaseline,
-  baselineDiffers,
+  offerBaseline = false,
   windowId,
 }: {
   employeeId: string;
-  /** Enable the baseline action only when a window baseline exists for the member. */
-  hasBaseline: boolean;
   /**
-   * Whether reverting to the baseline lands anywhere other than the cohort
-   * default (server-computed: `CoverageHistory.baseline_differs_from_default`).
-   * `false` hides the baseline button entirely — the two actions would be the
-   * same operation described two ways, which is what made the pair unreadable.
-   *
-   * `undefined` means "not evaluated here, show it". The elections panel passes
-   * nothing: its flag is scoped to the newest baseline while that panel reverts
-   * to a NAMED window's, so a false there could hide a button that would really
-   * change something. Hiding a correct action is worse than showing a redundant
-   * one, and in that panel "revert to baseline" reads unambiguously anyway —
-   * the period it means is the one on screen.
+   * Offer "Revert to baseline" alongside the reset. Only the elections panel
+   * sets it: there the enrolment period is the thing on screen, so "baseline"
+   * names a moment the broker can see, and `windowId` scopes the revert to it.
    */
-  baselineDiffers?: boolean;
+  offerBaseline?: boolean;
   windowId?: string | null;
 }) {
   const revert = useRevertCoverage(employeeId);
@@ -141,18 +141,12 @@ export function CoverageRevertControls({
   // was told their coverage was already at the target state.
   const skipped = (result ?? []).filter((c) => c.outcome === "skipped");
 
-  // Only offer the baseline action when it would land somewhere else.
-  const showBaseline = hasBaseline && baselineDiffers !== false;
 
   return (
     <div className="space-y-2">
       <TooltipProvider delayDuration={150}>
         <div className="flex flex-wrap gap-2">
-          {/* No baseline, or a baseline that lands on the cohort default →
-              the button is absent, not disabled. A disabled control has to
-              justify itself, and both explanations reduce to "the other button
-              is the one you want" — which is the only button left. */}
-          {showBaseline && (
+          {offerBaseline && (
           <Explain text="Back to the coverage they held when the enrolment period opened — undoing their elections, but keeping any manual change made before the period.">
             <Button
               variant="outline"
