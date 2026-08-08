@@ -222,7 +222,6 @@ function ItemBlock({
 interface Props {
   schedule: BenefitSchedule | null | undefined;
   annualPolicyLimit?: string | null;
-  coverDescription?: string | null;
   /** Claim usage per lowercased benefit name, when the surface has it. */
   usageByBenefit?: Map<string, UtilizationBucket>;
   /** The product-level roll-up bucket (benefit_key = null). */
@@ -232,7 +231,6 @@ interface Props {
 export function BenefitScheduleView({
   schedule,
   annualPolicyLimit,
-  coverDescription,
   usageByBenefit,
   productUsage,
 }: Props) {
@@ -255,9 +253,6 @@ export function BenefitScheduleView({
 
   return (
     <div className="flex flex-col gap-1.5">
-      {coverDescription && (
-        <p className="text-2xs text-muted-foreground">{coverDescription}</p>
-      )}
       {annualPolicyLimit && (
         <div className="text-xs font-medium text-foreground">
           Annual Limit: {formatValue(annualPolicyLimit) ?? annualPolicyLimit}

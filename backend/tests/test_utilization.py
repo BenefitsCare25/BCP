@@ -478,3 +478,18 @@ def test_a_category_sub_limit_never_reports_a_negative_remaining():
     assert dental.sub_limit == 300.0
     assert dental.approved == 700.0
     assert dental.remaining == 0.0
+
+
+def test_an_insured_limit_never_reports_a_negative_remaining():
+    """The same rule as the flex wallet, applied product-wide so no two surfaces
+    can disagree. An approval past the limit is a documented broker override
+    (`acknowledge=true`); the member is not "$X over limit" — the policy paid its
+    cap. What was actually approved stays on the claim record and the reports."""
+    _mk_claim(benefit_key="Dental", amount=900.0, approved=900.0, status="approved")
+    dental = _bucket(_util(), "GHS", "Dental")
+    assert dental.limit == 500.0
+    assert dental.approved == 900.0
+    assert dental.remaining == 0.0
+    # The product ROLL-UP has its own, larger limit (S$1,000), so 900 approved
+    # genuinely leaves 100 there — the floor bites per bucket, not globally.
+    assert _bucket(_util(), "GHS").remaining == 100.0

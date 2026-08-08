@@ -20,6 +20,18 @@
 import { cn } from "@/lib/cn";
 import { Money, currencySymbol, moneyText } from "./Figure";
 
+/** What was drawn AGAINST this limit, which can never exceed it.
+ *
+ * A benefit pays UP TO its limit: a member with S$300 left who presents a S$700
+ * bill draws S$300 and pays the rest themselves. `approved` is the full sum of
+ * approved claims — the right figure on a claim record and in the reports — but
+ * against a limit it printed "S$700 of S$300 used", which is not a sentence
+ * anyone reads correctly, and drew a bar whose words contradicted its own
+ * fullness. The bar and its caption both use this. */
+function drawnAgainst(approved: number, limit: number): number {
+  return Math.min(approved, limit);
+}
+
 function sentence(
   limit: number,
   approved: number,
@@ -28,16 +40,13 @@ function sentence(
   currency: string,
 ): string {
   const parts = [
-    `${currency}${moneyText(approved)} of ${currency}${moneyText(limit)} used`,
+    `${currency}${moneyText(drawnAgainst(approved, limit))} of ` +
+      `${currency}${moneyText(limit)} used`,
   ];
   if (pending > 0)
     parts.push(`${currency}${moneyText(pending)} still under review`);
   if (remaining !== null)
-    parts.push(
-      remaining < 0
-        ? `over the limit by ${currency}${moneyText(-remaining)}`
-        : `${currency}${moneyText(remaining)} left`,
-    );
+    parts.push(`${currency}${moneyText(Math.max(0, remaining))} left`);
   return `${parts.join(", ")}.`;
 }
 
@@ -91,7 +100,8 @@ export function FillRule({
     );
   }
 
-  const approvedPct = Math.max(0, Math.min(100, (approved / limit) * 100));
+  const drawn = drawnAgainst(approved, limit);
+  const approvedPct = Math.max(0, Math.min(100, (drawn / limit) * 100));
   const pendingPct = Math.max(
     0,
     Math.min(100 - approvedPct, (pending / limit) * 100),
@@ -124,7 +134,7 @@ export function FillRule({
         // falls back to.
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <span className="text-row text-label">
-            <Money value={approved} currency={cur} className="text-record" /> of{" "}
+            <Money value={drawn} currency={cur} className="text-record" /> of{" "}
             <Money value={limit} currency={cur} className="text-record" /> used
             {pending > 0 && (
               <>
@@ -139,22 +149,20 @@ export function FillRule({
             )}
           </span>
           {remaining !== null && (
-            // A limit CAN be exceeded — approving past `remaining_for_claim` is
-            // a documented broker override (`acknowledge=true`) — and printed
-            // straight this rendered "S$-120 left", which is not a sentence
-            // anyone reads correctly. Said as a shortfall instead, the same way
-            // the flex wallet says it one mount up (`UsageLeaf`), so the two
-            // figures on the same screen agree about what a negative means.
+            // Floored, matching `utilization.py`. A limit CAN be drawn past —
+            // an acknowledged broker override, or pro-ration shrinking a
+            // leaver's allowance below what they already drew — but a member is
+            // never "S$200 over the limit": the wallet paid its cap and they
+            // paid the rest. The clamp is repeated here rather than trusted
+            // from the payload so one stale caller cannot reintroduce
+            // "S$-120 left".
             <span className="text-row text-label">
               <Money
-                value={Math.abs(remaining)}
+                value={Math.max(0, remaining)}
                 currency={cur}
                 emphasis="strong"
-                className={
-                  remaining < 0 ? "text-strike-pending" : undefined
-                }
               />{" "}
-              {remaining < 0 ? "over the limit" : "left"}
+              left
             </span>
           )}
         </div>

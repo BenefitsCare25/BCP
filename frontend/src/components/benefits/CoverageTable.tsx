@@ -158,7 +158,6 @@ function CoverageDetail({
         <BenefitScheduleView
           schedule={line.benefit_schedule}
           annualPolicyLimit={line.annual_policy_limit}
-          coverDescription={line.cover_description}
           usageByBenefit={usage?.byBenefit}
           /* The product roll-up is already the Claims column of the row this
            * panel belongs to — repeating it here is the duplication this

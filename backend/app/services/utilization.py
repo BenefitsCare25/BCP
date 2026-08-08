@@ -7,7 +7,15 @@ the live rows. Buckets are keyed ``(product_code, benefit_key)``:
 - ``pending``   = Σ claimed (or converted) amounts of in-flight claims —
   shown separately and NEVER subtracted from remaining (a pending claim may
   be rejected).
-- ``remaining`` = limit - approved, when a numeric limit is known.
+- ``remaining`` = limit - approved, when a numeric limit is known, and it
+  **never goes below zero**. A benefit pays UP TO its limit: a member with S$500
+  left who presents a S$700 bill utilises S$500 and pays the rest themselves, so
+  "S$200 over the limit" is not a position anyone is in and reporting one is an
+  indication of something that cannot happen. (Reachable on paper two ways: an
+  acknowledged broker override past the guard, and pro-ration shrinking a
+  leaver's allowance below what was already reimbursed.) The same floor applies
+  to the flex wallet, its categories and `flex_ledger.MemberFlex.balance`, so no
+  two surfaces can disagree about what a member has left.
 
 Flex chain: tier wallet → minus enrollment price-tags (``flex_balance``) →
 minus approved flex claims → ``available``. Per-category rows track the
@@ -156,7 +164,7 @@ def _insured_buckets(
                 approved=round(float(product_sum["approved"]), 2),
                 pending=round(float(product_sum["pending"]), 2),
                 remaining=(
-                    round(limit - float(product_sum["approved"]), 2)
+                    max(0.0, round(limit - float(product_sum["approved"]), 2))
                     if limit is not None
                     else None
                 ),
@@ -191,7 +199,7 @@ def _insured_buckets(
                     approved=round(float(row["approved"]), 2),
                     pending=round(float(row["pending"]), 2),
                     remaining=(
-                        round(item_limit - float(row["approved"]), 2)
+                        max(0.0, round(item_limit - float(row["approved"]), 2))
                         if item_limit is not None
                         else None
                     ),

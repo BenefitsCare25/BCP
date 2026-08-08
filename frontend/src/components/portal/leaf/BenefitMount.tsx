@@ -22,7 +22,6 @@ import type { CoverageLine } from "@/types";
 import { Mount, MountRule } from "./Mount";
 import { Money } from "./Figure";
 import { ScheduleLeaf } from "./ScheduleLeaf";
-import { glossBeside } from "./glossary";
 
 function dependantLabel(d: {
   name: string | null;
@@ -30,16 +29,6 @@ function dependantLabel(d: {
 }): string {
   if (d.name && d.relationship) return `${d.name} (${d.relationship})`;
   return d.name ?? d.relationship ?? "Dependant";
-}
-
-/** The slip writes its description as a labelled field — "Cover: Reimbursement
- * of eligible inpatient expenses…". Under the product's own title the label is
- * furniture: the member is not choosing between fields, they are reading what
- * this product does. */
-function describedCover(text: string | null | undefined): string | null {
-  const trimmed = text?.trim();
-  if (!trimmed) return null;
-  return trimmed.replace(/^cover\s*[:\-–—]\s*/i, "").trim() || null;
 }
 
 /** A value long enough to read as a sentence goes full width beneath its label;
@@ -58,24 +47,14 @@ export function BenefitMount({
 }) {
   const titleId = useId();
 
-  // **One description, in one place.** The mount used to print two: our
-  // plain-language gloss under the title, and the slip's own cover description
-  // further down inside the schedule. On a product whose NAME already says it
-  // ("Group Hospital & Surgical" / "hospital stays and surgery" / "Cover:
-  // Reimbursement of eligible inpatient expenses…") the member read the same
-  // fact three times before reaching a single figure.
-  //
-  // The slip's description wins when there is one: it comes from the policy, it
-  // is specific to this plan, and the gloss is a generic line written per
-  // product CODE. The gloss stays as the fallback, which is what it was for.
-  const described = describedCover(line.cover_description);
-  const gloss =
-    described ??
-    glossBeside(
-      line.product_name ?? line.product_code,
-      line.product_code,
-      line.product_name,
-    );
+  // **No description line at all.** This printed the slip's cover description
+  // under the title, falling back to a per-product-code gloss — and on every
+  // product we carry, both restate the heading: "Group Hospital & Surgical"
+  // followed by "Demo hospital & surgical cover". An earlier pass cut it from
+  // three restatements to one; one is still one too many. It cost a line above
+  // the fold on every card and told the member nothing the title had not. What
+  // the product actually does is the schedule beneath it, which is specific and
+  // numeric. Don't reintroduce a prose line here.
   const covered = line.covers_dependants ? line.covered_dependants : [];
   const coveredText = covered.map(dependantLabel).join(", ");
 
@@ -97,7 +76,6 @@ export function BenefitMount({
           )}
         </>
       }
-      gloss={gloss}
     >
       {/* **No margins on any of these blocks.** `Mount` is a flex column with
           `gap-3`; the `mb-3` these each carried added to that gap rather than

@@ -104,17 +104,13 @@ export function ClaimPosition({
     <div className={cn("flex flex-col gap-0.5", side)}>
       {limit !== null && remaining !== null ? (
         <>
-          {/* `remaining` goes negative when an approval was pushed past the
-            * limit with `acknowledge=true`. "-$300 left" is not a sentence. */}
-          <span
-            className={cn(
-              "font-medium tabular-nums",
-              remaining < 0 ? "text-error" : "text-foreground",
-            )}
-          >
-            {remaining < 0
-              ? `${fmtMoney(-remaining)} over limit`
-              : `${fmtMoney(remaining)} left`}
+          {/* Floored, matching `utilization.py` — a benefit pays UP TO its
+            * limit, so "$300 over limit" is not a position anyone is in. The
+            * clamp is repeated here so a stale payload cannot reintroduce
+            * "-$300 left". What was actually approved stays on the claim
+            * record and in the reports. */}
+          <span className="font-medium tabular-nums text-foreground">
+            {`${fmtMoney(Math.max(0, remaining))} left`}
           </span>
           <span className="text-2xs tabular-nums text-muted-foreground">
             of {fmtMoney(limit)}
