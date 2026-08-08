@@ -8,16 +8,36 @@ Status machine (single source of truth: `VALID_TRANSITIONS`):
                           │   the review row records the failure)
                           ▼
     broker decision (from submitted / ai_* / needs_info):
-        approve → approved (terminal)   reject → rejected (terminal)
+        approve → approved              reject → rejected (terminal)
         needs_info → member edits + resubmits → submitted
     draft → member delete (row removed)
+
+    settlement (the insurer leg — see `services/claim_settlement.py`):
+
+        approved ──send-to-insurer──▶ sent_to_insurer ──payment──▶ paid
+                                            └──────────────▶ rejected
+
+`approved` is therefore NOT terminal: it means *we* accepted the claim, which
+is the start of the insurer's part, not the end of the claim. Deliberately no
+separate `pending_documents` state — that is exactly `needs_info`, and a second
+spelling of one state is how two queues start disagreeing about the same claim.
+The incumbent's label is applied at the report boundary only.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import JSON, Base, TimestampMixin, new_uuid
@@ -30,6 +50,8 @@ CLAIM_STATUS_AI_FLAGGED = "ai_flagged"
 CLAIM_STATUS_NEEDS_INFO = "needs_info"
 CLAIM_STATUS_APPROVED = "approved"
 CLAIM_STATUS_REJECTED = "rejected"
+CLAIM_STATUS_SENT_TO_INSURER = "sent_to_insurer"
+CLAIM_STATUS_PAID = "paid"
 
 CLAIM_STATUSES = frozenset(
     {
@@ -41,6 +63,8 @@ CLAIM_STATUSES = frozenset(
         CLAIM_STATUS_NEEDS_INFO,
         CLAIM_STATUS_APPROVED,
         CLAIM_STATUS_REJECTED,
+        CLAIM_STATUS_SENT_TO_INSURER,
+        CLAIM_STATUS_PAID,
     }
 )
 
@@ -55,11 +79,35 @@ DECIDABLE_STATUSES = frozenset(
     }
 )
 
+# States where the money is COMMITTED — we have accepted the claim, whatever
+# stage of the insurer leg it has reached.
+#
+# **This set, not `== CLAIM_STATUS_APPROVED`, is what utilization must test.**
+# Every one of these has an `amount_approved` that is spoken for, so a claim
+# that has been sent to the insurer or already paid still consumes the limit.
+# Comparing to `approved` alone made settlement RESTORE a member's limit: the
+# claim fell out of the approved sum and back into "pending", which
+# `utilization` reports separately and never subtracts.
+SETTLED_STATUSES = frozenset(
+    {
+        CLAIM_STATUS_APPROVED,
+        CLAIM_STATUS_SENT_TO_INSURER,
+        CLAIM_STATUS_PAID,
+    }
+)
+
 # States in which the member may still edit / add documents / submit.
 MEMBER_EDITABLE_STATUSES = frozenset({CLAIM_STATUS_DRAFT, CLAIM_STATUS_NEEDS_INFO})
 
 # States that count against limits/duplicate checks ("live" claims).
 LIVE_STATUSES = frozenset(CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED})
+
+# Hospital sector, as the insurer classifies it. Drives which invoice type the
+# document classifier expects (govt vs private) and appears on the claims
+# reports; see `services/claim_doc_types.py`.
+HOSPITAL_TYPE_GOVERNMENT = "government"
+HOSPITAL_TYPE_PRIVATE = "private"
+HOSPITAL_TYPES = frozenset({HOSPITAL_TYPE_GOVERNMENT, HOSPITAL_TYPE_PRIVATE})
 
 VALID_TRANSITIONS: dict[str, frozenset[str]] = {
     CLAIM_STATUS_DRAFT: frozenset({CLAIM_STATUS_SUBMITTED}),
@@ -111,7 +159,18 @@ VALID_TRANSITIONS: dict[str, frozenset[str]] = {
             CLAIM_STATUS_REJECTED,
         }
     ),
-    CLAIM_STATUS_APPROVED: frozenset(),
+    CLAIM_STATUS_APPROVED: frozenset({CLAIM_STATUS_SENT_TO_INSURER}),
+    CLAIM_STATUS_SENT_TO_INSURER: frozenset(
+        {
+            CLAIM_STATUS_PAID,
+            # The insurer declining after we accepted is a real outcome, and
+            # the member's limit must be released when it happens — which
+            # `rejected` does (it is outside LIVE_STATUSES) and no other state
+            # would.
+            CLAIM_STATUS_REJECTED,
+        }
+    ),
+    CLAIM_STATUS_PAID: frozenset(),
     CLAIM_STATUS_REJECTED: frozenset(),
 }
 
@@ -176,6 +235,15 @@ class Claim(Base, TimestampMixin):
         # lands on `public.claims` — which holds no rows on Postgres — while
         # every real query runs in `firm_<id>` without it.
         Index("ix_claims_year_case_type", "policy_year_id", "case_type"),
+        # UNIQUE — `claim_settlement.mint_reference_no` reads the current max and
+        # writes one past it, and that races between concurrent submissions.
+        # Declared HERE for the same reason as the index above: `sync_firm_schema`
+        # reconciles from MODEL METADATA, so a migration-only constraint would
+        # guard `public.claims` (empty on Postgres) while every real claim is
+        # written to `firm_<id>` without it — i.e. the guard would be absent in
+        # exactly the environment that needs it. NULLs are exempt from uniqueness
+        # on both dialects, so drafts and pre-existing claims are unaffected.
+        Index("ix_claims_reference_no", "reference_no", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -258,6 +326,48 @@ class Claim(Base, TimestampMixin):
     decision_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Member-entered claim-form snapshot the AI review compares documents against.
     form_fields: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
+
+    # ── Human-quotable reference ─────────────────────────────────────────────
+    #
+    # Minted once at SUBMIT (see `claim_settlement.mint_reference_no`) and never
+    # reused. This is the string a member quotes to support and the key a broker
+    # reconciles against the insurer's ledger — the row id is a uuid nobody can
+    # read over the phone. Nullable because a draft has none: a claim that was
+    # never submitted has nothing to reference.
+    # Indexed + uniquely constrained by the table-level `ix_claims_reference_no`
+    # above — NOT `index=True` here, which would add a second, non-unique index.
+    reference_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # ── Insurer settlement leg ───────────────────────────────────────────────
+    sent_to_insurer_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sent_to_insurer_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # When the insurer's turnaround expires. A DATE, not a timestamp: it is a
+    # business deadline negotiated in days, and the SLA counters compare dates.
+    insurer_deadline_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # The insurer's OWN payment date, transcribed from their advice — not the
+    # moment a broker keyed it in, which is why this is a date and not a
+    # server-set timestamp.
+    paid_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # What the insurer actually paid. Distinct from `amount_approved`: a
+    # shortfall between the two is the whole reason a reconciliation report
+    # exists, so collapsing them would hide it.
+    payment_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ── Clinical / assessment detail ─────────────────────────────────────────
+    # Sector as the insurer classifies it (HOSPITAL_TYPE_*). Also the tie-break
+    # the document classifier uses between govt and private invoice types.
+    hospital_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    admission_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    discharge_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Payroll treatment of the reimbursement. Tri-state on purpose: NULL means
+    # "not assessed", which is different from an assessor deciding "no".
+    taxable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    cpf_claimable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Broker-side note. Kept apart from `remarks` (the MEMBER's note) because
+    # the member can read theirs back and must never read this one.
+    admin_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 def member_visible_claims():

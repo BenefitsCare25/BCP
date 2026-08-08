@@ -62,6 +62,10 @@ const STATE: Record<
   ai_flagged: { label: "Under review", tone: "review" },
   needs_info: { label: "More info needed", tone: "pending" },
   approved: { label: "Approved", tone: "approved" },
+  // Kept in step with `Strike.CLAIM_STATE` — the same status must not read one
+  // way in the ledger and another on the claim it opens.
+  sent_to_insurer: { label: "Approved", tone: "approved" },
+  paid: { label: "Paid", tone: "approved" },
   rejected: { label: "Rejected", tone: "rejected" },
 };
 

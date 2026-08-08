@@ -43,6 +43,7 @@ from app.models.claim import (
 from app.models.policy_year import PolicyYearStatus
 from app.schemas.claims import LogCaseCreateIn
 from app.services.claim_intake import ALLOWED_CURRENCIES, normalize_sub_type
+from app.services.claim_settlement import mint_reference_no
 from app.services.claims import assert_coverage_claimable, assert_incurred_in_period
 from app.services.member_statement import build_member_statement
 
@@ -194,6 +195,15 @@ def create_log_case(
     )
     assert_log_valid(db, employee, claim, year)
     db.add(claim)
+    db.flush()
+    # A LOG case lands at `submitted` WITHOUT going through `submit_claim`, so
+    # it does not pick up a reference on the way in. It still needs one: it is
+    # a claim in the register, it is reconciled against the insurer's ledger by
+    # that string, and the member whose treatment it covers may well ring up
+    # about it. Minting here rather than moving the call into a shared helper
+    # keeps both entry points explicit — there are exactly two ways a claim
+    # reaches `submitted`, and each mints its own.
+    mint_reference_no(db, claim)
     db.flush()
     return claim
 

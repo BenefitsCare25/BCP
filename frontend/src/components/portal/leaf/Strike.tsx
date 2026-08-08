@@ -51,6 +51,13 @@ const CLAIM_STATE: Record<
   ai_flagged: { label: "Under review", tone: "review", bucket: "review" },
   needs_info: { label: "More info needed", tone: "pending", bucket: "attention" },
   approved: { label: "Approved", tone: "approved", bucket: "approved" },
+  // The insurer leg. `sent_to_insurer` reads as "Approved" to the member ON
+  // PURPOSE: they were told approved, and forwarding to the insurer is our
+  // workflow — the same reason `record_payment` posts a notice and
+  // `send_to_insurer` posts none. Only `paid` is a new fact to them, and it is
+  // the one that ends their wait.
+  sent_to_insurer: { label: "Approved", tone: "approved", bucket: "approved" },
+  paid: { label: "Paid", tone: "approved", bucket: "approved" },
   rejected: { label: "Rejected", tone: "rejected", bucket: "closed" },
 };
 

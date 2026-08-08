@@ -1646,7 +1646,45 @@ def _effective_leave(db: Session, employee: Employee):
     return row
 
 
-def summarize_employee(db: Session, employee: Employee) -> FlexPriceSummary | None:
+@dataclass(frozen=True)
+class FlexYearContext:
+    """The YEAR-level half of a flex resolution, built once.
+
+    Everything here is keyed on the policy year alone, so recomputing it per
+    member is pure waste — and `maybe_slip_indices` is not cheap waste: it runs
+    a full `list_product_tiers` load. On CDL's 491-member roster the wallet
+    report spent 31 of its 35 seconds rebuilding this same object 491 times.
+
+    Passed in via `summarize_employee(..., context=...)`. Absent, that function
+    builds its own and behaves exactly as before, so every existing per-member
+    caller is unaffected — this is an opt-in for the surfaces that sweep a whole
+    roster (the wallet ledger, its summary, the leaver sheet).
+    """
+
+    pricing: dict[str, Any] | None
+    reference_date: date
+    source_map: dict[str, str]
+    rule: str
+    slip_idx: dict[str, Any] | None
+    family_slip_idx: dict | None
+
+
+def flex_year_context(db: Session, policy_year_id: str) -> FlexYearContext:
+    source_map, rule = governing_flex_config(db, policy_year_id)
+    slip_idx, family_slip_idx = maybe_slip_indices(db, policy_year_id, source_map)
+    return FlexYearContext(
+        pricing=get_pricing(db, policy_year_id),
+        reference_date=reference_date(db, policy_year_id),
+        source_map=source_map,
+        rule=rule,
+        slip_idx=slip_idx,
+        family_slip_idx=family_slip_idx,
+    )
+
+
+def summarize_employee(
+    db: Session, employee: Employee, *, context: FlexYearContext | None = None
+) -> FlexPriceSummary | None:
     """Resolve the member's effective coverage + leave → wallet balance.
 
     Effective tier per product = their override if present, else the matched
@@ -1655,22 +1693,27 @@ def summarize_employee(db: Session, employee: Employee) -> FlexPriceSummary | No
     the governing window's config), so a member is priced even with no manual matrix
     configured. Returns None only when the member has no flex wallet AND no priced
     leave AND no pricing matrix — i.e. flex doesn't apply to them.
+
+    ``context`` is an optional prebuilt `FlexYearContext` for callers resolving
+    many members of ONE year. It changes nothing about the result — it is the
+    same values, computed once instead of per member.
     """
-    pricing = get_pricing(db, employee.policy_year_id)
+    ctx = context if context is not None else flex_year_context(
+        db, employee.policy_year_id
+    )
+    pricing = ctx.pricing
     leave = _effective_leave(db, employee)
     has_wallet = isinstance(employee.flex_wallet_amount, (int, float))
     if pricing is None and leave is None and not has_wallet:
         return None
-    ref = reference_date(db, employee.policy_year_id)
-    age = employee_age(employee, ref)
+    age = employee_age(employee, ctx.reference_date)
+    ref = ctx.reference_date
 
     # Company-wide flex config (source per product + drawdown rule) governs how each
     # line is priced. The slip indices are built whenever any product resolves to
     # the slip source (the default), so coverage prices from the slip with no matrix.
-    source_map, rule = governing_flex_config(db, employee.policy_year_id)
-    slip_idx, family_slip_idx = maybe_slip_indices(
-        db, employee.policy_year_id, source_map
-    )
+    source_map, rule = ctx.source_map, ctx.rule
+    slip_idx, family_slip_idx = ctx.slip_idx, ctx.family_slip_idx
 
     lines: list[FlexPriceLine] = []
     total = 0.0

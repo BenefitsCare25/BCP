@@ -47,6 +47,7 @@ from app.services.claim_intake import (
     required_doc_slots,
     resolve_sp_referral,
 )
+from app.services.claim_settlement import mint_reference_no
 from app.services.flex_membership import flex_effective_window
 from app.services.member_statement import build_member_statement
 from app.services.roster_attributes import NAME_KEYS, first_value
@@ -773,6 +774,11 @@ def submit_claim(
     claim.submitted_at = datetime.now(UTC)
     if submitted_by_member_id:
         claim.submitted_by_member_id = submitted_by_member_id
+    # Allocate the human-quotable reference at the moment the claim becomes
+    # real. `mint_reference_no` is idempotent, so a `needs_info` resubmission
+    # keeps the number the member was already given — a reference that changed
+    # between submissions is one neither side can look the claim up by.
+    mint_reference_no(db, claim)
     return claim
 
 

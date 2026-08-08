@@ -142,6 +142,26 @@ export interface BrokerClaim {
   remaining_limit?: number | null;
   /** Member replies nobody here has opened — on the list AND the detail. */
   unread_member_messages: number;
+
+  // ── Settlement (the insurer leg) ───────────────────────────────────────────
+  /** Human-quotable reference, minted at submit. Null on a draft. */
+  reference_no: string | null;
+  sent_to_insurer_at: string | null;
+  insurer_deadline_on: string | null;
+  paid_on: string | null;
+  /** What the insurer actually paid — may fall short of `amount_approved`. */
+  payment_amount: number | null;
+  hospital_type: string | null;
+  admission_date: string | null;
+  discharge_date: string | null;
+  taxable: boolean | null;
+  cpf_claimable: boolean | null;
+  /** Broker-only note. Never shown to the member (that is `remarks`). */
+  admin_remarks: string | null;
+  /** Derived server-side from the dates — never stored, so never stale. */
+  servicer_days: number | null;
+  insurer_days: number | null;
+  days_over_deadline: number | null;
 }
 
 export interface BrokerClaimList {
@@ -477,6 +497,82 @@ export function useDecideClaim() {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       // Approval changes the employee's usage-vs-limits view.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Dispatch an approved claim to the insurer. Dates optional — the server
+ *  defaults to now plus the standard turnaround. */
+export function useSendToInsurer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      claimId: string;
+      sentOn?: string;
+      deadlineOn?: string;
+      note?: string;
+    }) =>
+      api.post<BrokerClaim>(`/claims/${input.claimId}/send-to-insurer`, {
+        sent_on: input.sentOn ?? null,
+        deadline_on: input.deadlineOn ?? null,
+        note: input.note ?? null,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Record the insurer's payment advice. */
+export function useRecordClaimPayment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      claimId: string;
+      paidOn: string;
+      amount?: number;
+      note?: string;
+    }) =>
+      api.post<BrokerClaim>(`/claims/${input.claimId}/payment`, {
+        paid_on: input.paidOn,
+        amount: input.amount ?? null,
+        note: input.note ?? null,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      // Settlement keeps the money spent, but the member's usage view reads
+      // through the same buckets — refetch so a paid claim is not left showing
+      // as pending beside its own limit.
+      void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Assessor-entered detail. PARTIAL — only the keys passed are written, so two
+ *  forms editing different fields cannot blank each other's. */
+export function useUpdateClaimAssessment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      claimId: string;
+      patch: Partial<{
+        hospital_type: string | null;
+        admission_date: string | null;
+        discharge_date: string | null;
+        taxable: boolean | null;
+        cpf_claimable: boolean | null;
+        admin_remarks: string | null;
+      }>;
+    }) =>
+      api.patch<BrokerClaim>(`/claims/${input.claimId}/assessment`, input.patch),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
     },
     meta: { localErrorHandling: true },

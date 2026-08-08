@@ -29,10 +29,10 @@ from app.models import Claim, Employee
 from app.models.claim import (
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
-    CLAIM_STATUS_APPROVED,
     CLAIM_STATUS_DRAFT,
     CLAIM_STATUS_REJECTED,
     CLAIM_STATUSES,
+    SETTLED_STATUSES,
 )
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import (
@@ -44,8 +44,15 @@ from app.schemas.claims import (
 from app.services.member_statement import build_member_statement
 
 # In-flight claims that may still consume the limit.
+#
+# Subtracts the WHOLE settled set, not just `approved`. Derived by subtraction,
+# so a status added to the model lands here by default — which is right for a
+# new in-flight state and catastrophically wrong for a new settled one: the
+# claim would drop out of `approved` (which is subtracted from the limit) into
+# `pending` (which is reported beside it and never subtracted), handing the
+# member back a limit they have already spent.
 PENDING_STATUSES = frozenset(
-    CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED, CLAIM_STATUS_APPROVED}
+    CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED} - SETTLED_STATUSES
 )
 
 _AMOUNT_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
@@ -95,7 +102,7 @@ def _countable_claims(db: Session, employee: Employee) -> list[Claim]:
             select(Claim).where(
                 Claim.employee_id == employee.id,
                 Claim.policy_year_id == employee.policy_year_id,
-                Claim.status.in_(PENDING_STATUSES | {CLAIM_STATUS_APPROVED}),
+                Claim.status.in_(PENDING_STATUSES | SETTLED_STATUSES),
             )
         ).scalars()
     )
@@ -111,7 +118,7 @@ def _bucket_sums(
     def _add(key: tuple[str | None, str | None], claim: Claim) -> None:
         row = sums[key]
         row["count"] += 1
-        if claim.status == CLAIM_STATUS_APPROVED:
+        if claim.status in SETTLED_STATUSES:
             row["approved"] += float(claim.amount_approved or 0.0)
         else:
             row["pending"] += _claim_amount(claim)
@@ -233,7 +240,7 @@ def _flex_utilization(
         if claim.claim_kind != CLAIM_KIND_FLEX:
             continue
         cat = (claim.flex_category_name or "").strip()
-        if claim.status == CLAIM_STATUS_APPROVED:
+        if claim.status in SETTLED_STATUSES:
             amount = float(claim.amount_approved or 0.0)
             approved += amount
             per_category[cat.lower()]["approved"] += amount

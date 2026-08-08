@@ -14,6 +14,7 @@ import {
   ScrollText,
   Sparkles,
   UserCog,
+  UserMinus,
   Users,
   Wallet,
 } from "lucide-react";
@@ -37,6 +38,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ReportBundleCard } from "@/components/operations/ReportBundleCard";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { ReportVersionActions } from "@/components/operations/ReportVersionActions";
 import { useReportReadiness } from "@/api/reports";
@@ -73,6 +75,10 @@ function isTeam(v: string | undefined): v is TeamKey {
 }
 
 type NricMode = "masked" | "full";
+// Which slice of the roster the internal listings cover. `all` is the default
+// (and the incumbent's), because "who is on file" is a wider question than
+// "who is billable" — a leaver missing from a roster export reads as data loss.
+type RosterScope = "all" | "active";
 
 function datestamp(): string {
   const d = new Date();
@@ -290,12 +296,16 @@ function PaReports({
   setNric,
   insurer,
   setInsurer,
+  rosterScope,
+  setRosterScope,
 }: {
   year: PolicyYear;
   nric: NricMode;
   setNric: (v: NricMode) => void;
   insurer: string;
   setInsurer: (v: string) => void;
+  rosterScope: RosterScope;
+  setRosterScope: (v: RosterScope) => void;
 }) {
   const { data: readiness, isError } = useReportReadiness(year.id);
 
@@ -365,7 +375,42 @@ function PaReports({
     },
   ];
 
+  // `all` = everyone on file (the incumbent's default, and wider than the
+  // insurer listings' active + in-period-leaver population). The toggle sits in
+  // the section header because it scopes both listings and nothing else.
+  const statusParam = `?employee_status=${rosterScope}${maskedParam}`;
+
   const internalRows: ReportRow[] = [
+    {
+      icon: Users,
+      title: "Employee Listing",
+      description:
+        "The full company roster across every insurer, with each product's default plan and family grouping.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/built-in-employee-listing${statusParam}`}
+          filename={`built-in-employee-listing-report-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: Users,
+      title: "Dependant Listing",
+      description:
+        "Every dependant on file with their details and status — including those nobody covers yet.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/built-in-dependant-listing${statusParam}`}
+          filename={`built-in-dependant-listing-report-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
     {
       icon: Users,
       title: "Employee Coverage Report",
@@ -391,6 +436,36 @@ function PaReports({
         <ReportDownloadButton
           path={`/dependants/coverage-report/export?policy_year_id=${year.id}`}
           filename={`dependant-coverage-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: UserMinus,
+      title: "Leaver Summary",
+      description:
+        "Everyone who left during the period, with their cover window and final wallet position.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/leaver-summary${nric === "full" ? "?masked=false" : ""}`}
+          filename={`leaver-summary-report-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: UserMinus,
+      title: "Leaver Details",
+      description:
+        "Leavers' claims — including anything still in flight when their cover ended.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/leaver-details${nric === "full" ? "?masked=false" : ""}`}
+          filename={`leaver-details-report-${stamp(year)}.xlsx`}
           label="Download"
           size="sm"
         />
@@ -509,7 +584,22 @@ function PaReports({
       <ReportSection
         title="Internal registers"
         hint="Our own records — these span every insurer and aren't filtered by the picker above."
-        controls={<NricToggle nric={nric} setNric={setNric} />}
+        controls={
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Members</span>
+              <Segmented
+                value={rosterScope}
+                onChange={setRosterScope}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "active", label: "Active only" },
+                ]}
+              />
+            </div>
+            <NricToggle nric={nric} setNric={setNric} />
+          </div>
+        }
         rows={internalRows}
       />
     </div>
@@ -551,6 +641,43 @@ function FlexReports({
             path: `/policy-years/${year.id}/reports/benefit-selection${nric === "full" ? "?masked=false" : ""}`,
             filename: `benefit-selection-status-with-buy-sell-leave-report-${stamp(year)}.xlsx`,
           }}
+        />
+      ),
+    },
+  ];
+
+  // Their OWN section, not appended to "Wallets & pricing": that section's hint
+  // says it carries no NRICs, and these two do. A masking toggle that silently
+  // governs some rows of a section and not others is the exact mislabelled-scope
+  // problem the insurer-picker split was made to fix.
+  const utilisationRows: ReportRow[] = [
+    {
+      icon: Wallet,
+      title: "Wallet Utilisation",
+      description:
+        "The wallet ledger — every dated movement: the allocation, what each product's price tag draws, leave traded and claims paid.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/wallet-utilisation${nric === "full" ? "?masked=false" : ""}`}
+          filename={`utilisation-report-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: Wallet,
+      title: "Wallet Utilisation Summary",
+      description:
+        "One row per member: allocation, what they have spent, what is still in flight and what is left.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/wallet-utilisation-summary${nric === "full" ? "?masked=false" : ""}`}
+          filename={`utilisation-summary-report-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
         />
       ),
     },
@@ -611,6 +738,12 @@ function FlexReports({
         rows={electionRows}
       />
       <ReportSection
+        title="Wallet utilisation"
+        hint="Where each member's wallet went, as a ledger and as a summary."
+        controls={<NricToggle nric={nric} setNric={setNric} />}
+        rows={utilisationRows}
+      />
+      <ReportSection
         title="Wallets & pricing"
         hint="The scheme, the wallet balances and what each plan draws. No NRICs — nothing to mask."
         rows={walletRows}
@@ -620,13 +753,82 @@ function FlexReports({
 }
 
 /* ── Claims — adjudication register + utilization ────────────────────── */
-function ClaimsReports({ year }: { year: PolicyYear }) {
+function ClaimsReports({
+  year,
+  nric,
+  setNric,
+}: {
+  year: PolicyYear;
+  nric: NricMode;
+  setNric: (v: NricMode) => void;
+}) {
+  const maskedParam = nric === "full" ? "&masked=false" : "";
   const rows: ReportRow[] = [
+    {
+      icon: Receipt,
+      title: "All Insurance Claims",
+      description:
+        "Every insured claim in the year with its full servicing history — reference, document dates, what went to the insurer and when they paid.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/insurance-claims?scope=all${maskedParam}`}
+          filename={`all-insurance-claims-in-benefit-year-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: Receipt,
+      title: "Inpatient Claims",
+      description:
+        "Hospitalisation and day surgery only, with sector, admission and discharge.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/insurance-claims?scope=inpatient${maskedParam}`}
+          filename={`inpatient-claims-in-benefit-year-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: Receipt,
+      title: "Outpatient Claims",
+      description:
+        "GP, specialist and dental claims, with the referral-letter position on each.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/insurance-claims?scope=outpatient${maskedParam}`}
+          filename={`outpatient-claims-in-benefit-year-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
+    {
+      icon: Users,
+      title: "Employee Claims in Benefit Year",
+      description:
+        "Every claim a member made this year — insured and flex together, so one page covers their whole year.",
+      format: ".xlsx",
+      action: (
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/employee-claims${nric === "full" ? "?masked=false" : ""}`}
+          filename={`employee-claims-in-benefit-year-${stamp(year)}.xlsx`}
+          label="Download"
+          size="sm"
+        />
+      ),
+    },
     {
       icon: Receipt,
       title: "Claims Register",
       description:
-        "Every claim in the year — claimant, coverage line, amounts and decision, for reconciliation against the insurer's ledger.",
+        "The flat adjudication register — one row per claim with the decision, for a quick reconciliation.",
       format: ".xlsx",
       action: (
         <ReportDownloadButton
@@ -652,13 +854,69 @@ function ClaimsReports({ year }: { year: PolicyYear }) {
       ),
     },
   ];
-  return <ReportTable rows={rows} />;
+  return (
+    <ReportSection
+      title="Claims"
+      hint="The year's claims and their servicing history."
+      controls={<NricToggle nric={nric} setNric={setNric} />}
+      rows={rows}
+    />
+  );
 }
 
-/* ── IT / Firm — audit, spend & access (interactive surfaces) ────────── */
-function ItReports() {
+/* ── IT / Firm — audit, spend & access ───────────────────────────────── */
+function ItReports({ year }: { year: PolicyYear | null }) {
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  const exportRows: ReportRow[] = year
+    ? [
+        {
+          icon: ScrollText,
+          title: "Portal Activity",
+          description:
+            "Sign-ins across the member portal and HR surface for the last 30 days — including failed attempts and lockouts.",
+          format: ".xlsx",
+          action: (
+            <ReportDownloadButton
+              path={`/policy-years/${year.id}/reports/portal-activity`}
+              filename={`portal-login-activity-report-${stamp(year)}.xlsx`}
+              label="Download"
+              size="sm"
+            />
+          ),
+        },
+        {
+          icon: ScrollText,
+          title: "Company Activity",
+          description:
+            "Configuration and administration changes for the last 30 days — who changed what, and when.",
+          format: ".xlsx",
+          action: (
+            <ReportDownloadButton
+              path={`/policy-years/${year.id}/reports/company-activity`}
+              filename={`company-activity-report-${stamp(year)}.xlsx`}
+              label="Download"
+              size="sm"
+            />
+          ),
+        },
+        {
+          icon: UserCog,
+          title: "Portal Access",
+          description:
+            "The roster beside its portal accounts — who is provisioned, whose invite is still unsent, and who has never signed in.",
+          format: ".xlsx",
+          action: (
+            <ReportDownloadButton
+              path={`/policy-years/${year.id}/reports/portal-access`}
+              filename={`portal-access-report-${stamp(year)}.xlsx`}
+              label="Download"
+              size="sm"
+            />
+          ),
+        },
+      ]
+    : [];
   const rows: ReportRow[] = [
     {
       icon: ScrollText,
@@ -687,7 +945,22 @@ function ItReports() {
       action: <OpenLink to="/firm/access" label="Open access admin" />,
     });
   }
-  return <ReportTable rows={rows} />;
+  return (
+    <div className="space-y-6">
+      {exportRows.length > 0 && (
+        <ReportSection
+          title="Activity & access"
+          hint="Exports covering sign-ins, changes and portal provisioning. No NRICs — nothing to mask."
+          rows={exportRows}
+        />
+      )}
+      <ReportSection
+        title="Live surfaces"
+        hint="Reviewed in the app rather than exported."
+        rows={rows}
+      />
+    </div>
+  );
 }
 
 /** Status chip for the selected benefit year, so the broker always knows which
@@ -731,6 +1004,7 @@ export function ReportsPage() {
   // switch, which unmounts the inactive tab's content.
   const [nric, setNric] = useState<NricMode>("masked");
   const [insurer, setInsurer] = useState<string>("");
+  const [rosterScope, setRosterScope] = useState<RosterScope>("all");
 
   return (
     <div className="space-y-5">
@@ -766,6 +1040,28 @@ export function ReportsPage() {
         </span>
       </div>
 
+      {/* Report sets sit ABOVE the team tabs, not inside one. A set is defined
+          by the submission it makes up, and an insurer submission spans Policy
+          Admin (the listings) and Flex (the benefit-selection record) — filing
+          it under either tab would hide it from half the people who send it. */}
+      {selectedYear && (
+        <section className="space-y-2">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">
+              Report sets
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              A whole submission in one download. Uses the NRIC/FIN setting from
+              the tab below.
+            </p>
+          </div>
+          <ReportBundleCard
+            policyYearId={selectedYear.id}
+            masked={nric === "masked"}
+          />
+        </section>
+      )}
+
       <Tabs
         value={tab}
         onValueChange={(value) =>
@@ -791,6 +1087,8 @@ export function ReportsPage() {
               setNric={setNric}
               insurer={insurer}
               setInsurer={setInsurer}
+              rosterScope={rosterScope}
+              setRosterScope={setRosterScope}
             />
           ) : (
             <NoYearNotice />
@@ -805,13 +1103,13 @@ export function ReportsPage() {
         </TabsContent>
         <TabsContent value="claims">
           {selectedYear ? (
-            <ClaimsReports year={selectedYear} />
+            <ClaimsReports year={selectedYear} nric={nric} setNric={setNric} />
           ) : (
             <NoYearNotice />
           )}
         </TabsContent>
         <TabsContent value="it">
-          <ItReports />
+          <ItReports year={selectedYear} />
         </TabsContent>
       </Tabs>
     </div>

@@ -26,6 +26,29 @@ export function useReportReadiness(policyYearId: string | null) {
   });
 }
 
+// ── Report bundles ───────────────────────────────────────────────────────────
+
+export interface ReportBundle {
+  key: string;
+  label: string;
+  description: string;
+  requires_insurer: boolean;
+  file_count: number;
+  /** Empty unless `requires_insurer` — served so the picker offers exactly the
+   *  insurers the download accepts. */
+  insurers: string[];
+}
+
+export function useReportBundles(policyYearId: string | null) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["report-bundles", policyYearId, cid],
+    queryFn: () =>
+      api.get<ReportBundle[]>(`/policy-years/${policyYearId}/reports/bundles`),
+    enabled: Boolean(policyYearId),
+  });
+}
+
 // ── Report versioning ────────────────────────────────────────────────────────
 
 export type ReportMode = "versioned" | "latest";

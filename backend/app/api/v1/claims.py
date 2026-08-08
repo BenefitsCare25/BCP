@@ -48,7 +48,10 @@ from app.models.claim import (
     CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_APPROVED,
     CLAIM_STATUS_NEEDS_INFO,
+    CLAIM_STATUS_PAID,
     CLAIM_STATUS_REJECTED,
+    CLAIM_STATUS_SENT_TO_INSURER,
+    HOSPITAL_TYPES,
     LIVE_STATUSES,
     ORIGIN_PORTAL,
 )
@@ -56,6 +59,7 @@ from app.models.claim_message import (
     AUTHOR_MEMBER,
     EVENT_APPROVED,
     EVENT_NEEDS_INFO,
+    EVENT_PAID,
     EVENT_REJECTED,
 )
 from app.models.stored_document import DOC_ENTITY_CLAIM
@@ -65,9 +69,12 @@ from app.schemas.claims import (
     BrokerMessageIn,
     ClaimAIReviewOut,
     ClaimAIReviewSummary,
+    ClaimAssessmentIn,
     ClaimCaseTypeIn,
     ClaimDecisionIn,
     ClaimMessageOut,
+    ClaimPaymentIn,
+    ClaimSendToInsurerIn,
     LogCaseCreateIn,
     MessagesReadOut,
     StoredDocumentOut,
@@ -79,6 +86,14 @@ from app.services.claim_messages import (
     post_broker_message,
     post_system_message,
     thread_for_claim,
+)
+from app.services.claim_settlement import (
+    days_over_deadline,
+    document_dates,
+    insurer_days,
+    record_payment,
+    send_to_insurer,
+    servicer_days,
 )
 from app.services.claims import (
     assert_transition,
@@ -157,6 +172,7 @@ def _broker_out(
     dep_names: dict[str, str | None] | None = None,
     documents: dict[str, list[StoredDocument]] | None = None,
     unread_messages: dict[str, int] | None = None,
+    doc_dates: dict[str, object] | None = None,
 ) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
     # Shared filler (documents, referral letter, claimant name) — keeps the
@@ -185,6 +201,16 @@ def _broker_out(
         if unread_messages is not None
         else _unread_member_messages(db, [claim.id])
     ).get(claim.id, 0)
+    # SLA counters, derived from the dates. `doc_dates` is prefetched for a
+    # whole page — computing it per claim would be one GROUP BY per row.
+    dates = (
+        doc_dates
+        if doc_dates is not None
+        else document_dates(db, [claim.id])
+    ).get(claim.id)
+    out.servicer_days = servicer_days(claim, dates)
+    out.insurer_days = insurer_days(claim)
+    out.days_over_deadline = days_over_deadline(claim)
     return out
 
 
@@ -227,6 +253,7 @@ def list_claims(
         db, [c for c, _ in rows]
     )
     unread = _unread_member_messages(db, [c.id for c, _ in rows])
+    doc_dates = document_dates(db, [c.id for c, _ in rows])
     return BrokerClaimList(
         total=total,
         offset=offset,
@@ -240,6 +267,7 @@ def list_claims(
                 dep_names=dep_names,
                 documents=documents,
                 unread_messages=unread,
+                doc_dates=doc_dates,
             )
             for claim, employee in rows
         ],
@@ -375,6 +403,144 @@ def decide_claim(
     db.commit()
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
+
+
+@router.post("/{claim_id}/send-to-insurer", response_model=BrokerClaimOut)
+def send_claim_to_insurer(
+    body: ClaimSendToInsurerIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Dispatch an accepted claim to the insurer.
+
+    No member notice is posted. The member has already been told they were
+    approved; "we forwarded it" is our internal workflow, and narrating it in
+    their thread would make an ordinary handoff look like a new decision.
+    """
+    assert_transition(claim, CLAIM_STATUS_SENT_TO_INSURER)
+    before = {"status": claim.status}
+    send_to_insurer(
+        db,
+        claim,
+        user_id=user.user_id,
+        sent_on=body.sent_on,
+        deadline_on=body.deadline_on,
+        turnaround_days=body.turnaround_days,
+    )
+    if body.note:
+        claim.admin_remarks = body.note
+    write_audit(
+        db, user, "claim.sent_to_insurer", "claim", claim.id,
+        before=before,
+        after={
+            "status": claim.status,
+            "sent_to_insurer_at": (
+                claim.sent_to_insurer_at.isoformat()
+                if claim.sent_to_insurer_at
+                else None
+            ),
+            "insurer_deadline_on": (
+                claim.insurer_deadline_on.isoformat()
+                if claim.insurer_deadline_on
+                else None
+            ),
+        },
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return _broker_out(db, claim, db.get(Employee, claim.employee_id))
+
+
+@router.post("/{claim_id}/payment", response_model=BrokerClaimOut)
+def record_claim_payment(
+    body: ClaimPaymentIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Record the insurer's payment advice against a dispatched claim.
+
+    The member IS told: "approved" and "the money is in your account" are
+    different events and only the second one ends their wait.
+    """
+    assert_transition(claim, CLAIM_STATUS_PAID)
+    before = {"status": claim.status}
+    record_payment(db, claim, paid_on=body.paid_on, amount=body.amount)
+    if body.note:
+        claim.admin_remarks = body.note
+    if claim.origin == ORIGIN_PORTAL:
+        post_system_message(db, claim, EVENT_PAID, note=None)
+    write_audit(
+        db, user, "claim.paid", "claim", claim.id,
+        before=before,
+        after={
+            "status": claim.status,
+            "paid_on": claim.paid_on.isoformat() if claim.paid_on else None,
+            "payment_amount": claim.payment_amount,
+        },
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return _broker_out(db, claim, db.get(Employee, claim.employee_id))
+
+
+@router.patch("/{claim_id}/assessment", response_model=BrokerClaimOut)
+def update_claim_assessment(
+    body: ClaimAssessmentIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Assessor-entered detail (sector, admission dates, payroll treatment).
+
+    A PARTIAL update driven by `model_fields_set`: these fields are edited from
+    several places at different points in a claim's life, and a full-object PUT
+    would let the sector form blank an admission date somebody else keyed in.
+    """
+    fields = body.model_fields_set
+    if "hospital_type" in fields and body.hospital_type is not None:
+        if body.hospital_type not in HOSPITAL_TYPES:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"hospital_type must be one of {sorted(HOSPITAL_TYPES)}.",
+            )
+    # Compare the EFFECTIVE pair — what the claim will hold after the merge —
+    # not just what this request carried. A partial update that sets only the
+    # discharge date is precisely how an inverted pair gets stored: the body
+    # alone looks fine, and the admission date it now precedes is already on the
+    # row. Which is the interaction this endpoint's partial-update design makes
+    # ordinary rather than exotic.
+    effective_admission = (
+        body.admission_date if "admission_date" in fields else claim.admission_date
+    )
+    effective_discharge = (
+        body.discharge_date if "discharge_date" in fields else claim.discharge_date
+    )
+    if (
+        effective_admission is not None
+        and effective_discharge is not None
+        and effective_discharge < effective_admission
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "discharge_date cannot precede admission_date.",
+        )
+    before = {f: getattr(claim, f) for f in fields}
+    for name in fields:
+        setattr(claim, name, getattr(body, name))
+    write_audit(
+        db, user, "claim.assessment", "claim", claim.id,
+        before={k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                for k, v in before.items()},
+        after={
+            k: (v.isoformat() if hasattr(v, "isoformat") else v)
+            for k, v in ((f, getattr(claim, f)) for f in fields)
+        },
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
 
 @employee_router.post(

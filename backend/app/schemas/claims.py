@@ -138,6 +138,13 @@ class ClaimOut(_Base):
     amount_converted: float | None = None
     amount_approved: float | None = None
     status: str
+    # The human-quotable reference, minted at submit. Member-visible on purpose:
+    # it is the string they are asked for when they call about the claim, so
+    # hiding it here would leave support with nothing to look a claim up by.
+    reference_no: str | None = None
+    # When the insurer paid. Member-visible for the same reason — "approved" and
+    # "in my account" are different questions and they only ask the second.
+    paid_on: date | None = None
     dependant_id: str | None = None
     # Resolved claimant display name when the claim is for a dependant.
     dependant_name: str | None = None
@@ -205,6 +212,63 @@ class BrokerClaimOut(ClaimOut):
     # grouped query — a member waiting on an answer is the reason to open the
     # claim, so it has to be visible in the queue rather than inside the sheet.
     unread_member_messages: int = 0
+
+    # ── Settlement (see services/claim_settlement.py) ────────────────────────
+    sent_to_insurer_at: datetime | None = None
+    insurer_deadline_on: date | None = None
+    # What the insurer actually paid, which may fall short of what we approved.
+    payment_amount: float | None = None
+    hospital_type: str | None = None
+    admission_date: date | None = None
+    discharge_date: date | None = None
+    taxable: bool | None = None
+    cpf_claimable: bool | None = None
+    # BROKER-ONLY, and the reason this lives here rather than on `ClaimOut`:
+    # `remarks` is the member's note and they can read it back, this one they
+    # must not. Adding it to the shared base would publish every assessor's
+    # working note to the portal.
+    admin_remarks: str | None = None
+    # Derived, never stored — an unpaid claim's overdue count changes nightly
+    # and there is no event to recompute a stored copy on.
+    servicer_days: int | None = None
+    insurer_days: int | None = None
+    days_over_deadline: int | None = None
+
+
+class ClaimSendToInsurerIn(BaseModel):
+    """Dispatch an accepted claim. Both dates optional — omitted means
+    "now" and "the default turnaround from now"."""
+
+    sent_on: date | None = None
+    deadline_on: date | None = None
+    turnaround_days: int | None = Field(default=None, gt=0, le=365)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ClaimPaymentIn(BaseModel):
+    """Record the insurer's payment advice."""
+
+    paid_on: date
+    # Defaults to `amount_approved` when omitted. `ge=0` not `gt=0`: a zero
+    # settlement is a real advice (fully offset against an excess) and refusing
+    # it would leave the claim stuck in `sent_to_insurer` forever.
+    amount: float | None = Field(default=None, ge=0)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ClaimAssessmentIn(BaseModel):
+    """Assessor-entered detail that no document extraction supplies.
+
+    Every field is optional and applied only when PRESENT (`model_fields_set`),
+    so a form that edits one field cannot blank the rest.
+    """
+
+    hospital_type: str | None = None
+    admission_date: date | None = None
+    discharge_date: date | None = None
+    taxable: bool | None = None
+    cpf_claimable: bool | None = None
+    admin_remarks: str | None = Field(default=None, max_length=4000)
 
 
 class BrokerClaimList(BaseModel):

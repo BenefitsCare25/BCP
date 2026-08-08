@@ -325,6 +325,11 @@ def test_log_case_saves_with_no_documents(broker):
     assert body["received_via"] == "email"
     assert body["requested_by"] == "HR — Serene Lim"
     assert body["received_on"] == "2027-06-10"
+    # A LOG case never runs through `submit_claim`, so it has to mint its own
+    # reference. Without one it appears in the claims register and on the
+    # insurer submission with a blank Reference No. — the column both sides
+    # reconcile on.
+    assert body["reference_no"], "a LOG case needs a quotable reference too"
 
 
 def test_log_case_allowed_against_a_product_members_cannot_self_file(broker, anon):

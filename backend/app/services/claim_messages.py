@@ -35,6 +35,7 @@ from app.models.claim_message import (
     AUTHOR_SYSTEM,
     EVENT_APPROVED,
     EVENT_NEEDS_INFO,
+    EVENT_PAID,
     EVENT_REJECTED,
     EVENT_SUBMITTED,
 )
@@ -120,6 +121,31 @@ def _system_copy(claim: Claim, event: str, note: str | None) -> tuple[str, str]:
                 note,
                 "If you think something has been missed, reply here and we'll "
                 "take another look.",
+            ),
+        )
+    if event == EVENT_PAID:
+        # Quote what the INSURER paid, not what we approved. When the two
+        # differ, the member is about to see the smaller number in their bank
+        # and the notice has to be the one that matches it.
+        # `is not None`, NOT `or`: a ZERO settlement is a real advice (fully
+        # offset against an excess), and `ClaimPaymentIn` accepts it for exactly
+        # that reason. `or` falls through to what we approved and tells the
+        # member they were paid a sum that never left the insurer.
+        paid = _money(
+            claim,
+            claim.payment_amount
+            if claim.payment_amount is not None
+            else claim.amount_approved,
+        )
+        on = claim.paid_on.strftime("%d %b %Y") if claim.paid_on else None
+        return (
+            "Your claim has been paid",
+            _join(
+                f"Your {_what(claim)} claim for {when} has been paid"
+                + (f" — {paid}" if paid else "")
+                + (f" on {on}." if on else "."),
+                note,
+                "It can take a few working days to reach your account.",
             ),
         )
     if event == EVENT_NEEDS_INFO:

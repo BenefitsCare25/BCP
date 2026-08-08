@@ -1,0 +1,283 @@
+"""Built-in (non-insurer) member listings.
+
+The point of these sheets is that they span every insurer and every person on
+file, so the tests that matter are the two ways that can silently fail: a
+product block dropped because it belongs to the "wrong" insurer, and a row
+dropped because the person or the dependant is not billable.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+TEST_DB = Path(__file__).parent / "_test_built_in_listings.db"
+os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
+
+from datetime import date  # noqa: E402
+from io import BytesIO  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+from openpyxl import load_workbook  # noqa: E402
+
+from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
+from app.db.base import Base  # noqa: E402
+from app.db.session import SessionLocal, engine  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import (  # noqa: E402
+    Category,
+    Client,
+    Dependant,
+    Employee,
+    Plan,
+    PolicyYear,
+    Product,
+    ProductSetup,
+    User,
+)
+from app.models.policy_year import PolicyYearStatus  # noqa: E402
+
+CLIENT_ID = "00000000-0000-0000-0000-0000000b1000"
+PY_ID = "00000000-0000-0000-0000-0000000b1001"
+USER_ID = "00000000-0000-0000-0000-0000000b10ff"
+
+PROD_GHS = "00000000-0000-0000-0000-0000000b1301"
+PROD_GTL = "00000000-0000-0000-0000-0000000b1302"
+CAT_GHS = "00000000-0000-0000-0000-0000000b1401"
+CAT_GTL = "00000000-0000-0000-0000-0000000b1402"
+
+EMP_ACTIVE = "00000000-0000-0000-0000-0000000b1101"
+EMP_LEAVER_IN = "00000000-0000-0000-0000-0000000b1102"
+EMP_LEAVER_OLD = "00000000-0000-0000-0000-0000000b1103"
+DEP_COVERED = "00000000-0000-0000-0000-0000000b1201"
+DEP_PENDING = "00000000-0000-0000-0000-0000000b1202"
+
+
+def _user(role: str = "broker_admin") -> CurrentUser:
+    return CurrentUser(
+        user_id=USER_ID, broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=CLIENT_ID, role=role,
+    )
+
+
+def _emp(eid: str, staff: str, name: str, **kw) -> Employee:
+    defaults = dict(
+        client_id=CLIENT_ID, policy_year_id=PY_ID, staff_id=staff,
+        employee_name=name, attribute_values={}, derived_attribute_values={},
+        matched_categories=[], source="csv_import", status="active",
+    )
+    defaults.update(kw)
+    return Employee(id=eid, **defaults)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _setup_db():
+    if TEST_DB.exists():
+        TEST_DB.unlink()
+    Base.metadata.create_all(bind=engine)
+    from scripts.seed_demo import seed
+    seed()
+    with SessionLocal() as s:
+        s.add(Client(id=CLIENT_ID, name="Builtin Co", slug="builtin-co",
+                     broker_firm_id=DEMO_BROKER_FIRM_ID))
+        s.add(User(id=USER_ID, broker_firm_id=DEMO_BROKER_FIRM_ID,
+                   email="ops@builtin.co", display_name="Bo Ops",
+                   role="broker_admin", status="active"))
+        s.flush()
+        s.add(PolicyYear(id=PY_ID, client_id=CLIENT_ID, year=2037,
+                         start_date=date(2037, 1, 1), end_date=date(2037, 12, 31),
+                         status=PolicyYearStatus.active))
+        s.flush()
+        # Two products placed with DIFFERENT insurers — the whole point of a
+        # built-in listing is that both appear on one sheet.
+        s.add_all([
+            Product(id=PROD_GHS, client_id=CLIENT_ID, code="GHS",
+                    display_name="Group Hospital & Surgical",
+                    product_metadata={"report_code": "GHS"}),
+            Product(id=PROD_GTL, client_id=CLIENT_ID, code="GTL",
+                    display_name="Group Term Life",
+                    product_metadata={"report_code": "GTL"}),
+        ])
+        s.flush()
+        for code, insurer in (("GHS", "AIA"), ("GTL", "Zurich")):
+            s.add(ProductSetup(
+                policy_year_id=PY_ID, product_code=code,
+                answers={"header": {"insurer": insurer}},
+            ))
+        s.add_all([
+            Category(id=CAT_GHS, policy_year_id=PY_ID,
+                     product_id=PROD_GHS, display_name="All Employees",
+                     raw_description="All Employees",
+                     plan_assignments={"plan_code": "Plan1"}),
+            Category(id=CAT_GTL, policy_year_id=PY_ID,
+                     product_id=PROD_GTL, display_name="All Employees",
+                     raw_description="All Employees",
+                     plan_assignments={"plan_code": "100K", "basis": "S$ 100,000"}),
+        ])
+        s.add_all([
+            Plan(policy_year_id=PY_ID, product_id=PROD_GHS,
+                 code="Plan1", display_name="Plan 1",
+                 report_label="1 Bed Pte Hosp"),
+        ])
+        s.add_all([
+            _emp(EMP_ACTIVE, "BI-1", "Ann Active",
+                 attribute_values={
+                     "entity": "Builtin Co Pte Ltd",
+                     "id_no": "S1234567D",
+                     "category": "All Employees",
+                     "insurer_member_ids": {"AIA": "AIA-99", "Zurich": "ZUR-77"},
+                 },
+                 matched_categories=[
+                     {"category_id": CAT_GHS, "product_id": PROD_GHS,
+                      "product_code": "GHS", "method": "rule"},
+                     {"category_id": CAT_GTL, "product_id": PROD_GTL,
+                      "product_code": "GTL", "method": "rule"},
+                 ]),
+            _emp(EMP_LEAVER_IN, "BI-2", "Ben Leaver",
+                 status="terminated", terminated_effective=date(2037, 6, 30)),
+            # Left BEFORE the period: excluded from the insurer listing, but
+            # "who is on file" must still include them.
+            _emp(EMP_LEAVER_OLD, "BI-3", "Cy Ancient",
+                 status="terminated", terminated_effective=date(2036, 3, 31)),
+        ])
+        s.flush()
+        s.add_all([
+            Dependant(id=DEP_COVERED, client_id=CLIENT_ID, policy_year_id=PY_ID,
+                      employee_id=EMP_ACTIVE, status="active",
+                      attribute_values={"dependant_name": "Dara Dep",
+                                        "relationship": "Spouse",
+                                        "dependant_id_no": "S7654321Z"}),
+            # A portal self-add awaiting approval — covered by nobody yet.
+            Dependant(id=DEP_PENDING, client_id=CLIENT_ID, policy_year_id=PY_ID,
+                      employee_id=EMP_ACTIVE, status="pending_approval",
+                      attribute_values={"dependant_name": "Eli Pending",
+                                        "relationship": "Child"}),
+        ])
+        s.commit()
+    app.dependency_overrides[get_current_user] = lambda: _user()
+    yield
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client():
+    with TestClient(app) as c:
+        yield c
+
+
+def _sheet(resp):
+    assert resp.status_code == 200, resp.text
+    ws = load_workbook(BytesIO(resp.content)).active
+    rows = list(ws.iter_rows(values_only=True))
+    return rows[0], rows[1:]
+
+
+def _emp_sheet(client, **params):
+    return _sheet(client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/built-in-employee-listing",
+        params=params,
+    ))
+
+
+def _dep_sheet(client, **params):
+    return _sheet(client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/built-in-dependant-listing",
+        params=params,
+    ))
+
+
+def test_employee_listing_spans_every_insurer(client):
+    """One sheet, both insurers' products — the reason this report exists."""
+    header, _ = _emp_sheet(client)
+    assert "GHS Default Plan ID" in header
+    assert "GHS Default Group Option" in header
+    assert "GTL EE Default Plan ID" in header
+    assert "GTL EE Last Accepted Sum Assured" in header
+
+
+def test_employee_listing_has_a_member_id_column_per_insurer(client):
+    """A member holds a different id with each insurer; one column loses all
+    but the first."""
+    header, rows = _emp_sheet(client)
+    assert "AIA Member ID" in header
+    assert "Zurich Member ID" in header
+    row = next(r for r in rows if r[1] == "BI-1")
+    assert row[header.index("AIA Member ID")] == "AIA-99"
+    assert row[header.index("Zurich Member ID")] == "ZUR-77"
+
+
+def test_employee_status_all_includes_pre_period_leavers(client):
+    """`all` is everyone on file, which is wider than the insurer listing's
+    active + in-period-leaver population."""
+    header, rows = _emp_sheet(client, employee_status="all")
+    staff = {r[1] for r in rows}
+    assert staff == {"BI-1", "BI-2", "BI-3"}
+    leaver = next(r for r in rows if r[1] == "BI-3")
+    assert leaver[header.index("Employee Status")] == "Terminated"
+
+
+def test_employee_status_active_drops_every_leaver(client):
+    _, rows = _emp_sheet(client, employee_status="active")
+    assert {r[1] for r in rows} == {"BI-1"}
+
+
+def test_employee_status_defaults_to_all(client):
+    _, defaulted = _emp_sheet(client)
+    _, explicit = _emp_sheet(client, employee_status="all")
+    assert len(defaulted) == len(explicit) == 3
+
+
+def test_unknown_employee_status_falls_back_to_all(client):
+    """A typo'd parameter must not silently narrow the population."""
+    _, rows = _emp_sheet(client, employee_status="nonsense")
+    assert len(rows) == 3
+
+
+def test_employee_listing_masks_nric_by_default(client):
+    header, rows = _emp_sheet(client)
+    row = next(r for r in rows if r[1] == "BI-1")
+    assert row[header.index("Identification No.")] != "S1234567D"
+    _, unmasked = _emp_sheet(client, masked="false")
+    row = next(r for r in unmasked if r[1] == "BI-1")
+    assert row[header.index("Identification No.")] == "S1234567D"
+
+
+def test_viewer_cannot_pull_unmasked(client):
+    app.dependency_overrides[get_current_user] = lambda: _user("broker_viewer")
+    try:
+        res = client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/built-in-employee-listing",
+            params={"masked": "false"},
+        )
+        assert res.status_code == 403
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: _user()
+
+
+def test_dependant_listing_includes_uncovered_dependants(client):
+    """A dependant nobody covers is usually the data problem being hunted."""
+    header, rows = _dep_sheet(client)
+    names = {r[header.index("Dependant Name")] for r in rows}
+    assert names == {"Dara Dep", "Eli Pending"}
+    pending = next(r for r in rows if r[header.index("Dependant Name")] == "Eli Pending")
+    assert pending[header.index("Dependant Status")] == "Pending Approval"
+
+
+def test_dependant_listing_carries_no_product_columns(client):
+    """Coverage is the insurer listing's question, answered there per insurer."""
+    header, _ = _dep_sheet(client)
+    assert not any("Default Plan ID" in h for h in header)
+    assert not any("Family Grouping" in h for h in header)
+
+
+def test_dependant_member_id_falls_back_to_the_employee_row(client):
+    """Rosters put the insurer member id on the employee row, not per life."""
+    header, rows = _dep_sheet(client)
+    row = next(r for r in rows if r[header.index("Dependant Name")] == "Dara Dep")
+    assert row[header.index("AIA Member ID")] == "AIA-99"
+
+
+def test_dependant_listing_follows_the_employee_status_filter(client):
+    _, rows = _dep_sheet(client, employee_status="active")
+    assert len(rows) == 2

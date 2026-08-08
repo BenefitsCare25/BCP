@@ -49,6 +49,11 @@ EVENT_SUBMITTED = "submitted"
 EVENT_APPROVED = "approved"
 EVENT_REJECTED = "rejected"
 EVENT_NEEDS_INFO = "needs_info"
+# The insurer has paid. A SEPARATE notice from `approved` on purpose: those are
+# two different events weeks apart, and the only one that ends the member's wait
+# is this one. Folding it into the approval notice would have us tell them the
+# money had arrived before it had.
+EVENT_PAID = "paid"
 
 # NOTE: no AUTHOR_TYPES set and no MAX_BODY_CHARS here. Both existed, both were
 # referenced by nothing, and the body caps that are actually ENFORCED live on

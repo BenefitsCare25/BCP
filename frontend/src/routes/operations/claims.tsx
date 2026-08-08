@@ -8,6 +8,8 @@ import {
   useBrokerClaimDetail,
   useBrokerClaims,
   useDecideClaim,
+  useRecordClaimPayment,
+  useSendToInsurer,
   useRerunReview,
   useSetCaseType,
   type BrokerClaim,
@@ -74,6 +76,11 @@ const STATUS_FILTERS = [
   { value: "ai_review_pending", label: "Running" },
   { value: "needs_info", label: "Needs info" },
   { value: "approved", label: "Approved" },
+  // The settlement leg. Without these two the filter rail would silently stop
+  // at "Approved" while the claims themselves moved past it — visible only
+  // under "All", which is the one filter nobody works a queue from.
+  { value: "sent_to_insurer", label: "With insurer" },
+  { value: "paid", label: "Paid" },
   { value: "rejected", label: "Rejected" },
 ] as const;
 
@@ -90,6 +97,10 @@ const BROKER_STATUS: Record<
   ai_flagged: { label: "AI flagged", variant: "error" },
   needs_info: { label: "Needs info", variant: "warn" },
   approved: { label: "Approved", variant: "good" },
+  // "Approved" and "Paid" are weeks apart and only one of them means the member
+  // has their money — the badge has to tell them apart.
+  sent_to_insurer: { label: "With insurer", variant: "info" },
+  paid: { label: "Paid", variant: "good" },
   rejected: { label: "Rejected", variant: "error" },
 };
 
@@ -134,6 +145,12 @@ const DECIDABLE = new Set([
 // exactly as long as it is decidable. The server is the authority — this only
 // decides whether the control is offered.
 const RELABELLABLE = DECIDABLE;
+// The settlement leg. A claim we approved is not finished — it still has to go
+// to the insurer and be paid. Each set is exactly the statuses the server
+// accepts the corresponding transition from (`models/claim.VALID_TRANSITIONS`);
+// the server is the authority, this only decides whether to offer the control.
+const SENDABLE = new Set(["approved"]);
+const PAYABLE = new Set(["sent_to_insurer"]);
 // ai_review_pending is rerunnable (self-transition) so stuck reviews can be
 // re-queued from the sheet.
 const RERUNNABLE = new Set([
@@ -200,11 +217,17 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
   // Set from a 409 limit_exceeded — the dialog re-arms as "Approve anyway".
   const [limitWarning, setLimitWarning] = useState<string | null>(null);
   const [logFormOpen, setLogFormOpen] = useState(false);
+  // Settlement dialog: "send" to the insurer, or "pay" from their advice.
+  const [settling, setSettling] = useState<"send" | "pay" | null>(null);
+  const [paidOn, setPaidOn] = useState("");
+  const [paidAmount, setPaidAmount] = useState("");
   // Target of the reclassify dialog; null = closed.
   const [relabelTo, setRelabelTo] = useState<CaseType | null>(null);
   const [relabelReason, setRelabelReason] = useState("");
 
   const decide = useDecideClaim();
+  const sendToInsurer = useSendToInsurer();
+  const recordPayment = useRecordClaimPayment();
   const rerun = useRerunReview();
   const setCaseTypeMutation = useSetCaseType();
   const { data, isLoading } = useBrokerClaims(
@@ -243,6 +266,46 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
   useEffect(() => {
     setRelabelReason("");
   }, [relabelTo, selectedId]);
+
+  useEffect(() => {
+    setPaidOn("");
+    setPaidAmount("");
+  }, [settling, selectedId]);
+
+  const confirmSettlement = async () => {
+    if (!selected || !settling) return;
+    try {
+      if (settling === "send") {
+        await sendToInsurer.mutateAsync({ claimId: selected.id });
+        toast.success("Sent to the insurer");
+      } else {
+        if (!paidOn) {
+          toast.error("Enter the payment date from the insurer's advice");
+          return;
+        }
+        // Blank = what we approved. An explicit 0 is a real advice (fully
+        // offset against an excess), so it must not be coerced to "unset".
+        const raw = paidAmount.trim();
+        const amount = raw === "" ? undefined : Number(raw);
+        if (amount !== undefined && (!isFinite(amount) || amount < 0)) {
+          toast.error("Paid amount must be zero or more");
+          return;
+        }
+        await recordPayment.mutateAsync({
+          claimId: selected.id,
+          paidOn,
+          amount,
+        });
+        toast.success("Payment recorded");
+      }
+      setSettling(null);
+      // With a status filter active the claim leaves the filtered list, which
+      // would strand the sheet open over nothing — same rule as a decision.
+      if (status) setSelectedId(null);
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
 
   if (!policyYearId) return null;
   const total = data?.total ?? 0;
@@ -718,6 +781,37 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
                   </Button>
                 </SheetFooter>
               )}
+              {/* The same pinned slot carries the settlement step. The two are
+                  mutually exclusive by construction — a claim is either awaiting
+                  our decision or awaiting the insurer's — so one footer always
+                  shows exactly the next thing to do. */}
+              {SENDABLE.has(selected.status) && (
+                <SheetFooter className="justify-start">
+                  <Button onClick={() => setSettling("send")}>
+                    Send to insurer
+                  </Button>
+                </SheetFooter>
+              )}
+              {PAYABLE.has(selected.status) && (
+                <SheetFooter className="justify-start">
+                  <Button onClick={() => setSettling("pay")}>
+                    Record payment
+                  </Button>
+                  {/* The insurer declining after WE accepted is a real outcome
+                      (`VALID_TRANSITIONS` allows sent_to_insurer → rejected),
+                      and it is the only transition that releases the member's
+                      limit. Without this control the claim stays in
+                      `sent_to_insurer` — a SETTLED status — forever, and the
+                      limit stays permanently consumed. */}
+                  <Button
+                    variant="outline"
+                    className="text-error hover:text-error"
+                    onClick={() => setDecision("reject")}
+                  >
+                    Insurer declined
+                  </Button>
+                </SheetFooter>
+              )}
             </>
           )}
         </SheetContent>
@@ -776,6 +870,16 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
             {decision === "reject" && (
               <p>This is final — the member cannot resubmit a rejected claim.</p>
             )}
+            {decision === "reject" && selected?.status === "sent_to_insurer" && (
+              // They were already told the claim was approved, so a bare
+              // rejection notice will read as a reversal. The note is the only
+              // place that gets explained — say so before it is skipped.
+              <p className="rounded-md border border-warn/40 bg-warn-soft px-3 py-2.5 text-warn">
+                This member has already been told their claim was approved.
+                Explain the insurer&apos;s decision in the note — it is the only
+                thing they will see. Their benefit limit is released.
+              </p>
+            )}
             {decision === "needs_info" && (
               <p>
                 The claim reopens for the member to add documents and resubmit. Explain
@@ -807,6 +911,70 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
         }
         loading={decide.isPending}
         onConfirm={confirmDecision}
+      />
+
+      <AlertDialog
+        open={settling !== null}
+        onOpenChange={(o) => {
+          if (!o) setSettling(null);
+        }}
+        title={
+          settling === "send" ? "Send to the insurer?" : "Record the payment"
+        }
+        tone="info"
+        description={
+          <div className="space-y-4">
+            {settling === "send" && (
+              <p>
+                The claim moves to awaiting the insurer, and the turnaround
+                deadline starts today. The member is not notified — they have
+                already been told it was approved.
+              </p>
+            )}
+            {settling === "pay" && selected && (
+              <>
+                <p>
+                  The member is told their claim has been paid. Leave the amount
+                  blank if the insurer paid the full{" "}
+                  {selected.currency}{" "}
+                  {(selected.amount_approved ?? selected.amount_claimed).toFixed(
+                    2,
+                  )}
+                  .
+                </p>
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Payment date
+                  </span>
+                  <Input
+                    type="date"
+                    value={paidOn}
+                    onChange={(e) => setPaidOn(e.target.value)}
+                  />
+                </label>
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Amount paid (optional)
+                  </span>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={paidAmount}
+                    onChange={(e) => setPaidAmount(e.target.value)}
+                    placeholder={(
+                      selected.amount_approved ?? selected.amount_claimed
+                    ).toFixed(2)}
+                    className="tabular-nums"
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        }
+        confirmLabel={settling === "send" ? "Send" : "Record payment"}
+        loading={sendToInsurer.isPending || recordPayment.isPending}
+        onConfirm={confirmSettlement}
       />
 
       <LogCaseForm
