@@ -37,6 +37,7 @@ from app.models.claim import (
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import (
     FlexCategoryUtilization,
+    FlexProration,
     FlexUtilization,
     UtilizationBucket,
     UtilizationOut,
@@ -250,8 +251,27 @@ def _flex_utilization(
             per_category[cat.lower()]["pending"] += amount
 
     # Chain: wallet → minus price-tags (flex_balance) → minus approved claims.
+    #
+    # CLAIMS CANNOT TAKE THIS BELOW ZERO. A flex wallet pays UP TO the limit — a
+    # member with S$500 left who presents a S$700 bill utilises S$500 and pays
+    # the rest themselves — so "overspent by S$200" is not a state the product
+    # can be in, and reporting one is an indication of something that cannot
+    # happen. (It is reachable on paper only because pro-ration binds forward: it
+    # can shrink an allowance below what was already reimbursed, and never
+    # reaches back for that money.)
+    #
+    # A NEGATIVE `base` is a different thing and stays signed: the member's
+    # elected cover costs more than their wallet, which is a real broker-facing
+    # state the enrolment guard and the bulk `flex_overdraft` warning both exist
+    # for. Flooring that too would hide it. `flex_ledger.MemberFlex.balance`
+    # splits the same way, so the reports and this can never disagree about what
+    # a member has left.
     base = flex.flex_balance if flex.flex_balance is not None else flex.wallet_amount
-    available = round(float(base) - approved, 2) if base is not None else None
+    if base is None:
+        available = None
+    else:
+        drawn_down = round(float(base) - approved, 2)
+        available = drawn_down if base < 0 else max(0.0, drawn_down)
 
     categories: list[FlexCategoryUtilization] = []
     for cat in flex.benefit_categories:
@@ -288,6 +308,11 @@ def _flex_utilization(
     return FlexUtilization(
         currency=flex.currency,
         wallet_amount=flex.wallet_amount,
+        proration=(
+            FlexProration(**flex.proration.model_dump())
+            if flex.proration is not None
+            else None
+        ),
         price_tags_total=flex.price_tags_total,
         flex_balance=flex.flex_balance,
         approved=round(approved, 2),

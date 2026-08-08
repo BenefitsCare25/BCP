@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Category, Dependant, Employee, FlexPricing, FlexScheme, PolicyYear
 from app.models.enrollment_window import FlexDrawdownRule, FlexPriceSource
+from app.services import flex_proration
 from app.services.cohort_tiers import first_category_per_product, tier_key
 from app.services.coverage_resolver import employee_category_defaults, load_overrides
 from app.services.plan_hydration import (
@@ -1458,6 +1459,7 @@ def member_coverage_tag(
     dep_profiles: list[tuple[str, int | None]] | None = None,
     dep_option_ids: dict[str, Any] | None = None,
     dependants_compulsory: bool = False,
+    factor: float = 1.0,
 ) -> float | None:
     """Total flex drawn down for one product = employee plan tag (see
     ``member_price_tag``) + dependant tag (see ``dependant_tag``), combined by
@@ -1471,6 +1473,10 @@ def member_coverage_tag(
     cover (participation compulsory): the dependants are covered but draw NO
     member flex, and their unpriceability never blocks the tag.
 
+    ``factor`` is the member's flex pro-ration — pass ``factor_of(employee)``
+    from every call site, so a snapshot taken at election time is scaled by the
+    same rule the statement recomputes with.
+
     Declined coverage (employee + dependants) costs no flex → None."""
     emp = member_price_tag(
         source_map=source_map, rule=rule, pricing=pricing, slip_idx=slip_idx,
@@ -1481,7 +1487,7 @@ def member_coverage_tag(
     if declined:
         return emp  # None — no coverage, no flex
     if dependants_compulsory:
-        return _combine_tags(emp, None, 0, dep_applies=False)
+        return _combine_tags(emp, None, 0, dep_applies=False, factor=factor)
     source = (source_map or {}).get(product_id, DEFAULT_FLEX_SOURCE)
     mode = _effective_dependant_mode(
         pricing, product_id, source, family_slip_idx,
@@ -1494,12 +1500,18 @@ def member_coverage_tag(
         dep_profiles=dep_profiles, dep_option_ids=dep_option_ids,
     )
     return _combine_tags(
-        emp, dep, spouse_count + child_count, dep_applies=mode != DependantMode.none
+        emp, dep, spouse_count + child_count,
+        dep_applies=mode != DependantMode.none, factor=factor,
     )
 
 
 def _combine_tags(
-    emp: float | None, dep: float | None, covered_count: int, *, dep_applies: bool
+    emp: float | None,
+    dep: float | None,
+    covered_count: int,
+    *,
+    dep_applies: bool,
+    factor: float = 1.0,
 ) -> float | None:
     """THE combine rule for a coverage line's flex tag — shared by the election
     snapshot (``member_coverage_tag``) and the benefit-statement recompute
@@ -1509,12 +1521,22 @@ def _combine_tags(
     unprice the WHOLE tag (surfaced by the unpriced-election guard) rather than
     letting a priced employee component silently absorb $0 dependants. When
     neither component prices → None. Otherwise the components sum (an
-    inapplicable one counts as $0), rounded to cents."""
+    inapplicable one counts as $0), rounded to cents.
+
+    ``factor`` is the member's flex pro-ration (``flex_proration.factor_of``),
+    applied HERE because this is the one place every tag producer passes through.
+    A pro-rated allowance with an annual price tag would leave a mid-year joiner
+    holding 3/12 of the wallet and 12/12 of the cost — overdrawn before electing
+    anything — so the cover charged against a wallet is scaled by the same factor
+    that sized it. Applied AFTER the GST multiplier and rounded ONCE, so a
+    grossed pro-rated tag and a pro-rated grossed tag cannot differ by a cent.
+    Claims deliberately never pass through here: reimbursed money does not
+    pro-rate."""
     if dep is None and covered_count and dep_applies:
         return None
     if emp is None and dep is None:
         return None
-    return round((emp or 0.0) + (dep or 0.0), 2)
+    return round(((emp or 0.0) + (dep or 0.0)) * factor, 2)
 
 
 def maybe_family_slip_index(
@@ -1708,6 +1730,10 @@ def summarize_employee(
         return None
     age = employee_age(employee, ctx.reference_date)
     ref = ctx.reference_date
+    # The member's own pro-ration, read from the wallet's stored derivation so
+    # the cover charged and the allowance it is charged against are scaled by
+    # ONE number. 1.0 when the scheme does not pro-rate.
+    factor = flex_proration.factor_of(employee)
 
     # Company-wide flex config (source per product + drawdown rule) governs how each
     # line is priced. The slip indices are built whenever any product resolves to
@@ -1738,6 +1764,7 @@ def summarize_employee(
                 default_plan=default_plan, base_cat=base_cat, ov=ov,
                 age=age, ref=ref,
                 dependants_compulsory=base_cat in compulsory_dep_cats,
+                factor=factor,
             )
             if line.price_tag is not None:
                 total += line.price_tag
@@ -1780,6 +1807,7 @@ def _member_flex_line(
     age: int | None,
     ref: date | None,
     dependants_compulsory: bool,
+    factor: float = 1.0,
 ) -> FlexPriceLine:
     """One product's effective-coverage flex line for the benefit statement:
     the member's override (or cohort default) priced through the SAME pieces as
@@ -1830,9 +1858,14 @@ def _member_flex_line(
         tier_key=key,
         plan_code=plan_code,
         price_tag=_combine_tags(
-            emp_tag, dep_tag, spouse_count + child_count, dep_applies=dep_applies
+            emp_tag, dep_tag, spouse_count + child_count,
+            dep_applies=dep_applies, factor=factor,
         ),
-        dependant_tag=dep_tag,
+        # The dependant PORTION of the (pro-rated) tag, so "incl. $X dependants"
+        # stays a component of the number printed beside it.
+        dependant_tag=(
+            None if dep_tag is None else round(dep_tag * factor, 2)
+        ),
     )
 
 

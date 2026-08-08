@@ -52,7 +52,18 @@ class Employee(Base, TimestampMixin):
     # re-assignment refreshes them (and clears them for inactive/ineligible staff).
     flex_family_status: Mapped[str | None] = mapped_column(String(8), nullable=True)
     flex_tier_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The EFFECTIVE allowance — pro-rated to the period the member was covered
+    # when the scheme says so (app/services/flex_proration.py). NULL = no wallet.
     flex_wallet_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # How that figure was derived: {basis, factor, served, total, full_amount,
+    # period_start, period_end}. NULL means no pro-ration was applied, so the
+    # wallet IS the annual allowance. Stored rather than recomputed because six
+    # call sites read the wallet directly, and because `flex_pricing_resolver`
+    # scales the price tags by this same factor — one number, so the allowance
+    # and the cover drawn against it can never disagree about the period.
+    flex_proration: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(), nullable=True
+    )
     flex_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
     # How family status was resolved: "dependants" | "roster" | "none".
     flex_source: Mapped[str | None] = mapped_column(String(16), nullable=True)

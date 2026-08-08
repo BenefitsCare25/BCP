@@ -10,7 +10,8 @@ The resolution itself is delegated to ``compute_flex_membership`` — the same
 read-only logic that powers the live membership card — so the persisted snapshot
 can never diverge from the preview. Assignment writes only happen for a confirmed
 scheme (see the endpoint guard); the snapshot is refreshed on re-assign and
-cleared for employees who are no longer active or no longer land in a tier.
+cleared only for a row that resolves to nothing. A LEAVER KEEPS THEIRS, pro-rated
+to the period they were covered — see ``assign_flex_membership``.
 """
 from __future__ import annotations
 
@@ -20,12 +21,13 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.models import Employee, FlexScheme
+from app.models.employee import EMPLOYEE_STATUS_ACTIVE, EMPLOYEE_STATUS_TERMINATED
 from app.models.flex_scheme import FlexSchemeStatus
 from app.services.flex_membership import EmployeeFlex, compute_flex_membership
 
@@ -34,15 +36,6 @@ logger = logging.getLogger(__name__)
 # Mirror the matching engine's batched-flush size for large rosters.
 FLUSH_BATCH_SIZE = 500
 
-# The flex_* columns, used to clear a stale wallet in one bulk statement.
-_FLEX_NULLS = {
-    "flex_family_status": None,
-    "flex_tier_name": None,
-    "flex_wallet_amount": None,
-    "flex_currency": None,
-    "flex_source": None,
-    "flex_assigned_at": None,
-}
 
 
 @dataclass(frozen=True)
@@ -70,6 +63,7 @@ def _clear_flex(emp: Employee) -> None:
     emp.flex_family_status = None
     emp.flex_tier_name = None
     emp.flex_wallet_amount = None
+    emp.flex_proration = None
     emp.flex_currency = None
     emp.flex_source = None
     emp.flex_assigned_at = None
@@ -79,6 +73,7 @@ def _apply(emp: Employee, fx: EmployeeFlex, now: datetime) -> None:
     emp.flex_family_status = fx.family_status
     emp.flex_tier_name = fx.tier_name
     emp.flex_wallet_amount = fx.wallet_amount
+    emp.flex_proration = fx.proration
     emp.flex_currency = fx.currency
     emp.flex_source = fx.source
     emp.flex_assigned_at = now
@@ -87,49 +82,64 @@ def _apply(emp: Employee, fx: EmployeeFlex, now: datetime) -> None:
 def assign_flex_membership(
     db: Session, policy_year_id: str, client_id: str | None
 ) -> FlexAssignmentSummary:
-    """Resolve and persist every active employee's Flex wallet for a policy year.
+    """Resolve and persist every employee's Flex wallet for a policy year.
 
     Computes the membership snapshot (the single source of truth, shared with the
-    read-only preview), writes it onto the ``flex_*`` columns of the active
-    employees it resolved, and clears those columns for any non-active employee
-    that still carries a stale wallet — in one bulk statement, so terminated staff
-    aren't loaded or iterated. NEVER commits — the caller owns the audit-log
-    entry and the transaction (matching ``match_policy_year``'s contract), so a
-    failure mid-run rolls back the whole assignment instead of leaving half the
-    roster on new wallets. Large rosters are flushed in batches.
+    read-only preview) and writes it onto the ``flex_*`` columns. NEVER commits —
+    the caller owns the audit-log entry and the transaction (matching
+    ``match_policy_year``'s contract), so a failure mid-run rolls back the whole
+    assignment instead of leaving half the roster on new wallets. Large rosters
+    are flushed in batches.
+
+    **A LEAVER KEEPS THEIR WALLET, pro-rated to the period they were covered.**
+    This used to end with a bulk ``UPDATE … SET flex_* = NULL WHERE status !=
+    'active'``, which every listing-sync apply triggered in the same request that
+    terminated the member — so the leaver sheet, whose whole purpose is to settle
+    up, printed their claims against a BLANK allocation and a blank balance. A
+    pro-rated allowance is both the honest figure and a better bound on what they
+    may still draw than a null (which left ``available`` undefined, so nothing
+    bounded them at all). Under a scheme that does not pro-rate they simply keep
+    the full annual allowance, which is what such a scheme owes them.
+
+    ``_clear_flex`` still fires for a row that resolves to nothing — a member who
+    matches no tier, or whose cover does not intersect the scheme period.
     """
     started = time.monotonic()
     now = datetime.now(tz=UTC)
 
-    membership = compute_flex_membership(db, policy_year_id, client_id)
+    membership = compute_flex_membership(
+        db, policy_year_id, client_id, include_terminated=True
+    )
     by_emp: dict[str, EmployeeFlex] = {fx.employee_id: fx for fx in membership.assignments}
 
-    # compute_flex_membership resolved exactly the ACTIVE employees; load those
-    # rows to write their wallet. Inactive rows are handled by the bulk clear.
-    active = list(
+    rows = list(
         db.execute(
             select(Employee).where(
                 Employee.policy_year_id == policy_year_id,
-                Employee.status == "active",
+                Employee.status.in_([EMPLOYEE_STATUS_ACTIVE, EMPLOYEE_STATUS_TERMINATED]),
             )
         ).scalars()
     )
 
     assigned = 0
     with_status = 0
+    active_total = 0
     by_tier: dict[str, int] = defaultdict(int)
     pending = 0
 
-    for emp in active:
+    for emp in rows:
         fx = by_emp.get(emp.id)
+        is_active = emp.status == EMPLOYEE_STATUS_ACTIVE
+        active_total += int(is_active)
         if fx is None:
-            # An active row compute didn't resolve (shouldn't happen) — clear it.
+            # A row compute didn't resolve (shouldn't happen) — clear it.
             _clear_flex(emp)
         else:
             _apply(emp, fx, now)
-            if fx.family_status:
+            # Headcounts describe the ACTIVE roster, matching the preview.
+            if is_active and fx.family_status:
                 with_status += 1
-            if fx.tier_name:
+            if is_active and fx.tier_name:
                 assigned += 1
                 by_tier[fx.tier_name] += 1
         pending += 1
@@ -137,21 +147,8 @@ def assign_flex_membership(
             db.flush()
             pending = 0
 
-    # Clear stale wallets on non-active employees in a single targeted UPDATE
-    # (only rows that actually carry one), instead of loading + iterating them.
-    db.execute(
-        update(Employee)
-        .where(
-            Employee.policy_year_id == policy_year_id,
-            Employee.status != "active",
-            Employee.flex_assigned_at.is_not(None),
-        )
-        .values(**_FLEX_NULLS)
-        .execution_options(synchronize_session=False)
-    )
-
     return FlexAssignmentSummary(
-        employees_total=len(active),
+        employees_total=active_total,
         employees_assigned=assigned,
         employees_with_status=with_status,
         by_tier=dict(by_tier),

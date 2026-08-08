@@ -17,15 +17,19 @@ same helper the wallet ledger prints, and the claims sheet carries both the end
 date AND a flag per claim so a reader can settle up without cross-referencing
 the other sheet.
 
-**The allocation is the FULL-year wallet, not a pro-rated one.** A flex scheme
-may declare `proration: months_served`, but nothing in the platform reads it —
-`assign_flex_membership` writes the whole tier allowance to
-`Employee.flex_wallet_amount` and every surface (the member's own wallet page,
-the benefit statement, the broker coverage pane, this sheet) reports that one
-figure. Pro-rating HERE would make this the only place that disagrees with the
-member's own screen, which is the defect the derived-not-stored design exists to
-prevent. It has to be applied at assignment or nowhere; see the note in
-`docs/REPORTS_PARITY_PLAN.md`.
+**The allocation is PRO-RATED at assignment, never here.** When the scheme says
+so (`services/flex_proration.py`), `assign_flex_membership` writes the member's
+own share of the annual allowance to `Employee.flex_wallet_amount`, and every
+surface — the member's wallet page, the benefit statement, the broker coverage
+pane, this sheet — reports that one figure. `Annual Allocation Amt` and
+`Pro-ration` print the derivation beside it, because a reduced number with
+nothing explaining it is unauditable and this is the sheet people argue over.
+Pro-rating in the report instead would make it the only place that disagrees
+with the member's own screen.
+
+**The balance never goes negative** and there is no shortfall column: a flex
+wallet pays up to the limit, so utilisation cannot exceed the allowance. See
+`flex_ledger.MemberFlex.balance` and `docs/FLEX_PRORATION_PLAN.md`.
 """
 from __future__ import annotations
 
@@ -71,7 +75,8 @@ LEAVER_SUMMARY_HEADER = [
     "Entity", "Staff ID", "Employee Name", "Identification No.",
     "Date of Hire", "Last Day of Service", "Benefit Start Date",
     "Benefit End Date", "Category", "Wallet",
-    "Total Allocation Amt", "Selection Amt", "Leave Trading Amt",
+    "Total Allocation Amt", "Annual Allocation Amt", "Pro-ration",
+    "Selection Amt", "Leave Trading Amt",
     "Claims Payment Amt", "Total Utilized Amt",
     "Pending Claims Payment Amt", "Balance Available Allocation Amt",
 ]
@@ -171,6 +176,8 @@ def build_leaver_summary_workbook(
             first_value(attrs, _CATEGORY_KEYS) or "",
             WALLET_NAME if flex else "",
             flex.wallet if flex else None,
+            flex.annual_wallet if flex else None,
+            flex.proration_note if flex else "",
             (flex.selection_total or None) if flex else None,
             leave_amount or None,
             (flex.claims_settled or None) if flex else None,

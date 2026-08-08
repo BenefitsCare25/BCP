@@ -29,6 +29,7 @@ from app.core.auth import CurrentUser
 from app.models import Employee, EmployeePlanOverride, Enrollment
 from app.models.employee_plan_override import OverrideSource
 from app.schemas.enrollment import CoverageChangeOut
+from app.services import flex_proration
 from app.services.coverage_resolver import is_sparse_default, load_overrides
 from app.services.enrollment_lifecycle import _defaults_and_baseline
 from app.services.flex_pricing_resolver import (
@@ -365,6 +366,7 @@ def revert_to_baseline(
             dep_profiles=dep_profiles,
             dep_option_ids=dep_option_ids,
             dependants_compulsory=base_tier in ctx["compulsory_dep_cats"],
+            factor=flex_proration.factor_of(employee),
         )
         restore_before = restore_snapshot(ov)
         row, before = upsert_override(

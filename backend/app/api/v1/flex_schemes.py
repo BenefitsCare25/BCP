@@ -74,6 +74,7 @@ from app.services.flex_membership import (
     roster_vocabulary,
 )
 from app.services.flex_pricing_resolver import _is_age
+from app.services.flex_proration import proration_errors
 from app.services.flex_reconcile import seed_tier_match_sets
 
 logger = logging.getLogger(__name__)
@@ -832,6 +833,14 @@ def save_flex(
     # Fail fast at the write boundary: a malformed section (e.g. a non-list
     # `tiers`) must not persist and break later reads.
     shape_errors = _section_shape_errors(body.scheme)
+    # Pro-ration decides money, so a save that carries an unrecognised basis must
+    # be refused rather than silently read as "no pro-ration" — a broker would
+    # believe it was on. Checked HERE and not in `validate_scheme`, so the error
+    # attaches to the save that caused it: an inherited value from an older
+    # extraction must never block a confirm of a scheme nobody edited
+    # (test_legacy_eligibility_keys_are_tolerated).
+    if "eligibility" in body.scheme:
+        shape_errors = [*shape_errors, *proration_errors(body.scheme)]
     if shape_errors:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,

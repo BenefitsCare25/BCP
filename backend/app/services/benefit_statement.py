@@ -30,6 +30,7 @@ from app.schemas.api import (
     FlexBenefitCategoryLine,
     FlexCoverageLine,
     FlexPriceTagLine,
+    FlexProrationLine,
     StatementAttribute,
     StatementEmployee,
 )
@@ -39,6 +40,7 @@ from app.services.flex_membership import (
     resolve_family_status,
 )
 from app.services.flex_pricing_resolver import summarize_employee
+from app.services.flex_proration import describe
 from app.services.plan_hydration import basis_amount, hydrate_plans
 from app.services.roster_attributes import (
     DOB_KEYS,
@@ -226,6 +228,7 @@ def _build_flex_coverage(db: Session, employee: Employee) -> FlexCoverageLine | 
         tier_name=employee.flex_tier_name,
         family_status=employee.flex_family_status,
         wallet_amount=employee.flex_wallet_amount,
+        proration=_proration_line(employee),
         currency=employee.flex_currency,
         source=employee.flex_source,
         employer_pct=employer_pct,
@@ -242,6 +245,31 @@ def _build_flex_coverage(db: Session, employee: Employee) -> FlexCoverageLine | 
             scheme_row, employee.flex_assigned_at, tier
         ),
     )
+
+
+def _proration_line(employee: Employee) -> FlexProrationLine | None:
+    """The stored derivation behind a pro-rated wallet, as API output.
+
+    None when nothing was pro-rated, so a surface can render the explanation
+    unconditionally and print nothing in the ordinary case. Shape-guarded: the
+    column is JSON and a legacy/hand-edited row must not break the statement.
+    """
+    raw = employee.flex_proration
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return FlexProrationLine(
+            basis=str(raw["basis"]),
+            factor=float(raw["factor"]),
+            served=int(raw["served"]),
+            total=int(raw["total"]),
+            full_amount=float(raw["full_amount"]),
+            note=describe(raw),
+            period_start=raw.get("period_start"),
+            period_end=raw.get("period_end"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatementOut:

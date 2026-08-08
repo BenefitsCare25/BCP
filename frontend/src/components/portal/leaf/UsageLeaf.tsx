@@ -200,6 +200,17 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
         currency={currency}
       />
 
+      {/* Why the allowance is what it is, when it is not the full year's. A
+        * member sees this the moment their leaving date is recorded, and an
+        * allowance that simply shrinks with nothing explaining it is the thing
+        * they will ask about. Absent for anyone covered the whole period. */}
+      {flex.proration && (
+        <p className="mt-2 text-row text-label">
+          <Money value={flex.proration.full_amount} currency={currency} /> a
+          year, pro-rated to {flex.proration.note} of cover
+        </p>
+      )}
+
       {categories.length > 0 && (
         <>
           <MountRule className="mt-4" />

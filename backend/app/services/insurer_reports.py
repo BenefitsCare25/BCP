@@ -11,7 +11,7 @@ the endpoint gates that behind a write-capable role and audits every download.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any
 
 from openpyxl import Workbook
@@ -29,6 +29,15 @@ from app.services.roster_attributes import (
     EMPLOYEE_ID_KEYS,
     first_value,
     mask_nric,
+)
+from app.services.roster_attributes import (
+    last_day_of_service as _last_day_of_service,
+)
+from app.services.roster_attributes import (
+    resolved_last_day as _resolved_last_day,
+)
+from app.services.roster_attributes import (
+    roster_date as _as_date,
 )
 from app.services.roster_parser import _FORMULA_LEADERS
 
@@ -53,7 +62,6 @@ _SELECTED_STATUSES = {
     EnrollmentStatus.declined,
 }
 
-_XLSX_EPOCH_KEYS = ("last_day_of_service", "last_day", "termination_date")
 
 
 def report_employees(db: Session, policy_year: PolicyYear) -> list[Employee]:
@@ -110,60 +118,6 @@ def latest_window(db: Session, policy_year_id: str) -> EnrollmentWindow | None:
         )
         .order_by(EnrollmentWindow.opens_at.desc())
     ).scalars().first()
-
-
-_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d")
-
-
-def _as_date(value: object) -> date | str | None:
-    """Coerce a roster date-ish value to a real ``date`` cell (Excel formats
-    it) — fall back to the raw string when unparseable. Roster dates are stored
-    ISO on ingest, but tolerate the common alternates + Excel serial numbers so
-    a stray format lands as a real date rather than literal text."""
-    if value in (None, ""):
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    # Excel serial date (days since 1899-12-30), if a numeric cell slipped through.
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        try:
-            return (date(1899, 12, 30) + timedelta(days=int(value)))
-        except (ValueError, OverflowError):
-            return str(value)
-    raw = str(value).strip().split(" ")[0]
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(raw, fmt).date()
-        except ValueError:
-            continue
-    return str(value)
-
-
-def _last_day_of_service(member: Employee | Any) -> date | str | None:
-    """The member's last day AS THE SHEET PRINTS IT.
-
-    Takes an Employee or a Dependant — both carry `terminated_effective` and
-    `attribute_values`, and the listing sync writes the same two shapes to
-    each. An unparseable roster value comes back as the raw string on purpose:
-    a cell that reads "end of June" is worth printing, and dropping it would
-    make a leaver look like they had no last day at all.
-    """
-    if member.terminated_effective is not None:
-        return member.terminated_effective
-    return _as_date(first_value(member.attribute_values or {}, _XLSX_EPOCH_KEYS))
-
-
-def _resolved_last_day(member: Employee | Any) -> date | None:
-    """The same value, as a real date, or None when it cannot be one.
-
-    The DECIDING half of the pair above: only a real date can be compared
-    against a policy period. A raw string is treated exactly like a missing one
-    — unknown, and therefore conservatively in period.
-    """
-    value = _last_day_of_service(member)
-    return value if isinstance(value, date) else None
 
 
 def benefit_window(

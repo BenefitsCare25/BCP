@@ -49,6 +49,7 @@ from app.schemas.enrollment import (
     PortalEnrollmentOut,
     ProductTierSetOut,
 )
+from app.services import flex_proration
 from app.services.cohort_tiers import electable_tiers_for_employee, tier_key
 from app.services.coverage_resolver import employee_compulsory_product_ids
 from app.services.enrollment_flex_guard import (
@@ -691,6 +692,7 @@ def apply_elections(
                 tier_set is not None
                 and tier_set.dependant_participation == "compulsory"
             ),
+            factor=flex_proration.factor_of(employee),
         )
         existing.notes = item.notes
 

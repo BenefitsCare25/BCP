@@ -61,7 +61,7 @@ from app.schemas.enrollment import (
 )
 from app.schemas.member_query import MemberQuery
 from app.services import bulk_warnings as warn
-from app.services import dual_coverage
+from app.services import dual_coverage, flex_proration
 from app.services.cohort_tiers import first_category_per_product
 from app.services.coverage_resolver import is_sparse_default, resolve_plan
 from app.services.flex_pricing_resolver import (
@@ -930,6 +930,7 @@ def _price_tag(
         dep_profiles=dep_profiles,
         dep_option_ids=dep_options,
         dependants_compulsory=base_cat in flex.compulsory_dep_cats,
+        factor=flex_proration.factor_of(emp),
     )
 
 

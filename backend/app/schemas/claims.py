@@ -578,9 +578,30 @@ class FlexCategoryUtilization(BaseModel):
     remaining: float | None = None
 
 
+class FlexProration(BaseModel):
+    """How the annual allowance was scaled to the member's own cover period.
+
+    Mirrors ``api.FlexProrationLine``; carried here too because the member's
+    wallet page is where someone whose allowance dropped will look for the
+    reason, and a reduced figure with nothing explaining it is the one members
+    dispute. ``note`` is the printable fraction ("6/12 months"), SERVED so the
+    client never recomputes a month count that could drift from the figure
+    beside it.
+    """
+
+    basis: str
+    factor: float
+    served: int
+    total: int
+    full_amount: float
+    note: str
+
+
 class FlexUtilization(BaseModel):
     currency: str | None = None
     wallet_amount: float | None = None
+    # Present only when the allowance was pro-rated.
+    proration: FlexProration | None = None
     price_tags_total: float | None = None
     flex_balance: float | None = None  # wallet - enrollment price-tags
     approved: float = 0.0  # approved flex claims

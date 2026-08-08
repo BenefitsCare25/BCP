@@ -682,6 +682,23 @@ class FlexPriceTagLine(BaseModel):
     dependant_tag: float | None = None
 
 
+class FlexProrationLine(BaseModel):
+    """How an annual flex allowance was scaled to one member's cover period.
+
+    ``note`` is the printable fraction ("6/12 months") so every surface renders
+    the same words — see ``services/flex_proration.describe``.
+    """
+
+    basis: str
+    factor: float
+    served: int
+    total: int
+    full_amount: float
+    note: str
+    period_start: str | None = None
+    period_end: str | None = None
+
+
 class FlexCoverageLine(BaseModel):
     """The employee's resolved Flexible-Benefits wallet — no premium figures.
 
@@ -693,7 +710,14 @@ class FlexCoverageLine(BaseModel):
     scheme_name: str | None = None
     tier_name: str | None = None
     family_status: str | None = None
+    # The EFFECTIVE allowance — pro-rated to the period the member was covered
+    # when the scheme says so. `proration` carries the derivation.
     wallet_amount: float | None = None
+    # {basis, factor, served, total, full_amount, period_start, period_end} when
+    # the allowance was pro-rated, else None. SERVED, never recomputed in the
+    # client: the month count has no exact JS equivalent worth maintaining twice,
+    # and a fraction that drifts from the figure beside it is silent.
+    proration: FlexProrationLine | None = None
     currency: str | None = None
     # How the family status was resolved: "dependants" | "roster" | "none".
     source: str | None = None

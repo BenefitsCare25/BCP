@@ -528,11 +528,32 @@ export interface FlexPriceTagLine {
   price_tag: number | null;
 }
 
+/**
+ * How an annual flex allowance was scaled to one member's cover period.
+ *
+ * SERVED, never recomputed here: the month count has no exact JS equivalent
+ * worth maintaining twice, and a fraction that drifts from the figure beside it
+ * is silent. `note` is the printable form ("6/12 months").
+ */
+export interface FlexProrationLine {
+  basis: string;
+  factor: number;
+  served: number;
+  total: number;
+  full_amount: number;
+  note: string;
+  period_start: string | null;
+  period_end: string | null;
+}
+
 export interface FlexCoverageLine {
   scheme_name: string | null;
   tier_name: string | null;
   family_status: string | null;
+  /** The EFFECTIVE allowance — pro-rated when the scheme says so. */
   wallet_amount: number | null;
+  /** Present only when the allowance was pro-rated. */
+  proration: FlexProrationLine | null;
   currency: string | null;
   source: string | null;
   employer_pct: number | null;
@@ -1140,8 +1161,19 @@ export type EntitlementStart =
   | "policy_year_start"
   | "confirmation_date";
 
+/** How the annual allowance is scaled to the period a member was covered. */
+export type ProrationBasis = "none" | "months_served" | "days_served";
+/** Which end of the year the pro-ration applies to. */
+export type ProrationAppliesTo = "leavers" | "joiners" | "both";
+
 export interface FlexProration {
-  basis?: "months_served" | "none" | null;
+  basis?: ProrationBasis | null;
+  applies_to?: ProrationAppliesTo | null;
+  /**
+   * Extracted from documents that state it, but deliberately NOT acted on: a
+   * flex wallet pays up to the limit, so utilisation can never exceed the
+   * allowance and there is no shortfall to recover.
+   */
   leaver_recovery?: boolean | null;
 }
 
@@ -1353,6 +1385,13 @@ export interface FlexCategoryUtilization {
 export interface FlexUtilization {
   currency: string | null;
   wallet_amount: number | null;
+  /**
+   * Present only when the allowance was pro-rated to the member's cover period.
+   * NARROWER than `FlexProrationLine` on purpose: `schemas/claims.FlexProration`
+   * carries no period bounds, so typing this as the statement's shape would
+   * promise two fields the utilization endpoints never send.
+   */
+  proration: Omit<FlexProrationLine, "period_start" | "period_end"> | null;
   price_tags_total: number | null;
   flex_balance: number | null;
   approved: number;

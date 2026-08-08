@@ -35,11 +35,16 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import tenant_or_global
 from app.models import Dependant, Employee, EmployeeAttributeSchema, FlexScheme, PolicyYear
+from app.models.dependant import DEPENDANT_STATUS_TERMINATED
+from app.models.employee import EMPLOYEE_STATUS_ACTIVE, EMPLOYEE_STATUS_TERMINATED
+from app.services import flex_proration
 from app.services.derivation_engine import derive
 from app.services.flex_pricing_resolver import (
     _dependant_eligible,
     scheme_dependant_age_limits,
 )
+from app.services.flex_proration import ProrationConfig
+from app.services.roster_attributes import resolved_last_day
 
 # Canonical family-status codes (mirror the seeded ``family_status`` enum).
 FAMILY_CODES: tuple[str, ...] = ("S", "M", "M1C", "M2C", "M3C")
@@ -547,6 +552,8 @@ class EmployeeFlex:
     tier_name: str | None
     currency: str | None
     wallet_amount: float | None
+    # Derivation behind a pro-rated wallet; None = the full annual allowance.
+    proration: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -605,10 +612,13 @@ class ResolvedEmployee:
     tier_idx: int | None
     tier_name: str | None
     currency: str | None
+    # The EFFECTIVE wallet — pro-rated when the scheme says so. `proration`
+    # carries the derivation (None = the full annual allowance).
     wallet_amount: float | None
     # Names of every tier whose reconciled match sets this employee satisfies;
     # length > 1 means ambiguous (assigned to the first, overlap surfaced).
     overlap_tiers: list[str]
+    proration: dict[str, Any] | None = None
 
 
 def resolve_employee(
@@ -619,6 +629,8 @@ def resolve_employee(
     meta: dict[str, Any],
     age_limits: dict[str, dict[str, int]] | None = None,
     ref: date | None = None,
+    proration: ProrationConfig | None = None,
+    entitlement: tuple[date, date] | None = None,
 ) -> ResolvedEmployee:
     """Resolve ONE employee's family status + flex-tier assignment + identity.
 
@@ -654,6 +666,14 @@ def resolve_employee(
         if tier
         else None
     )
+    # The annual allowance the tier grants, then the member's own share of it.
+    # A pro-rated wallet and its derivation are written together or not at all —
+    # a bare reduced number with nothing explaining it is unauditable, and this
+    # is the figure members dispute.
+    full_wallet = tier_wallet(tier, code, meta)
+    prorated = flex_proration.prorate(
+        full_wallet, emp, entitlement, proration or ProrationConfig()
+    )
     return ResolvedEmployee(
         employee_id=emp.id,
         staff_id=emp.staff_id,
@@ -670,8 +690,9 @@ def resolve_employee(
         tier_idx=idx,
         tier_name=(tier.get("name") if tier else None),
         currency=currency,
-        wallet_amount=tier_wallet(tier, code, meta),
+        wallet_amount=full_wallet if prorated is None else prorated.amount,
         overlap_tiers=overlap,
+        proration=None if prorated is None else prorated.as_dict(),
     )
 
 
@@ -695,12 +716,60 @@ class ResolvedRoster:
     ref: date | None
 
 
+def _counts_for(dep: Dependant, emp: Employee) -> bool:
+    """Whether ``dep`` counts towards ``emp``'s family status — and therefore
+    towards the size of their wallet.
+
+    An active dependant always counts. A TERMINATED one counts only while
+    resolving a leaver, and only if they were still live on the employee's last
+    day. The listing sync terminates a leaver's household in the same apply that
+    terminates them, so counting active rows alone would resolve every leaver as
+    Single and silently HALVE the settlement figure their sheet is read for. A
+    dependant who left earlier (a divorce in March) correctly stops counting.
+    """
+    if dep.status != DEPENDANT_STATUS_TERMINATED:
+        return True
+    last_day = resolved_last_day(emp)
+    dep_end = resolved_last_day(dep)
+    # Excluded ONLY when it is known they left first. An unresolvable date on
+    # either side (no `terminated_effective`, or a roster cell reading "end of
+    # June") is unknown, not evidence — and defaulting unknown to "drop" is the
+    # very failure this function exists to prevent, just reached by the other
+    # path: the leaver resolves as Single and the settlement wallet halves.
+    if last_day is None or dep_end is None:
+        return True
+    return dep_end >= last_day
+
+
+def _entitlement_bounds(
+    meta: dict[str, Any], py: PolicyYear | None
+) -> tuple[date | None, date | None]:
+    """The window a FULL allowance buys: the flex effective window intersected
+    with the policy year — the denominator every factor divides by.
+
+    The intersection is what makes a short first year self-healing. CDL's scheme
+    carries ``effective_start 2026-07-15`` with an end beyond the year; against a
+    hardcoded 12 months every member would pro-rate to ~46% for serving the whole
+    scheme period, and against the intersection they resolve to 1.0.
+    """
+    if py is None:
+        return None, None
+    start = _meta_date(meta, "effective_start") or py.start_date
+    end = _meta_date(meta, "effective_end") or py.end_date
+    if start is not None and py.start_date is not None:
+        start = max(start, py.start_date)
+    if end is not None and py.end_date is not None:
+        end = min(end, py.end_date)
+    return start, end
+
+
 def resolve_roster(
     db: Session,
     policy_year_id: str,
     client_id: str | None,
     *,
     with_dependant_detail: bool = True,
+    include_terminated: bool = False,
 ) -> ResolvedRoster:
     """Load + resolve the whole active roster in one place.
 
@@ -709,6 +778,12 @@ def resolve_roster(
     The headcount path (``compute_flex_membership``) passes False: it only needs
     spouse/child counts for linked dependants, so the wider query + retained list
     would be wasted work on that hot path.
+
+    ``include_terminated`` (default False) additionally resolves leavers, so
+    ``flex_assignment`` can size their settlement wallet instead of nulling it.
+    ONLY that caller passes True: ``aggregate_membership`` counts
+    ``active_emp_ids`` only, because a leaver in the tier headcounts would
+    inflate every eligibility figure on the flex overview.
     """
     scheme_row = db.execute(
         select(FlexScheme).where(FlexScheme.policy_year_id == policy_year_id)
@@ -730,35 +805,48 @@ def resolve_roster(
             )
         ).scalars()
     )
+    statuses = (
+        [EMPLOYEE_STATUS_ACTIVE, EMPLOYEE_STATUS_TERMINATED]
+        if include_terminated
+        else [EMPLOYEE_STATUS_ACTIVE]
+    )
     employees = list(
         db.execute(
             select(Employee).where(
                 Employee.policy_year_id == policy_year_id,
-                Employee.status == "active",
+                Employee.status.in_(statuses),
             )
         ).scalars()
     )
-    active_emp_ids = {e.id for e in employees}
+    active_emp_ids = {e.id for e in employees if e.status == EMPLOYEE_STATUS_ACTIVE}
     emp_by_id = {e.id: e for e in employees}
 
+    dep_statuses = ["active", DEPENDANT_STATUS_TERMINATED] if include_terminated else ["active"]
     dep_query = select(Dependant).where(
         Dependant.policy_year_id == policy_year_id,
-        Dependant.status == "active",
+        Dependant.status.in_(dep_statuses),
     )
     if not with_dependant_detail:
         # Headcount only counts linked deps — skip the orphaned/inactive rows.
         dep_query = dep_query.where(Dependant.employee_id.is_not(None))
     all_deps = list(db.execute(dep_query).scalars())
 
+    resolvable = {e.id for e in employees}
     deps_by_emp: dict[str, list[Dependant]] = defaultdict(list)
     for dep in all_deps:
-        if dep.employee_id is not None and dep.employee_id in active_emp_ids:
-            deps_by_emp[dep.employee_id].append(dep)
+        if dep.employee_id is not None and dep.employee_id in resolvable:
+            if _counts_for(dep, emp_by_id[dep.employee_id]):
+                deps_by_emp[dep.employee_id].append(dep)
+
+    proration = flex_proration.proration_config(scheme)
+    entitlement = flex_proration.entitlement_period(
+        *_entitlement_bounds(meta, py)
+    )
 
     resolved = [
         resolve_employee(
             emp, deps_by_emp.get(emp.id, []), derive(emp.attribute_values or {}, schemas),
-            tiers, meta, age_limits, ref,
+            tiers, meta, age_limits, ref, proration, entitlement,
         )
         for emp in employees
     ]
@@ -777,11 +865,22 @@ def resolve_roster(
 
 
 def compute_flex_membership(
-    db: Session, policy_year_id: str, client_id: str | None
+    db: Session,
+    policy_year_id: str,
+    client_id: str | None,
+    *,
+    include_terminated: bool = False,
 ) -> FlexMembership:
-    """Resolve every active employee's family status + flex tier and aggregate."""
+    """Resolve every active employee's family status + flex tier and aggregate.
+
+    ``include_terminated`` additionally resolves leavers into ``assignments``
+    (never into the headcounts) so ``flex_assignment`` can size their settlement
+    wallet. See ``resolve_roster``.
+    """
     roster = resolve_roster(
-        db, policy_year_id, client_id, with_dependant_detail=False
+        db, policy_year_id, client_id,
+        with_dependant_detail=False,
+        include_terminated=include_terminated,
     )
     return aggregate_membership(roster)
 
@@ -800,6 +899,25 @@ def aggregate_membership(roster: ResolvedRoster) -> FlexMembership:
     ambiguous_examples: list[dict[str, Any]] = []
 
     for r in roster.resolved:
+        # Assignments cover everyone resolved (leavers included, so their
+        # settlement wallet can be written); every COUNT below is active-only,
+        # or a leaver would inflate the eligibility figures on the flex overview.
+        assignments.append(
+            EmployeeFlex(
+                employee_id=r.employee_id,
+                family_status=r.family_status,
+                source=r.source,
+                spouse_count=r.spouse_count,
+                child_count=r.child_count,
+                tier_name=r.tier_name,
+                currency=r.currency,
+                wallet_amount=r.wallet_amount,
+                proration=r.proration,
+            )
+        )
+        if r.employee_id not in roster.active_emp_ids:
+            continue
+
         fs_counts[r.family_status or "unknown"] += 1
         source_counts[r.source] += 1
 
@@ -821,19 +939,6 @@ def aggregate_membership(roster: ResolvedRoster) -> FlexMembership:
             # Matched no tier despite a configured scheme → no wallet. Bucket by
             # the designation that didn't match so the broker can act on it.
             ineligible_designations[r.designation or "(no job title)"] += 1
-
-        assignments.append(
-            EmployeeFlex(
-                employee_id=r.employee_id,
-                family_status=r.family_status,
-                source=r.source,
-                spouse_count=r.spouse_count,
-                child_count=r.child_count,
-                tier_name=r.tier_name,
-                currency=r.currency,
-                wallet_amount=r.wallet_amount,
-            )
-        )
 
     tier_headcounts = [
         TierHeadcount(

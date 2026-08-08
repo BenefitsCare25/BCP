@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 NAME_KEYS = ("name", "dependant_name", "full_name", "employee_name")
@@ -194,6 +194,62 @@ def suspect_nric_warning(values: Iterable[object | None]) -> str | None:
 
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%Y/%m/%d")
+
+# Roster spellings of "the day cover stops". One tuple, because the reports and
+# the flex allowance have to agree on when a member left.
+LAST_DAY_KEYS = ("last_day_of_service", "last_day", "termination_date")
+
+
+def roster_date(value: object) -> date | str | None:
+    """Coerce a roster date-ish value to a real ``date`` — fall back to the raw
+    string when unparseable. Roster dates are stored ISO on ingest, but tolerate
+    the common alternates + Excel serial numbers so a stray format lands as a
+    real date rather than literal text."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    # Excel serial date (days since 1899-12-30), if a numeric cell slipped through.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return date(1899, 12, 30) + timedelta(days=int(value))
+        except (ValueError, OverflowError):
+            return str(value)
+    raw = str(value).strip().split(" ")[0]
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return str(value)
+
+
+def last_day_of_service(member: Any) -> date | str | None:
+    """The member's last day AS A SHEET PRINTS IT.
+
+    Takes an Employee or a Dependant — both carry `terminated_effective` and
+    `attribute_values`, and the listing sync writes the same two shapes to each.
+    An unparseable roster value comes back as the raw string on purpose: a cell
+    that reads "end of June" is worth printing, and dropping it would make a
+    leaver look like they had no last day at all.
+    """
+    if getattr(member, "terminated_effective", None) is not None:
+        return member.terminated_effective
+    return roster_date(first_value(member.attribute_values or {}, LAST_DAY_KEYS))
+
+
+def resolved_last_day(member: Any) -> date | None:
+    """The same value, as a real date, or None when it cannot be one.
+
+    The DECIDING half of the pair above: only a real date can be compared
+    against a policy period or used to size a pro-rated allowance. A raw string
+    is treated exactly like a missing one — unknown, and therefore conservatively
+    "still here".
+    """
+    value = last_day_of_service(member)
+    return value if isinstance(value, date) else None
 
 
 def iso_date(raw: object | None) -> str | None:

@@ -433,3 +433,35 @@ def test_reject_never_guarded(broker: TestClient):
     )
     assert res.status_code == 200
     assert res.json()["status"] == "rejected"
+
+
+def test_claims_can_never_take_the_wallet_below_zero():
+    """A flex wallet pays UP TO the limit — a member with S$500 left who presents
+    a S$700 bill utilises S$500 and pays the rest themselves. "Overspent by
+    S$200" is not a state the product can be in, so `available` floors at 0 and
+    `flex_ledger.MemberFlex.balance` splits identically: one member, one answer
+    to "what have I got left". Reachable on paper only because pro-ration binds
+    forward — it can shrink an allowance below what was already reimbursed."""
+    _mk_claim(kind="flex", flex_category="Dental", amount=900.0,
+              approved=900.0, status="approved")
+    flex = _util().flex
+    assert flex.flex_balance == 800.0
+    assert flex.approved == 900.0
+    assert flex.available == 0.0
+
+
+def test_cover_costing_more_than_the_wallet_stays_signed(monkeypatch):
+    """A DIFFERENT state, and the one the enrolment guard and the bulk
+    `flex_overdraft` warning exist for: the member holds elected cover priced
+    above their allowance. Flooring that too would hide it behind a wallet that
+    merely looks empty."""
+    def _overdrawn(db, emp):
+        st = _statement(emp)
+        st.flex.price_tags_total = 1100.0
+        st.flex.flex_balance = -100.0
+        return st
+
+    monkeypatch.setattr(utilization_service, "build_member_statement", _overdrawn)
+    flex = _util().flex
+    assert flex.flex_balance == -100.0
+    assert flex.available == -100.0

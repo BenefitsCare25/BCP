@@ -42,10 +42,13 @@ import {
 } from "@/lib/flex";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import type {
+  FlexProration,
   FlexScheme,
   FlexSchemeBody,
   FlexTier,
   FlexTierHeadcount,
+  ProrationAppliesTo,
+  ProrationBasis,
 } from "@/types";
 import { FlexTierEditor } from "./FlexTierEditor";
 import { toast } from "sonner";
@@ -118,6 +121,18 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
   };
   const setMeta = (partial: Partial<FlexSchemeBody["meta"]>) =>
     update({ ...body, meta: { ...meta, ...partial } });
+
+  // Pro-ration lives under `eligibility`, where the extractor writes it — moving
+  // it would orphan every value AI has already pulled out of a scheme document.
+  const proration = body.eligibility?.proration ?? {};
+  const setProration = (partial: Partial<FlexProration>) =>
+    update({
+      ...body,
+      eligibility: {
+        ...(body.eligibility ?? {}),
+        proration: { ...proration, ...partial },
+      },
+    });
   const setTier = (i: number, tier: FlexTier) =>
     update({ ...body, tiers: body.tiers.map((t, j) => (j === i ? tier : t)) });
 
@@ -363,6 +378,55 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                 aria-label="Child maximum age"
               />
             </div>
+          </div>
+
+          {/* Pro-ration. A member is rarely covered for a whole year, and
+              companies settle that differently — by months, by days, or not at
+              all. Off by default: reducing an allowance on an inference is the
+              one error that cannot be walked back with a member. */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3">
+            <FieldLabel hint="Scales the annual allowance to the period the member was actually covered, and scales the price tags drawn against it by the same factor. Claims already reimbursed never pro-rate. Leave as Full annual when the scheme grants the whole year regardless.">
+              Pro-ration
+            </FieldLabel>
+            <div className="w-56 space-y-1">
+              <Select
+                value={proration.basis ?? "none"}
+                onValueChange={(v) =>
+                  setProration({ basis: v as ProrationBasis })
+                }
+              >
+                <SelectTrigger aria-label="Pro-ration basis">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Full annual allowance</SelectItem>
+                  {/* "By months" already means a part month counts whole — that
+                      is what choosing months over days IS. A member wanting
+                      partial-month precision picks days. */}
+                  <SelectItem value="months_served">By months served</SelectItem>
+                  <SelectItem value="days_served">By days served</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(proration.basis ?? "none") !== "none" && (
+              <div className="w-56 space-y-1">
+                <Select
+                  value={proration.applies_to ?? "both"}
+                  onValueChange={(v) =>
+                    setProration({ applies_to: v as ProrationAppliesTo })
+                  }
+                >
+                  <SelectTrigger aria-label="Pro-ration applies to">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">Joiners and leavers</SelectItem>
+                    <SelectItem value="leavers">Leavers only</SelectItem>
+                    <SelectItem value="joiners">Joiners only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

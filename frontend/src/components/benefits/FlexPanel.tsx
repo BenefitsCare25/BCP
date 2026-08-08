@@ -188,11 +188,15 @@ export function FlexPanel({
     drawn.push({ label: "claims approved", value: approved, add: false });
   }
 
-  // Overdrawn is a property of what is LEFT, not of the balance before claims:
-  // a wallet with 500 of balance and 800 of approved claims is overdrawn, and
-  // reading `balance` printed that −300 in ordinary ink labelled "available".
-  // `available` already falls back through `flex_balance` to `wallet`, so it is
-  // the only figure the headline and the equation total ever show.
+  // Overdrawn is a property of what is LEFT, and `available` already falls back
+  // through `flex_balance` to `wallet`, so it is the only figure the headline
+  // and the equation total ever show.
+  //
+  // It now means ONE thing: the member holds elected cover priced above their
+  // allowance. Claims can no longer produce it — a flex wallet pays up to the
+  // limit, so `utilization` floors the claims half at zero (and the leaver
+  // sheets split identically). Don't "restore" a negative from claims here; it
+  // would be an indication of something that cannot happen.
   const shortfall = available != null && available < 0;
   // Magnitude + the word "overdrawn"; "SGD -300 overdrawn" states the sign
   // twice and "SGD -300 available" is not a quantity anyone has.
@@ -298,6 +302,19 @@ export function FlexPanel({
           </span>
         )}
       </p>
+      {/* Where the allowance above came from. Rendered only when it was
+        * pro-rated, so a full-year member sees nothing — and never folded into
+        * the ledger line, because the fraction is not another movement, it is
+        * the derivation of that line's FIRST term. A reduced allowance with
+        * nothing explaining it is the number members dispute. */}
+      {flex.proration && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          <span className="tabular-nums">
+            {formatWallet(flex.proration.full_amount, currency)}
+          </span>{" "}
+          annual, pro-rated {flex.proration.note} of cover
+        </p>
+      )}
 
       {(tagLines.length > 0 || hasLeave) && (
         <div className="mt-2">

@@ -823,8 +823,12 @@ procedure"). Capture cost_sharing (e.g. employer 80 / employee 20, with exceptio
 
 5. ELIGIBILITY & PRORATION — capture in `eligibility`: entitlement_start (when cover begins — \
 "date_of_hire", "policy_year_start", or "confirmation_date"), and proration (basis \
-"months_served" when the limit is pro-rated for joiners/leavers by months served, plus \
-leaver_recovery=true if any shortfall is recovered from leavers). Put tax/lapse notes in meta. \
+"months_served" when the limit is pro-rated by months served, "days_served" when by days, \
+"none" when the full annual limit applies regardless; applies_to "leavers" when the document \
+says only employees LEAVING service are pro-rated, "joiners" for entrants only, "both" when it \
+covers both or does not say; leaver_recovery=true if a shortfall is stated as recovered. The \
+clause is usually ONE sentence under the limit table and decides the member's real limit). \
+Put tax/lapse notes in meta. \
 If the document states the scheme's effective/commencement period, set meta.effective_start / \
 meta.effective_end as ISO dates (YYYY-MM-DD); leave them null when not stated.
 
@@ -974,7 +978,19 @@ FLEX_EXTRACT_TOOL_SCHEMA: dict[str, Any] = {
                         "properties": {
                             "basis": {
                                 "type": ["string", "null"],
-                                "enum": ["months_served", "none", None],
+                                "enum": ["months_served", "days_served", "none", None],
+                                "description": (
+                                    "How the annual limit is scaled to the period the "
+                                    "member was actually covered."
+                                ),
+                            },
+                            "applies_to": {
+                                "type": ["string", "null"],
+                                "enum": ["leavers", "joiners", "both", None],
+                                "description": (
+                                    "Which end of the year the pro-ration applies to, "
+                                    "per the document's own wording."
+                                ),
                             },
                             "leaver_recovery": {
                                 "type": ["boolean", "null"],

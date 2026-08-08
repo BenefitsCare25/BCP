@@ -530,3 +530,65 @@ def test_workbook_viewer_cannot_pull_unmasked(client):
         assert res.status_code == 403
     finally:
         app.dependency_overrides[get_current_user] = lambda: _user()
+
+
+# ── Pro-ration on the sheets ─────────────────────────────────────────────────
+
+def test_the_proration_columns_are_blank_when_nothing_was_prorated(client):
+    """The columns only carry a figure where it differs from the one beside it.
+    Every member here holds a full annual allowance, so both stay empty rather
+    than restating `Total Allocation Amt` and a `12/12` nobody needs."""
+    for kind in ("leaver-summary", "wallet-utilisation-summary"):
+        header, rows = _get(client, kind)
+        assert "Annual Allocation Amt" in header
+        for r in rows:
+            assert r[header.index("Annual Allocation Amt")] is None
+            assert not r[header.index("Pro-ration")]
+
+
+def test_a_prorated_wallet_prints_its_annual_figure_and_the_fraction(client):
+    """A reduced number with nothing explaining it is unauditable, and this is
+    the sheet people argue over."""
+    with SessionLocal() as s:
+        emp = s.get(Employee, EMP_LEAVER)
+        emp.flex_wallet_amount = 500.0
+        emp.flex_proration = {
+            "basis": "months_served", "factor": 0.5, "served": 6, "total": 12,
+            "full_amount": 1000.0,
+            "period_start": "2039-01-01", "period_end": "2039-12-31",
+        }
+        s.commit()
+    try:
+        header, rows = _get(client, "leaver-summary")
+        row = _row(header, rows, "FX-2")
+        assert row[header.index("Total Allocation Amt")] == 500.0
+        assert row[header.index("Annual Allocation Amt")] == 1000.0
+        assert row[header.index("Pro-ration")] == "6/12 months"
+    finally:
+        with SessionLocal() as s:
+            emp = s.get(Employee, EMP_LEAVER)
+            emp.flex_wallet_amount, emp.flex_proration = 1000.0, None
+            s.commit()
+
+
+def test_the_balance_never_prints_negative(client):
+    """A flex wallet pays UP TO the limit — a member with S$500 left who presents
+    a S$700 bill utilises S$500 and pays the rest themselves. So "overspent" is
+    not a state the product can be in, and a negative balance would be an
+    indication of something that cannot happen. Reachable on paper only because
+    pro-ration binds FORWARD: it can shrink an allowance below what was already
+    reimbursed, and it never reaches back for that money."""
+    with SessionLocal() as s:
+        emp = s.get(Employee, EMP_LEAVER)
+        emp.flex_wallet_amount = 50.0  # below the 120.00 already claimed
+        s.commit()
+    try:
+        header, rows = _get(client, "leaver-summary")
+        row = _row(header, rows, "FX-2")
+        assert row[header.index("Total Utilized Amt")] == 120.0
+        assert row[header.index("Balance Available Allocation Amt")] == 0.0
+    finally:
+        with SessionLocal() as s:
+            s.get(Employee, EMP_LEAVER).flex_wallet_amount = 1000.0
+            s.commit()
+

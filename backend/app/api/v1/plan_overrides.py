@@ -36,6 +36,7 @@ from app.schemas.enrollment import (
     PlanOverrideOut,
     PlanOverrideUpsert,
 )
+from app.services import flex_proration
 from app.services.bulk_plan_update import baseline_cat_by_product
 from app.services.cohort_tiers import tier_key
 from app.services.coverage_history import coverage_history
@@ -308,6 +309,7 @@ def set_plan_override(
         spouse_count=spouse_count, child_count=child_count,
         dep_profiles=dep_profiles, dep_option_ids=dep_options,
         dependants_compulsory=compulsory_deps,
+        factor=flex_proration.factor_of(emp),
     )
 
     existing, before = upsert_override(

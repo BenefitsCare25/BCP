@@ -38,6 +38,7 @@ from app.services.flex_pricing_resolver import (
     flex_year_context,
     summarize_employee,
 )
+from app.services.flex_proration import describe
 from app.services.insurer_reports import (
     _last_day_of_service,
     append_safe,
@@ -77,7 +78,8 @@ UTILISATION_SUMMARY_HEADER = [
     "Entity", "Staff ID", "Employee Name", "Identification No.",
     "Date of Hire", "Last Day of Service", "Benefit Start Date",
     "Benefit End Date", "Category", "Wallet",
-    "Total Allocation Amt", "Buy Leave Amt", "Sell Leave Amt",
+    "Total Allocation Amt", "Annual Allocation Amt", "Pro-ration",
+    "Buy Leave Amt", "Sell Leave Amt",
     "Selection Amt", "Deals Amt", "Claims Payment Amt",
     "Total Utilized Amt", "Pending Claims Payment Amt",
     "Balance Available Allocation Amt", "B/F Allocation Amt to Next Year",
@@ -125,6 +127,27 @@ class MemberFlex:
     claims_pending: float
 
     @property
+    def annual_wallet(self) -> float | None:
+        """The un-pro-rated allowance, when the wallet was pro-rated.
+
+        Blank otherwise, so the column only carries a figure where it differs
+        from the one beside it. A pro-rated number with nothing explaining it is
+        unauditable, and this is the figure members dispute.
+        """
+        raw = getattr(self.employee, "flex_proration", None)
+        if not isinstance(raw, dict):
+            return None
+        value = raw.get("full_amount")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        return round(float(value), 2)
+
+    @property
+    def proration_note(self) -> str:
+        """"6/12 months" / "182/365 days"; empty when nothing was pro-rated."""
+        return describe(getattr(self.employee, "flex_proration", None))
+
+    @property
     def total_utilized(self) -> float:
         """Selection plus claims plus leave bought, less leave sold.
 
@@ -141,10 +164,44 @@ class MemberFlex:
         )
 
     @property
-    def balance(self) -> float | None:
+    def _after_cover(self) -> float | None:
+        """The wallet once elected cover and any leave trade are taken off, but
+        BEFORE claims — the mirror of `FlexCoverageLine.flex_balance`."""
         if self.wallet is None:
             return None
-        return round(self.wallet - self.total_utilized, 2)
+        return round(
+            self.wallet - self.selection_total - self.buy_leave + self.sell_leave, 2
+        )
+
+    @property
+    def balance(self) -> float | None:
+        """What is left to draw.
+
+        **Claims cannot take this below zero.** A flex wallet pays UP TO the
+        limit — a member with S$500 left who presents a S$700 bill utilises
+        S$500 and pays the rest themselves — so "overspent by S$x" is not a
+        state the product can be in, and printing one is an indication of
+        something that cannot happen. It is reachable on paper only because
+        pro-ration binds forward: it can shrink a leaver's allowance below what
+        was already reimbursed, and never reaches back for that money. In that
+        case the row's terms deliberately do NOT subtract to this figure —
+        `Total Allocation Amt` and `Total Utilized Amt` each stay the true
+        number, and this reports what is left to draw, which is nothing.
+        Restating either to force the subtraction would move a fact to protect
+        an arithmetic identity.
+
+        A wallet already overdrawn by ELECTED COVER is a different state and
+        stays signed: the member holds cover costing more than their allowance,
+        which the enrolment guard and the bulk `flex_overdraft` warning exist
+        for. `utilization._flex_utilization` splits `available` the same way, so
+        the sheets and the member's own screen can never disagree about what
+        they have left.
+        """
+        base = self._after_cover
+        if base is None:
+            return None
+        drawn_down = round(base - self.claims_settled, 2)
+        return drawn_down if base < 0 else max(0.0, drawn_down)
 
 
 def _flex_claims(db: Session, py: PolicyYear) -> dict[str, list[Claim]]:
@@ -373,6 +430,8 @@ def build_utilisation_summary_workbook(
             first_value(attrs, _CATEGORY_KEYS) or "",
             WALLET_NAME,
             flex.wallet,
+            flex.annual_wallet,
+            flex.proration_note,
             flex.buy_leave or None,
             flex.sell_leave or None,
             flex.selection_total or None,
