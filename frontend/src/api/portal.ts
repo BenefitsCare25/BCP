@@ -34,8 +34,24 @@ export interface OtpVerifyResult {
   member: PortalMember;
 }
 
+/** What this member may still do, and until when. SERVED — the client renders
+ *  from `capabilities` and must NEVER re-derive the matrix from `state`. Which
+ *  capabilities a state carries is the server's rule (`member_access.py`), and
+ *  a copy of that table here would go on hiding (or showing) the wrong tab the
+ *  day it changes. */
+export interface PortalAccess {
+  state: "active" | "run_off" | "settling" | "ended" | "unknown";
+  capabilities: string[];
+  /** Stated last day of service; null when they have not left. */
+  last_day: string | null;
+  /** The derived bound — can be set with no `last_day` (a terminated row with
+   *  no date is still bounded, by the benefit year). */
+  access_ends_on: string | null;
+}
+
 export interface PortalMe {
   member: PortalMember;
+  access: PortalAccess;
   /** The member's employer, resolved server-side from the TOKEN's client — not
    *  from the URL, which is what makes it usable to check the URL against. */
   company: {
@@ -438,6 +454,11 @@ export interface InsuredClaimOption {
 export interface CoverageOptions {
   policy_year_start: string;
   policy_year_end: string;
+  /** The dates an INSURED claim may be incurred on — the policy year clamped
+   *  to this member's own cover (a leaver's ends on their last day). Served by
+   *  the same function submit enforces, never re-derived here. */
+  claimable_from: string;
+  claimable_to: string;
   insured: InsuredClaimOption[];
   flex: {
     currency: string | null;
@@ -445,6 +466,10 @@ export interface CoverageOptions {
     flex_balance: number | null;
     categories: { name: string; sub_limit: number | null; note: string | null }[];
     doc_slots: DocSlot[];
+    /** The flex scheme's own effective window, member-clamped. Genuinely
+     *  different from the policy year — a scheme can start mid-year. */
+    claimable_from: string | null;
+    claimable_to: string | null;
   } | null;
   dependants: { id: string; name: string | null; relationship: string | null }[];
   currencies: string[];

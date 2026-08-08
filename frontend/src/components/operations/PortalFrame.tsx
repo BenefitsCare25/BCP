@@ -14,6 +14,7 @@ import {
   MessageSquare,
   UserPlus,
 } from "lucide-react";
+import { AccessNotice } from "@/components/portal/AccessNotice";
 import {
   usePortalPreviewContext,
   usePreviewCards,
@@ -79,9 +80,13 @@ const TABS = [
   { key: "home", label: "Home" },
   { key: "coverage", label: "Coverage" },
   { key: "claims", label: "Claims" },
-  { key: "card", label: "Card" },
-  { key: "clinics", label: "Clinics" },
-  { key: "enrollment", label: "Enrolment" },
+  // `needs` mirrors `NAV` in PortalShell — the SERVED capability, never the
+  // access `state`. A broker previewing a leaver has to see the same three
+  // tabs gone that the member sees gone; the preview endpoints themselves stay
+  // ungated, so this is presentation parity, not a second gate.
+  { key: "card", label: "Card", needs: "entitlement" },
+  { key: "clinics", label: "Clinics", needs: "entitlement" },
+  { key: "enrollment", label: "Enrolment", needs: "elect" },
 ] as const;
 
 /** Messages is deliberately absent from TABS: on the live shell it is an ICON
@@ -405,12 +410,17 @@ function EnrollmentTab({ employeeId }: { employeeId: string }) {
 function HomeTab({
   employeeId,
   enrollmentOpen,
+  capabilities,
   onGo,
   onOpenQuestion,
   onOpenClaim,
 }: {
   employeeId: string;
   enrollmentOpen: boolean;
+  /** Threaded through so the preview's tiles close on the same served rule as
+   *  the member's — the tabs above hide, and the tiles are the other entry
+   *  point to the same destinations. */
+  capabilities?: string[];
   onGo: (dest: HomeDest) => void;
   onOpenClaim: (claimId: string) => void;
   onOpenQuestion: (enquiryId: string) => void;
@@ -424,6 +434,7 @@ function HomeTab({
     <HomeMosaicView
       source={{
         enrollmentOpen,
+        capabilities,
         utilization,
         claims,
         statement,
@@ -602,6 +613,13 @@ function CoverageTab({
  * visually faithful, with tabs instead of routes and actions disabled. */
 export function PortalFrame({ employeeId }: { employeeId: string }) {
   const { data: ctx } = usePortalPreviewContext(employeeId);
+  // Same rule as the member's shell: filter on the SERVED capability list, and
+  // show everything until it resolves rather than blinking tabs away.
+  const visibleTabs = useMemo(() => {
+    const held = ctx?.access?.capabilities;
+    if (!held) return TABS;
+    return TABS.filter((t) => !("needs" in t) || held.includes(t.needs));
+  }, [ctx]);
   const [tab, setTab] = useState<TabKey>("home");
   const [coverageTab, setCoverageTab] = useState<CoverageTabKey>("benefits");
   // The Claims tab's drill-in. The frame has tabs where the portal has routes,
@@ -734,7 +752,7 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 something the member never sees — the one thing this frame
                 exists not to do. */}
             <nav className="flex items-center gap-0.5">
-              {TABS.map((item) => (
+              {visibleTabs.map((item) => (
                 <button
                   key={item.key}
                   type="button"
@@ -797,10 +815,12 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 />
               )}
             </div>
+            <AccessNotice access={ctx?.access ?? undefined} />
             {tab === "home" && (
               <HomeTab
                 employeeId={employeeId}
                 enrollmentOpen={Boolean(ctx?.enrollment_open)}
+                capabilities={ctx?.access?.capabilities}
                 onGo={goFromHome}
                 onOpenClaim={openClaim}
                 onOpenQuestion={openQuestion}

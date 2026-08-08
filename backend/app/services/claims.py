@@ -5,6 +5,7 @@ rules live in one place.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.core.storage import (
     DOCUMENT_SUFFIXES,
     MAX_DOCUMENT_BYTES,
@@ -50,7 +52,7 @@ from app.services.claim_intake import (
 from app.services.claim_settlement import mint_reference_no
 from app.services.flex_membership import flex_effective_window
 from app.services.member_statement import build_member_statement
-from app.services.roster_attributes import NAME_KEYS, first_value
+from app.services.roster_attributes import NAME_KEYS, cover_end, first_value
 
 logger = logging.getLogger(__name__)
 
@@ -637,41 +639,93 @@ def _assert_no_duplicate_invoice(
         )
 
 
+@dataclass(frozen=True)
+class ClaimWindow:
+    """The dates a claim may be incurred on, for one member.
+
+    Two ends, deliberately. ``end`` is the latest date THIS MEMBER was covered
+    on; ``period_end`` is where the period itself closes. They differ only for a
+    leaver, and conflating them would make the submission grace period expire
+    early for exactly those people — the grace deadline is a property of the
+    year, not of when one person left.
+    """
+
+    start: date
+    end: date
+    label: str
+    period_end: date
+    period_label: str
+
+    @property
+    def is_empty(self) -> bool:
+        """The member's cover ended BEFORE this period began, so nothing in it
+        is claimable. Reachable two ways: a flex scheme that starts mid-year
+        (CDL's starts 15 Jul) against someone who left in June, and a
+        terminated row carried into a new benefit year with a prior-year last
+        day. The range refuses every date on its own — `start <= d <= end` is
+        unsatisfiable — but a caller PRINTING it has to know, or the form asks
+        for "a date between 15 July and 1 June"."""
+        return self.end < self.start
+
+
 def claim_period_window(
-    db: Session, year: PolicyYear, claim_kind: str
-) -> tuple[date, date, str]:
+    db: Session, year: PolicyYear, claim_kind: str, employee: Employee
+) -> ClaimWindow:
     """The window a claim's incurred date must fall inside, and its label.
 
     Flex claims are bounded by the flex scheme's effective window (which
     defaults to the policy year's span); insured claims by the policy year.
     ONE implementation, shared by member submit and broker LOG-case creation —
     two copies would eventually disagree about which dates are claimable.
+
+    **A leaver's window closes on their last day.** Cover ending is a fact about
+    the cover, not about the portal, so it belongs here rather than in the
+    member-access gate: a broker recording a LOG case for a leaver is subject to
+    the same truth, and putting the rule on one surface only is how the two
+    would come to disagree about what is claimable.
+
+    The bound comes from `roster_attributes.cover_end`, NOT `resolved_last_day`
+    — a `Last Day of Service` sitting on an ACTIVE row is a template column
+    nobody cleared, and reading it here would start refusing a live employee's
+    claims. An unparseable date is likewise no bound at all (unknown →
+    conservatively include).
     """
     if claim_kind == CLAIM_KIND_FLEX:
         start, end = flex_effective_window(db, year)
-        return start, end, "flex scheme's effective period"
-    return year.start_date, year.end_date, "policy year"
+        label = "flex scheme's effective period"
+    else:
+        start, end = year.start_date, year.end_date
+        label = "policy year"
+
+    last_day = cover_end(employee)
+    if last_day is not None and last_day < end:
+        return ClaimWindow(start, last_day, "cover period", end, label)
+    return ClaimWindow(start, end, label, end, label)
 
 
 def assert_incurred_in_period(
-    db: Session, year: PolicyYear, claim: Claim
-) -> tuple[date, date, str]:
+    db: Session, year: PolicyYear, claim: Claim, employee: Employee
+) -> ClaimWindow:
     """422 unless the claim's incurred date sits inside its period.
 
-    Returns the window AND its label so a caller applying a deadline anchored to
-    the same end date doesn't have to resolve the window a second time — for a
-    flex claim that repeat costs another `flex_effective_window` read on every
-    submit."""
-    window_start, window_end, period_label = claim_period_window(
-        db, year, claim.claim_kind
-    )
-    if not (window_start <= claim.incurred_date <= window_end):
+    Returns the resolved window so a caller applying a deadline anchored to the
+    period's end doesn't have to resolve it a second time — for a flex claim
+    that repeat costs another `flex_effective_window` read on every submit."""
+    window = claim_period_window(db, year, claim.claim_kind, employee)
+    if window.is_empty:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"The incurred date must fall within the {period_label} "
-            f"({window_start.isoformat()} to {window_end.isoformat()}).",
+            f"Your cover ended on {window.end.isoformat()}, before this "
+            f"{window.period_label} began — there is nothing to claim against "
+            "here.",
         )
-    return window_start, window_end, period_label
+    if not (window.start <= claim.incurred_date <= window.end):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"The incurred date must fall within the {window.label} "
+            f"({window.start.isoformat()} to {window.end.isoformat()}).",
+        )
+    return window
 
 
 def submit_claim(
@@ -690,18 +744,26 @@ def submit_claim(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Claims can only be submitted against the active policy year.",
         )
-    _, window_end, period_label = assert_incurred_in_period(db, year, claim)
+    window = assert_incurred_in_period(db, year, claim, employee)
 
     # Submission grace period: once configured, claims can only be submitted up
-    # to N days after the enforced period ends. Anchored to `window_end` (the
-    # flex effective end for flex claims, the policy-year end otherwise) so the
-    # grace lines up with the incurred-window check above. None = no deadline.
+    # to N days after the enforced period ends. Anchored to `period_end` (the
+    # flex effective end for flex claims, the policy-year end otherwise) — NOT
+    # to `window.end`, which for a leaver is their own last day. How long a
+    # claim may be sent in for is a property of the YEAR; how long a member was
+    # covered is a separate bound with its own control
+    # (`PolicyYear.leaver_access_days`). Anchoring grace on the member would
+    # apply the leaver bound twice and could close their filing window before
+    # their run-off even expires. None = no deadline.
     if year.claim_grace_period_days is not None:
-        deadline = window_end + timedelta(days=year.claim_grace_period_days)
-        if datetime.now(tz=UTC).date() > deadline:
+        deadline = window.period_end + timedelta(days=year.claim_grace_period_days)
+        # Business date, not the UTC one: a UTC rollover closes the window at
+        # 8am Singapore on its final day, so a member submitting on the last
+        # morning would be refused a day early (`core/clock.py`).
+        if business_today() > deadline:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"The claim submission window for this {period_label} closed on "
+                f"The claim submission window for this {window.period_label} closed on "
                 f"{deadline.isoformat()} (period end + "
                 f"{year.claim_grace_period_days} days grace).",
             )

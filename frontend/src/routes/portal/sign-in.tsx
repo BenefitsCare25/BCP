@@ -29,7 +29,22 @@ export function PortalSignInPage() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // Landed here because their access ended mid-session (`portalClient.ts`
+  // appends `?ended` before it clears the token). Read off the URL rather than
+  // through the router's typed search: the redirect is a raw
+  // `window.location.assign`, and routing it through `navigate({search})` is
+  // how a `"1"` reaches the address bar as `%221%22`.
+  //
+  // Seeded into the same error slot the form already renders, and cleared by
+  // the next submit — a member who then signs in as someone else must not keep
+  // reading a sentence about the account they were just signed out of. Signing
+  // in as THEMSELVES simply hits the same refusal again, from the server.
+  const [error, setError] = useState<string | null>(
+    typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).has("ended")
+      ? "Your access to this portal has ended. Contact your HR team if you still need something from your record."
+      : null,
+  );
   const [company, setCompany] = useState("");
   const companyRequired = useCompanyRequired();
 

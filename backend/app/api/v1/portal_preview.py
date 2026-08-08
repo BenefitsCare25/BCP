@@ -34,6 +34,7 @@ from app.schemas.panel import ClinicSearchOut
 from app.schemas.panel_card import MemberCardsOut
 from app.schemas.portal import (
     MemberAccountOut,
+    PortalAccessOut,
     PortalEmployeeOut,
     PortalPolicyYearOut,
     PortalPreviewOut,
@@ -51,6 +52,7 @@ from app.services.enrollment_elections import (
     build_portal_enrollment,
     member_window_for,
 )
+from app.services.member_access import access_of, access_payload
 from app.services.member_enquiries import enquiry_out, load_member_enquiry
 from app.services.member_statement import build_member_statement
 from app.services.panel_cards import build_member_cards
@@ -103,6 +105,10 @@ def portal_preview_context(
         if year is not None
         else None,
         flex_eligible=employee.flex_tier_name is not None,
+        # Resolved against the previewed employee's OWN year, so a broker
+        # looking at a past year sees what that year said. The preview is not
+        # gated by it — this is here to render the member's banner.
+        access=PortalAccessOut(**access_payload(access_of(db, employee, year))),
         # The live portal always resolves the ACTIVE policy year; flag when
         # this preview is looking at a different (draft/closed) year.
         is_active_policy_year=active is not None

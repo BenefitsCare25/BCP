@@ -49,6 +49,7 @@ def _policy_year_out(py: PolicyYear, envelope: tuple[date, date]) -> PolicyYearO
         coverage_end=end,
         status=py.status.value if isinstance(py.status, PolicyYearStatus) else py.status,
         claim_grace_period_days=py.claim_grace_period_days,
+        leaver_access_days=py.leaver_access_days,
         activated_at=py.activated_at,
     )
 
@@ -110,6 +111,7 @@ def create_policy_year(
         end_date=payload.end_date,
         status=PolicyYearStatus.draft,
         claim_grace_period_days=payload.claim_grace_period_days,
+        leaver_access_days=payload.leaver_access_days,
     )
     db.add(py)
     db.flush()
@@ -183,6 +185,8 @@ def update_policy_year(
         py.year = new_start.year
     if "claim_grace_period_days" in fields:
         py.claim_grace_period_days = payload.claim_grace_period_days
+    if "leaver_access_days" in fields:
+        py.leaver_access_days = payload.leaver_access_days
 
     write_audit(
         db,
@@ -194,6 +198,7 @@ def update_policy_year(
             "start_date": py.start_date.isoformat(),
             "end_date": py.end_date.isoformat(),
             "claim_grace_period_days": py.claim_grace_period_days,
+            "leaver_access_days": py.leaver_access_days,
         },
     )
     db.commit()
@@ -310,6 +315,9 @@ def copy_policy_year(
             if payload.claim_grace_period_days is not None
             else py.claim_grace_period_days
         ),
+        # Carried over like the grace period — a renewal keeps the company's
+        # settled deadlines unless the broker states new ones.
+        leaver_access_days=py.leaver_access_days,
     )
     db.add(target)
     db.flush()

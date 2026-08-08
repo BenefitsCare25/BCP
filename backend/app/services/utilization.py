@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,9 +38,7 @@ from app.models import Claim, Employee
 from app.models.claim import (
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
-    CLAIM_STATUS_DRAFT,
-    CLAIM_STATUS_REJECTED,
-    CLAIM_STATUSES,
+    PENDING_STATUSES,
     SETTLED_STATUSES,
 )
 from app.schemas.api import BenefitStatementOut
@@ -52,17 +51,11 @@ from app.schemas.claims import (
 )
 from app.services.member_statement import build_member_statement
 
-# In-flight claims that may still consume the limit.
-#
-# Subtracts the WHOLE settled set, not just `approved`. Derived by subtraction,
-# so a status added to the model lands here by default — which is right for a
-# new in-flight state and catastrophically wrong for a new settled one: the
-# claim would drop out of `approved` (which is subtracted from the limit) into
-# `pending` (which is reported beside it and never subtracted), handing the
-# member back a limit they have already spent.
-PENDING_STATUSES = frozenset(
-    CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED} - SETTLED_STATUSES
-)
+# In-flight claims that may still consume the limit. Defined on the model
+# (`models/claim.py`) beside the settled set it subtracts, and re-exported here
+# because this is where most callers have always imported it from.
+__all__ = ["PENDING_STATUSES", "build_utilization", "parse_limit_amount",
+           "remaining_for_claim"]
 
 _AMOUNT_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 # A benefit-item value only counts as an ANNUAL limit when it's a plain amount
@@ -106,22 +99,27 @@ def _claim_amount(claim: Claim) -> float:
 
 
 def _countable_claims(db: Session, employee: Employee) -> list[Claim]:
+    # Ordered so the `pending_claim_ids` both this and `_flex_utilization` emit
+    # are stable between reads — the sums don't care, but a list served to a UI
+    # that opens "the" pending claim shouldn't reshuffle under it.
     return list(
         db.execute(
-            select(Claim).where(
+            select(Claim)
+            .where(
                 Claim.employee_id == employee.id,
                 Claim.policy_year_id == employee.policy_year_id,
                 Claim.status.in_(PENDING_STATUSES | SETTLED_STATUSES),
             )
+            .order_by(Claim.incurred_date, Claim.id)
         ).scalars()
     )
 
 
 def _bucket_sums(
     claims: list[Claim],
-) -> dict[tuple[str | None, str | None], dict[str, float | int]]:
-    sums: dict[tuple[str | None, str | None], dict[str, float | int]] = defaultdict(
-        lambda: {"approved": 0.0, "pending": 0.0, "count": 0}
+) -> dict[tuple[str | None, str | None], dict[str, Any]]:
+    sums: dict[tuple[str | None, str | None], dict[str, Any]] = defaultdict(
+        lambda: {"approved": 0.0, "pending": 0.0, "count": 0, "claim_ids": []}
     )
 
     def _add(key: tuple[str | None, str | None], claim: Claim) -> None:
@@ -131,6 +129,13 @@ def _bucket_sums(
             row["approved"] += float(claim.amount_approved or 0.0)
         else:
             row["pending"] += _claim_amount(claim)
+            # Collected HERE, where the claim is already being classified —
+            # membership is `status not in SETTLED_STATUSES`, and that set is
+            # defined by subtraction, so a caller re-filtering the claim list
+            # would be reimplementing it. Recorded against BOTH the product
+            # roll-up and the per-benefit bucket, because the claim's amount
+            # is counted into both.
+            row["claim_ids"].append(str(claim.id))
 
     for claim in claims:
         if claim.claim_kind != CLAIM_KIND_INSURED:
@@ -151,7 +156,7 @@ def _insured_buckets(
     for line in statement.coverage:
         seen_products.add(line.product_code)
         product_sum = sums.pop((line.product_code, None), None) or {
-            "approved": 0.0, "pending": 0.0, "count": 0,
+            "approved": 0.0, "pending": 0.0, "count": 0, "claim_ids": [],
         }
         limit = parse_limit_amount(line.annual_policy_limit)
         buckets.append(
@@ -169,6 +174,7 @@ def _insured_buckets(
                     else None
                 ),
                 claim_count=int(product_sum["count"]),
+                pending_claim_ids=list(product_sum["claim_ids"]),
                 limit_unparsed=_limit_unparsed(limit, line.annual_policy_limit),
             )
         )
@@ -204,6 +210,7 @@ def _insured_buckets(
                         else None
                     ),
                     claim_count=int(row["count"]),
+                    pending_claim_ids=list(row["claim_ids"]),
                     limit_unparsed=_limit_unparsed(item_limit, item_display),
                 )
             )
@@ -227,6 +234,11 @@ def _insured_buckets(
                 pending=round(float(row["pending"]), 2),
                 remaining=None,
                 claim_count=int(row["count"]),
+                # An orphaned PRODUCT bucket has `benefit_key=None`, so the
+                # member's usage tab renders it among the product rows and
+                # itemises its pending figure like any other — it needs the ids
+                # for the same reason they do.
+                pending_claim_ids=list(row["claim_ids"]),
                 orphaned=True,
             )
         )

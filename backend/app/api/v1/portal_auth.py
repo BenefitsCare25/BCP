@@ -59,6 +59,12 @@ from app.schemas.portal import (
     OtpVerifyOut,
     PortalMemberOut,
 )
+from app.services.member_access import (
+    CODE_ACCESS_ENDED,
+    Capability,
+    access_for_account,
+    refusal,
+)
 from app.services.member_invite import clear_invite_expiry, invite_expired
 from app.services.member_otp import as_utc, can_issue_otp, issue_otp, send_otp
 
@@ -234,6 +240,42 @@ def _member_out(token: str, expires_at, account: MemberAccount) -> OtpVerifyOut:
 
 
 def _issue_member_login(db: Session, request: Request, account: MemberAccount, client_id: str):
+    # **The one choke point for every session this surface issues** — password
+    # login, OTP verify, MFA and set-password all end here, so the leaver
+    # refusal is checked once rather than at four call sites that could drift.
+    #
+    # It runs AFTER the credential has been proved, so it leaks nothing an
+    # attacker could enumerate: the person already holds the password. And it
+    # fires only on a definite `ended` verdict — a member with no roster row in
+    # the current year resolves to `unknown` and signs in exactly as today,
+    # because absence is not evidence that anyone left.
+    access = access_for_account(
+        db,
+        member_account_id=account.id,
+        client_id=client_id,
+        staff_id=account.staff_id,
+    )
+    if access.state == "ended":
+        account_id = account.id
+        # **Discard whatever the caller had pending before recording anything.**
+        # `member_set_password` reaches here having already written the new
+        # `password_hash`, `password_updated_at`, `must_rotate_after`, a cleared
+        # invite deadline and a reset failure count — committing those on the way
+        # to a 403 would silently rotate the credential of a member being told
+        # they cannot come in, and clear the invite deadline that bounds it. A
+        # refusal must leave nothing behind but its own audit row.
+        db.rollback()
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_BLOCKED,
+            surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account_id,
+            client_id=client_id, ip=_client_ip(request),
+            subdomain=request.headers.get("host"),
+            detail={"reason": CODE_ACCESS_ENDED},
+        )
+        db.commit()
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, refusal(access, Capability.RECORD)
+        )
     CRED.reset_failures(account)
     account.last_sign_in_at = datetime.now(UTC)
     if account.status == MEMBER_STATUS_INVITED:

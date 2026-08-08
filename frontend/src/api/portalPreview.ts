@@ -4,6 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
+  PortalAccess,
   PortalClaim,
   PortalClaimList,
   PortalEnrollmentData,
@@ -35,6 +36,13 @@ export interface PortalPreviewContext {
   member_account: MemberAccount | null;
   /** Mirrors PortalMe.enrollment_open for the previewed employee. */
   enrollment_open: boolean;
+  /** Mirrors PortalMe.access. The preview endpoints are deliberately UNGATED —
+   *  a broker settling a leaver's last claim must be able to read their
+   *  screens — so this exists to render the same banner and hide the same
+   *  tabs. Without consuming it, a broker previewing a leaver sees Card,
+   *  Clinics and Enrolment while the member's own shell has hidden all three,
+   *  which is the divergence the parity rule exists to prevent. */
+  access: PortalAccess | null;
 }
 
 function usePreviewQuery<T>(

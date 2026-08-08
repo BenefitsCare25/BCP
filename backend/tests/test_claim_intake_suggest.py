@@ -139,6 +139,11 @@ def _coverage(insured, dependants=None, flex=None) -> CoverageOptionsOut:
     return CoverageOptionsOut(
         policy_year_start="2027-01-01",
         policy_year_end="2027-12-31",
+        # Required, not defaulted: the claim form's date bounds come from these,
+        # and a default would let a caller that forgot them serve a window that
+        # silently disagrees with what submit enforces.
+        claimable_from="2027-01-01",
+        claimable_to="2027-12-31",
         insured=insured,
         flex=flex,
         dependants=dependants or [],

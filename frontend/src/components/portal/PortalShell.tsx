@@ -23,7 +23,7 @@
  *
  * Mirrored by the broker preview in `components/operations/PortalFrame` —
  * change both together. */
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import {
   Link,
   Outlet,
@@ -54,6 +54,7 @@ import { glassHover, glassSurface } from "./leaf/Mount";
 import { HeadRailProvider, useHeadRailWidth } from "./leaf/HeadRail";
 import { portalPath } from "@/lib/tenant";
 import { useCompany } from "@/components/portal/useCompany";
+import { AccessNotice } from "./AccessNotice";
 
 /** Six destinations on desktop, five in the phone dock — "Home" is the dock's
  * first slot and Coverage is reached from the tiles that summarise it, so the
@@ -73,6 +74,15 @@ const NAV: {
   icon: ComponentType<{ className?: string }>;
   /** In the phone dock. Coverage is not — it is one tap from the home tiles. */
   dock: boolean;
+  /** The SERVED capability this destination needs, when it needs one. Matched
+   *  against `PortalMe.access.capabilities` — never against `state`, because
+   *  which capabilities a state carries is the server's rule and a copy of that
+   *  table here would go on showing the wrong tab the day it changes.
+   *
+   *  Only the destinations that actually close are listed. Home and Claims stay
+   *  for as long as a member can sign in at all: Home is where the notice
+   *  explaining the change is read, and Claims is what a leaver comes back for. */
+  needs?: string;
 }[] = [
   { label: "Home", short: "Home", sub: "", icon: LayoutGrid, dock: true },
   {
@@ -89,13 +99,21 @@ const NAV: {
     icon: FileText,
     dock: true,
   },
-  { label: "Card", short: "Card", sub: "/card", icon: CreditCard, dock: true },
+  {
+    label: "Card",
+    short: "Card",
+    sub: "/card",
+    icon: CreditCard,
+    dock: true,
+    needs: "entitlement",
+  },
   {
     label: "Clinics",
     short: "Clinics",
     sub: "/clinics",
     icon: MapPin,
     dock: true,
+    needs: "entitlement",
   },
   {
     label: "Enrolment",
@@ -103,6 +121,7 @@ const NAV: {
     sub: "/enrollment",
     icon: CalendarCheck,
     dock: true,
+    needs: "elect",
   },
 ];
 
@@ -119,6 +138,16 @@ export function PortalShell() {
   const { data: me } = usePortalMe();
   const company = useCompany();
   const { data: security } = useMemberSecurityStatus();
+  // The destinations this member still holds. **Read from the SERVED list, and
+  // only once `me` has loaded** — an empty `capabilities` while the query is in
+  // flight would blink the whole nav away and back on every cold load, so an
+  // unresolved `me` shows everything (which is what it did before this existed,
+  // and the endpoints refuse anything they must).
+  const nav = useMemo(() => {
+    const held = me?.access.capabilities;
+    if (!held) return NAV;
+    return NAV.filter((item) => !item.needs || held.includes(item.needs));
+  }, [me]);
   // The badge's figure. Deliberately NOT a new field on `PortalMe` — that was
   // tried and removed (schemas/portal.py), because it puts a COUNT query on the
   // hottest endpoint in the portal. This is the same query key the home
@@ -268,7 +297,7 @@ export function PortalShell() {
             <span aria-hidden className="mx-5 h-8 w-px shrink-0 bg-hairline" />
 
             <nav aria-label="Portal sections" className="flex items-center gap-0.5">
-              {NAV.map((item) => {
+              {nav.map((item) => {
                 const active = isActive(item.sub);
                 return (
                   <Link
@@ -374,6 +403,11 @@ export function PortalShell() {
                 </span>
               </Link>
             )}
+            {/* Above the page, not inside it: every page is affected and the
+                reason is the same one, so stating it per page would be five
+                copies of one sentence — and the pages that are GONE could not
+                carry it at all. */}
+            <AccessNotice access={me?.access} />
             <HeadRailProvider value={rail}>
               <Outlet />
             </HeadRailProvider>
@@ -397,7 +431,7 @@ export function PortalShell() {
             "mb-[env(safe-area-inset-bottom)]",
           )}
         >
-          {NAV.filter((i) => i.dock).map((item) => {
+          {nav.filter((i) => i.dock).map((item) => {
             const active = isActive(item.sub);
             const Icon = item.icon;
             return (

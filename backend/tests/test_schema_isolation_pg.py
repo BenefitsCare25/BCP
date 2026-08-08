@@ -199,3 +199,72 @@ def test_tenant_routing_survives_commit(pg_engine) -> None:
         assert c.execute(
             text(f"SELECT count(*) FROM \"{sa}\".policy_years WHERE year = 2041")
         ).scalar() == 1
+
+
+def test_the_portal_sign_in_gate_reads_the_FIRM_schema(pg_engine) -> None:
+    """A leaver's sign-in refusal must resolve against the firm's own roster.
+
+    Regression, and the shape this file exists for. `_issue_member_login` reads
+    `policy_years`, `employees` and `claims` — all TENANT tables — but the
+    portal AUTH endpoints have no member token yet, so `get_current_member`
+    (the only other `set_search_path` call on this surface) has not run. Until
+    the leaver gate they touched control tables only, which live in `public` on
+    every deployment, so nothing noticed.
+
+    Unrouted, every one of those names resolves against `public`, which holds no
+    tenant rows: the access check comes back `unknown` and the gate silently
+    signs in every member whose access has ended — the session-terminating half
+    of the feature, dead in prod and green on SQLite. `require_portal_tenant`
+    now routes the schema; this asserts it, from both sides.
+    """
+    from datetime import timedelta
+
+    from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
+    from app.models import Employee, PolicyYear
+    from app.models.employee import EMPLOYEE_STATUS_TERMINATED
+    from app.models.policy_year import PolicyYearStatus
+    from app.services.member_access import access_for_account
+
+    provision_firm_schema(pg_engine, FIRM_A)
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+    today = date(2042, 6, 1)
+
+    with Session() as s:
+        set_search_path(s, FIRM_A)
+        year = PolicyYear(
+            client_id=CLI_A, year=2042,
+            start_date=date(2042, 1, 1), end_date=date(2042, 12, 31),
+            status=PolicyYearStatus.active, leaver_access_days=10,
+        )
+        s.add(year)
+        s.flush()
+        s.add(
+            Employee(
+                client_id=CLI_A, policy_year_id=year.id, staff_id="PG-1",
+                status=EMPLOYEE_STATUS_TERMINATED,
+                terminated_effective=today - timedelta(days=200),
+                member_account_id="acc-pg-leaver", attribute_values={},
+            )
+        )
+        s.commit()
+
+        assert access_for_account(
+            s, member_account_id="acc-pg-leaver", client_id=CLI_A,
+            staff_id="PG-1", today=today,
+        ).state == "ended"
+
+    # And the failure mode itself: with the path back at `public` the same call
+    # finds nothing and reports `unknown`, which would let the member in. This
+    # is what shipped before `require_portal_tenant` routed the schema.
+    with Session() as s:
+        set_search_path(s, None)
+        assert access_for_account(
+            s, member_account_id="acc-pg-leaver", client_id=CLI_A,
+            staff_id="PG-1", today=today,
+        ).state == "unknown"
+
+    with pg_engine.connect() as c:
+        sa = schema_for_firm(FIRM_A)
+        assert c.execute(
+            text(f'SELECT count(*) FROM "{sa}".employees WHERE staff_id = \'PG-1\'')
+        ).scalar() == 1

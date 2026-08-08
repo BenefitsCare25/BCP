@@ -29,6 +29,7 @@ from app.core.pagination import MAX_LIMIT
 from app.core.portal_auth import (
     CurrentMember,
     active_policy_year,
+    assert_member_capability,
     get_current_member,
     resolve_member_employee,
 )
@@ -39,7 +40,9 @@ from app.db.session import get_db
 from app.models import Claim, ClaimAIReview, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
     CLAIM_KIND_FLEX,
+    CLAIM_KIND_INSURED,
     CLAIM_STATUS_AI_REVIEW_PENDING,
+    CLAIM_STATUS_DRAFT,
     MEMBER_EDITABLE_STATUSES,
     member_visible_claims,
 )
@@ -81,6 +84,7 @@ from app.services.claim_intake_suggest import build_intake_suggestion
 from app.services.claim_messages import post_system_message
 from app.services.claims import (
     attach_document,
+    claim_period_window,
     claim_to_out,
     claims_to_out,
     create_claim,
@@ -93,6 +97,7 @@ from app.services.claims_review.pipeline import run_review
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 from app.services.enrollment_products import resolve_products_by_codes
 from app.services.insurer_listings import member_id_for_insurer
+from app.services.member_access import Capability
 from app.services.member_statement import build_member_statement
 from app.services.product_insurer import insurer_map
 from app.services.sg_diagnoses import search_diagnoses
@@ -128,7 +133,7 @@ def coverage_options(
     db: Session = Depends(get_db),
 ) -> CoverageOptionsOut:
     """What the member may claim against — drives the claim-form pickers."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     year = active_policy_year(db, member.client_id)
     statement = build_member_statement(db, employee)
     return build_coverage_options(db, statement, employee, year)
@@ -228,6 +233,7 @@ def build_coverage_options(
 
     flex = None
     if statement.flex is not None:
+        flex_window = claim_period_window(db, year, CLAIM_KIND_FLEX, employee)
         flex = FlexClaimOptions(
             currency=statement.flex.currency,
             wallet_amount=statement.flex.wallet_amount,
@@ -242,11 +248,25 @@ def build_coverage_options(
             doc_slots=_slots(
                 required_doc_slots(None, None, claim_kind=CLAIM_KIND_FLEX)
             ),
+            # The flex scheme's own effective window, member-clamped. Served
+            # separately because it genuinely differs — CDL's scheme starts
+            # 15 Jul against a January year — and the form used the policy-year
+            # span for both kinds, so a flex claim inside the year but before
+            # the scheme started passed the form and was refused at submit.
+            claimable_from=flex_window.start.isoformat(),
+            claimable_to=flex_window.end.isoformat(),
         )
 
+    # What the member may date a claim, resolved by the SAME function submit
+    # enforces — so the form can state the bound instead of surfacing a 422
+    # after the member has filled everything in. A leaver's window ends on their
+    # last day (`services/claims.py::claim_period_window`).
+    insured_window = claim_period_window(db, year, CLAIM_KIND_INSURED, employee)
     return CoverageOptionsOut(
         policy_year_start=year.start_date.isoformat(),
         policy_year_end=year.end_date.isoformat(),
+        claimable_from=insured_window.start.isoformat(),
+        claimable_to=insured_window.end.isoformat(),
         insured=insured,
         flex=flex,
         dependants=[
@@ -343,7 +363,7 @@ async def extract_claim_intake(
             f"Upload at most {MAX_INTAKE_FILES} documents at a time.",
         )
 
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     year = active_policy_year(db, member.client_id)
 
     extractions: list[dict[str, Any]] = []
@@ -455,7 +475,7 @@ def list_my_referral_letters(
     db: Session = Depends(get_db),
 ) -> list[StoredDocumentOut]:
     """The member's own referral letters (reusable across specialist claims)."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     docs = db.execute(
         select(StoredDocument)
         .where(
@@ -479,7 +499,7 @@ async def upload_my_referral_letter(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> StoredDocumentOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     doc = await attach_document(
         db,
         client_id=employee.client_id,
@@ -509,7 +529,7 @@ def delete_my_referral_letter(
     """Remove one of the member's own referral letters. Refuses (409) while a
     claim still rides on it, so deleting can't strand a claim's
     `referral_document_id`."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     doc = db.get(StoredDocument, doc_id)
     if (
         doc is None
@@ -545,7 +565,7 @@ def list_my_claims(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimList:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     conditions = [
         Claim.employee_id == employee.id,
         Claim.policy_year_id == employee.policy_year_id,
@@ -588,7 +608,7 @@ def create_my_claim(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     claim = create_claim(
         db, employee, body, submitted_by_member_id=member.member_account_id
     )
@@ -607,7 +627,7 @@ def get_my_claim(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     return claim_to_out(db, _own_claim(db, claim_id, employee.id))
 
 
@@ -621,7 +641,10 @@ async def upload_my_claim_document(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> StoredDocumentOut:
-    employee = resolve_member_employee(db, member)
+    # RESPOND, not CLAIM: attaching the document a broker asked for is how a
+    # `needs_info` claim gets answered, and a member whose run-off has expired
+    # must still be able to do it (`services/member_access.py`).
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = _own_claim(db, claim_id, employee.id)
     if claim.status not in MEMBER_EDITABLE_STATUSES:
         raise HTTPException(
@@ -660,7 +683,7 @@ def delete_my_draft_claim(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> None:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     claim = _own_claim(db, claim_id, employee.id)
     if claim.status != "draft":
         raise HTTPException(
@@ -683,8 +706,14 @@ def submit_my_claim(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
-    employee = resolve_member_employee(db, member)
+    # A submit is two different acts down one route. Answering a `needs_info`
+    # is RESPOND — the whole point of the `settling` state. Finishing a DRAFT
+    # is starting a new claim, so it additionally needs CLAIM, which is what
+    # stops a member past their run-off filing a claim from a stale draft.
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = _own_claim(db, claim_id, employee.id)
+    if claim.status == CLAIM_STATUS_DRAFT:
+        assert_member_capability(db, employee, Capability.CLAIM)
     submit_claim(
         db, claim, employee, submitted_by_member_id=member.member_account_id
     )

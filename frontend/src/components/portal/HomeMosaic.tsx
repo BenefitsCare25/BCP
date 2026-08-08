@@ -246,6 +246,14 @@ interface Loadable<T> {
 
 export interface HomeMosaicSource {
   enrollmentOpen: boolean;
+  /** The SERVED capability list (`PortalMe.access.capabilities`). The home
+   *  tiles are entry points to the same destinations the nav offers, so they
+   *  have to close on the same rule — a leaver whose Clinics tab is gone but
+   *  whose "Find a clinic" tile is still there just reaches a 403 by a
+   *  different route, which is the "the app is broken" outcome the whole
+   *  access notice exists to prevent. Undefined until `me` resolves: show
+   *  everything rather than blink tiles away on a cold load. */
+  capabilities?: string[];
   utilization: Loadable<Utilization>;
   claims: Loadable<{ items: PortalClaim[] }>;
   statement: Loadable<BenefitStatement>;
@@ -269,6 +277,7 @@ export function HomeMosaic() {
     <HomeMosaicView
       source={{
         enrollmentOpen: Boolean(me?.enrollment_open),
+        capabilities: me?.access.capabilities,
         utilization,
         claims,
         statement,
@@ -305,6 +314,10 @@ export function HomeMosaicView({
 }) {
   const navigate = useNavigate();
   const { utilization, claims, statement, dependants, messages } = source;
+  // Undefined until `me` resolves — show everything then, the same rule the
+  // shell nav uses. The endpoints refuse whatever they must regardless.
+  const can = (capability: string) =>
+    !source.capabilities || source.capabilities.includes(capability);
 
   const buckets = utilization.data?.insured ?? [];
   const headline = pickHeadline(buckets);
@@ -589,6 +602,7 @@ export function HomeMosaicView({
         </Tile>
       )}
 
+      {can("entitlement") && (
       <Tile
         className="leaf-rise col-span-2 h-full sm:col-span-1"
       >
@@ -613,11 +627,12 @@ export function HomeMosaicView({
           Find a clinic
         </Go>
       </Tile>
+      )}
 
       {/* ── Enrolment ─────────────────────────────────────────────────────
           A deadline is a NOTICE, never a second brand fill, and it exists only
           while a window is open. */}
-      {source.enrollmentOpen && (
+      {source.enrollmentOpen && can("elect") && (
         <Tile
           className="leaf-rise col-span-2 sm:col-span-3"
         >

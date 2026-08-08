@@ -23,6 +23,19 @@ export interface MemberAccount {
   invite_sent_at: string | null;
   /** Deadline on a mailed one-time password that hasn't been used yet. */
   invite_expires_at: string | null;
+  /** Whether this member's ROSTER row still lets them in — a different axis
+   *  from `status`. `status` is the broker's manual switch; this is derived
+   *  from the employee record and moves on its own as a leaver's run-off
+   *  expires, so an account can be `active` and still let nobody in.
+   *  `null` on older payloads. */
+  access_state:
+    | "active"
+    | "run_off"
+    | "settling"
+    | "ended"
+    | "unknown"
+    | null;
+  access_ends_on: string | null;
   /** What THIS member should be told to type, resolved server-side from the
    *  company's "Login username" setting. Never re-derive it here: the setting
    *  lives behind a firm-admin-only endpoint this page can't call. */

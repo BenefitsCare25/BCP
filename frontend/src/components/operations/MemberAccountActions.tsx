@@ -74,7 +74,14 @@ type Phase =
   | "invited"       // invite delivered, not signed in
   | "expired"       // invite delivered, one-time password timed out
   | "active"        // signed in / has chosen a password
+  | "left"          // cover ended; the run-off is still running
+  | "ended"         // the run-off expired — the account lets nobody in
   | "disabled";
+
+/** Cover has ended but access has not — the run-off (or a claim still being
+ *  settled). Not a phase on its own for every account: see `phaseOf`. */
+const windingDown = (account: MemberAccount) =>
+  account.access_state === "run_off" || account.access_state === "settling";
 
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, {
@@ -89,10 +96,23 @@ const fmtDate = (iso: string) =>
 function phaseOf(account: MemberAccount | undefined): Phase {
   if (!account) return "none";
   if (account.status === "disabled") return "disabled";
+  // **`ended` outranks everything**, because nothing below it is actionable:
+  // no invite, password or reset gets a finished member past the gate, so
+  // offering one would have a broker fixing this with a tool that cannot.
+  if (account.access_state === "ended") return "ended";
   // `status` flips to active on the first sign-in / set-password. `has_password`
   // does NOT mean onboarded — an outstanding invite also leaves a hash on the
   // row (the mailed one-time value).
-  if (account.status === "active" || account.last_sign_in_at) return "active";
+  // Run-off replaces `active` and ONLY `active`. It must not swallow the
+  // invite lifecycle: an account that was never invited, or whose one-time
+  // password expired, still needs to say so — a leaver in run-off can and
+  // should still be given access, since filing their outstanding claims is
+  // what the run-off is for. Folding those into "Left" hid the one thing the
+  // broker had to act on, and offered "Reset password" for an account that has
+  // never had one.
+  if (account.status === "active" || account.last_sign_in_at) {
+    return windingDown(account) ? "left" : "active";
+  }
   if (account.invite_sent_at) {
     const expiry = account.invite_expires_at;
     return expiry && new Date(expiry) <= new Date() ? "expired" : "invited";
@@ -117,6 +137,8 @@ const PHASE_BADGE: Record<
   invited: { variant: "warn", label: "Invited", tone: "text-warn" },
   expired: { variant: "error", label: "Invite expired", tone: "text-error" },
   active: { variant: "good", label: "Active", tone: "text-good" },
+  left: { variant: "warn", label: "Left", tone: "text-warn" },
+  ended: { variant: "error", label: "Access ended", tone: "text-error" },
   disabled: { variant: "error", label: "Disabled", tone: "text-error" },
 };
 
@@ -124,8 +146,10 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
   const Icon =
     phase === "active"
       ? CheckCircle2
-      : phase === "expired" || phase === "disabled"
-        ? AlertTriangle
+      : phase === "left"
+        ? Clock
+        : phase === "expired" || phase === "disabled" || phase === "ended"
+          ? AlertTriangle
         : phase === "invited"
           ? Clock
           : phase === "no_email"
@@ -134,9 +158,11 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
   const tone =
     phase === "active"
       ? "text-good"
-      : phase === "expired" || phase === "disabled"
-        ? "text-error"
-        : "text-muted-foreground";
+      : phase === "left"
+        ? "text-warn"
+        : phase === "expired" || phase === "disabled" || phase === "ended"
+          ? "text-error"
+          : "text-muted-foreground";
 
   let headline: string;
   let detail: string | null = null;
@@ -168,11 +194,38 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
         ? `Last signed in ${fmtDate(account.last_sign_in_at)}`
         : "Password set";
       break;
+    case "left":
+      // Not a fault and not an action — the run-off is working as designed, and
+      // the only thing a broker needs is the date it stops.
+      headline = "Cover ended — winding down";
+      detail = account?.access_ends_on
+        ? `They can still read their record and send in claims for treatment during their cover, until ${fmtDate(account.access_ends_on)}.`
+        : "They can still read their record and send in claims for treatment during their cover.";
+      break;
+    case "ended":
+      headline = account?.access_ends_on
+        ? `Portal access ended ${fmtDate(account.access_ends_on)}`
+        : "Portal access has ended";
+      // Says what it is NOT, because the badge sits where "Disabled" sits and
+      // a broker will otherwise look for a switch to flip. Re-enabling does
+      // nothing here; only the roster row does.
+      detail =
+        "This follows their last day of service — it is not the disable switch, " +
+        "and re-enabling the account will not let them back in.";
+      break;
     case "disabled":
       headline = "Portal access revoked";
       detail = "They cannot sign in until this is re-enabled.";
       break;
   }
+
+  // Run-off replaces the `active` phase only, so an account still in the invite
+  // lifecycle keeps its own headline — and would otherwise never mention that
+  // the person has LEFT. Said here rather than folded into the phase, because
+  // both facts matter and neither replaces the other: they still need
+  // onboarding, and the window for it closes.
+  const winding =
+    account && phase !== "left" && phase !== "ended" && windingDown(account);
 
   return (
     <div className="flex items-start gap-2">
@@ -180,6 +233,14 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
       <div className="min-w-0">
         <div className="text-sm font-medium text-foreground">{headline}</div>
         {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
+        {winding && (
+          <p className="text-xs text-warn">
+            Their cover has ended
+            {account?.access_ends_on
+              ? ` — portal access closes ${fmtDate(account.access_ends_on)}.`
+              : "."}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -292,6 +353,17 @@ function AccountPanel({
   const [confirmResend, setConfirmResend] = useState(false);
 
   const badge = PHASE_BADGE[phase];
+  // **A member in run-off can still SIGN IN** — that is what the run-off is
+  // for, and it is when they are most likely to need a password reset (they no
+  // longer have a work laptop that remembered it). So the credential controls
+  // follow "can they get in", not "are they active". `ended` gets none of them:
+  // there is no password that would let them past the gate, and offering one
+  // would have a broker resetting a password to fix something a reset cannot.
+  // ONLY these two. The invite-lifecycle phases keep their own buttons and
+  // their own dialog copy ("Send a new invite?"), which is still correct for a
+  // leaver in run-off — widening this to them would offer "Reset this
+  // password?" for an account that has never had one.
+  const canSignIn = phase === "active" || phase === "left";
   const busy =
     createAccount.isPending || resendInvite.isPending || makeLink.isPending;
 
@@ -440,7 +512,7 @@ function AccountPanel({
           {phase === "no_email" && linkButton("Set-password link", "default")}
           {(phase === "not_sent" || phase === "invited" || phase === "expired") &&
             linkButton("Set-password link", "outline")}
-          {phase === "active" && (
+          {canSignIn && (
             <>
               {account?.email && resendButton("Reset password", "outline")}
               {linkButton("Set-password link", "outline")}
@@ -565,10 +637,10 @@ function AccountPanel({
             open={confirmResend}
             onOpenChange={setConfirmResend}
             title={
-              phase === "active" ? "Reset this password?" : "Send a new invite?"
+              canSignIn ? "Reset this password?" : "Send a new invite?"
             }
             description={
-              phase === "active" ? (
+              canSignIn ? (
                 <>
                   A new one-time password is emailed to{" "}
                   <strong>{account.email}</strong> and{" "}
@@ -584,9 +656,9 @@ function AccountPanel({
                 </>
               )
             }
-            confirmLabel={phase === "active" ? "Reset password" : "Send invite"}
-            confirmVariant={phase === "active" ? "destructive" : "default"}
-            tone={phase === "active" ? "danger" : "info"}
+            confirmLabel={canSignIn ? "Reset password" : "Send invite"}
+            confirmVariant={canSignIn ? "destructive" : "default"}
+            tone={canSignIn ? "danger" : "info"}
             loading={resendInvite.isPending}
             onConfirm={() => void resend()}
           />

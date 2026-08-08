@@ -22,8 +22,11 @@ export interface ClaimValues {
   referralFile: File | null;
   referralExistingId: string;
   incurredDate: string;
-  yearStart: string;
-  yearEnd: string;
+  /** The served claimable window for the selected claim kind — NOT the policy
+   *  year: a flex scheme can start mid-year and a leaver's cover ends on their
+   *  last day. */
+  claimableFrom: string;
+  claimableTo: string;
   today: string;
   isHospitalisation: boolean;
   hospital: string;
@@ -83,8 +86,11 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
 
   if (!v.incurredDate) {
     errs.incurred_date = "Enter the visit date.";
-  } else if (v.incurredDate < v.yearStart || v.incurredDate > v.yearEnd) {
-    errs.incurred_date = `Pick a date between ${formatDay(v.yearStart)} and ${formatDay(v.yearEnd)} — that's the period your benefits cover.`;
+  } else if (
+    v.incurredDate < v.claimableFrom ||
+    v.incurredDate > v.claimableTo
+  ) {
+    errs.incurred_date = `Pick a date between ${formatDay(v.claimableFrom)} and ${formatDay(v.claimableTo)} — that's the period your benefits cover.`;
   } else if (v.incurredDate > v.today) {
     errs.incurred_date = "The incurred date can't be in the future.";
   }

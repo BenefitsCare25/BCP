@@ -890,6 +890,7 @@ export function useCreatePolicyYear() {
       start_date: string;
       end_date: string;
       claim_grace_period_days?: number | null;
+      leaver_access_days?: number | null;
     }) => api.post<PolicyYear>("/policy-years", payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
@@ -910,6 +911,7 @@ export function useUpdatePolicyYear() {
         start_date?: string;
         end_date?: string;
         claim_grace_period_days?: number | null;
+        leaver_access_days?: number | null;
       };
     }) => api.patch<PolicyYear>(`/policy-years/${policyYearId}`, payload),
     onSuccess: () => {
@@ -948,6 +950,7 @@ export function useCopyPolicyYear() {
         start_date: string;
         end_date: string;
         claim_grace_period_days?: number | null;
+        leaver_access_days?: number | null;
       };
     }) =>
       api.post<PolicyYearCopyResult>(

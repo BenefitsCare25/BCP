@@ -29,6 +29,7 @@ from app.schemas.claims import UtilizationOut
 from app.schemas.panel import ClinicSearchOut
 from app.schemas.panel_card import MemberCardsOut
 from app.schemas.portal import (
+    PortalAccessOut,
     PortalCompanyOut,
     PortalEmployeeOut,
     PortalMe,
@@ -36,6 +37,11 @@ from app.schemas.portal import (
     PortalPolicyYearOut,
 )
 from app.services.enrollment_elections import member_window_for
+from app.services.member_access import (
+    Capability,
+    access_for_account,
+    access_payload,
+)
 from app.services.member_statement import build_member_statement
 from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
@@ -56,7 +62,19 @@ def portal_me(
     """Member profile + their coverage context. Unlike the data endpoints,
     this never 404s on a missing roster row — the shell needs it to render."""
     client = db.get(Client, member.client_id)
+    # Resolved BEFORE anything else can 404: this endpoint's job is to answer
+    # for a member whose access has ended, and `access_for_account` is the only
+    # resolver that copes with having no roster row in the current year (a
+    # leaver after rollover, or a roster that hasn't landed yet — two states
+    # that look identical from here and must not be described identically).
+    access = access_for_account(
+        db,
+        member_account_id=member.member_account_id,
+        client_id=member.client_id,
+        staff_id=member.staff_id,
+    )
     out = PortalMe(
+        access=PortalAccessOut(**access_payload(access)),
         member=PortalMemberOut(
             id=member.member_account_id,
             email=member.email,
@@ -75,7 +93,9 @@ def portal_me(
     if year is None:
         return out
     try:
-        employee = resolve_member_employee(db, member)
+        # UNGATED: this is the endpoint that has to tell a member their access
+        # has ended, so it cannot be one of the things their access gates.
+        employee = resolve_member_employee(db, member, requires=None)
     except HTTPException:
         employee = None
     out.policy_year = PortalPolicyYearOut(
@@ -100,7 +120,7 @@ def portal_benefit_statement(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> BenefitStatementOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     return build_member_statement(db, employee)
 
 
@@ -110,7 +130,7 @@ def portal_utilization(
     db: Session = Depends(get_db),
 ) -> UtilizationOut:
     """The member's own claim usage vs limits (computed on read)."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     return build_utilization(db, employee)
 
 
@@ -129,7 +149,7 @@ def portal_clinics(
 ) -> ClinicSearchOut:
     """Clinic locator — panel clinics tagged to the member's active policy
     year, nearest-first when the member shares their location."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ENTITLEMENT)
     return search_policy_year_clinics(
         db,
         employee.policy_year_id,
@@ -151,7 +171,7 @@ def portal_cards(
 ) -> MemberCardsOut:
     """The member's panel e-cards — one per covered product, plus one per
     dependant covered under that product."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ENTITLEMENT)
     statement = build_member_statement(db, employee)
     return MemberCardsOut(
         items=build_member_cards(db, employee, statement, member_email=member.email)
@@ -174,7 +194,7 @@ def portal_card_artwork(
     """
     if face not in CARD_FACES:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found")
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ENTITLEMENT)
     assigned = db.execute(
         select(PolicyYearCard.id).where(
             PolicyYearCard.policy_year_id == employee.policy_year_id,
@@ -205,7 +225,7 @@ def portal_dependants(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[DependantOut]:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     rows = db.execute(
         select(Dependant)
         .where(

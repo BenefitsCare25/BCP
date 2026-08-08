@@ -40,6 +40,7 @@ from app.services.claim_messages import (
     thread_for_claim,
 )
 from app.services.claims import load_member_claim
+from app.services.member_access import Capability
 
 router = APIRouter(
     prefix="/portal",
@@ -79,7 +80,7 @@ def list_my_conversations(
     page: it is what the shell badge and the home tile state, and a page-local
     figure would shrink as the member paged forward.
     """
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     total, rows = member_conversations(
         db, employee.id, employee.policy_year_id, offset=offset, limit=limit
     )
@@ -98,7 +99,7 @@ def list_my_claim_messages(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[ClaimMessageOut]:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     claim = _own_claim(db, claim_id, employee.id)
     return [member_message_out(m) for m in thread_for_claim(db, claim.id)]
 
@@ -122,7 +123,7 @@ def post_my_claim_message(
     other end — a reply there would sit unread until the member submitted, and
     reads to them as a message delivered.
     """
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = _own_claim(db, claim_id, employee.id)
     if claim.status == CLAIM_STATUS_DRAFT:
         raise HTTPException(
@@ -154,7 +155,7 @@ def mark_my_claim_messages_read(
     """Called when the member opens a claim's thread. Not audited — reading is
     not an action on the record, and one audit row per page view would bury the
     trail that matters."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     claim = _own_claim(db, claim_id, employee.id)
     marked = mark_member_read(db, claim_id=claim.id)
     db.commit()

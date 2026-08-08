@@ -493,3 +493,61 @@ def test_an_insured_limit_never_reports_a_negative_remaining():
     # The product ROLL-UP has its own, larger limit (S$1,000), so 900 approved
     # genuinely leaves 100 there — the floor bites per bucket, not globally.
     assert _bucket(_util(), "GHS").remaining == 100.0
+
+
+# ── Pending claim ids ─────────────────────────────────────────────────────────
+
+
+def test_pending_claim_ids_are_served_with_the_figure():
+    """The claims `pending` was summed from, on every bucket that counted them.
+
+    Served rather than re-filtered by the client: membership is `status not in
+    SETTLED_STATUSES`, a set defined BY SUBTRACTION, so a status list mirrored
+    into TypeScript starts offering a different set from the number it sits
+    under. The roll-up AND the per-benefit bucket both carry the claim, because
+    its amount is counted into both.
+    """
+    flagged = _mk_claim(benefit_key="Dental", amount=50.0, status="ai_flagged")
+    needs = _mk_claim(benefit_key="Dental", amount=25.0, status="needs_info")
+    other = _mk_claim(benefit_key="Room & Board", amount=75.0, status="submitted")
+    _mk_claim(benefit_key="Dental", amount=100.0, approved=100.0, status="approved")
+    _mk_claim(benefit_key="Dental", amount=30.0, status="rejected")
+    _mk_claim(benefit_key="Dental", amount=20.0, status="draft")
+
+    util = _util()
+    ghs = _bucket(util, "GHS")
+    assert set(ghs.pending_claim_ids) == {flagged, needs, other}
+    assert ghs.pending == 150.0
+
+    dental = _bucket(util, "GHS", "Dental")
+    assert set(dental.pending_claim_ids) == {flagged, needs}
+    # Settled, rejected and draft claims are not "pending" and must not appear.
+    assert dental.pending == 75.0
+
+
+def test_a_settled_claim_leaves_the_pending_ids():
+    """`approved` is no longer terminal (`sent_to_insurer`/`paid` follow it), and
+    every settled status must drop out of the list as well as out of the figure —
+    which is exactly what a mirrored, hand-written status set gets wrong."""
+    paid = _mk_claim(amount=40.0, approved=40.0, status="paid")
+    sent = _mk_claim(amount=50.0, approved=50.0, status="sent_to_insurer")
+    live = _mk_claim(amount=60.0, status="submitted")
+    ghs = _bucket(_util(), "GHS")
+    assert ghs.pending_claim_ids == [live]
+    assert paid not in ghs.pending_claim_ids
+    assert sent not in ghs.pending_claim_ids
+    assert (ghs.approved, ghs.pending) == (90.0, 60.0)
+
+
+def test_nothing_in_flight_serves_an_empty_list():
+    assert _bucket(_util(), "GHS").pending_claim_ids == []
+
+
+def test_an_orphaned_bucket_carries_its_pending_ids():
+    """An orphaned PRODUCT bucket has `benefit_key=None`, so the member's usage
+    tab renders it among the product rows and itemises its pending figure like
+    any other — without the ids that breakdown would silently disappear."""
+    claim = _mk_claim(product="GPA", amount=40.0, status="submitted")
+    orphan = _bucket(_util(), "GPA")
+    assert orphan.orphaned is True
+    assert orphan.pending_claim_ids == [claim]

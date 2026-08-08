@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ClaimGracePeriodField } from "@/components/claims/ClaimGracePeriodField";
+import { LeaverAccessField } from "@/components/claims/LeaverAccessField";
 import { ClaimMessages } from "@/components/claims/ClaimMessages";
 import {
   ConversationQueue,
@@ -1180,6 +1181,7 @@ export function ClaimsQueuePage() {
           </CardHeader>
           <CardContent className="pb-6">
             <ClaimGracePeriodField />
+            <LeaverAccessField />
           </CardContent>
         </Card>
         <DocTypeSettings />

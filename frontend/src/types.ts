@@ -157,6 +157,10 @@ export interface PolicyYear {
   // Days after the coverage period ends during which claims may still be
   // submitted. null = no submission deadline (system default).
   claim_grace_period_days: number | null;
+  /** Days after a member's LAST DAY OF SERVICE that they keep portal access.
+   *  A different bound from the grace period above: that one belongs to the
+   *  year, this one to the member. null = the system default (60). */
+  leaver_access_days: number | null;
   activated_at: string | null;
 }
 
@@ -1367,6 +1371,10 @@ export interface UtilizationBucket {
   pending: number;
   remaining: number | null;
   claim_count: number;
+  /** The claims `pending` was summed from. SERVED, never re-derived: "which
+   *  statuses count as pending" is defined server-side by subtraction from the
+   *  settled set, so a client-side filter drifts the day a status is added. */
+  pending_claim_ids: string[];
   /** Claims against coverage no longer on the statement. */
   orphaned: boolean;
   /** True when a limit text existed but couldn't be parsed to a number, so

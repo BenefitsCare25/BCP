@@ -36,6 +36,7 @@ from app.services.claim_messages import (
     post_member_enquiry_message,
     thread_for_enquiry,
 )
+from app.services.member_access import Capability
 from app.services.member_enquiries import (
     TOPICS,
     create_enquiry,
@@ -71,7 +72,7 @@ def create_my_enquiry(
     """Open a question. The thread and its first message are one transaction —
     a question nobody has written in would list on both surfaces with nothing
     to read."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     enquiry = create_enquiry(
         db,
         employee,
@@ -97,7 +98,7 @@ def get_my_enquiry(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> EnquiryOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     return enquiry_out(db, load_member_enquiry(db, enquiry_id, employee.id))
 
 
@@ -109,7 +110,7 @@ def list_my_enquiry_messages(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[ClaimMessageOut]:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     enquiry = load_member_enquiry(db, enquiry_id, employee.id)
     return [member_message_out(m) for m in thread_for_enquiry(db, enquiry.id)]
 
@@ -133,7 +134,7 @@ def post_my_enquiry_message(
     that lands in it would sit unread with nobody expecting it. The member is
     told to open a new question, which is one tap away.
     """
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     enquiry = load_member_enquiry(db, enquiry_id, employee.id)
     if enquiry.status == STATUS_CLOSED:
         raise HTTPException(
@@ -166,7 +167,7 @@ def mark_my_enquiry_messages_read(
 ) -> MessagesReadOut:
     """Called when the member opens the thread. Not audited — reading is not an
     action on the record, and one row per page view buries the trail that is."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     enquiry = load_member_enquiry(db, enquiry_id, employee.id)
     marked = mark_member_read(db, enquiry_id=enquiry.id)
     db.commit()

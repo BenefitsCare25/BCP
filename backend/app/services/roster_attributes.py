@@ -13,6 +13,8 @@ from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from app.models.employee import EMPLOYEE_STATUS_TERMINATED
+
 NAME_KEYS = ("name", "dependant_name", "full_name", "employee_name")
 REL_KEYS = ("relationship", "relation", "rel", "dependant_type", "type")
 DOB_KEYS = ("dob", "date_of_birth", "birth_date", "dateOfBirth", "birthdate")
@@ -240,6 +242,22 @@ def last_day_of_service(member: Any) -> date | str | None:
     return roster_date(first_value(member.attribute_values or {}, LAST_DAY_KEYS))
 
 
+def has_left(member: Any) -> bool:
+    """Whether the member has ACTUALLY left, not merely whether a date is on file.
+
+    `Last Day of Service` is a column of the member-listing template, so it
+    round-trips on every sync and an ACTIVE row can legitimately carry a stale
+    past date (a rehire, or a date nobody cleared) — which is exactly why
+    `services/adc.py` terminates only on a NEWLY stated one. Reading the date
+    alone would silently cut an active employee's wallet, every price tag drawn
+    against it, and (since `member_access`) their portal sign-in, with nothing
+    on screen explaining why.
+
+    Takes an Employee or a Dependant; both carry `status`.
+    """
+    return getattr(member, "status", None) == EMPLOYEE_STATUS_TERMINATED
+
+
 def resolved_last_day(member: Any) -> date | None:
     """The same value, as a real date, or None when it cannot be one.
 
@@ -250,6 +268,23 @@ def resolved_last_day(member: Any) -> date | None:
     """
     value = last_day_of_service(member)
     return value if isinstance(value, date) else None
+
+
+def cover_end(member: Any) -> date | None:
+    """The member's last covered day, or None when they have not left.
+
+    The two above, composed in the only order that is safe to act on: a date is
+    only evidence once the row says the person actually went. Everything that
+    SHORTENS what a member may do — the claim window, the portal access bound —
+    must read this rather than `resolved_last_day` alone, or a stale
+    `Last Day of Service` on an active row starts refusing a live employee's
+    claims.
+
+    ``insurer_reports.benefit_window`` deliberately does NOT use it: a report
+    prints what is on file, and a sheet showing a date nobody cleared is a
+    prompt to clear it, not a refusal aimed at a member.
+    """
+    return resolved_last_day(member) if has_left(member) else None
 
 
 def iso_date(raw: object | None) -> str | None:

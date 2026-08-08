@@ -24,7 +24,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
               {...p}
               type="date"
               className={leafControl}
-              min={form.yearStart}
+              min={form.claimableFrom}
               max={form.maxIncurred}
               value={form.incurredDate}
               onChange={(e) => form.setIncurredDate(e.target.value)}

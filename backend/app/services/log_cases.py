@@ -122,7 +122,7 @@ def assert_log_valid(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "This dependant is pending approval and can't be claimed for yet.",
             )
-    assert_incurred_in_period(db, year, claim)
+    assert_incurred_in_period(db, year, claim, employee)
     # Coverage must exist on the member's own resolved statement, and a named
     # dependant must be covered under it. The `member_claimable` gate inside
     # this helper is exempted for LOG cases (see its comment) — recording a case

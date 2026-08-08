@@ -65,6 +65,7 @@ from app.schemas.portal import (
     PortalRolloutMember,
     PortalRolloutOut,
 )
+from app.services.member_access import access_for_account, access_map
 from app.services.member_invite import (
     clear_invite_expiry,
     issue_invite_credential,
@@ -102,6 +103,21 @@ def _login_source(db: Session, client_id: str | None) -> str | None:
     return get_auth_policy(db, client_id).portal_login_source
 
 
+def _with_access(out: MemberAccountOut, access) -> MemberAccountOut:
+    """Stamp the derived access state onto a serialized account.
+
+    Kept separate from `_account_out` because the LIST resolves every account's
+    access in one batch (`member_access.access_map`) — a per-row call there is
+    four queries each, and CDL's roster is 491 accounts.
+    """
+    if access is not None:
+        out.access_state = access.state
+        out.access_ends_on = (
+            access.access_ends_on.isoformat() if access.access_ends_on else None
+        )
+    return out
+
+
 def _account_out(db: Session, account: MemberAccount) -> MemberAccountOut:
     """Serialize an account WITH its resolved sign-in username.
 
@@ -110,7 +126,19 @@ def _account_out(db: Session, account: MemberAccount) -> MemberAccountOut:
     """
     out = MemberAccountOut.model_validate(account)
     out.login_username = login_username(account, _login_source(db, account.client_id))
-    return out
+    # `access_for_account`, not `access_map`: the batch loads the WHOLE current
+    # roster in one query to amortise a page of accounts, which is the wrong
+    # trade for one — and this runs on create / resend / disable / set-password
+    # link. The single resolver is two point-loads.
+    return _with_access(
+        out,
+        access_for_account(
+            db,
+            member_account_id=account.id,
+            client_id=account.client_id,
+            staff_id=account.staff_id,
+        ),
+    )
 
 
 def _load_account(
@@ -187,12 +215,14 @@ def list_member_accounts(
     # indistinguishable from a wrong password.
     slug = _tenant_slug(db, client_id)
     source = _login_source(db, client_id)
+    # Four queries for the whole page, not four per row — see `access_map`.
+    access = access_map(db, client_id, rows)
     items = []
     for row in rows:
         out = MemberAccountOut.model_validate(row)
         out.tenant_slug = slug
         out.login_username = login_username(row, source)
-        items.append(out)
+        items.append(_with_access(out, access.get(row.id)))
     return MemberAccountList(
         total=total,
         items=items,

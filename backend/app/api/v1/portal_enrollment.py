@@ -50,6 +50,7 @@ from app.services.enrollment_elections import (
     perform_submit,
 )
 from app.services.enrollment_lifecycle import baseline_for
+from app.services.member_access import Capability
 
 router = APIRouter(
     prefix="/portal/enrollment",
@@ -104,7 +105,7 @@ def _reopen_if_submitted(enr: Enrollment) -> None:
 def _require_open_enrollment(
     db: Session, member: CurrentMember
 ) -> tuple[Employee, EnrollmentWindow, Enrollment]:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ELECT)
     window = member_window_for(db, employee)
     if window is None:
         raise HTTPException(
@@ -121,7 +122,7 @@ def my_enrollment(
     """The member's enrollment surface: window + own session + electable
     options. Everything None when no window is open (the page renders an
     informational empty state, not an error)."""
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ELECT)
     window = member_window_for(db, employee)
     if window is None:
         return PortalEnrollmentOut()

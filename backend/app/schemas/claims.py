@@ -561,6 +561,14 @@ class UtilizationBucket(BaseModel):
     pending: float = 0.0  # in-flight claims — shown separately, never subtracted
     remaining: float | None = None  # limit - approved
     claim_count: int = 0
+    # The claims `pending` was summed FROM — same contract as
+    # `FlexUtilization.pending_claim_ids`, and served for the same reason:
+    # "which statuses count as pending" is `utilization.PENDING_STATUSES`,
+    # defined BY SUBTRACTION from the settled set, so it grows a new member the
+    # day a status is added. A client filtering the claim list itself would be
+    # reimplementing that rule and would start offering a different set from the
+    # number it sits under.
+    pending_claim_ids: list[str] = Field(default_factory=list)
     # Claims against coverage no longer on the statement (coverage changed
     # after submission).
     orphaned: bool = False
@@ -688,11 +696,23 @@ class FlexClaimOptions(BaseModel):
     categories: list[FlexClaimCategoryOption] = Field(default_factory=list)
     # Required-document slots for flex claims (the generic invoice/receipt).
     doc_slots: list[DocSlotOut] = Field(default_factory=list)
+    # The flex scheme's effective window, clamped to the member's own cover.
+    # Genuinely different from the policy year (a scheme can start mid-year), so
+    # the form must not reuse the year's span for a flex claim.
+    claimable_from: str | None = None
+    claimable_to: str | None = None
 
 
 class CoverageOptionsOut(BaseModel):
     policy_year_start: str
     policy_year_end: str
+    # The dates an INSURED claim may be incurred on, resolved by the same
+    # function submit enforces (`claims.claim_period_window`). SERVED so the
+    # form can state the bound up front instead of surfacing a 422 after the
+    # member has filled the whole thing in — and so a leaver, whose window ends
+    # on their last day, is told that rather than discovering it.
+    claimable_from: str
+    claimable_to: str
     insured: list[InsuredClaimOption] = Field(default_factory=list)
     flex: FlexClaimOptions | None = None
     dependants: list[dict[str, Any]] = Field(default_factory=list)  # {id, name, relationship}

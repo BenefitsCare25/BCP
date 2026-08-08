@@ -45,6 +45,13 @@ class PolicyYear(Base, TimestampMixin):
     # Days after the coverage period ends during which members may still submit
     # claims for this year. None = no submission deadline (system default).
     claim_grace_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Days after a member's LAST DAY OF SERVICE during which they keep portal
+    # access (read + file claims incurred on or before it). Bounds the member,
+    # where `claim_grace_period_days` bounds the year — a submit must satisfy
+    # both. None = `member_access.DEFAULT_LEAVER_ACCESS_DAYS`; 0 = access ends
+    # on the last day. There is deliberately no "unlimited" value: unlimited is
+    # the defect this column exists to close (`docs/LEAVER_ACCESS_PLAN.md`).
+    leaver_access_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     activated_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)

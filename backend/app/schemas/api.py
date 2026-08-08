@@ -229,6 +229,12 @@ class PolicyYearOut(_Base):
     # Days after the coverage period ends during which claims may still be
     # submitted. None = no submission deadline (system default).
     claim_grace_period_days: int | None = None
+    # Days after a member's LAST DAY OF SERVICE that they keep portal access.
+    # A different bound from the grace period above: that one is a property of
+    # the YEAR, this one of the member. None = the system default
+    # (`member_access.DEFAULT_LEAVER_ACCESS_DAYS`); 0 = access ends on the last
+    # day. There is deliberately no "unlimited".
+    leaver_access_days: int | None = None
     activated_at: datetime | None = None
 
 
@@ -236,6 +242,7 @@ class PolicyYearCreate(BaseModel):
     start_date: date
     end_date: date
     claim_grace_period_days: int | None = None
+    leaver_access_days: int | None = None
 
     @model_validator(mode="after")
     def _check_range(self) -> PolicyYearCreate:
@@ -243,11 +250,13 @@ class PolicyYearCreate(BaseModel):
             raise ValueError("end_date must be on or after start_date")
         if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
             raise ValueError("claim_grace_period_days must be zero or positive")
+        if self.leaver_access_days is not None and self.leaver_access_days < 0:
+            raise ValueError("leaver_access_days must be zero or positive")
         return self
 
 
 class PolicyYearUpdate(BaseModel):
-    """Partial update of a benefit year (dates + claim grace period).
+    """Partial update of a benefit year (dates, grace period, leaver run-off).
 
     Only fields present in the request body are written (``model_fields_set``),
     so a grace-period-only update can't wipe the dates and vice versa.
@@ -256,6 +265,7 @@ class PolicyYearUpdate(BaseModel):
     start_date: date | None = None
     end_date: date | None = None
     claim_grace_period_days: int | None = None
+    leaver_access_days: int | None = None
 
     @model_validator(mode="after")
     def _check(self) -> PolicyYearUpdate:
@@ -267,6 +277,8 @@ class PolicyYearUpdate(BaseModel):
             raise ValueError("end_date must be on or after start_date")
         if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
             raise ValueError("claim_grace_period_days must be zero or positive")
+        if self.leaver_access_days is not None and self.leaver_access_days < 0:
+            raise ValueError("leaver_access_days must be zero or positive")
         return self
 
 

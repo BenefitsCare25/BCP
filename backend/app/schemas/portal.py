@@ -59,6 +59,27 @@ class PortalEmployeeOut(BaseModel):
     employee_name: str | None = None
 
 
+class PortalAccessOut(BaseModel):
+    """What this member may still do, and until when.
+
+    ``capabilities`` is the whole point: the client renders from THIS LIST and
+    must never re-derive the matrix from ``state``. Which capabilities a state
+    carries is `services/member_access.py`'s business, and a copy of that table
+    in TypeScript is the same drift class as mirroring the pending-claim status
+    set — it would go on hiding (or showing) the wrong tab the day the rule
+    changes.
+    """
+
+    state: str  # active | run_off | settling | ended | unknown
+    capabilities: list[str] = Field(default_factory=list)
+    # The member's stated last day of service; None when they have not left (or
+    # the roster never said). What a surface PRINTS.
+    last_day: str | None = None
+    # The derived bound. Can exist without `last_day` — a terminated row with no
+    # date is still bounded, by the benefit year.
+    access_ends_on: str | None = None
+
+
 class PortalCompanyOut(BaseModel):
     """The member's employer, as the member should see it.
 
@@ -94,6 +115,11 @@ class PortalMe(BaseModel):
     # stated in words on the home Messages tile, which reads the count off
     # `GET /portal/messages`. Adding it back means a COUNT query on this hot
     # endpoint for a mark that has to explain itself some other way.
+    #
+    # Access is SERVED here because this is the one endpoint that keeps
+    # answering for a member whose access has ended — it is what lets the shell
+    # explain itself instead of 403ing on the first call it makes.
+    access: PortalAccessOut
 
 
 # ── Broker-side member-account provisioning ───────────────────────────────────
@@ -130,6 +156,13 @@ class MemberAccountOut(_Base):
     mail_sent: bool | None = None
     # Set once by set-password-link responses — deliver to the member.
     set_password_token: str | None = None
+    # Whether this member's ROSTER row still lets them in
+    # (`services/member_access.py`), which is a different axis from `status`:
+    # `status` is the broker's manual switch, this is derived from the employee
+    # record and moves on its own as a leaver's run-off expires. Both are needed
+    # — an account can be `active` and yet let nobody in.
+    access_state: str | None = None
+    access_ends_on: str | None = None
     # The tenant's subdomain label, so the UI can build an ABSOLUTE
     # `{tenant_slug}.portal.<base>` link. The broker generating it is on a
     # different host, so a bare path would be unclickable when pasted into an
@@ -263,3 +296,9 @@ class PortalPreviewOut(BaseModel):
     member_account: MemberAccountOut | None = None
     # Mirrors PortalMe.enrollment_open for the previewed employee.
     enrollment_open: bool = False
+    # Mirrors PortalMe.access. The preview itself is deliberately NOT gated — a
+    # broker settling a leaver's last claim has to be able to read their
+    # screens — so this is here to render the same banner the member sees,
+    # which is what "the preview shows exactly what the member sees" means for
+    # someone whose cover has ended.
+    access: PortalAccessOut | None = None

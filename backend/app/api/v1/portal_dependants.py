@@ -20,6 +20,7 @@ from app.models.stored_document import DOC_ENTITY_DEPENDANT
 from app.schemas.api import DependantOut
 from app.schemas.claims import PortalDependantCreateIn, StoredDocumentOut
 from app.services.claims import attach_document
+from app.services.member_access import Capability
 from app.services.roster_attributes import normalize_nric
 
 router = APIRouter(
@@ -37,7 +38,7 @@ def add_my_dependant(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> DependantOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ELECT)
     attribute_values = {
         "name": body.name.strip(),
         "relationship": body.relationship.strip().lower(),
@@ -84,7 +85,7 @@ async def upload_my_dependant_proof(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> StoredDocumentOut:
-    employee = resolve_member_employee(db, member)
+    employee = resolve_member_employee(db, member, requires=Capability.ELECT)
     dependant = db.get(Dependant, dependant_id)
     if dependant is None or dependant.employee_id != employee.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Dependant not found")

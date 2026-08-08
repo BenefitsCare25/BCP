@@ -37,6 +37,7 @@ from app.core.tenancy_host import (
 )
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
+from app.services.member_access import Capability, access_of, refusal
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,18 @@ def require_portal_tenant(
             status.HTTP_400_BAD_REQUEST,
             "This request must be made on a company portal subdomain.",
         )
+    # **Route the schema HERE, not only in `get_current_member`.** The sign-in
+    # endpoints have no member token yet, so the authenticated dep has not run —
+    # and until the leaver gate they touched only CONTROL tables, which live in
+    # `public` on every deployment, so nothing noticed the omission.
+    #
+    # `_issue_member_login` now reads `policy_years`, `employees` and `claims`,
+    # all TENANT tables. Unrouted, every one of those resolves against `public`,
+    # which holds no tenant rows on Postgres: the access check would come back
+    # `unknown` and silently sign in every member whose access had ended. The
+    # SQLite suite cannot catch that (no schemas) — see
+    # `tests/test_schema_isolation_pg.py`.
+    set_search_path(db, ctx.broker_firm_id)
     return ctx
 
 
@@ -278,13 +291,30 @@ def active_policy_year(db: Session, client_id: str):
     )
 
 
-def resolve_member_employee(db: Session, member: CurrentMember):
+def resolve_member_employee(
+    db: Session,
+    member: CurrentMember,
+    *,
+    requires: Capability | None = Capability.RECORD,
+):
     """The member's own Employee row in the active policy year.
 
     Prefers the stamped `member_account_id` binding; falls back to a
     `(policy_year_id, staff_id)` match (new policy year rosters arrive without
     the stamp) and stamps it for next time. 404 when the client has no active
     year or the member has no row in it.
+
+    **`requires` is the leaver gate, and this is deliberately where it lives.**
+    Every portal handler already has to call this function, and that rule is
+    already documented as mandatory — so bolting the check on here is the one
+    seam that cannot be forgotten, unlike a dependency someone omits from a new
+    router. It defaults to `Capability.RECORD`; `requires=None` opts out
+    entirely and exists for `GET /portal/me`, which has to keep answering for a
+    member whose access has ended so the shell can say why.
+
+    A denied capability is a 403 carrying a `code` (`access_ended` when the
+    member is finished with, `coverage_ended` while they are still in run-off) —
+    never a 404, which would say the record does not exist when it does.
     """
     from app.models import Employee
 
@@ -325,4 +355,28 @@ def resolve_member_employee(db: Session, member: CurrentMember):
             db.commit()
     if employee is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active coverage")
+    if requires is not None:
+        assert_member_capability(db, employee, requires, year=year)
     return employee
+
+
+def assert_member_capability(
+    db: Session,
+    employee,
+    capability: Capability,
+    *,
+    year=None,
+) -> None:
+    """403 unless this member still holds `capability`. The ONE raise site.
+
+    Almost every caller reaches this through `resolve_member_employee`'s
+    `requires=`. It is exposed for the one place a route's capability depends on
+    the ROW it is acting on rather than on the route: submitting a claim is
+    answering a `needs_info` (`RESPOND`) or finishing a new one (`CLAIM`), and
+    which it is can only be known once the claim is loaded.
+    """
+    if year is None:
+        year = active_policy_year(db, employee.client_id)
+    denied = refusal(access_of(db, employee, year), capability)
+    if denied is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, denied)

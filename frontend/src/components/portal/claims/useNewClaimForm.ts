@@ -274,12 +274,26 @@ export function useNewClaimForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autofillDocs, isHospitalisation, hospital, provider]);
 
-  const yearStart = options.data?.policy_year_start ?? "";
-  const yearEnd = options.data?.policy_year_end ?? "";
+  // The dates this member may claim on, SERVED by the same function submit
+  // enforces (`claims.claim_period_window`) rather than re-derived from the
+  // policy year here. Two things that window knows and the year does not: a
+  // flex scheme can start mid-year, and a LEAVER's window closes on their last
+  // day. Both used to pass the form and be refused at submit, after the member
+  // had filled everything in.
+  const flexWindow = options.data?.flex;
+  const claimableFrom =
+    (effectiveKind === "flex" ? flexWindow?.claimable_from : null) ??
+    options.data?.claimable_from ??
+    "";
+  const claimableTo =
+    (effectiveKind === "flex" ? flexWindow?.claimable_to : null) ??
+    options.data?.claimable_to ??
+    "";
   // Claims can't be incurred in the future — clamp to today when today falls
-  // inside the policy window (a seeded future-dated year keeps its own span).
+  // inside the claimable window (a seeded future-dated year keeps its own span).
   const today = todayISO();
-  const maxIncurred = today >= yearStart && today <= yearEnd ? today : yearEnd;
+  const maxIncurred =
+    today >= claimableFrom && today <= claimableTo ? today : claimableTo;
 
   // Fields that depend on the chosen claim type — reset when the type changes.
   const resetTypeFields = () => {
@@ -471,8 +485,8 @@ export function useNewClaimForm() {
       referralFile,
       referralExistingId,
       incurredDate,
-      yearStart,
-      yearEnd,
+      claimableFrom,
+      claimableTo,
       today,
       isHospitalisation,
       hospital,
@@ -648,7 +662,7 @@ export function useNewClaimForm() {
     groupLabels: GROUP_LABELS,
     currencies: options.data?.currencies ?? [],
     walletCurrency,
-    yearStart,
+    claimableFrom,
     maxIncurred,
     // selection
     dependantId,

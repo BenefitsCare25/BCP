@@ -102,6 +102,21 @@ MEMBER_EDITABLE_STATUSES = frozenset({CLAIM_STATUS_DRAFT, CLAIM_STATUS_NEEDS_INF
 # States that count against limits/duplicate checks ("live" claims).
 LIVE_STATUSES = frozenset(CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED})
 
+# Live but not yet settled — a claim still in flight, whose amount may or may
+# not end up consuming the limit.
+#
+# Derived BY SUBTRACTION, so a status added above lands here by default — right
+# for a new in-flight state and catastrophically wrong for a new settled one:
+# the claim would drop out of `approved` (subtracted from the limit) into
+# `pending` (reported beside it and never subtracted), handing the member back a
+# limit they have already spent. Add settled states to `SETTLED_STATUSES`.
+#
+# It lives HERE rather than in `utilization` because it is a fact about the
+# status model, and three subsystems now ask the question — utilization,
+# duplicate-invoice checks, and `member_access` (a leaver keeps read access
+# while a claim of theirs is still open). `utilization` re-exports the name.
+PENDING_STATUSES = frozenset(LIVE_STATUSES - SETTLED_STATUSES)
+
 # Hospital sector, as the insurer classifies it. Drives which invoice type the
 # document classifier expects (govt vs private) and appears on the claims
 # reports; see `services/claim_doc_types.py`.

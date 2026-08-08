@@ -43,10 +43,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from app.models.employee import EMPLOYEE_STATUS_TERMINATED
 from app.schemas.api import FlexProrationLine
 from app.services.roster_attributes import (
     first_value,
+    has_left,
     resolved_last_day,
     roster_date,
 )
@@ -252,19 +252,6 @@ def _entitlement_start_for(
     return value if isinstance(value, date) else None
 
 
-def _has_left(member: Any) -> bool:
-    """Whether the member has ACTUALLY left, not merely whether a date is on file.
-
-    `Last Day of Service` is a column of the member-listing template, so it
-    round-trips on every sync and an ACTIVE row can legitimately carry a stale
-    past date (a rehire, or a date nobody cleared) — which is exactly why
-    `services/adc.py` terminates only on a NEWLY stated one. Reading the date
-    alone would silently cut an active employee's wallet and every price tag
-    drawn against it, with nothing on screen explaining why.
-    """
-    return getattr(member, "status", None) == EMPLOYEE_STATUS_TERMINATED
-
-
 def service_period(
     member: Any, period: tuple[date, date], config: ProrationConfig
 ) -> tuple[date, date] | None:
@@ -283,7 +270,7 @@ def service_period(
         joined = _entitlement_start_for(member.attribute_values or {}, config)
         if joined is not None and joined > start:
             start = joined
-    if config.prorates_leavers and _has_left(member):
+    if config.prorates_leavers and has_left(member):
         left = resolved_last_day(member)
         if left is not None and left < end:
             end = left

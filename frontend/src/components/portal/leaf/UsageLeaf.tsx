@@ -25,21 +25,6 @@ import { prorationReason } from "./FlexProrationNote";
 import { glossBeside } from "./glossary";
 import { formatDay } from "./date";
 
-/** In-flight claims — the ones whose amounts make up a bucket's `pending`.
- *
- * Mirrors `utilization.py::PENDING_STATUSES`, which is "every status except
- * draft, rejected and approved". Spelled out rather than derived, because the
- * two lists have to agree for the breakdown below to reconcile, and a set
- * defined by subtraction silently grows a new member the day a status is added
- * server-side. */
-const IN_FLIGHT = new Set([
-  "submitted",
-  "ai_review_pending",
-  "ai_verified",
-  "ai_flagged",
-  "needs_info",
-]);
-
 /** The amount a claim contributes, exactly as `utilization.py::_claim_amount`
  * computes it — the converted figure when the claim was filed in another
  * currency, else what was claimed. */
@@ -57,7 +42,14 @@ function claimAmount(c: PortalClaim): number {
  * independent queries that can be a moment apart, and a breakdown that does not
  * add up to the figure above it reads as a fault in the number rather than in
  * the pairing. When they disagree the figure stands alone, which is what it did
- * before. */
+ * before.
+ *
+ * **The rows are chosen by the SERVED ids**, not by re-filtering the claim list.
+ * That drops two mirrors of server-side rules at once: which statuses count as
+ * pending (`utilization.PENDING_STATUSES`, defined by subtraction from the
+ * settled set, so a copy here grows a different member the day a status is
+ * added) and which claims belong to this bucket (`_bucket_sums`' business —
+ * the ids already encode it, product code and all). */
 function PendingBreakdown({
   bucket,
   claims,
@@ -65,12 +57,8 @@ function PendingBreakdown({
   bucket: UtilizationBucket;
   claims: PortalClaim[];
 }) {
-  const mine = claims.filter(
-    (c) =>
-      c.claim_kind === "insured" &&
-      c.product_code === bucket.product_code &&
-      IN_FLIGHT.has(c.status),
-  );
+  const ids = new Set(bucket.pending_claim_ids);
+  const mine = claims.filter((c) => ids.has(c.id));
   if (mine.length === 0) return null;
 
   const total = mine.reduce((sum, c) => sum + claimAmount(c), 0);
