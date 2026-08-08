@@ -210,16 +210,31 @@ def client():
         yield c
 
 
+# All three were downloads of their own; they are sheets of one workbook now —
+# the three questions a security review opens together. `_get` still returns the
+# raw response so the date-range validation tests can assert on a status code,
+# and carries the sheet the caller meant so `_sheet` knows which tab to read.
+ACTIVITY = f"/api/v1/policy-years/{PY_ID}/reports/workbooks/activity-access"
+
+_ACTIVITY_SHEET = {
+    "portal-activity": "Portal Sign-ins",
+    "company-activity": "Company Changes",
+    "portal-access": "Portal Access",
+}
+
+
 def _sheet(resp):
     assert resp.status_code == 200, resp.text
     wb = load_workbook(BytesIO(resp.content))
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
+    assert resp.sheet_title in wb.sheetnames, wb.sheetnames
+    rows = list(wb[resp.sheet_title].iter_rows(values_only=True))
     return rows[0], rows[1:]
 
 
-def _get(client, path: str, **params):
-    return client.get(f"/api/v1/policy-years/{PY_ID}/reports/{path}", params=params)
+def _get(client, report: str, **params):
+    resp = client.get(ACTIVITY, params=params)
+    resp.sheet_title = _ACTIVITY_SHEET[report]
+    return resp
 
 
 # ── Portal activity ──────────────────────────────────────────────────────────
@@ -284,14 +299,17 @@ def test_portal_activity_rejects_inverted_and_oversized_ranges(client):
 
 
 def test_portal_activity_is_audited(client):
+    """The download is logged with the WORKBOOK and the range it covered —
+    which is what left the building, and the range is what makes the entry
+    reconstructable."""
     assert _get(client, "portal-activity").status_code == 200
     with SessionLocal() as s:
         rows = s.query(AuditLog).filter(
-            AuditLog.entity_type == "activity_report"
+            AuditLog.entity_type == "report_workbook"
         ).all()
-        assert any(
-            (r.after or {}).get("report") == "portal-activity" for r in rows
-        )
+    pulled = [r.after or {} for r in rows]
+    assert any(a.get("workbook") == "activity-access" for a in pulled)
+    assert any(a.get("start") and a.get("end") for a in pulled)
 
 
 # ── Company activity ─────────────────────────────────────────────────────────

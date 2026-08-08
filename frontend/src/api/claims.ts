@@ -152,12 +152,21 @@ export interface BrokerClaim {
   /** What the insurer actually paid — may fall short of `amount_approved`. */
   payment_amount: number | null;
   hospital_type: string | null;
+  /** The sector DERIVED from the provider, served (never re-derived here — the
+   *  claims report labels its column from the same resolver). `hospital_type`
+   *  is the assessor's OVERRIDE; null there means "use this". */
+  hospital_type_derived: string | null;
   admission_date: string | null;
   discharge_date: string | null;
   taxable: boolean | null;
   cpf_claimable: boolean | null;
   /** Broker-only note. Never shown to the member (that is `remarks`). */
   admin_remarks: string | null;
+  /** Whether the claim draws on an inpatient benefit. SERVED, never derived
+   *  here — the claims report picks its columns from the same helper, so a
+   *  product-code list in TypeScript would silently hide the sector field on a
+   *  hospitalisation claim while the report kept printing the column. */
+  is_inpatient: boolean;
   /** Derived server-side from the dates — never stored, so never stale. */
   servicer_days: number | null;
   insurer_days: number | null;
@@ -568,6 +577,14 @@ export function useUpdateClaimAssessment() {
         taxable: boolean | null;
         cpf_claimable: boolean | null;
         admin_remarks: string | null;
+        // Settlement AMENDMENTS — they correct the recorded dates without
+        // moving the status. `send-to-insurer` / `payment` are the
+        // transitions, and each is offered from one status only, so without
+        // these a claim past that point could never have a wrong date fixed.
+        sent_to_insurer_on: string | null;
+        insurer_deadline_on: string | null;
+        paid_on: string | null;
+        payment_amount: number | null;
       }>;
     }) =>
       api.patch<BrokerClaim>(`/claims/${input.claimId}/assessment`, input.patch),

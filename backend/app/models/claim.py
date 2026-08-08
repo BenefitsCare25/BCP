@@ -361,8 +361,12 @@ class Claim(Base, TimestampMixin):
     hospital_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     admission_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     discharge_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # Payroll treatment of the reimbursement. Tri-state on purpose: NULL means
-    # "not assessed", which is different from an assessor deciding "no".
+    # Payroll treatment of the reimbursement. Nullable for storage only — NULL
+    # means "nobody has changed it from the default", and the default IS No:
+    # that is the ordinary treatment of a medical reimbursement, it is what the
+    # assessment form offers (Yes/No, defaulting No) and what `claims_reports.
+    # _flag` prints. This was a tri-state where NULL printed blank; once the
+    # form defaulted to No, blank became a second answer to the same question.
     taxable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     cpf_claimable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # Broker-side note. Kept apart from `remarks` (the MEMBER's note) because

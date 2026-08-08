@@ -94,7 +94,7 @@ def mint_reference_no(db: Session, claim: Claim) -> str:
     client = db.get(Client, claim.client_id)
     prefix = reference_prefix(client)
     for _attempt in range(_MINT_ATTEMPTS):
-        candidate = f"{prefix}-{_next_sequence(db, claim.client_id, prefix):06d}"
+        candidate = f"{prefix}-{_next_sequence(db, prefix):06d}"
         savepoint = db.begin_nested()
         try:
             claim.reference_no = candidate
@@ -127,15 +127,30 @@ def _reference_taken(db: Session, reference_no: str) -> bool:
     ) > 0
 
 
-def _next_sequence(db: Session, client_id: str, prefix: str) -> int:
-    """One past the highest sequence issued for this client's prefix.
+def _next_sequence(db: Session, prefix: str) -> int:
+    """One past the highest sequence issued under this PREFIX.
 
     Compares as TEXT on a zero-padded 6-digit tail, so `MAX` orders correctly
-    right up to 999,999 references for one company.
+    right up to 999,999 references for one prefix.
+
+    **Scoped by prefix, NOT by client — because that is what the uniqueness is
+    on.** `ix_claims_reference_no` is unique across the whole schema, while a
+    prefix is only the first 8 alphanumerics of a company's slug, so two related
+    companies in one firm collide: "CDL Holdings Pte Ltd" and "CDL Holding
+    Group" both reduce to `CDLHOLDI`. A client-scoped max returned 1 for the
+    second company no matter how many references the first had already issued,
+    so its first claim proposed a number that was taken, the retry recomputed
+    the identical candidate, and submission 503'd — permanently, for every claim
+    that company ever filed. Reading the max the constraint actually governs
+    makes the retry converge instead of repeating itself.
+
+    The two companies then share one ascending series. That is the right
+    trade: a reference is a lookup key, not a per-company counter, and it stays
+    unique and monotonic. (`prefix` is alphanumeric by construction, so it can
+    carry no LIKE wildcard.)
     """
     highest = db.scalar(
         select(func.max(Claim.reference_no)).where(
-            Claim.client_id == client_id,
             Claim.reference_no.like(f"{prefix}-%"),
         )
     )
@@ -294,3 +309,137 @@ def record_payment(
 
 def is_settled(claim: Claim) -> bool:
     return claim.status in SETTLED_STATUSES
+
+
+# The claim's dates a broker may CORRECT after the fact, as request-field names.
+# `sent_to_insurer_on` is a date on the request and a timestamp on the row.
+SETTLEMENT_AMENDMENTS = frozenset(
+    {"sent_to_insurer_on", "insurer_deadline_on", "paid_on", "payment_amount"}
+)
+
+# The two that describe money HAVING MOVED, as opposed to the dispatch that
+# started the insurer's clock. Correctable only on a claim recorded as paid —
+# see `assert_settlement_amendable`.
+_PAYMENT_AMENDMENTS = frozenset({"paid_on", "payment_amount"})
+
+# Request-field name → the column it writes, for callers that need to snapshot
+# the claim before an amendment (the audit trail does).
+AMENDMENT_COLUMNS = {"sent_to_insurer_on": "sent_to_insurer_at"}
+
+
+def was_dispatched(claim: Claim) -> bool:
+    """Whether this claim ever went to the insurer.
+
+    The STATUS is not enough on its own: `sent_to_insurer → rejected` is a real
+    transition (the insurer declining after we accepted), and such a claim was
+    dispatched, has a deadline, and is exactly the one whose recorded dates a
+    broker may need to correct. Gating on `status in {sent_to_insurer, paid}`
+    alone refused it with "…once the claim has been sent to the insurer", which
+    is not only unhelpful but false.
+    """
+    return (
+        claim.sent_to_insurer_at is not None
+        or claim.status in (CLAIM_STATUS_SENT_TO_INSURER, CLAIM_STATUS_PAID)
+    )
+
+
+def assert_settlement_amendable(
+    claim: Claim, present: frozenset[str] | set[str]
+) -> None:
+    """Refuse corrections the claim's state does not admit. Raises 409.
+
+    Two rules, and the second is the load-bearing one:
+
+    - **Nothing before dispatch.** Backfilling a dispatch date onto a draft
+      would invent a history the SLA counters then report on.
+    - **A payment can only be corrected on a claim recorded as PAID.** Writing
+      `paid_on` onto a claim still `sent_to_insurer` does not move the status,
+      but `_insurer_clock_stop` reads `paid_on` FIRST — so the SLA counters
+      freeze, the claim drops off the overdue list a broker works and out of
+      the "Nd over" badge, while it is still with the insurer, still counted as
+      pending against the member's limit, and no money has arrived. An unpaid
+      claim quietly leaving the chase list is the worst failure this module has.
+    """
+    if not present:
+        return
+    if not was_dispatched(claim):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Settlement dates can only be corrected once the claim has been "
+            "sent to the insurer.",
+        )
+    if present & _PAYMENT_AMENDMENTS and claim.status != CLAIM_STATUS_PAID:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The payment date and amount can only be corrected on a claim "
+            "recorded as paid. Use Record payment to settle it.",
+        )
+
+
+def apply_settlement_amendment(claim: Claim, body, present: frozenset[str] | set[str]):
+    """Correct the recorded settlement dates without touching the status.
+
+    `send_to_insurer` and `record_payment` are TRANSITIONS, offered only from
+    the single status each is legal in. That leaves no way back: a claim that
+    reached `paid` without passing through dispatch — a LOG case settled
+    outside the flow, a migrated row, a date keyed in wrongly — has lost the
+    control that sets these, permanently, and the SLA columns that read them
+    stay blank forever with nothing in the product able to fill them.
+
+    This is the amendment path. It writes the same fields and deliberately does
+    NOT move the status: re-running the transition would repost the member's
+    "your claim has been paid" notice for a typo correction.
+
+    Caller commits. Ordering is validated against the EFFECTIVE values (what
+    the claim will hold after the merge), not just what this request carried —
+    a partial update that moves only the deadline is exactly how it comes to
+    precede a dispatch date already on the row.
+    """
+    if not present:
+        return
+
+    def effective(field: str, current):
+        return getattr(body, field) if field in present else current
+
+    sent = effective("sent_to_insurer_on", _as_date(claim.sent_to_insurer_at))
+    deadline = effective("insurer_deadline_on", claim.insurer_deadline_on)
+    paid = effective("paid_on", claim.paid_on)
+
+    # A cleared date input sends null, so this is one keystroke away on the
+    # form. Clearing the dispatch date of a claim that IS with the insurer
+    # leaves it reporting itself as dispatched with no dispatch date:
+    # `insurer_days` goes blank while `days_over_deadline` keeps counting
+    # against a deadline nothing now explains. Correcting a date is legitimate;
+    # deleting it out from under the status is not.
+    if sent is None and was_dispatched(claim):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "This claim has been sent to the insurer, so it must keep a "
+            "dispatch date. Correct the date rather than clearing it.",
+        )
+
+    if sent is not None and deadline is not None and deadline < sent:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "The insurer deadline cannot precede the date sent to the insurer.",
+        )
+    if sent is not None and paid is not None and paid < sent:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "The payment date cannot precede the date sent to the insurer.",
+        )
+
+    if "sent_to_insurer_on" in present:
+        # Keep the wall-clock component so the stored value stays a real
+        # timestamp; only the DATE is what anyone reads off it.
+        claim.sent_to_insurer_at = (
+            datetime.combine(sent, datetime.now(UTC).timetz())
+            if sent is not None
+            else None
+        )
+    if "insurer_deadline_on" in present:
+        claim.insurer_deadline_on = deadline
+    if "paid_on" in present:
+        claim.paid_on = paid
+    if "payment_amount" in present:
+        claim.payment_amount = body.payment_amount

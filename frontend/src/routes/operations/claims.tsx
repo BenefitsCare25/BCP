@@ -56,6 +56,11 @@ import {
   useAwaitingReplyCount,
 } from "@/components/claims/ConversationQueue";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
+import { ClaimAssessmentPanel } from "@/components/claims/ClaimAssessmentPanel";
+import {
+  ClaimSettlementFacts,
+  hasSettlement,
+} from "@/components/claims/ClaimSettlementFacts";
 import { LogCaseForm } from "@/components/claims/LogCaseForm";
 import { NativeSelect } from "@/components/ui/native-select";
 import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
@@ -471,6 +476,12 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
                           {c.claim_kind === "flex"
                             ? `Flex · ${c.flex_category_name}`
                             : c.product_code}
+                          {/* The reference is what a caller quotes, so it has
+                              to be findable by eye in the queue — not only
+                              inside the sheet they'd have to open first. */}
+                          {c.reference_no && (
+                            <span className="font-mono"> · {c.reference_no}</span>
+                          )}
                         </div>
                       </TableCell>
                       {/* Money and dates are single values: wrapping them mid-
@@ -487,6 +498,17 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={c.status} />
+                        {/* An overdue claim is the one thing in this queue that
+                            needs chasing today, and the count changes every
+                            night — which is why it is derived rather than
+                            stored, and why it belongs here rather than only in
+                            a spreadsheet somebody pulls weekly. */}
+                        {c.days_over_deadline != null &&
+                          c.days_over_deadline > 0 && (
+                            <div className="mt-1 text-2xs font-medium tabular-nums text-warn">
+                              {c.days_over_deadline}d over
+                            </div>
+                          )}
                       </TableCell>
                       <TableCell>
                         <VerdictBadge claim={c} />
@@ -514,6 +536,16 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
               {/* pr-10 keeps the title clear of the overlaid close control. */}
               <SheetHeader className="gap-3 pr-10">
                 <SheetTitle>{selected.claim_type}</SheetTitle>
+                {/* The reference is the string the member quotes on the phone
+                    and the key a broker reconciles against the insurer's
+                    ledger. It was minted at submit and rendered nowhere, which
+                    left support with only a uuid to look a claim up by. It
+                    identifies the claim, so it belongs beside its name. */}
+                {selected.reference_no && (
+                  <p className="-mt-1 font-mono text-xs tabular-nums text-muted-foreground">
+                    {selected.reference_no}
+                  </p>
+                )}
                 {/* Status, verdict and the re-run action identify the claim, so
                     they belong beside its name rather than as the first item of
                     the scrolling body. */}
@@ -654,6 +686,24 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
                     </DetailField>
                   )}
                 </dl>
+
+                {/* Renders nothing before the insurer leg — see the component.
+                    Gated on `hasSettlement`, not on the dispatch timestamp: a
+                    claim recorded as paid without one still has a payment date
+                    and amount to show. */}
+                {hasSettlement(selected) && (
+                  <DetailSection title="Insurer settlement">
+                    <ClaimSettlementFacts claim={selected} />
+                  </DetailSection>
+                )}
+
+                {/* The assessor's own fields. Directly above Documents because
+                    the sector and admission window are read OFF those
+                    documents, and every field here is a column on the claims
+                    reports that nothing else in the product can fill. */}
+                <DetailSection title="Assessment">
+                  <ClaimAssessmentPanel claim={selected} />
+                </DetailSection>
 
                 <DetailSection title="Documents">
                   {selected.documents.length === 0 ? (

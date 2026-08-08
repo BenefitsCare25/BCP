@@ -255,6 +255,24 @@ def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
     return _PROFILES.get((product_code or "").strip().upper(), _EMPTY)
 
 
+def is_inpatient_product(product_code: str | None) -> bool:
+    """Whether a product's claims draw on an inpatient benefit.
+
+    Lives here because this module owns the profiles, and it has three
+    consumers now — the claims reports' scope filter, the broker claim payload
+    (which tells the assessment form whether to offer sector and admission
+    dates) and, through the payload, the form itself. A product-code list in
+    any of them would be a place to forget when a product is added, and the
+    frontend must not reimplement it: a drifted copy hides the sector field on
+    a hospitalisation claim while the report still prints the column.
+
+    Keyed on the PRODUCT, not the sub-type: a pre-/post-hospitalisation consult
+    is billed by a specialist clinic but is an inpatient benefit (see
+    `_target_settings`), so a sub-type test would file it under outpatient.
+    """
+    return claim_profile_for(product_code).category == CATEGORY_INPATIENT
+
+
 # The inpatient sub-type whose documents depend on the hospital sector.
 SUB_TYPE_HOSPITALISATION = GHS_SUB_TYPES[1]
 

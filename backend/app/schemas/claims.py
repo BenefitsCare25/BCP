@@ -219,6 +219,11 @@ class BrokerClaimOut(ClaimOut):
     # What the insurer actually paid, which may fall short of what we approved.
     payment_amount: float | None = None
     hospital_type: str | None = None
+    # The sector DERIVED from the provider (`sg_hospitals.sector_from_provider`)
+    # — served, never re-derived in TypeScript, because the claims report picks
+    # its label from the same resolver. `hospital_type` above is the assessor's
+    # OVERRIDE: null there means "use this", not "nobody has looked".
+    hospital_type_derived: str | None = None
     admission_date: date | None = None
     discharge_date: date | None = None
     taxable: bool | None = None
@@ -228,6 +233,15 @@ class BrokerClaimOut(ClaimOut):
     # must not. Adding it to the shared base would publish every assessor's
     # working note to the portal.
     admin_remarks: str | None = None
+    # Whether the claim draws on an inpatient benefit
+    # (`claim_intake.is_inpatient_product`). SERVED, never mirrored in
+    # TypeScript: it decides whether the assessment form offers hospital sector
+    # and admission dates, and the claims report decides its columns from the
+    # same helper. A product-code list in the frontend would drift, and the
+    # failure is silent in the worst direction — the form hides the sector
+    # field on a hospitalisation claim while the report keeps printing the
+    # column, so it is blank on every row with no way to fill it.
+    is_inpatient: bool = False
     # Derived, never stored — an unpaid claim's overdue count changes nightly
     # and there is no event to recompute a stored copy on.
     servicer_days: int | None = None
@@ -261,6 +275,16 @@ class ClaimAssessmentIn(BaseModel):
 
     Every field is optional and applied only when PRESENT (`model_fields_set`),
     so a form that edits one field cannot blank the rest.
+
+    **The settlement dates are AMENDMENTS, not transitions.** `send-to-insurer`
+    and `payment` move the claim's status and are offered only from the one
+    status each is legal in — so a claim that reached `paid` without passing
+    through dispatch (a LOG case settled outside the flow, a migrated row, a
+    date keyed in wrongly) had no path back to correcting them: the button that
+    sets them is gone, permanently. These fields correct the RECORD and leave
+    the status alone, which is what an amendment is. Guarded server-side to
+    claims that have actually reached the insurer leg — backfilling a dispatch
+    date onto a draft would invent a history and start its SLA counters.
     """
 
     hospital_type: str | None = None
@@ -269,6 +293,15 @@ class ClaimAssessmentIn(BaseModel):
     taxable: bool | None = None
     cpf_claimable: bool | None = None
     admin_remarks: str | None = Field(default=None, max_length=4000)
+
+    # ── Settlement amendments ────────────────────────────────────────────────
+    # A DATE, though the column is a timestamp: the broker is transcribing an
+    # insurer's advice, not stamping the moment they keyed it in — the same
+    # reason `send_to_insurer` accepts `sent_on`.
+    sent_to_insurer_on: date | None = None
+    insurer_deadline_on: date | None = None
+    paid_on: date | None = None
+    payment_amount: float | None = Field(default=None, ge=0)
 
 
 class BrokerClaimList(BaseModel):

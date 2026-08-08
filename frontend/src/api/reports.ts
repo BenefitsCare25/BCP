@@ -26,25 +26,43 @@ export function useReportReadiness(policyYearId: string | null) {
   });
 }
 
-// ── Report bundles ───────────────────────────────────────────────────────────
+// ── Composite report workbooks ───────────────────────────────────────────────
+//
+// One download, several NAMED sheets. These replaced both the zip "report sets"
+// and the loose per-file rows: a submission is one artifact, and a workbook is
+// the only shape of it that keeps its own table of contents once it is emailed
+// on.
 
-export interface ReportBundle {
+export interface ReportSheet {
+  title: string;
+  description: string;
+}
+
+export interface ReportWorkbook {
   key: string;
   label: string;
   description: string;
   requires_insurer: boolean;
-  file_count: number;
+  supports_masking: boolean;
+  supports_date_range: boolean;
+  supports_employee_status: boolean;
   /** Empty unless `requires_insurer` — served so the picker offers exactly the
    *  insurers the download accepts. */
   insurers: string[];
+  /** SERVED, never a constant here. The page prints what is inside a workbook
+   *  before it is downloaded and a broker files against that; a sheet added on
+   *  the server must not need a matching edit here to be described. */
+  sheets: ReportSheet[];
 }
 
-export function useReportBundles(policyYearId: string | null) {
+export function useReportWorkbooks(policyYearId: string | null) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
-    queryKey: ["report-bundles", policyYearId, cid],
+    queryKey: ["report-workbooks", policyYearId, cid],
     queryFn: () =>
-      api.get<ReportBundle[]>(`/policy-years/${policyYearId}/reports/bundles`),
+      api.get<ReportWorkbook[]>(
+        `/policy-years/${policyYearId}/reports/workbooks`,
+      ),
     enabled: Boolean(policyYearId),
   });
 }

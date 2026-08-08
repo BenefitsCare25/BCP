@@ -79,7 +79,7 @@ from app.schemas.claims import (
     MessagesReadOut,
     StoredDocumentOut,
 )
-from app.services.claim_intake import DOC_SLOT_LABELS
+from app.services.claim_intake import DOC_SLOT_LABELS, is_inpatient_product
 from app.services.claim_messages import (
     broker_message_out,
     mark_broker_read,
@@ -88,12 +88,18 @@ from app.services.claim_messages import (
     thread_for_claim,
 )
 from app.services.claim_settlement import (
+    AMENDMENT_COLUMNS,
+    apply_settlement_amendment,
+    assert_settlement_amendable,
     days_over_deadline,
     document_dates,
     insurer_days,
     record_payment,
     send_to_insurer,
     servicer_days,
+)
+from app.services.claim_settlement import (
+    SETTLEMENT_AMENDMENTS as _SETTLEMENT_AMENDMENTS,
 )
 from app.services.claims import (
     assert_transition,
@@ -110,6 +116,7 @@ from app.services.log_cases import (
     intake_field,
     set_case_type,
 )
+from app.services.sg_hospitals import sector_from_provider
 from app.services.utilization import remaining_for_claim
 
 router = APIRouter(prefix="/claims", tags=["claims"])
@@ -211,6 +218,9 @@ def _broker_out(
     out.servicer_days = servicer_days(claim, dates)
     out.insurer_days = insurer_days(claim)
     out.days_over_deadline = days_over_deadline(claim)
+    # Served, not mirrored — see `BrokerClaimOut.is_inpatient`.
+    out.is_inpatient = is_inpatient_product(claim.product_code)
+    out.hospital_type_derived = sector_from_provider(claim.provider_name)
     return out
 
 
@@ -526,17 +536,37 @@ def update_claim_assessment(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "discharge_date cannot precede admission_date.",
         )
-    before = {f: getattr(claim, f) for f in fields}
-    for name in fields:
+    # Settlement dates are AMENDMENTS — see `ClaimAssessmentIn`. The service
+    # owns which of them this claim's state admits (nothing before dispatch; a
+    # payment only on a claim recorded as paid).
+    settlement = fields & _SETTLEMENT_AMENDMENTS
+    assert_settlement_amendable(claim, settlement)
+
+    # **Snapshot BEFORE anything is written.** The columns are read through
+    # `AMENDMENT_COLUMNS` because `sent_to_insurer_on` is a request field whose
+    # column is `sent_to_insurer_at`. Taken after the amendment, `before` was
+    # read off an already-mutated claim: a broker correcting a payment from
+    # 1,200.00 to 120.00 wrote an audit row saying before=120.00, after=120.00,
+    # losing the only figure the row existed to preserve — and a request that
+    # corrected the dispatch date alone wrote before={} / after={}, no record
+    # at all. Money and dates are exactly what this trail is for.
+    columns = {AMENDMENT_COLUMNS.get(f, f) for f in fields}
+    before = {c: getattr(claim, c) for c in columns}
+
+    apply_settlement_amendment(claim, body, settlement)
+    for name in fields - set(AMENDMENT_COLUMNS) - settlement:
         setattr(claim, name, getattr(body, name))
+
+    def _cells(source: dict[str, object]) -> dict[str, object]:
+        return {
+            k: (v.isoformat() if hasattr(v, "isoformat") else v)
+            for k, v in source.items()
+        }
+
     write_audit(
         db, user, "claim.assessment", "claim", claim.id,
-        before={k: (v.isoformat() if hasattr(v, "isoformat") else v)
-                for k, v in before.items()},
-        after={
-            k: (v.isoformat() if hasattr(v, "isoformat") else v)
-            for k, v in ((f, getattr(claim, f)) for f in fields)
-        },
+        before=_cells(before),
+        after=_cells({c: getattr(claim, c) for c in columns}),
         employee_id=claim.employee_id,
     )
     db.commit()

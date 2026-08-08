@@ -112,7 +112,7 @@ def build_leaver_summary_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Leaver Summary"
     append_safe(ws, LEAVER_SUMMARY_HEADER)
     bold_header(ws)
 
@@ -195,7 +195,7 @@ def build_leaver_details_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Leaver Claims"
     append_safe(ws, LEAVER_DETAILS_HEADER)
     bold_header(ws)
 

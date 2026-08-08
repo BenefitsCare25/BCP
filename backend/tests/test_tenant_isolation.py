@@ -451,7 +451,7 @@ def test_reports_built_in_employee_listing_cross_tenant_404(
     client_as_a: TestClient,
 ) -> None:
     res = client_as_a.get(
-        f"/api/v1/policy-years/{PY_B}/reports/built-in-employee-listing"
+        f"/api/v1/policy-years/{PY_B}/reports/workbooks/member-register"
     )
     assert res.status_code == 404
 
@@ -460,23 +460,23 @@ def test_reports_built_in_dependant_listing_cross_tenant_404(
     client_as_a: TestClient,
 ) -> None:
     res = client_as_a.get(
-        f"/api/v1/policy-years/{PY_B}/reports/built-in-dependant-listing"
+        f"/api/v1/policy-years/{PY_B}/reports/workbooks/member-register"
     )
     assert res.status_code == 404
 
 
 def test_reports_portal_activity_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/portal-activity")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/activity-access")
     assert res.status_code == 404
 
 
 def test_reports_company_activity_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/company-activity")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/activity-access")
     assert res.status_code == 404
 
 
 def test_reports_portal_access_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/portal-access")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/activity-access")
     assert res.status_code == 404
 
 
@@ -569,7 +569,7 @@ def test_reports_member_listing_template_cross_tenant_404(
 
 
 def test_reports_underwriting_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/underwriting")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/underwriting")
     assert res.status_code == 404
 
 
@@ -2090,44 +2090,44 @@ def test_schemas_attribute_delete_cross_tenant_404(client_as_a: TestClient) -> N
 
 
 def test_reports_bundle_list_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/bundles")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks")
     assert res.status_code == 404
 
 
 def test_reports_bundle_download_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(
-        f"/api/v1/policy-years/{PY_B}/reports/bundles/wallet-utilisation"
+        f"/api/v1/policy-years/{PY_B}/reports/workbooks/flex-wallet"
     )
     assert res.status_code == 404
 
 
 def test_reports_wallet_utilisation_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/wallet-utilisation")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/flex-wallet")
     assert res.status_code == 404
 
 
 def test_reports_wallet_summary_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(
-        f"/api/v1/policy-years/{PY_B}/reports/wallet-utilisation-summary"
+        f"/api/v1/policy-years/{PY_B}/reports/workbooks/flex-wallet"
     )
     assert res.status_code == 404
 
 
 def test_reports_leaver_summary_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/leaver-summary")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/leavers")
     assert res.status_code == 404
 
 
 def test_reports_leaver_details_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/leaver-details")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/leavers")
     assert res.status_code == 404
 
 
 def test_reports_insurance_claims_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/insurance-claims")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/claims-register")
     assert res.status_code == 404
 
 
 def test_reports_employee_claims_cross_tenant_404(client_as_a: TestClient) -> None:
-    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/employee-claims")
+    res = client_as_a.get(f"/api/v1/policy-years/{PY_B}/reports/workbooks/claims-register")
     assert res.status_code == 404

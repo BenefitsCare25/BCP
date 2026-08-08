@@ -152,16 +152,31 @@ def client():
         yield c
 
 
-def _sheet(resp):
+def _sheet(resp, title: str):
     assert resp.status_code == 200, resp.text
-    ws = load_workbook(BytesIO(resp.content)).active
-    rows = list(ws.iter_rows(values_only=True))
+    wb = load_workbook(BytesIO(resp.content))
+    assert title in wb.sheetnames, wb.sheetnames
+    rows = list(wb[title].iter_rows(values_only=True))
     return rows[0], rows[1:]
 
 
-def _get(client, path, **params):
+# Each of these was a download of its own; they are sheets of two workbooks
+# now. Same builders — see `test_a_grafted_sheet_matches_its_standalone_builder`.
+_IN_WORKBOOK = {
+    "wallet-utilisation": ("flex-wallet", "Ledger"),
+    "wallet-utilisation-summary": ("flex-wallet", "Summary"),
+    "leaver-summary": ("leavers", "Summary"),
+    "leaver-details": ("leavers", "Claims"),
+}
+
+
+def _get(client, report, **params):
+    key, title = _IN_WORKBOOK[report]
     return _sheet(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/{path}", params=params)
+        client.get(
+            f"/api/v1/policy-years/{PY_ID}/reports/workbooks/{key}", params=params
+        ),
+        title,
     )
 
 
@@ -274,69 +289,112 @@ def test_leaver_details_lists_their_claims_only(client):
 
 
 def test_leaver_reports_are_audited(client):
+    """Every download emits PII, so every download is logged — the composite
+    included. It records the WORKBOOK, since that is what left the building."""
     from app.models import AuditLog
     _get(client, "leaver-summary")
     with SessionLocal() as s:
-        reports = {
-            (r.after or {}).get("report")
+        pulled = {
+            (r.after or {}).get("workbook")
             for r in s.query(AuditLog).filter(
-                AuditLog.entity_type == "insurer_report"
+                AuditLog.entity_type == "report_workbook"
             ).all()
         }
-    assert "leaver-summary" in reports
+    assert "leavers" in pulled
 
 
-# ── Bundles ──────────────────────────────────────────────────────────────────
+# ── Composite workbooks ──────────────────────────────────────────────────────
+#
+# These replaced the zip "report sets". A zip of two workbooks and a workbook of
+# two sheets carry the same bytes; only the second can be cross-referenced in
+# place and keeps its sheet names once it is forwarded on.
 
-def test_bundle_listing_names_the_files_and_insurers(client):
-    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/bundles")
+def test_workbook_listing_names_every_sheet(client):
+    """The sheet list is SERVED. The Reports page prints what is inside a
+    workbook before a broker downloads it, and a broker files against what the
+    page said was inside — so it must not be a frontend constant that can drift
+    from the composer."""
+    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/workbooks")
     assert res.status_code == 200, res.text
     by_key = {b["key"]: b for b in res.json()}
-    assert by_key["wallet-utilisation"]["file_count"] == 2
+    wallet = by_key["flex-wallet"]
+    assert [s["title"] for s in wallet["sheets"]] == ["Summary", "Ledger"]
+    assert all(s["description"] for s in wallet["sheets"])
+    assert wallet["requires_insurer"] is False
     assert by_key["insurer-submission"]["requires_insurer"] is True
-    assert by_key["wallet-utilisation"]["requires_insurer"] is False
+    # A workbook with no identification number on any sheet says so, rather
+    # than offering a masking toggle that would govern nothing.
+    assert by_key["activity-access"]["supports_masking"] is False
+    assert by_key["activity-access"]["supports_date_range"] is True
 
 
-def test_bundle_download_zips_every_member(client):
-    from zipfile import ZipFile
-
+def test_workbook_download_is_one_file_with_named_sheets(client):
     res = client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/bundles/wallet-utilisation"
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/flex-wallet"
     )
     assert res.status_code == 200, res.text
-    assert res.headers["content-type"] == "application/zip"
-    names = ZipFile(BytesIO(res.content)).namelist()
-    assert len(names) == 2
-    assert any(n.startswith("utilisation-report-") for n in names)
-    assert any(n.startswith("utilisation-summary-report-") for n in names)
+    assert "spreadsheetml" in res.headers["content-type"]
+    wb = load_workbook(BytesIO(res.content))
+    # Named, and in declaration order — and NOT "Sheet1", which every one of
+    # these workbooks used to be called.
+    assert wb.sheetnames == ["Summary", "Ledger"]
 
 
-def test_insurer_bundle_refuses_without_an_insurer(client):
-    """An empty zip would read as "there is nothing to submit"."""
+def test_a_grafted_sheet_matches_its_standalone_builder(client):
+    """The composite is a COPY of the single-sheet builder's output, never a
+    reimplementation — which is what stops the workbook and the file it came
+    from disagreeing about a member's wallet."""
+    from app.services.flex_ledger import build_utilisation_summary_workbook
+
     res = client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/bundles/insurer-submission"
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/flex-wallet"
+    )
+    grafted = list(
+        load_workbook(BytesIO(res.content))["Summary"].iter_rows(values_only=True)
+    )
+    with SessionLocal() as s:
+        py = s.get(PolicyYear, PY_ID)
+        wb = build_utilisation_summary_workbook(s, py, masked=True)
+    # Round-trip the standalone workbook through a save/load too, so the two
+    # sides are compared as Excel stores them. An in-memory sheet still holds
+    # `date` and `float`; the file format has neither — every date reads back as
+    # a datetime and a whole float as an int. Comparing an unsaved workbook
+    # against a downloaded one fails on that alone and says nothing about the
+    # graft.
+    buf = BytesIO()
+    wb.save(buf)
+    direct = list(
+        load_workbook(BytesIO(buf.getvalue())).active.iter_rows(values_only=True)
+    )
+    assert grafted == direct
+
+
+def test_insurer_workbook_refuses_without_an_insurer(client):
+    """An all-blank coverage column reads as "there is nothing to submit"."""
+    res = client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/insurer-submission"
     )
     assert res.status_code == 400
 
 
-def test_insurer_bundle_refuses_an_unconfigured_insurer(client):
+def test_insurer_workbook_refuses_an_unconfigured_insurer(client):
     res = client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/bundles/insurer-submission",
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/insurer-submission",
         params={"insurer": "Not An Insurer"},
     )
     assert res.status_code == 404
 
 
-def test_unknown_bundle_404s(client):
-    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/bundles/nonsense")
+def test_unknown_workbook_404s(client):
+    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/workbooks/nonsense")
     assert res.status_code == 404
 
 
-def test_bundle_viewer_cannot_pull_unmasked(client):
+def test_workbook_viewer_cannot_pull_unmasked(client):
     app.dependency_overrides[get_current_user] = lambda: _user("broker_viewer")
     try:
         res = client.get(
-            f"/api/v1/policy-years/{PY_ID}/reports/bundles/wallet-utilisation",
+            f"/api/v1/policy-years/{PY_ID}/reports/workbooks/flex-wallet",
             params={"masked": "false"},
         )
         assert res.status_code == 403

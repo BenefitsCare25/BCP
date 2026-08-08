@@ -298,7 +298,7 @@ def build_underwriting_report(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Underwriting"
     append_safe(ws, HEADER)
     bold_header(ws)
     for _key, row in sorted(rows, key=lambda pair: pair[0]):

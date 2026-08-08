@@ -35,7 +35,7 @@ from app.models.claim import (
     CLAIM_STATUS_SENT_TO_INSURER,
     HOSPITAL_TYPE_GOVERNMENT,
 )
-from app.services.claim_intake import CATEGORY_INPATIENT, claim_profile_for
+from app.services.claim_intake import is_inpatient_product
 from app.services.claim_settlement import (
     days_over_deadline,
     document_dates,
@@ -56,6 +56,7 @@ from app.services.roster_attributes import (
     first_value,
     mask_nric,
 )
+from app.services.sg_hospitals import resolve_hospital_type
 
 SCOPE_ALL = "all"
 SCOPE_INPATIENT = "inpatient"
@@ -87,24 +88,28 @@ def status_label(status: str) -> str:
 def _is_inpatient(claim: Claim) -> bool:
     """Whether the claim draws on an inpatient product.
 
-    Resolved through the product's own intake profile — the same classification
-    the claim form and the AI review use — rather than a local product-code
-    list, which would be a fourth place to remember when a product is added.
-
-    Keyed on the PRODUCT, not the sub-type: a pre-/post-hospitalisation consult
-    is billed by a specialist clinic but is an inpatient benefit
-    (`claim_intake._target_settings`), so a sub-type test would file it under
-    outpatient and understate the hospitalisation book.
+    Delegates to `claim_intake.is_inpatient_product` — the same answer the
+    broker claim payload serves the assessment form, so the sheet cannot print
+    a sector column for a claim whose form never offered the field.
     """
-    return claim_profile_for(claim.product_code).category == CATEGORY_INPATIENT
+    return is_inpatient_product(claim.product_code)
 
 
 def _hospital_label(claim: Claim) -> str:
-    if not claim.hospital_type:
+    """The sector, RESOLVED — an assessor's override else the provider's own.
+
+    Reading the raw column printed blank on every ordinary claim: nothing in
+    the product wrote it, while the sector was being derived from the provider
+    two other places (intake autofill, document completeness). Same resolver as
+    the one the claim payload serves the assessment form, so the sheet and the
+    form cannot disagree.
+    """
+    resolved = resolve_hospital_type(claim.hospital_type, claim.provider_name)
+    if not resolved:
         return ""
     return (
         "Government"
-        if claim.hospital_type == HOSPITAL_TYPE_GOVERNMENT
+        if resolved == HOSPITAL_TYPE_GOVERNMENT
         else "Private/Overseas"
     )
 
@@ -228,11 +233,17 @@ def _header(scope: str) -> list[str]:
 
 
 def _flag(value: bool | None) -> str:
-    """Tri-state to a cell. NULL is BLANK, not "No" — "we have not assessed the
-    tax treatment" and "this is not taxable" are different answers and a
-    payroll team acts differently on each."""
-    if value is None:
-        return ""
+    """Payroll flag to a cell. NULL reads as "No".
+
+    No is the ordinary payroll treatment of a medical reimbursement and is the
+    assessment form's default (broker decision), so a claim nobody has touched
+    is genuinely No rather than unanswered — and the form offers only Yes/No.
+
+    The rule that matters is that the two AGREE. This started as a tri-state
+    where NULL printed blank; once the form defaulted to No, a blank column
+    under a control reading "No" would be a disagreement about the same claim,
+    and payroll acts on whichever of the two it happens to be holding.
+    """
     return "Yes" if value else "No"
 
 
@@ -249,7 +260,7 @@ def build_insurance_claims_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Insurance Claims"
     header = _header(wanted)
     append_safe(ws, header)
     bold_header(ws)
@@ -363,7 +374,7 @@ def build_employee_claims_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Claims by Employee"
     append_safe(ws, EMPLOYEE_CLAIMS_HEADER)
     bold_header(ws)
 

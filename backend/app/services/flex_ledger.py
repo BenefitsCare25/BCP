@@ -309,7 +309,7 @@ def build_utilisation_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Ledger"
     append_safe(ws, UTILISATION_HEADER)
     bold_header(ws)
 
@@ -364,7 +364,7 @@ def build_utilisation_summary_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Summary"
     append_safe(ws, UTILISATION_SUMMARY_HEADER)
     bold_header(ws)
 

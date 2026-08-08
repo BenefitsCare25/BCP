@@ -166,25 +166,28 @@ def client():
         yield c
 
 
-def _sheet(resp):
+# Both listings are now SHEETS of the Member Register workbook rather than
+# files of their own — same builders, one download. The tests reach them by
+# sheet name, which is also the assertion that the sheet is named at all: the
+# whole point of the composite is that a broker opening it can tell the tabs
+# apart, and every one of these workbooks used to be called "Sheet1".
+MEMBER_REGISTER = f"/api/v1/policy-years/{PY_ID}/reports/workbooks/member-register"
+
+
+def _sheet(resp, title: str):
     assert resp.status_code == 200, resp.text
-    ws = load_workbook(BytesIO(resp.content)).active
-    rows = list(ws.iter_rows(values_only=True))
+    wb = load_workbook(BytesIO(resp.content))
+    assert title in wb.sheetnames, wb.sheetnames
+    rows = list(wb[title].iter_rows(values_only=True))
     return rows[0], rows[1:]
 
 
 def _emp_sheet(client, **params):
-    return _sheet(client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/built-in-employee-listing",
-        params=params,
-    ))
+    return _sheet(client.get(MEMBER_REGISTER, params=params), "Employees")
 
 
 def _dep_sheet(client, **params):
-    return _sheet(client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/built-in-dependant-listing",
-        params=params,
-    ))
+    return _sheet(client.get(MEMBER_REGISTER, params=params), "Dependants")
 
 
 def test_employee_listing_spans_every_insurer(client):
@@ -247,7 +250,7 @@ def test_viewer_cannot_pull_unmasked(client):
     app.dependency_overrides[get_current_user] = lambda: _user("broker_viewer")
     try:
         res = client.get(
-            f"/api/v1/policy-years/{PY_ID}/reports/built-in-employee-listing",
+            MEMBER_REGISTER,
             params={"masked": "false"},
         )
         assert res.status_code == 403

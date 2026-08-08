@@ -222,7 +222,7 @@ def build_portal_activity_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Portal Sign-ins"
     append_safe(ws, PORTAL_ACTIVITY_HEADER)
     bold_header(ws)
 
@@ -289,7 +289,7 @@ def build_company_activity_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Company Changes"
     append_safe(ws, COMPANY_ACTIVITY_HEADER)
     bold_header(ws)
 

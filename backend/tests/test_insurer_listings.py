@@ -1551,7 +1551,7 @@ def test_underwriting_report_rows_and_columns(client: TestClient) -> None:
               "decided_on": "2034-03-04", "remarks": "loaded 50%"},
     )
 
-    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/underwriting")
+    res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting")
     assert res.status_code == 200, res.text
     rows = _sheet_rows(res.content)
     assert rows, "expected at least the family employee + spouse cases"
@@ -1596,7 +1596,7 @@ def test_underwriting_report_rows_and_columns(client: TestClient) -> None:
 def test_underwriting_report_masking(client: TestClient) -> None:
     client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
     res = client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/underwriting?masked=false"
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting?masked=false"
     )
     assert res.status_code == 200
     emp = next(
@@ -1611,10 +1611,10 @@ def test_underwriting_report_unmasked_needs_write_access(
 ) -> None:
     # Unmasked PII is write-access only (same gate as the insurer listings).
     assert viewer_client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/underwriting?masked=false"
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting?masked=false"
     ).status_code == 403
     assert viewer_client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/underwriting"
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting"
     ).status_code == 200
 
 
@@ -1638,7 +1638,7 @@ def test_underwriting_report_keeps_legacy_and_retired_cases(
         s.commit()
 
     rows = _sheet_rows(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/underwriting").content
+        client.get(f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting").content
     )
     # The legacy line was adopted into a review on read, so it exports with a
     # workflow status rather than a blank one.
@@ -1674,7 +1674,7 @@ def test_underwriting_report_activity_and_insurer_are_review_truthful(
         s.commit()
 
     rows = _sheet_rows(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/underwriting").content
+        client.get(f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting").content
     )
     row = next(
         r for r in rows if r["Staff ID"] == "IL-1" and not r["Dependant Name"]

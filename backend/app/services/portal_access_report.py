@@ -139,7 +139,7 @@ def build_portal_access_workbook(db: Session, py: PolicyYear) -> Workbook:
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Portal Access"
     append_safe(ws, HEADER)
     bold_header(ws)
 

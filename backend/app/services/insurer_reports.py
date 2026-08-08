@@ -285,7 +285,7 @@ def build_benefit_selection_workbook(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Benefit Selection"
     ws.append(BENEFIT_SELECTION_HEADER)
     _bold_header(ws)
 

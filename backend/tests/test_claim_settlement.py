@@ -179,13 +179,45 @@ def test_reference_is_minted_once_and_never_changes(client):
     assert again == first
 
 
-def test_references_increment_per_client(client):
+def test_references_increment(client):
     with SessionLocal() as s:
         a = mint_reference_no(s, _claim(s, status="draft"))
         s.commit()
         b = mint_reference_no(s, _claim(s, status="draft"))
         s.commit()
     assert int(b.rsplit("-", 1)[1]) == int(a.rsplit("-", 1)[1]) + 1
+
+
+def test_a_shared_prefix_does_not_wedge_the_second_company(client):
+    """Two companies in one firm can reduce to the SAME reference prefix.
+
+    A prefix is the first 8 alphanumerics of the slug, so "Settle Co" and
+    "Settle Co Group" both give `SETTLECO` — and `ix_claims_reference_no` is
+    unique across the whole schema, not per client. When the sequence was read
+    per CLIENT, the second company's very first claim proposed a number the
+    first company already held, and the retry recomputed the identical
+    candidate; every claim that company ever filed 503'd. The sequence has to be
+    read from the same scope the constraint enforces.
+    """
+    other_id = "00000000-0000-0000-0000-0000000c5900"
+    with SessionLocal() as s:
+        s.add(Client(id=other_id, name="Settle Co Group",
+                     slug="settle-co-group", broker_firm_id=DEMO_BROKER_FIRM_ID))
+        s.flush()
+        mine = mint_reference_no(s, _claim(s, status="draft"))
+        s.commit()
+
+        theirs = mint_reference_no(
+            s, _claim(s, status="draft", client_id=other_id)
+        )
+        s.commit()
+
+    assert reference_prefix(Client(name="Settle Co Group",
+                                   slug="settle-co-group")) == "SETTLECO"
+    assert theirs != mine
+    # One ascending series across the shared prefix — which is what keeps it
+    # unique. A per-client counter cannot, because the constraint is not.
+    assert int(theirs.rsplit("-", 1)[1]) == int(mine.rsplit("-", 1)[1]) + 1
 
 
 def test_reference_prefix_falls_back_rather_than_being_blank():
@@ -418,11 +450,32 @@ def test_assessment_checks_dates_against_the_stored_pair(client):
 
 # ── Reports ──────────────────────────────────────────────────────────────────
 
-def _sheet(resp):
+CLAIMS_REGISTER = f"/api/v1/policy-years/{PY_ID}/reports/workbooks/claims-register"
+
+# The three insurance-claim scopes and the per-employee view are SHEETS of one
+# workbook now, not four downloads. The scope is still one builder and a filter
+# (`claims_reports._claim_rows`); only the packaging changed.
+_CLAIM_SHEET = {
+    "all": "All Claims",
+    "adjudication": "Adjudication",
+    "inpatient": "Inpatient",
+    "outpatient": "Outpatient",
+    "employee": "By Employee",
+}
+
+
+def _sheet(resp, title: str):
     assert resp.status_code == 200, resp.text
-    ws = load_workbook(BytesIO(resp.content)).active
-    rows = list(ws.iter_rows(values_only=True))
+    wb = load_workbook(BytesIO(resp.content))
+    assert title in wb.sheetnames, wb.sheetnames
+    rows = list(wb[title].iter_rows(values_only=True))
     return rows[0], rows[1:]
+
+
+def _claims_sheet(client, scope="all", **params):
+    return _sheet(
+        client.get(CLAIMS_REGISTER, params=params), _CLAIM_SHEET[scope]
+    )
 
 
 def test_insurance_claims_report_carries_the_servicing_columns(client):
@@ -432,9 +485,7 @@ def test_insurance_claims_report_carries_the_servicing_columns(client):
         cid = c.id
     client.post(f"/api/v1/claims/{cid}/send-to-insurer", json={})
     client.post(f"/api/v1/claims/{cid}/payment", json={"paid_on": "2038-04-10"})
-    header, rows = _sheet(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims")
-    )
+    header, rows = _claims_sheet(client)
     for col in (
         "Reference No.", "Date Sent to Insurer", "Deadline Date for Insurer",
         "Payment Date", "No. of days for Tracking Insurer", "Days Over Deadline",
@@ -447,10 +498,7 @@ def test_insurance_claims_report_carries_the_servicing_columns(client):
 
 def test_outpatient_sheet_drops_the_inpatient_only_columns(client):
     """Three columns blank on every row read as missing data, not as N/A."""
-    header, _ = _sheet(client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims",
-        params={"scope": "outpatient"},
-    ))
+    header, _ = _claims_sheet(client, "outpatient")
     assert "Admission Date" not in header
     assert "Hospital Type" not in header
     assert "Referral Letter" in header
@@ -460,10 +508,7 @@ def test_inpatient_scope_filters_by_product_not_sub_type(client):
     with SessionLocal() as s:
         _claim(s, product_code="GOGP", reference_no="SETTLECO-000901")
         s.commit()
-    header, rows = _sheet(client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims",
-        params={"scope": "inpatient"},
-    ))
+    header, rows = _claims_sheet(client, "inpatient")
     refs = {r[header.index("Reference No.")] for r in rows}
     assert "SETTLECO-000901" not in refs
 
@@ -474,18 +519,14 @@ def test_employee_claims_sheet_covers_flex_and_insured(client):
                flex_category_name="Wellness", claim_type="Wellness",
                reference_no="SETTLECO-000902")
         s.commit()
-    header, rows = _sheet(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/employee-claims")
-    )
+    header, rows = _claims_sheet(client, "employee")
     categories = {r[header.index("Claim Category")] for r in rows}
     assert {"Flexible Benefits", "Insurance"} <= categories
 
 
 def test_flex_claims_are_absent_from_the_insurance_sheet(client):
     """A flex claim is funded by the member's wallet — there is no insurer."""
-    header, rows = _sheet(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims")
-    )
+    header, rows = _claims_sheet(client)
     refs = {r[header.index("Reference No.")] for r in rows}
     assert "SETTLECO-000902" not in refs
 
@@ -495,32 +536,284 @@ def test_needs_info_reports_as_pending_documents(client):
         _claim(s, status="needs_info", amount_approved=None,
                reference_no="SETTLECO-000903")
         s.commit()
-    header, rows = _sheet(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims")
-    )
+    header, rows = _claims_sheet(client)
     row = next(r for r in rows if r[header.index("Reference No.")] == "SETTLECO-000903")
     assert row[header.index("Status")] == "Pending Documents"
 
 
-def test_tax_and_cpf_render_blank_when_unassessed(client):
-    """NULL is "not assessed", which payroll acts on differently from "No"."""
+def test_tax_and_cpf_default_to_no(client):
+    """No is the ordinary payroll treatment and the assessment form's default,
+    so an untouched claim reports No rather than blank.
+
+    The point is that the sheet and the form AGREE: the form offers only
+    Yes/No, so a blank column under a control reading "No" would be two answers
+    to one question, and payroll acts on whichever it is holding.
+    """
     with SessionLocal() as s:
         _claim(s, reference_no="SETTLECO-000904")
         s.commit()
-    header, rows = _sheet(
-        client.get(f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims")
-    )
+    header, rows = _claims_sheet(client)
     row = next(r for r in rows if r[header.index("Reference No.")] == "SETTLECO-000904")
-    assert row[header.index("TAX")] in (None, "")
+    assert row[header.index("TAX")] == "No"
+    assert row[header.index("CPF")] == "No"
+
+
+def test_hospital_sector_is_derived_from_the_provider(client):
+    """The sector was already computed from the provider by the intake autofill
+    and the review's document check — but `Claim.hospital_type`, the column the
+    report prints, is written by NOTHING, so the sheet was blank on every row
+    and a manual dropdown was the only thing that could ever fill it."""
+    with SessionLocal() as s:
+        _claim(s, reference_no="SETTLECO-000910",
+               provider_name="Raffles Hospital")
+        _claim(s, reference_no="SETTLECO-000911",
+               provider_name="Singapore General Hospital")
+        # An assessor's stored value OVERRIDES the derivation — an overseas
+        # admission, or a hospital the registry does not list.
+        _claim(s, reference_no="SETTLECO-000912",
+               provider_name="Bumrungrad International",
+               hospital_type="private")
+        s.commit()
+    header, rows = _claims_sheet(client)
+    by_ref = {r[header.index("Reference No.")]: r for r in rows}
+    col = header.index("Hospital Type")
+    assert by_ref["SETTLECO-000910"][col] == "Private/Overseas"
+    assert by_ref["SETTLECO-000911"][col] == "Government"
+    assert by_ref["SETTLECO-000912"][col] == "Private/Overseas"
+
+
+def test_the_form_is_served_the_same_derivation_the_report_prints(client):
+    """Served, never re-derived in TypeScript: the dropdown's default names the
+    sector the sheet will print, so the two cannot disagree."""
+    with SessionLocal() as s:
+        c = _claim(s, provider_name="Mount Alvernia Hospital")
+        s.commit()
+        cid = c.id
+    body = client.get(f"/api/v1/claims/{cid}").json()
+    assert body["hospital_type_derived"] == "private"
+    # The stored override stays empty — null means "derive", not "unassessed".
+    assert body["hospital_type"] is None
+
+
+def test_settlement_dates_can_be_corrected_after_the_fact(client):
+    """`send-to-insurer` and `payment` are TRANSITIONS, each legal from one
+    status only — so a claim already at `paid` had lost the controls that set
+    these and could never have a wrong date fixed, or a missing one filled in.
+
+    The amendment writes the record and leaves the STATUS alone: re-running the
+    transition would repost the member's "your claim has been paid" notice for
+    a typo correction.
+    """
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_PAID,
+            paid_on=date(2038, 4, 10),
+            payment_amount=500.0,
+        )
+        s.commit()
+        cid = c.id
+
+    res = client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={
+            "sent_to_insurer_on": "2038-03-20",
+            "insurer_deadline_on": "2038-04-19",
+            "payment_amount": 450.0,
+        },
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == CLAIM_STATUS_PAID
+    assert body["sent_to_insurer_at"].startswith("2038-03-20")
+    assert body["insurer_deadline_on"] == "2038-04-19"
+    assert body["payment_amount"] == 450.0
+    # The SLA counters are derived, so correcting the dates recomputes them
+    # rather than leaving a stored copy behind: 20 Mar → 10 Apr.
+    assert body["insurer_days"] == 21
+    assert body["days_over_deadline"] == -9
+
+
+def test_an_amendment_audits_the_figure_it_replaced(client):
+    """The `before` snapshot must be taken BEFORE the amendment writes.
+
+    Read afterwards it was read off an already-mutated claim, so a broker
+    correcting a payment from 1,200.00 to 120.00 logged before=120, after=120 —
+    losing the only figure the audit row existed to preserve. Money and dates
+    are exactly what this trail is for.
+    """
+    from app.models import AuditLog
+
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_PAID,
+            sent_to_insurer_at=NOW - timedelta(days=20),
+            paid_on=date(2038, 4, 10),
+            payment_amount=1200.0,
+        )
+        s.commit()
+        cid = c.id
+
+    assert client.patch(
+        f"/api/v1/claims/{cid}/assessment", json={"payment_amount": 120.0}
+    ).status_code == 200
+
+    with SessionLocal() as s:
+        row = (
+            s.query(AuditLog)
+            .filter(AuditLog.action == "claim.assessment",
+                    AuditLog.entity_id == cid)
+            .order_by(AuditLog.created_at.desc())
+            .first()
+        )
+    assert row.before["payment_amount"] == 1200.0
+    assert row.after["payment_amount"] == 120.0
+
+
+def test_a_dispatch_only_correction_is_still_audited(client):
+    """`sent_to_insurer_on` is a request field whose COLUMN is
+    `sent_to_insurer_at`. Excluded from the snapshot by name, a request that
+    corrected only the dispatch date wrote before={} / after={} — no record."""
+    from app.models import AuditLog
+
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_SENT_TO_INSURER,
+            sent_to_insurer_at=datetime(2038, 3, 1, tzinfo=UTC),
+        )
+        s.commit()
+        cid = c.id
+
+    assert client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={"sent_to_insurer_on": "2038-03-05"},
+    ).status_code == 200
+
+    with SessionLocal() as s:
+        row = (
+            s.query(AuditLog)
+            .filter(AuditLog.action == "claim.assessment",
+                    AuditLog.entity_id == cid)
+            .order_by(AuditLog.created_at.desc())
+            .first()
+        )
+    assert row.before["sent_to_insurer_at"].startswith("2038-03-01")
+    assert row.after["sent_to_insurer_at"].startswith("2038-03-05")
+
+
+def test_an_insurer_declined_claim_can_still_be_corrected(client):
+    """`sent_to_insurer → rejected` is a real transition, and such a claim WAS
+    dispatched. Gating on `status in {sent_to_insurer, paid}` refused it with
+    "…once the claim has been sent to the insurer" — which is false, and it is
+    precisely the "wrong date, no way back" case the amendment exists for."""
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status="rejected",
+            amount_approved=None,
+            sent_to_insurer_at=NOW - timedelta(days=10),
+        )
+        s.commit()
+        cid = c.id
+    res = client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={"insurer_deadline_on": "2038-05-01"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["insurer_deadline_on"] == "2038-05-01"
+
+
+def test_a_payment_cannot_be_recorded_by_amendment_on_an_unpaid_claim(client):
+    """Writing `paid_on` onto a claim still with the insurer does not move the
+    status, but `_insurer_clock_stop` reads it FIRST — so the SLA counters
+    freeze and an UNPAID claim silently drops off the overdue list a broker
+    works, while it is still pending against the member's limit."""
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_SENT_TO_INSURER,
+            sent_to_insurer_at=NOW - timedelta(days=40),
+            insurer_deadline_on=(NOW - timedelta(days=10)).date(),
+        )
+        s.commit()
+        cid = c.id
+    assert client.patch(
+        f"/api/v1/claims/{cid}/assessment", json={"paid_on": "2038-04-10"}
+    ).status_code == 409
+    # Still overdue, still being chased.
+    with SessionLocal() as s:
+        assert s.get(Claim, cid).paid_on is None
+
+
+def test_a_dispatch_date_cannot_be_cleared_out_from_under_the_status(client):
+    """A cleared date input sends null, so this is one keystroke away. Cleared,
+    `insurer_days` goes blank while `days_over_deadline` keeps counting against
+    a deadline nothing now explains."""
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_SENT_TO_INSURER,
+            sent_to_insurer_at=NOW - timedelta(days=5),
+        )
+        s.commit()
+        cid = c.id
+    assert client.patch(
+        f"/api/v1/claims/{cid}/assessment", json={"sent_to_insurer_on": None}
+    ).status_code == 422
+    with SessionLocal() as s:
+        assert s.get(Claim, cid).sent_to_insurer_at is not None
+
+
+def test_settlement_dates_are_refused_before_the_insurer_leg(client):
+    """Backfilling a dispatch date onto a claim that was never sent would
+    invent a history the SLA counters then report on."""
+    with SessionLocal() as s:
+        c = _claim(s, status=CLAIM_STATUS_APPROVED)
+        s.commit()
+        cid = c.id
+    res = client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={"sent_to_insurer_on": "2038-03-20"},
+    )
+    assert res.status_code == 409
+
+
+def test_an_amended_deadline_cannot_precede_the_dispatch_on_the_row(client):
+    """Checked against the EFFECTIVE pair, not just what the request carried —
+    a partial update that moves only the deadline is exactly how it comes to
+    precede a dispatch date already stored."""
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_SENT_TO_INSURER,
+            sent_to_insurer_at=NOW,
+            insurer_deadline_on=(NOW + timedelta(days=30)).date(),
+        )
+        s.commit()
+        cid = c.id
+    res = client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={"insurer_deadline_on": (NOW - timedelta(days=5)).date().isoformat()},
+    )
+    assert res.status_code == 422
+
+
+def test_the_adjudication_register_is_a_sheet_of_the_workbook(client):
+    """Its own Reports row was deleted in the consolidation, which left the
+    endpoint behind it reachable from nothing. It is NOT redundant with All
+    Claims — it is the only sheet carrying the claim id and the invoice number,
+    which is the key a broker reconciles a disputed line against."""
+    header, _ = _claims_sheet(client, "adjudication")
+    assert "Invoice No." in header
+    assert "Claim ID" in header
 
 
 def test_viewer_cannot_pull_unmasked_claims(client):
     app.dependency_overrides[get_current_user] = lambda: _user("broker_viewer")
     try:
-        res = client.get(
-            f"/api/v1/policy-years/{PY_ID}/reports/insurance-claims",
-            params={"masked": "false"},
-        )
+        res = client.get(CLAIMS_REGISTER, params={"masked": "false"})
         assert res.status_code == 403
     finally:
         app.dependency_overrides[get_current_user] = lambda: _user()

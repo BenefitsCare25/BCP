@@ -469,7 +469,7 @@ def build_employee_listing(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Employees"
     append_safe(ws, header)
     _bold_header(ws)
 
@@ -579,7 +579,7 @@ def build_dependant_listing(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Sheet1"
+    ws.title = "Dependants"
     append_safe(ws, header)
     _bold_header(ws)
 
