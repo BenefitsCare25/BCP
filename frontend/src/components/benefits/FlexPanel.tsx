@@ -202,6 +202,21 @@ export function FlexPanel({
   // twice and "SGD -300 available" is not a quantity anyone has.
   const headline = available != null ? Math.abs(available) : null;
 
+  // Whether the printed terms actually SUM to the printed total. They stop
+  // doing so in exactly one case: claims already reimbursed exceed the
+  // allowance, which pro-ration can produce by shrinking a leaver's allowance
+  // below what they had already drawn. `available` floors at 0 there (a wallet
+  // pays up to its limit), so rendering "500 − 200 − 700 = 0" would put an
+  // equals sign in front of arithmetic that is false on its face. Every term
+  // stays on screen — they are each true — but the total is stated rather than
+  // summed. This panel's own rule is that the set must reconcile; the honest
+  // way to keep it is to stop calling it a sum when it isn't one.
+  const drawnTotal = drawn.reduce((n, d) => n + (d.add ? d.value : -d.value), 0);
+  const reconciles =
+    wallet == null || available == null
+      ? true
+      : Math.abs(wallet + drawnTotal - available) < 0.01;
+
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -287,11 +302,19 @@ export function FlexPanel({
                 shortfall ? "text-error" : "text-foreground",
               )}
             >
-              <span aria-hidden className="mr-1 text-subtle">
-                =
-              </span>
-              {formatWallet(headline, currency)}{" "}
-              {shortfall ? "overdrawn" : "left"}
+              {reconciles && (
+                <span aria-hidden className="mr-1 text-subtle">
+                  =
+                </span>
+              )}
+              {reconciles ? (
+                <>
+                  {formatWallet(headline, currency)}{" "}
+                  {shortfall ? "overdrawn" : "left"}
+                </>
+              ) : (
+                "nothing left to draw"
+              )}
             </span>
           </>
         )}

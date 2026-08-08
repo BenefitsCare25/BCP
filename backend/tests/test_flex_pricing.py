@@ -1090,3 +1090,109 @@ def test_member_coverage_tag_compulsory_dependants_never_block():
     assert member_coverage_tag(**common) is None
     # Compulsory: same coverage costs the employee tag only, never blocked.
     assert member_coverage_tag(**common, dependants_compulsory=True) == 500.0
+
+
+# ── Pro-ration scales the COVER, not just the allowance ───────────────────────
+
+
+def test_the_proration_factor_scales_a_price_tag() -> None:
+    """`_combine_tags` is the single point every tag producer passes through —
+    the election snapshot (`member_coverage_tag`, used by enrolment, bulk and
+    revert) and the statement recompute (`_member_flex_line`) both end here.
+
+    Scaling only the wallet would leave an October joiner holding 3/12 of the
+    allowance and 12/12 of the cost: overdrawn before electing anything, and
+    refused by `enrollment_flex_guard` for a member who has done nothing wrong.
+    """
+    from app.services.flex_pricing_resolver import _combine_tags
+
+    # Employee tag + dependant tag, halved together.
+    assert _combine_tags(1000.0, 200.0, 1, dep_applies=True, factor=0.5) == 600.0
+    # Default is unscaled — a scheme with no pro-ration is untouched.
+    assert _combine_tags(1000.0, 200.0, 1, dep_applies=True) == 1200.0
+    # Rounded ONCE, so a grossed pro-rated tag equals a pro-rated grossed one.
+    assert _combine_tags(1635.0, None, 0, dep_applies=False, factor=0.25) == 408.75
+
+    # The factor must never manufacture a price out of "unpriceable". None is
+    # the signal the unpriced-election guard reads.
+    assert _combine_tags(None, None, 0, dep_applies=False, factor=0.5) is None
+    assert _combine_tags(1000.0, None, 1, dep_applies=True, factor=0.5) is None
+
+
+def test_member_coverage_tag_forwards_the_factor() -> None:
+    """The snapshot path, end to end — a stored election must be scaled by the
+    same rule the statement recomputes with, or the two disagree about money."""
+    kw = dict(
+        source_map=None, rule="full", pricing=_PRICING, slip_idx=None,
+        family_slip_idx=None, product_id="prodA", age=35, declined=False,
+        tier_category_id="cat1", plan_code="GOLD",
+        default_tier_category_id="cat1", default_plan="GOLD",
+        spouse_count=0, child_count=0,
+    )
+    assert member_coverage_tag(**kw) == 1500.0
+    assert member_coverage_tag(**kw, factor=0.5) == 750.0
+
+
+# ── Pro-ration of the price tag ───────────────────────────────────────────────
+
+
+def test_the_price_tag_scales_by_the_members_proration_factor() -> None:
+    """The cover charged against a wallet is scaled by the same factor that
+    sized the wallet.
+
+    Pro-rating only the allowance would leave an October joiner holding 3/12 of
+    the wallet and 12/12 of the cost — overdrawn before electing anything, and
+    tripping the enrolment guard for a member who has done nothing wrong. The
+    factor is applied in `_combine_tags`, the ONE point every tag producer
+    passes through (the election snapshot, bulk, revert, plan overrides and the
+    benefit-statement recompute), so no call site can quietly keep an annual
+    figure.
+    """
+    def tag(factor: float) -> float | None:
+        return member_coverage_tag(
+            source_map=None, rule="full", pricing=_PRICING, slip_idx=None,
+            family_slip_idx=None, product_id="prodA", age=35, declined=False,
+            tier_category_id="cat1", plan_code="GOLD",
+            default_tier_category_id="cat1", default_plan="GOLD",
+            spouse_count=0, child_count=0, factor=factor,
+        )
+
+    assert tag(1.0) == 1500.0
+    assert tag(0.5) == 750.0
+    assert tag(0.25) == 375.0
+    # A member covered for none of the period draws nothing.
+    assert tag(0.0) == 0.0
+
+
+def test_proration_and_gst_round_once_together() -> None:
+    """Applied AFTER the GST multiplier and rounded ONCE, so a grossed pro-rated
+    tag and a pro-rated grossed tag cannot differ by a cent."""
+    pricing = {**_PRICING, "__gst__": {"default": 1.09, "products": {}}}
+    tag = member_coverage_tag(
+        source_map=None, rule="full", pricing=pricing, slip_idx=None,
+        family_slip_idx=None, product_id="prodA", age=35, declined=False,
+        tier_category_id="cat1", plan_code="GOLD",
+        default_tier_category_id="cat1", default_plan="GOLD",
+        spouse_count=0, child_count=0, factor=0.25,
+    )
+    assert tag == round(1500.0 * 1.09 * 0.25, 2) == 408.75
+
+
+def test_an_unpriceable_tag_stays_none_whatever_the_factor() -> None:
+    """The factor scales a number; it must never turn "no price" into 0.00 —
+    the unpriced-election guard reads None and a 0 would sail past it."""
+    assert member_coverage_tag(
+        source_map=None, rule="full", pricing=_PRICING, slip_idx=None,
+        family_slip_idx=None, product_id="nosuch", age=35, declined=False,
+        tier_category_id="cat1", plan_code="GOLD",
+        default_tier_category_id="cat1", default_plan="GOLD",
+        spouse_count=0, child_count=0, factor=0.5,
+    ) is None
+    # Declined coverage costs no flex regardless of the factor.
+    assert member_coverage_tag(
+        source_map=None, rule="full", pricing=_PRICING, slip_idx=None,
+        family_slip_idx=None, product_id="prodA", age=35, declined=True,
+        tier_category_id="cat1", plan_code="GOLD",
+        default_tier_category_id="cat1", default_plan="GOLD",
+        spouse_count=0, child_count=0, factor=0.5,
+    ) is None

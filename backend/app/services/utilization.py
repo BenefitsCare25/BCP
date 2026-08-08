@@ -284,8 +284,11 @@ def _flex_utilization(
                 sub_limit=cat.sub_limit,
                 approved=round(row["approved"], 2),
                 pending=round(row["pending"], 2),
+                # Floors at 0 for the same reason the wallet does: a sub-limit
+                # pays UP TO its cap, so "SGD -200 left" is not a quantity
+                # anyone has. Claims beyond the cap are the member's own cost.
                 remaining=(
-                    round(cat.sub_limit - row["approved"], 2)
+                    max(0.0, round(cat.sub_limit - row["approved"], 2))
                     if cat.sub_limit is not None
                     else None
                 ),

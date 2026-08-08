@@ -465,3 +465,16 @@ def test_cover_costing_more_than_the_wallet_stays_signed(monkeypatch):
     flex = _util().flex
     assert flex.flex_balance == -100.0
     assert flex.available == -100.0
+
+
+def test_a_category_sub_limit_never_reports_a_negative_remaining():
+    """Same rule as the wallet: a sub-limit pays UP TO its cap, so "SGD -200
+    left" is not a quantity anyone has. Reachable when a claim is approved past
+    the cap (the guard allows an acknowledged override) or when pro-ration
+    shrinks an allowance below what was already reimbursed."""
+    _mk_claim(kind="flex", flex_category="Dental", amount=700.0,
+              approved=700.0, status="approved")
+    dental = next(c for c in _util().flex.categories if c.name == "Dental")
+    assert dental.sub_limit == 300.0
+    assert dental.approved == 700.0
+    assert dental.remaining == 0.0
