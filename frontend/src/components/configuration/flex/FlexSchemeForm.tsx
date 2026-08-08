@@ -392,7 +392,16 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
               <Select
                 value={proration.basis ?? "none"}
                 onValueChange={(v) =>
-                  setProration({ basis: v as ProrationBasis })
+                  // Write BOTH fields. The server reads an absent `applies_to`
+                  // as "leavers" (a legacy AI extraction can never have carried
+                  // one), so saving a basis alone would store a rule the form is
+                  // not showing — the select would read "Leavers only" here and
+                  // the wallet would be cut on one end while the broker believed
+                  // they had chosen the other.
+                  setProration({
+                    basis: v as ProrationBasis,
+                    applies_to: proration.applies_to ?? "leavers",
+                  })
                 }
               >
                 <SelectTrigger aria-label="Pro-ration basis">
@@ -411,7 +420,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
             {(proration.basis ?? "none") !== "none" && (
               <div className="w-56 space-y-1">
                 <Select
-                  value={proration.applies_to ?? "both"}
+                  value={proration.applies_to ?? "leavers"}
                   onValueChange={(v) =>
                     setProration({ applies_to: v as ProrationAppliesTo })
                   }
@@ -420,8 +429,8 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="both">Joiners and leavers</SelectItem>
                     <SelectItem value="leavers">Leavers only</SelectItem>
+                    <SelectItem value="both">Joiners and leavers</SelectItem>
                     <SelectItem value="joiners">Joiners only</SelectItem>
                   </SelectContent>
                 </Select>
