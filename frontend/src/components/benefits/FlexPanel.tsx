@@ -86,6 +86,48 @@ function mergeCategories(
   return rows;
 }
 
+/** One category's position, as a figure the LEDGER ABOVE CAN BE ADDED FROM.
+ *
+ * **Every row leads with what was CLAIMED**, which is the term the ledger sums
+ * ("SGD 1,340 flex dollars − SGD 680 claims approved"). This list used to
+ * change shape by row: a category with a sub-limit reported what was LEFT
+ * ("SGD 120 left / of SGD 300") while one without reported what was CLAIMED
+ * ("SGD 500 claimed"). Two adjacent rows answering different questions, and the
+ * total stated directly above them derivable from neither — a reader looking at
+ * 500 and 120 against a stated 680 has to notice the second row is a remainder
+ * and do 300 − 120 in their head to find the missing 180. What's left is still
+ * carried, as the secondary line, where it belongs to the cap beside it.
+ *
+ * The claimed figure is CAPPED at the sub-limit (`drawnAgainst`'s rule): the
+ * bar below it is already capped, so an uncapped caption would contradict its
+ * own fullness. Where an acknowledged over-limit approval makes that bite, the
+ * row is short of the ledger's raw total by the overage — the full approved
+ * amount is on the claim record and in the reports, which is where an override
+ * is reconciled. */
+/** One category's position, as a SINGLE non-wrapping line.
+ *
+ * It was a 160px-wide stack — a figure, a remainder, a mini bar — which on a
+ * wide card left the name and its numbers at opposite ends of an empty row and
+ * still wrapped "SGD 180 of SGD 300 claimed" onto two lines inside its own
+ * column. A category is one fact about one benefit; it gets one row, and the
+ * row does not break mid-phrase.
+ *
+ * The per-category bar is gone with it. The wallet keeps ONE bar, at the top,
+ * because that is the figure a broker scans for; a 160px bar under a wrapped
+ * caption measures a sub-limit the caption has already stated exactly.
+ *
+ * **Every row leads with what was CLAIMED**, which is the term the ledger sums
+ * ("SGD 2,680 flex dollars − SGD 680 claims approved"). This list used to
+ * change shape by row: a category with a sub-limit reported what was LEFT while
+ * one without reported what was CLAIMED — two adjacent rows answering different
+ * questions, with the total above derivable from neither. A reader seeing 500
+ * and "120 left" against a stated 680 had to notice the second was a remainder
+ * and compute 300 − 120 to find the missing 180.
+ *
+ * The claimed figure is CAPPED at the sub-limit (`drawnAgainst`'s rule). Where
+ * an acknowledged over-limit approval makes that bite, the row is short of the
+ * ledger's raw total by the overage — the full approved amount is on the claim
+ * record and in the reports, which is where an override is reconciled. */
 function CategoryPosition({
   row,
   currency,
@@ -94,44 +136,46 @@ function CategoryPosition({
   currency: string | null;
 }) {
   const use = row.use;
-  const spent = Boolean(use && (use.approved > 0 || use.pending > 0));
+  const capped =
+    use && row.subLimit != null
+      ? Math.min(use.approved, row.subLimit)
+      : (use?.approved ?? 0);
 
   return (
-    <div className="flex w-40 shrink-0 flex-col items-end gap-0.5 text-right">
-      {use && row.subLimit != null && use.remaining != null ? (
+    <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+      {/* Gated on something HAVING been claimed, not merely on a cap existing.
+          A capped category with nothing settled rendered "SGD 0 of SGD 250
+          claimed · SGD 250 left" — two figures that are only ever zero and the
+          cap restated as its own remainder. It is the cap, and nothing else. */}
+      {capped > 0 && row.subLimit != null && use?.remaining != null ? (
         <>
-          <span className="text-xs font-medium tabular-nums text-foreground">
-            {formatWallet(use.remaining, currency)} left
-          </span>
-          <span className="text-2xs tabular-nums text-muted-foreground">
-            of {formatWallet(row.subLimit, currency)}
-          </span>
-          <UtilizationBar
-            limit={row.subLimit}
-            approved={use.approved}
-            pending={use.pending}
-            className="mt-0.5"
-          />
+          <span className="font-medium text-foreground">
+            {formatWallet(capped, currency)} of{" "}
+            {formatWallet(row.subLimit, currency)}
+          </span>{" "}
+          claimed · {formatWallet(use.remaining, currency)} left
         </>
-      ) : /* Approved only. "SGD 0 claimed" above a pending line states a
-           figure that isn't a fact about anything — the pending line below is
-           the whole story for a category with nothing settled yet. */
-      spent && use!.approved > 0 ? (
-        <span className="text-xs font-medium tabular-nums text-foreground">
-          {formatWallet(use!.approved, currency)} claimed
-        </span>
+      ) : /* Approved only. "SGD 0 claimed" beside a pending figure states a
+           number that isn't a fact about anything — the pending term is the
+           whole story for a category with nothing settled yet. */
+      capped > 0 ? (
+        <>
+          <span className="font-medium text-foreground">
+            {formatWallet(capped, currency)}
+          </span>{" "}
+          claimed
+        </>
       ) : row.subLimit != null ? (
-        <span className="text-2xs tabular-nums text-muted-foreground">
-          {formatWallet(row.subLimit, currency)} sub-limit
-        </span>
+        <>{formatWallet(row.subLimit, currency)} sub-limit</>
       ) : null}
       {use && use.pending > 0 && (
-        <span className="text-2xs tabular-nums text-warn">
+        <span className="text-warn">
+          {capped > 0 || row.subLimit != null ? " · " : ""}
           <PendingSwatch />
           {formatWallet(use.pending, currency)} pending
         </span>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -202,20 +246,19 @@ export function FlexPanel({
   // twice and "SGD -300 available" is not a quantity anyone has.
   const headline = available != null ? Math.abs(available) : null;
 
-  // Whether the printed terms actually SUM to the printed total. They stop
-  // doing so in exactly one case: claims already reimbursed exceed the
-  // allowance, which pro-ration can produce by shrinking a leaver's allowance
-  // below what they had already drawn. `available` floors at 0 there (a wallet
-  // pays up to its limit), so rendering "500 − 200 − 700 = 0" would put an
-  // equals sign in front of arithmetic that is false on its face. Every term
-  // stays on screen — they are each true — but the total is stated rather than
-  // summed. This panel's own rule is that the set must reconcile; the honest
-  // way to keep it is to stop calling it a sum when it isn't one.
-  const drawnTotal = drawn.reduce((n, d) => n + (d.add ? d.value : -d.value), 0);
-  const reconciles =
-    wallet == null || available == null
-      ? true
-      : Math.abs(wallet + drawnTotal - available) < 0.01;
+  // **The ledger prints its TERMS only — the total is the headline.** It used
+  // to close with "= SGD 2,000 left", which is the same number, in the same
+  // panel, six pixels below the figure already labelled "available": the
+  // restatement this panel exists to remove.
+  //
+  // Dropping it also retires a whole correctness problem rather than managing
+  // one. The terms stop summing to the total in exactly one case — claims
+  // already reimbursed exceed the allowance, which pro-ration can produce by
+  // shrinking a leaver's allowance below what they had drawn — and `available`
+  // floors at 0 there, so the panel used to need a `reconciles` check to avoid
+  // printing "500 − 200 − 700 = 0", an equals sign in front of arithmetic false
+  // on its face. A line that never claims to be a sum cannot make that claim
+  // falsely. Every term is still on screen and each is true.
 
   return (
     <section className="rounded-lg border border-border bg-card p-4">
@@ -296,26 +339,6 @@ export function FlexPanel({
                 {formatWallet(d.value, currency)} {d.label}
               </span>
             ))}
-            <span
-              className={cn(
-                "tabular-nums font-medium",
-                shortfall ? "text-error" : "text-foreground",
-              )}
-            >
-              {reconciles && (
-                <span aria-hidden className="mr-1 text-subtle">
-                  =
-                </span>
-              )}
-              {reconciles ? (
-                <>
-                  {formatWallet(headline, currency)}{" "}
-                  {shortfall ? "overdrawn" : "left"}
-                </>
-              ) : (
-                "nothing left to draw"
-              )}
-            </span>
           </>
         )}
         {pending > 0 && (
@@ -401,18 +424,27 @@ export function FlexPanel({
           <SectionLabel as="h4" className="mb-1.5">
             Claimable benefits
           </SectionLabel>
-          <div className="flex flex-col gap-1.5">
+          {/* One row per category, baseline-aligned: the NAME may wrap (it is
+              prose and can be long), the figures may not (`whitespace-nowrap`
+              in `CategoryPosition`) — a phrase like "SGD 180 of SGD 300" broken
+              across two lines reads as two amounts. `items-baseline` sits the
+              two halves on one line instead of top-aligning a wrapped name
+              against a single-line figure. */}
+          <div className="flex flex-col gap-1">
             {categories.map((row) => (
-              <div key={row.name} className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-start gap-1.5 text-sm">
+              <div
+                key={row.name}
+                className="flex items-baseline justify-between gap-6"
+              >
+                <span className="flex min-w-0 items-baseline gap-1.5 text-sm">
                   {row.claimable ? (
                     <CheckCircle2
-                      className="mt-0.5 size-3.5 shrink-0 text-good"
+                      className="size-3.5 shrink-0 translate-y-0.5 text-good"
                       aria-label="Claimable"
                     />
                   ) : (
                     <XCircle
-                      className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
+                      className="size-3.5 shrink-0 translate-y-0.5 text-muted-foreground"
                       aria-label="Not claimable"
                     />
                   )}
@@ -424,7 +456,7 @@ export function FlexPanel({
                       </span>
                     )}
                   </span>
-                </div>
+                </span>
                 <CategoryPosition row={row} currency={currency} />
               </div>
             ))}
