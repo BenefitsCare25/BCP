@@ -53,6 +53,11 @@ export interface ReportWorkbook {
    *  before it is downloaded and a broker files against that; a sheet added on
    *  the server must not need a matching edit here to be described. */
   sheets: ReportSheet[];
+  /** The retained series a download of this workbook files a copy into, or null
+   *  when it only writes an audit row. Served for the same reason every other
+   *  control here is: derived client-side, the page would promise a submission
+   *  record the server does not keep. */
+  retained_type: string | null;
 }
 
 export function useReportWorkbooks(policyYearId: string | null) {
@@ -97,6 +102,13 @@ export interface ReportVersion {
     manifest_hash?: string;
   };
   generated_by_user_id: string | null;
+  /** Display name of whoever generated it — resolved server-side. The id has
+   *  always been stored and rendered nowhere, so "who sent this" was answerable
+   *  only by looking up a UUID by hand. */
+  generated_by: string | null;
+  /** Human label for `report_type`. The drawer merges a live series with the
+   *  superseded ones it replaced, so rows have to name which they came from. */
+  report_label: string;
   created_at: string | null;
 }
 

@@ -1,6 +1,8 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Layers } from "lucide-react";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
+import { SubmissionRecord } from "@/components/operations/ReportVersionActions";
 import { Segmented } from "@/components/ui/segmented";
 import {
   Select,
@@ -34,25 +36,55 @@ import type { ReportWorkbook } from "@/api/reports";
  *   above reports no insurer submission touches.
  * - **The insurers are served too.** Deriving them here is how a picker comes
  *   to offer an insurer the download then 404s.
+ * - **The submission record belongs to THIS row, under its own Download.**
+ *   Downloading a submission-grade workbook files a retained copy, so what was
+ *   last sent is a property of this button and its insurer — not of a separate
+ *   section further down the page, which is what the retained listings used to
+ *   be. That section duplicated two of this workbook's three sheets and offered
+ *   a Save button as its only control, so the archive read as a chore with no
+ *   visible payoff and the download hid two clicks inside it.
  */
+/** Retired series merged into a live one's history. Mirrors
+ *  `report_registry.SUPERSEDED_TYPES` — a short, closed list whose only job is
+ *  to keep old submissions reachable, so it is not worth a served field. */
+const SUPERSEDED: Record<string, string[]> = {
+  insurer_submission: ["employee_listing", "dependant_listing"],
+};
+
 export function ReportWorkbookRow({
   policyYearId,
   workbook,
-  masked,
   year,
 }: {
   policyYearId: string;
   workbook: ReportWorkbook;
-  masked: boolean;
   year: number;
 }) {
   const [insurer, setInsurer] = useState("");
+  // Masking is the row's OWN control, like every other one here. It arrived as
+  // a prop from a section header while `supports_masking` was already served —
+  // so the toggle governing the insurer submission sat in the header of the
+  // section BELOW it, labelled "Internal registers". That was merely confusing
+  // until masking became load-bearing: an unmasked pull is what files a
+  // submission, and a broker cannot be asked to discover that from a control in
+  // a different section.
+  const [masked, setMasked] = useState(true);
   const [scope, setScope] = useState<"all" | "active">("all");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [open, setOpen] = useState(false);
+  const qc = useQueryClient();
 
   const blocked = workbook.requires_insurer && !insurer;
+  // A download FILES a copy server-side, so the record line below is stale the
+  // instant the click succeeds. Without this the broker downloads, sees "Not
+  // sent yet" still sitting under the button, and downloads again.
+  const onDownloaded = workbook.retained_type
+    ? () => {
+        qc.invalidateQueries({ queryKey: ["report-version-status"] });
+        qc.invalidateQueries({ queryKey: ["report-versions"] });
+      }
+    : undefined;
 
   const query = new URLSearchParams();
   if (workbook.supports_masking && !masked) query.set("masked", "false");
@@ -117,6 +149,16 @@ export function ReportWorkbookRow({
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {workbook.supports_masking && (
+            <Segmented
+              value={masked ? "masked" : "full"}
+              onChange={(v) => setMasked(v === "masked")}
+              options={[
+                { value: "masked", label: "Masked" },
+                { value: "full", label: "Unmasked" },
+              ]}
+            />
+          )}
           {workbook.supports_employee_status && (
             <Segmented
               value={scope}
@@ -179,9 +221,23 @@ export function ReportWorkbookRow({
             label="Download"
             size="sm"
             disabled={blocked}
+            onDownloaded={onDownloaded}
           />
         </div>
       </div>
+
+      {workbook.retained_type && (
+        <SubmissionRecord
+          policyYearId={policyYearId}
+          reportType={workbook.retained_type}
+          supersededTypes={SUPERSEDED[workbook.retained_type] ?? []}
+          scopeKey={insurer ? insurer.toLowerCase() : null}
+          scopeLabel={insurer || undefined}
+          hasMovement={workbook.requires_insurer}
+          disabled={blocked}
+          filesOnDownload={!workbook.supports_masking || !masked}
+        />
+      )}
 
       {open && (
         <dl className="space-y-1.5 border-t border-border px-4 py-3 pl-11">

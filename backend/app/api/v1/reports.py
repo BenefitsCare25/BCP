@@ -1,11 +1,23 @@
 """Downloadable insurer reports (the Reports page).
 
-Every download emits PII, so each one is audit-logged with the report type and
-masking choice. Unmasked NRIC/FIN is for insurer submission only — gated to
-write-capable roles (broker viewers always get masked output).
+Every download emits PII, so each one is audit-logged with the report type,
+masking choice and the user who pulled it. Unmasked NRIC/FIN is for insurer
+submission only — gated to write-capable roles (broker viewers always get masked
+output).
+
+**A download of a submission-grade report also RETAINS what it produced**
+(`_retain_download`, 2026-08-08). The audit row records that someone pulled a
+file; it cannot reproduce the file, because the report is derived from live data
+and the roster is overwritten in place by the listing sync. Those are different
+questions — "who sent this" and "what did we send" — and only the second one an
+insurer disputes. Retention used to be a separate button a broker had to
+remember, so the archive held whatever anybody thought to press Save on and
+nothing about the rest. See `report_registry.RETAINED_ON_DOWNLOAD` for which
+reports retain and why the internal registers do not.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from io import BytesIO
 from typing import Any
@@ -18,6 +30,7 @@ from app.core.audit import write_audit
 from app.core.auth import ROLE_BROKER_VIEWER, CurrentUser, get_current_user
 from app.core.deps import assert_policy_year_for_user
 from app.core.rate_limit import limiter
+from app.core.storage import get_storage
 from app.db.session import get_db
 from app.models import PolicyYear
 from app.services.built_in_listings import normalize_employee_status
@@ -33,6 +46,17 @@ from app.services.placement_slip_export import (
     build_placement_slip_workbook,
     build_quotation_slip_workbook,
 )
+from app.services.report_registry import (
+    RETENTION_KEEP,
+    retained_type_for,
+)
+from app.services.report_registry import (
+    scope_key_for as version_scope_key_for,
+)
+from app.services.report_registry import (
+    spec_for as version_spec_for,
+)
+from app.services.report_versions import create_version, prune_series
 from app.services.report_workbooks import (
     WORKBOOKS,
     BuildContext,
@@ -40,6 +64,8 @@ from app.services.report_workbooks import (
     spec_for,
     workbook_filename,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _slug(insurer: str) -> str:
@@ -79,14 +105,130 @@ def _require_configured_insurer(db: Session, py: PolicyYear, insurer: str) -> No
         )
 
 
-def _xlsx_response(wb, filename: str) -> Response:
+def _xlsx_bytes(wb) -> bytes:
     buf = BytesIO()
     wb.save(buf)
-    return Response(
-        content=buf.getvalue(),
-        media_type=_XLSX_MEDIA_TYPE,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return buf.getvalue()
+
+
+def _xlsx_response(wb, filename: str) -> Response:
+    return _bytes_response(_xlsx_bytes(wb), filename)
+
+
+def _bytes_response(
+    data: bytes, filename: str, retained: dict[str, Any] | None = None
+) -> Response:
+    """The file, plus what its retention did.
+
+    The outcome rides a HEADER because the body is the workbook. Without it the
+    page can only re-read the record line, which is unchanged both when nothing
+    needed filing and when filing failed — and "the roster moved" fires on any
+    roster or config edit while filing compares the report's BYTES, so a change
+    that does not reach this insurer leaves a badge showing with no way to learn
+    why downloading did not clear it. Same-origin (the SPA ships inside this
+    image), so no CORS exposure header is needed.
+    """
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if retained:
+        if retained.get("retention_error"):
+            headers["X-Inspro-Report-Filed"] = "error"
+        elif retained.get("version_created"):
+            headers["X-Inspro-Report-Filed"] = f"v{retained['version_no']}"
+        else:
+            headers["X-Inspro-Report-Filed"] = f"unchanged:v{retained['version_no']}"
+    return Response(content=data, media_type=_XLSX_MEDIA_TYPE, headers=headers)
+
+
+def _retain_download(
+    db: Session,
+    user: CurrentUser,
+    py: PolicyYear,
+    download_key: str,
+    params: dict[str, Any],
+    data: bytes,
+) -> tuple[dict[str, Any], list[str]]:
+    """Retain the bytes this download is about to stream, if it is that kind of
+    report AND this pull is a submission. Returns ``(audit_fields, blobs)``.
+
+    **Only an UNMASKED pull by a write-capable user is retained**, and both
+    halves of that are load-bearing:
+
+    - *Unmasked* is what makes the archive mean one thing. The masked copy is an
+      internal preview — an insurer matches members on the identification
+      number, which is why this module gates unmasked output as "for insurer
+      submission only" in the first place. Retaining previews put them in the
+      same numbered series, so "Last sent v5" could name a file nobody sent, and
+      a preview pulled after a roster change CLEARED the changed-since badge —
+      telling the broker the insurer holds a roster it has never seen. They also
+      shared the 24-slot retention budget, so previews evicted real submissions.
+    - *Write-capable* because retention WRITES a row and a blob and
+      ``prune_series`` DELETES the oldest — through a GET.
+      ``deps.require_write_access`` only blocks non-read methods, so without
+      this the role documented as "read-only across the entire API surface"
+      mutated and destroyed the submission archive. The masking rule already
+      403s a viewer's unmasked pull, so this is belt-and-braces — but the
+      invariant is "a read-only role never writes", and it should not depend on
+      a masking rule that could be relaxed later.
+
+    (The rejected alternative was to retain both and prune per masking bucket,
+    reading "last sent" off the newest unmasked row. It keeps more data, but the
+    data is previews — roster PII in blob storage, serving nothing — and it puts
+    two meanings in one series.)
+
+    **Never raises.** A broker's file must not be withheld because the archive
+    could not be written — storage being unreachable is our problem, and the
+    report they asked for is derived from data they can see on screen. The
+    failure is logged and named in the audit row instead, and because staleness
+    is measured against the newest retained version, a failed retention leaves
+    the row reading "changed since" rather than silently claiming to be filed.
+
+    Retention is deduplicated on content, so repeatedly downloading an unchanged
+    report reuses one version and writes no further blobs — the archive grows
+    with data changes, not with clicks.
+    """
+    report_type = retained_type_for(download_key)
+    if report_type is None:
+        return {}, []
+    if params.get("masked", True) or user.role == ROLE_BROKER_VIEWER:
+        return {}, []
+    try:
+        rv, created, _superseded = create_version(
+            db, user, py, report_type, params, blob_bytes=data
+        )
+        pruned = prune_series(
+            db, py, report_type,
+            version_scope_key_for(version_spec_for(report_type), params),
+            RETENTION_KEEP,
+        )
+        return (
+            {
+                "report_version_id": rv.id,
+                "version_no": rv.version_no,
+                "version_created": created,
+            },
+            pruned,
+        )
+    except Exception:
+        log.exception(
+            "Retaining %s for policy year %s failed; serving the download anyway.",
+            report_type, py.id,
+        )
+        db.rollback()
+        return {"retention_error": True}, []
+
+
+def _drop_blobs(paths: list[str]) -> None:
+    """Remove pruned blobs — only ever called AFTER the caller's commit, so a
+    rollback can never leave a live row pointing at a deleted file. A failure
+    leaves an orphan, which is inert; nothing references it."""
+    if not paths:
+        return
+    storage = get_storage()
+    for path in paths:
+        try:
+            storage.delete(path)
+        except Exception:  # pragma: no cover - storage backend specific
+            log.warning("Could not delete pruned report blob %s", path)
 
 
 @router.get("/benefit-selection")
@@ -102,8 +244,12 @@ def download_benefit_selection_report(
     """Benefit-selection status + buy/sell-leave report (.xlsx)."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
     assert_masking_allowed(user, masked)
-    wb = build_benefit_selection_workbook(
-        db, py, masked=masked, window_id=window_id
+    data = _xlsx_bytes(
+        build_benefit_selection_workbook(db, py, masked=masked, window_id=window_id)
+    )
+    retained, pruned = _retain_download(
+        db, user, py, "benefit_selection",
+        {"masked": masked, "window_id": window_id}, data,
     )
     write_audit(
         db, user, action="export", entity_type="insurer_report",
@@ -112,13 +258,16 @@ def download_benefit_selection_report(
             "report": "benefit-selection",
             "masked": masked,
             "window_id": window_id,
+            **retained,
         },
     )
     db.commit()
-    return _xlsx_response(
-        wb,
+    _drop_blobs(pruned)
+    return _bytes_response(
+        data,
         "benefit-selection-status-with-buy-sell-leave-report-"
         f"{date.today():%Y%m%d}.xlsx",
+        retained,
     )
 
 
@@ -316,6 +465,11 @@ def list_report_workbooks(
             "supports_masking": spec.supports_masking,
             "supports_date_range": spec.supports_date_range,
             "supports_employee_status": spec.supports_employee_status,
+            # Whether downloading this workbook also files a retained copy —
+            # SERVED, like every other control on the row, so the page shows a
+            # submission record on exactly the workbooks that keep one. Derived
+            # client-side it would announce an archive that does not exist.
+            "retained_type": retained_type_for(spec.key),
             # Served, never derived client-side: the picker must offer exactly
             # the insurers the download will accept.
             "insurers": insurers if spec.requires_insurer else [],
@@ -373,17 +527,22 @@ def download_report_workbook(
     if spec.supports_date_range:
         lo, hi = _activity_range(start, end)
     wanted_status = normalize_employee_status(employee_status)
-    wb = build_workbook(
-        db,
-        py,
-        spec,
-        BuildContext(
-            masked=masked,
-            insurer=insurer,
-            start=lo,
-            end=hi,
-            employee_status=wanted_status,
-        ),
+    data = _xlsx_bytes(
+        build_workbook(
+            db,
+            py,
+            spec,
+            BuildContext(
+                masked=masked,
+                insurer=insurer,
+                start=lo,
+                end=hi,
+                employee_status=wanted_status,
+            ),
+        )
+    )
+    retained, pruned = _retain_download(
+        db, user, py, spec.key, {"insurer": insurer, "masked": masked}, data,
     )
     write_audit(
         db, user, action="export", entity_type="report_workbook",
@@ -397,8 +556,10 @@ def download_report_workbook(
             "employee_status": (
                 wanted_status if spec.supports_employee_status else None
             ),
+            **retained,
         },
     )
     db.commit()
-    return _xlsx_response(wb, workbook_filename(spec, py, insurer))
+    _drop_blobs(pruned)
+    return _bytes_response(data, workbook_filename(spec, py, insurer), retained)
 

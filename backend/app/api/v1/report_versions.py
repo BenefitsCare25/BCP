@@ -31,6 +31,7 @@ from app.services.insurer_listings import configured_insurers_for_year
 from app.services.report_registry import REGISTRY, spec_for
 from app.services.report_versions import (
     ReportTooLargeError,
+    actor_names,
     compute_movement,
     create_version,
     list_versions,
@@ -52,6 +53,10 @@ registry_router = APIRouter(tags=["reports"])
 _XLSX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+
+# Ceiling on a merged history request. The real caller asks for a live series
+# plus its superseded ones — three today, and the whole registry is six.
+_MAX_MERGED_TYPES = 8
 
 
 class CreateVersionIn(BaseModel):
@@ -163,11 +168,37 @@ def list_report_versions(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
+    """The history for a series, newest first.
+
+    ``report_type`` accepts a comma-separated list so the drawer can show a
+    live series beside the SUPERSEDED ones it replaced (`report_registry.
+    SUPERSEDED_TYPES`). Retiring a report type must not orphan the record of
+    what was submitted under it — the bytes are the point, and a broker cannot
+    reach them from anywhere else.
+    """
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    _spec_or_404(report_type)
-    return [
-        version_out(rv) for rv in list_versions(db, py, report_type, scope_key)
-    ]
+    # Deduplicated and bounded. Each entry costs a query returning up to
+    # MAX_LIMIT rows, and `_spec_or_404` rejects an unknown type but not a
+    # repeated one — so `?report_type=insurer_submission,insurer_submission,…`
+    # was a single authenticated request that issued thousands of queries and
+    # materialised the results of all of them.
+    wanted = list(dict.fromkeys(t.strip() for t in report_type.split(",") if t.strip()))
+    if not wanted:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "report_type is required.")
+    if len(wanted) > _MAX_MERGED_TYPES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"At most {_MAX_MERGED_TYPES} report types can be listed together.",
+        )
+    rows: list[ReportVersion] = []
+    for rt in wanted:
+        _spec_or_404(rt)
+        rows.extend(list_versions(db, py, rt, scope_key))
+    # One chronology across the merged series — version numbers restart per
+    # series, so sorting on them would interleave nonsensically.
+    rows.sort(key=lambda rv: (rv.created_at is not None, rv.created_at), reverse=True)
+    names = actor_names(db, rows)
+    return [version_out(rv, names) for rv in rows]
 
 
 @router.get("/status")
@@ -298,6 +329,25 @@ def download_movement(
     else:
         # Default: the previous version in the series ("since the last submission").
         baseline = previous_version(db, rv)
+        # A MISSING predecessor is not an empty one. `compute_movement` reads
+        # `None` as "initial submission — everything is an addition", which is
+        # right for v1 and catastrophic for a version whose predecessor was
+        # pruned: the sheet would list every member of the roster under
+        # ADDITIONS and nothing under DELETIONS, i.e. wrong in the direction a
+        # broker acts on. Refuse instead of reporting a diff we cannot compute.
+        if baseline is None and rv.version_no > 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "code": "baseline_pruned",
+                    "message": (
+                        f"The submission before v{rv.version_no} is no longer "
+                        "retained, so there is nothing to compare it against. "
+                        "Pick a later version, or diff against the current "
+                        "roster."
+                    ),
+                },
+            )
 
     wb = compute_movement(db, rv, baseline)
     write_audit(

@@ -94,8 +94,22 @@ COMPANY_ACTIVITY_HEADER = [
     "Record ID",
     "Employee Staff ID",
     "Employee Name",
+    "Detail",
     "Cross-Tenant Access",
 ]
+
+# Fields worth printing from an audit row's `after` blob, in this order. The
+# sheet used to stop at Record Type / Record ID, which turned every report
+# download into `Export / Report Workbook / <policy-year-uuid>` — the same nine
+# words for the underwriting register and an unmasked insurer submission, and
+# the whole reason someone opens this export is to tell those two apart. The
+# list is an ALLOW-list rather than a dump of `after`: that blob also carries
+# per-row before/after diffs, i.e. the roster PII this sheet is not.
+_DETAIL_KEYS = (
+    "workbook", "report", "report_type", "insurer", "version_no", "masked",
+    "employee_status", "filename", "terminate_missing",
+    "added", "changed", "deleted", "missing_terminated",
+)
 
 _ENTITY_KEYS = ("entity", "company", "subsidiary")
 
@@ -110,6 +124,28 @@ def _label(mapping: dict[str, str], value: str | None) -> str:
     if not raw:
         return ""
     return mapping.get(raw) or raw.replace("_", " ").title()
+
+
+def _detail(after: object) -> str:
+    """One readable line from an audit row's `after`, or blank.
+
+    Booleans print as yes/no and a `None` is dropped entirely — an
+    `insurer=None` on an internal register is not a fact about it, it is the
+    field not applying.
+    """
+    if not isinstance(after, dict):
+        return ""
+    parts: list[str] = []
+    for key in _DETAIL_KEYS:
+        if key not in after:
+            continue
+        value = after[key]
+        if value is None or value == "":
+            continue
+        if isinstance(value, bool):
+            value = "yes" if value else "no"
+        parts.append(f"{key.replace('_', ' ')}: {value}")
+    return " · ".join(parts)
 
 
 def range_bounds(start: date, end: date) -> tuple[datetime, datetime]:
@@ -313,6 +349,7 @@ def build_company_activity_workbook(
                 row.entity_id or "",
                 emp.staff_id if emp else "",
                 (emp.employee_name or "") if emp else "",
+                _detail(row.after),
                 "Yes" if row.cross_tenant_access else "",
             ],
         )

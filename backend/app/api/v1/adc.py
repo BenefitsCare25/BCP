@@ -73,6 +73,7 @@ async def apply_listing_upload(
                 db, user, policy_year_id, client_id, tmp_path,
                 terminate_missing=terminate_missing,
                 expected_missing_digest=missing_digest,
+                source_filename=file.filename,
             )
         except StaleListingPreview as exc:
             raise HTTPException(

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -35,7 +36,10 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ReportWorkbookRow } from "@/components/operations/ReportWorkbookRow";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
-import { ReportVersionActions } from "@/components/operations/ReportVersionActions";
+import {
+  ReportVersionActions,
+  SubmissionRecord,
+} from "@/components/operations/ReportVersionActions";
 import { useReportReadiness, useReportWorkbooks } from "@/api/reports";
 import { useMe, usePolicyYears } from "@/api/hooks";
 import { useSession } from "@/stores/session";
@@ -94,13 +98,6 @@ function stamp(year: PolicyYear): string {
   return `${year.year}-${datestamp()}`;
 }
 
-function slug(insurer: string): string {
-  return insurer
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-}
-
 /* ── Table shell — one row per single-artifact report ─────────────────── */
 interface ReportRow {
   icon: LucideIcon;
@@ -147,6 +144,49 @@ function ReportTable({ rows }: { rows: ReportRow[] }) {
           ))}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+/** The benefit-selection download, with its own masking control beside it.
+ *
+ *  Two reasons it is a component rather than a bare button. The record line
+ *  under the table has to refresh the moment the file is served — the download
+ *  FILES the retained copy, so a stale "Not sent yet" underneath it is the one
+ *  thing that would send a broker round the loop twice. And masking belongs
+ *  IN the card, exactly as it does on a workbook row: it decides whether this
+ *  download is a submission, so it cannot sit in a section header away from the
+ *  button it qualifies. */
+function BenefitSelectionDownload({
+  year,
+  nric,
+  setNric,
+}: {
+  year: PolicyYear;
+  nric: NricMode;
+  setNric: (v: NricMode) => void;
+}) {
+  const qc = useQueryClient();
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <Segmented
+        value={nric}
+        onChange={setNric}
+        options={[
+          { value: "masked", label: "Masked" },
+          { value: "full", label: "Unmasked" },
+        ]}
+      />
+      <ReportDownloadButton
+        path={`/policy-years/${year.id}/reports/benefit-selection${nric === "full" ? "?masked=false" : ""}`}
+        filename={`benefit-selection-status-with-buy-sell-leave-report-${stamp(year)}.xlsx`}
+        label="Download"
+        size="sm"
+        onDownloaded={() => {
+          qc.invalidateQueries({ queryKey: ["report-version-status"] });
+          qc.invalidateQueries({ queryKey: ["report-versions"] });
+        }}
+      />
     </div>
   );
 }
@@ -208,43 +248,12 @@ function ReportSection({
   );
 }
 
-/** NRIC/FIN masking toggle — shared by the tabs whose exports carry NRICs. */
-function NricToggle({
-  nric,
-  setNric,
-}: {
-  nric: NricMode;
-  setNric: (v: NricMode) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-muted-foreground">NRIC/FIN</span>
-      <Segmented
-        value={nric}
-        onChange={setNric}
-        options={[
-          { value: "masked", label: "Masked" },
-          { value: "full", label: "Unmasked" },
-        ]}
-      />
-    </div>
-  );
-}
-
 /** Renders the composite workbooks a tab owns, in the order named.
  *
  *  Driven off the SERVED list rather than a hardcoded set, so a workbook added
  *  on the server appears with its real sheet list; an unknown key is simply not
  *  rendered rather than throwing. */
-function Workbooks({
-  keys,
-  year,
-  masked,
-}: {
-  keys: string[];
-  year: PolicyYear;
-  masked: boolean;
-}) {
+function Workbooks({ keys, year }: { keys: string[]; year: PolicyYear }) {
   const { data: workbooks = [] } = useReportWorkbooks(year.id);
   const byKey = useMemo(
     () => new Map(workbooks.map((w) => [w.key, w])),
@@ -259,7 +268,6 @@ function Workbooks({
           key={wb.key}
           policyYearId={year.id}
           workbook={wb}
-          masked={masked}
           year={year.year}
         />
       ))}
@@ -282,8 +290,6 @@ function CrReports({ year }: { year: PolicyYear }) {
           reportType="fact_find"
           scopeKey={null}
           createInput={{ report_type: "fact_find" }}
-          mode="latest"
-          hasMovement={false}
         />
       ),
     },
@@ -299,8 +305,6 @@ function CrReports({ year }: { year: PolicyYear }) {
           reportType="quotation_slip"
           scopeKey={null}
           createInput={{ report_type: "quotation_slip" }}
-          mode="latest"
-          hasMovement={false}
         />
       ),
     },
@@ -316,8 +320,6 @@ function CrReports({ year }: { year: PolicyYear }) {
           reportType="placement_slip"
           scopeKey={null}
           createInput={{ report_type: "placement_slip" }}
-          mode="latest"
-          hasMovement={false}
         />
       ),
     },
@@ -326,93 +328,15 @@ function CrReports({ year }: { year: PolicyYear }) {
 }
 
 /* ── Policy Admin — roster, coverage & insurer submissions ───────────── */
-// NRIC selection is held by ReportsPage so switching to another team tab (which
-// unmounts this one) doesn't discard the broker's choice.
-function PaReports({
-  year,
-  nric,
-  setNric,
-  insurer,
-  setInsurer,
-}: {
-  year: PolicyYear;
-  nric: NricMode;
-  setNric: (v: NricMode) => void;
-  insurer: string;
-  setInsurer: (v: string) => void;
-}) {
+function PaReports({ year }: { year: PolicyYear }) {
   const { data: readiness, isError } = useReportReadiness(year.id);
 
+  // The insurer is picked ON the submission row (the workbook declares that it
+  // needs one), so this tab holds no insurer state of its own. It used to hold
+  // one for a second insurer picker in the retained-history section — the same
+  // two concepts offered by three controls that did not govern each other.
   const insurers = readiness?.insurers ?? [];
   const missingInsurer = readiness?.products_without_insurer ?? [];
-  useEffect(() => {
-    if (insurers.length && !insurers.includes(insurer)) {
-      setInsurer(insurers[0]);
-    }
-  }, [insurers, insurer, setInsurer]);
-
-  const maskedParam = nric === "full" ? "&masked=false" : "";
-  const listingReady = insurers.length > 0 && Boolean(insurer);
-
-  // The two RETAINED series. They stay per-file and keep their own row even
-  // though the same sheets appear inside the Insurer Submission workbook: this
-  // is the versioned record with its movement diffs, which is a different
-  // artifact from a submission package, and `report_versions` keys on the
-  // individual report type.
-  const versioned: ReportRow[] = [
-    {
-      icon: FileSpreadsheet,
-      title: "Employee Listing (retained versions)",
-      description:
-        "The per-insurer employee submission, saved as a numbered version with a movement diff against the last one.",
-      format: ".xlsx",
-      action: (
-        <ReportVersionActions
-          policyYearId={year.id}
-          reportType="employee_listing"
-          scopeKey={insurer ? insurer.toLowerCase() : null}
-          createInput={{
-            report_type: "employee_listing",
-            insurer,
-            masked: nric === "masked",
-          }}
-          mode="versioned"
-          hasMovement
-          disabled={!listingReady}
-          liveDownload={{
-            path: `/policy-years/${year.id}/reports/employee-listing?insurer=${encodeURIComponent(insurer)}${maskedParam}`,
-            filename: `employee-listing-for-insurer-report-${slug(insurer || "insurer")}-${stamp(year)}.xlsx`,
-          }}
-        />
-      ),
-    },
-    {
-      icon: FileSpreadsheet,
-      title: "Dependant Listing (retained versions)",
-      description:
-        "The per-insurer dependant submission, saved as a numbered version with its movement diff.",
-      format: ".xlsx",
-      action: (
-        <ReportVersionActions
-          policyYearId={year.id}
-          reportType="dependant_listing"
-          scopeKey={insurer ? insurer.toLowerCase() : null}
-          createInput={{
-            report_type: "dependant_listing",
-            insurer,
-            masked: nric === "masked",
-          }}
-          mode="versioned"
-          hasMovement
-          disabled={!listingReady}
-          liveDownload={{
-            path: `/policy-years/${year.id}/reports/dependant-listing?insurer=${encodeURIComponent(insurer)}${maskedParam}`,
-            filename: `dependant-listing-for-insurer-report-${slug(insurer || "insurer")}-${stamp(year)}.xlsx`,
-          }}
-        />
-      ),
-    },
-  ];
 
   return (
     <div className="space-y-6">
@@ -476,61 +400,23 @@ function PaReports({
           control beside the only thing it scopes. */}
       <ReportSection
         title="Insurer submissions"
-        hint="A whole submission in one workbook — pick the insurer on the row."
+        hint="A whole submission in one workbook — pick the insurer and NRIC treatment on the row. An unmasked download is the copy an insurer receives, and files a record of it."
       >
-        <Workbooks
-          keys={["insurer-submission"]}
-          year={year}
-          masked={nric === "masked"}
-        />
+        <Workbooks keys={["insurer-submission"]} year={year} />
       </ReportSection>
 
+      {/* No section-level NRIC toggle: every row here is a workbook, and a
+          workbook declares and owns its own masking control. A toggle in the
+          header would be a second control for the same thing — and the one that
+          used to live here also governed the Insurer Submission row in the
+          section ABOVE it. */}
       <ReportSection
         title="Internal registers"
         hint="Our own records — these span every insurer and aren't insurer-scoped."
-        controls={<NricToggle nric={nric} setNric={setNric} />}
       >
-        <Workbooks
-          keys={["member-register", "leavers", "underwriting"]}
-          year={year}
-          masked={nric === "masked"}
-        />
+        <Workbooks keys={["member-register", "leavers", "underwriting"]} year={year} />
       </ReportSection>
 
-      {/* Below the workbooks, because a retained version is a filing concern
-          rather than the thing a broker came here to send. */}
-      <ReportSection
-        title="Retained submission history"
-        hint="Numbered versions of the two insurer listings, each with a movement diff against the previous one."
-        controls={
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm text-muted-foreground">Insurer</span>
-            <Select
-              value={insurer}
-              onValueChange={setInsurer}
-              disabled={!insurers.length}
-            >
-              <SelectTrigger className="w-[200px]" aria-label="Insurer">
-                <SelectValue
-                  placeholder={
-                    insurers.length ? "Select insurer" : "No insurers configured"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {insurers.map((ins) => (
-                  <SelectItem key={ins} value={ins}>
-                    {ins}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <NricToggle nric={nric} setNric={setNric} />
-          </div>
-        }
-      >
-        <ReportTable rows={versioned} />
-      </ReportSection>
     </div>
   );
 }
@@ -552,22 +438,12 @@ function FlexReports({
       description:
         "What each member elected and what it draws from their flex wallet — plan changes, dependant cover and buy/sell-leave, one row per employee for the latest window.",
       format: ".xlsx",
+      // Downloading files a retained copy, exactly like the insurer submission
+      // — the record line below the table says what was last sent. It used to
+      // offer "Save version" as its ONLY control, with the download itself two
+      // clicks inside a drawer that did not exist until something was saved.
       action: (
-        <ReportVersionActions
-          policyYearId={year.id}
-          reportType="benefit_selection"
-          scopeKey={null}
-          createInput={{
-            report_type: "benefit_selection",
-            masked: nric === "masked",
-          }}
-          mode="versioned"
-          hasMovement={false}
-          liveDownload={{
-            path: `/policy-years/${year.id}/reports/benefit-selection${nric === "full" ? "?masked=false" : ""}`,
-            filename: `benefit-selection-status-with-buy-sell-leave-report-${stamp(year)}.xlsx`,
-          }}
-        />
+        <BenefitSelectionDownload year={year} nric={nric} setNric={setNric} />
       ),
     },
   ];
@@ -623,20 +499,23 @@ function FlexReports({
       <ReportSection
         title="Member benefits selection"
         hint="What members chose, and what it costs their wallet."
-        controls={<NricToggle nric={nric} setNric={setNric} />}
       >
-        <ReportTable rows={electionRows} />
+        <div className="rounded-lg border border-border bg-card">
+          <ReportTable rows={electionRows} />
+          <SubmissionRecord
+            policyYearId={year.id}
+            reportType="benefit_selection"
+            scopeKey={null}
+            hasMovement={false}
+            filesOnDownload={nric === "full"}
+          />
+        </div>
       </ReportSection>
       <ReportSection
         title="Wallet utilisation"
         hint="Where each member's wallet went — the position and the ledger behind it, in one workbook."
-        controls={<NricToggle nric={nric} setNric={setNric} />}
       >
-        <Workbooks
-          keys={["flex-wallet"]}
-          year={year}
-          masked={nric === "masked"}
-        />
+        <Workbooks keys={["flex-wallet"]} year={year} />
       </ReportSection>
       <ReportSection
         title="Scheme & pricing"
@@ -649,15 +528,7 @@ function FlexReports({
 }
 
 /* ── Claims — adjudication register + utilization ────────────────────── */
-function ClaimsReports({
-  year,
-  nric,
-  setNric,
-}: {
-  year: PolicyYear;
-  nric: NricMode;
-  setNric: (v: NricMode) => void;
-}) {
+function ClaimsReports({ year }: { year: PolicyYear }) {
   const rows: ReportRow[] = [
     {
       icon: Gauge,
@@ -679,13 +550,8 @@ function ClaimsReports({
       <ReportSection
         title="Claims"
         hint="The year's claims and their servicing history — the whole book, split by setting and per member, in one workbook."
-        controls={<NricToggle nric={nric} setNric={setNric} />}
       >
-        <Workbooks
-          keys={["claims-register"]}
-          year={year}
-          masked={nric === "masked"}
-        />
+        <Workbooks keys={["claims-register"]} year={year} />
       </ReportSection>
       <ReportSection
         title="Live surfaces"
@@ -738,7 +604,7 @@ function ItReports({ year }: { year: PolicyYear | null }) {
           title="Activity & access"
           hint="Sign-ins, changes and portal provisioning — the three questions a security review opens together. Defaults to the last 30 days."
         >
-          <Workbooks keys={["activity-access"]} year={year} masked />
+          <Workbooks keys={["activity-access"]} year={year} />
         </ReportSection>
       )}
       <ReportSection
@@ -788,10 +654,9 @@ export function ReportsPage() {
 
   const selectedYear = years.find((y) => y.id === selectedYearId) ?? null;
 
-  // Insurer/NRIC held here (not in PaReports) so the choice survives a tab
-  // switch, which unmounts the inactive tab's content.
+  // NRIC held here (not in the tab) so the choice survives a tab switch, which
+  // unmounts the inactive tab's content.
   const [nric, setNric] = useState<NricMode>("masked");
-  const [insurer, setInsurer] = useState<string>("");
 
   return (
     <div className="space-y-5">
@@ -846,13 +711,7 @@ export function ReportsPage() {
         </TabsContent>
         <TabsContent value="pa">
           {selectedYear ? (
-            <PaReports
-              year={selectedYear}
-              nric={nric}
-              setNric={setNric}
-              insurer={insurer}
-              setInsurer={setInsurer}
-            />
+            <PaReports year={selectedYear} />
           ) : (
             <NoYearNotice />
           )}
@@ -866,7 +725,7 @@ export function ReportsPage() {
         </TabsContent>
         <TabsContent value="claims">
           {selectedYear ? (
-            <ClaimsReports year={selectedYear} nric={nric} setNric={setNric} />
+            <ClaimsReports year={selectedYear} />
           ) : (
             <NoYearNotice />
           )}

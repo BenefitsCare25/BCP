@@ -788,12 +788,19 @@ def apply_listing(
     *,
     terminate_missing: bool = False,
     expected_missing_digest: str | None = None,
+    source_filename: str | None = None,
 ) -> AdcApplyResult:
     """Re-evaluate then apply the listing atomically, then re-match + re-assign
     flex. Per-row audit; a mid-run failure rolls back the whole run.
 
     ``terminate_missing`` is the preview's opt-in: without it, people absent
     from the file are reported and left alone.
+
+    ``source_filename`` is recorded on the summary audit row. The workbook
+    itself is not retained (it is roster PII and the parse is destructive), so
+    the name is the only thread from a movement back to the file that caused
+    it — "which upload terminated these forty people" is otherwise answerable
+    only by the timestamp.
     """
     plan, _ = evaluate_listing(db, policy_year_id, client_id, path)
 
@@ -938,7 +945,14 @@ def apply_listing(
         entity_id=policy_year_id,
         after={"added": added, "changed": changed, "deleted": deleted,
                "missing_terminated": missing_terminated,
-               "unchanged": plan.unchanged, "issues": len(plan.issues)},
+               "unchanged": plan.unchanged, "issues": len(plan.issues),
+               "filename": source_filename,
+               # The operator's own choice, not an inference. The per-row
+               # `adc_delete` audits already distinguish `leaving_date` from
+               # `absent_from_listing`, but reconstructing "was the tick on?"
+               # from the absence of a row is not the same as recording that
+               # the one control which ends cover was switched on.
+               "terminate_missing": terminate_missing},
     )
     db.commit()
 

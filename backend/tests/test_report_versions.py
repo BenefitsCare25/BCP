@@ -34,6 +34,7 @@ from app.models import (  # noqa: E402
     Product,
     ProductTerm,
     ReportVersion,
+    User,
 )
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
@@ -73,6 +74,12 @@ def _setup_db():
     seed()
     with SessionLocal() as s:
         s.add(Client(id=CLIENT_ID, name="Versions Co", broker_firm_id=DEMO_BROKER_FIRM_ID))
+        # A real user row so the history can print WHO generated a version —
+        # `generated_by_user_id` was stored and served and rendered nowhere.
+        s.add(User(id="00000000-0000-0000-0000-0000000r20ff",
+                   broker_firm_id=DEMO_BROKER_FIRM_ID, email="rita@versions.co",
+                   display_name="Rita Reports", role="broker_admin",
+                   status="active"))
         s.flush()
         s.add(PolicyYear(
             id=PY_ID, client_id=CLIENT_ID, year=2034,
@@ -380,3 +387,198 @@ def test_content_signature_ignores_write_timestamp():
     assert sig_a is not None
     assert sig_a == _content_signature(_Spec, a_again)  # timestamp ignored
     assert sig_a != _content_signature(_Spec, b)  # data change caught
+
+
+# ── Retention on download (the "Save version" button is gone) ────────────────
+
+
+def _download(client, key="insurer-submission", **params):
+    """A SUBMISSION pull — unmasked, which is what retention keys on."""
+    return client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/{key}",
+        params={"insurer": "TestSure", "masked": "false", **params},
+    )
+
+
+def _versions(client, report_type):
+    res = client.get(
+        f"/api/v1/policy-years/{PY_ID}/report-versions",
+        params={"report_type": report_type, "scope_key": "testsure"},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_downloading_a_submission_files_a_version(client: TestClient) -> None:
+    """The download IS the record. Retention used to need a separate click, so
+    the archive held whatever someone remembered to press Save on."""
+    before = len(_versions(client, "insurer_submission"))
+    res = _download(client)
+    assert res.status_code == 200
+    assert res.headers["X-Inspro-Report-Filed"].startswith("v")
+    after = _versions(client, "insurer_submission")
+    assert len(after) == before + 1
+    assert after[0]["summary"]["member_count"] > 0
+    # Who pulled it, resolved — the id was stored and served and rendered
+    # nowhere, so "who sent this" needed a UUID lookup by hand.
+    assert after[0]["generated_by"] == "Rita Reports"
+
+
+def test_a_masked_pull_is_a_preview_and_files_nothing(client: TestClient) -> None:
+    """The masked copy is an internal preview — an insurer matches members on
+    the identification number, which is why unmasked output is gated as "for
+    insurer submission only". Retaining previews put them in the same numbered
+    series, so "Last sent v5" could name a file nobody sent, and one pulled
+    after a roster change CLEARED the changed-since badge."""
+    before = _versions(client, "insurer_submission")
+    res = _download(client, masked="true")
+    assert res.status_code == 200
+    assert "X-Inspro-Report-Filed" not in res.headers
+    assert len(_versions(client, "insurer_submission")) == len(before)
+
+
+def test_a_viewer_download_cannot_write_or_prune(client: TestClient) -> None:
+    """`require_write_access` only blocks non-read methods, so retention on a
+    GET let the role documented as read-only write rows and blobs — and
+    `prune_series` DELETES past the cap, through the same GET."""
+    assert _download(client).status_code == 200  # something on file to evict
+    before = _versions(client, "insurer_submission")
+
+    def _viewer() -> CurrentUser:
+        return CurrentUser(
+            user_id="00000000-0000-0000-0000-0000000r20fe",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id=CLIENT_ID, role="broker_viewer",
+        )
+
+    app.dependency_overrides[get_current_user] = _viewer
+    try:
+        # Unmasked is refused outright; masked is allowed and must file nothing.
+        assert _download(client).status_code == 403
+        masked = _download(client, masked="true")
+        assert masked.status_code == 200
+        assert "X-Inspro-Report-Filed" not in masked.headers
+    finally:
+        app.dependency_overrides[get_current_user] = _user
+    assert _versions(client, "insurer_submission") == before
+
+
+def test_an_unchanged_redownload_files_nothing_new(client: TestClient) -> None:
+    """Deduped on content, so the archive grows with data changes and not with
+    clicks — which is what makes retaining on every download affordable. The
+    header says so, because the record line looks identical either way."""
+    assert _download(client).status_code == 200
+    first = _versions(client, "insurer_submission")
+    res = _download(client)
+    assert res.headers["X-Inspro-Report-Filed"].startswith("unchanged:v")
+    assert len(_versions(client, "insurer_submission")) == len(first)
+
+
+def test_an_internal_register_logs_but_retains_nothing(client: TestClient) -> None:
+    """Retention is for what a THIRD PARTY acts on. Keeping a blob per pull of a
+    working document banks NRIC-bearing files for nothing."""
+    res = client.get(
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/member-register",
+        params={"masked": "false"},
+    )
+    assert res.status_code == 200, res.text
+    with SessionLocal() as s:
+        from app.models import AuditLog
+        rows = [
+            r for r in s.query(AuditLog).all()
+            if (r.after or {}).get("workbook") == "member-register"
+        ]
+    assert rows, "the pull must still be logged"
+    assert all("report_version_id" not in (r.after or {}) for r in rows)
+
+
+def test_history_merges_the_superseded_series(client: TestClient) -> None:
+    """Retiring a report type must not orphan the record of what was submitted
+    under it — the bytes are the point and nothing else reaches them."""
+    assert _create(client, "employee_listing", insurer="TestSure").status_code == 200
+    assert _download(client).status_code == 200
+    res = client.get(
+        f"/api/v1/policy-years/{PY_ID}/report-versions",
+        params={
+            "report_type": "insurer_submission,employee_listing",
+            "scope_key": "testsure",
+        },
+    )
+    assert res.status_code == 200, res.text
+    types = {r["report_type"] for r in res.json()}
+    assert {"insurer_submission", "employee_listing"} <= types
+    # Merged by DATE: version numbers restart per series, so ordering on them
+    # would interleave nonsensically.
+    stamps = [r["created_at"] for r in res.json()]
+    assert stamps == sorted(stamps, reverse=True)
+
+
+def test_a_repeated_report_type_is_deduped_and_bounded(client: TestClient) -> None:
+    """`_spec_or_404` rejects an unknown type but not a repeated one, and each
+    entry costs a query returning up to MAX_LIMIT rows."""
+    res = client.get(
+        f"/api/v1/policy-years/{PY_ID}/report-versions",
+        params={
+            "report_type": "insurer_submission,insurer_submission",
+            "scope_key": "testsure",
+        },
+    )
+    assert res.status_code == 200, res.text
+    ids = [r["id"] for r in res.json()]
+    assert len(ids) == len(set(ids)), "deduplicated, not listed twice"
+
+    flood = client.get(
+        f"/api/v1/policy-years/{PY_ID}/report-versions",
+        params={"report_type": ",".join(f"t{i}" for i in range(50))},
+    )
+    assert flood.status_code == 400
+
+
+def test_a_pruned_baseline_refuses_instead_of_inventing_a_diff(
+    client: TestClient,
+) -> None:
+    """`compute_movement` reads a missing predecessor as "initial submission —
+    everything is an addition", which is right for v1 and catastrophic for a
+    version whose predecessor was pruned: every member would be listed under
+    ADDITIONS and none under DELETIONS, i.e. wrong in the direction a broker
+    acts on."""
+    from app.services.report_versions import list_versions, prune_series
+
+    assert _download(client).status_code == 200
+    # A second submission off changed data, so there is something to prune under.
+    with SessionLocal() as s:
+        emp = s.get(Employee, EMP_SOLO)
+        attrs = dict(emp.attribute_values or {})
+        attrs["salary"] = float(attrs.get("salary") or 0) + 1000
+        emp.attribute_values = attrs
+        s.commit()
+    assert _download(client).status_code == 200
+
+    with SessionLocal() as s:
+        py = s.get(PolicyYear, PY_ID)
+        assert len(list_versions(s, py, "insurer_submission", "testsure")) >= 2
+        prune_series(s, py, "insurer_submission", "testsure", 1)
+        s.commit()
+        survivor = list_versions(s, py, "insurer_submission", "testsure")[0]
+        assert survivor.version_no > 1, "the pruned one was its baseline"
+        survivor_id = survivor.id
+
+    res = client.get(f"/api/v1/report-versions/{survivor_id}/movement")
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"]["code"] == "baseline_pruned"
+
+
+def test_retention_keeps_only_the_newest_versions() -> None:
+    """Nothing pruned before the download became the retention event, when a
+    version cost a deliberate click."""
+    from app.services.report_registry import RETENTION_KEEP
+    from app.services.report_versions import list_versions, prune_series
+
+    with SessionLocal() as s:
+        py = s.get(PolicyYear, PY_ID)
+        prune_series(s, py, "insurer_submission", "testsure", 1)
+        s.flush()
+        remaining = list_versions(s, py, "insurer_submission", "testsure")
+        s.rollback()
+    assert len(remaining) <= 1
+    assert RETENTION_KEEP == 24

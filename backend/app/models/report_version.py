@@ -29,8 +29,31 @@ MODE_LATEST = "latest"
 class ReportVersion(Base, TimestampMixin):
     __tablename__ = "report_versions"
     __table_args__ = (
-        # Drives both "next version_no" and history-list queries. No UNIQUE —
-        # latest-mode supersede replaces a row and must not fight a constraint.
+        # Drives both "next version_no" and history-list queries, and makes the
+        # number UNIQUE within its series.
+        #
+        # `create_version` reads the current max and writes one past it, which
+        # RACES. That was survivable when a version cost a deliberate "Save"
+        # click; retention now fires on every submission download, so two
+        # brokers pulling one insurer's submission at the same moment both read
+        # the same prior and both write v7. `previous_version` then uses a
+        # strict `<`, so the movement diff SKIPS one of them — a submission
+        # silently absent from "what changed since last time".
+        #
+        # UNIQUE is safe despite latest-mode supersede: that path deletes the
+        # prior row and FLUSHES before inserting its replacement, so the two
+        # never coexist. `create_version` retries on the IntegrityError.
+        #
+        # Declared on the MODEL, not only in the migration: `sync_firm_schema`
+        # reconciles each firm's Postgres schema from model metadata, so a
+        # migration-only constraint would guard `public.report_versions` (empty
+        # in prod) while every real row is written to `firm_<id>`.
+        #
+        # NOTE: Postgres treats NULLs as distinct, so this does not constrain a
+        # series whose `scope_key` is NULL (`benefit_selection`, which is
+        # window-scoped and normally unscoped in practice). That series has
+        # `has_movement=False`, so a duplicate number there cannot produce a
+        # wrong diff — it would only show two rows with one label.
         Index(
             "ix_report_versions_series",
             "client_id",
@@ -38,6 +61,7 @@ class ReportVersion(Base, TimestampMixin):
             "report_type",
             "scope_key",
             "version_no",
+            unique=True,
         ),
     )
 

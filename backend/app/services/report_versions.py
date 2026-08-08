@@ -16,6 +16,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser
@@ -37,6 +38,7 @@ from app.models import (
     LeaveElection,
     Plan,
     PolicyYear,
+    User,
 )
 from app.models.report_version import (
     MODE_LATEST,
@@ -45,6 +47,7 @@ from app.models.report_version import (
 from app.services.insurer_listings import membership_manifest
 from app.services.insurer_reports import append_safe, autosize
 from app.services.report_registry import (
+    REGISTRY,
     ReportSpec,
     build_report_bytes,
     mime_for,
@@ -64,6 +67,12 @@ _EXTRA_STALENESS_MODELS = {
 }
 
 
+# Retries when a concurrent submission takes the version number first. Two is
+# ample: each attempt re-reads the series max, so a third collision means real
+# contention, not the read-then-write window.
+_VERSION_NO_ATTEMPTS = 3
+
+
 class ReportTooLargeError(Exception):
     """The generated report exceeds MAX_REPORT_BYTES."""
 
@@ -76,9 +85,13 @@ def _manifest_hash(manifest: dict[str, Any] | None) -> str:
 
 # NOTE: there is deliberately no manifest-based dedup key any more. It hashed
 # only member identity, so it could not see the underwriting/salary-derived
-# columns the listing renders and wrongly reported "unchanged". The masking
-# choice no longer needs encoding either — masked and unmasked bytes differ, so
-# `_content_signature` separates them naturally.
+# columns the listing renders and wrongly reported "unchanged".
+#
+# Masking is not in the key either — masked and unmasked bytes differ, so
+# `_content_signature` separates them on its own. What it does NOT do is stop
+# them displacing each other, which is why the no-op guard compares against the
+# newest version sharing this masking choice (`latest_comparable`) rather than
+# the newest version outright.
 
 
 # The only OOXML package part openpyxl / python-docx stamp with a write
@@ -183,6 +196,55 @@ def list_versions(
     return list(db.execute(stmt).scalars().all())
 
 
+def latest_comparable(
+    db: Session,
+    py: PolicyYear,
+    report_type: str,
+    scope_key: str | None,
+    params: dict[str, Any],
+) -> ReportVersion | None:
+    """The newest version in the series produced with the SAME masking choice.
+
+    The no-op guard compares against this, not against the newest version
+    outright, and the difference only started to matter once retention moved
+    onto the download. Masked and unmasked bytes always differ, so a broker
+    flipping the NRIC toggle twice — with no data change at all — minted v1, v2
+    and v3. Comparing like with like means the second masked pull recognises v1
+    and stores nothing.
+
+    The version NUMBER still comes from the series as a whole: one chronological
+    record of what was sent, in the order it was sent.
+    """
+    wanted = bool(params.get("masked", True))
+    for rv in list_versions(db, py, report_type, scope_key):
+        if bool((rv.summary or {}).get("masked", True)) == wanted:
+            return rv
+    return None
+
+
+def prune_series(
+    db: Session, py: PolicyYear, report_type: str, scope_key: str | None, keep: int
+) -> list[str]:
+    """Drop all but the newest ``keep`` versions of a series.
+
+    Returns the storage paths of the deleted blobs — the CALLER deletes them
+    only after its commit, for the same reason `create_version` defers a
+    superseded blob: a file removed before the transaction lands is orphaned
+    from a row that still references it if the transaction rolls back.
+
+    Retention was unbounded before the download became the retention event, when
+    a version cost somebody a deliberate click. It now costs a data change, so a
+    year of weekly roster edits on one insurer would keep every intermediate
+    copy of a workbook carrying the whole roster's NRICs.
+    """
+    versions = list_versions(db, py, report_type, scope_key)
+    doomed = versions[keep:]
+    paths = [rv.storage_path for rv in doomed]
+    for rv in doomed:
+        db.delete(rv)
+    return paths
+
+
 def previous_version(db: Session, rv: ReportVersion) -> ReportVersion | None:
     """The version immediately below ``rv`` in its series (default movement
     baseline = "since the last submission")."""
@@ -209,6 +271,7 @@ def create_version(
     report_type: str,
     params: dict[str, Any],
     label: str | None = None,
+    blob_bytes: bytes | None = None,
 ) -> tuple[ReportVersion, bool, str | None]:
     """Generate the report, retain the bytes, and record a version row. Returns
     ``(version, created, superseded_blob_path)`` — ``created`` is False when the
@@ -231,7 +294,10 @@ def create_version(
         )
     scope_key = scope_key_for(spec, params)
     prior = latest_version(db, py, report_type, scope_key)
-    prior_hash = (prior.summary or {}).get("content_hash") if prior else None
+    # Numbering follows the whole series; the no-op comparison follows the same
+    # masking choice — see `latest_comparable`.
+    comparable = latest_comparable(db, py, report_type, scope_key, params)
+    prior_hash = (comparable.summary or {}).get("content_hash") if comparable else None
 
     manifest = (
         membership_manifest(db, py, params["insurer"]) if spec.has_movement else None
@@ -250,7 +316,13 @@ def create_version(
     # correcting a salary left the manifest identical, the save answered
     # "unchanged", and the retained record of what was submitted silently
     # diverged from what the report now produces.
-    blob_bytes = build_report_bytes(db, py, report_type, params)
+    # ``blob_bytes`` is supplied when the caller has ALREADY built this artifact
+    # — the download path, which retains exactly the bytes it streamed. Building
+    # a second copy there would double the cost of every download of a report
+    # that sweeps the whole roster, and would make the retained file a
+    # re-derivation of the one that was sent rather than the one that was sent.
+    if blob_bytes is None:
+        blob_bytes = build_report_bytes(db, py, report_type, params)
     if len(blob_bytes) > MAX_REPORT_BYTES:
         raise ReportTooLargeError(
             f"Report is {len(blob_bytes)} bytes (max {MAX_REPORT_BYTES})."
@@ -258,7 +330,9 @@ def create_version(
 
     content_hash = _content_signature(spec, blob_bytes)
     if content_hash is not None and content_hash == prior_hash:
-        return prior, False, None
+        # `comparable`, not `prior` — the identical bytes belong to THAT version,
+        # and it is the one the download is being recorded against.
+        return comparable, False, None
 
     next_no = (prior.version_no + 1) if prior else 1
     version_id = new_uuid()
@@ -292,28 +366,79 @@ def create_version(
     summary = _summary(spec, manifest, params)
     if content_hash is not None:
         summary["content_hash"] = content_hash
-    rv = ReportVersion(
-        id=version_id,
-        client_id=py.client_id,
-        policy_year_id=py.id,
-        report_type=report_type,
-        scope_key=scope_key,
-        version_no=next_no,
-        mode=spec.mode,
-        label=label,
-        params=dict(params),
-        summary=summary,
-        manifest=manifest,
-        file_name=_default_filename(report_type, scope_key, next_no, spec.fmt),
-        mime_type=mime_for(spec.fmt),
-        size_bytes=saved.size_bytes,
-        sha256=saved.sha256,
-        storage_path=saved.path,
-        generated_by_user_id=user.user_id,
+
+    # `next_no` was read before this insert, so a concurrent submission can
+    # already hold it. `ix_report_versions_series` is UNIQUE precisely so that
+    # surfaces as an IntegrityError instead of leaving two rows sharing a
+    # number — which `previous_version`'s strict `<` then steps over, dropping a
+    # whole submission out of "what changed since last time".
+    #
+    # The insert runs inside a SAVEPOINT so only IT rolls back: a plain
+    # `db.rollback()` here would discard whatever the CALLER had already done in
+    # this transaction. The blob is saved once and reused across attempts, so a
+    # retry costs a row insert and not another upload.
+    for _ in range(_VERSION_NO_ATTEMPTS):
+        rv = ReportVersion(
+            id=version_id,
+            client_id=py.client_id,
+            policy_year_id=py.id,
+            report_type=report_type,
+            scope_key=scope_key,
+            version_no=next_no,
+            mode=spec.mode,
+            label=label,
+            params=dict(params),
+            summary=summary,
+            manifest=manifest,
+            file_name=_default_filename(report_type, scope_key, next_no, spec.fmt),
+            mime_type=mime_for(spec.fmt),
+            size_bytes=saved.size_bytes,
+            sha256=saved.sha256,
+            storage_path=saved.path,
+            generated_by_user_id=user.user_id,
+        )
+        try:
+            with db.begin_nested():
+                db.add(rv)
+                db.flush()
+            return rv, True, superseded_path
+        except IntegrityError:
+            db.expunge(rv)
+            if _series_holds(db, py, report_type, scope_key, next_no) is None:
+                # Not a version_no clash — some other constraint failed, and
+                # swallowing it into a retry would loop on a real fault.
+                raise
+            taken = latest_version(db, py, report_type, scope_key)
+            next_no = (taken.version_no + 1) if taken else 1
+    raise RuntimeError(
+        f"Could not allocate a version number for {report_type!r} after "
+        f"{_VERSION_NO_ATTEMPTS} attempts."
     )
-    db.add(rv)
-    db.flush()
-    return rv, True, superseded_path
+
+
+def _series_holds(
+    db: Session,
+    py: PolicyYear,
+    report_type: str,
+    scope_key: str | None,
+    version_no: int,
+) -> ReportVersion | None:
+    """The row occupying ``version_no``, if the number really was taken.
+
+    Re-raising when it was not is what stops an unrelated constraint failure
+    being swallowed into a retry loop.
+    """
+    return db.execute(
+        select(ReportVersion).where(
+            ReportVersion.client_id == py.client_id,
+            ReportVersion.policy_year_id == py.id,
+            ReportVersion.report_type == report_type,
+            ReportVersion.scope_key.is_(scope_key)
+            if scope_key is None
+            else ReportVersion.scope_key == scope_key,
+            ReportVersion.version_no == version_no,
+        )
+    ).scalars().first()
 
 
 def load_version_blob(rv: ReportVersion) -> bytes:
@@ -354,6 +479,22 @@ def is_stale(db: Session, py: PolicyYear, rv: ReportVersion) -> bool:
     return latest_change is not None and latest_change > rv.created_at
 
 
+def actor_names(db: Session, versions: list[ReportVersion]) -> dict[str, str]:
+    """Display name per `generated_by_user_id`, for the history list.
+
+    The id has always been stored and served and was rendered nowhere, so "who
+    sent this to the insurer" — the first question asked of a submission record
+    — was answerable only by looking up a UUID by hand.
+    """
+    ids = {rv.generated_by_user_id for rv in versions if rv.generated_by_user_id}
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(User.id, User.display_name, User.email).where(User.id.in_(ids))
+    ).all()
+    return {uid: (name or email or uid) for uid, name, email in rows}
+
+
 def report_status(
     db: Session, py: PolicyYear, report_type: str, scope_key: str | None
 ) -> dict[str, Any]:
@@ -363,16 +504,24 @@ def report_status(
     if rv is None:
         return {"latest": None, "is_stale": False, "has_movement": spec.has_movement}
     return {
-        "latest": version_out(rv),
+        # WITH the actor's name: "last sent by whom" is half of what the status
+        # line says, and resolving it in the list endpoint alone would leave the
+        # one place it is always read showing a bare UUID.
+        "latest": version_out(rv, actor_names(db, [rv])),
         "is_stale": is_stale(db, py, rv),
         "has_movement": spec.has_movement,
     }
 
 
-def version_out(rv: ReportVersion) -> dict[str, Any]:
+def version_out(
+    rv: ReportVersion, names: dict[str, str] | None = None
+) -> dict[str, Any]:
     return {
         "id": rv.id,
         "report_type": rv.report_type,
+        "report_label": REGISTRY[rv.report_type].label
+        if rv.report_type in REGISTRY
+        else rv.report_type,
         "scope_key": rv.scope_key,
         "version_no": rv.version_no,
         "mode": rv.mode,
@@ -381,6 +530,7 @@ def version_out(rv: ReportVersion) -> dict[str, Any]:
         "size_bytes": rv.size_bytes,
         "summary": rv.summary,
         "generated_by_user_id": rv.generated_by_user_id,
+        "generated_by": (names or {}).get(rv.generated_by_user_id or "") or None,
         "created_at": rv.created_at.isoformat() if rv.created_at else None,
     }
 
