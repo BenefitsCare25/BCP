@@ -77,12 +77,18 @@ export function WalletLedger({
         >
           <Money value={flex.wallet} currency={currency} />
         </MountRow>
+        {/* Wrapped: `<dl>` permits only dt/dd/div, and every other row here
+            goes through `MountRow`, which supplies its own div. A bare <p>
+            child painted fine and put a non-dd into the list a screen reader
+            walks. */}
         {flex.proration && (
-          <FlexProrationNote
-            proration={flex.proration}
-            currency={currency}
-            className="pb-3"
-          />
+          <div>
+            <FlexProrationNote
+              proration={flex.proration}
+              currency={currency}
+              className="pb-3"
+            />
+          </div>
         )}
         {flex.total !== 0 && (
           // **The direction is in the TERM, so the term has to follow the

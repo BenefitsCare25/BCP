@@ -16,7 +16,7 @@ import type { FlexCoverageLine } from "@/types";
 import { FAMILY_STATUS_LABELS, type FamilyStatusCode } from "@/types";
 import { Mount, MountRow, MountRule } from "./Mount";
 import { Money } from "./Figure";
-import { WALLET_LABEL } from "./FlexProrationNote";
+import { WALLET_LABEL, prorationReason } from "./FlexProrationNote";
 import { familyGloss } from "./glossary";
 
 function familyLabel(code: string | null): string | null {
@@ -110,7 +110,7 @@ export function FlexMount({
           has gone rather than about the arithmetic. */}
       {flex.proration && (
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-row text-label">
-          <span>Pro-rated to {flex.proration.note} of cover</span>
+          <span>{prorationReason(flex.proration.note)}</span>
           <span className="shrink-0">
             <Money value={flex.proration.full_amount} currency={currency} /> a
             year

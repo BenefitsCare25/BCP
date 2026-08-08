@@ -1119,22 +1119,6 @@ def test_the_proration_factor_scales_a_price_tag() -> None:
     assert _combine_tags(1000.0, None, 1, dep_applies=True, factor=0.5) is None
 
 
-def test_member_coverage_tag_forwards_the_factor() -> None:
-    """The snapshot path, end to end — a stored election must be scaled by the
-    same rule the statement recomputes with, or the two disagree about money."""
-    kw = dict(
-        source_map=None, rule="full", pricing=_PRICING, slip_idx=None,
-        family_slip_idx=None, product_id="prodA", age=35, declined=False,
-        tier_category_id="cat1", plan_code="GOLD",
-        default_tier_category_id="cat1", default_plan="GOLD",
-        spouse_count=0, child_count=0,
-    )
-    assert member_coverage_tag(**kw) == 1500.0
-    assert member_coverage_tag(**kw, factor=0.5) == 750.0
-
-
-# ── Pro-ration of the price tag ───────────────────────────────────────────────
-
 
 def test_the_price_tag_scales_by_the_members_proration_factor() -> None:
     """The cover charged against a wallet is scaled by the same factor that

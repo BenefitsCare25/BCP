@@ -21,6 +21,7 @@ import { Mount, MountRow, MountRule } from "./Mount";
 import { insuredClaimTitle } from "./ClaimMount";
 import { Limit, Money, currencySymbol } from "./Figure";
 import { FillRule, drawnAgainst } from "./FillRule";
+import { prorationReason } from "./FlexProrationNote";
 import { glossBeside } from "./glossary";
 import { formatDay } from "./date";
 
@@ -165,13 +166,30 @@ function drawnFromWallet(
   wallet: number | null,
 ): number {
   const limit = subLimit ?? wallet;
-  return limit == null ? approved : drawnAgainst(approved, limit);
+  // Only a POSITIVE limit can cap anything. See `hasLimit` in `FlexBlock`:
+  // `flex_balance` is deliberately signed when elected cover is priced past the
+  // wallet, and `Math.min(approved, -100)` would report −100 as the amount
+  // drawn — turning a real approval into a negative one.
+  return limit == null || limit <= 0 ? approved : drawnAgainst(approved, limit);
 }
 
 function FlexBlock({ flex }: { flex: FlexUtilization }) {
   const currency = flex.currency ?? "S$";
   const base = flex.flex_balance ?? flex.wallet_amount;
-  const used = base == null ? flex.approved : drawnAgainst(flex.approved, base);
+  // **There is not always a limit to read the drawn figure against**, and this
+  // is the guard `FillRule` used to apply before this card stated its own
+  // figures. Two ways it fails: `wallet_amount` can be absent outright, and
+  // `flex_balance` is deliberately SIGNED when the member holds elected cover
+  // priced above their wallet (`utilization._flex_utilization`, pinned by
+  // `test_cover_costing_more_than_the_wallet_stays_signed`) — the one overdrawn
+  // state the product still reports, because the enrolment guard exists for it.
+  // Capping against a negative made `used` NEGATIVE, printing "S$-100 of S$-100
+  // used" beneath an aside already reading "Short by S$100", and hiding any
+  // real approval behind it. With no positive limit the drawn figure is simply
+  // what was approved, and the "of Y" clause is not printed at all.
+  const hasLimit = base != null && base > 0;
+  const used = hasLimit ? drawnAgainst(flex.approved, base) : flex.approved;
+  const showDrawn = used > 0 || flex.pending > 0 || hasLimit;
 
   // A lone category with NO cap of its own can only restate the wallet: with
   // one category the wallet's approved and pending totals ARE that category's,
@@ -238,25 +256,31 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
             months of cover"); this tab is about what is left, so it carries
             the reason and not the arithmetic. An empty span holds the right
             half in place for a member who is covered the whole period. */}
-        <span>
-          {flex.proration && `Pro-rated to ${flex.proration.note} of cover`}
-        </span>
+        <span>{flex.proration && prorationReason(flex.proration.note)}</span>
         {/* Right: "X of Y used" — the same words `FillRule` captions every
             other limit with, and the same words the category rows below use, so
             the wallet and its subdivisions read as one vocabulary. It replaced
             "S$1,340 allowance · S$1,340 used", which introduced a synonym for
             the card's own title to label a figure the sentence already
             explains. */}
-        <span className="shrink-0">
-          <Money value={used} currency={currency} /> of{" "}
-          <Money value={base} currency={currency} /> used
-          {flex.pending > 0 && (
-            <>
-              {" · "}
-              <Money value={flex.pending} currency={currency} /> under review
-            </>
-          )}
-        </span>
+        {showDrawn && (
+          <span className="shrink-0">
+            <Money value={used} currency={currency} />
+            {hasLimit && (
+              <>
+                {" of "}
+                <Money value={base} currency={currency} />
+              </>
+            )}
+            {" used"}
+            {flex.pending > 0 && (
+              <>
+                {" · "}
+                <Money value={flex.pending} currency={currency} /> under review
+              </>
+            )}
+          </span>
+        )}
       </div>
 
       {/* One LINE per category, not a titled block with its own bar. Each is a
