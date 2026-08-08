@@ -225,6 +225,27 @@ def test_settling_cannot_submit_a_stale_DRAFT(client: TestClient):
     assert res.status_code == 403 and _code(res) == CODE_COVERAGE_ENDED
 
 
+def test_settling_cannot_add_documents_to_a_stale_DRAFT(client: TestClient):
+    """The upload takes its capability from the ROW, exactly as submit does.
+
+    `MEMBER_EDITABLE_STATUSES` includes `draft`, so gating the route on RESPOND
+    alone — correct for the `needs_info` case it was written for — let a member
+    past their run-off pile documents onto a draft they can neither submit
+    (CLAIM) nor delete (CLAIM), against cover that ended months ago.
+    """
+    _claim(CLAIM_STATUS_NEEDS_INFO)  # holds them in `settling`
+    draft = _claim(CLAIM_STATUS_DRAFT)
+    _set_state(
+        status=EMPLOYEE_STATUS_TERMINATED,
+        last_day=TODAY - timedelta(days=30), days=10,
+    )
+    res = client.post(
+        f"/api/v1/portal/claims/{draft}/documents",
+        files={"file": ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")},
+    )
+    assert res.status_code == 403 and _code(res) == CODE_COVERAGE_ENDED
+
+
 def test_without_a_live_claim_the_same_member_is_finished(client: TestClient):
     _set_state(
         status=EMPLOYEE_STATUS_TERMINATED,
@@ -418,6 +439,34 @@ def test_coverage_options_serves_the_window_the_form_must_obey(client: TestClien
     # The policy year is still reported unchanged beside it — they answer
     # different questions.
     assert body["policy_year_end"] == YEAR_END.isoformat()
+    assert body["claim_block"] is None
+
+
+def test_a_window_that_refuses_every_date_is_served_as_NO_window(
+    client: TestClient,
+):
+    """Cover that ended BEFORE the period began, while the member still holds
+    CLAIM — reachable, and not rare: a leaver inside a generous run-off, or a
+    flex scheme that starts mid-year.
+
+    The bounds cross over, and served verbatim they reach the date input as
+    `min > max`: the form then refuses every date the member tries with "pick a
+    date between 15 Jul and 1 Jun", and the clean 422 the backend would have
+    raised is unreachable behind its own client-side validation. So the window
+    is served as absent, its options withheld, and `claim_block` says why.
+    """
+    before_the_year = YEAR_START - timedelta(days=5)
+    _set_state(
+        status=EMPLOYEE_STATUS_TERMINATED, last_day=before_the_year, days=400
+    )
+    res = client.get("/api/v1/portal/coverage-options")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["claimable_from"] is None and body["claimable_to"] is None
+    assert body["insured"] == []
+    assert body["flex"] is None
+    assert before_the_year.isoformat() in body["claim_block"]
+    assert "nothing to claim against" in body["claim_block"]
 
 
 # ── What the client is told ───────────────────────────────────────────────────
@@ -642,3 +691,100 @@ def test_the_batched_map_refuses_an_ambiguous_staff_id_like_the_single_path():
         assert access_map(s, DEMO_CLIENT_ID, [_Ref])[_Ref.id].state == "unknown"
         s.query(Employee).filter(Employee.staff_id == "AMBIG-1").delete()
         s.commit()
+
+
+# ── The emailed-code route is the same door ───────────────────────────────────
+
+
+def test_every_route_that_mints_a_member_session_resolves_the_tenant():
+    """`require_portal_tenant` is not just tenant SELECTION on these routes.
+
+    It calls `set_search_path`, and `_issue_member_login` reads `policy_years`,
+    `employees` and `claims` — all tenant tables. Unrouted on Postgres every one
+    of them resolves against `public`, which holds no tenant rows: the leaver
+    check comes back `unknown` and the route signs in the members the password
+    route refuses. `/verify` was missing it because until the leaver gate these
+    routes touched only control tables, which live in `public` everywhere, so
+    nothing noticed.
+
+    Enumerated rather than listed, so a NEW way to mint a session is caught too.
+    The routing itself is unobservable here (SQLite has no schemas) and is
+    covered by `tests/test_schema_isolation_pg.py`.
+    """
+    import inspect
+
+    from app.api.v1 import portal_auth as mod
+
+    minting = [
+        fn
+        for name, fn in vars(mod).items()
+        if inspect.isfunction(fn)
+        and inspect.getmodule(fn) is mod
+        and name != "_issue_member_login"
+        and "_issue_member_login" in inspect.getsource(fn)
+    ]
+    assert minting, "found no session-minting routes — this scan has rotted"
+    missing = [
+        fn.__name__
+        for fn in minting
+        if "require_portal_tenant" not in inspect.getsource(fn)
+    ]
+    assert not missing, (
+        "routes that mint a member session without resolving the portal "
+        f"tenant (so the leaver check reads the wrong schema): {missing}"
+    )
+
+
+def test_the_emailed_code_route_refuses_a_request_with_no_tenant():
+    """The behavioural half of the rule above."""
+    res = TestClient(app).post(
+        "/api/v1/portal/auth/verify",
+        json={"email": "leaver@lv.test", "code": "123456"},
+    )
+    assert res.status_code == 400
+
+
+def test_a_refused_sign_in_still_SPENDS_the_emailed_code():
+    """A code is spent when it MATCHES, not when the sign-in succeeds.
+
+    `_issue_member_login` rolls back on a leaver refusal — it has to, because
+    `member_set_password` reaches it holding a freshly written credential — and
+    that rollback was reverting the consumption too. A correctly-guessed code
+    stayed live for the rest of its TTL, so the refusal was replayable and, if
+    the member's access state moved inside the window, the already-used code
+    would mint a session.
+    """
+    from app.models import MemberOtpCode
+
+    _password_account()
+    _set_state(
+        status=EMPLOYEE_STATUS_TERMINATED,
+        last_day=TODAY - timedelta(days=400), days=10,
+    )
+    api = TestClient(app)
+    try:
+        issued = api.post(
+            "/api/v1/portal/auth/request-code", json={"email": "leaver@lv.test"}
+        )
+        assert issued.status_code == 202, issued.text
+        code = issued.json().get("debug_code")
+        assert code, "dev+mock surfaces the code so local sign-in works"
+
+        def _verify():
+            return api.post(
+                "/api/v1/portal/auth/verify",
+                json={"email": "leaver@lv.test", "code": code},
+                headers={"X-Inspro-Tenant-Slug": SLUG},
+            )
+
+        refused = _verify()
+        assert refused.status_code == 403
+        assert refused.json()["detail"]["code"] == CODE_ACCESS_ENDED
+
+        # 401 (no live code matches), NOT another 403 — a second 403 would mean
+        # the code was still there to be matched.
+        assert _verify().status_code == 401
+    finally:
+        with SessionLocal() as s:
+            s.query(MemberOtpCode).delete()
+            s.commit()

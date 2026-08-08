@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import Employee, Plan, PolicyYear
 from app.models.category import Category
 from app.models.product import Product
@@ -275,7 +276,7 @@ def _reference_date(db: Session, policy_year_id: str | None) -> date:
         py = db.get(PolicyYear, policy_year_id)
         if py and py.start_date:
             return py.start_date
-    return date.today()
+    return business_today()
 
 
 def _employee_age(employee: Employee, ref: date) -> int | None:

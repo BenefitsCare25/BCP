@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
+from app.core.clock import today as business_today
 from app.core.deps import _deny_cross_tenant, assert_policy_year_for_user, user_owns
 from app.core.rate_limit import limiter
 from app.db.session import get_db
@@ -386,7 +387,7 @@ def decide_case(
         # Undecided (pending / postponed) with no figure: guaranteed in force.
         case.accepted_si = min(guaranteed, case.eligible_si)
     case.decided_on = (
-        (body.decided_on or date.today())
+        (body.decided_on or business_today())
         if body.status in DECIDED_UW_STATUSES
         else None
     )

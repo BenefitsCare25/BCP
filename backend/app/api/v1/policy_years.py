@@ -317,7 +317,11 @@ def copy_policy_year(
         ),
         # Carried over like the grace period — a renewal keeps the company's
         # settled deadlines unless the broker states new ones.
-        leaver_access_days=py.leaver_access_days,
+        leaver_access_days=(
+            payload.leaver_access_days
+            if payload.leaver_access_days is not None
+            else py.leaver_access_days
+        ),
     )
     db.add(target)
     db.flush()

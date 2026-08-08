@@ -31,6 +31,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import Claim, Employee, PolicyYear
 from app.models.claim import CLAIM_KIND_FLEX, SETTLED_STATUSES
 from app.services.flex_pricing_resolver import (
@@ -448,4 +449,4 @@ def build_utilisation_summary_workbook(
 
 
 def flex_report_filename(kind: str, today: date | None = None) -> str:
-    return f"{kind}-{(today or date.today()):%Y%m%d}.xlsx"
+    return f"{kind}-{(today or business_today()):%Y%m%d}.xlsx"

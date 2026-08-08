@@ -50,6 +50,7 @@ import {
   type MemberAccount,
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
+import { fmtDay, parseServerDate } from "@/lib/format";
 import { tenantSurfaceUrl } from "@/lib/tenant";
 import { cn } from "@/lib/cn";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -67,6 +68,18 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
+/** The account's one state, as a broker reads it.
+ *
+ * `left` and `settling` are separate because they permit different things and a
+ * broker relays this to the member: a member in run-off can still send in new
+ * claims, a settling one cannot (`_SETTLING` is RECORD + RESPOND, no CLAIM —
+ * `backend/app/services/member_access.py`). One shared sentence told the broker
+ * a settling member "can still send in claims until <date>" with a date weeks
+ * in the past, contradicting both the server and the member's own screen.
+ *
+ * `leaving` is separate for the opposite reason: the server has been serving a
+ * future last day on every response and no surface rendered it, so an account
+ * read "Active" right up to the night it stopped letting anyone in. */
 type Phase =
   | "none"          // no account at all
   | "no_email"      // account exists, nothing to send an invite to
@@ -74,21 +87,52 @@ type Phase =
   | "invited"       // invite delivered, not signed in
   | "expired"       // invite delivered, one-time password timed out
   | "active"        // signed in / has chosen a password
+  | "leaving"       // still covered, but the roster states a last day ahead
   | "left"          // cover ended; the run-off is still running
+  | "settling"      // run-off expired, held open by a claim we owe an answer on
   | "ended"         // the run-off expired — the account lets nobody in
   | "disabled";
 
-/** Cover has ended but access has not — the run-off (or a claim still being
- *  settled). Not a phase on its own for every account: see `phaseOf`. */
-const windingDown = (account: MemberAccount) =>
-  account.access_state === "run_off" || account.access_state === "settling";
+/** Terminated with a last day still AHEAD of them: fully covered today, and
+ *  everything ends on a date the server already knows. Only that branch of
+ *  `access_for_employee` returns `active` carrying a `last_day`. */
+const onNotice = (account: MemberAccount) =>
+  account.access_state === "active" && Boolean(account.last_day);
 
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString(undefined, {
+/** A server TIMESTAMP. Through `parseServerDate`, never a bare `new Date()` —
+ *  SQLite serializes UTC without an offset and the browser then reads it as
+ *  local time (`lib/format.ts`). Bare calendar dates (`access_ends_on`,
+ *  `last_day`) use `fmtDay` instead, which never goes near `new Date()`. */
+const fmtStamp = (iso: string) =>
+  parseServerDate(iso).toLocaleDateString(undefined, {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
+
+/** "…and they are on their way out", for an account whose PHASE is something
+ *  else. The invite-lifecycle phases keep their own headline (they still need
+ *  onboarding) and would otherwise never mention that the person has left. */
+function windDownNote(account: MemberAccount): string | null {
+  const ends = account.access_ends_on ? fmtDay(account.access_ends_on) : null;
+  switch (account.access_state) {
+    case "run_off":
+      return `Their cover has ended${ends ? ` — portal access closes ${ends}.` : "."}`;
+    case "settling":
+      return (
+        "Their cover has ended and the window for new claims has closed — " +
+        "access lasts only while a claim of theirs is still open."
+      );
+    case "active":
+      return account.last_day
+        ? `They leave on ${fmtDay(account.last_day)}${
+            ends ? `, and portal access closes ${ends}.` : "."
+          }`
+        : null;
+    default:
+      return null;
+  }
+}
 
 /** The panel's whole information architecture: one state, one sentence, one
  *  obvious next action. Derived here rather than inline so the badge, the
@@ -111,11 +155,19 @@ function phaseOf(account: MemberAccount | undefined): Phase {
   // broker had to act on, and offered "Reset password" for an account that has
   // never had one.
   if (account.status === "active" || account.last_sign_in_at) {
-    return windingDown(account) ? "left" : "active";
+    if (account.access_state === "run_off") return "left";
+    if (account.access_state === "settling") return "settling";
+    // A stated last day still ahead of them. Served on every response and
+    // rendered nowhere, so an account read "Active" right up to the night it
+    // stopped letting anyone in.
+    return onNotice(account) ? "leaving" : "active";
   }
   if (account.invite_sent_at) {
     const expiry = account.invite_expires_at;
-    return expiry && new Date(expiry) <= new Date() ? "expired" : "invited";
+    // `parseServerDate`, not `new Date()` — an offset-less timestamp read as
+    // local is an eight-hour lie here, and it decides whether the broker is
+    // offered "Resend invite" or "Send a NEW invite".
+    return expiry && parseServerDate(expiry) <= new Date() ? "expired" : "invited";
   }
   return account.email ? "not_sent" : "no_email";
 }
@@ -137,16 +189,19 @@ const PHASE_BADGE: Record<
   invited: { variant: "warn", label: "Invited", tone: "text-warn" },
   expired: { variant: "error", label: "Invite expired", tone: "text-error" },
   active: { variant: "good", label: "Active", tone: "text-good" },
+  leaving: { variant: "warn", label: "Leaving", tone: "text-warn" },
   left: { variant: "warn", label: "Left", tone: "text-warn" },
+  settling: { variant: "warn", label: "Settling", tone: "text-warn" },
   ended: { variant: "error", label: "Access ended", tone: "text-error" },
   disabled: { variant: "error", label: "Disabled", tone: "text-error" },
 };
 
 function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase }) {
+  const winding = phase === "leaving" || phase === "left" || phase === "settling";
   const Icon =
     phase === "active"
       ? CheckCircle2
-      : phase === "left"
+      : winding
         ? Clock
         : phase === "expired" || phase === "disabled" || phase === "ended"
           ? AlertTriangle
@@ -158,7 +213,7 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
   const tone =
     phase === "active"
       ? "text-good"
-      : phase === "left"
+      : winding
         ? "text-warn"
         : phase === "expired" || phase === "disabled" || phase === "ended"
           ? "text-error"
@@ -180,9 +235,9 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
       detail = "Send it now, or it goes out with the next company-wide send.";
       break;
     case "invited":
-      headline = `Invite sent ${account?.invite_sent_at ? fmtDate(account.invite_sent_at) : ""}`.trim();
+      headline = `Invite sent ${account?.invite_sent_at ? fmtStamp(account.invite_sent_at) : ""}`.trim();
       detail = account?.invite_expires_at
-        ? `Not signed in yet. The one-time password works until ${fmtDate(account.invite_expires_at)}.`
+        ? `Not signed in yet. The one-time password works until ${fmtStamp(account.invite_expires_at)}.`
         : "Not signed in yet.";
       break;
     case "expired":
@@ -191,20 +246,40 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
       break;
     case "active":
       headline = account?.last_sign_in_at
-        ? `Last signed in ${fmtDate(account.last_sign_in_at)}`
+        ? `Last signed in ${fmtStamp(account.last_sign_in_at)}`
         : "Password set";
+      break;
+    case "leaving":
+      // On notice. Nothing to do and nothing wrong — but the date is the whole
+      // point: without it the account reads "Active" until the night their
+      // cover stops, and the first anyone hears of it is the member calling to
+      // say the portal broke.
+      headline = `Leaving ${account?.last_day ? fmtDay(account.last_day) : "soon"}`;
+      detail = account?.access_ends_on
+        ? `Full access until then. After that they can still read their record and send in claims for treatment during their cover, until ${fmtDay(account.access_ends_on)}.`
+        : "Full access until then.";
       break;
     case "left":
       // Not a fault and not an action — the run-off is working as designed, and
       // the only thing a broker needs is the date it stops.
       headline = "Cover ended — winding down";
       detail = account?.access_ends_on
-        ? `They can still read their record and send in claims for treatment during their cover, until ${fmtDate(account.access_ends_on)}.`
+        ? `They can still read their record and send in claims for treatment during their cover, until ${fmtDay(account.access_ends_on)}.`
         : "They can still read their record and send in claims for treatment during their cover.";
+      break;
+    case "settling":
+      // The run-off is OVER; the account is held open only by a claim we still
+      // owe them an answer on. Says the same thing the member's own notice
+      // does — new claims are closed, replies are not — because a broker
+      // reading "they can still send in claims" here would tell them to.
+      headline = "Cover ended — settling an open claim";
+      detail = account?.access_ends_on
+        ? `The window for new claims closed on ${fmtDay(account.access_ends_on)}. They can still read their record and reply to anything we've asked them about, until that claim is settled.`
+        : "The window for new claims has closed. They can still read their record and reply to anything we've asked them about, until that claim is settled.";
       break;
     case "ended":
       headline = account?.access_ends_on
-        ? `Portal access ended ${fmtDate(account.access_ends_on)}`
+        ? `Portal access ended ${fmtDay(account.access_ends_on)}`
         : "Portal access has ended";
       // Says what it is NOT, because the badge sits where "Disabled" sits and
       // a broker will otherwise look for a switch to flip. Re-enabling does
@@ -219,13 +294,12 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
       break;
   }
 
-  // Run-off replaces the `active` phase only, so an account still in the invite
-  // lifecycle keeps its own headline — and would otherwise never mention that
-  // the person has LEFT. Said here rather than folded into the phase, because
-  // both facts matter and neither replaces the other: they still need
-  // onboarding, and the window for it closes.
-  const winding =
-    account && phase !== "left" && phase !== "ended" && windingDown(account);
+  // The wind-down phases replace `active` only, so an account still in the
+  // invite lifecycle keeps its own headline — and would otherwise never mention
+  // that the person is on their way out. Said here rather than folded into the
+  // phase, because both facts matter and neither replaces the other: they still
+  // need onboarding, and the window for it closes.
+  const trailer = winding || phase === "ended" ? null : account && windDownNote(account);
 
   return (
     <div className="flex items-start gap-2">
@@ -233,14 +307,7 @@ function StatusLine({ account, phase }: { account?: MemberAccount; phase: Phase 
       <div className="min-w-0">
         <div className="text-sm font-medium text-foreground">{headline}</div>
         {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
-        {winding && (
-          <p className="text-xs text-warn">
-            Their cover has ended
-            {account?.access_ends_on
-              ? ` — portal access closes ${fmtDate(account.access_ends_on)}.`
-              : "."}
-          </p>
-        )}
+        {trailer && <p className="text-xs text-warn">{trailer}</p>}
       </div>
     </div>
   );
@@ -359,11 +426,15 @@ function AccountPanel({
   // follow "can they get in", not "are they active". `ended` gets none of them:
   // there is no password that would let them past the gate, and offering one
   // would have a broker resetting a password to fix something a reset cannot.
-  // ONLY these two. The invite-lifecycle phases keep their own buttons and
-  // their own dialog copy ("Send a new invite?"), which is still correct for a
+  // ONLY these. The invite-lifecycle phases keep their own buttons and their
+  // own dialog copy ("Send a new invite?"), which is still correct for a
   // leaver in run-off — widening this to them would offer "Reset this
   // password?" for an account that has never had one.
-  const canSignIn = phase === "active" || phase === "left";
+  const canSignIn =
+    phase === "active" ||
+    phase === "leaving" ||
+    phase === "left" ||
+    phase === "settling";
   const busy =
     createAccount.isPending || resendInvite.isPending || makeLink.isPending;
 

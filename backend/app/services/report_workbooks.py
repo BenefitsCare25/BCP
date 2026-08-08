@@ -39,6 +39,7 @@ from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import PolicyYear
 from app.services.insurer_reports import autosize, bold_header
 
@@ -512,5 +513,5 @@ def workbook_filename(
     parts = [spec.key]
     if spec.requires_insurer and insurer:
         parts.append(_slug(insurer))
-    parts += [str(py.year), f"{(today or date.today()):%Y%m%d}"]
+    parts += [str(py.year), f"{(today or business_today()):%Y%m%d}"]
     return "-".join(parts) + ".xlsx"

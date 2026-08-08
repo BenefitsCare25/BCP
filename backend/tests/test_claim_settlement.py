@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
+from app.core.clock import today as business_today  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -373,7 +374,12 @@ def test_the_insurer_clock_stops_when_they_decline():
         incurred_date=date(2038, 3, 1), amount_claimed=1.0,
         status="rejected",
         sent_to_insurer_at=datetime.now(UTC) - _td(days=60),
-        insurer_deadline_on=(datetime.now(UTC) - _td(days=30)).date(),
+        # The deadline is a `date` COLUMN, so it has to be stated in the same
+        # calendar the counters read the timestamps in — business, not UTC
+        # (`core/clock.py`). Built from `(now(UTC) - 30d).date()` this fixture
+        # agreed with itself only while the server ran in UTC, and disagreed by
+        # a day for the eight hours a Singapore day runs ahead of one.
+        insurer_deadline_on=business_today() - _td(days=30),
         decided_at=decided,
     )
     # 60 days sent → 40 days decided = 20, and it stays 20 tomorrow.

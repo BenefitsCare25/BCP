@@ -53,6 +53,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
+from app.core.clock import today as business_today
 from app.models import Dependant, Employee, EmployeeAttributeSchema
 from app.models.dependant import (
     DEPENDANT_STATUS_ACTIVE,
@@ -262,8 +263,12 @@ def _leaving_date(
       — exactly the invariant `_canon` exists to protect. Only a date that is
       new or different terminates.
     """
+    # Business date, not the UTC one (`core/clock.py`). On a UTC server the
+    # first eight hours of every Singapore day read yesterday, so a listing
+    # stating today as the last day of service was treated as "on notice" and
+    # deferred to the next upload.
     parsed = parse_dob(first_value(attrs, keys))
-    if parsed is None or parsed > date.today():
+    if parsed is None or parsed > business_today():
         return None
     if stored is not None and parse_dob(first_value(stored, keys)) == parsed:
         return None
@@ -920,7 +925,11 @@ def apply_listing(
     # leaving date and "wasn't in the file" are very different evidence.
     missing_terminated = 0
     if terminate_missing:
-        today = date.today()
+        # `terminated_effective` is read back by `roster_attributes.cover_end`,
+        # which bounds the claim window AND the leaver's portal run-off — so a
+        # UTC date here would quietly cost anyone terminated before 8am
+        # Singapore a day of cover on both.
+        today = business_today()
         for emp in plan.emp_missing:
             emp.status = EMPLOYEE_STATUS_TERMINATED
             emp.terminated_effective = today

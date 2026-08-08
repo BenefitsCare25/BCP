@@ -946,6 +946,11 @@ export function useCopyPolicyYear() {
       payload,
     }: {
       sourceId: string;
+      /** Both deadline settings are OPTIONAL overrides — omitted, the source
+       *  year's value carries over. The backend honours them symmetrically
+       *  (`PolicyYearCopyIn`); it used to accept only the grace period and
+       *  pydantic dropped the other in silence, so a caller setting the
+       *  run-off on copy compiled clean and lost the value. */
       payload: {
         start_date: string;
         end_date: string;

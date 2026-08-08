@@ -23,6 +23,7 @@ import secrets
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -37,7 +38,15 @@ from app.core.tenancy_host import (
 )
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
-from app.services.member_access import Capability, access_of, refusal
+from app.services.member_access import (
+    UNSET as _UNSET,  # "year not supplied", distinct from "no active year"
+)
+from app.services.member_access import (
+    Capability,
+    access_of,
+    locate_employee,
+    refusal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +305,7 @@ def resolve_member_employee(
     member: CurrentMember,
     *,
     requires: Capability | None = Capability.RECORD,
+    year: Any = _UNSET,
 ):
     """The member's own Employee row in the active policy year.
 
@@ -315,46 +325,40 @@ def resolve_member_employee(
     A denied capability is a 403 carrying a `code` (`access_ended` when the
     member is finished with, `coverage_ended` while they are still in run-off) —
     never a 404, which would say the record does not exist when it does.
-    """
-    from app.models import Employee
 
-    year = active_policy_year(db, member.client_id)
+    `year` lets a caller that has ALREADY resolved the active year hand it over
+    rather than have it looked up again. It takes a sentinel default, not
+    `None`, because `None` is a real answer here (the client has no active year)
+    and the two must stay distinguishable.
+    """
+    year = active_policy_year(db, member.client_id) if year is _UNSET else year
     if year is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active coverage")
 
-    employee = (
-        db.query(Employee)
-        .filter(
-            Employee.policy_year_id == year.id,
-            Employee.member_account_id == member.member_account_id,
-        )
-        .one_or_none()
+    # The binding rule itself lives in `member_access.locate_employee` — ONE
+    # spelling, shared with the access check, which must agree with this about
+    # which person a request is about. What is local to the data path is what
+    # happens either side of it: stamping the match, and refusing ambiguity.
+    employee, ambiguous = locate_employee(
+        db,
+        policy_year_id=year.id,
+        member_account_id=member.member_account_id,
+        staff_id=member.staff_id,
     )
-    if employee is None:
-        candidates = (
-            db.query(Employee)
-            .filter(
-                Employee.policy_year_id == year.id,
-                Employee.staff_id == member.staff_id,
-                Employee.member_account_id.is_(None),
-            )
-            .all()
+    if ambiguous:
+        logger.warning(
+            "Ambiguous staff_id %s for member %s in policy year %s",
+            member.staff_id, member.member_account_id, year.id,
         )
-        if len(candidates) > 1:
-            logger.warning(
-                "Ambiguous staff_id %s for member %s in policy year %s",
-                member.staff_id, member.member_account_id, year.id,
-            )
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Multiple roster rows match your staff ID — contact your broker.",
-            )
-        if candidates:
-            employee = candidates[0]
-            employee.member_account_id = member.member_account_id
-            db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Multiple roster rows match your staff ID — contact your broker.",
+        )
     if employee is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active coverage")
+    if employee.member_account_id != member.member_account_id:
+        employee.member_account_id = member.member_account_id
+        db.commit()
     if requires is not None:
         assert_member_capability(db, employee, requires, year=year)
     return employee

@@ -55,6 +55,7 @@ import {
 } from "@/api/portalMessages";
 import { cn } from "@/lib/cn";
 import { isNotFoundError } from "@/lib/errors";
+import { holds, type Capability } from "./capabilities";
 import { PortalErrorState } from "./PortalErrorState";
 import { glassHover, glassSurface, MountRule } from "./leaf/Mount";
 import { goLinkClass, GoArrow } from "./leaf/Action";
@@ -314,10 +315,9 @@ export function HomeMosaicView({
 }) {
   const navigate = useNavigate();
   const { utilization, claims, statement, dependants, messages } = source;
-  // Undefined until `me` resolves — show everything then, the same rule the
-  // shell nav uses. The endpoints refuse whatever they must regardless.
-  const can = (capability: string) =>
-    !source.capabilities || source.capabilities.includes(capability);
+  // The same rule the shell nav and the broker preview close on, from the
+  // one place that owns it (`./capabilities`).
+  const can = (capability: Capability) => holds(source.capabilities, capability);
 
   const buckets = utilization.data?.insured ?? [];
   const headline = pickHeadline(buckets);

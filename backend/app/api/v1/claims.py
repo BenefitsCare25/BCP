@@ -6,7 +6,7 @@ Phase 3 — these endpoints are its data layer and already usable directly.
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from io import BytesIO
 
 from fastapi import (
@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
+from app.core.clock import today as business_today
 from app.core.deps import (
     assert_policy_year_for_user,
     load_claim,
@@ -311,7 +312,7 @@ def download_claims_register(
         headers={
             "Content-Disposition": (
                 'attachment; filename="claims-register-'
-                f'{date.today():%Y%m%d}.xlsx"'
+                f'{business_today():%Y%m%d}.xlsx"'
             )
         },
     )

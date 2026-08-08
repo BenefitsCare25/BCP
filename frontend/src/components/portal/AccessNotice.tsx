@@ -14,10 +14,15 @@ import { formatDay } from "./leaf/date";
 
 /** The sentence for a state, or null when there is nothing to say.
  *
- * `active` and `unknown` both say nothing, for different reasons: an active
- * member has no news, and `unknown` means we could not find their roster row —
- * usually a new benefit year that has not been uploaded. Guessing out loud
- * there would tell someone they had left when they had not.
+ * `unknown` says nothing on purpose: it means we could not find their roster
+ * row — usually a new benefit year that has not been uploaded — and guessing
+ * out loud there would tell someone they had left when they had not.
+ *
+ * `active` says nothing UNLESS a last day is served with it. That combination
+ * is a member on notice: still fully covered, and everything ends on a date the
+ * server already knows. Both dates were served on every response and rendered
+ * by nobody, so the tabs and the panel card simply vanished overnight with no
+ * warning on any surface.
  */
 export function accessNotice(access: PortalAccess | undefined): string | null {
   if (!access) return null;
@@ -25,6 +30,14 @@ export function accessNotice(access: PortalAccess | undefined): string | null {
   const until = access.access_ends_on ? formatDay(access.access_ends_on) : null;
 
   switch (access.state) {
+    case "active":
+      if (!ended) return null;
+      return [
+        `Your last day of cover is ${ended}.`,
+        until
+          ? `You keep everything until then, and can send us claims for treatment on or before that date until ${until}.`
+          : "You keep everything until then.",
+      ].join(" ");
     case "run_off":
       return [
         ended ? `Your cover ended on ${ended}.` : "Your cover has ended.",

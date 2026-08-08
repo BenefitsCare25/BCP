@@ -393,6 +393,52 @@ def test_the_lookback_never_matches_on_staff_id():
 # ── The gate cannot be forgotten ──────────────────────────────────────────────
 
 
+def _gate_source(endpoint) -> str:
+    """An endpoint's source PLUS that of the same-module helpers it calls.
+
+    A route may scope itself directly or delegate to a helper beside it —
+    `/portal/enrollment`'s three writes all go through `_require_open_enrollment`
+    — and a check that reads only the endpoint's own body cannot tell the second
+    case from a route that scopes nothing at all.
+
+    Same-module only, and that is not a shortcut: a gate helper needs the
+    request's `member` and `db`, so it lives with the routes it serves. Walking
+    further would mean resolving arbitrary imports to decide whether a route is
+    safe, which is a worse thing to be approximately right about.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    module = inspect.getmodule(endpoint)
+    collected: list[str] = []
+    seen: set[str] = set()
+    frontier = [endpoint]
+    while frontier:
+        fn = frontier.pop()
+        try:
+            source = inspect.getsource(fn)
+        except (OSError, TypeError):  # pragma: no cover - C/builtin callables
+            continue
+        collected.append(source)
+        for node in ast.walk(ast.parse(textwrap.dedent(source))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute)
+                else None
+            )
+            if name is None or name in seen:
+                continue
+            seen.add(name)
+            target = getattr(module, name, None)
+            if inspect.isfunction(target) and inspect.getmodule(target) is module:
+                frontier.append(target)
+    return "\n".join(collected)
+
+
 def test_every_portal_write_route_declares_a_capability():
     """A new mutating portal endpoint must SAY what it needs.
 
@@ -402,11 +448,10 @@ def test_every_portal_write_route_declares_a_capability():
     rule is enforced by enumerating the app's real routes, not by trusting a
     registry that has to be kept in step by hand.
     """
-    import inspect
-
     from app.main import app
 
-    missing: list[str] = []
+    ungated: list[str] = []
+    unscoped: list[str] = []
     for route in app.routes:
         path = getattr(route, "path", "")
         methods = getattr(route, "methods", set()) or set()
@@ -418,16 +463,27 @@ def test_every_portal_write_route_declares_a_capability():
         # lives in the sign-in path (step 4 of docs/LEAVER_ACCESS_PLAN.md).
         if path.startswith("/api/v1/portal/auth"):
             continue
-        source = inspect.getsource(route.endpoint)
+        source = _gate_source(route.endpoint)
         if "resolve_member_employee" not in source:
-            # Nothing member-scoped happens here at all — e.g. a static list.
-            continue
-        if "requires=" not in source:
-            missing.append(f"{sorted(writes)} {path}")
+            unscoped.append(f"{sorted(writes)} {path}")
+        elif "requires=" not in source:
+            ungated.append(f"{sorted(writes)} {path}")
 
-    assert not missing, (
+    # **Fails CLOSED.** The old version skipped any route whose own body didn't
+    # name `resolve_member_employee`, on the assumption that nothing
+    # member-scoped happened there — so the three `/portal/enrollment` writes,
+    # which scope through the `_require_open_enrollment` helper, were never
+    # checked at all, and a new route could escape the gate just by moving the
+    # call one function away. `_gate_source` follows same-module helpers, and a
+    # route that still shows no scoping is now a failure to be explained rather
+    # than a silent pass.
+    assert not unscoped, (
+        "portal write routes that never reach resolve_member_employee — they "
+        f"are scoped by nothing, or by something this test cannot see: {unscoped}"
+    )
+    assert not ungated, (
         "portal write routes that call resolve_member_employee without an "
-        f"explicit `requires=`: {missing}"
+        f"explicit `requires=`: {ungated}"
     )
 
 
@@ -496,6 +552,81 @@ def test_the_batched_map_agrees_with_the_single_resolver():
                 staff_id=ref.staff_id, today=today,
             )
             assert batched[ref.id] == single, ref.id
+
+
+def test_the_batched_map_uses_the_same_binding_rule():
+    """The OTHER arm of the binding rule: an unclaimed row matched on staff id.
+
+    `access_map` cannot call `locate_employee` (it must not query per row), so
+    it is the one place the rule is spelled a second time — and the two halves
+    it has to reproduce are the ones a narrowed query is most likely to lose:
+    an unclaimed row found by staff id counts, and a REPEATED staff id counts
+    for nobody (the same ambiguity `resolve_member_employee` raises 409 on,
+    which an access check must not resolve by picking one).
+    """
+    from app.models import MemberAccount
+    from app.services.member_access import access_map, locate_employee
+
+    unclaimed = _account("acc-bind-unclaimed", "X-bind-unclaimed")
+    ambiguous = _account("acc-bind-ambiguous", "X-bind-ambiguous")
+    today = date(2029, 7, 1)
+    with SessionLocal() as s:
+        s.add(
+            # No `member_account_id` — a new year's roster before anyone signed
+            # in against it.
+            Employee(
+                id="emp-bind-unclaimed", client_id="c1",
+                policy_year_id="py-access", staff_id="X-bind-unclaimed",
+                status=EMPLOYEE_STATUS_ACTIVE, attribute_values={},
+            )
+        )
+        for n in (1, 2):
+            s.add(
+                Employee(
+                    id=f"emp-bind-dup{n}", client_id="c1",
+                    policy_year_id="py-access", staff_id="X-bind-ambiguous",
+                    status=EMPLOYEE_STATUS_ACTIVE, attribute_values={},
+                )
+            )
+        s.commit()
+
+    try:
+        with SessionLocal() as s:
+            found, amb = locate_employee(
+                s, policy_year_id="py-access",
+                member_account_id=unclaimed.id, staff_id=unclaimed.staff_id,
+            )
+            assert found is not None and not amb
+            assert locate_employee(
+                s, policy_year_id="py-access",
+                member_account_id=ambiguous.id, staff_id=ambiguous.staff_id,
+            ) == (None, True)
+
+            refs = [unclaimed, ambiguous]
+            batched = access_map(s, "c1", refs, today=today)
+            for ref in refs:
+                single = access_for_account(
+                    s, member_account_id=ref.id, client_id="c1",
+                    staff_id=ref.staff_id, today=today,
+                )
+                assert batched[ref.id] == single, ref.id
+            # Asking about ONE account must not change its answer — the batch
+            # narrows its roster query to the accounts it was handed, and both
+            # arms of the rule have to survive that narrowing.
+            assert access_map(s, "c1", [unclaimed], today=today) == {
+                unclaimed.id: batched[unclaimed.id]
+            }
+    finally:
+        with SessionLocal() as s:
+            s.query(Employee).filter(
+                Employee.id.in_(
+                    ["emp-bind-unclaimed", "emp-bind-dup1", "emp-bind-dup2"]
+                )
+            ).delete(synchronize_session=False)
+            s.query(MemberAccount).filter(
+                MemberAccount.id.in_([unclaimed.id, ambiguous.id])
+            ).delete(synchronize_session=False)
+            s.commit()
 
 
 def test_the_batched_map_sees_a_live_claim():

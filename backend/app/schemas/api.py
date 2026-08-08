@@ -283,16 +283,28 @@ class PolicyYearUpdate(BaseModel):
 
 
 class PolicyYearCopyIn(BaseModel):
-    """Create a new benefit year and clone a source year's configuration into it."""
+    """Create a new benefit year and clone a source year's configuration into it.
+
+    Both deadline settings are OPTIONAL overrides: omitted, the source year's
+    value carries over. `leaver_access_days` is accepted for the same reason
+    `claim_grace_period_days` is — they are the same kind of per-year setting,
+    and honouring one while silently dropping the other made a caller that set
+    the run-off on copy compile clean and lose the value.
+    """
 
     start_date: date
     end_date: date
     claim_grace_period_days: int | None = None
+    leaver_access_days: int | None = None
 
     @model_validator(mode="after")
     def _check_range(self) -> PolicyYearCopyIn:
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
+        if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
+            raise ValueError("claim_grace_period_days must be zero or positive")
+        if self.leaver_access_days is not None and self.leaver_access_days < 0:
+            raise ValueError("leaver_access_days must be zero or positive")
         return self
 
 

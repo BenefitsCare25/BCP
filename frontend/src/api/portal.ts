@@ -456,9 +456,14 @@ export interface CoverageOptions {
   policy_year_end: string;
   /** The dates an INSURED claim may be incurred on — the policy year clamped
    *  to this member's own cover (a leaver's ends on their last day). Served by
-   *  the same function submit enforces, never re-derived here. */
-  claimable_from: string;
-  claimable_to: string;
+   *  the same function submit enforces, never re-derived here.
+   *
+   *  NULL when that window refuses every date (cover that ended before the
+   *  period began — a leaver still inside their run-off against a flex scheme
+   *  that starts mid-year). `insured` is empty in that case and `claim_block`
+   *  says why; the bounds must never reach the date input as `min > max`. */
+  claimable_from: string | null;
+  claimable_to: string | null;
   insured: InsuredClaimOption[];
   flex: {
     currency: string | null;
@@ -471,6 +476,10 @@ export interface CoverageOptions {
     claimable_from: string | null;
     claimable_to: string | null;
   } | null;
+  /** Why a claim kind was withheld — the member's cover ended before the period
+   *  began, so its options are empty and its window null. Worded server-side
+   *  (`ClaimWindow.empty_note`), which is also the 422 submit would raise. */
+  claim_block: string | null;
   dependants: { id: string; name: string | null; relationship: string | null }[];
   currencies: string[];
   hospitals: { name: string; sector: "govt" | "private" }[];

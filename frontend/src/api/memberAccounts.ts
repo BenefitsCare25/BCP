@@ -36,6 +36,10 @@ export interface MemberAccount {
     | "unknown"
     | null;
   access_ends_on: string | null;
+  /** The stated last day of service, when the roster gives one. A member
+   *  terminated with a last day still AHEAD is `active` today and loses
+   *  everything on a known date — this is the only warning of that. */
+  last_day: string | null;
   /** What THIS member should be told to type, resolved server-side from the
    *  company's "Login username" setting. Never re-derive it here: the setting
    *  lives behind a firm-admin-only endpoint this page can't call. */

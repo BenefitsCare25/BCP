@@ -28,6 +28,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.clock import business_date, stamp_for_day
+from app.core.clock import today as business_today
 from app.models import Claim, Client, StoredDocument
 from app.models.claim import (
     CLAIM_STATUS_PAID,
@@ -193,9 +195,21 @@ def document_dates(db: Session, claim_ids: list[str]) -> dict[str, DocumentDates
 
 
 def _as_date(value: datetime | date | None) -> date | None:
+    """A stored value as the calendar date a broker reads it on.
+
+    Through `clock.business_date`, never a bare `.date()`: every date this
+    returns is subtracted from another date below to produce an SLA day count,
+    and `_insurer_clock_stop` supplies the other end from `business_today()`. A
+    UTC-derived start against a Singapore-derived end is off by one for any
+    instant after 16:00 UTC. `date` columns (`paid_on`, `insurer_deadline_on`)
+    are already calendar dates and pass straight through.
+
+    Dispatch dates a broker STATES are written by `stamp_for_day` (noon UTC),
+    so they read back as the day stated under either convention.
+    """
     if value is None:
         return None
-    return value.date() if isinstance(value, datetime) else value
+    return business_date(value) if isinstance(value, datetime) else value
 
 
 def servicer_days(claim: Claim, docs: DocumentDates | None) -> int | None:
@@ -228,8 +242,12 @@ def _insurer_clock_stop(claim: Claim) -> date:
     if claim.paid_on is not None:
         return claim.paid_on
     if claim.status in _CLOSED_UNPAID_STATUSES:
-        return _as_date(claim.decided_at) or date.today()
-    return date.today()
+        return _as_date(claim.decided_at) or business_today()
+    # Business date, not the UTC one (`core/clock.py`): on a UTC server every
+    # open claim's age would tick over at 8am Singapore, so the overdue list a
+    # broker works disagreed with itself for the first hour of the day — and it
+    # has to be the same calendar `_as_date` reads the other end in.
+    return business_today()
 
 
 def insurer_days(claim: Claim) -> int | None:
@@ -270,7 +288,12 @@ def send_to_insurer(
     """
     now = datetime.now(UTC)
     if sent_on is not None:
-        claim.sent_to_insurer_at = datetime.combine(sent_on, now.timetz())
+        # A STATED date, widened by `stamp_for_day` — never by the current
+        # wall clock. Combining it with `now.timetz()` made the stored
+        # instant's calendar date depend on the hour it was keyed: a dispatch
+        # recorded after 16:00 UTC read as the FOLLOWING day to any reader in
+        # Singapore, silently moving the start of the insurer's SLA clock.
+        claim.sent_to_insurer_at = stamp_for_day(sent_on)
     else:
         claim.sent_to_insurer_at = now
     claim.sent_to_insurer_by = user_id
@@ -430,12 +453,10 @@ def apply_settlement_amendment(claim: Claim, body, present: frozenset[str] | set
         )
 
     if "sent_to_insurer_on" in present:
-        # Keep the wall-clock component so the stored value stays a real
-        # timestamp; only the DATE is what anyone reads off it.
+        # Same widening as `send_to_insurer` — only the DATE was ever stated,
+        # and `stamp_for_day` is what makes it read back as that date.
         claim.sent_to_insurer_at = (
-            datetime.combine(sent, datetime.now(UTC).timetz())
-            if sent is not None
-            else None
+            stamp_for_day(sent) if sent is not None else None
         )
     if "insurer_deadline_on" in present:
         claim.insurer_deadline_on = deadline

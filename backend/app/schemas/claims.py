@@ -711,10 +711,21 @@ class CoverageOptionsOut(BaseModel):
     # form can state the bound up front instead of surfacing a 422 after the
     # member has filled the whole thing in — and so a leaver, whose window ends
     # on their last day, is told that rather than discovering it.
-    claimable_from: str
-    claimable_to: str
+    #
+    # **NULL when the window refuses every date** (`ClaimWindow.is_empty` — a
+    # leaver whose cover ended before the period began). An inverted range
+    # served verbatim reaches the form as `min > max` on the date input and
+    # tells the member to "pick a date between 15 Jul 2026 and 1 Jun 2026" for
+    # every date they try; `claim_block` carries the real reason instead.
+    claimable_from: str | None = None
+    claimable_to: str | None = None
     insured: list[InsuredClaimOption] = Field(default_factory=list)
     flex: FlexClaimOptions | None = None
+    # Why a claim kind was withheld from this response — the member's cover
+    # ended before the period began, so its options are empty and its window is
+    # null. `None` in the ordinary case. Worded once, in
+    # `ClaimWindow.empty_note`, which is also the 422 submit raises.
+    claim_block: str | None = None
     dependants: list[dict[str, Any]] = Field(default_factory=list)  # {id, name, relationship}
     # Single source of truth for the currency picker (claim_intake.py).
     currencies: list[str] = Field(default_factory=list)

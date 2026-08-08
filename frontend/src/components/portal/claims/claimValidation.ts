@@ -87,8 +87,12 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
   if (!v.incurredDate) {
     errs.incurred_date = "Enter the visit date.";
   } else if (
-    v.incurredDate < v.claimableFrom ||
-    v.incurredDate > v.claimableTo
+    // Both bounds or neither: an empty pair means the server served no window
+    // for this kind (`claim_block`), and range-checking against "" produced
+    // "Pick a date between — and —" for every date the member tried.
+    v.claimableFrom &&
+    v.claimableTo &&
+    (v.incurredDate < v.claimableFrom || v.incurredDate > v.claimableTo)
   ) {
     errs.incurred_date = `Pick a date between ${formatDay(v.claimableFrom)} and ${formatDay(v.claimableTo)} — that's the period your benefits cover.`;
   } else if (v.incurredDate > v.today) {

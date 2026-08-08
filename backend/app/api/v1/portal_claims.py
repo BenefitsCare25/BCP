@@ -175,6 +175,21 @@ def build_coverage_options(
     on the form for the selected claim type. A dependant claimant falls back to
     the policyholder's ID (same convention as the panel cards)."""
     attrs = employee.attribute_values or {}
+    # What the member may date a claim, resolved by the SAME function submit
+    # enforces — so the form can state the bound instead of surfacing a 422
+    # after the member has filled everything in. A leaver's window ends on their
+    # last day (`services/claims.py::claim_period_window`).
+    #
+    # **A window that refuses every date is served as NO window**, and its claim
+    # options are dropped with it. `is_empty` is reachable while the member
+    # still holds CLAIM — a run-off leaver who left in June against a flex
+    # scheme starting 15 July — and serving `start`/`end` verbatim there hands
+    # the date input `min > max`, so the form refuses every date with a sentence
+    # naming a range that runs backwards. Nothing to pick and one plain reason
+    # beats a control that cannot be satisfied.
+    insured_window = claim_period_window(db, year, CLAIM_KIND_INSURED, employee)
+    insured_open = not insured_window.is_empty
+    claim_block = None if insured_open else insured_window.empty_note
     # Resolve every coverage product's insurer in ONE batch (not per line) so
     # the member's insurer ID can be shown for the selected claim type.
     products_by_code = resolve_products_by_codes(
@@ -182,7 +197,7 @@ def build_coverage_options(
     )
     insurers_by_product = insurer_map(db, year.id, products_by_code.values())
     insured = []
-    for line in statement.coverage:
+    for line in statement.coverage if insured_open else ():
         profile = claim_profile_for(line.product_code)
         # Products settled outside the claim form (Major Medical top-up, term
         # life / personal accident / critical illness) never appear in the
@@ -234,41 +249,45 @@ def build_coverage_options(
     flex = None
     if statement.flex is not None:
         flex_window = claim_period_window(db, year, CLAIM_KIND_FLEX, employee)
-        flex = FlexClaimOptions(
-            currency=statement.flex.currency,
-            wallet_amount=statement.flex.wallet_amount,
-            flex_balance=statement.flex.flex_balance,
-            categories=[
-                FlexClaimCategoryOption(
-                    name=c.name, sub_limit=c.sub_limit, note=c.note
-                )
-                for c in statement.flex.benefit_categories
-                if c.claimable
-            ],
-            doc_slots=_slots(
-                required_doc_slots(None, None, claim_kind=CLAIM_KIND_FLEX)
-            ),
-            # The flex scheme's own effective window, member-clamped. Served
-            # separately because it genuinely differs — CDL's scheme starts
-            # 15 Jul against a January year — and the form used the policy-year
-            # span for both kinds, so a flex claim inside the year but before
-            # the scheme started passed the form and was refused at submit.
-            claimable_from=flex_window.start.isoformat(),
-            claimable_to=flex_window.end.isoformat(),
-        )
+        if flex_window.is_empty:
+            # Withheld for the same reason as the insured kind above. Reported
+            # only when insured had nothing to say — the two share one cause
+            # (cover that ended before the period began), so a second sentence
+            # would only restate it.
+            claim_block = claim_block or flex_window.empty_note
+        else:
+            flex = FlexClaimOptions(
+                currency=statement.flex.currency,
+                wallet_amount=statement.flex.wallet_amount,
+                flex_balance=statement.flex.flex_balance,
+                categories=[
+                    FlexClaimCategoryOption(
+                        name=c.name, sub_limit=c.sub_limit, note=c.note
+                    )
+                    for c in statement.flex.benefit_categories
+                    if c.claimable
+                ],
+                doc_slots=_slots(
+                    required_doc_slots(None, None, claim_kind=CLAIM_KIND_FLEX)
+                ),
+                # The flex scheme's own effective window, member-clamped. Served
+                # separately because it genuinely differs — CDL's scheme starts
+                # 15 Jul against a January year — and the form used the
+                # policy-year span for both kinds, so a flex claim inside the
+                # year but before the scheme started passed the form and was
+                # refused at submit.
+                claimable_from=flex_window.start.isoformat(),
+                claimable_to=flex_window.end.isoformat(),
+            )
 
-    # What the member may date a claim, resolved by the SAME function submit
-    # enforces — so the form can state the bound instead of surfacing a 422
-    # after the member has filled everything in. A leaver's window ends on their
-    # last day (`services/claims.py::claim_period_window`).
-    insured_window = claim_period_window(db, year, CLAIM_KIND_INSURED, employee)
     return CoverageOptionsOut(
         policy_year_start=year.start_date.isoformat(),
         policy_year_end=year.end_date.isoformat(),
-        claimable_from=insured_window.start.isoformat(),
-        claimable_to=insured_window.end.isoformat(),
+        claimable_from=insured_window.start.isoformat() if insured_open else None,
+        claimable_to=insured_window.end.isoformat() if insured_open else None,
         insured=insured,
         flex=flex,
+        claim_block=claim_block,
         dependants=[
             {"id": d.id, "name": d.name, "relationship": d.relationship}
             for d in statement.dependants
@@ -646,6 +665,12 @@ async def upload_my_claim_document(
     # must still be able to do it (`services/member_access.py`).
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = _own_claim(db, claim_id, employee.id)
+    # Same split as `submit_my_claim`: adding evidence to a DRAFT is building a
+    # new claim, so it additionally needs CLAIM. `MEMBER_EDITABLE_STATUSES`
+    # includes `draft`, so RESPOND alone let a `settling` member pile documents
+    # onto a stale draft they can neither submit nor delete.
+    if claim.status == CLAIM_STATUS_DRAFT:
+        assert_member_capability(db, employee, Capability.CLAIM)
     if claim.status not in MEMBER_EDITABLE_STATUSES:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

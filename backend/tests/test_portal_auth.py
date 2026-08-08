@@ -43,6 +43,11 @@ EMP_NO_EMAIL = "00000000-0000-0000-0000-00000000pa03"
 EMP_NO_EMAIL_2 = "00000000-0000-0000-0000-00000000pa04"
 ALICE_EMAIL = "alice@acme.test"
 DEMO_SLUG = "demo"
+# The portal subdomain, stood in for by a header off-prod. `verify` requires it
+# for the same reason `/login` does: it routes the Postgres search_path to the
+# firm schema the leaver check reads, and it pins which company's account a
+# mailed code may be redeemed against.
+_TENANT = {"X-Inspro-Tenant-Slug": DEMO_SLUG}
 
 
 def _broker() -> CurrentUser:
@@ -196,7 +201,9 @@ def test_invite_then_otp_sign_in_flow(broker_client: TestClient, anon_client: Te
     assert code is not None and len(code) == 6  # dev+mock exposes debug_code
 
     res = anon_client.post(
-        "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": code}
+        "/api/v1/portal/auth/verify",
+        json={"email": ALICE_EMAIL, "code": code},
+        headers=_TENANT,
     )
     assert res.status_code == 200, res.text
     out = res.json()
@@ -299,7 +306,9 @@ def test_verify_wrong_code_401(anon_client: TestClient):
     _clear_otps()
     _request_code(anon_client)
     res = anon_client.post(
-        "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": "000000"}
+        "/api/v1/portal/auth/verify",
+        json={"email": ALICE_EMAIL, "code": "000000"},
+        headers=_TENANT,
     )
     assert res.status_code == 401
 
@@ -311,12 +320,16 @@ def test_verify_lockout_after_max_attempts(anon_client: TestClient):
     wrong = "999999" if code != "999999" else "111111"
     for _ in range(5):
         res = anon_client.post(
-            "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": wrong}
+            "/api/v1/portal/auth/verify",
+            json={"email": ALICE_EMAIL, "code": wrong},
+            headers=_TENANT,
         )
         assert res.status_code == 401
     # The real code was burned by the failed attempts.
     res = anon_client.post(
-        "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": code}
+        "/api/v1/portal/auth/verify",
+        json={"email": ALICE_EMAIL, "code": code},
+        headers=_TENANT,
     )
     assert res.status_code == 401
 
@@ -338,7 +351,9 @@ def test_verify_expired_code_401(anon_client: TestClient):
         )
         session.commit()
     res = anon_client.post(
-        "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": "123456"}
+        "/api/v1/portal/auth/verify",
+        json={"email": ALICE_EMAIL, "code": "123456"},
+        headers=_TENANT,
     )
     assert res.status_code == 401
 
@@ -347,11 +362,15 @@ def test_code_single_use(anon_client: TestClient):
     _clear_otps()
     code = _request_code(anon_client)
     ok = anon_client.post(
-        "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": code}
+        "/api/v1/portal/auth/verify",
+        json={"email": ALICE_EMAIL, "code": code},
+        headers=_TENANT,
     )
     assert ok.status_code == 200
     replay = anon_client.post(
-        "/api/v1/portal/auth/verify", json={"email": ALICE_EMAIL, "code": code}
+        "/api/v1/portal/auth/verify",
+        json={"email": ALICE_EMAIL, "code": code},
+        headers=_TENANT,
     )
     assert replay.status_code == 401
 
@@ -630,6 +649,7 @@ def test_verify_activates_only_on_success(anon_client: TestClient):
     res = anon_client.post(
         "/api/v1/portal/auth/verify",
         json={"email": "carol@acme.test", "code": "123456"},
+        headers=_TENANT,
     )
     assert res.status_code == 401
     with SessionLocal() as session:

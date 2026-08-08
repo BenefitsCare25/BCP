@@ -115,6 +115,7 @@ def _with_access(out: MemberAccountOut, access) -> MemberAccountOut:
         out.access_ends_on = (
             access.access_ends_on.isoformat() if access.access_ends_on else None
         )
+        out.last_day = access.last_day.isoformat() if access.last_day else None
     return out
 
 

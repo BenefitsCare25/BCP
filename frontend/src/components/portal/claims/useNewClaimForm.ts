@@ -289,11 +289,19 @@ export function useNewClaimForm() {
     (effectiveKind === "flex" ? flexWindow?.claimable_to : null) ??
     options.data?.claimable_to ??
     "";
+  // Both bounds are NULL together when the server has no claimable window to
+  // offer for this kind — a leaver whose cover ended before the period began.
+  // It withholds that kind's options too, so `claimBlock` is what the page has
+  // left to say; the empty bounds here just keep the date input unconstrained
+  // rather than handing it `min > max`.
+  const claimBlock = options.data?.claim_block ?? null;
   // Claims can't be incurred in the future — clamp to today when today falls
   // inside the claimable window (a seeded future-dated year keeps its own span).
   const today = todayISO();
   const maxIncurred =
-    today >= claimableFrom && today <= claimableTo ? today : claimableTo;
+    claimableFrom && claimableTo && today >= claimableFrom && today <= claimableTo
+      ? today
+      : claimableTo;
 
   // Fields that depend on the chosen claim type — reset when the type changes.
   const resetTypeFields = () => {
@@ -664,6 +672,7 @@ export function useNewClaimForm() {
     walletCurrency,
     claimableFrom,
     maxIncurred,
+    claimBlock,
     // selection
     dependantId,
     selection,

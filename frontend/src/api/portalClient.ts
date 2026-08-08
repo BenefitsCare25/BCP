@@ -4,7 +4,7 @@
  * never `X-Inspro-Client` — a member is pinned to one client server-side).
  * A 401 clears the session and sends the member back to the portal sign-in.
  */
-import { errorFromText, parseErrorText } from "@/lib/errors";
+import { errorFromText } from "@/lib/errors";
 import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
 
@@ -30,22 +30,66 @@ function authHeader(): Record<string, string> {
  * session goes the way it does on a 401. Distinguished from the other portal
  * 403 (`coverage_ended`, an ordinary refusal a signed-in member reads and works
  * around): ending the session on every capability refusal would sign a member
- * out for tapping the panel-card tab. */
-function accessEnded(text: string): boolean {
+ * out for tapping the panel-card tab.
+ *
+ * Returns the server's own sentence, which carries the DATE their access ended
+ * — the one fact a member needs and cannot look up. `""` when the code matches
+ * but no message came with it; `null` when this is some other 403. */
+function accessEndedMessage(text: string): string | null {
   try {
     const detail = (JSON.parse(text) as { detail?: unknown }).detail;
-    return (
-      !!detail &&
-      typeof detail === "object" &&
-      (detail as { code?: unknown }).code === "access_ended"
-    );
+    if (!detail || typeof detail !== "object") return null;
+    const { code, message } = detail as { code?: unknown; message?: unknown };
+    if (code !== "access_ended") return null;
+    return typeof message === "string" ? message : "";
   } catch {
-    return false;
+    return null;
   }
 }
 
-function handleAccessEnded(): never {
+/** Where the refusal's sentence waits out the full page load below.
+ *
+ * `sessionStorage`, because the redirect is a `window.location.assign` and
+ * nothing in memory survives it. Not the query string: this is a whole sentence
+ * naming a date, and a URL is a bad place to put prose the member will read. */
+const ENDED_MESSAGE_KEY = "inspro.portal.access-ended-message";
+
+/** Read once per page load, so a second call in the same load still answers.
+ *  `undefined` = not yet read; `null` = read, and there was nothing. */
+let consumed: string | null | undefined;
+
+/** The refusal the member was last redirected on. Clears the store, but keeps
+ *  answering for the rest of THIS page load.
+ *
+ *  Not a bare read-and-delete: the sign-in page takes this in a `useState`
+ *  initialiser, and StrictMode invokes those twice in development — a strict
+ *  one-shot handed the second call `null`, so the whole point of this (the
+ *  server's dated sentence) showed up only in production builds. */
+export function takeAccessEndedMessage(): string | null {
+  if (consumed !== undefined) return consumed;
+  try {
+    consumed = sessionStorage.getItem(ENDED_MESSAGE_KEY);
+    sessionStorage.removeItem(ENDED_MESSAGE_KEY);
+  } catch {
+    consumed = null; // storage blocked (private mode) — generic line still shows
+  }
+  return consumed || null;
+}
+
+function handleAccessEnded(message: string): never {
   usePortalSession.getState().clearSession();
+  // Carried across the reload so the sign-in page can say "your access ended on
+  // 30 June" rather than the undated line it used to hardcode — the server has
+  // already worded this, including the date, and discarding it made the member
+  // ask their HR team a question the screen could have answered.
+  if (message) {
+    try {
+      sessionStorage.setItem(ENDED_MESSAGE_KEY, message);
+      consumed = undefined; // a new refusal supersedes anything already read
+    } catch {
+      /* storage blocked — fall back to the generic line */
+    }
+  }
   // `?ended` so the sign-in page can say why they are back here instead of
   // showing an empty form that will refuse them again. Appended to a raw URL
   // rather than routed through `navigate({search})` — the router JSON-encodes
@@ -55,6 +99,30 @@ function handleAccessEnded(): never {
   const target = portalPath(currentPortalTenantSlug(), "/sign-in");
   window.location.assign(`${target}?ended`);
   throw new PortalUnauthorizedError("Portal access has ended");
+}
+
+/** **The ONE place a failed portal response becomes an error.**
+ *
+ * Every fetch path here — JSON, blob, upload — has to end a dead session on a
+ * 401 and end it again on an `access_ended` 403, and the three had grown three
+ * copies of that decision. They had already drifted: `blob` and `upload` threw
+ * a bare `Error`, losing the typed errors (`ConflictDetailError` and friends)
+ * that pages branch on, so the same backend refusal read differently depending
+ * on which helper happened to fetch it.
+ */
+async function failed(
+  res: Response,
+  opts: { credential?: boolean } = {},
+): Promise<never> {
+  // A `credential` call is one whose BODY carried a value the member just typed,
+  // where a 401 means "that value is wrong" and must reach the form.
+  if (res.status === 401 && !opts.credential) return handleUnauthorized();
+  const text = await res.text();
+  if (res.status === 403) {
+    const ended = accessEndedMessage(text);
+    if (ended !== null) return handleAccessEnded(ended);
+  }
+  throw errorFromText(res.status, text, res.statusText);
 }
 
 function handleUnauthorized(): never {
@@ -91,17 +159,9 @@ async function request<T>(
       ...init.headers,
     },
   });
-  if (res.status === 401 && !opts.credential) return handleUnauthorized();
-  if (!res.ok) {
-    if (res.status === 403) {
-      const text = await res.text();
-      if (accessEnded(text)) return handleAccessEnded();
-      throw errorFromText(403, text, res.statusText);
-    }
-    // Coded 409s (e.g. unpriced_elections / flex_overdrawn on enrollment
-    // submit) surface as ConflictDetailError so pages can offer a choice.
-    throw errorFromText(res.status, await res.text(), res.statusText);
-  }
+  // Coded 409s (e.g. unpriced_elections / flex_overdrawn on enrollment submit)
+  // surface as ConflictDetailError so pages can offer a choice — see `failed`.
+  if (!res.ok) return failed(res, opts);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -132,12 +192,7 @@ export const portalApi = {
    * the blob into an object URL. */
   blob: async (path: string): Promise<Blob> => {
     const res = await fetch(`${API_BASE}${path}`, { headers: authHeader() });
-    if (res.status === 401) return handleUnauthorized();
-    if (!res.ok) {
-      const text = await res.text();
-      if (res.status === 403 && accessEnded(text)) return handleAccessEnded();
-      throw new Error(parseErrorText(text, res.statusText));
-    }
+    if (!res.ok) return failed(res);
     return await res.blob();
   },
   /** Multipart upload — no Content-Type so the browser sets the boundary. */
@@ -147,12 +202,7 @@ export const portalApi = {
       body: formData,
       headers: authHeader(),
     });
-    if (res.status === 401) return handleUnauthorized();
-    if (!res.ok) {
-      const text = await res.text();
-      if (res.status === 403 && accessEnded(text)) return handleAccessEnded();
-      throw new Error(parseErrorText(text, res.statusText));
-    }
+    if (!res.ok) return failed(res);
     return (await res.json()) as T;
   },
   /** Unauthenticated call for the OTP flow — a 401 here is a wrong/expired

@@ -73,15 +73,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/portal/auth", tags=["portal-auth"])
 
 
-def _accounts_for_email(db: Session, email: str) -> list[MemberAccount]:
-    return list(
-        db.execute(
-            select(MemberAccount).where(
-                MemberAccount.email == email,
-                MemberAccount.status != MEMBER_STATUS_DISABLED,
-            )
-        ).scalars().all()
-    )
+def _accounts_for_email(
+    db: Session, email: str, *, client_id: str | None = None
+) -> list[MemberAccount]:
+    """Non-disabled accounts on this email, optionally within ONE company.
+
+    `request-code` is anonymous and matches across companies (an address can
+    exist under several); `verify` passes `client_id` so the code is redeemed
+    against the company whose portal the member is actually on — see the
+    tenant note on `verify_code`.
+    """
+    conditions = [
+        MemberAccount.email == email,
+        MemberAccount.status != MEMBER_STATUS_DISABLED,
+    ]
+    if client_id is not None:
+        conditions.append(MemberAccount.client_id == client_id)
+    return list(db.execute(select(MemberAccount).where(*conditions)).scalars().all())
 
 
 @router.post(
@@ -124,6 +132,7 @@ def request_code(
 def verify_code(
     request: Request,
     body: OtpVerifyIn,
+    tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
 ):
     """Verify an emailed sign-in code.
@@ -134,6 +143,16 @@ def verify_code(
     straight from here let a member whose company requires 2FA skip the second
     factor entirely by choosing the emailed-code route (no `response_model`, so
     the challenge shapes can be returned like `/login` does).
+
+    **`require_portal_tenant` is load-bearing, exactly as it is on `/login`.**
+    It routes the Postgres `search_path` to the company's firm schema, and
+    `_issue_member_login` below reads `policy_years`, `employees` and `claims` —
+    all TENANT tables. Unrouted, every one of them resolves against `public`,
+    which holds no tenant rows: the leaver check came back `unknown` and this
+    route signed in members the password route refuses. It also scopes the
+    lookup to ONE company, so a code minted for an address that exists under
+    several can only be redeemed on the portal it was mailed for — otherwise the
+    matched account and the routed schema could be different firms'.
     """
     email = body.email.strip().lower()
     code_hash = hash_otp_code(body.code.strip())
@@ -144,7 +163,7 @@ def verify_code(
 
     matched: MemberAccount | None = None
     live_codes: list[tuple[MemberAccount, MemberOtpCode]] = []
-    for account in _accounts_for_email(db, email):
+    for account in _accounts_for_email(db, email, client_id=tenant.client_id):
         rows = db.execute(
             select(MemberOtpCode)
             .where(
@@ -175,8 +194,15 @@ def verify_code(
             db.commit()
         raise invalid
 
-    # The code is already consumed above, so neither challenge below can be
-    # replayed with it.
+    # **Commit the consumption before anything else can undo it.** Marking
+    # `consumed_at` in the session is not enough: `_issue_member_login` rolls
+    # back on a leaver refusal (it has to — `member_set_password` reaches it
+    # holding a written credential), and that rollback reverted the consumption
+    # too, leaving a correctly-guessed code live for the rest of its TTL. With
+    # this commit the code is spent the moment it is matched, so neither
+    # challenge below nor a refusal can replay it.
+    db.commit()
+
     if CRED.rotation_due(matched):
         token = issue_member_set_password_token(
             matched.id, CRED.credential_version(matched)

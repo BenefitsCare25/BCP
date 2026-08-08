@@ -55,6 +55,7 @@ import { HeadRailProvider, useHeadRailWidth } from "./leaf/HeadRail";
 import { portalPath } from "@/lib/tenant";
 import { useCompany } from "@/components/portal/useCompany";
 import { AccessNotice } from "./AccessNotice";
+import { holds, type Capability } from "./capabilities";
 
 /** Six destinations on desktop, five in the phone dock — "Home" is the dock's
  * first slot and Coverage is reached from the tiles that summarise it, so the
@@ -74,15 +75,13 @@ const NAV: {
   icon: ComponentType<{ className?: string }>;
   /** In the phone dock. Coverage is not — it is one tap from the home tiles. */
   dock: boolean;
-  /** The SERVED capability this destination needs, when it needs one. Matched
-   *  against `PortalMe.access.capabilities` — never against `state`, because
-   *  which capabilities a state carries is the server's rule and a copy of that
-   *  table here would go on showing the wrong tab the day it changes.
+  /** The SERVED capability this destination needs, when it needs one — see
+   *  `./capabilities`, which owns the vocabulary and the filter rule.
    *
    *  Only the destinations that actually close are listed. Home and Claims stay
    *  for as long as a member can sign in at all: Home is where the notice
    *  explaining the change is read, and Claims is what a leaver comes back for. */
-  needs?: string;
+  needs?: Capability;
 }[] = [
   { label: "Home", short: "Home", sub: "", icon: LayoutGrid, dock: true },
   {
@@ -138,15 +137,11 @@ export function PortalShell() {
   const { data: me } = usePortalMe();
   const company = useCompany();
   const { data: security } = useMemberSecurityStatus();
-  // The destinations this member still holds. **Read from the SERVED list, and
-  // only once `me` has loaded** — an empty `capabilities` while the query is in
-  // flight would blink the whole nav away and back on every cold load, so an
-  // unresolved `me` shows everything (which is what it did before this existed,
-  // and the endpoints refuse anything they must).
+  // The destinations this member still holds, filtered by the ONE shared rule
+  // (`./capabilities`) the preview frame and the home mosaic also close on.
   const nav = useMemo(() => {
     const held = me?.access.capabilities;
-    if (!held) return NAV;
-    return NAV.filter((item) => !item.needs || held.includes(item.needs));
+    return NAV.filter((item) => holds(held, item.needs));
   }, [me]);
   // The badge's figure. Deliberately NOT a new field on `PortalMe` — that was
   // tried and removed (schemas/portal.py), because it puts a COUNT query on the

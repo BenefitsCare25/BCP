@@ -257,7 +257,9 @@ def test_otp_verify_does_not_bypass_mfa(api: TestClient):
     assert code, "dev+mock should surface the code for local sign-in"
 
     res = api.post(
-        "/api/v1/portal/auth/verify", json={"email": email, "code": code}
+        "/api/v1/portal/auth/verify",
+        json={"email": email, "code": code},
+        headers=_tenant(),
     )
     assert res.status_code == 200, res.text
     body = res.json()

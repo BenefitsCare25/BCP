@@ -45,7 +45,7 @@ from datetime import date, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
@@ -57,6 +57,12 @@ from app.services.roster_attributes import cover_end, has_left
 # to cover a normal reimbursement round-trip on treatment received just before
 # they left; `PolicyYear.leaver_access_days` overrides it per year.
 DEFAULT_LEAVER_ACCESS_DAYS = 60
+
+# "The caller did not resolve the active year", as distinct from "this client
+# HAS no active year" — which is `None`, a real answer that changes what the
+# resolvers do. Lives here rather than in `core/portal_auth` because that
+# module imports this one, and not the other way round.
+UNSET: Any = object()
 
 
 class Capability(StrEnum):
@@ -271,6 +277,7 @@ def access_for_account(
     client_id: str,
     staff_id: str,
     today: date | None = None,
+    year: Any = UNSET,
 ) -> MemberAccess:
     """The account's access WITHOUT a resolved Employee row to hand.
 
@@ -284,10 +291,16 @@ def access_for_account(
     **The lookback concludes `ended` only from a row that is actually
     terminated.** A member whose new-year roster simply hasn't landed resolves
     to `UNKNOWN`, and signs in exactly as they do today.
+
+    `year` lets `GET /portal/me` — which resolves the active year for its own
+    response anyway — hand it over instead of paying for the lookup again. The
+    default is a sentinel, not `None`: `None` means "this client has no active
+    year", which is a different thing from "the caller didn't say".
     """
     from app.core.portal_auth import active_policy_year  # circular at module load
 
-    year = active_policy_year(db, client_id)
+    if year is UNSET:
+        year = active_policy_year(db, client_id)
     employee = _locate(db, member_account_id, staff_id, year)
     if employee is not None:
         return access_of(db, employee, year, today=today)
@@ -330,8 +343,27 @@ def access_map(
     by_account: dict[str, Employee] = {}
     by_staff: dict[str, Employee | None] = {}
     if year is not None:
+        # Narrowed to the accounts ASKED ABOUT, not the whole year. The broker
+        # list does ask about all of them, but every single-account response
+        # (`_account_out` after an invite, a resend, a status flip) comes
+        # through here too, and each was hydrating all 491 of CDL's roster rows
+        # to answer about one person.
+        #
+        # Both arms of the binding rule have to be in the filter, or the
+        # narrowed query changes the ANSWER and not just the cost: the stamped
+        # match, and an unclaimed row carrying the member's staff id. Repeated
+        # staff ids still collide inside the narrowed set, so the ambiguity rule
+        # below is unaffected. Pinned by
+        # `test_the_batched_map_uses_the_same_binding_rule`.
+        wanted_ids = [a.id for a in accounts]
+        wanted_staff = [
+            s for a in accounts if (s := getattr(a, "staff_id", None))
+        ]
+        match_row = Employee.member_account_id.in_(wanted_ids)
+        if wanted_staff:
+            match_row = or_(match_row, Employee.staff_id.in_(wanted_staff))
         for emp in db.execute(
-            select(Employee).where(Employee.policy_year_id == year.id)
+            select(Employee).where(Employee.policy_year_id == year.id, match_row)
         ).scalars():
             if emp.member_account_id:
                 by_account[emp.member_account_id] = emp
@@ -407,38 +439,72 @@ def access_map(
     return resolved
 
 
-def _locate(
-    db: Session, member_account_id: str, staff_id: str, year: PolicyYear | None
-) -> Employee | None:
-    """The member's row in `year`, without stamping anything.
+def locate_employee(
+    db: Session,
+    *,
+    policy_year_id: str,
+    member_account_id: str,
+    staff_id: str | None,
+) -> tuple[Employee | None, bool]:
+    """**THE member→Employee binding rule.** Returns `(employee, ambiguous)`.
 
-    Mirrors `resolve_member_employee`'s binding rule (stamped account id, else
-    an unclaimed staff-id match) but never writes: this runs on the sign-in path,
-    where committing a binding as a side effect of a refusal would be wrong.
-    `resolve_member_employee` stays the authority for the data path, and the
-    data path always has its own row, so the two can't disagree about which
-    person a request is about.
+    The stamped `member_account_id` wins; failing that, an UNCLAIMED row
+    carrying the member's staff id (how a new benefit year's roster arrives,
+    before anyone has signed in against it). More than one such row is
+    `ambiguous` — reported rather than resolved, because what to do about it
+    differs by caller and neither answer belongs here.
+
+    One implementation, because the rule had been written out three times —
+    here, in `core/portal_auth.resolve_member_employee` (which additionally
+    stamps the binding and raises 409) and in `access_map` (which resolves a
+    whole roster from two dicts) — and only one of the three was pinned by a
+    test. Three spellings of "which person is this request about" is how the
+    gate and the data path come to disagree about who a leaver is. `access_map`
+    cannot call this (it must not query per row) and is pinned against it
+    instead, by `test_the_batched_map_uses_the_same_binding_rule`.
+
+    It never writes: this also runs on the sign-in path, where committing a
+    binding as a side effect of a refusal would be wrong.
     """
-    if year is None:
-        return None
     employee = db.execute(
         select(Employee).where(
-            Employee.policy_year_id == year.id,
+            Employee.policy_year_id == policy_year_id,
             Employee.member_account_id == member_account_id,
         )
     ).scalars().one_or_none()
     if employee is not None:
-        return employee
+        return employee, False
+    if not staff_id:
+        return None, False
     rows = db.execute(
         select(Employee).where(
-            Employee.policy_year_id == year.id,
+            Employee.policy_year_id == policy_year_id,
             Employee.staff_id == staff_id,
             Employee.member_account_id.is_(None),
         )
     ).scalars().all()
-    # Ambiguity is `resolve_member_employee`'s 409 to raise, not ours — an
-    # access check must not be the thing that decides a member has two rows.
-    return rows[0] if len(rows) == 1 else None
+    if len(rows) == 1:
+        return rows[0], False
+    return None, len(rows) > 1
+
+
+def _locate(
+    db: Session, member_account_id: str, staff_id: str, year: PolicyYear | None
+) -> Employee | None:
+    """The member's row in `year` for the ACCESS check.
+
+    Ambiguity is `resolve_member_employee`'s 409 to raise, not ours — an access
+    check must not be the thing that decides a member has two rows.
+    """
+    if year is None:
+        return None
+    employee, _ambiguous = locate_employee(
+        db,
+        policy_year_id=year.id,
+        member_account_id=member_account_id,
+        staff_id=staff_id,
+    )
+    return employee
 
 
 def _most_recent_row(

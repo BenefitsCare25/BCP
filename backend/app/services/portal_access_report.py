@@ -22,6 +22,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import AuthMfa, Client, Employee, MemberAccount, PolicyYear
 from app.models.auth import SUBJECT_MEMBER
 from app.services.insurer_reports import (
@@ -179,4 +180,4 @@ def build_portal_access_workbook(db: Session, py: PolicyYear) -> Workbook:
 
 
 def portal_access_filename(today: date | None = None) -> str:
-    return f"portal-access-report-{(today or date.today()):%Y%m%d}.xlsx"
+    return f"portal-access-report-{(today or business_today()):%Y%m%d}.xlsx"

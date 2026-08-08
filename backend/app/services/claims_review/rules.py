@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import Claim, Dependant, PolicyYear, StoredDocument
 from app.models.claim import CLAIM_KIND_FLEX, LIVE_STATUSES
 from app.models.stored_document import DOC_ENTITY_CLAIM
@@ -248,9 +249,12 @@ def _check_referral(claim: Claim) -> dict[str, Any] | None:
 
 
 def _check_future_date(claim: Claim) -> dict[str, Any] | None:
-    from datetime import date as _date
-
-    if claim.incurred_date <= _date.today():
+    # Business date, not the UTC one — the same clock submit and the served
+    # claim window use (`core/clock.py`). On UTC, every day between midnight and
+    # 8am Singapore, a member's same-morning treatment passed the form and the
+    # submit bound and then landed here flagged "after today", sending a
+    # perfectly ordinary claim to a broker for no reason.
+    if claim.incurred_date <= business_today():
         return None
     return _result(
         "Incurred date is not in the future.",

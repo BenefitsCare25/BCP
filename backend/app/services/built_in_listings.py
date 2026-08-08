@@ -25,6 +25,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import Dependant, Employee, PolicyYear
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.services.insurer_listings import (
@@ -359,4 +360,4 @@ def build_built_in_dependant_listing(
 
 
 def built_in_filename(kind: str, today: date | None = None) -> str:
-    return f"built-in-{kind}-listing-report-{(today or date.today()):%Y%m%d}.xlsx"
+    return f"built-in-{kind}-listing-report-{(today or business_today()):%Y%m%d}.xlsx"

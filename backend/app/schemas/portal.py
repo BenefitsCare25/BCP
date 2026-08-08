@@ -163,6 +163,11 @@ class MemberAccountOut(_Base):
     # — an account can be `active` and yet let nobody in.
     access_state: str | None = None
     access_ends_on: str | None = None
+    # The STATED last day of service, when the roster gives one. Served for the
+    # same reason `PortalAccessOut` serves it: a member terminated with a last
+    # day still ahead is `active` today and loses everything on a known date, so
+    # without this the broker's only warning is the access disappearing.
+    last_day: str | None = None
     # The tenant's subdomain label, so the UI can build an ABSOLUTE
     # `{tenant_slug}.portal.<base>` link. The broker generating it is on a
     # different host, so a bare path would be unclickable when pasted into an

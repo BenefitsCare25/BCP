@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import ROLE_BROKER_VIEWER, CurrentUser, get_current_user
+from app.core.clock import today as business_today
 from app.core.deps import assert_policy_year_for_user
 from app.core.rate_limit import limiter
 from app.core.storage import get_storage
@@ -266,7 +267,7 @@ def download_benefit_selection_report(
     return _bytes_response(
         data,
         "benefit-selection-status-with-buy-sell-leave-report-"
-        f"{date.today():%Y%m%d}.xlsx",
+        f"{business_today():%Y%m%d}.xlsx",
         retained,
     )
 
@@ -318,7 +319,7 @@ def download_placement_slip_export(
     )
     db.commit()
     return _xlsx_response(
-        wb, f"placement-slip-{py.year}-{date.today():%Y%m%d}.xlsx"
+        wb, f"placement-slip-{py.year}-{business_today():%Y%m%d}.xlsx"
     )
 
 
@@ -343,7 +344,7 @@ def download_quotation_slip_export(
     )
     db.commit()
     return _xlsx_response(
-        wb, f"quotation-slip-{py.year}-{date.today():%Y%m%d}.xlsx"
+        wb, f"quotation-slip-{py.year}-{business_today():%Y%m%d}.xlsx"
     )
 
 
@@ -382,7 +383,7 @@ def download_employee_listing(
     return _xlsx_response(
         wb,
         f"employee-listing-for-insurer-report-{_slug(insurer)}-"
-        f"{date.today():%Y%m%d}.xlsx",
+        f"{business_today():%Y%m%d}.xlsx",
     )
 
 
@@ -410,7 +411,7 @@ def download_dependant_listing(
     return _xlsx_response(
         wb,
         f"dependant-listing-for-insurer-report-{_slug(insurer)}-"
-        f"{date.today():%Y%m%d}.xlsx",
+        f"{business_today():%Y%m%d}.xlsx",
     )
 
 
@@ -427,7 +428,7 @@ def _activity_range(start: date | None, end: date | None) -> tuple[date, date]:
     opened to answer is almost always "recently", and a default of "everything"
     would make the first click the slowest one.
     """
-    resolved_end = end or date.today()
+    resolved_end = end or business_today()
     resolved_start = start or (resolved_end - timedelta(days=30))
     if resolved_start > resolved_end:
         raise HTTPException(

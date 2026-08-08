@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import (
     Category,
     Client,
@@ -477,7 +478,7 @@ def _aggregate(
 def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
     client = db.get(Client, policy_year.client_id)
     data = _load_form_data(db, policy_year)
-    ref = policy_year.start_date or date.today()
+    ref = policy_year.start_date or business_today()
     sections, basis_acc, insurers = _aggregate(data, ref)
 
     # Collapse basis lines that would render identically. Combined sections

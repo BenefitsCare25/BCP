@@ -667,6 +667,19 @@ class ClaimWindow:
         for "a date between 15 July and 1 June"."""
         return self.end < self.start
 
+    @property
+    def empty_note(self) -> str:
+        """What to TELL someone whose window refuses every date.
+
+        One sentence, one owner: the 422 below and the claim form's empty state
+        both read it, so the member cannot be given two different accounts of
+        why they have nothing to claim against."""
+        return (
+            f"Your cover ended on {self.end.isoformat()}, before this "
+            f"{self.period_label} began — there is nothing to claim against "
+            "here."
+        )
+
 
 def claim_period_window(
     db: Session, year: PolicyYear, claim_kind: str, employee: Employee
@@ -714,10 +727,7 @@ def assert_incurred_in_period(
     window = claim_period_window(db, year, claim.claim_kind, employee)
     if window.is_empty:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"Your cover ended on {window.end.isoformat()}, before this "
-            f"{window.period_label} began — there is nothing to claim against "
-            "here.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY, window.empty_note
         )
     if not (window.start <= claim.incurred_date <= window.end):
         raise HTTPException(

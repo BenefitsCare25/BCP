@@ -174,6 +174,65 @@ def test_overlap_rejected(client: TestClient) -> None:
     assert res.status_code == 409
 
 
+def test_copy_carries_both_deadlines_and_accepts_an_override_of_either(
+    client: TestClient,
+) -> None:
+    """The grace period and the leaver run-off are the same kind of per-year
+    setting, and copy has to treat them the same way.
+
+    It honoured an override of the grace period and silently DROPPED one of
+    `leaver_access_days` — pydantic ignores an unknown key — so a broker
+    stating a new run-off on renewal got the old one with no error, on the
+    setting that decides how long a leaver keeps the portal.
+    """
+    source = client.post(
+        API,
+        json={
+            "start_date": "2043-01-01", "end_date": "2043-12-31",
+            "claim_grace_period_days": 45, "leaver_access_days": 14,
+        },
+    ).json()
+
+    carried = client.post(
+        f"{API}/{source['id']}/copy",
+        json={"start_date": "2044-01-01", "end_date": "2044-12-31"},
+    )
+    assert carried.status_code == 201, carried.text
+    assert carried.json()["policy_year"]["claim_grace_period_days"] == 45
+    assert carried.json()["policy_year"]["leaver_access_days"] == 14
+
+    overridden = client.post(
+        f"{API}/{source['id']}/copy",
+        json={
+            "start_date": "2045-01-01", "end_date": "2045-12-31",
+            "claim_grace_period_days": 30, "leaver_access_days": 90,
+        },
+    )
+    assert overridden.status_code == 201, overridden.text
+    assert overridden.json()["policy_year"]["claim_grace_period_days"] == 30
+    assert overridden.json()["policy_year"]["leaver_access_days"] == 90
+
+    # 0 is a real value ("access ends on the last day"), not "unset".
+    zeroed = client.post(
+        f"{API}/{source['id']}/copy",
+        json={
+            "start_date": "2046-01-01", "end_date": "2046-12-31",
+            "leaver_access_days": 0,
+        },
+    )
+    assert zeroed.status_code == 201, zeroed.text
+    assert zeroed.json()["policy_year"]["leaver_access_days"] == 0
+
+    rejected = client.post(
+        f"{API}/{source['id']}/copy",
+        json={
+            "start_date": "2047-01-01", "end_date": "2047-12-31",
+            "leaver_access_days": -1,
+        },
+    )
+    assert rejected.status_code == 422, rejected.text
+
+
 def test_copy_clones_categories(client: TestClient) -> None:
     source = client.post(
         API, json={"start_date": "2041-01-01", "end_date": "2041-12-31"}

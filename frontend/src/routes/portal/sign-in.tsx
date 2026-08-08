@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { KeyRound, Lock, User } from "lucide-react";
 import { isMemberToken, useMemberLogin, useMemberMfa } from "@/api/portal";
+import { takeAccessEndedMessage } from "@/api/portalClient";
 import { errorStatus, formatError } from "@/lib/errors";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
@@ -35,14 +36,21 @@ export function PortalSignInPage() {
   // `window.location.assign`, and routing it through `navigate({search})` is
   // how a `"1"` reaches the address bar as `%221%22`.
   //
+  // The SERVER's sentence when we have it — it names the date their access
+  // ended, which is the one fact a member cannot look up and the reason they
+  // would otherwise have to ask their HR team. The undated line below is the
+  // fallback for a blocked `sessionStorage` (private mode) or a refusal that
+  // carried no message.
+  //
   // Seeded into the same error slot the form already renders, and cleared by
   // the next submit — a member who then signs in as someone else must not keep
   // reading a sentence about the account they were just signed out of. Signing
   // in as THEMSELVES simply hits the same refusal again, from the server.
-  const [error, setError] = useState<string | null>(
+  const [error, setError] = useState<string | null>(() =>
     typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).has("ended")
-      ? "Your access to this portal has ended. Contact your HR team if you still need something from your record."
+    new URLSearchParams(window.location.search).has("ended")
+      ? takeAccessEndedMessage() ??
+        "Your access to this portal has ended. Contact your HR team if you still need something from your record."
       : null,
   );
   const [company, setCompany] = useState("");

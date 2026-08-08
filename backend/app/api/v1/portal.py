@@ -62,6 +62,11 @@ def portal_me(
     """Member profile + their coverage context. Unlike the data endpoints,
     this never 404s on a missing roster row — the shell needs it to render."""
     client = db.get(Client, member.client_id)
+    # Resolved ONCE and handed to both resolvers below. Each of them looks the
+    # active year up for itself when not given one, so this endpoint — the one
+    # every portal page load calls first — was running the same query three
+    # times per request.
+    year = active_policy_year(db, member.client_id)
     # Resolved BEFORE anything else can 404: this endpoint's job is to answer
     # for a member whose access has ended, and `access_for_account` is the only
     # resolver that copes with having no roster row in the current year (a
@@ -72,6 +77,7 @@ def portal_me(
         member_account_id=member.member_account_id,
         client_id=member.client_id,
         staff_id=member.staff_id,
+        year=year,
     )
     out = PortalMe(
         access=PortalAccessOut(**access_payload(access)),
@@ -89,13 +95,12 @@ def portal_me(
             legal_name=client.legal_name if client else None,
         ),
     )
-    year = active_policy_year(db, member.client_id)
     if year is None:
         return out
     try:
         # UNGATED: this is the endpoint that has to tell a member their access
         # has ended, so it cannot be one of the things their access gates.
-        employee = resolve_member_employee(db, member, requires=None)
+        employee = resolve_member_employee(db, member, requires=None, year=year)
     except HTTPException:
         employee = None
     out.policy_year = PortalPolicyYearOut(

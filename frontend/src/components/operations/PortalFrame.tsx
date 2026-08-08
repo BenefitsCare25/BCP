@@ -73,6 +73,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/cn";
 import { LeafScopeContext } from "@/lib/leaf-scope";
 import { isNotFoundError } from "@/lib/errors";
+import { holds } from "@/components/portal/capabilities";
 
 // Mirrors the live shell nav in components/portal/PortalShell — change both
 // together. Labels are the shell's short set, because the live bar is one row.
@@ -80,10 +81,11 @@ const TABS = [
   { key: "home", label: "Home" },
   { key: "coverage", label: "Coverage" },
   { key: "claims", label: "Claims" },
-  // `needs` mirrors `NAV` in PortalShell — the SERVED capability, never the
-  // access `state`. A broker previewing a leaver has to see the same three
-  // tabs gone that the member sees gone; the preview endpoints themselves stay
-  // ungated, so this is presentation parity, not a second gate.
+  // `needs` mirrors `NAV` in PortalShell and is filtered by the same shared
+  // rule (`components/portal/capabilities`). A broker previewing a leaver has
+  // to see the same three tabs gone that the member sees gone; the preview
+  // endpoints themselves stay ungated, so this is presentation parity, not a
+  // second gate.
   { key: "card", label: "Card", needs: "entitlement" },
   { key: "clinics", label: "Clinics", needs: "entitlement" },
   { key: "enrollment", label: "Enrolment", needs: "elect" },
@@ -617,8 +619,7 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
   // show everything until it resolves rather than blinking tabs away.
   const visibleTabs = useMemo(() => {
     const held = ctx?.access?.capabilities;
-    if (!held) return TABS;
-    return TABS.filter((t) => !("needs" in t) || held.includes(t.needs));
+    return TABS.filter((t) => holds(held, "needs" in t ? t.needs : undefined));
   }, [ctx]);
   const [tab, setTab] = useState<TabKey>("home");
   const [coverageTab, setCoverageTab] = useState<CoverageTabKey>("benefits");
@@ -636,6 +637,22 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
     setClaimId(null);
     setEnquiryId(null);
   }, [employeeId]);
+
+  // **Clamp the selection once the capabilities land.** `visibleTabs` shows
+  // every tab until `ctx` resolves, so on a slow connection a broker can click
+  // Card, watch its button disappear when a leaver's capabilities arrive, and
+  // go on reading the card — the preview endpoints are ungated, so the content
+  // renders happily. That is exactly the member-vs-preview divergence the
+  // filter exists to prevent, and nothing else moves the broker off it.
+  // "messages" is exempt: it is reachable but has no nav pill, so it is not in
+  // TABS (see the note above).
+  useEffect(() => {
+    if (tab === "messages") return;
+    if (visibleTabs.some((t) => t.key === tab)) return;
+    setTab("home");
+    setClaimId(null);
+    setEnquiryId(null);
+  }, [visibleTabs, tab]);
 
   /** Move to a tab the way the member's NAV moves: a claim being read is left
    *  behind. On the portal, tapping "Claims" always lands on the ledger — a

@@ -25,6 +25,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import Claim, Dependant, Employee, PolicyYear
 from app.models.claim import (
     CASE_TYPE_LOG,
@@ -415,4 +416,4 @@ def build_employee_claims_workbook(
 
 
 def claims_report_filename(kind: str, today: date | None = None) -> str:
-    return f"{kind}-{(today or date.today()):%Y%m%d}.xlsx"
+    return f"{kind}-{(today or business_today()):%Y%m%d}.xlsx"

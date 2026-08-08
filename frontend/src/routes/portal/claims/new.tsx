@@ -43,9 +43,14 @@ export function PortalNewClaimPage() {
     return (
       <Mount label="No benefits to claim against">
         <p className="text-row text-label">
-          We don't have any cover recorded against your name for this period, so
-          there's nothing to claim against yet. Your HR team can check your
-          record.
+          {/* The server's own sentence when it withheld a claim kind (cover
+              that ended before the period began) — the same one submit would
+              have refused with. Without it a leaver read the generic "no cover
+              recorded", which is not what happened to them. */}
+          {form.claimBlock ??
+            "We don't have any cover recorded against your name for this " +
+              "period, so there's nothing to claim against yet. Your HR team " +
+              "can check your record."}
         </p>
       </Mount>
     );

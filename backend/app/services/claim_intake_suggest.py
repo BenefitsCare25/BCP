@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Any
 
+from app.core.clock import today as business_today
 from app.models import Employee, PolicyYear
 from app.schemas.claims import (
     ClaimIntakeSuggestionOut,
@@ -258,7 +259,10 @@ def _date_field(
     parsed = [(f, d) for f in cands if (d := _parse_date(_val(f)))]
     if not parsed:
         return None, 0.0
-    ceiling = min(date.today(), year.end_date)
+    # Business date, not the UTC one (`core/clock.py`) — the same clock the
+    # served claim window and submit use. On UTC this refused to suggest today's
+    # date for every claim filed between midnight and 8am Singapore.
+    ceiling = min(business_today(), year.end_date)
     in_window = [p for p in parsed if year.start_date <= p[1] <= ceiling]
     pool = in_window or parsed
     # On an inpatient bill the ADMISSION date is the incurred date — it beats

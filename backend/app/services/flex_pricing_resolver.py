@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.clock import today as business_today
 from app.models import Category, Dependant, Employee, FlexPricing, FlexScheme, PolicyYear
 from app.models.enrollment_window import FlexDrawdownRule, FlexPriceSource
 from app.services import flex_proration
@@ -1619,7 +1620,7 @@ def employee_age(employee: Employee, ref: date) -> int | None:
 def reference_date(db: Session, policy_year_id: str) -> date:
     """The date used to compute ages — the policy year's start (today as fallback)."""
     py = db.get(PolicyYear, policy_year_id)
-    return py.start_date if py and py.start_date else date.today()
+    return py.start_date if py and py.start_date else business_today()
 
 
 @dataclass(frozen=True)
