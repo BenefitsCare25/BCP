@@ -242,6 +242,11 @@ def _flex_utilization(
 
     approved = 0.0
     pending = 0.0
+    # The claims behind `pending`, in the order they were summed, so a surface
+    # that prints the figure can open exactly what it is made of. Collected HERE
+    # rather than re-filtered by a caller: the membership test is
+    # `status not in SETTLED_STATUSES`, and that set is defined by subtraction.
+    pending_claim_ids: list[str] = []
     per_category: dict[str, dict[str, float]] = defaultdict(
         lambda: {"approved": 0.0, "pending": 0.0}
     )
@@ -256,6 +261,7 @@ def _flex_utilization(
         else:
             amount = _claim_amount(claim)
             pending += amount
+            pending_claim_ids.append(str(claim.id))
             per_category[cat.lower()]["pending"] += amount
 
     # Chain: wallet → minus price-tags (flex_balance) → minus approved claims.
@@ -328,6 +334,7 @@ def _flex_utilization(
         flex_balance=flex.flex_balance,
         approved=round(approved, 2),
         pending=round(pending, 2),
+        pending_claim_ids=pending_claim_ids,
         available=available,
         categories=categories,
     )

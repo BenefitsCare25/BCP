@@ -1396,6 +1396,11 @@ export interface FlexUtilization {
   flex_balance: number | null;
   approved: number;
   pending: number;
+  /** The claims `pending` was summed from. SERVED, never re-derived here: which
+   *  statuses count as pending is defined by subtraction server-side
+   *  (`utilization.PENDING_STATUSES`), so a mirrored copy would drift into
+   *  offering a different set from the figure it sits under. */
+  pending_claim_ids: string[];
   available: number | null;
   categories: FlexCategoryUtilization[];
 }

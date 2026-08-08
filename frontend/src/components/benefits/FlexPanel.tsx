@@ -10,12 +10,15 @@
  * agree, and printing SGD 2,680 seven times across two cards is what made this
  * page read as duplicated.
  *
- * It is one ledger here: allowance, what has been drawn from it, what is left.
- * A term that hasn't moved isn't printed — a wallet with no price tags and no
- * claims used to render eight product lines of "SGD 0" and a "Balance" equal to
- * the wallet directly above it.
+ * It is one panel here, and every figure on it has the SAME shape: **used /
+ * total**, for the wallet in the heading and for each claimable benefit under
+ * it, so a row can be checked against the wallet without translating between
+ * "claimed", "left" and "available". A figure that is only ever zero is not
+ * printed — this pane used to render eight product lines of "SGD 0" and a
+ * "Balance" equal to the wallet directly above it.
  */
 import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, CheckCircle2, ChevronRight, Wallet, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { InfoHint } from "@/components/ui/tooltip";
@@ -86,24 +89,6 @@ function mergeCategories(
   return rows;
 }
 
-/** One category's position, as a figure the LEDGER ABOVE CAN BE ADDED FROM.
- *
- * **Every row leads with what was CLAIMED**, which is the term the ledger sums
- * ("SGD 1,340 flex dollars − SGD 680 claims approved"). This list used to
- * change shape by row: a category with a sub-limit reported what was LEFT
- * ("SGD 120 left / of SGD 300") while one without reported what was CLAIMED
- * ("SGD 500 claimed"). Two adjacent rows answering different questions, and the
- * total stated directly above them derivable from neither — a reader looking at
- * 500 and 120 against a stated 680 has to notice the second row is a remainder
- * and do 300 − 120 in their head to find the missing 180. What's left is still
- * carried, as the secondary line, where it belongs to the cap beside it.
- *
- * The claimed figure is CAPPED at the sub-limit (`drawnAgainst`'s rule): the
- * bar below it is already capped, so an uncapped caption would contradict its
- * own fullness. Where an acknowledged over-limit approval makes that bite, the
- * row is short of the ledger's raw total by the overage — the full approved
- * amount is on the claim record and in the reports, which is where an override
- * is reconciled. */
 /** One category's position, as a SINGLE non-wrapping line.
  *
  * It was a 160px-wide stack — a figure, a remainder, a mini bar — which on a
@@ -116,18 +101,20 @@ function mergeCategories(
  * because that is the figure a broker scans for; a 160px bar under a wrapped
  * caption measures a sub-limit the caption has already stated exactly.
  *
- * **Every row leads with what was CLAIMED**, which is the term the ledger sums
- * ("SGD 2,680 flex dollars − SGD 680 claims approved"). This list used to
- * change shape by row: a category with a sub-limit reported what was LEFT while
- * one without reported what was CLAIMED — two adjacent rows answering different
- * questions, with the total above derivable from neither. A reader seeing 500
- * and "120 left" against a stated 680 had to notice the second was a remainder
- * and compute 300 − 120 to find the missing 180.
+ * **Every row is USED / TOTAL**, the same shape as the headline, so the column
+ * reads down as fractions of one kind and each row can be checked against the
+ * wallet above it. This list used to change shape by row — a capped category
+ * reported what was LEFT while an uncapped one reported what was CLAIMED, two
+ * adjacent rows answering different questions with the wallet total derivable
+ * from neither.
  *
- * The claimed figure is CAPPED at the sub-limit (`drawnAgainst`'s rule). Where
- * an acknowledged over-limit approval makes that bite, the row is short of the
- * ledger's raw total by the overage — the full approved amount is on the claim
- * record and in the reports, which is where an override is reconciled. */
+ * The remainder is deliberately NOT printed beside the fraction: it is the
+ * subtraction of the two figures already on the line.
+ *
+ * The used figure is CAPPED at the sub-limit (`drawnAgainst`'s rule). Where an
+ * acknowledged over-limit approval makes that bite, the row understates by the
+ * overage — the full approved amount is on the claim record and in the reports,
+ * which is where an override is reconciled. */
 function CategoryPosition({
   row,
   currency,
@@ -143,30 +130,27 @@ function CategoryPosition({
 
   return (
     <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-      {/* Gated on something HAVING been claimed, not merely on a cap existing.
-          A capped category with nothing settled rendered "SGD 0 of SGD 250
-          claimed · SGD 250 left" — two figures that are only ever zero and the
-          cap restated as its own remainder. It is the cap, and nothing else. */}
-      {capped > 0 && row.subLimit != null && use?.remaining != null ? (
+      {row.subLimit != null ? (
         <>
           <span className="font-medium text-foreground">
-            {formatWallet(capped, currency)} of{" "}
-            {formatWallet(row.subLimit, currency)}
-          </span>{" "}
-          claimed · {formatWallet(use.remaining, currency)} left
+            {formatWallet(capped, currency)}
+          </span>
+          <span className="text-subtle"> / </span>
+          {formatWallet(row.subLimit, currency)}
         </>
-      ) : /* Approved only. "SGD 0 claimed" beside a pending figure states a
-           number that isn't a fact about anything — the pending term is the
-           whole story for a category with nothing settled yet. */
-      capped > 0 ? (
+      ) : capped > 0 ? (
+        /* **No slash without a cap.** A capless category draws against the
+           WALLET, so its only honest denominator is the whole wallet — which
+           would print an identical "/ SGD 2,680" on every such row and, where
+           a scheme has exactly one (CDL's real shape), restate the headline
+           verbatim one line below it. The slash appears where there is
+           something to divide by, and nowhere else. */
         <>
           <span className="font-medium text-foreground">
             {formatWallet(capped, currency)}
           </span>{" "}
-          claimed
+          used
         </>
-      ) : row.subLimit != null ? (
-        <>{formatWallet(row.subLimit, currency)} sub-limit</>
       ) : null}
       {use && use.pending > 0 && (
         <span className="text-warn">
@@ -175,6 +159,9 @@ function CategoryPosition({
           {formatWallet(use.pending, currency)} pending
         </span>
       )}
+      {/* Nothing used, no cap, nothing pending: the row is the benefit's NAME
+          and that is the whole fact. Printing "SGD 0" against it would be the
+          only-ever-zero figure this panel keeps removing. */}
     </span>
   );
 }
@@ -196,10 +183,27 @@ export function FlexPanel({
   usage?: FlexUtilization | null;
 }) {
   const [showTags, setShowTags] = useState(false);
+  const navigate = useNavigate();
   const currency = flex.currency ?? usage?.currency ?? null;
 
+  // The claims BEHIND the pending figure, so it can be opened. SERVED with the
+  // figure (`utilization._flex_utilization` collects them as it sums), never a
+  // second query filtered by a status list copied into TypeScript: "pending" is
+  // defined server-side by SUBTRACTION from the settled statuses, so a mirror
+  // would start offering a different set the day a status is added.
+  const pendingClaimIds = usage?.pending_claim_ids ?? [];
+  const openPending = () =>
+    navigate({
+      to: "/claims/review",
+      // One claim opens ITS sheet; several open the queue, because picking one
+      // of them here would be an arbitrary choice presented as the answer.
+      search:
+        pendingClaimIds.length === 1
+          ? { tab: "queue", claim: pendingClaimIds[0] }
+          : { tab: "queue" },
+    });
+
   const wallet = flex.wallet_amount ?? usage?.wallet_amount ?? null;
-  const priceTags = flex.price_tags_total ?? usage?.price_tags_total ?? null;
   const balance = flex.flex_balance ?? usage?.flex_balance ?? null;
   const approved = usage?.approved ?? 0;
   const pending = usage?.pending ?? 0;
@@ -211,27 +215,6 @@ export function FlexPanel({
   const hasLeave = flex.leave_flex_amount != null && flex.leave_flex_amount !== 0;
   const categories = mergeCategories(flex, usage);
 
-  // Only the terms that actually moved — anything else is a line of zeroes
-  // restating the wallet. The set must RECONCILE, so the leave trade is one of
-  // them: `flex_pricing_resolver` computes `balance = wallet − price_tags +
-  // leave_flex_amount` (signed: buying spends, selling credits), and printing
-  // only tags and claims left the stated terms not adding up to the stated
-  // total on any member who traded a day.
-  const drawn: { label: string; value: number; add: boolean }[] = [];
-  if (priceTags) {
-    drawn.push({ label: "coverage price tags", value: priceTags, add: false });
-  }
-  if (hasLeave) {
-    drawn.push({
-      label: `leave ${flex.leave_action === "buy" ? "bought" : "sold"}`,
-      value: Math.abs(flex.leave_flex_amount!),
-      add: flex.leave_flex_amount! > 0,
-    });
-  }
-  if (approved) {
-    drawn.push({ label: "claims approved", value: approved, add: false });
-  }
-
   // Overdrawn is a property of what is LEFT, and `available` already falls back
   // through `flex_balance` to `wallet`, so it is the only figure the headline
   // and the equation total ever show.
@@ -242,9 +225,14 @@ export function FlexPanel({
   // sheets split identically). Don't "restore" a negative from claims here; it
   // would be an indication of something that cannot happen.
   const shortfall = available != null && available < 0;
-  // Magnitude + the word "overdrawn"; "SGD -300 overdrawn" states the sign
-  // twice and "SGD -300 available" is not a quantity anyone has.
-  const headline = available != null ? Math.abs(available) : null;
+  // What has been DRAWN, as the numerator of the headline fraction. Derived
+  // from `available` rather than summed from `drawn` so the headline and the
+  // "What the wallet paid for" list cannot disagree: `available` is the one
+  // figure `flex_pricing_resolver` and `utilization` both resolve.
+  const used =
+    wallet != null && available != null
+      ? Math.round((wallet - available) * 100) / 100
+      : null;
 
   // **The ledger prints its TERMS only — the total is the headline.** It used
   // to close with "= SGD 2,000 left", which is the same number, in the same
@@ -284,6 +272,19 @@ export function FlexPanel({
               .join(" · ")}
           </p>
         </div>
+        {/* **USED / TOTAL**, the same shape as every category row beneath it,
+            so the wallet and its parts are read the same way and each row can
+            be checked against this one.
+
+            `used` is everything DRAWN, not just claims: `available` already
+            nets off the price tags of elected cover and any leave traded, so
+            `wallet − available` is the whole draw. Sizing this on claims alone
+            would print "SGD 0 / SGD 2,680" for a member whose wallet is fully
+            committed to upgrades.
+            Overdrawn needs no separate word here — used exceeding total says it
+            on its face — but it keeps the error colour, because it is the state
+            the enrolment guard and the bulk `flex_overdraft` warning exist
+            for. */}
         <div className="shrink-0 text-right">
           <div
             className={cn(
@@ -291,14 +292,40 @@ export function FlexPanel({
               shortfall ? "text-error" : "text-foreground",
             )}
           >
-            {formatWallet(headline, currency)}
+            {used != null && wallet != null ? (
+              <>
+                {formatWallet(used, currency)}
+                <span className="font-normal text-subtle"> / </span>
+                {formatWallet(wallet, currency)}
+              </>
+            ) : (
+              formatWallet(wallet, currency)
+            )}
           </div>
           <div className="flex items-center justify-end gap-1 text-2xs text-muted-foreground">
-            {usage ? (shortfall ? "overdrawn" : "available") : "annual wallet"}
+            {pendingClaimIds.length > 0 ? (
+              /* **The pending figure is the way IN to the claims behind it.**
+                 It used to read "available" — a word for a number stated three
+                 inches away. What a broker does with a pending total is open
+                 it, so it opens: one claim goes straight to its sheet, several
+                 to the queue. */
+              <button
+                type="button"
+                onClick={openPending}
+                className="flex items-center gap-1 text-warn hover:underline"
+              >
+                <PendingSwatch />
+                {formatWallet(pending, currency)} pending
+                {pendingClaimIds.length > 1 && ` · ${pendingClaimIds.length} claims`}
+                <ChevronRight aria-hidden className="size-3" />
+              </button>
+            ) : (
+              <>{usage ? "used" : "annual wallet"}</>
+            )}
             <InfoHint>
-              The flex dollars, less the price tags of the cover this member
-              holds and any claim already approved. Pending claims are shown
-              separately and never deducted.
+              What this member has drawn — the price tags of the cover they hold
+              plus any claim already approved — against their flex dollars.
+              Pending claims are never deducted.
             </InfoHint>
           </div>
         </div>
@@ -313,46 +340,21 @@ export function FlexPanel({
         />
       )}
 
-      {/* The ledger, as one sentence of arithmetic rather than a grid of tiles
-       * repeating figures that are already above. */}
-      <p className="mt-3 flex flex-wrap items-baseline gap-x-1.5 text-xs text-muted-foreground">
-        {wallet == null ? (
-          <span>
-            No wallet assigned yet — confirm and assign the Flex scheme to see a
-            balance.
-          </span>
-        ) : drawn.length === 0 ? (
-          // The headline already states the figure and calls it available;
-          // repeating it in the sentence beneath is the restatement this panel
-          // exists to stop.
-          <span>No flex dollars have been drawn yet.</span>
-        ) : (
-          <>
-            <span className="tabular-nums">
-              {formatWallet(wallet, currency)} flex dollars
-            </span>
-            {drawn.map((d) => (
-              <span key={d.label} className="tabular-nums">
-                <span aria-hidden className="mr-1 text-subtle">
-                  {d.add ? "+" : "−"}
-                </span>
-                {formatWallet(d.value, currency)} {d.label}
-              </span>
-            ))}
-          </>
-        )}
-        {pending > 0 && (
-          <span className="tabular-nums text-warn">
-            <PendingSwatch />
-            {formatWallet(pending, currency)} pending, not deducted
-          </span>
-        )}
-      </p>
-      {/* Where the allowance above came from. Rendered only when it was
-        * pro-rated, so a full-year member sees nothing — and never folded into
-        * the ledger line, because the fraction is not another movement, it is
-        * the derivation of that line's FIRST term. A reduced allowance with
-        * nothing explaining it is the number members dispute. */}
+      {/* **No ledger line.** It spelled out "SGD 2,680 flex dollars − SGD 680
+        * claims approved · SGD 90 pending, not deducted" — three figures that
+        * are now all on screen already: the wallet and the draw are the
+        * headline fraction, and the pending total is the link beneath it. What
+        * the draw was SPENT ON is the "What the wallet paid for" disclosure
+        * below, which is where a broker who needs the itemisation looks. */}
+      {wallet == null && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          No wallet assigned yet — confirm and assign the Flex scheme to see a
+          balance.
+        </p>
+      )}
+      {/* Where the flex dollars above came from. Rendered only when they were
+        * pro-rated, so a full-year member sees nothing. A reduced entitlement
+        * with nothing explaining it is the number members dispute. */}
       {flex.proration && (
         <p className="mt-1 text-xs text-muted-foreground">
           <span className="tabular-nums">

@@ -606,6 +606,13 @@ class FlexUtilization(BaseModel):
     flex_balance: float | None = None  # wallet - enrollment price-tags
     approved: float = 0.0  # approved flex claims
     pending: float = 0.0
+    # The claims `pending` was summed FROM, so a surface that prints the figure
+    # can open what is behind it. Served rather than re-derived in the client:
+    # "which statuses count as pending" is `utilization.PENDING_STATUSES`, which
+    # is defined BY SUBTRACTION and therefore grows a new member the day a
+    # status is added — a mirrored copy would silently start offering a
+    # different set from the number it sits under.
+    pending_claim_ids: list[str] = Field(default_factory=list)
     available: float | None = None  # flex_balance - approved
     categories: list[FlexCategoryUtilization] = Field(default_factory=list)
 
