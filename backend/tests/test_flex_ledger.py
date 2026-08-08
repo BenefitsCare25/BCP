@@ -42,6 +42,9 @@ USER_ID = "00000000-0000-0000-0000-0000000f10ff"
 EMP_WALLET = "00000000-0000-0000-0000-0000000f1101"
 EMP_LEAVER = "00000000-0000-0000-0000-0000000f1102"
 EMP_NOFLEX = "00000000-0000-0000-0000-0000000f1103"
+EMP_PRE_PERIOD = "00000000-0000-0000-0000-0000000f1104"
+EMP_LATE_LEAVER = "00000000-0000-0000-0000-0000000f1105"
+EMP_NOFLEX_LEAVER = "00000000-0000-0000-0000-0000000f1106"
 
 NOW = datetime.now(UTC)
 
@@ -104,6 +107,23 @@ def _setup_db():
             # No wallet, no leave, no pricing → flex does not apply.
             _emp(EMP_NOFLEX, "FX-3", "Nora Noflex",
                  attribute_values={"entity": "Flexi Co Pte Ltd"}),
+            # Left BEFORE the period, and the date lives only in the roster —
+            # `terminated_effective` is written by the listing sync, so a roster
+            # imported any other way carries it here instead.
+            _emp(EMP_PRE_PERIOD, "FX-4", "Percy Priorleaver",
+                 status="terminated",
+                 attribute_values={"entity": "Flexi Co Pte Ltd",
+                                   "last_day_of_service": "2038-03-01"}),
+            # Left AFTER the period closed: covered for all of 2039, so a leaver
+            # of the NEXT year's sheet — but still on the insurer listing.
+            _emp(EMP_LATE_LEAVER, "FX-5", "Lena Lateleaver",
+                 status="terminated", terminated_effective=date(2040, 1, 15),
+                 attribute_values={"entity": "Flexi Co Pte Ltd"}),
+            # An in-period leaver flex does not apply to. Sorts FIRST by name.
+            _emp(EMP_NOFLEX_LEAVER, "FX-6", "Amos Ahead",
+                 status="terminated", terminated_effective=date(2039, 9, 30),
+                 attribute_values={"entity": "Flexi Co Pte Ltd",
+                                   "category": "Officer"}),
         ])
         s.flush()
         s.add_all([
@@ -139,6 +159,29 @@ def _setup_db():
                   amount_approved=120.0, currency="SGD",
                   status=CLAIM_STATUS_APPROVED, decided_at=NOW,
                   reference_no="FLEXICO-000004"),
+            # Reclassified as a LOG case AFTER the member submitted it, so it
+            # still carries the member's own descriptive label.
+            Claim(client_id=CLIENT_ID, policy_year_id=PY_ID,
+                  employee_id=EMP_LEAVER, claim_kind="insured",
+                  product_code="GHS",
+                  claim_type="Emergency Accidental Outpatient Treatment",
+                  case_type="log",
+                  incurred_date=date(2039, 6, 1), amount_claimed=90.0,
+                  currency="SGD", status="submitted",
+                  reference_no="FLEXICO-000005"),
+            # Incurred AFTER their last day (30 Jun) — outside the cover they held.
+            Claim(client_id=CLIENT_ID, policy_year_id=PY_ID,
+                  employee_id=EMP_LEAVER, claim_kind="insured",
+                  product_code="GHS", claim_type="GP Consultation",
+                  incurred_date=date(2039, 7, 15), amount_claimed=45.0,
+                  currency="SGD", status="submitted",
+                  reference_no="FLEXICO-000006"),
+            Claim(client_id=CLIENT_ID, policy_year_id=PY_ID,
+                  employee_id=EMP_NOFLEX_LEAVER, claim_kind="insured",
+                  product_code="GHS", claim_type="GP Consultation",
+                  incurred_date=date(2039, 8, 1), amount_claimed=60.0,
+                  currency="SGD", status="submitted",
+                  reference_no="FLEXICO-000007"),
         ])
         s.commit()
     app.dependency_overrides[get_current_user] = lambda: _user()
@@ -260,32 +303,119 @@ def test_summary_masks_nric_by_default(client):
 
 # ── Leavers ──────────────────────────────────────────────────────────────────
 
+def _row(header, rows, staff: str):
+    return next(r for r in rows if r[header.index("Staff ID")] == staff)
+
+
 def test_leaver_summary_lists_only_in_period_leavers(client):
     header, rows = _get(client, "leaver-summary")
-    assert {r[header.index("Staff ID")] for r in rows} == {"FX-2"}
+    assert {r[header.index("Staff ID")] for r in rows} == {"FX-2", "FX-6"}
 
 
 def test_leaver_benefit_end_is_their_last_day_not_the_year_end(client):
     """The whole point of the sheet: cover stops when they leave."""
     header, rows = _get(client, "leaver-summary")
-    row = rows[0]
+    row = _row(header, rows, "FX-2")
     assert row[header.index("Benefit End Date")] == datetime(2039, 6, 30)
     assert row[header.index("Last Day of Service")] == datetime(2039, 6, 30)
 
 
 def test_leaver_summary_carries_the_final_wallet_position(client):
     header, rows = _get(client, "leaver-summary")
-    row = rows[0]
+    row = _row(header, rows, "FX-2")
     assert row[header.index("Total Allocation Amt")] == 1000.0
     assert row[header.index("Claims Payment Amt")] == 120.0
     assert row[header.index("Balance Available Allocation Amt")] == 880.0
 
 
+def test_a_pre_period_leaver_is_excluded_on_the_rosters_own_date(client):
+    """`terminated_effective` is written by the listing sync alone; a roster
+    imported any other way carries the leaving date in `attribute_values`. The
+    period filter used to read the column while every sheet PRINTED the resolved
+    value, so a 2038 leaver landed on the 2039 sheet with 2038 beside them."""
+    header, rows = _get(client, "leaver-summary")
+    assert "FX-4" not in {r[header.index("Staff ID")] for r in rows}
+
+
+def test_a_leaver_who_left_after_the_period_is_not_this_years_leaver(client):
+    """Covered for the whole of 2039, so they belong to 2040's sheet — but the
+    insurer listing still needs them, which is why only this sheet drops them."""
+    header, rows = _get(client, "leaver-summary")
+    assert "FX-5" not in {r[header.index("Staff ID")] for r in rows}
+
+    from app.services.insurer_reports import report_employees
+    with SessionLocal() as s:
+        py = s.get(PolicyYear, PY_ID)
+        reportable = {e.staff_id for e in report_employees(s, py)}
+    assert "FX-5" in reportable, "the insurer listing still has to off-bill them"
+    assert "FX-4" not in reportable, "a pre-period leaver is out of both"
+
+
+def test_a_leaver_flex_does_not_apply_to_still_gets_a_row(client):
+    """The utilisation summary skips them; this sheet must not. Their cover
+    window is the reason the row exists — the wallet columns are simply blank."""
+    header, rows = _get(client, "leaver-summary")
+    row = _row(header, rows, "FX-6")
+    assert row[header.index("Benefit End Date")] == datetime(2039, 9, 30)
+    assert row[header.index("Total Allocation Amt")] is None
+
+
 def test_leaver_details_lists_their_claims_only(client):
     header, rows = _get(client, "leaver-details")
     refs = {r[header.index("Reference No.")] for r in rows}
-    assert refs == {"FLEXICO-000004"}
-    assert rows[0][header.index("Claim Category")] == "Flexible Benefits"
+    assert refs == {
+        "FLEXICO-000004", "FLEXICO-000005", "FLEXICO-000006", "FLEXICO-000007",
+    }
+    flex_row = next(
+        r for r in rows if r[header.index("Reference No.")] == "FLEXICO-000004"
+    )
+    assert flex_row[header.index("Claim Category")] == "Flexible Benefits"
+
+
+def test_a_log_case_keeps_its_label_and_is_marked_in_its_own_column(client):
+    """`log_cases.set_case_type` deliberately does not rewrite `claim_type` — it
+    is what the MEMBER sees as the title of their claim. This sheet used to
+    overwrite it with "LOG", which was the one place that label was destroyed."""
+    header, rows = _get(client, "leaver-details")
+    row = next(
+        r for r in rows if r[header.index("Reference No.")] == "FLEXICO-000005"
+    )
+    assert row[header.index("Claim Type")] == (
+        "Emergency Accidental Outpatient Treatment"
+    )
+    assert row[header.index("LOG")] == "Yes"
+    assert next(
+        r for r in rows if r[header.index("Reference No.")] == "FLEXICO-000006"
+    )[header.index("LOG")] == "No"
+
+
+def test_a_claim_incurred_after_cover_end_is_flagged(client):
+    """The sheet's premise, made checkable — and the end date sits beside the
+    flag so a reader can verify it without opening the Summary sheet."""
+    header, rows = _get(client, "leaver-details")
+    after = next(
+        r for r in rows if r[header.index("Reference No.")] == "FLEXICO-000006"
+    )
+    assert after[header.index("Incurred After Cover End")] == "Yes"
+    assert after[header.index("Benefit End Date")] == datetime(2039, 6, 30)
+    within = next(
+        r for r in rows if r[header.index("Reference No.")] == "FLEXICO-000005"
+    )
+    assert within[header.index("Incurred After Cover End")] == "No"
+
+
+def test_both_leaver_sheets_list_people_in_the_same_order(client):
+    """Two sheets of one workbook. The claims were ordered by `employee_id` — an
+    opaque identifier — so neither sheet read as sorted and they disagreed."""
+    sheader, srows = _get(client, "leaver-summary")
+    dheader, drows = _get(client, "leaver-details")
+    summary_order = [r[sheader.index("Staff ID")] for r in srows]
+    seen: list[str] = []
+    for r in drows:
+        staff = r[dheader.index("Staff ID")]
+        if staff not in seen:
+            seen.append(staff)
+    assert seen == [s for s in summary_order if s in seen]
 
 
 def test_leaver_reports_are_audited(client):

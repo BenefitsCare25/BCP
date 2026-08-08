@@ -43,6 +43,7 @@ from app.services.insurer_reports import (
     append_safe,
     as_date,
     autosize,
+    benefit_window,
     bold_header,
     report_employees,
 )
@@ -283,21 +284,6 @@ def summary_date(value: datetime | date | None) -> date | None:
     return value.date() if isinstance(value, datetime) else value
 
 
-def _benefit_window(py: PolicyYear, employee: Employee) -> tuple[date | None, date | None]:
-    """The member's own cover window inside the year.
-
-    Start is their effective date when the roster carries one (a mid-year joiner
-    is not allocated from January); end is their last day when they left. Both
-    fall back to the year, which is the normal case.
-    """
-    attrs = employee.attribute_values or {}
-    start = as_date(first_value(attrs, ("effective_date",)))
-    if not isinstance(start, date):
-        start = py.start_date
-    end = _last_day_of_service(employee)
-    return start, end if isinstance(end, date) else None
-
-
 def build_utilisation_workbook(
     db: Session, py: PolicyYear, *, masked: bool = True
 ) -> Workbook:
@@ -319,7 +305,7 @@ def build_utilisation_workbook(
             continue
         attrs = emp.attribute_values or {}
         raw_id = first_value(attrs, EMPLOYEE_ID_KEYS)
-        start, end = _benefit_window(py, emp)
+        start, end = benefit_window(py, emp)
         head = [
             first_value(attrs, _ENTITY_KEYS) or "",
             emp.staff_id,
@@ -374,7 +360,7 @@ def build_utilisation_summary_workbook(
             continue
         attrs = emp.attribute_values or {}
         raw_id = first_value(attrs, EMPLOYEE_ID_KEYS)
-        start, end = _benefit_window(py, emp)
+        start, end = benefit_window(py, emp)
         append_safe(ws, [
             first_value(attrs, _ENTITY_KEYS) or "",
             emp.staff_id,

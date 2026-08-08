@@ -48,6 +48,7 @@ from app.services.insurer_reports import (
     _last_day_of_service,
     append_safe,
     report_employees,
+    resolved_last_day,
 )
 from app.services.leave_pricing_resolver import leave_sell_eligible
 from app.services.plan_hydration import (
@@ -112,14 +113,20 @@ def _dep_reportable(dep: Dependant, start: date | None) -> bool:
     """A dependant belongs on an insurer listing when active, or terminated
     within the policy period — mirrors ``report_employees`` for leavers so a
     dependant who left mid-year still appears (with a termination date) for the
-    insurer to off-bill. Pre-period terminations are excluded."""
+    insurer to off-bill. Pre-period terminations are excluded.
+
+    Reads the RESOLVED last day for the same reason ``report_employees`` does —
+    the listing sync writes the date to the column, an ordinary roster import
+    leaves it in `attribute_values`, and a rule that mirrors another must test
+    the same field or it only mirrors it on the rows written one way."""
     if dep.status == DEPENDANT_STATUS_ACTIVE:
         return True
     if dep.status != DEPENDANT_STATUS_TERMINATED:
         return False
-    if dep.terminated_effective is None or start is None:
+    last_day = resolved_last_day(dep)
+    if last_day is None or start is None:
         return True
-    return dep.terminated_effective >= start
+    return last_day >= start
 
 
 def _report_code(p: Product) -> str:

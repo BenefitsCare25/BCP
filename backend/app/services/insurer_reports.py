@@ -12,6 +12,7 @@ the endpoint gates that behind a write-capable role and audits every download.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -61,6 +62,15 @@ def report_employees(db: Session, policy_year: PolicyYear) -> list[Employee]:
     A terminated employee stays on the report when their last day falls on or
     after the policy-year start (or is unknown — conservative include, the
     insurer reconciles). Pre-period leavers are ancient history and excluded.
+
+    **The date this tests is the RESOLVED last day, not the column alone.**
+    `terminated_effective` is written by the listing sync (`services/adc.py` is
+    its only writer); a roster imported any other way carries the leaving date
+    in `attribute_values` instead, which is why `_last_day_of_service` has a
+    fallback and every sheet PRINTS through it. Filtering on the bare column
+    while printing the resolved value meant a leaver whose date lived only in
+    the roster fell into the "unknown → include" branch, so a 2019 leaver
+    appeared on a 2026 listing with their 2019 last day printed beside them.
     """
     rows = list(
         db.execute(
@@ -81,9 +91,10 @@ def report_employees(db: Session, policy_year: PolicyYear) -> list[Employee]:
     def _in_period(emp: Employee) -> bool:
         if emp.status != EMPLOYEE_STATUS_TERMINATED:
             return True
-        if emp.terminated_effective is None or start is None:
+        last_day = _resolved_last_day(emp)
+        if last_day is None or start is None:
             return True
-        return emp.terminated_effective >= start
+        return last_day >= start
 
     return [e for e in rows if _in_period(e)]
 
@@ -130,10 +141,50 @@ def _as_date(value: object) -> date | str | None:
     return str(value)
 
 
-def _last_day_of_service(emp: Employee) -> date | str | None:
-    if emp.terminated_effective is not None:
-        return emp.terminated_effective
-    return _as_date(first_value(emp.attribute_values or {}, _XLSX_EPOCH_KEYS))
+def _last_day_of_service(member: Employee | Any) -> date | str | None:
+    """The member's last day AS THE SHEET PRINTS IT.
+
+    Takes an Employee or a Dependant — both carry `terminated_effective` and
+    `attribute_values`, and the listing sync writes the same two shapes to
+    each. An unparseable roster value comes back as the raw string on purpose:
+    a cell that reads "end of June" is worth printing, and dropping it would
+    make a leaver look like they had no last day at all.
+    """
+    if member.terminated_effective is not None:
+        return member.terminated_effective
+    return _as_date(first_value(member.attribute_values or {}, _XLSX_EPOCH_KEYS))
+
+
+def _resolved_last_day(member: Employee | Any) -> date | None:
+    """The same value, as a real date, or None when it cannot be one.
+
+    The DECIDING half of the pair above: only a real date can be compared
+    against a policy period. A raw string is treated exactly like a missing one
+    — unknown, and therefore conservatively in period.
+    """
+    value = _last_day_of_service(member)
+    return value if isinstance(value, date) else None
+
+
+def benefit_window(
+    policy_year: PolicyYear, member: Employee | Any
+) -> tuple[date | None, date | None]:
+    """The member's own cover window inside the year.
+
+    Start is their effective date when the roster carries one (a mid-year joiner
+    is not allocated from January); end is their last day when they left. Both
+    fall back to the year, which is the normal case.
+
+    ONE definition, shared by the wallet ledger, its summary and the leaver
+    sheets. It was written out twice — the leaver sheet resolved the start half
+    itself — and a member's cover window is exactly the kind of figure this
+    codebase keeps finding computed in two places and then disagreeing.
+    """
+    attrs = member.attribute_values or {}
+    start = _as_date(first_value(attrs, ("effective_date",)))
+    if not isinstance(start, date):
+        start = policy_year.start_date
+    return start, _resolved_last_day(member)
 
 
 def _identification(emp: Employee, masked: bool) -> str:
@@ -181,6 +232,7 @@ autosize = _autosize
 bold_header = _bold_header
 as_date = _as_date
 last_day_of_service = _last_day_of_service
+resolved_last_day = _resolved_last_day
 
 
 # Spreadsheet formula-injection guard. openpyxl stores any string starting with
