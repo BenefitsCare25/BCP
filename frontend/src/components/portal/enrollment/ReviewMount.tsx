@@ -297,8 +297,8 @@ export function ReviewMount({
                   <Pair
                     term={
                       leave.impact < 0
-                        ? "Taken from your allowance"
-                        : "Added to your allowance"
+                        ? "Taken from your flex dollars"
+                        : "Added to your flex dollars"
                     }
                   >
                     <Money

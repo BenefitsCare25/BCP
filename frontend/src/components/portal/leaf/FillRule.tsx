@@ -28,7 +28,7 @@ import { Money, currencySymbol, moneyText } from "./Figure";
  * against a limit it printed "S$700 of S$300 used", which is not a sentence
  * anyone reads correctly, and drew a bar whose words contradicted its own
  * fullness. The bar and its caption both use this. */
-function drawnAgainst(approved: number, limit: number): number {
+export function drawnAgainst(approved: number, limit: number): number {
   return Math.min(approved, limit);
 }
 

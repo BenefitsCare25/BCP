@@ -15,7 +15,12 @@ import { api } from "./client";
 import { isNotFoundError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type { MemberQuery } from "@/api/memberQuery";
-import type { InsuranceLine, PlanFinancials, VoluntaryRateBand } from "@/types";
+import type {
+  FlexProrationLine,
+  InsuranceLine,
+  PlanFinancials,
+  VoluntaryRateBand,
+} from "@/types";
 
 // Re-exported for existing importers — the canonical declarations live in
 // types.ts (they were previously re-declared here, a drift risk).
@@ -319,8 +324,12 @@ export interface EnrollmentOptions {
   /** Null on the broker employee-view preview path (no Enrollment row exists). */
   enrollment_id: string | null;
   products: ProductTierSet[];
-  /** Member's flex wallet + age so the UI can show the running flex balance. */
+  /** Member's flex wallet + age so the UI can show the running flex balance.
+   *  `flex_wallet` is the EFFECTIVE allowance — already pro-rated when the
+   *  scheme says so — and `flex_proration` is why, so the deck can say it
+   *  rather than describing a reduced figure as the year's. */
   flex_wallet: number | null;
+  flex_proration: FlexProrationLine | null;
   flex_currency: string | null;
   member_age: number | null;
   /** Per-day buy/sell-leave rate for this member (null = none), for a live balance. */

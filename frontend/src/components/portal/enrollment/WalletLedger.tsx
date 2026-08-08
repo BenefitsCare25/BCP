@@ -22,6 +22,7 @@
 import { type FlexSummary, flexShort } from "@/components/enrollment/electionCore";
 import { FillRule } from "@/components/portal/leaf/FillRule";
 import { Money } from "@/components/portal/leaf/Figure";
+import { FlexProrationNote } from "@/components/portal/leaf/FlexProrationNote";
 import { MountRow } from "@/components/portal/leaf/Mount";
 
 export function WalletLedger({
@@ -62,9 +63,27 @@ export function WalletLedger({
             was a slide of its own; as a row it sits in the same subtraction as
             everything under it, which is what makes the four figures readable
             as one sum rather than as a headline and three details. */}
-        <MountRow term="Your allowance" gloss="What you have to spend this year.">
+        {/* The gloss must not say "this year" for a PRO-RATED member: their
+            year's allowance is a different, larger number, and this is the
+            screen they commit from. The derivation goes under the row, in the
+            same words the coverage and usage tabs use. */}
+        <MountRow
+          term="Flex dollars"
+          gloss={
+            flex.proration
+              ? "What you have to spend for your period of cover."
+              : "What you have to spend this year."
+          }
+        >
           <Money value={flex.wallet} currency={currency} />
         </MountRow>
+        {flex.proration && (
+          <FlexProrationNote
+            proration={flex.proration}
+            currency={currency}
+            className="pb-3"
+          />
+        )}
         {flex.total !== 0 && (
           // **The direction is in the TERM, so the term has to follow the
           // sign.** A downgrade returns money — `total` goes negative and the
@@ -98,8 +117,8 @@ export function WalletLedger({
             term={`Leave you ${flex.leaveImpact < 0 ? "bought" : "sold back"}`}
             gloss={
               flex.leaveImpact < 0
-                ? "Taken from your allowance."
-                : "Added to your allowance."
+                ? "Taken from your flex dollars."
+                : "Added to your flex dollars."
             }
           >
             <Money value={Math.abs(flex.leaveImpact)} currency={currency} />
@@ -134,8 +153,8 @@ export function WalletLedger({
           }
         >
           {allowOverdraft
-            ? "Your choices cost more than your allowance. Your company allows this — your HR team can tell you how the difference is settled."
-            : "Your choices cost more than your allowance. Change one of them to bring it back, or ask your HR team."}
+            ? "Your choices cost more than your flex dollars. Your company allows this — your HR team can tell you how the difference is settled."
+            : "Your choices cost more than your flex dollars. Change one of them to bring it back, or ask your HR team."}
         </p>
       )}
     </>

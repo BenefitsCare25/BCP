@@ -6,7 +6,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.api import PlanFinancials
+from app.schemas.api import FlexProrationLine, PlanFinancials
 from app.schemas.member_query import MemberQuery
 
 
@@ -397,6 +397,13 @@ class EnrollmentOptionsOut(BaseModel):
     # Member's flex wallet + age, so the UI can show the running flex balance as
     # the member elects (wallet minus total price tags). None when no flex exists.
     flex_wallet: float | None = None
+    # How that wallet was scaled to the member's cover period, when it was —
+    # else None. `flex_wallet` is the EFFECTIVE (pro-rated) allowance, so this is
+    # what stops the enrollment deck describing it as the year's: the member
+    # decides how to spend the wallet HERE, and an allowance smaller than the one
+    # their colleagues quote, with nothing explaining it, is the question they
+    # will ask. The coverage and usage tabs already carry the same derivation.
+    flex_proration: FlexProrationLine | None = None
     flex_currency: str | None = None
     member_age: int | None = None
     # Per-day buy/sell-leave rate for this member (None when no rate applies), so the

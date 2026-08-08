@@ -44,6 +44,7 @@ from datetime import date
 from typing import Any
 
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED
+from app.schemas.api import FlexProrationLine
 from app.services.roster_attributes import (
     first_value,
     resolved_last_day,
@@ -379,6 +380,36 @@ def describe(raw: object) -> str:
     return f"{served}/{total} {unit}"
 
 
+def proration_line(employee: Any) -> FlexProrationLine | None:
+    """The stored derivation behind a pro-rated wallet, as API output.
+
+    None when nothing was pro-rated, so a surface can render the explanation
+    unconditionally and print nothing in the ordinary case. Shape-guarded: the
+    column is JSON and a legacy/hand-edited row must not break the caller.
+
+    It lives HERE, beside ``describe``, because three surfaces answer "why is
+    this allowance not the full year's" — the benefit statement, the utilization
+    payload and the enrollment options — and a member moving between them must
+    not meet three spellings of one derivation.
+    """
+    raw = getattr(employee, "flex_proration", None)
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return FlexProrationLine(
+            basis=str(raw["basis"]),
+            factor=float(raw["factor"]),
+            served=int(raw["served"]),
+            total=int(raw["total"]),
+            full_amount=float(raw["full_amount"]),
+            note=describe(raw),
+            period_start=raw.get("period_start"),
+            period_end=raw.get("period_end"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 __all__ = [
     "APPLIES_BOTH",
     "APPLIES_JOINERS",
@@ -397,5 +428,6 @@ __all__ = [
     "prorate",
     "proration_config",
     "proration_errors",
+    "proration_line",
     "service_period",
 ]

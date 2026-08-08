@@ -323,7 +323,7 @@ export function MemberEnrollmentPanel({
   const blocked = leaveError
     ? "Your leave choice needs fixing before you can send."
     : flexShort(flex) && !win.allow_overdraft
-      ? "Your choices cost more than your allowance — reduce them before sending."
+      ? "Your choices cost more than your flex dollars — reduce them before sending."
       : null;
 
   async function saveAll(): Promise<boolean> {
@@ -366,7 +366,7 @@ export function MemberEnrollmentPanel({
         if (e.detail.code === "flex_overdrawn") {
           const balance = e.detail.balance;
           toast.error(
-            `Your choices exceed your allowance${
+            `Your choices exceed your flex dollars${
               typeof balance === "number"
                 ? ` by ${money}${fmtAmount(Math.abs(balance))}`
                 : ""
@@ -567,7 +567,7 @@ export function MemberEnrollmentPanel({
         // which is who the rest of the portal names.
         description={`${
           unpricedProducts?.length
-            ? `These plans change your coverage but don't have a price set yet, so they would draw ${money}0 from your allowance: ${unpricedProducts.join(", ")}. `
+            ? `These plans change your coverage but don't have a price set yet, so they would draw ${money}0 from your flex dollars: ${unpricedProducts.join(", ")}. `
             : ""
         }You can send them anyway, or check with your HR team first.`}
         confirmLabel="Send anyway"

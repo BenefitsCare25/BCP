@@ -16,6 +16,7 @@ import type { FlexCoverageLine } from "@/types";
 import { FAMILY_STATUS_LABELS, type FamilyStatusCode } from "@/types";
 import { Mount, MountRow, MountRule } from "./Mount";
 import { Money } from "./Figure";
+import { WALLET_LABEL } from "./FlexProrationNote";
 import { familyGloss } from "./glossary";
 
 function familyLabel(code: string | null): string | null {
@@ -76,23 +77,52 @@ export function FlexMount({
       as="article"
       rise={rise}
       label="Flexible benefits"
-      gloss="Your yearly allowance to spend across the benefits listed here."
+      // No gloss. "Your allowance to spend across the benefits listed here" is
+      // a table of contents for a card that is already a labelled figure over a
+      // labelled list — it cost a line above the fold and named the card twice.
+      //
+      // Label and figure share ONE baseline beside the title, matching the
+      // usage tab's wallet: stacked, a two-word caption under a short figure
+      // built a third band of height into the card's head.
       aside={
-        <div className="text-right">
+        <span className="flex items-baseline justify-end gap-1.5">
+          <span className="leaf-label">
+            {WALLET_LABEL}
+          </span>
           <Money
             value={flex.wallet_amount}
             currency={currency}
             emphasis="display"
           />
-          <div className="leaf-label mt-0.5">Yearly allowance</div>
-        </div>
+        </span>
       }
     >
+      {/* Why the allowance is what it is, when it is not the full year's, in
+          the same two-column shape as the usage tab: the reason on the left,
+          the figure it was scaled from on the right, under the heading half
+          each belongs to.
+
+          This tab used to print the pro-rated figure under the words "Yearly
+          allowance" with nothing to explain it — naming a reduced number as the
+          annual one on a screen where the annual one is a different number.
+          Both tabs show the same wallet, so both say the same thing about it;
+          this one keeps the annual amount, since "what's left" is about what
+          has gone rather than about the arithmetic. */}
+      {flex.proration && (
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-row text-label">
+          <span>Pro-rated to {flex.proration.note} of cover</span>
+          <span className="shrink-0">
+            <Money value={flex.proration.full_amount} currency={currency} /> a
+            year
+          </span>
+        </div>
+      )}
+
       {(family || flex.tier_name) && (
         <dl>
           {family && <MountRow term="Covers">{family}</MountRow>}
           {flex.tier_name && (
-            <MountRow term="Your allowance band">{flex.tier_name}</MountRow>
+            <MountRow term="Flex dollar band">{flex.tier_name}</MountRow>
           )}
         </dl>
       )}
@@ -109,7 +139,7 @@ export function FlexMount({
             {spent !== 0 && (
               <MountRow
                 term="Spent on your cover"
-                gloss="Allowance already used to pay for the plans above."
+                gloss="Flex dollars already used to pay for the plans above."
               >
                 {/* Stored positive; the direction is in the term, not a sign
                     wedged between the currency symbol and the digits. */}
@@ -129,8 +159,8 @@ export function FlexMount({
                 }`}
                 gloss={
                   leave < 0
-                    ? "Taken from your allowance."
-                    : "Added to your allowance."
+                    ? "Taken from your flex dollars."
+                    : "Added to your flex dollars."
                 }
               >
                 <Money value={Math.abs(leave)} currency={currency} />
@@ -149,7 +179,7 @@ export function FlexMount({
           </dl>
           {shortfall && (
             <p className="text-row text-label">
-              Your choices cost more than your allowance. Your HR team can tell
+              Your choices cost more than your flex dollars. Your HR team can tell
               you how the difference is settled.
             </p>
           )}
@@ -163,7 +193,7 @@ export function FlexMount({
       {!flex.price_age_known && (
         <p className="text-row text-label">
           We don&rsquo;t have your date of birth on file, so what your plan
-          choices cost hasn&rsquo;t been taken off this allowance yet — the
+          choices cost hasn&rsquo;t been taken off your flex dollars yet — the
           figure above may be higher than what you can actually spend. Your HR
           team can add your date of birth.
         </p>

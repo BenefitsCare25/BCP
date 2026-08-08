@@ -385,7 +385,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
               all. Off by default: reducing an allowance on an inference is the
               one error that cannot be walked back with a member. */}
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3">
-            <FieldLabel hint="Scales the annual allowance to the period the member was actually covered, and scales the price tags drawn against it by the same factor. Claims already reimbursed never pro-rate. Leave as Full annual when the scheme grants the whole year regardless.">
+            <FieldLabel hint="Scales the annual flex dollars to the period the member was actually covered, and scales the price tags drawn against it by the same factor. Claims already reimbursed never pro-rate. Leave as Full annual when the scheme grants the whole year regardless.">
               Pro-ration
             </FieldLabel>
             <div className="w-56 space-y-1">
@@ -408,7 +408,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Full annual allowance</SelectItem>
+                  <SelectItem value="none">Full annual flex dollars</SelectItem>
                   {/* "By months" already means a part month counts whole — that
                       is what choosing months over days IS. A member wanting
                       partial-month precision picks days. */}

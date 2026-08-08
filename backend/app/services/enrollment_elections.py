@@ -399,6 +399,9 @@ def build_enrollment_options(
         enrollment_id=enrollment_id,
         products=products,
         flex_wallet=employee.flex_wallet_amount if employee else None,
+        flex_proration=(
+            flex_proration.proration_line(employee) if employee else None
+        ),
         flex_currency=employee.flex_currency if employee else None,
         member_age=age,
         member_leave_rate=leave_rate_for(leave_policy, employee) if employee else None,

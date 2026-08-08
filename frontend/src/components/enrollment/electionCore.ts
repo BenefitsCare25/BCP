@@ -24,6 +24,7 @@ import type {
   MemberLeaveOptions,
   ProductTierSet,
 } from "@/api/enrollment";
+import type { FlexProrationLine } from "@/types";
 import { fmtAmount } from "@/lib/format";
 
 /** The minimal dependant shape the election UI needs (statement dependants and
@@ -351,6 +352,11 @@ export function buildElectionsPayload(
 
 export interface FlexSummary {
   wallet: number;
+  /** How `wallet` was scaled to the member's cover period, when it was. SERVED,
+   * never recomputed here — a fraction that drifts from the figure beside it is
+   * silent, and the month count has no exact JS equivalent worth maintaining
+   * twice. Null for anyone covered the whole period. */
+  proration: FlexProrationLine | null;
   currency: string | null;
   total: number;
   leaveImpact: number;
@@ -437,6 +443,7 @@ export function computeFlex(
       : 0;
   return {
     wallet: options.flex_wallet,
+    proration: options.flex_proration ?? null,
     currency: options.flex_currency,
     total,
     leaveImpact,
@@ -456,12 +463,12 @@ export function leaveBlockedReason(
   if (!leave) return "No leave policy is configured for this benefit year.";
   if (action === "buy") {
     if (!leave.allow_buy) return "Buying leave isn't permitted this year.";
-    if (leave.max_buy_days <= 0) return "No buy-leave allowance is configured.";
+    if (leave.max_buy_days <= 0) return "No buy-leave days are configured.";
     return null;
   }
   if (!leave.allow_sell) return "Selling leave isn't permitted this year.";
   if (!leave.sell_eligible) return "This member isn't eligible to sell leave.";
-  if (leave.max_sell_days <= 0) return "No sell-leave allowance is configured.";
+  if (leave.max_sell_days <= 0) return "No sell-leave days are configured.";
   return null;
 }
 

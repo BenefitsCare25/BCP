@@ -253,9 +253,9 @@ export function FlexPanel({
           <div className="flex items-center justify-end gap-1 text-2xs text-muted-foreground">
             {usage ? (shortfall ? "overdrawn" : "available") : "annual wallet"}
             <InfoHint>
-              The allowance, less the price tags of the cover this member holds
-              and any claim already approved. Pending claims are shown separately
-              and never deducted.
+              The flex dollars, less the price tags of the cover this member
+              holds and any claim already approved. Pending claims are shown
+              separately and never deducted.
             </InfoHint>
           </div>
         </div>
@@ -282,11 +282,11 @@ export function FlexPanel({
           // The headline already states the figure and calls it available;
           // repeating it in the sentence beneath is the restatement this panel
           // exists to stop.
-          <span>Nothing has been drawn from this allowance yet.</span>
+          <span>No flex dollars have been drawn yet.</span>
         ) : (
           <>
             <span className="tabular-nums">
-              {formatWallet(wallet, currency)} allowance
+              {formatWallet(wallet, currency)} flex dollars
             </span>
             {drawn.map((d) => (
               <span key={d.label} className="tabular-nums">

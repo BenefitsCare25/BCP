@@ -17,10 +17,10 @@ import type {
   UtilizationBucket,
 } from "@/types";
 import type { PortalClaim } from "@/api/portal";
-import { Mount, MountRule } from "./Mount";
+import { Mount, MountRow, MountRule } from "./Mount";
 import { insuredClaimTitle } from "./ClaimMount";
 import { Limit, Money, currencySymbol } from "./Figure";
-import { FillRule } from "./FillRule";
+import { FillRule, drawnAgainst } from "./FillRule";
 import { glossBeside } from "./glossary";
 import { formatDay } from "./date";
 
@@ -148,27 +148,58 @@ function BucketBlock({
   );
 }
 
+/** What a flex category reports as drawn.
+ *
+ * A category with NO cap of its own draws against the WALLET, so that is the
+ * limit its figure is capped at — the same rule `FillRule` applies to every
+ * other limit, reached here because a capless category renders no bar and so
+ * used to print `approved` raw. On a S$1,340 wallet against which S$2,000 of
+ * claims were approved, the card said "S$0 left to claim" and, two lines below,
+ * "Approved and paid S$2,000": the member is told the wallet paid more than it
+ * holds. A wallet pays UP TO its allowance; the S$660 above it is the member's
+ * own. The claim record and the reports still carry the full approved figure —
+ * this cap applies only where a figure is read against a limit. */
+function drawnFromWallet(
+  approved: number,
+  subLimit: number | null,
+  wallet: number | null,
+): number {
+  const limit = subLimit ?? wallet;
+  return limit == null ? approved : drawnAgainst(approved, limit);
+}
+
 function FlexBlock({ flex }: { flex: FlexUtilization }) {
   const currency = flex.currency ?? "S$";
   const base = flex.flex_balance ?? flex.wallet_amount;
+  const used = base == null ? flex.approved : drawnAgainst(flex.approved, base);
 
-  // A lone category with no cap of its own and nothing claimed against it is
-  // the wallet restated under a second name — the row can only repeat the bar
-  // directly above it. Two or more categories, a sub-limit or any activity all
-  // make the breakdown say something the wallet doesn't.
+  // A lone category with NO cap of its own can only restate the wallet: with
+  // one category the wallet's approved and pending totals ARE that category's,
+  // so the row repeats the two figures directly above it under a second name.
+  // It used to be kept whenever it had any activity — which is exactly when the
+  // repetition is visible. A sub-limit, or a second category, makes the
+  // breakdown say something the wallet doesn't.
   const only = flex.categories.length === 1 ? flex.categories[0] : null;
-  const categories =
-    only && only.sub_limit === null && only.approved <= 0 && only.pending <= 0
-      ? []
-      : flex.categories;
+  const categories = only && only.sub_limit === null ? [] : flex.categories;
 
   return (
     <Mount
       label="Flexible benefits"
-      gloss="Your yearly allowance and what you've claimed against it."
+      // No gloss. The aside states what is left and the rows beneath state the
+      // allowance and what has gone — "your allowance and what you've claimed
+      // against it" is a table of contents for three figures already on screen.
+      // The figure and its label sit on ONE baseline beside the title, not
+      // stacked — stacked, a two-word caption under a four-character figure
+      // built a third band of height into a card that has two rows of content.
       aside={
         flex.available !== null ? (
-          <div className="text-right">
+          <span className="flex items-baseline justify-end gap-1.5">
+            {/* Label FIRST, then the figure — it reads as a sentence, and it
+                puts the number at the card's right edge where every other
+                figure on the tab is aligned. */}
+            <span className="leaf-label">
+              {flex.available < 0 ? "Short by" : "Left to claim"}
+            </span>
             {/* A wallet spent past its allowance (an upgrade priced above it)
                 leaves this negative, and "S$-450 left to claim" is not a
                 sentence anyone reads correctly — it is a shortfall, said the
@@ -179,64 +210,90 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
               emphasis="display"
               className={flex.available < 0 ? "text-strike-pending" : undefined}
             />
-            <div className="leaf-label mt-0.5">
-              {flex.available < 0 ? "Short by" : "Left to claim"}
-            </div>
-          </div>
+          </span>
         ) : undefined
       }
     >
-      {/* `remaining` is deliberately NOT passed. The mount's own aside already
-          states what is left, in the largest type on the tile — passing it here
-          too printed the same figure twice under two labels ("Left to claim"
-          above, "left" in the legend), which reads as two facts that happen to
-          agree rather than one stated once. The legend keeps the half the aside
-          does not carry: how much of the allowance has gone. */}
-      <FillRule
-        limit={base}
-        approved={flex.approved}
-        pending={flex.pending}
-        remaining={null}
-        currency={currency}
-      />
+      {/* **The whole card is TWO rows.** Row one is the title with what's left
+          beside it; row two is why the allowance is what it is on the left, and
+          what has gone from it on the right — each half sitting under the
+          heading half it belongs to.
 
-      {/* Why the allowance is what it is, when it is not the full year's. A
-        * member sees this the moment their leaving date is recorded, and an
-        * allowance that simply shrinks with nothing explaining it is the thing
-        * they will ask about. Absent for anyone covered the whole period. */}
-      {flex.proration && (
-        <p className="mt-2 text-row text-label">
-          <Money value={flex.proration.full_amount} currency={currency} /> a
-          year, pro-rated to {flex.proration.note} of cover
-        </p>
-      )}
+          It was a bar, a legend, a row each for allowance and used, and a line
+          for the pro-ration: five bands of vertical space for four numbers, on
+          a card whose entire content is four numbers. The bar is gone because a
+          track that is either empty or solid adds a graphic to a purely numeric
+          card, and on a fully-drawn wallet it was a block of colour saying what
+          "S$0 left to claim" already says in the largest type here.
 
+          `remaining` is deliberately NOT restated: the aside carries it. And
+          pending is a TERM OF ITS OWN, never folded into "used" — it is not
+          subtracted from what is left (a product rule from `utilization.py`),
+          so presenting it as spent would misreport the balance. The bar drew
+          that distinction as a texture; the words carry it now. */}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-row text-label">
+        {/* Left: why the figure on the right is smaller than a full year's.
+            The annual amount is deliberately not repeated here — "What's
+            covered" states it in full ("S$2,680 a year, pro-rated to 3/6
+            months of cover"); this tab is about what is left, so it carries
+            the reason and not the arithmetic. An empty span holds the right
+            half in place for a member who is covered the whole period. */}
+        <span>
+          {flex.proration && `Pro-rated to ${flex.proration.note} of cover`}
+        </span>
+        {/* Right: "X of Y used" — the same words `FillRule` captions every
+            other limit with, and the same words the category rows below use, so
+            the wallet and its subdivisions read as one vocabulary. It replaced
+            "S$1,340 allowance · S$1,340 used", which introduced a synonym for
+            the card's own title to label a figure the sentence already
+            explains. */}
+        <span className="shrink-0">
+          <Money value={used} currency={currency} /> of{" "}
+          <Money value={base} currency={currency} /> used
+          {flex.pending > 0 && (
+            <>
+              {" · "}
+              <Money value={flex.pending} currency={currency} /> under review
+            </>
+          )}
+        </span>
+      </div>
+
+      {/* One LINE per category, not a titled block with its own bar. Each is a
+          subdivision of the wallet stated directly above, so it needs to be
+          readable as a detail of it rather than as another card. */}
       {categories.length > 0 && (
         <>
-          <MountRule className="mt-4" />
-          <div className="divide-y divide-hairline/75">
+          <MountRule className="mt-1" />
+          <dl>
             {categories.map((c) => (
-              <div key={c.name} className="py-3">
-                <div className="mb-2 flex items-baseline justify-between gap-4">
-                  <span className="min-w-0 break-words text-row text-record">
-                    {c.name}
-                  </span>
-                  {c.sub_limit === null && (
-                    <span className="shrink-0 text-row text-label">
-                      No separate cap
-                    </span>
+              <MountRow key={c.name} term={c.name}>
+                <span className="text-label">
+                  <Money
+                    value={drawnFromWallet(c.approved, c.sub_limit, base)}
+                    currency={currency}
+                  />
+                  {c.sub_limit !== null && (
+                    <>
+                      {" of "}
+                      <Money value={c.sub_limit} currency={currency} />
+                    </>
                   )}
-                </div>
-                <FillRule
-                  limit={c.sub_limit}
-                  approved={c.approved}
-                  pending={c.pending}
-                  remaining={c.remaining}
-                  currency={currency}
-                />
-              </div>
+                  {" used"}
+                  {c.remaining !== null && (
+                    <>
+                      {" · "}
+                      <Money
+                        value={Math.max(0, c.remaining)}
+                        currency={currency}
+                      />
+                      {" left"}
+                    </>
+                  )}
+                </span>
+              </MountRow>
             ))}
-          </div>
+          </dl>
         </>
       )}
     </Mount>

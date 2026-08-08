@@ -124,8 +124,8 @@ function priceTerm(
   if (tier.price_tag === 0)
     return {
       term: flexOnChange
-        ? "No change to your allowance."
-        : "Nothing comes out of your allowance.",
+        ? "No change to your flex dollars."
+        : "Nothing comes out of your flex dollars.",
       amount: null,
     };
   if (tier.price_tag > 0) return { term: "Costs you", amount: tier.price_tag };

@@ -222,7 +222,7 @@ export function FamilyChoice({
             ? "Everyone here is covered on this plan automatically — it costs you nothing extra."
             : disabled
               ? "The people covered on this plan alongside you."
-              : "Tick anyone you'd like covered on this plan. Doing so spends part of your allowance."}
+              : "Tick anyone you'd like covered on this plan. Doing so spends part of your flex dollars."}
         </p>
 
         {depCompulsory || disabled ? (
@@ -256,10 +256,10 @@ export function FamilyChoice({
             <>
               Covering them costs you{" "}
               <Money value={pricing.total} currency={currency} emphasis="strong" />{" "}
-              from your allowance.
+              from your flex dollars.
             </>
           ) : (
-            "Covering them draws nothing from your allowance."
+            "Covering them draws nothing from your flex dollars."
           )}
         </p>
       )}

@@ -41,7 +41,7 @@ function TradeImpact({
 }) {
   return (
     <MountRow
-      term={t.isBuy ? "Taken from your allowance" : "Added to your allowance"}
+      term={t.isBuy ? "Taken from your flex dollars" : "Added to your flex dollars"}
       gloss={emphasis ? `${days(t.enteredDays)} at your daily rate.` : undefined}
     >
       <Money
@@ -133,7 +133,7 @@ function TradeNotices({ t }: { t: Trade }) {
       {t.trading && !t.blockedReason && t.rate <= 0 && (
         <p className="text-row text-label">
           There&rsquo;s no daily rate set for your role yet, so trading leave
-          won&rsquo;t change your allowance. Your HR team can confirm it.
+          won&rsquo;t change your flex dollars. Your HR team can confirm it.
         </p>
       )}
       {!t.trading && t.buyBlocked && t.sellBlocked && (
@@ -189,7 +189,7 @@ export function LeaveMount({
       as="article"
       rise={rise}
       label="Buy or sell leave"
-      gloss="Spend part of your allowance on extra days off, or sell days back to add to it."
+      gloss="Spend part of your flex dollars on extra days off, or sell days back to add to them."
     >
       {allowance && (
         <p className="text-row text-label">
