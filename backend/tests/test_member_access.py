@@ -33,6 +33,7 @@ from app.services.member_access import (
     access_for_employee,
     has_live_claim,
     leaver_access_days,
+    refusal,
 )
 
 YEAR_START = date(2029, 1, 1)
@@ -696,3 +697,24 @@ def test_the_batched_map_is_a_fixed_number_of_queries():
         finally:
             event.remove(engine, "before_cursor_execute", _count)
     assert len(counted) <= 4, f"{len(counted)} queries for {len(refs)} accounts"
+
+
+def test_the_ended_refusal_speaks_its_date():
+    """The one sentence a returning leaver reads, and the sign-in form now shows
+    it verbatim — so the date in it has to be written the way the portal writes
+    every other date ("22 Mar 2026", `leaf/date.ts`). An ISO date is fine in
+    `access_ends_on` beside it, which is read by code; in the middle of an
+    English sentence it was the only one on the surface."""
+    # Left on 30 Jun, 60-day run-off, read long after it expired.
+    access = _access(
+        _emp(status=EMPLOYEE_STATUS_TERMINATED, terminated_effective=LAST_DAY),
+        _year(60),
+        today=date(2029, 12, 1),
+    )
+    assert access.state == "ended"
+    body = refusal(access, Capability.RECORD)
+    assert body is not None
+    assert "29 Aug 2029" in str(body["message"])
+    assert "2029-08-29" not in str(body["message"])
+    # The machine-readable copy keeps ISO — the pair is the point.
+    assert body["access_ends_on"] == access.access_ends_on.isoformat()

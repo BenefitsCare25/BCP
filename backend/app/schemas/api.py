@@ -603,6 +603,9 @@ class CoverageSummaryItem(BaseModel):
     employee_name: str | None
     product_count: int
     products: list[CoverageProduct]
+    #: Terminated on the roster. Only ever true when the caller asked for
+    #: leavers, but served unconditionally so the row can say so.
+    left: bool = False
 
 
 class CoverageSummary(BaseModel):

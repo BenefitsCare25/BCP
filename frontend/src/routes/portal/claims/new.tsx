@@ -24,6 +24,7 @@ import { Action } from "@/components/portal/leaf/Action";
 import { Field, FormAlert, leafControl } from "@/components/portal/leaf/Field";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { Mount } from "@/components/portal/leaf/Mount";
+import { errorStatus, formatError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
 
@@ -40,14 +41,26 @@ export function PortalNewClaimPage() {
     !options.data ||
     (form.insured.length === 0 && !form.hasFlex)
   ) {
+    /* The server's own sentence, in the two different ways it can arrive.
+       `claimBlock` is the 200 that withheld a claim kind (cover that ended
+       before the period began); a 403 is the harder case — `coverage-options`
+       requires CLAIM, so a settling leaver's request is REFUSED outright and
+       there is no body to read a block out of. Both must beat the generic line
+       below, which says the member has no cover on file and sends them to HR:
+       untrue, contradicted by the access notice on the same screen, and the
+       "this app is broken" outcome that notice exists to prevent. */
+    const refused =
+      options.isError && errorStatus(options.error) === 403
+        ? formatError(options.error)
+        : null;
+    const blocked = form.claimBlock ?? refused;
     return (
-      <Mount label="No benefits to claim against">
+      /* The heading has to move with the sentence. "No benefits to claim
+         against" is the right noun only for the generic case — a leaver HAS
+         benefits, and the thing that ended is the window. */
+      <Mount label={blocked ? "This window has closed" : "No benefits to claim against"}>
         <p className="text-row text-label">
-          {/* The server's own sentence when it withheld a claim kind (cover
-              that ended before the period began) — the same one submit would
-              have refused with. Without it a leaver read the generic "no cover
-              recorded", which is not what happened to them. */}
-          {form.claimBlock ??
+          {blocked ??
             "We don't have any cover recorded against your name for this " +
               "period, so there's nothing to claim against yet. Your HR team " +
               "can check your record."}

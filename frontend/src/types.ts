@@ -442,6 +442,8 @@ export interface CoverageSummaryItem {
   employee_name: string | null;
   product_count: number;
   products: CoverageProduct[];
+  /** Terminated on the roster — only present when leavers were asked for. */
+  left: boolean;
 }
 
 export interface CoverageSummary {

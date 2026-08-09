@@ -1173,13 +1173,21 @@ export function ClaimsQueuePage() {
       <TabsContent value="settings" className="space-y-5">
         <Card>
           <CardHeader className="pb-4">
-            <CardTitle>Claim submission</CardTitle>
+            {/* Both fields are DEADLINES on the current benefit year, which is
+                what they have in common — the old "Claim submission" titled the
+                card after the first field only, and the second one governs
+                portal access, not submission. */}
+            <CardTitle>Deadlines</CardTitle>
             <CardDescription className="max-w-prose">
-              Governs when members may submit claims for the current benefit
-              year.
+              How long members have to send claims in, and how long someone who
+              has left keeps the portal. Both apply to the current benefit year.
             </CardDescription>
           </CardHeader>
-          <CardContent className="pb-6">
+          {/* `space-y-5`: two `PolicyYearDaysField`s are sibling stacks with
+              their own internal `gap-1.5`, so with nothing between them the
+              second label sat flush against the first input and the pair read
+              as one four-line control. */}
+          <CardContent className="space-y-5 pb-6">
             <ClaimGracePeriodField />
             <LeaverAccessField />
           </CardContent>

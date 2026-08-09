@@ -5,6 +5,7 @@ import { useEmployeeUtilization } from "@/api/claims";
 import { useBenefitStatement, useCoverageSummary } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Segmented } from "@/components/ui/segmented";
 import {
   Select,
@@ -122,9 +123,17 @@ export function EmployeeCoveragePage() {
 
   const [query, setQuery] = useState("");
   const [countFilter, setCountFilter] = useState<string>(ANY);
+  // Off by default: this page is about who is covered NOW, and a roster that
+  // silently included everyone who ever left would change the figure every
+  // broker reads off the header. On, it is the only way to reach a leaver's
+  // Portal access sheet — the sheet's `left`/`settling`/`ended` states are all
+  // about people this list excludes (`services/coverage_summary.py`).
+  const [includeLeft, setIncludeLeft] = useState(false);
 
-  const { data: summary, isLoading: listLoading } =
-    useCoverageSummary(policyYearId ?? undefined);
+  const { data: summary, isLoading: listLoading } = useCoverageSummary(
+    policyYearId ?? undefined,
+    includeLeft,
+  );
   const items = useMemo(() => summary?.items ?? [], [summary]);
 
   // Product-count options come from the counts actually present in the roster —
@@ -225,7 +234,10 @@ export function EmployeeCoveragePage() {
           items={filtered.map((it) => ({
             id: it.id,
             name: it.employee_name ?? it.staff_id,
-            subtitle: it.staff_id,
+            // The one word that stops a leaver's row reading as a colleague
+            // still on cover. On the subtitle rather than the trailing slot,
+            // which already carries the product count.
+            subtitle: it.left ? `${it.staff_id} · Left` : it.staff_id,
             trailing: (
               <span
                 className={cn(
@@ -246,15 +258,27 @@ export function EmployeeCoveragePage() {
           query={query}
           onQueryChange={setQuery}
           header={
-            <div className="flex items-center justify-between px-1 pb-2 text-2xs text-muted-foreground">
-              <span>
-                {filtered.length.toLocaleString()}{" "}
-                {filtered.length === 1 ? "employee" : "employees"}
-              </span>
-              {summary && filtered.length !== summary.total && (
-                <span>of {summary.total.toLocaleString()}</span>
-              )}
-            </div>
+            <>
+              <div className="flex items-center justify-between px-1 pb-2 text-2xs text-muted-foreground">
+                <span>
+                  {filtered.length.toLocaleString()}{" "}
+                  {filtered.length === 1 ? "employee" : "employees"}
+                </span>
+                {summary && filtered.length !== summary.total && (
+                  <span>of {summary.total.toLocaleString()}</span>
+                )}
+              </div>
+              {/* A plain label wrapping the box, so the words are the hit
+                  target too — at 16px the box alone is under the 24px minimum
+                  and this sits in a narrow rail. */}
+              <label className="mb-2 flex cursor-pointer items-center gap-2 px-1 text-2xs text-muted-foreground">
+                <Checkbox
+                  checked={includeLeft}
+                  onCheckedChange={(v) => setIncludeLeft(v === true)}
+                />
+                Include leavers
+              </label>
+            </>
           }
         />
 

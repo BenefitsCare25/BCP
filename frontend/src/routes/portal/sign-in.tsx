@@ -97,14 +97,24 @@ export function PortalSignInPage() {
             setStep("mfa");
           }
         },
-        // A blanket "not recognised" hid the two states the user MUST see:
-        // 423 (locked out) and 429 (rate limited). Retrying against those just
-        // extends the backoff, so surface the server's own message. 401 keeps
-        // the generic wording — it must not confirm whether an account exists.
+        // A blanket "not recognised" hid the states the user MUST see:
+        // 423 (locked out), 429 (rate limited) and 403 (their access ended).
+        // Retrying against any of them just extends the backoff or repeats a
+        // refusal that will never change, so surface the server's own message.
+        // 401 keeps the generic wording — it must not confirm whether an
+        // account exists.
+        //
+        // **403 is the leaver's FIRST contact**, and it is the case
+        // `takeAccessEndedMessage` cannot cover: that carries a refusal across
+        // a mid-session bounce, so someone who left months ago and comes back
+        // to a fresh tab never went through it. The server has already worded
+        // this, with the DATE their access ended — the one fact they cannot
+        // look up — and it was being replaced by "check and try again", which
+        // reads as a typo and ends with the member locking their own account.
         onError: (err) => {
           const status = errorStatus(err);
           setError(
-            status === 423 || status === 429
+            status === 423 || status === 429 || status === 403
               ? formatError(err)
               : "Those details weren't recognised. Check and try again.",
           );

@@ -1,7 +1,8 @@
 /** "My claims" — the member's claims for the current benefit year. */
 import { Link } from "@tanstack/react-router";
 import { FilePlus2 } from "lucide-react";
-import { usePortalClaims } from "@/api/portal";
+import { usePortalClaims, usePortalMe } from "@/api/portal";
+import { holds } from "@/components/portal/capabilities";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { Mount } from "@/components/portal/leaf/Mount";
@@ -67,6 +68,13 @@ const MEASURE = "mx-auto max-w-3xl";
 export function PortalClaimsPage() {
   const company = useCompany();
   const claims = usePortalClaims();
+  // The FOURTH entry point that closes on the served capability list, beside
+  // the shell nav, the home mosaic and the broker's preview frame. A settling
+  // leaver keeps this page — reading their claims and answering us is the whole
+  // point of it — but not the right to start a new one, and the pill shipped
+  // ungated: their own banner said the window had closed while the page's one
+  // brand-filled action invited them through it, into a 403.
+  const canClaim = holds(usePortalMe().data?.access.capabilities, "claim");
   useDocumentTitle("My claims");
 
   if (claims.isLoading) return <LeafSkeleton label="Loading your claims" />;
@@ -90,16 +98,18 @@ export function PortalClaimsPage() {
           When you pay for treatment that your benefits cover, send us the
           receipt here and we&rsquo;ll tell you where it&rsquo;s up to.
         </p>
-        <div>
-          <Link
-            to="/portal/$company/claims/new"
-            params={{ company }}
-            className={actionClass("primary", { block: "phone" })}
-          >
-            <FilePlus2 className="size-4" aria-hidden />
-            Make a claim
-          </Link>
-        </div>
+        {canClaim && (
+          <div>
+            <Link
+              to="/portal/$company/claims/new"
+              params={{ company }}
+              className={actionClass("primary", { block: "phone" })}
+            >
+              <FilePlus2 className="size-4" aria-hidden />
+              Make a claim
+            </Link>
+          </div>
+        )}
       </Mount>
     );
   }
@@ -111,7 +121,7 @@ export function PortalClaimsPage() {
           rendering it after the ledger put the portal's primary action behind
           every claim link in the tab order — 40 tab stops to reach a button
           that never left the screen. */}
-      <MakeClaimAction />
+      {canClaim && <MakeClaimAction />}
       {/* Clearance for the floating pill, on top of the shell's own padding.
           The pill's top edge is 144px off the floor on a phone (dock + gap +
           pill) against the shell's 112px, and 72px from `sm` up against its

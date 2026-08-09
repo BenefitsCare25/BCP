@@ -165,13 +165,20 @@ export function useCategoriesGrouped(policyYearId: string | undefined) {
   });
 }
 
-export function useCoverageSummary(policyYearId: string | undefined) {
+/** `includeLeft` is part of the KEY, not just the URL — the two rosters are
+ *  different responses and a shared key served the cached active-only list
+ *  under the toggle that had just asked for leavers. */
+export function useCoverageSummary(
+  policyYearId: string | undefined,
+  includeLeft = false,
+) {
   const cid = useActiveClientId();
   return useQuery({
-    queryKey: ["coverage-summary", policyYearId, cid],
+    queryKey: ["coverage-summary", policyYearId, cid, includeLeft],
     queryFn: () =>
       api.get<CoverageSummary>(
-        `/employees/coverage-summary?policy_year_id=${policyYearId}`,
+        `/employees/coverage-summary?policy_year_id=${policyYearId}` +
+          (includeLeft ? "&include_left=true" : ""),
       ),
     enabled: Boolean(policyYearId),
   });

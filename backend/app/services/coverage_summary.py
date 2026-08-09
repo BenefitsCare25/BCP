@@ -18,24 +18,37 @@ from app.models.product import Product
 from app.schemas.api import CoverageProduct, CoverageSummaryItem
 
 
-def build_coverage_items(db: Session, policy_year_id: str) -> list[CoverageSummaryItem]:
-    """Return one summary row per active employee in the policy year, ordered by staff ID."""
+def build_coverage_items(
+    db: Session, policy_year_id: str, *, include_left: bool = False
+) -> list[CoverageSummaryItem]:
+    """One summary row per employee in the policy year, ordered by staff ID.
+
+    Active only by default — a roster page is about the people currently
+    covered. ``include_left`` adds the terminated ones, which is not a
+    convenience: this picker is the ONLY surface that mounts
+    ``MemberAccountActions``, and every leaver phase that sheet renders
+    (``leaving``/``left``/``settling``/``ended``, the wind-down dates, the
+    derived ``access_state``) is about someone this filter had already removed
+    from the page — so the whole leaver half of it could never be reached. A
+    broker settling a leaver's last claim needs exactly that person.
+    """
+    conditions = [Employee.policy_year_id == policy_year_id]
+    if not include_left:
+        conditions.append(Employee.status == EMPLOYEE_STATUS_ACTIVE)
     rows = db.execute(
         select(
             Employee.id,
             Employee.staff_id,
             Employee.employee_name,
             Employee.matched_categories,
+            Employee.status,
         )
-        .where(
-            Employee.policy_year_id == policy_year_id,
-            Employee.status == EMPLOYEE_STATUS_ACTIVE,
-        )
+        .where(*conditions)
         .order_by(Employee.staff_id)
     ).all()
 
     cat_ids: set[str] = set()
-    for _id, _sid, _name, matched in rows:
+    for _id, _sid, _name, matched, _status in rows:
         for m in matched or []:
             if m.get("category_id"):
                 cat_ids.add(m["category_id"])
@@ -50,7 +63,7 @@ def build_coverage_items(db: Session, policy_year_id: str) -> list[CoverageSumma
             prod_by_cat[cid] = (code, name)
 
     items: list[CoverageSummaryItem] = []
-    for emp_id, staff_id, employee_name, matched in rows:
+    for emp_id, staff_id, employee_name, matched, status in rows:
         seen: dict[str, str | None] = {}
         for m in matched or []:
             cid = m.get("category_id")
@@ -71,6 +84,11 @@ def build_coverage_items(db: Session, policy_year_id: str) -> list[CoverageSumma
                 employee_name=employee_name,
                 product_count=len(products),
                 products=products,
+                # Served ALWAYS, not only when leavers were asked for: the
+                # picker marks the row, and a row that looks identical to an
+                # active colleague's is how a broker reads a leaver's coverage
+                # as current.
+                left=status != EMPLOYEE_STATUS_ACTIVE,
             )
         )
     return items

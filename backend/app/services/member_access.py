@@ -136,6 +136,18 @@ _REFUSALS: dict[Capability, str] = {
 }
 
 
+def _spoken_day(day: date) -> str:
+    """A date inside a SENTENCE, written the way the portal writes dates.
+
+    The machine-readable copy of the same date rides alongside in
+    `access_ends_on`; this one is prose a member reads, and `2026-03-22` in the
+    middle of an English sentence is the only ISO date anywhere on that surface
+    (`leaf/date.ts` renders every other one as "22 Mar 2026"). `%-d` is not
+    portable to Windows, so the day is trimmed by hand.
+    """
+    return f"{day.day} {day.strftime('%b %Y')}"
+
+
 def refusal(access: MemberAccess, capability: Capability) -> dict[str, object] | None:
     """The 403 body for a denied capability, or None when it is allowed.
 
@@ -148,7 +160,7 @@ def refusal(access: MemberAccess, capability: Capability) -> dict[str, object] |
     on = access.access_ends_on
     if ended:
         message = (
-            f"Your access to this portal ended on {on.isoformat()}."
+            f"Your access to this portal ended on {_spoken_day(on)}."
             if on
             else "Your access to this portal has ended."
         )

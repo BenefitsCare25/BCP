@@ -851,6 +851,18 @@ def test_employee_coverage_summary_cross_tenant_404(client_as_a: TestClient) -> 
     assert res.status_code == 404
 
 
+def test_employee_coverage_summary_leavers_cross_tenant_404(
+    client_as_a: TestClient,
+) -> None:
+    """`include_left` widens WHICH rows come back, never whose. A filter that
+    relaxes a WHERE clause is exactly where a tenant check gets forgotten."""
+    res = client_as_a.get(
+        "/api/v1/employees/coverage-summary",
+        params={"policy_year_id": PY_B, "include_left": "true"},
+    )
+    assert res.status_code == 404
+
+
 def test_employee_coverage_report_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(
         "/api/v1/employees/coverage-report/export", params={"policy_year_id": PY_B}

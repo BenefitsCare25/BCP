@@ -158,6 +158,7 @@ def list_employees(
 @router.get("/coverage-summary", response_model=CoverageSummary)
 def coverage_summary(
     policy_year_id: str,
+    include_left: bool = False,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CoverageSummary:
@@ -165,9 +166,15 @@ def coverage_summary(
 
     Lightweight (no SOB hydration) so the entire policy year fits one response,
     letting the client filter by product count + search without server paging.
+
+    ``include_left`` adds terminated members. Spelled as its own flag rather
+    than reusing `/employees`' `status=active|terminated|all`, because this
+    picker only ever wants "the roster" or "the roster plus the people who have
+    left" — a terminated-ONLY roster page is not a thing a broker asks for, and
+    offering it here would be a third list to keep in step with the other two.
     """
     assert_policy_year_for_user(policy_year_id, user, db)
-    items = build_coverage_items(db, policy_year_id)
+    items = build_coverage_items(db, policy_year_id, include_left=include_left)
     return CoverageSummary(total=len(items), items=items)
 
 
