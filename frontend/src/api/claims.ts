@@ -210,12 +210,18 @@ export function useBrokerClaims(
   limit: number,
   /** "" = both categories, which is what the server defaults to. */
   caseType: CaseType | "" = "",
+  /** One member's claims. The endpoint has always accepted `employee_id`; the
+   *  queue never passed it, so the flex panel's "2 claims" link landed on the
+   *  whole firm's queue. */
+  employeeId?: string,
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
-    // caseType is part of the key: without it, switching the filter would serve
-    // the previous category's page from cache.
-    queryKey: ["claims", cid, policyYearId, status, caseType, offset, limit],
+    // caseType and employeeId are part of the key: without them, switching a
+    // filter would serve the previous selection's page from cache.
+    queryKey: [
+      "claims", cid, policyYearId, status, caseType, employeeId, offset, limit,
+    ],
     queryFn: () => {
       const params = new URLSearchParams({
         policy_year_id: policyYearId!,
@@ -224,6 +230,7 @@ export function useBrokerClaims(
       });
       if (status) params.set("status", status);
       if (caseType) params.set("case_type", caseType);
+      if (employeeId) params.set("employee_id", employeeId);
       return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
     },
     enabled: !!policyYearId,

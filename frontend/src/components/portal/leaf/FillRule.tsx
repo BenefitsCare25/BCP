@@ -12,6 +12,13 @@
  * is left** — that is a product rule from `utilization.py`, and drawing it as
  * though it were spent would misreport the member's balance.
  *
+ * **Pending is "not settled yet", never "under review".** The figure is a SUM,
+ * and `needs_info` is in it — a claim we have asked the member a question about
+ * is pending, but it is waiting on THEM. "Under review" told them we were
+ * working on something that had been sitting on their own desk for a fortnight.
+ * The per-claim states in `UsageLeaf`'s breakdown say which is which; this
+ * caption covers every mix of them, so it names the only thing they share.
+ *
  * The fill draws itself from zero on load. This is one of the four things that
  * animate in this world, and it earns it: the motion IS the datum. It is a
  * `scaleX` on the painted bar, never a width transition, so nothing reflows —
@@ -44,7 +51,7 @@ function sentence(
       `${currency}${moneyText(limit)} used`,
   ];
   if (pending > 0)
-    parts.push(`${currency}${moneyText(pending)} still under review`);
+    parts.push(`${currency}${moneyText(pending)} not settled yet`);
   if (remaining !== null)
     parts.push(`${currency}${moneyText(Math.max(0, remaining))} left`);
   return `${parts.join(", ")}.`;
@@ -92,7 +99,7 @@ export function FillRule({
         )}
         {pending > 0 && (
           <div className="flex items-baseline justify-between gap-4">
-            <span className="text-row text-label">Still under review</span>
+            <span className="text-row text-label">Not settled yet</span>
             <Money value={pending} currency={cur} />
           </div>
         )}
@@ -144,7 +151,7 @@ export function FillRule({
                   currency={cur}
                   className="text-record"
                 />{" "}
-                under review
+                not settled
               </>
             )}
           </span>

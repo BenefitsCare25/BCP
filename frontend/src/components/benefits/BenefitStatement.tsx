@@ -88,7 +88,11 @@ export function BenefitStatement({
             <CoverageTable lines={data.coverage} utilization={utilization} />
           )}
           {data.flex && (
-            <FlexPanel flex={data.flex} usage={utilization?.flex} />
+            <FlexPanel
+              flex={data.flex}
+              usage={utilization?.flex}
+              employeeId={data.employee.id}
+            />
           )}
         </>
       ) : (

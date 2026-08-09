@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { Download, Loader2, Plus, RefreshCw, Tag } from "lucide-react";
+import { Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
 import {
   DOC_TYPE_LABELS,
   RECEIVED_VIA_LABELS,
@@ -206,8 +206,20 @@ function DetailSection({
   );
 }
 
-function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
+function QueueTab({
+  initialClaimId,
+  employeeId,
+}: {
+  initialClaimId?: string;
+  /** `?employee=` — one member's claims (the flex panel's pending link). Unlike
+   *  `?claim=` this is NOT read once into state: it is a filter the queue is
+   *  under for as long as the URL says so, and it has to be visible and
+   *  clearable, because a queue silently showing a subset is worse than one
+   *  showing everything. */
+  employeeId?: string;
+}) {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const navigate = useNavigate();
   const [status, setStatus] = useState<string>("");
   const [caseType, setCaseType] = useState<CaseType | "">("");
   const [page, setPage] = useState(0);
@@ -242,7 +254,12 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
     page * PAGE_SIZE,
     PAGE_SIZE,
     caseType,
+    employeeId,
   );
+  // The filtered-to member's name, taken from the rows themselves rather than
+  // fetched: every row in a filtered response is theirs, so the first one names
+  // them, and a member with no claims left needs no chip.
+  const filteredTo = employeeId ? data?.items[0]?.employee_name : null;
 
   // Detail fetch rides alongside the list item for the fields the list omits
   // (the remaining benefit limit for this claim's bucket).
@@ -370,6 +387,27 @@ function QueueTab({ initialClaimId }: { initialClaimId?: string }) {
                   : ""}
                 {status ? ` · ${STATUS_FILTERS.find((f) => f.value === status)?.label}` : ""}
               </CardDescription>
+              {/* Named and clearable. The member filter arrives from another
+                  page, so unlike the controls opposite there is nothing on
+                  screen showing it is on — and "8 cases" on a 467-member client
+                  reads as the whole queue being nearly empty. */}
+              {employeeId && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void navigate({
+                      to: "/claims/review",
+                      search: { tab: "queue" },
+                      replace: true,
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-2xs text-muted-foreground hover:text-foreground focus-ring"
+                >
+                  {filteredTo ? `Only ${filteredTo}` : "One member only"}
+                  <X className="size-3" aria-hidden />
+                  <span className="sr-only">Show all members</span>
+                </button>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <NativeSelect
@@ -1130,7 +1168,11 @@ const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
 
 export function ClaimsQueuePage() {
   const navigate = useNavigate();
-  const search = useSearch({ strict: false }) as { tab?: string; claim?: string };
+  const search = useSearch({ strict: false }) as {
+    tab?: string;
+    claim?: string;
+    employee?: string;
+  };
   const tab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
   const awaiting = useAwaitingReplyCount();
 
@@ -1159,7 +1201,7 @@ export function ClaimsQueuePage() {
       </TabsList>
 
       <TabsContent value="queue">
-        <QueueTab initialClaimId={search.claim} />
+        <QueueTab initialClaimId={search.claim} employeeId={search.employee} />
       </TabsContent>
 
       <TabsContent value="messages">

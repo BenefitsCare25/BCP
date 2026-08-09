@@ -20,6 +20,7 @@ import type { PortalClaim } from "@/api/portal";
 import { Mount, MountRow, MountRule } from "./Mount";
 import { insuredClaimTitle } from "./ClaimMount";
 import { Limit, Money, currencySymbol } from "./Figure";
+import { ClaimStrike, claimBucket } from "./Strike";
 import { FillRule, drawnAgainst } from "./FillRule";
 import { prorationReason } from "./FlexProrationNote";
 import { glossBeside } from "./glossary";
@@ -32,10 +33,23 @@ function claimAmount(c: PortalClaim): number {
   return c.amount_converted ?? c.amount_claimed;
 }
 
-/** What the member sent in, itemised, for a product whose total is under
- * review. "S$303.48" answers nothing on its own — the question it provokes is
+/** What the member sent in, itemised, for a product whose total is not settled.
+ * "S$303.48" answers nothing on its own — the question it provokes is
  * "which claims is that?", and the member is the only person who can tell us a
  * receipt is missing from it.
+ *
+ * **"Under review" is not true of every claim in the figure.** `needs_info` is
+ * pending — it is not settled, so it is summed here — but it is waiting on the
+ * MEMBER, not on us, and this list was the one place that told them otherwise:
+ * a claim we had asked them a question about was filed under "the 3 claims
+ * under review", i.e. as something being handled. So the heading no longer
+ * names a state, and each row carries its own through `ClaimStrike` — the same
+ * vocabulary the ledger uses (`Strike.tsx`), so a status added there appears
+ * here already worded.
+ *
+ * No links, deliberately: the broker's employee-view frame renders this leaf
+ * (`operations/PortalFrame.tsx`), and a portal route href inside it would
+ * navigate the BROKER's app out of the page it is embedded in.
  *
  * **Rendered only when the rows RECONCILE with the bucket.** The total comes
  * from the utilisation service and the rows from the claims list — two
@@ -67,9 +81,7 @@ function PendingBreakdown({
   return (
     <div className="flex flex-col gap-1">
       <h3 className="leaf-label">
-        {mine.length === 1
-          ? "The claim under review"
-          : `The ${mine.length} claims under review`}
+        {mine.length === 1 ? "The claim in that figure" : "What's in that figure"}
       </h3>
       <dl className="divide-y divide-hairline/75">
         {mine.map((c) => (
@@ -86,6 +98,12 @@ function PendingBreakdown({
             </dt>
             <dd className="m-0 shrink-0 text-right">
               <Money value={claimAmount(c)} currency={currencySymbol(c.currency)} />
+              {/* Under the amount, on its own line: at index width a figure and
+                  a struck state cannot share a line (the same constraint
+                  `ConversationMount` records). */}
+              <span className="mt-0.5 block">
+                <ClaimStrike status={c.status} />
+              </span>
             </dd>
           </div>
         ))}
@@ -264,7 +282,7 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
             {flex.pending > 0 && (
               <>
                 {" · "}
-                <Money value={flex.pending} currency={currency} /> under review
+                <Money value={flex.pending} currency={currency} /> not settled
               </>
             )}
           </span>
@@ -317,7 +335,7 @@ export function UsageLeaf({
   claims = [],
 }: {
   data: Utilization;
-  /** The member's claims, for itemising what is under review. Optional: the
+  /** The member's claims, for itemising what is not settled. Optional: the
    * balances are still the answer if the claims query is slow or fails, so this
    * never gates rendering. */
   claims?: PortalClaim[];
@@ -359,6 +377,12 @@ export function UsageLeaf({
 
   const anyPending =
     data.insured.some((b) => b.pending > 0) || (data.flex?.pending ?? 0) > 0;
+  // How many unsettled claims are waiting on the MEMBER. It changes the
+  // footnote's verb: "still with us" is a promise we are working on it, and for
+  // a claim we have asked a question about it is the opposite of true.
+  const waitingOnMember = claims.filter(
+    (c) => claimBucket(c.status) === "attention",
+  ).length;
 
   return (
     <div className="space-y-3">
@@ -417,8 +441,13 @@ export function UsageLeaf({
 
       {anyPending && (
         <p className="px-1 text-row text-label">
-          Claims still under review are shown separately and aren't taken off
-          your remaining balance until they're approved.
+          Claims that aren&rsquo;t settled yet are shown separately and
+          aren&rsquo;t taken off your remaining balance until they&rsquo;re
+          approved.
+          {waitingOnMember > 0 &&
+            (waitingOnMember === 1
+              ? " One of them needs something from you — open it under Claims."
+              : ` ${waitingOnMember} of them need something from you — open them under Claims.`)}
         </p>
       )}
     </div>

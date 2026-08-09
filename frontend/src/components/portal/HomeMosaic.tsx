@@ -227,7 +227,7 @@ function heroFigure(b: UtilizationBucket, cur: string) {
       value: b.approved,
       note:
         b.pending > 0
-          ? `${cur}${moneyText(b.pending)} still under review`
+          ? `${cur}${moneyText(b.pending)} not settled yet`
           : undefined,
     };
   }

@@ -178,9 +178,14 @@ function Notice({ children }: { children: React.ReactNode }) {
 export function FlexPanel({
   flex,
   usage,
+  employeeId,
 }: {
   flex: FlexCoverageLine;
   usage?: FlexUtilization | null;
+  /** Whose panel this is — carried to the queue so opening the pending figure
+   *  lands on THEIR claims. Optional: a surface that has no employee in hand
+   *  still gets the panel, it just opens the queue unfiltered. */
+  employeeId?: string;
 }) {
   const [showTags, setShowTags] = useState(false);
   const navigate = useNavigate();
@@ -195,12 +200,16 @@ export function FlexPanel({
   const openPending = () =>
     navigate({
       to: "/claims/review",
-      // One claim opens ITS sheet; several open the queue, because picking one
-      // of them here would be an arbitrary choice presented as the answer.
+      // One claim opens ITS sheet; several open the queue FILTERED TO THIS
+      // MEMBER, because picking one of them here would be an arbitrary choice
+      // presented as the answer — but landing on the whole firm's queue is no
+      // better. The figure says "2 claims"; the destination has to be those
+      // claims, and on a 467-member client an unfiltered queue buried them
+      // among hundreds of rows the broker did not ask for.
       search:
         pendingClaimIds.length === 1
           ? { tab: "queue", claim: pendingClaimIds[0] }
-          : { tab: "queue" },
+          : { tab: "queue", employee: employeeId },
     });
 
   const wallet = flex.wallet_amount ?? usage?.wallet_amount ?? null;

@@ -24,13 +24,27 @@ export function numOrNull(value: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Format a flex wallet amount with its currency code (null/undefined → "—"). */
+/** Format a flex wallet amount with its currency code (null/undefined → "—").
+ *
+ * **Cents when there are cents, none when there aren't** — the same rule the
+ * member's own surface states at `portal/leaf/Figure.tsx::moneyText`, and it has
+ * to be the same rule because these two surfaces print THE SAME FIGURES. This
+ * rounded to whole dollars, which is right for a wallet allowance (a scheme
+ * sets 2,680, never 2,680.35) but wrong for the sums of real claims that share
+ * the panel: a member reading "S$215.50 under review" was being quoted
+ * "SGD 216" by their broker over the phone, off by fifty cents in the broker's
+ * favour, on a figure both were reading off the same API response. A round
+ * allowance still prints clean — this adds decimals only where they exist. */
 export function formatWallet(
   amount: number | null | undefined,
   currency: string | null | undefined,
 ): string {
   if (amount == null) return "—";
-  const num = amount.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const cents = Math.round(Math.abs(amount) * 100) % 100 !== 0;
+  const num = amount.toLocaleString(undefined, {
+    minimumFractionDigits: cents ? 2 : 0,
+    maximumFractionDigits: 2,
+  });
   return currency ? `${currency} ${num}` : num;
 }
 
