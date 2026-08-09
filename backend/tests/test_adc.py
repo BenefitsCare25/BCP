@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from openpyxl import Workbook  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
+from app.core.clock import today as business_today  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -41,8 +42,8 @@ DEP_COLS = [
     "Termination Date",
 ]
 
-PAST = (date.today() - timedelta(days=30)).isoformat()
-FUTURE = (date.today() + timedelta(days=30)).isoformat()
+PAST = (business_today() - timedelta(days=30)).isoformat()
+FUTURE = (business_today() + timedelta(days=30)).isoformat()
 
 # The three seeded employees, as listing rows. Tests derive their files from
 # this so "everyone still here" is expressed once.
@@ -215,7 +216,7 @@ def test_apply_terminates_missing_only_on_opt_in(client: TestClient) -> None:
     assert res.json()["missing_terminated"] == 1
     a3 = _active("A-3")
     assert a3.status == EMPLOYEE_STATUS_TERMINATED
-    assert a3.terminated_effective == date.today()
+    assert a3.terminated_effective == business_today()
     assert _active("A-1").status == "active"
     assert _active("A-2").status == "active"
 
@@ -611,7 +612,7 @@ def test_a_stale_leaving_date_does_not_re_terminate(client: TestClient) -> None:
     assert _active("A-1").status == "active"
 
     # ...but changing it to a different past date IS a statement.
-    newer = (date.today() - timedelta(days=5)).isoformat()
+    newer = (business_today() - timedelta(days=5)).isoformat()
     rows[0][5] = newer
     body = _preview(client, py, _listing(rows)).json()
     assert body["counts"]["deletions"] == 1

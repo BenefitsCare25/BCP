@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.auth import DEMO_CLIENT_ID
+from app.core.clock import today as business_today
 from app.core.portal_auth import issue_member_token
 from app.db.session import SessionLocal
 from app.main import app
@@ -36,7 +37,7 @@ ACC = "00000000-0000-0000-0000-0000000lv003"
 # `require_portal_tenant` and need a real slug on the client.
 SLUG = "leaver-co"
 
-TODAY = date.today()
+TODAY = business_today()
 # A year that contains today, so "the member is still covered" is the baseline
 # and only the roster row decides otherwise.
 YEAR_START = TODAY - timedelta(days=120)
