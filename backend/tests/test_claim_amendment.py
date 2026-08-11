@@ -641,3 +641,147 @@ def test_a_draft_amendment_posts_nothing(anon: TestClient):
     claim = _draft(anon)
     assert _amend(anon, claim["id"], amount_claimed=12.0).status_code == 200
     assert _thread(anon, claim["id"]) == []
+
+
+# ── The broker's amendment ───────────────────────────────────────────────────
+
+
+def _broker_amend(broker: TestClient, claim_id: str, **body):
+    return broker.patch(f"/api/v1/claims/{claim_id}", json=body)
+
+
+def test_a_broker_corrects_a_live_claim_freely(
+    anon: TestClient, broker: TestClient
+):
+    claim = _submitted(anon, b" bk-live")
+    res = _broker_amend(broker, claim["id"], amount_claimed=77.0)
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 77.0
+    assert res.json()["revision"] == claim["revision"] + 1
+
+
+def test_a_broker_correction_to_a_settled_claim_needs_a_reason(
+    anon: TestClient, broker: TestClient
+):
+    """By now the figure has been given to the member, and on a dispatched
+    claim to the insurer as well. Mirrors `ClaimCaseTypeIn.reason`."""
+    claim = _submitted(anon, b" bk-settled")
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
+    ).status_code == 200
+
+    res = _broker_amend(broker, claim["id"], amount_claimed=55.0)
+    assert res.status_code == 422
+    assert _code(res) == "reason_required"
+
+    res = _broker_amend(
+        broker, claim["id"], amount_claimed=55.0, reason="Invoice re-read: 55.00."
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 55.0
+
+
+def test_a_reason_alone_is_not_a_change(anon: TestClient, broker: TestClient):
+    """`reason` STEERS an amendment; it is not part of one. Counting it would
+    let a body carrying nothing else bump the revision and record an edit that
+    never happened."""
+    claim = _submitted(anon, b" bk-reasononly")
+    assert _broker_amend(broker, claim["id"], reason="just because").status_code == 422
+
+
+def test_the_broker_may_not_rewrite_the_members_note(
+    anon: TestClient, broker: TestClient
+):
+    """`remarks` is the member's own sentence and they can read it back. An
+    assessor editing it would be putting words in their mouth — so the field is
+    absent from the broker schema and a request carrying it is ignored."""
+    claim = _submitted(anon, b" bk-remarks", remarks="I paid cash on the day.")
+    res = _broker_amend(
+        broker, claim["id"], remarks="member says otherwise", amount_claimed=91.0
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 91.0
+    assert res.json()["remarks"] == "I paid cash on the day."
+
+
+def test_a_broker_amendment_leaves_the_review_and_the_thread_alone(
+    anon: TestClient, broker: TestClient
+):
+    """The assessor is READING the review while they correct the claim, so
+    invalidating it under them is the opposite of useful. And a broker changing
+    what a member claimed needs a sentence a person wrote, not a generated
+    one."""
+    claim = _submitted(anon, b" bk-quiet")
+    with SessionLocal() as s:
+        s.add(
+            ClaimAIReview(
+                client_id=DEMO_CLIENT_ID, claim_id=claim["id"],
+                status="complete", verdict="clean",
+            )
+        )
+        s.get(Claim, claim["id"]).status = "ai_verified"
+        s.commit()
+    before_thread = len(_thread(anon, claim["id"]))
+
+    assert _broker_amend(broker, claim["id"], amount_claimed=64.0).status_code == 200
+
+    body = _get(anon, claim["id"])
+    assert body["status"] == "ai_verified"  # not knocked back to submitted
+    assert len(_thread(anon, claim["id"])) == before_thread
+    with SessionLocal() as s:
+        assert not any(
+            r.superseded
+            for r in s.query(ClaimAIReview).filter_by(claim_id=claim["id"]).all()
+        )
+
+
+def test_a_decision_on_a_stale_read_is_refused(
+    anon: TestClient, broker: TestClient
+):
+    """THE race the revision guard exists for: the assessor reads $150, the
+    member corrects it to $105, and the assessor approves what they read."""
+    claim = _submitted(anon, b" race", amount_claimed=150.0)
+    seen = claim["revision"]
+
+    assert _amend(anon, claim["id"], amount_claimed=105.0).status_code == 200
+
+    res = broker.post(
+        f"/api/v1/claims/{claim['id']}/decision",
+        json={"action": "approve", "expected_revision": seen},
+    )
+    assert res.status_code == 409
+    assert _code(res) == "claim_amended"
+    # Nothing was decided.
+    assert _get(anon, claim["id"])["status"] != "approved"
+
+    # Reloading and deciding on what is actually there works, and approves the
+    # CORRECTED figure.
+    current = _get(anon, claim["id"])["revision"]
+    res = broker.post(
+        f"/api/v1/claims/{claim['id']}/decision",
+        json={"action": "approve", "expected_revision": current},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_approved"] == 105.0
+
+
+def test_a_decision_without_a_revision_still_works(
+    anon: TestClient, broker: TestClient
+):
+    """Optional on purpose — a LOG case created and decided in one assessor
+    flow has no stale read to guard against, and making it mandatory would
+    break every existing caller."""
+    claim = _submitted(anon, b" norev")
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
+    ).status_code == 200
+
+
+def test_a_broker_amendment_runs_the_same_validation(
+    anon: TestClient, broker: TestClient
+):
+    """An assessor correcting a claim is subject to the same truth about what
+    is claimable as the member who filed it."""
+    claim = _submitted(anon, b" bk-valid")
+    assert _broker_amend(broker, claim["id"], incurred_date="2030-01-01").status_code == 422
+    assert _broker_amend(broker, claim["id"], product_code="NOPE").status_code == 422

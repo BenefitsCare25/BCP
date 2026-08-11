@@ -1076,7 +1076,44 @@ MEMBER_AMENDABLE_FIELDS = frozenset(
     }
 )
 
+# Columns a BROKER's amendment may write. `remarks` is dropped — it is the
+# member's own sentence, which they can read back, and an assessor rewriting it
+# would put words in their mouth. `benefit_key` is added: it decides the
+# utilization bucket and the member's form has no benefit picker at all.
+BROKER_AMENDABLE_FIELDS = (MEMBER_AMENDABLE_FIELDS - {"remarks"}) | {"benefit_key"}
+
 _REFERRAL_FLAG = "referral_not_applicable"
+
+# States in which correcting a claim is rewriting settled history rather than
+# fixing a live record, and therefore has to say why. `rejected` is in here with
+# the settled three: the member has been told the outcome either way.
+_REASON_REQUIRED_STATUSES = SETTLED_STATUSES | {CLAIM_STATUS_REJECTED}
+
+
+def assert_amendment_reason(claim: Claim, reason: str | None) -> None:
+    """422 unless a correction to a SETTLED claim says why it was made.
+
+    By this point the figure has been communicated to the member and, on a
+    dispatched claim, to the insurer as well. Mirrors `ClaimCaseTypeIn.reason`
+    — a correction to the record is exactly when the record should say what
+    happened — and the same instinct as `assert_settlement_amendable`, which
+    refuses to let a claim invent a history it never had.
+    """
+    if claim.status not in _REASON_REQUIRED_STATUSES:
+        return
+    if reason and reason.strip():
+        return
+    raise HTTPException(
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "reason_required",
+            "message": (
+                f"This claim is already {claim.status.replace('_', ' ')}. "
+                "Say why it is being corrected — the note is kept on the "
+                "claim's audit trail."
+            ),
+        },
+    )
 
 
 def assert_member_may_amend(claim: Claim) -> None:

@@ -1499,6 +1499,18 @@ def test_claim_assessment_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_claim_amendment_cross_tenant_404(client_as_a: TestClient) -> None:
+    """Correcting what the member stated is a separate handler from
+    `/assessment`, and reaches further — it rewrites the claim's own figures.
+    It goes through `load_claim` like the rest, so another tenant's claim is
+    simply not found."""
+    _ensure_claim_b()
+    res = client_as_a.patch(
+        f"/api/v1/claims/{CLAIM_B}", json={"amount_claimed": 1.0}
+    )
+    assert res.status_code == 404
+
+
 def test_claim_document_download_cross_tenant_404(client_as_a: TestClient) -> None:
     _ensure_claim_b()
     res = client_as_a.get(f"/api/v1/claims/{CLAIM_B}/documents/any-doc/download")

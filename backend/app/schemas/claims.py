@@ -88,8 +88,14 @@ _NOT_CLEARABLE = frozenset(
 )
 
 
-class ClaimAmendIn(BaseModel):
-    """A member correcting their own claim, until a broker decides it.
+# Fields that STEER an amendment rather than being part of it. They must not
+# count towards "did this request change anything", or a body carrying nothing
+# but a reason would bump the revision and announce an edit that never happened.
+_AMEND_CONTROL_FIELDS = frozenset({"expected_revision", "reason"})
+
+
+class _ClaimAmendBase(BaseModel):
+    """The claim FACTS an amendment may carry, shared by both surfaces.
 
     A PARTIAL update driven by `model_fields_set`, for the same reason
     `ClaimAssessmentIn` is: an edit sheet that touches one control must not
@@ -98,12 +104,13 @@ class ClaimAmendIn(BaseModel):
 
     Every value is re-validated by `claims.validate_claim_facts` over the MERGED
     claim, so an amendment can only ever produce a claim that would pass
-    submit — including the duplicate-invoice refusal, which has no member-side
-    override here either.
+    submit — including the duplicate-invoice refusal, which has no override on
+    either surface.
 
-    `remarks` is amendable and `admin_remarks` is not: one is the member's own
-    note and the other is the assessor's, and the member must never write the
-    second. See `docs/CLAIM_AMENDMENT_PLAN.md` §3.
+    The two subclasses differ only at the edges, and each edge is deliberate:
+    `remarks` is the MEMBER's own note (a broker rewriting it is forgery) and
+    `benefit_key` is BROKER attribution (never the member's). See
+    `docs/CLAIM_AMENDMENT_PLAN.md` §3.
     """
 
     claim_kind: str | None = Field(default=None, pattern="^(insured|flex)$")
@@ -117,7 +124,6 @@ class ClaimAmendIn(BaseModel):
     invoice_number: str | None = Field(default=None, min_length=1, max_length=128)
     doctor_name: str | None = Field(default=None, max_length=255)
     diagnosis: str | None = Field(default=None, max_length=512)
-    remarks: str | None = Field(default=None, max_length=500)
     amount_claimed: float | None = Field(default=None, gt=0, le=1_000_000)
     currency: str | None = Field(default=None, min_length=3, max_length=8)
     dependant_id: str | None = None
@@ -125,12 +131,12 @@ class ClaimAmendIn(BaseModel):
     referral_not_applicable: bool | None = None
 
     # The revision the client actually read (see `Claim.revision`). Optional —
-    # a mismatch 409s, absence skips the check. The portal always sends it.
+    # a mismatch 409s, absence skips the check. Both UIs always send it.
     expected_revision: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
-    def _is_a_real_change(self) -> ClaimAmendIn:
-        touched = self.model_fields_set - {"expected_revision"}
+    def _is_a_real_change(self) -> _ClaimAmendBase:
+        touched = self.model_fields_set - _AMEND_CONTROL_FIELDS
         if not touched:
             # Otherwise an empty body bumps the revision, supersedes the AI
             # review and posts the member a notice saying they changed
@@ -140,6 +146,32 @@ class ClaimAmendIn(BaseModel):
         if cleared:
             raise ValueError(f"these fields cannot be cleared: {', '.join(cleared)}")
         return self
+
+
+class ClaimAmendIn(_ClaimAmendBase):
+    """A member correcting their own claim, until a broker decides it."""
+
+    remarks: str | None = Field(default=None, max_length=500)
+
+
+class ClaimBrokerAmendIn(_ClaimAmendBase):
+    """An assessor correcting what the member stated.
+
+    Deliberately NOT the same endpoint as `ClaimAssessmentIn`: that one records
+    facts the BROKER owns and the member never stated (sector, admission dates,
+    payroll treatment, settlement dates). This one rewrites the member's own
+    account of the claim, which is a different act with a different trail — and,
+    once the claim is settled, a different bar.
+    """
+
+    # Which SOB benefit item the claim draws on. Broker attribution, never the
+    # member's: it decides the utilization bucket, and the member's form has no
+    # benefit picker at all.
+    benefit_key: str | None = Field(default=None, max_length=255)
+    # REQUIRED once the claim is settled (see `claims.assert_amendment_reason`).
+    # Not optional-with-a-default there: a blank reason on a corrected payment
+    # figure is an audit row that explains nothing, which is the same as none.
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class LogCaseCreateIn(BaseModel):
@@ -644,6 +676,15 @@ class ClaimDecisionIn(BaseModel):
     # Approving beyond the bucket's remaining limit 409s (`limit_exceeded`)
     # unless the broker explicitly acknowledges the overrun.
     acknowledge: bool = False
+    # The `Claim.revision` the assessor actually read. A member may amend their
+    # claim right up to this decision, so without it a broker can read $150,
+    # have it corrected to $105 under them, and approve a figure that is no
+    # longer on the claim. A mismatch 409s (`claim_amended`).
+    #
+    # Optional, and that is not laziness: a LOG case created and decided in one
+    # assessor flow has no stale read to guard against, and making it mandatory
+    # would break every existing caller. The queue always sends it.
+    expected_revision: int | None = Field(default=None, ge=0)
 
 
 # ── Utilization (computed-on-read; see services/utilization.py) ───────────────

@@ -71,6 +71,7 @@ from app.schemas.claims import (
     ClaimAIReviewOut,
     ClaimAIReviewSummary,
     ClaimAssessmentIn,
+    ClaimBrokerAmendIn,
     ClaimCaseTypeIn,
     ClaimDecisionIn,
     ClaimMessageOut,
@@ -103,8 +104,13 @@ from app.services.claim_settlement import (
     SETTLEMENT_AMENDMENTS as _SETTLEMENT_AMENDMENTS,
 )
 from app.services.claims import (
+    BROKER_AMENDABLE_FIELDS,
+    apply_claim_amendment,
+    assert_amendment_reason,
+    assert_claim_revision,
     assert_transition,
     attach_document,
+    audit_cells,
     populate_claim_out,
     prefetch_claim_relations,
 )
@@ -342,6 +348,11 @@ def decide_claim(
 ) -> BrokerClaimOut:
     new_status = _DECISION_STATUS[body.action]
     assert_transition(claim, new_status)
+    # The member may amend right up to this moment, so a decision carries the
+    # revision the assessor actually read. Checked BEFORE anything is written:
+    # approving a figure that changed under you is the failure this guards, and
+    # it has to fail before the approval, not after it.
+    assert_claim_revision(claim, body.expected_revision)
 
     before = {"status": claim.status, "amount_approved": claim.amount_approved}
     if body.action == "approve":
@@ -558,20 +569,62 @@ def update_claim_assessment(
     for name in fields - set(AMENDMENT_COLUMNS) - settlement:
         setattr(claim, name, getattr(body, name))
 
-    def _cells(source: dict[str, object]) -> dict[str, object]:
-        return {
-            k: (v.isoformat() if hasattr(v, "isoformat") else v)
-            for k, v in source.items()
-        }
-
     write_audit(
         db, user, "claim.assessment", "claim", claim.id,
-        before=_cells(before),
-        after=_cells({c: getattr(claim, c) for c in columns}),
+        before=audit_cells(before),
+        after=audit_cells({c: getattr(claim, c) for c in columns}),
         employee_id=claim.employee_id,
     )
     db.commit()
     return _broker_out(db, claim, db.get(Employee, claim.employee_id))
+
+
+@router.patch("/{claim_id}", response_model=BrokerClaimOut)
+def amend_claim(
+    body: ClaimBrokerAmendIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Correct what the member stated — at any point in the claim's life.
+
+    Distinct from `PATCH /assessment`, which records facts the BROKER owns and
+    the member never stated. This one rewrites the member's own account, so it
+    carries a different audit action and, once the claim is settled, demands a
+    written reason.
+
+    Runs the SAME validation chain the member's amendment and submit run: an
+    assessor correcting a claim is subject to the same truth about what is
+    claimable as the member who filed it, and two implementations would come to
+    disagree about what a valid claim is.
+
+    **No review supersede, and no thread notice** — unlike the member's. The
+    assessor is READING the review while they correct the claim, so
+    invalidating it under them is the opposite of useful; and if a broker
+    changes what a member claimed, that needs a sentence a person wrote, which
+    the message composer and the decision note are both already there for.
+    """
+    employee = db.get(Employee, claim.employee_id)
+    if employee is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
+    assert_claim_revision(claim, body.expected_revision)
+    assert_amendment_reason(claim, body.reason)
+
+    before, after = apply_claim_amendment(
+        db, claim, body, employee, allowed=BROKER_AMENDABLE_FIELDS
+    )
+    write_audit(
+        db, user, "claim.amended", "claim", claim.id,
+        before=audit_cells(before),
+        after={
+            **audit_cells(after),
+            "revision": claim.revision,
+            "reason": (body.reason or "").strip() or None,
+        },
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return _broker_out(db, claim, employee)
 
 
 @employee_router.post(
