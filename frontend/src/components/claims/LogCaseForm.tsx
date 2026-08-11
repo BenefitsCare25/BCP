@@ -22,6 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { useBrokerFxQuote, useCreateLogCase } from "@/api/claims";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useEmployeeUtilization } from "@/api/claims";
 import { useBenefitStatement, useCoverageSummary } from "@/api/hooks";
 import { useSession } from "@/stores/session";
@@ -227,16 +228,21 @@ export function LogCaseForm({
   // the same figure the server will store. Quoted live rather than left blank:
   // "we can't compare this" was the old behaviour, and it meant an assessor
   // recording a USD case learned about an overrun from the approve screen.
-  const fxQuote = useBrokerFxQuote(
-    currency,
-    amountValid ? amountValue : null,
-    incurredDate,
-  );
+  // Debounced for the same reason the member's form is: the amount is part of
+  // the query key, so an undebounced control fires one request per keystroke
+  // against a rate-limited endpoint.
+  const quotedAmount = useDebouncedValue(amountValid ? amountValue : null, 400);
+  const fxQuote = useBrokerFxQuote(currency, quotedAmount, incurredDate);
+  // Only trusted when the quote is for the amount currently typed — mid-debounce
+  // it still holds the previous figure, and comparing THAT to the remaining
+  // limit would warn (or fail to warn) about a number nobody entered.
   const policyAmount = inPolicyCurrency
     ? amountValid
       ? amountValue
       : null
-    : (fxQuote.data?.converted ?? null);
+    : fxQuote.data?.amount === amountValue
+      ? (fxQuote.data?.converted ?? null)
+      : null;
   const canSave =
     !!employeeId && !!productCode && !!incurredDate && amountValid && !create.isPending;
 

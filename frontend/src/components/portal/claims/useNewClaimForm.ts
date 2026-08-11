@@ -32,6 +32,7 @@ import {
 } from "@/api/portal";
 import { ConflictDetailError } from "@/api/client";
 import { usePortalSession } from "@/stores/portalSession";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { todayISO } from "@/components/portal/leaf/date";
 import { formatError } from "@/lib/errors";
 import { validateClaim } from "./claimValidation";
@@ -135,14 +136,17 @@ export function useNewClaimForm() {
   const effectiveCurrency = effectiveKind === "flex" ? walletCurrency : currency;
   const policyCurrency = options.data?.policy_currency ?? "SGD";
   const amountValue = Number(amount);
+  const amountUsable =
+    Number.isFinite(amountValue) && amountValue > 0 ? amountValue : null;
+  // **Debounced, because the amount is in the query key.** Undebounced, typing
+  // "1200" fired four requests (1, 12, 120, 1200) against a 60/min limit — and
+  // a 429 leaves the quote unresolved, which now BLOCKS sending. The member
+  // would have rate-limited themselves out of their own claim by typing.
+  const quotedAmount = useDebouncedValue(amountUsable, 400);
   // The live conversion. Only asked for on a foreign amount with a date — a
   // rate is per-DAY, so quoting before the member has picked one would price
   // the claim at the wrong day and then silently change under them.
-  const fxQuote = useFxQuote(
-    effectiveCurrency,
-    Number.isFinite(amountValue) && amountValue > 0 ? amountValue : null,
-    incurredDate,
-  );
+  const fxQuote = useFxQuote(effectiveCurrency, quotedAmount, incurredDate);
   // **"We asked and there is no rate" and "we have not got an answer" are
   // different states, and only the first waives the confirmation.** Keying this
   // off `data?.available ?? false` collapsed them: a 429 (one request per
@@ -152,9 +156,16 @@ export function useNewClaimForm() {
   // taking the draft and every uploaded document down with it in the rollback.
   const fxForeign = effectiveCurrency !== policyCurrency;
   const fxUnavailable = fxQuote.isSuccess && !fxQuote.data.available;
-  const fxUnresolved = fxForeign && !fxQuote.isSuccess;
-  // A quote is on screen, so submitting the claim accepts it. There is no
-  // separate tick — see `ConversionNotice`.
+  // A quote for a DIFFERENT amount than the one on screen is not an answer —
+  // it is the previous answer, still showing while the debounce settles. The
+  // server echoes the amount it priced, so this compares the two rather than
+  // tracking the timer: the figure displayed and the figure submitted are then
+  // always about the number the member actually typed.
+  const fxMatchesInput =
+    fxQuote.isSuccess && fxQuote.data.amount === amountUsable;
+  const fxUnresolved = fxForeign && amountUsable !== null && !fxMatchesInput;
+  // A quote for THIS amount is on screen, so submitting the claim accepts it.
+  // There is no separate tick — see `ConversionNotice`.
   const fxShown = fxForeign && !fxUnavailable && !fxUnresolved;
   // Foreign, and we still cannot say what it converts to. Blocks submit with a
   // retry rather than letting them send into a 409 they cannot satisfy.
