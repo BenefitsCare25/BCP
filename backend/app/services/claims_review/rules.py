@@ -16,12 +16,35 @@ from app.models import Claim, Dependant, PolicyYear, StoredDocument
 from app.models.claim import CLAIM_KIND_FLEX, LIVE_STATUSES
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
+from app.services.claim_fx import (
+    FX_SOURCE_BROKER,
+    FX_STATE_CONVERTED,
+    FX_STATE_NOT_REQUIRED,
+    fx_state,
+)
 from app.services.claim_intake import normalize_invoice_number
+from app.services.fx import POLICY_CURRENCY
 from app.services.utilization import parse_limit_amount
 
 
 def _result(rule: str, status: str, evidence: str) -> dict[str, Any]:
     return {"rule": rule, "status": status, "source": "deterministic", "evidence": evidence}
+
+
+def _flagging(rule: str, evidence: str) -> dict[str, Any]:
+    """A warning that must still flag the verdict, without short-circuiting.
+
+    The two existing severities only cover the ends: ``fail`` aborts the whole
+    pipeline before a single document is read, and ``warning`` is advisory and
+    cannot move the verdict on its own. Between them sits a real case — the
+    claim is unfit to auto-clear for a reason that has nothing to do with its
+    evidence, so the evidence should still be examined and the assessor should
+    still be handed the claim.
+
+    `verdict.compute_verdict` reads the ``flag`` key. Anything not setting it
+    behaves exactly as before.
+    """
+    return {**_result(rule, "warning", evidence), "flag": True}
 
 
 def _check_period(db: Session, claim: Claim) -> dict[str, Any]:
@@ -265,13 +288,52 @@ def _check_future_date(claim: Claim) -> dict[str, Any] | None:
 
 
 def _check_currency(claim: Claim) -> dict[str, Any]:
-    rule = "Claim is in the policy currency (SGD)."
-    if (claim.currency or "SGD").upper() == "SGD":
-        return _result(rule, "pass", "Claim currency is SGD.")
-    return _result(
-        rule, "warning",
-        f"Claim is in {claim.currency.upper()} — conversion to SGD needs "
-        "broker confirmation.",
+    """Whether this claim has a policy-currency value at all.
+
+    A foreign claim is fine; a foreign claim NOBODY CAN PRICE is not. The second
+    cannot be compared to a limit, cannot be summed into a bucket, and cannot be
+    approved — so it must reach a person, and this is what puts it in front of
+    one.
+
+    ``flag`` rather than ``fail``: a hard fail short-circuits the whole pipeline
+    (see the module docstring), so a currency API being unreachable would cost
+    the assessor the entire document comparison on a claim whose paperwork is
+    very probably fine. The conversion and the evidence are unrelated questions;
+    this flags the verdict without cancelling the answer to the other one.
+    """
+    rule = f"Claim has a value in the policy currency ({POLICY_CURRENCY})."
+    state = fx_state(claim)
+    if state == FX_STATE_NOT_REQUIRED:
+        return _result(rule, "pass", f"Claim is already in {POLICY_CURRENCY}.")
+
+    code = (claim.currency or "").upper()
+    if state == FX_STATE_CONVERTED:
+        detail = (
+            f"{code} {claim.amount_claimed:,.2f} = {POLICY_CURRENCY} "
+            f"{claim.amount_converted:,.2f}"
+        )
+        if claim.fx_source == FX_SOURCE_BROKER:
+            return _result(rule, "pass", f"{detail}, entered by an assessor.")
+        rate = f" at {claim.fx_rate:,.6g}" if claim.fx_rate else ""
+        if claim.fx_rate_date and claim.fx_rate_date != claim.incurred_date:
+            # Expected, not suspicious — there is no published rate for a
+            # weekend or a holiday. Said plainly so an assessor comparing the
+            # two dates doesn't read a normal Saturday receipt as a discrepancy.
+            when = (
+                f" using the rate published {claim.fx_rate_date.isoformat()} "
+                f"(none is published for {claim.incurred_date.isoformat()})"
+            )
+        else:
+            when = f" at the {claim.fx_rate_date.isoformat()} rate" if claim.fx_rate_date else ""
+        return _result(rule, "pass", f"{detail}{rate}{when}.")
+
+    return _flagging(
+        rule,
+        f"No exchange rate could be obtained for {code} on "
+        f"{claim.incurred_date.isoformat()}, so this claim has no "
+        f"{POLICY_CURRENCY} value. It cannot be checked against the member's "
+        f"remaining limit, and approving it needs the {POLICY_CURRENCY} amount "
+        "entered by hand.",
     )
 
 

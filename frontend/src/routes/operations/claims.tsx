@@ -11,12 +11,14 @@ import {
   useDecideClaim,
   useRecordClaimPayment,
   useSendToInsurer,
+  useRefreshClaimConversion,
   useRerunReview,
   useSetCaseType,
   type BrokerClaim,
   type CaseType,
 } from "@/api/claims";
 import { ConflictDetailError } from "@/api/client";
+import { ConversionLine, policyAmount } from "@/components/claims/ConversionLine";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -234,6 +236,11 @@ function QueueTab({
   const [decision, setDecision] = useState<DecisionAction | null>(null);
   const [note, setNote] = useState("");
   const [approvedAmount, setApprovedAmount] = useState("");
+  // The policy-currency value of a foreign claim, keyed in when no reference
+  // rate could be fetched. Distinct from `approvedAmount`: this is what the
+  // BILL is worth, that is what we agree to PAY, and a partial approval must
+  // not silently restate the claim's value.
+  const [convertedAmount, setConvertedAmount] = useState("");
   // Set from a 409 limit_exceeded — the dialog re-arms as "Approve anyway".
   const [limitWarning, setLimitWarning] = useState<string | null>(null);
   const [logFormOpen, setLogFormOpen] = useState(false);
@@ -250,6 +257,7 @@ function QueueTab({
   const sendToInsurer = useSendToInsurer();
   const recordPayment = useRecordClaimPayment();
   const rerun = useRerunReview();
+  const refreshFx = useRefreshClaimConversion();
   const setCaseTypeMutation = useSetCaseType();
   const { data, isLoading } = useBrokerClaims(
     policyYearId ?? undefined,
@@ -279,6 +287,13 @@ function QueueTab({
     return detail.data?.id === selectedId ? detail.data : null;
   }, [data, selectedId, detail.data]);
 
+  // What the claim is worth in the currency every limit is stated in. NULL on a
+  // foreign claim nobody has converted yet — and that is the point: there is no
+  // number to compare, so the UI must ask for one rather than reach for the
+  // foreign figure sitting next to it.
+  const claimedInPolicyCurrency = selected ? policyAmount(selected) : null;
+  const needsConversion = selected?.fx_state === "unavailable";
+
   useEffect(() => {
     setPage(0);
   }, [status, caseType]);
@@ -286,6 +301,7 @@ function QueueTab({
   useEffect(() => {
     setNote("");
     setApprovedAmount("");
+    setConvertedAmount("");
     setLimitWarning(null);
   }, [selectedId, decision]);
 
@@ -341,8 +357,25 @@ function QueueTab({
     if (!selected || !decision) return;
     try {
       const amount = approvedAmount.trim() ? Number(approvedAmount) : undefined;
+      const converted = convertedAmount.trim()
+        ? Number(convertedAmount)
+        : undefined;
       if (decision === "approve" && amount !== undefined && (!isFinite(amount) || amount <= 0)) {
         toast.error("Approved amount must be a positive number");
+        return;
+      }
+      // Caught here rather than left to the server's 422 (`fx_amount_required`)
+      // so the assessor is told beside the field, not by a toast over a dialog
+      // that has already lost what they typed.
+      if (
+        decision === "approve" &&
+        needsConversion &&
+        (converted === undefined || !isFinite(converted) || converted <= 0)
+      ) {
+        toast.error(
+          `Enter what this claim is worth in ${selected.policy_currency} — ` +
+            "no exchange rate could be fetched for it.",
+        );
         return;
       }
       await decide.mutateAsync({
@@ -350,6 +383,11 @@ function QueueTab({
         action: decision,
         note: note.trim() || undefined,
         approvedAmount: decision === "approve" ? amount : undefined,
+        // Only ever sent when the claim actually lacks one — the server refuses
+        // to overwrite a conversion that already exists, and sending it on an
+        // already-priced claim would be asking for that 409.
+        convertedAmount:
+          decision === "approve" && needsConversion ? converted : undefined,
         acknowledge: limitWarning !== null,
         // The revision this sheet is showing. A member may correct their claim
         // right up to the decision, so deciding without it can approve a figure
@@ -680,17 +718,65 @@ function QueueTab({
                     <span className="font-medium tabular-nums">
                       {selected.currency} {selected.amount_claimed.toFixed(2)}
                     </span>
+                    {/* On a foreign claim the figure above is NOT the one that
+                        spends the limit — the SGD equivalent is. Shown together
+                        so an assessor never has to hold two currencies in their
+                        head, and so an unresolved conversion is visible before
+                        they reach for Approve. */}
+                    <ConversionLine claim={selected} />
+                    {/* The honest first move on an unpriced claim: the rate
+                        service was very likely just briefly unreachable when
+                        the member filed. One press beats typing a figure off a
+                        bank statement, and it clears the server's outage
+                        cooldown so "try now" means now. */}
+                    {needsConversion && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mt-1.5"
+                        disabled={refreshFx.isPending}
+                        onClick={async () => {
+                          try {
+                            const out = await refreshFx.mutateAsync(selected.id);
+                            toast[
+                              out.fx_state === "converted" ? "success" : "error"
+                            ](
+                              out.fx_state === "converted"
+                                ? `Converted to ${out.policy_currency} ${(
+                                    out.amount_converted ?? 0
+                                  ).toFixed(2)}`
+                                : "Still no exchange rate — enter the value by hand.",
+                            );
+                          } catch (err) {
+                            toast.error(formatError(err));
+                          }
+                        }}
+                      >
+                        {refreshFx.isPending ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="size-3.5" />
+                        )}
+                        Retry exchange rate
+                      </Button>
+                    )}
                   </DetailField>
                   {remainingLimit != null && (
                     <DetailField label="Remaining limit">
                       <span
                         className={
-                          selected.amount_claimed > remainingLimit
+                          // Both sides in the POLICY currency. This used to
+                          // compare `amount_claimed` — a foreign figure — to an
+                          // SGD limit and print the limit with the claim's own
+                          // currency code, so a USD 500 bill looked like it fit
+                          // inside SGD 600 and the label agreed.
+                          claimedInPolicyCurrency != null &&
+                          claimedInPolicyCurrency > remainingLimit
                             ? "font-medium tabular-nums text-warn"
                             : "tabular-nums"
                         }
                       >
-                        {selected.currency} {remainingLimit.toFixed(2)}
+                        {selected.policy_currency} {remainingLimit.toFixed(2)}
                       </span>
                     </DetailField>
                   )}
@@ -767,7 +853,11 @@ function QueueTab({
                   {selected.amount_approved != null && (
                     <DetailField label="Approved amount">
                       <span className="font-medium tabular-nums">
-                        {selected.currency} {selected.amount_approved.toFixed(2)}
+                        {/* `amount_approved` is ALWAYS the policy currency,
+                            never the claim's own — on a foreign claim the two
+                            differ by the exchange rate. */}
+                        {selected.policy_currency}{" "}
+                        {selected.amount_approved.toFixed(2)}
                       </span>
                     </DetailField>
                   )}
@@ -998,14 +1088,57 @@ function QueueTab({
             )}
             {decision === "approve" && selected && (
               <>
+                {/* A foreign claim with no rate has no policy-currency value,
+                    so there is nothing to approve yet. Asked for HERE rather
+                    than sending the assessor to another screen: they are
+                    looking at the receipt right now, and the server takes both
+                    figures in one request. */}
+                {needsConversion && (
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-medium text-warn">
+                      What is {selected.currency}{" "}
+                      {selected.amount_claimed.toFixed(2)} worth in{" "}
+                      {selected.policy_currency}? (required)
+                    </span>
+                    <Input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={convertedAmount}
+                      onChange={(e) => {
+                        setConvertedAmount(e.target.value);
+                        setLimitWarning(null);
+                      }}
+                      placeholder="0.00"
+                      className="tabular-nums"
+                    />
+                    <span className="block text-xs text-muted-foreground">
+                      No exchange rate could be fetched for{" "}
+                      {selected.incurred_date}. This is what the claim is worth,
+                      not what you are paying — set that below if they differ.
+                    </span>
+                  </label>
+                )}
                 <p>
-                  The member will see the claim as approved. Leave the amount blank to
-                  approve the full {selected.currency}{" "}
-                  {selected.amount_claimed.toFixed(2)}.
+                  The member will see the claim as approved. Leave the amount
+                  blank to approve the full{" "}
+                  {claimedInPolicyCurrency != null ? (
+                    <>
+                      {selected.policy_currency}{" "}
+                      {claimedInPolicyCurrency.toFixed(2)}
+                    </>
+                  ) : (
+                    "converted value"
+                  )}
+                  .
                 </p>
                 <label className="block space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">
-                    Approved amount (optional)
+                    {/* The currency is IN THE LABEL because on a foreign claim
+                        it differs from the one shown beside "Amount claimed".
+                        An assessor typing 500 against a USD bill is approving
+                        SGD 500, and nothing else on this dialog said so. */}
+                    Approved amount in {selected.policy_currency} (optional)
                   </span>
                   <Input
                     type="number"
@@ -1016,7 +1149,11 @@ function QueueTab({
                       setApprovedAmount(e.target.value);
                       setLimitWarning(null); // new amount → re-check the limit
                     }}
-                    placeholder={selected.amount_claimed.toFixed(2)}
+                    placeholder={
+                      claimedInPolicyCurrency != null
+                        ? claimedInPolicyCurrency.toFixed(2)
+                        : "0.00"
+                    }
                     className="tabular-nums"
                   />
                 </label>
@@ -1091,10 +1228,12 @@ function QueueTab({
                 <p>
                   The member is told their claim has been paid. Leave the amount
                   blank if the insurer paid the full{" "}
-                  {selected.currency}{" "}
-                  {(selected.amount_approved ?? selected.amount_claimed).toFixed(
-                    2,
-                  )}
+                  {selected.policy_currency}{" "}
+                  {(
+                    selected.amount_approved ??
+                    claimedInPolicyCurrency ??
+                    selected.amount_claimed
+                  ).toFixed(2)}
                   .
                 </p>
                 <label className="block space-y-1.5">
@@ -1109,7 +1248,7 @@ function QueueTab({
                 </label>
                 <label className="block space-y-1.5">
                   <span className="text-xs font-medium text-muted-foreground">
-                    Amount paid (optional)
+                    Amount paid in {selected.policy_currency} (optional)
                   </span>
                   <Input
                     type="number"
@@ -1118,7 +1257,9 @@ function QueueTab({
                     value={paidAmount}
                     onChange={(e) => setPaidAmount(e.target.value)}
                     placeholder={(
-                      selected.amount_approved ?? selected.amount_claimed
+                      selected.amount_approved ??
+                      claimedInPolicyCurrency ??
+                      selected.amount_claimed
                     ).toFixed(2)}
                     className="tabular-nums"
                   />

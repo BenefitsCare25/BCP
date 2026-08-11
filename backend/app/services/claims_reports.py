@@ -36,6 +36,7 @@ from app.models.claim import (
     CLAIM_STATUS_SENT_TO_INSURER,
     HOSPITAL_TYPE_GOVERNMENT,
 )
+from app.services.claim_fx import is_foreign, policy_amount
 from app.services.claim_intake import is_inpatient_product
 from app.services.claim_settlement import (
     days_over_deadline,
@@ -44,6 +45,7 @@ from app.services.claim_settlement import (
     servicer_days,
 )
 from app.services.claims import dependant_display_name
+from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_reports import (
     append_safe,
     autosize,
@@ -210,10 +212,15 @@ def _header(scope: str) -> list[str]:
     header += [
         "Diagnosis",
         "Doctor",
+        # The currency the MEMBER was billed in. The two figures after it are in
+        # it too; the two after those are what we decided, which is always the
+        # policy currency — so they carry it in the header rather than sitting
+        # under a code that is wrong for every foreign claim.
         "Currency",
         "Incurred Amt",
-        "Payable Amt",
-        "Paid Amt",
+        f"Converted Amt ({POLICY_CURRENCY})",
+        f"Payable Amt ({POLICY_CURRENCY})",
+        f"Paid Amt ({POLICY_CURRENCY})",
         "TAX",
         "CPF",
         "Status",
@@ -311,6 +318,10 @@ def build_insurance_claims_workbook(
             claim.doctor_name or "",
             claim.currency,
             claim.amount_claimed,
+            # BLANK, never the foreign figure, when the conversion is unresolved
+            # — a cell under an SGD heading holding a USD number is worse than
+            # an empty one, because it will be summed.
+            policy_amount(claim) if is_foreign(claim) else None,
             claim.amount_approved,
             claim.payment_amount,
             _flag(claim.taxable),
@@ -356,7 +367,7 @@ EMPLOYEE_CLAIMS_HEADER = [
     "Incurred Amt",
     "Converted Currency",
     "Converted Incurred Amt",
-    "Payment Amt",
+    f"Payment Amt ({POLICY_CURRENCY})",
     "Status",
 ]
 
@@ -400,9 +411,13 @@ def build_employee_claims_workbook(
             claim.provider_name or "",
             claim.currency,
             claim.amount_claimed,
-            claim.currency,
-            claim.amount_converted if claim.amount_converted is not None
-            else claim.amount_claimed,
+            # The CONVERTED column is in the policy currency by definition.
+            # Echoing `claim.currency` here labelled an SGD figure "USD" on
+            # every foreign claim, and labelled the *unconverted* fallback
+            # correctly — which is the pair of errors that made the mistake
+            # invisible: the label was only ever right when the value was wrong.
+            POLICY_CURRENCY,
+            policy_amount(claim),
             # What actually moved: the insurer's payment when there is one,
             # otherwise what we approved. A flex claim has no insurer leg, so
             # `amount_approved` IS its payment.

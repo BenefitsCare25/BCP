@@ -4,9 +4,19 @@ No persisted counters: claim volume per employee is tiny, so every read sums
 the live rows. Buckets are keyed ``(product_code, benefit_key)``:
 
 - ``approved``  = Σ amount_approved of approved claims.
-- ``pending``   = Σ claimed (or converted) amounts of in-flight claims —
-  shown separately and NEVER subtracted from remaining (a pending claim may
-  be rejected).
+- ``pending``   = Σ in-flight claims, **in the policy currency** — shown
+  separately and NEVER subtracted from remaining (a pending claim may be
+  rejected).
+
+**Every figure in here is denominated in the policy currency**, because every
+limit it is compared against is. A foreign claim contributes its converted
+amount; one whose conversion is still unresolved contributes NOTHING and is
+counted in ``pending_unconverted`` instead. Adding its raw foreign amount would
+be arithmetic across two currencies — a USD 500 bill landing in an SGD bucket as
+500 — which is how a member with S$600 of cover left came to pass an approve
+guard on a bill worth S$675. The claim cannot be approved while it is in that
+state (`api/v1/claims.py::decide_claim`), so the omission is transient and the
+count is what makes it visible rather than silent.
 - ``remaining`` = limit - approved, when a numeric limit is known, and it
   **never goes below zero**. A benefit pays UP TO its limit: a member with S$500
   left who presents a S$700 bill utilises S$500 and pays the rest themselves, so
@@ -49,6 +59,7 @@ from app.schemas.claims import (
     UtilizationBucket,
     UtilizationOut,
 )
+from app.services.claim_fx import policy_amount
 from app.services.member_statement import build_member_statement
 
 # In-flight claims that may still consume the limit. Defined on the model
@@ -94,8 +105,11 @@ def _limit_unparsed(limit: float | None, display: str | None) -> bool:
     return limit is None and bool(display) and any(c.isdigit() for c in display)
 
 
-def _claim_amount(claim: Claim) -> float:
-    return float(claim.amount_converted or claim.amount_claimed)
+# `claim_fx.policy_amount` returns None when a foreign claim's SGD value is not
+# yet known. Aliased rather than re-implemented: the old local version was
+# `amount_converted or amount_claimed`, which has no way to say "unknown" and so
+# said "the foreign number" instead.
+_claim_amount = policy_amount
 
 
 def _countable_claims(db: Session, employee: Employee) -> list[Claim]:
@@ -119,7 +133,10 @@ def _bucket_sums(
     claims: list[Claim],
 ) -> dict[tuple[str | None, str | None], dict[str, Any]]:
     sums: dict[tuple[str | None, str | None], dict[str, Any]] = defaultdict(
-        lambda: {"approved": 0.0, "pending": 0.0, "count": 0, "claim_ids": []}
+        lambda: {
+            "approved": 0.0, "pending": 0.0, "pending_unconverted": 0,
+            "count": 0, "claim_ids": [],
+        }
     )
 
     def _add(key: tuple[str | None, str | None], claim: Claim) -> None:
@@ -128,13 +145,20 @@ def _bucket_sums(
         if claim.status in SETTLED_STATUSES:
             row["approved"] += float(claim.amount_approved or 0.0)
         else:
-            row["pending"] += _claim_amount(claim)
+            amount = _claim_amount(claim)
+            if amount is None:
+                # Foreign, and the rate could not be fetched — see the module
+                # docstring. Counted, never guessed at.
+                row["pending_unconverted"] += 1
+            else:
+                row["pending"] += amount
             # Collected HERE, where the claim is already being classified —
             # membership is `status not in SETTLED_STATUSES`, and that set is
             # defined by subtraction, so a caller re-filtering the claim list
             # would be reimplementing it. Recorded against BOTH the product
             # roll-up and the per-benefit bucket, because the claim's amount
-            # is counted into both.
+            # is counted into both. An unconverted claim is listed too: it is
+            # pending, it is just not yet a number.
             row["claim_ids"].append(str(claim.id))
 
     for claim in claims:
@@ -156,7 +180,8 @@ def _insured_buckets(
     for line in statement.coverage:
         seen_products.add(line.product_code)
         product_sum = sums.pop((line.product_code, None), None) or {
-            "approved": 0.0, "pending": 0.0, "count": 0, "claim_ids": [],
+            "approved": 0.0, "pending": 0.0, "pending_unconverted": 0,
+            "count": 0, "claim_ids": [],
         }
         limit = parse_limit_amount(line.annual_policy_limit)
         buckets.append(
@@ -173,6 +198,7 @@ def _insured_buckets(
                     if limit is not None
                     else None
                 ),
+                pending_unconverted=int(product_sum["pending_unconverted"]),
                 claim_count=int(product_sum["count"]),
                 pending_claim_ids=list(product_sum["claim_ids"]),
                 limit_unparsed=_limit_unparsed(limit, line.annual_policy_limit),
@@ -209,6 +235,7 @@ def _insured_buckets(
                         if item_limit is not None
                         else None
                     ),
+                    pending_unconverted=int(row["pending_unconverted"]),
                     claim_count=int(row["count"]),
                     pending_claim_ids=list(row["claim_ids"]),
                     limit_unparsed=_limit_unparsed(item_limit, item_display),
@@ -233,6 +260,7 @@ def _insured_buckets(
                 approved=round(float(row["approved"]), 2),
                 pending=round(float(row["pending"]), 2),
                 remaining=None,
+                pending_unconverted=int(row["pending_unconverted"]),
                 claim_count=int(row["count"]),
                 # An orphaned PRODUCT bucket has `benefit_key=None`, so the
                 # member's usage tab renders it among the product rows and
@@ -259,6 +287,9 @@ def _flex_utilization(
     # rather than re-filtered by a caller: the membership test is
     # `status not in SETTLED_STATUSES`, and that set is defined by subtraction.
     pending_claim_ids: list[str] = []
+    # Flex claims whose SGD value is not yet known — same rule as the insured
+    # buckets: counted, never summed at a foreign face value.
+    pending_unconverted = 0
     per_category: dict[str, dict[str, float]] = defaultdict(
         lambda: {"approved": 0.0, "pending": 0.0}
     )
@@ -271,9 +302,12 @@ def _flex_utilization(
             approved += amount
             per_category[cat.lower()]["approved"] += amount
         else:
-            amount = _claim_amount(claim)
-            pending += amount
             pending_claim_ids.append(str(claim.id))
+            amount = _claim_amount(claim)
+            if amount is None:
+                pending_unconverted += 1
+                continue
+            pending += amount
             per_category[cat.lower()]["pending"] += amount
 
     # Chain: wallet → minus price-tags (flex_balance) → minus approved claims.
@@ -346,6 +380,7 @@ def _flex_utilization(
         flex_balance=flex.flex_balance,
         approved=round(approved, 2),
         pending=round(pending, 2),
+        pending_unconverted=pending_unconverted,
         pending_claim_ids=pending_claim_ids,
         available=available,
         categories=categories,

@@ -367,8 +367,33 @@ export interface PortalClaim {
   diagnosis: string | null;
   remarks: string | null;
   amount_claimed: number;
+  /** The currency the MEMBER was billed in. */
   currency: string;
+  /** `amount_claimed` in `policy_currency`. NULL both when no conversion is
+   *  needed and when none could be obtained — read `fx_state`, never this. */
   amount_converted: number | null;
+  /** SERVED. "not_required" (already in the policy currency) | "converted" |
+   *  "unavailable" (foreign, no rate — a broker converts it by hand).
+   *
+   *  Do NOT re-derive from `amount_converted === null`: that reads the two
+   *  opposite cases the same way and prints a foreign figure under an SGD
+   *  heading. Same drift class as mirroring `member_editable`. */
+  fx_state: "not_required" | "converted" | "unavailable";
+  fx_rate: number | null;
+  /** The day the rate was PUBLISHED, which is earlier than `incurred_date`
+   *  whenever that is a weekend or holiday. Ordinary, not an error. */
+  fx_rate_date: string | null;
+  fx_source: string | null;
+  fx_stale: boolean;
+  /** When the member accepted the converted figure. Submit refuses a
+   *  convertible foreign claim without it. */
+  fx_acknowledged_at: string | null;
+  /** The currency every limit, wallet and reimbursement is in. Use this in
+   *  labels rather than hardcoding "SGD". */
+  policy_currency: string;
+  /** ALWAYS in `policy_currency`, never in `currency` — on a foreign claim the
+   *  two differ, and labelling this with `currency` overstates a US$ approval
+   *  by the exchange rate. */
   amount_approved: number | null;
   status: string;
   dependant_id: string | null;
@@ -430,6 +455,13 @@ export interface ClaimCreateInput {
   dependant_id?: string | null;
   referral_document_id?: string | null;
   referral_not_applicable?: boolean;
+  /** The member ticked "I accept the converted amount", plus the figure their
+   *  screen actually showed. The second is what makes the first mean anything:
+   *  if the quote moved between rendering and saving, the server leaves the
+   *  claim unacknowledged and submit re-asks with the current number rather
+   *  than recording consent to one nobody saw. */
+  fx_acknowledged?: boolean;
+  fx_quoted_amount?: number | null;
 }
 
 /** A required-document upload slot on the claim form. */
@@ -505,7 +537,28 @@ export interface CoverageOptions {
   claim_block: string | null;
   dependants: { id: string; name: string | null; relationship: string | null }[];
   currencies: string[];
+  /** The one currency limits and reimbursement are in; everything else in
+   *  `currencies` is converted into it. Served so no label hardcodes "SGD". */
+  policy_currency: string;
   hospitals: { name: string; sector: "govt" | "private" }[];
+}
+
+/** A live conversion preview for the claim form. `available: false` means no
+ *  rate could be fetched — the claim is still submittable and `note` says so. */
+export interface FxQuote {
+  currency: string;
+  policy_currency: string;
+  amount: number;
+  converted: number | null;
+  rate: number | null;
+  as_of_date: string | null;
+  rate_date: string | null;
+  stale: boolean;
+  source: string | null;
+  available: boolean;
+  /** One sentence stating what was done, worded server-side so the member's
+   *  confirmation and the broker's evidence line cannot disagree. */
+  note: string | null;
 }
 
 export interface DiagnosisOption {
@@ -613,6 +666,12 @@ export function useExtractClaimIntake() {
  * exactly the ones the truncation was wrong for. */
 const CLAIMS_PAGE = 200;
 
+/** Used only to decide whether a quote is worth ASKING FOR — never to label a
+ * figure. Every rendered currency comes from the server (`policy_currency` on
+ * the claim or on the coverage options), so a deployment that changed it would
+ * relabel every screen; this constant would only make one needless request. */
+const POLICY_CURRENCY_FALLBACK = "SGD";
+
 export function usePortalClaims() {
   return useQuery({
     queryKey: ["portal", "claims"],
@@ -630,6 +689,55 @@ export function usePortalClaim(claimId: string | null) {
     enabled: Boolean(claimId),
     meta: { localErrorHandling: true },
     retry: false,
+  });
+}
+
+/** The converted figure, refreshed as the member types the amount.
+ *
+ * Also the CACHE WARMER for submit: a rate for a past date never changes, so by
+ * the time the claim is sent the server already holds it and the retry budget
+ * has been spent here, in front of a spinner, rather than there. */
+export function useFxQuote(
+  currency: string,
+  amount: number | null,
+  on: string,
+) {
+  const foreign = Boolean(currency) && currency !== POLICY_CURRENCY_FALLBACK;
+  const enabled = foreign && Boolean(on) && amount !== null && amount > 0;
+  return useQuery({
+    queryKey: ["portal", "fx-quote", currency, amount, on],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        currency,
+        amount: String(amount),
+        on,
+      });
+      return portalApi.get<FxQuote>(`/portal/fx-quote?${params.toString()}`);
+    },
+    enabled,
+    meta: { localErrorHandling: true },
+    // A rate for a given day is a fixed fact; re-asking on every focus change
+    // would spend the member's rate limit to be told the same number.
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
+/** Accept the converted figure on a claim already saved.
+ *
+ * Its own endpoint, not a field on the amendment: it changes no claim fact, and
+ * routing it through the amendment would bump the revision, supersede the AI
+ * review and tell the member they had edited something. */
+export function useConfirmConversion() {
+  const qc = usePortalQueryInvalidator();
+  return useMutation({
+    mutationFn: (input: { claimId: string; convertedAmount: number }) =>
+      portalApi.post<PortalClaim>(
+        `/portal/claims/${input.claimId}/confirm-conversion`,
+        { converted_amount: input.convertedAmount },
+      ),
+    onSuccess: qc,
+    meta: { localErrorHandling: true },
   });
 }
 

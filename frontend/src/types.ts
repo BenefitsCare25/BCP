@@ -1371,6 +1371,13 @@ export interface UtilizationBucket {
   approved: number;
   /** In-flight claims — shown separately, never subtracted from remaining. */
   pending: number;
+  /** In-flight foreign claims with no resolved policy-currency value, and so
+   *  ABSENT from `pending`. Every figure in this bucket is policy-currency, so
+   *  a raw foreign amount cannot be added to one — a count is the honest way to
+   *  say "and this many more, worth an amount nobody has established yet".
+   *  Non-zero means someone owes a claim a conversion before it can be
+   *  approved. */
+  pending_unconverted: number;
   remaining: number | null;
   claim_count: number;
   /** The claims `pending` was summed from. SERVED, never re-derived: "which
@@ -1406,6 +1413,13 @@ export interface FlexUtilization {
   flex_balance: number | null;
   approved: number;
   pending: number;
+  /** In-flight foreign claims with no resolved policy-currency value, and so
+   *  ABSENT from `pending`. Every figure in this bucket is policy-currency, so
+   *  a raw foreign amount cannot be added to one — a count is the honest way to
+   *  say "and this many more, worth an amount nobody has established yet".
+   *  Non-zero means someone owes a claim a conversion before it can be
+   *  approved. */
+  pending_unconverted: number;
   /** The claims `pending` was summed from. SERVED, never re-derived here: which
    *  statuses count as pending is defined by subtraction server-side
    *  (`utilization.PENDING_STATUSES`), so a mirrored copy would drift into

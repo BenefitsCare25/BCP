@@ -389,9 +389,48 @@ class Claim(Base, TimestampMixin):
     diagnosis: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Free-text member note (not a document-matched field).
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # What the member was billed, in the currency they were billed in.
     amount_claimed: Mapped[float] = mapped_column(Float, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="SGD")
+
+    # ── Currency conversion (services/claim_fx.py) ───────────────────────────
+    #
+    # `amount_claimed` in the POLICY currency (SGD). NULL means one of two
+    # things and they are not interchangeable — read it through
+    # `claim_fx.fx_state` / `claim_fx.policy_amount`, never with an `or`:
+    #
+    #   currency == SGD  → nothing to convert; `amount_claimed` is the figure.
+    #   currency != SGD  → the rate could not be fetched. The SGD value of this
+    #                      claim is UNKNOWN. It may not be compared to a limit,
+    #                      summed into a bucket, or approved until a person
+    #                      supplies it.
+    #
+    # `amount_converted or amount_claimed` was the shape every reader used, and
+    # it silently priced a USD 500 bill as SGD 500 against an SGD limit.
     amount_converted: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Policy-currency units per 1 unit of `currency`, and the date that rate was
+    # PUBLISHED on. The publication date can be earlier than `incurred_date` —
+    # the reference series has no weekend or holiday entries, so a Sunday
+    # receipt converts at Friday's rate. Recording both is what lets an assessor
+    # see which day was actually used. NULL date on a broker-keyed figure.
+    fx_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fx_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # "frankfurter" (the ECB reference rate) or "broker" (hand-keyed because no
+    # rate could be had). NULL when no conversion applies.
+    fx_source: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # When the CLAIMANT accepted the converted figure. A member files in their
+    # own currency but is reimbursed in SGD, so the conversion is a term of the
+    # claim, not a display detail — submit refuses a convertible foreign claim
+    # without it, and any change to the figure clears it so the consent always
+    # refers to the number actually on the claim.
+    fx_acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # What the broker approved, ALWAYS in the policy currency (SGD) — never in
+    # `currency`. On a foreign claim it is denominated differently from
+    # `amount_claimed` sitting two fields above it, which is why anything
+    # rendering it must say SGD rather than reach for `claim.currency`.
     amount_approved: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=CLAIM_STATUS_DRAFT, index=True
@@ -469,7 +508,8 @@ class Claim(Base, TimestampMixin):
     paid_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     # What the insurer actually paid. Distinct from `amount_approved`: a
     # shortfall between the two is the whole reason a reconciliation report
-    # exists, so collapsing them would hide it.
+    # exists, so collapsing them would hide it. In the POLICY currency, like
+    # `amount_approved` it defaults to — not the claim's own `currency`.
     payment_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # ── Clinical / assessment detail ─────────────────────────────────────────

@@ -26,11 +26,18 @@ import { prorationReason } from "./FlexProrationNote";
 import { glossBeside } from "./glossary";
 import { formatDay } from "./date";
 
-/** The amount a claim contributes, exactly as `utilization.py::_claim_amount`
- * computes it — the converted figure when the claim was filed in another
- * currency, else what was claimed. */
-function claimAmount(c: PortalClaim): number {
-  return c.amount_converted ?? c.amount_claimed;
+/** The amount a claim contributes to a POLICY-CURRENCY bucket, exactly as
+ * `claim_fx.policy_amount` computes it.
+ *
+ * NULL when the claim is in another currency and no rate could be fetched: its
+ * value here is genuinely unknown, and the server leaves it out of `pending`
+ * for that reason (counting it in `pending_unconverted` instead). The tempting
+ * `amount_converted ?? amount_claimed` reads the foreign figure as an SGD one —
+ * which would also make the reconciliation below pass on a wrong number rather
+ * than failing safe. */
+function claimAmount(c: PortalClaim): number | null {
+  if (c.fx_state === "not_required") return c.amount_claimed;
+  return c.amount_converted ?? null;
 }
 
 /** What the member sent in, itemised, for a product whose total is not settled.
@@ -75,16 +82,27 @@ function PendingBreakdown({
   const mine = claims.filter((c) => ids.has(c.id));
   if (mine.length === 0) return null;
 
-  const total = mine.reduce((sum, c) => sum + claimAmount(c), 0);
+  // Only the claims that HAVE a policy-currency value are itemised, because
+  // only those are in the figure. An unpriced one would break the reconciliation
+  // below — correctly: it is not part of the total it would be listed under.
+  const priced = mine.filter((c) => claimAmount(c) !== null);
+  if (priced.length === 0) return null;
+  // Claims in the bucket whose SGD value is not yet known. The server leaves
+  // them out of `pending` (it cannot add a foreign amount to a policy-currency
+  // total) and counts them instead, so this list has to say so — otherwise a
+  // member reads a total that quietly omits a claim they can see in their own
+  // list, with nothing explaining the gap.
+  const awaiting = mine.length - priced.length;
+  const total = priced.reduce((sum, c) => sum + (claimAmount(c) ?? 0), 0);
   if (Math.abs(total - bucket.pending) > 0.01) return null;
 
   return (
     <div className="flex flex-col gap-1">
       <h3 className="leaf-label">
-        {mine.length === 1 ? "The claim in that figure" : "What's in that figure"}
+        {priced.length === 1 ? "The claim in that figure" : "What's in that figure"}
       </h3>
       <dl className="divide-y divide-hairline/75">
-        {mine.map((c) => (
+        {priced.map((c) => (
           <div
             key={c.id}
             className="flex items-baseline justify-between gap-4 py-1.5"
@@ -97,7 +115,14 @@ function PendingBreakdown({
               </span>
             </dt>
             <dd className="m-0 shrink-0 text-right">
-              <Money value={claimAmount(c)} currency={currencySymbol(c.currency)} />
+              {/* The POLICY-currency figure, because that is what the total
+                  above is made of. Printing the foreign amount here with its
+                  own symbol would list rows that visibly do not add up to the
+                  number they sit under. */}
+              <Money
+                value={claimAmount(c) ?? 0}
+                currency={currencySymbol(c.policy_currency)}
+              />
               {/* Under the amount, on its own line: at index width a figure and
                   a struck state cannot share a line (the same constraint
                   `ConversationMount` records). */}
@@ -108,6 +133,13 @@ function PendingBreakdown({
           </div>
         ))}
       </dl>
+      {awaiting > 0 && (
+        <p className="text-row text-strike-pending">
+          {awaiting === 1
+            ? "One more claim is being converted to SGD and isn't counted above yet."
+            : `${awaiting} more claims are being converted to SGD and aren't counted above yet.`}
+        </p>
+      )}
     </div>
   );
 }

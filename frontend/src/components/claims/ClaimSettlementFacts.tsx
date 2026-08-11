@@ -107,14 +107,18 @@ export function ClaimSettlementFacts({ claim }: { claim: BrokerClaim }) {
       {claim.paid_on && <Fact label="Paid on">{fmtDate(claim.paid_on)}</Fact>}
       {claim.payment_amount != null && (
         <Fact label="Amount paid">
-          {claim.currency} {claim.payment_amount.toFixed(2)}
+          {/* The POLICY currency, not the claim's. What the insurer paid is
+              denominated the same way as what we approved it for — on a foreign
+              claim, labelling it `claim.currency` restates an SGD settlement in
+              the currency of the receipt and overstates it by the rate. */}
+          {claim.policy_currency} {claim.payment_amount.toFixed(2)}
           {/* A shortfall is the whole reason payment_amount is stored apart
               from amount_approved — say so rather than leaving two numbers to
               be compared by eye. */}
           {claim.amount_approved != null &&
             claim.payment_amount < claim.amount_approved && (
               <span className="ml-2 text-xs font-normal text-warn">
-                short by {claim.currency}{" "}
+                short by {claim.policy_currency}{" "}
                 {(claim.amount_approved - claim.payment_amount).toFixed(2)}
               </span>
             )}

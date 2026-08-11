@@ -1,9 +1,10 @@
 """Stage 5 — the verdict.
 
-``clean`` iff: no failed rule (deterministic or AI), no remaining MISMATCH
-after vision verification, no evidence-required field left MISSING_IN_PDF
-(claimed but unsubstantiated), no REFUTED vision check, and the review
-confidence clears the threshold. Anything else → ``flagged`` (the broker
+``clean`` iff: no failed rule (deterministic or AI), no rule marked ``flag``
+(`rules._flagging` — a warning that must still reach a person), no remaining
+MISMATCH after vision verification, no evidence-required field left
+MISSING_IN_PDF (claimed but unsubstantiated), no REFUTED vision check, and the
+review confidence clears the threshold. Anything else → ``flagged`` (the broker
 decides either way — the verdict only orders the queue).
 """
 from __future__ import annotations
@@ -40,6 +41,13 @@ def compute_verdict(
     for r in rule_results:
         if r.get("status") == "fail":
             reasons.append(f"Rule failed: {r.get('rule')}")
+        elif r.get("flag"):
+            # A warning a rule marked as verdict-moving (`rules._flagging`).
+            # Ordinary warnings stay advisory; this is for a claim that must not
+            # auto-clear for a reason unconnected to its evidence — an
+            # unresolved currency conversion — where failing outright would
+            # abort the pipeline and throw away the document checks too.
+            reasons.append(f"Needs a decision: {r.get('rule')}")
     for c in field_comparisons:
         status = c.get("status")
         if status == "MISMATCH":

@@ -21,7 +21,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
-import { useCreateLogCase } from "@/api/claims";
+import { useBrokerFxQuote, useCreateLogCase } from "@/api/claims";
 import { useEmployeeUtilization } from "@/api/claims";
 import { useBenefitStatement, useCoverageSummary } from "@/api/hooks";
 import { useSession } from "@/stores/session";
@@ -222,6 +222,21 @@ export function LogCaseForm({
   const inPolicyCurrency = currency === POLICY_CURRENCY;
   const amountValue = Number(amount);
   const amountValid = amount.trim() !== "" && isFinite(amountValue) && amountValue > 0;
+  // A foreign case is converted server-side the moment it is recorded, so the
+  // limit comparison below CAN be made in the policy currency — it just needs
+  // the same figure the server will store. Quoted live rather than left blank:
+  // "we can't compare this" was the old behaviour, and it meant an assessor
+  // recording a USD case learned about an overrun from the approve screen.
+  const fxQuote = useBrokerFxQuote(
+    currency,
+    amountValid ? amountValue : null,
+    incurredDate,
+  );
+  const policyAmount = inPolicyCurrency
+    ? amountValid
+      ? amountValue
+      : null
+    : (fxQuote.data?.converted ?? null);
   const canSave =
     !!employeeId && !!productCode && !!incurredDate && amountValid && !create.isPending;
 
@@ -429,23 +444,35 @@ export function LogCaseForm({
                     learn about a limit from an error after they finished.
 
                     Utilization buckets are always in the POLICY currency, so
-                    the comparison is only made when the case is being entered
-                    in it — against a foreign-currency amount it would both
-                    mislabel the limit and invent (or suppress) an overrun. */}
+                    the comparison is made against `policyAmount` — the CONVERTED
+                    figure on a foreign case. Comparing the raw foreign amount
+                    would both mislabel the limit and invent (or suppress) an
+                    overrun; skipping the comparison, which is what this used to
+                    do, just moved the surprise to the approve screen. */}
                 {remaining != null && (
                   <p
                     className={
-                      inPolicyCurrency && amountValid && amountValue > remaining
+                      policyAmount != null && policyAmount > remaining
                         ? "text-xs tabular-nums text-warn"
                         : "text-xs tabular-nums text-muted-foreground"
                     }
                   >
                     Remaining limit {POLICY_CURRENCY} {remaining.toFixed(2)}
-                    {!inPolicyCurrency
-                      ? ` — this case is in ${currency}`
-                      : amountValid && amountValue > remaining
-                        ? " — this exceeds it"
-                        : ""}
+                    {policyAmount != null && policyAmount > remaining
+                      ? " — this exceeds it"
+                      : ""}
+                  </p>
+                )}
+                {/* What the case will actually be recorded as. Shown for the
+                    same reason the member is asked to accept it: the figure the
+                    assessor typed is not the figure the limit is spent in. */}
+                {!inPolicyCurrency && amountValid && (
+                  <p className="text-xs tabular-nums text-muted-foreground">
+                    {fxQuote.isFetching && !fxQuote.data
+                      ? `Converting to ${POLICY_CURRENCY}…`
+                      : (fxQuote.data?.note ??
+                        `No exchange rate for ${currency} — you will be asked ` +
+                          `for the ${POLICY_CURRENCY} value when you approve this.`)}
                   </p>
                 )}
               </Field>

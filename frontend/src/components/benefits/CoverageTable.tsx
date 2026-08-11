@@ -183,6 +183,13 @@ function CoverageDetail({
               <span className="shrink-0 tabular-nums text-muted-foreground">
                 {fmtMoney(b.approved)} approved
                 {b.pending > 0 ? ` · ${fmtMoney(b.pending)} pending` : ""}
+                {/* Absent from `pending` by design — see BenefitStatement. */}
+                {b.pending_unconverted > 0 ? (
+                  <span className="text-warn">
+                    {" · "}
+                    {b.pending_unconverted} awaiting conversion
+                  </span>
+                ) : null}
               </span>
             </div>
           ))}

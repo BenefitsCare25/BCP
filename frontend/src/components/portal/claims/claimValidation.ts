@@ -36,6 +36,15 @@ export interface ClaimValues {
   requiresDoctorName: boolean;
   doctorName: string;
   amount: string;
+  /** A foreign claim carrying a conversion the member has not yet accepted.
+   *  False when the claim is already in the policy currency AND when no rate
+   *  could be fetched — there is nothing to accept in either case, and a
+   *  currency API outage must never stop someone filing a claim. */
+  /** Foreign, and we cannot yet say what it converts to — the quote is still in
+   *  flight or the request failed. Distinct from "there is no rate": that is a
+   *  settled answer that waives the confirmation, this is no answer at all, and
+   *  sending on it walks into a 409 for a control that was never rendered. */
+  fxBlocked: boolean;
   docSlots: DocSlot[];
   slotFiles: Record<string, File | null>;
 }
@@ -125,6 +134,16 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
     errs.amount = "Enter the amount on the receipt.";
   } else if (amount > 1_000_000) {
     errs.amount = "Amount looks too large — check the receipt.";
+  }
+
+  // The ONLY currency block. There is no acceptance tick — sending the claim
+  // with the converted figure on screen is the acceptance. But sending while
+  // that figure is still UNKNOWN walks into the server's
+  // `fx_confirmation_required` 409, so it waits for an answer first. "There is
+  // no rate" is a settled answer and does NOT block: an outage must never stop
+  // a member filing.
+  if (v.fxBlocked) {
+    errs.fx = "We're still checking the exchange rate — try again in a moment.";
   }
 
   for (const slot of v.docSlots) {

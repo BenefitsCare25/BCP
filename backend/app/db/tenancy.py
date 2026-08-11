@@ -53,6 +53,11 @@ CONTROL_TABLES: frozenset[str] = frozenset(
         # all firms/clients, so they must live in public (not per-firm schemas).
         "platform_ai_settings",
         "platform_ai_usage",
+        # Cached FX reference rates. A rate is a fact about the market on a
+        # date, owned by no firm — per-schema copies would let two firms convert
+        # the same receipt to two different figures, and would multiply the
+        # outbound calls by the tenant count. See `models/fx_rate.py`.
+        "fx_rates",
     }
 )
 

@@ -36,6 +36,17 @@ function OrphanedClaims({
             <span className="shrink-0 tabular-nums text-muted-foreground">
               {fmtMoney(b.approved)} approved
               {b.pending > 0 ? ` · ${fmtMoney(b.pending)} pending` : ""}
+              {/* Foreign claims with no resolved SGD value are ABSENT from
+                  `pending` — they cannot be summed into a policy-currency
+                  figure. Naming them is what keeps the total honest; a
+                  silently short number is the same class of wrongness the
+                  conversion work removed. */}
+              {b.pending_unconverted > 0 ? (
+                <span className="text-warn">
+                  {" · "}
+                  {b.pending_unconverted} awaiting conversion
+                </span>
+              ) : null}
             </span>
           </li>
         ))}

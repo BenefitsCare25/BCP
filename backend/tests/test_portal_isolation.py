@@ -271,6 +271,42 @@ def test_amending_an_unknown_claim_404(anon: TestClient):
     )
 
 
+def test_confirming_the_conversion_of_an_unknown_claim_404(anon: TestClient):
+    """Accepting a converted figure is a WRITE on a claim, so it resolves the
+    caller's own employee row and loads through `load_member_claim` like every
+    other claim write. Its own handler, so it needs its own test: a scoping slip
+    here would let a member stamp consent onto somebody else's claim."""
+    ghost = "00000000-0000-0000-0000-0000000000ff"
+    res = anon.post(
+        f"/api/v1/portal/claims/{ghost}/confirm-conversion",
+        json={"converted_amount": 100.0},
+        headers=_auth(ACC_ALICE),
+    )
+    assert res.status_code == 404
+
+
+def test_the_fx_quote_reads_no_member_data(anon: TestClient):
+    """Deliberately NOT scoped to an employee row.
+
+    An exchange rate is public market data — it says nothing about the caller —
+    so gating it on `resolve_member_employee` would put a leaver check in front
+    of a number anyone can look up, and refuse a lawful claimant the figure
+    their own claim is about to be converted at. Portal membership is the gate.
+    A member whose client has no active year still gets an answer here, which is
+    the observable difference from every data endpoint beside it.
+    """
+    res = anon.get(
+        "/api/v1/portal/fx-quote",
+        params={"currency": "USD", "amount": 100, "on": "2026-06-15"},
+        headers=_auth(ACC_BOB_B, CLIENT_B_ID),
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["currency"] == "USD" and body["policy_currency"] == "SGD"
+    # FX is off suite-wide (conftest), so no rate — the shape is the point.
+    assert body["available"] is False
+
+
 def test_token_client_mismatch_401(anon: TestClient):
     """A token minted for another client than the account's is refused —
     same staff_id in two clients must never cross."""

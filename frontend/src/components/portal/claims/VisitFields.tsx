@@ -6,6 +6,7 @@ import { AlertTriangle } from "lucide-react";
 import { Field, leafControl } from "@/components/portal/leaf/Field";
 import { DiagnosisPicker } from "@/components/portal/DiagnosisPicker";
 import { FieldGroup } from "@/components/portal/leaf/Field";
+import { ConversionNotice } from "./ConversionNotice";
 import { FALLBACK_CURRENCIES, OTHER_HOSPITAL } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
 
@@ -165,15 +166,33 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
         </Field>
       </div>
 
-      {/* Wrong-currency guard: bills incurred in Singapore are almost always
-          SGD — nudge before the AI review flags a mismatch. */}
-      {form.effectiveKind === "insured" && form.effectiveCurrency !== "SGD" && (
-        <p className="flex items-start gap-1.5 text-row text-strike-pending">
-          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          Double-check the receipt — most Singapore bills are in SGD. Claims in{" "}
-          {form.effectiveCurrency} need broker confirmation of the conversion.
-        </p>
-      )}
+      {/* States the choice back rather than second-guessing it. Kept ABOVE
+          the conversion panel: this one is about WHICH currency, the panel
+          below is about what it comes to — and there is no point reading a
+          conversion of the wrong currency. */}
+      {form.effectiveKind === "insured" &&
+        form.effectiveCurrency !== form.policyCurrency && (
+          <p className="flex items-start gap-1.5 text-row text-strike-pending">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            Note that you have selected {form.effectiveCurrency}.
+          </p>
+        )}
+
+      {/* What the bill is worth in the currency the member is actually
+          reimbursed in. Sending the claim with this on screen IS the
+          acceptance — the form submits the figure it displayed and the server
+          records which one that was. Submit is blocked only while the rate is
+          still UNKNOWN, never when there simply isn't one: an outage must not
+          stop a member filing. */}
+      <ConversionNotice
+        quote={form.fxQuote}
+        loading={form.fxLoading}
+        currency={form.effectiveCurrency}
+        policyCurrency={form.policyCurrency}
+        error={form.fieldErrors.fx}
+        failed={form.fxFailed}
+        onRetry={form.retryFxQuote}
+      />
 
       {/* Diagnosis — searchable catalog scoped to the claim type. */}
       {form.showDiagnosisPicker && selectedProduct && (

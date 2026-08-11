@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from datetime import UTC, date, datetime
 from typing import Any
 
 from anthropic import RateLimitError
@@ -61,6 +62,8 @@ from app.schemas.claims import (
     DocSlotOut,
     FlexClaimCategoryOption,
     FlexClaimOptions,
+    FxAcknowledgeIn,
+    FxQuoteOut,
     HospitalOut,
     InsuredClaimOption,
     StoredDocumentOut,
@@ -70,6 +73,12 @@ from app.services.ai_breaker import CircuitOpenError
 from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError
 from app.services.claim_doc_types import resolve_doc_types
+from app.services.claim_fx import (
+    FX_STATE_CONVERTED,
+    apply_conversion,
+    build_quote,
+    fx_state,
+)
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     CATEGORY_INPATIENT,
@@ -107,6 +116,7 @@ from app.services.claims import (
 from app.services.claims_review.pipeline import run_review
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 from app.services.enrollment_products import resolve_products_by_codes
+from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_listings import member_id_for_insurer
 from app.services.member_access import Capability
 from app.services.member_statement import build_member_statement
@@ -304,6 +314,7 @@ def build_coverage_options(
             for d in statement.dependants
         ],
         currencies=list(ALLOWED_CURRENCIES),
+        policy_currency=POLICY_CURRENCY,
         hospitals=[HospitalOut(**h) for h in hospital_directory()],
     )
 
@@ -497,6 +508,41 @@ def claim_diagnoses(
         group=group,
         items=[DiagnosisOut(label=d.label, icd10=d.icd10) for d in hits],
     )
+
+
+@options_router.get("/fx-quote", response_model=FxQuoteOut)
+@limiter.limit("60/minute")
+def my_fx_quote(
+    request: Request,
+    currency: str = Query(min_length=3, max_length=8),
+    amount: float = Query(gt=0, le=1_000_000),
+    on: date = Query(description="The date on the receipt."),
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> FxQuoteOut:
+    """What a foreign bill is worth in the policy currency, while the form is
+    still being filled in — so the member is shown the figure they will actually
+    be reimbursed against BEFORE they commit to it, not after.
+
+    Deliberately not scoped to an employee: it reads no member data and returns
+    none. An exchange rate is public market data, so `resolve_member_employee`
+    would be gating a public fact behind a leaver check and refusing a lawful
+    claimant a number they can look up anywhere. Membership of the portal is the
+    gate; the rate limit is what stops it being a free FX proxy.
+
+    Also the CACHE WARMER for submit: the rate for a past date never changes, so
+    by the time the claim is sent the figure is already local and the retry
+    budget has been spent here, in front of a spinner, rather than there.
+
+    **Which is why this read endpoint commits.** `get_db` only closes the
+    session, so without an explicit commit the `fx_rates` row `fx.quote` just
+    fetched is discarded on the way out — the cache never warms, and the member
+    pays the full upstream budget again on create AND on submit, inside requests
+    they are waiting on. The only thing in the session is that cache row.
+    """
+    out = build_quote(db, currency=currency, amount=amount, on=on)
+    db.commit()
+    return out
 
 
 @options_router.get("/referral-letters", response_model=list[StoredDocumentOut])
@@ -871,6 +917,54 @@ def delete_my_draft_claim(
     )
     db.delete(claim)
     db.commit()
+
+
+@router.post("/{claim_id}/confirm-conversion", response_model=ClaimOut)
+@limiter.limit("20/minute")
+def confirm_my_conversion(
+    request: Request,
+    claim_id: str,
+    body: FxAcknowledgeIn,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> ClaimOut:
+    """Accept the policy-currency figure this claim converts to.
+
+    Its own endpoint rather than a field on the amendment, because accepting a
+    figure is not correcting a claim: nothing about the claim changes. Routed
+    through `amend_my_claim` it would bump `revision`, supersede the AI review
+    and post the member a notice telling them they had changed something.
+
+    RESPOND, not CLAIM — the same capability answering a `needs_info` needs.
+    Confirming the conversion on a claim already filed is finishing something in
+    flight, and a member whose run-off has expired must still be able to.
+
+    Re-prices before stamping, so what is being consented to is the current
+    figure and not one that has since moved. If it HAS moved, this returns the
+    claim carrying the new one, unacknowledged — the form shows it and asks
+    again rather than recording consent to a number nobody saw.
+    """
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
+    claim = _own_claim(db, claim_id, employee.id)
+    assert_member_may_amend(claim)
+    apply_conversion(db, claim)
+    if fx_state(claim) == FX_STATE_CONVERTED and (
+        body.converted_amount is None
+        or abs(body.converted_amount - claim.amount_converted) <= 0.005
+    ):
+        claim.fx_acknowledged_at = datetime.now(UTC)
+        write_member_audit(
+            db, member, "claim.conversion_confirmed", "claim", claim.id,
+            after={
+                "currency": claim.currency,
+                "amount_claimed": claim.amount_claimed,
+                "amount_converted": claim.amount_converted,
+                "fx_rate": claim.fx_rate,
+            },
+            employee_id=employee.id,
+        )
+    db.commit()
+    return claim_to_out(db, claim)
 
 
 @router.post("/{claim_id}/submit", response_model=ClaimOut)

@@ -52,6 +52,12 @@ from app.models.policy_year import PolicyYearStatus
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, DocSlotOut, StoredDocumentOut
+from app.services.claim_fx import (
+    FX_INPUT_FIELDS,
+    FX_STATE_CONVERTED,
+    apply_conversion,
+    fx_state,
+)
 from app.services.claim_intake import (
     DOC_SLOT_LABELS,
     GP_SUB_TYPES,
@@ -68,6 +74,7 @@ from app.services.claim_intake import (
 )
 from app.services.claim_settlement import mint_reference_no
 from app.services.flex_membership import flex_effective_window
+from app.services.fx import POLICY_CURRENCY
 from app.services.member_statement import build_member_statement
 from app.services.roster_attributes import NAME_KEYS, cover_end, first_value
 
@@ -272,6 +279,23 @@ def populate_claim_out(
     # the amendment kept requiring it, and every save 422'd with nothing the
     # member could do about it.
     out.requires_doctor_name = requires_doctor_name(claim.product_code, claim.sub_type)
+    # Currency state, SERVED for the same reason `member_editable` is: the
+    # client cannot get it right from the columns. `amount_converted` is NULL
+    # both when a claim needs no conversion and when its conversion failed, and
+    # a UI that reads NULL as the first prints the foreign figure under an SGD
+    # heading — which is the presentation half of the bug the conversion exists
+    # to fix. `policy_currency` rides along so no label hardcodes "SGD".
+    out.fx_state = fx_state(claim)
+    out.policy_currency = POLICY_CURRENCY
+    # Measured against the RECEIPT date, deliberately — not against
+    # `FxQuote.stale`, which compares to the date actually requested (clamped to
+    # today, since the future has no published rate). The two disagree only on a
+    # future-dated receipt, and there the claim-level answer is the one a reader
+    # needs: "this rate is not from the day on your receipt" is the sentence the
+    # UI has to justify, whatever we asked the upstream for.
+    out.fx_stale = bool(
+        claim.fx_rate_date is not None and claim.fx_rate_date != claim.incurred_date
+    )
     return out
 
 
@@ -491,9 +515,37 @@ def create_claim(
     claim.form_fields = form_snapshot(
         claim, referral_not_applicable=body.referral_not_applicable
     )
+    # Priced on the DRAFT, so the member sees the SGD figure on the review step
+    # rather than meeting it for the first time after they have committed. The
+    # rate is cached, so the submit that follows a moment later costs nothing.
+    apply_conversion(db, claim)
+    _stamp_fx_acknowledgement(claim, body)
     db.add(claim)
     db.flush()
     return claim
+
+
+def _stamp_fx_acknowledgement(claim: Claim, body: Any) -> None:
+    """Record the claimant accepting the converted figure, if they did.
+
+    Deliberately silent when they didn't: the acknowledgement is only ever
+    REQUIRED at submit (`assert_fx_acknowledged`), so a draft saved before the
+    quote resolved is a normal state, not an error to raise here.
+
+    Guarded on the figure the client says it displayed. A quote can move between
+    the form loading and the claim saving — a same-day receipt whose rate
+    publishes in between — and consent to a number that has since changed is not
+    consent. A mismatch simply leaves the claim unacknowledged, and submit asks
+    again with the current figure.
+    """
+    if not getattr(body, "fx_acknowledged", False):
+        return
+    if fx_state(claim) != FX_STATE_CONVERTED:
+        return
+    shown = getattr(body, "fx_quoted_amount", None)
+    if shown is not None and abs(float(shown) - float(claim.amount_converted)) > 0.005:
+        return
+    claim.fx_acknowledged_at = datetime.now(UTC)
 
 
 async def attach_document(
@@ -1105,6 +1157,42 @@ def validate_claim_facts(
     return window
 
 
+def assert_fx_acknowledged(claim: Claim) -> None:
+    """Refuse to send a convertible foreign claim the claimant has not confirmed.
+
+    A member states their bill in the currency they were billed in, but they are
+    reimbursed — and their limit is consumed — in the policy currency. The
+    converted figure is therefore a TERM of the claim, and filing one the
+    claimant has never seen would settle them against a number they never
+    agreed to.
+
+    Only fires when there is something to confirm. A domestic claim has no
+    conversion, and one whose rate could not be fetched has no figure to show —
+    that claim goes through unconverted and reaches the broker flagged, because
+    blocking a member on a third-party outage is the one outcome worse than a
+    manual conversion.
+    """
+    if fx_state(claim) != FX_STATE_CONVERTED or claim.fx_acknowledged_at is not None:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "code": "fx_confirmation_required",
+            "message": (
+                f"{claim.currency} {claim.amount_claimed:,.2f} converts to "
+                f"{POLICY_CURRENCY} {claim.amount_converted:,.2f}. Confirm the "
+                "converted amount before sending this claim."
+            ),
+            "currency": claim.currency,
+            "amount_claimed": claim.amount_claimed,
+            "policy_currency": POLICY_CURRENCY,
+            "amount_converted": claim.amount_converted,
+            "rate": claim.fx_rate,
+            "rate_date": claim.fx_rate_date.isoformat() if claim.fx_rate_date else None,
+        },
+    )
+
+
 def submit_claim(
     db: Session,
     claim: Claim,
@@ -1184,6 +1272,15 @@ def submit_claim(
         enforce_doctor_name=claim.status == CLAIM_STATUS_DRAFT,
         window=window,
     )
+
+    # Re-priced at the moment the claim becomes real, so the stored SGD figure
+    # is the server's own answer and never a number the client sent. Cheap: the
+    # draft warmed the cache, and a rate for a past date is immutable, so this
+    # is a cache hit for everything except a receipt dated today whose rate
+    # published in between — which is exactly the case the acknowledgement
+    # check below exists to catch.
+    apply_conversion(db, claim)
+    assert_fx_acknowledged(claim)
 
     claim.status = CLAIM_STATUS_SUBMITTED
     claim.submitted_at = datetime.now(UTC)
@@ -1370,6 +1467,7 @@ def apply_claim_amendment(
     before: dict[str, Any] = {c: getattr(claim, c) for c in columns}
     previous_sub_type = claim.sub_type
     previous_key = claim.benefit_key
+    previous_converted = claim.amount_converted
     previous_flag = bool((claim.form_fields or {}).get(_REFERRAL_FLAG))
 
     for name in columns:
@@ -1414,6 +1512,25 @@ def apply_claim_amendment(
         # The broker NAMED a bucket, so it must not be silently derived over.
         explicit_benefit_key="benefit_key" in columns,
     )
+    # Re-price when an INPUT to the conversion moved. A conversion is a function
+    # of the amount, the currency and the date, so leaving the old one on a
+    # claim whose amount just changed would attach an SGD figure to a foreign
+    # number it was never computed from — and the approve guard, the utilization
+    # bucket and the member's own notice would all read it as current.
+    #
+    # `apply_conversion` also drops the claimant's acknowledgement whenever the
+    # figure lands somewhere new, so a member who corrects 500 to 750 is asked
+    # to accept the new SGD equivalent rather than carried along on their
+    # consent to the old one. A broker's hand-keyed conversion is discarded by
+    # the same rule: it described the previous claim.
+    if columns & FX_INPUT_FIELDS:
+        # `replace_manual=True`: this is the ONE path where an assessor's
+        # hand-keyed figure must go. It priced a claim whose amount, currency or
+        # date has just changed, so it describes something that no longer
+        # exists. Every other caller leaves it alone (see `apply_conversion`).
+        apply_conversion(db, claim, replace_manual=True)
+        _stamp_fx_acknowledgement(claim, body)
+
     # Re-snapshot in FULL after validation, which normalizes `sub_type` and may
     # relink the referral letter.
     claim.form_fields = form_snapshot(claim, referral_not_applicable=bool(flag))
@@ -1429,6 +1546,13 @@ def apply_claim_amendment(
     # the trail has to show it moving.
     if claim.benefit_key != previous_key:
         before["benefit_key"], after["benefit_key"] = previous_key, claim.benefit_key
+    # Same reasoning for the SGD figure: it moves as a consequence of the
+    # amendment rather than as part of it, and it is the number the claim is
+    # actually settled on. A trail that shows the foreign amount changing but
+    # not the figure derived from it is missing the half that spends the limit.
+    if claim.amount_converted != previous_converted:
+        before["amount_converted"] = previous_converted
+        after["amount_converted"] = claim.amount_converted
     return before, after
 
 

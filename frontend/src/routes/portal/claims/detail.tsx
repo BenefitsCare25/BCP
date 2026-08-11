@@ -19,6 +19,7 @@ import {
   useAmendClaim,
   useDeleteClaimDocument,
   usePortalClaim,
+  useConfirmConversion,
   useSubmitClaim,
   useUploadClaimDocument,
   type ClaimAmendInput,
@@ -59,6 +60,7 @@ export function PortalClaimDetailPage() {
   const markRead = useMarkClaimMessagesRead();
   const uploadDoc = useUploadClaimDocument();
   const submitClaim = useSubmitClaim();
+  const confirmConversion = useConfirmConversion();
   const amendClaim = useAmendClaim();
   const removeDoc = useDeleteClaimDocument();
   // The edit sheet's open state, and the SERVER's last word on the attempt.
@@ -147,6 +149,18 @@ export function PortalClaimDetailPage() {
   // the thing they need to see is that THIS claim now has it.
   const resubmit = async () => {
     try {
+      // A foreign claim the member has not yet accepted the conversion on is
+      // refused by submit (409 `fx_confirmation_required`). Accepted here
+      // rather than surfaced as an error: the figure is ON THIS PAGE, directly
+      // above the button they just pressed, so pressing it IS the acceptance —
+      // the same rule the new-claim form follows. The server still checks the
+      // figure against its own before recording it.
+      if (data.fx_state === "converted" && !data.fx_acknowledged_at) {
+        await confirmConversion.mutateAsync({
+          claimId: data.id,
+          convertedAmount: data.amount_converted ?? 0,
+        });
+      }
       await submitClaim.mutateAsync(data.id);
       await claim.refetch();
       void navigate({
@@ -218,6 +232,17 @@ export function PortalClaimDetailPage() {
       onAddDocument={(file, docType) => void addDocument(file, docType)}
       uploading={uploadDoc.isPending}
       onSubmit={() => void resubmit()}
+      conversion={{
+        state: data.fx_state,
+        currency: data.currency,
+        policyCurrency: data.policy_currency,
+        amountClaimed: data.amount_claimed,
+        converted: data.amount_converted,
+        rate: data.fx_rate,
+        rateDate: data.fx_rate_date,
+        stale: data.fx_stale,
+        acknowledged: data.fx_acknowledged_at !== null,
+      }}
       submitting={submitClaim.isPending}
       onEdit={() => {
         setEditError(null);

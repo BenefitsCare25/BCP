@@ -22,6 +22,7 @@ import {
   useDeleteDraftClaim,
   useDeleteReferralLetter,
   useExtractClaimIntake,
+  useFxQuote,
   useReferralLetters,
   useSubmitClaim,
   useUploadClaimDocument,
@@ -29,6 +30,7 @@ import {
   type ClaimIntakeSuggestion,
   type InsuredClaimOption,
 } from "@/api/portal";
+import { ConflictDetailError } from "@/api/client";
 import { usePortalSession } from "@/stores/portalSession";
 import { todayISO } from "@/components/portal/leaf/date";
 import { formatError } from "@/lib/errors";
@@ -131,6 +133,33 @@ export function useNewClaimForm() {
   const flexCategory =
     effectiveKind === "flex" ? selection.slice(FLEX_PREFIX.length) : "";
   const effectiveCurrency = effectiveKind === "flex" ? walletCurrency : currency;
+  const policyCurrency = options.data?.policy_currency ?? "SGD";
+  const amountValue = Number(amount);
+  // The live conversion. Only asked for on a foreign amount with a date — a
+  // rate is per-DAY, so quoting before the member has picked one would price
+  // the claim at the wrong day and then silently change under them.
+  const fxQuote = useFxQuote(
+    effectiveCurrency,
+    Number.isFinite(amountValue) && amountValue > 0 ? amountValue : null,
+    incurredDate,
+  );
+  // **"We asked and there is no rate" and "we have not got an answer" are
+  // different states, and only the first waives the confirmation.** Keying this
+  // off `data?.available ?? false` collapsed them: a 429 (one request per
+  // keystroke against a 60/min limit) or any network blip left `data` undefined,
+  // so no confirmation was required, no checkbox rendered — and submit then
+  // 409'd `fx_confirmation_required` on a control the member could not see,
+  // taking the draft and every uploaded document down with it in the rollback.
+  const fxForeign = effectiveCurrency !== policyCurrency;
+  const fxUnavailable = fxQuote.isSuccess && !fxQuote.data.available;
+  const fxUnresolved = fxForeign && !fxQuote.isSuccess;
+  // A quote is on screen, so submitting the claim accepts it. There is no
+  // separate tick — see `ConversionNotice`.
+  const fxShown = fxForeign && !fxUnavailable && !fxUnresolved;
+  // Foreign, and we still cannot say what it converts to. Blocks submit with a
+  // retry rather than letting them send into a 409 they cannot satisfy.
+  const fxBlocked = fxUnresolved;
+  const convertedAmount = fxQuote.data?.converted ?? null;
 
   const selectedProduct: InsuredClaimOption | null = useMemo(
     () => insured.find((p) => p.product_code === productCode) ?? null,
@@ -503,6 +532,7 @@ export function useNewClaimForm() {
       requiresDoctorName,
       doctorName,
       amount,
+      fxBlocked,
       docSlots,
       slotFiles,
     });
@@ -589,6 +619,14 @@ export function useNewClaimForm() {
         dependant_id: dependantId || null,
         referral_document_id: referralDocumentId,
         referral_not_applicable: false,
+        // Sending the claim with the figure on screen IS the acceptance, so
+        // this rides along automatically. The amount is what was ACTUALLY
+        // DISPLAYED: the server re-computes and stamps the acknowledgement only
+        // if the two agree, so a rate that published between this screen
+        // rendering and the claim saving re-asks on the claim page rather than
+        // binding them to a figure they never saw.
+        fx_acknowledged: fxShown,
+        fx_quoted_amount: convertedAmount,
       });
       claimId = claim.id;
       await uploadEvidence(claim.id);
@@ -612,6 +650,26 @@ export function useNewClaimForm() {
         });
       }
     } catch (err) {
+      // **A conversion the member has not confirmed is RECOVERABLE, so the
+      // draft must survive it.** The rollback below deletes the claim and with
+      // it every document just uploaded — right for a claim that can never be
+      // filed (a duplicate invoice), catastrophic for one that only needs a
+      // box ticked. The claim's own page carries that control, so send them
+      // there rather than making them re-enter the form and re-attach the
+      // receipts. Reachable even with the guard above: the rate can publish
+      // between this screen rendering and the claim being saved.
+      if (
+        claimId &&
+        err instanceof ConflictDetailError &&
+        err.detail.code === "fx_confirmation_required"
+      ) {
+        setBusy(false);
+        void navigate({
+          to: "/portal/$company/claims/$claimId",
+          params: { company, claimId },
+        });
+        return;
+      }
       // Includes the duplicate-invoice 409, which is a HARD refusal with no
       // member-side override — `ConflictDetailError` carries the server's own
       // message, so it reads as the specific reason rather than a generic
@@ -687,6 +745,12 @@ export function useNewClaimForm() {
       (selectedProduct?.diagnosis_group ?? null) !== null,
     docSlots,
     effectiveCurrency,
+    policyCurrency,
+    // currency conversion
+    fxQuote: fxQuote.data ?? null,
+    fxLoading: fxQuote.isFetching,
+    fxFailed: fxForeign && fxQuote.isError,
+    retryFxQuote: () => void fxQuote.refetch(),
     // fields
     incurredDate,
     setIncurredDate,

@@ -35,6 +35,15 @@ os.environ.setdefault(
 # unit tests, so the SlowAPI layer is switched off suite-wide.
 os.environ.setdefault("INSPRO_RATE_LIMIT_ENABLED", "0")
 
+# No live currency lookups from the suite. `services/fx.py` reaches out to
+# Frankfurter, and a test that quietly does so is a test whose result depends on
+# somebody else's uptime — it would pass on a laptop, hang for ~10s per foreign
+# claim behind a proxy, and fail in an offline CI runner. Off here means every
+# foreign claim in the suite lands `unavailable`, which is exactly the degraded
+# path the flag exists to model, so the ordinary tests exercise it for free.
+# `tests/test_claim_fx.py` turns it back on against a stubbed transport.
+os.environ.setdefault("INSPRO_FX_ENABLED", "0")
+
 # ── One database for the suite, reset between modules ────────────────────────
 # 47 test modules each set INSPRO_DATABASE_URL at their own import time, but
 # `app/db/session.py` binds `engine` ONCE at first import. So whichever module

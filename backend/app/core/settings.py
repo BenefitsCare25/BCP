@@ -54,6 +54,54 @@ class Settings:
     storage_container: str = "documents"
     storage_account_url: str = ""
     storage_connection_string: str = ""
+    # ── Currency conversion (services/fx.py) ──
+    # Foreign-currency claims are converted to the policy currency at the ECB
+    # reference rate for the receipt date, fetched from Frankfurter (free, no
+    # key, no account). Disabling it does NOT block foreign claims — they land
+    # unconverted and flagged for a broker, which is the same path an outage
+    # takes, so an air-gapped deploy degrades exactly like a bad network day.
+    fx_enabled: bool = True
+    fx_api_url: str = "https://api.frankfurter.dev/v1"
+    fx_timeout_seconds: float = 3.0
+    # RETRIES, not attempts: the budget is one call plus this many. Kept small
+    # because the whole retry runs inside a member's submit.
+    fx_max_retries: int = 2
+
+
+def _flag(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _positive_float(name: str, *, default: float, ceiling: float) -> float:
+    """A tuning knob that must stay a sane positive number.
+
+    Clamped rather than validated-and-refused: a typo'd timeout should not
+    prevent the app booting, but neither should it be honoured — a `0` here
+    would make every FX call fail instantly and quietly convert nothing.
+    """
+    try:
+        value = float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        logger.warning("%s is not a number — using %s", name, default)
+        return default
+    if not value > 0:
+        logger.warning("%s must be positive — using %s", name, default)
+        return default
+    return min(value, ceiling)
+
+
+def _bounded_int(name: str, *, default: int, ceiling: int) -> int:
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        logger.warning("%s is not an integer — using %s", name, default)
+        return default
+    return max(0, min(value, ceiling))
 
 
 def _split_role_map(raw: str) -> dict[str, str]:
@@ -281,6 +329,15 @@ def get_settings() -> Settings:
         storage_connection_string=os.environ.get(
             "INSPRO_STORAGE_CONNECTION_STRING", ""
         ).strip(),
+        fx_enabled=_flag("INSPRO_FX_ENABLED", default=True),
+        fx_api_url=os.environ.get(
+            "INSPRO_FX_API_URL", "https://api.frankfurter.dev/v1"
+        ).strip().rstrip("/")
+        or "https://api.frankfurter.dev/v1",
+        fx_timeout_seconds=_positive_float(
+            "INSPRO_FX_TIMEOUT_SECONDS", default=3.0, ceiling=30.0
+        ),
+        fx_max_retries=_bounded_int("INSPRO_FX_MAX_RETRIES", default=2, ceiling=5),
     )
 
 

@@ -26,6 +26,7 @@ from app.models.enrollment_window import EnrollmentWindow
 from app.models.entity_alias import EntityAlias
 from app.models.flex_pricing import FlexPricing
 from app.models.flex_scheme import FlexScheme
+from app.models.fx_rate import FxRate
 from app.models.insurer import Insurer
 from app.models.invitation import Invitation
 from app.models.leave_election import LeaveElection
@@ -77,6 +78,7 @@ __all__ = [
     "EntityAlias",
     "FlexPricing",
     "FlexScheme",
+    "FxRate",
     "Insurer",
     "Invitation",
     "LeaveElection",

@@ -28,6 +28,7 @@ import { claimTitle } from "./ClaimMount";
 import { formatDay } from "./date";
 import { Money } from "./Figure";
 import { MessageThread } from "./MessageMount";
+import { ConversionNotice } from "@/components/portal/claims/ConversionNotice";
 import { Mount, MountRow, MountRule } from "./Mount";
 import { Strike } from "./Strike";
 
@@ -207,6 +208,25 @@ export interface ClaimDetailLeafProps {
   back?: ReactNode;
   /** The just-submitted receipt. */
   receipt?: boolean;
+  /** The claim's currency conversion, shown above the Send control.
+   *
+   *  Passed IN rather than read off `claim` because this same component is the
+   *  broker's employee-view preview, which passes nothing — a broker looking at
+   *  a member's screen is not the party the figure is being put to. */
+  conversion?: ConversionState;
+}
+
+export interface ConversionState {
+  state: "not_required" | "converted" | "unavailable";
+  currency: string;
+  policyCurrency: string;
+  amountClaimed: number;
+  converted: number | null;
+  rate: number | null;
+  rateDate: string | null;
+  stale: boolean;
+  /** Already accepted on a previous visit — nothing left to show. */
+  acknowledged: boolean;
 }
 
 export function ClaimDetailLeaf({
@@ -228,6 +248,7 @@ export function ClaimDetailLeaf({
   disabledTitle,
   back,
   receipt = false,
+  conversion,
 }: ClaimDetailLeafProps) {
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -640,6 +661,37 @@ export function ClaimDetailLeaf({
                   Attach {missing.map((s) => s.label).join(" and ")} first.
                 </p>
               )}
+              {/* What the claim converts to. Placed beside the Send control
+                  rather than up beside the amount: pressing Send accepts this
+                  figure, so it belongs where that decision is made. */}
+              {claim.member_can_submit &&
+                conversion &&
+                conversion.state !== "not_required" &&
+                !conversion.acknowledged && (
+                  <ConversionNotice
+                    quote={{
+                      currency: conversion.currency,
+                      policy_currency: conversion.policyCurrency,
+                      amount: conversion.amountClaimed,
+                      converted: conversion.converted,
+                      rate: conversion.rate,
+                      as_of_date: null,
+                      rate_date: conversion.rateDate,
+                      stale: conversion.stale,
+                      source: null,
+                      available: conversion.state === "converted",
+                      note:
+                        conversion.state === "converted"
+                          ? conversion.stale && conversion.rateDate
+                            ? `Using the rate published on ${conversion.rateDate} — none is published for ${claim.incurred_date}.`
+                            : null
+                          : null,
+                    }}
+                    loading={false}
+                    currency={conversion.currency}
+                    policyCurrency={conversion.policyCurrency}
+                  />
+                )}
             </div>
           </>
         )}

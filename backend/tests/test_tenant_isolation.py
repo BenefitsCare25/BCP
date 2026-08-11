@@ -1477,6 +1477,20 @@ def test_claim_decision_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_claim_set_conversion_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.post(
+        f"/api/v1/claims/{CLAIM_B}/conversion", json={"converted_amount": 100.0}
+    )
+    assert res.status_code == 404
+
+
+def test_claim_fx_refresh_cross_tenant_404(client_as_a: TestClient) -> None:
+    _ensure_claim_b()
+    res = client_as_a.post(f"/api/v1/claims/{CLAIM_B}/fx-refresh")
+    assert res.status_code == 404
+
+
 def test_claim_send_to_insurer_cross_tenant_404(client_as_a: TestClient) -> None:
     _ensure_claim_b()
     res = client_as_a.post(f"/api/v1/claims/{CLAIM_B}/send-to-insurer", json={})

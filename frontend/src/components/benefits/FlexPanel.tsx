@@ -216,6 +216,9 @@ export function FlexPanel({
   const balance = flex.flex_balance ?? usage?.flex_balance ?? null;
   const approved = usage?.approved ?? 0;
   const pending = usage?.pending ?? 0;
+  // Excluded from `pending` by the server: their policy-currency value is not
+  // yet established (`utilization.py`). Counted, never guessed at.
+  const pendingUnconverted = usage?.pending_unconverted ?? 0;
   const available = usage?.available ?? balance ?? wallet;
 
   const tagLines = flex.price_tag_lines.filter(
@@ -326,6 +329,13 @@ export function FlexPanel({
                 <PendingSwatch />
                 {formatWallet(pending, currency)} pending
                 {pendingClaimIds.length > 1 && ` · ${pendingClaimIds.length} claims`}
+                {/* Foreign claims with no resolved SGD value are NOT in the
+                    figure to their left — a policy-currency total cannot
+                    absorb a foreign amount. They ARE in `pendingClaimIds`, so
+                    the count beside it would otherwise be the only hint that
+                    the two disagree. */}
+                {pendingUnconverted > 0 &&
+                  ` · ${pendingUnconverted} awaiting conversion`}
                 <ChevronRight aria-hidden className="size-3" />
               </button>
             ) : (

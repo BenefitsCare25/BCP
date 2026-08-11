@@ -51,6 +51,8 @@ from app.schemas.claims import (
     ConversationOut,
     ConversationSubjectOut,
 )
+from app.services.claim_fx import is_foreign
+from app.services.fx import POLICY_CURRENCY
 
 # What a member sees as the author of anything written by us. Deliberately a
 # team, not a person: a claim is handled by whoever picks it up, and naming an
@@ -74,16 +76,41 @@ MEMBER_REPLY_SUBJECT = "Your reply"
 _SYMBOL = {"SGD": "S$", "MYR": "RM", "USD": "US$", "EUR": "€", "GBP": "£"}
 
 
-def _money(claim: Claim, amount: float | None) -> str:
+def _in(code: str, amount: float | None) -> str:
     if amount is None:
         return ""
-    code = (claim.currency or "").strip().upper()
+    code = (code or "").strip().upper()
     symbol = _SYMBOL.get(code)
     # Cents in full when there are any, omitted when there are none — the same
     # rule `moneyText` follows, so a round figure isn't given a decorative
     # ".00" the member's receipt doesn't have.
     figure = f"{amount:,.2f}" if round(abs(amount) * 100) % 100 else f"{amount:,.0f}"
     return f"{symbol}{figure}" if symbol else f"{code} {figure}".strip()
+
+
+def _claimed(claim: Claim) -> str:
+    """What the member says they were billed, in the currency they were billed in.
+
+    On a foreign claim the SGD equivalent is appended, because the member is
+    told this figure at submission and reimbursed a different one — and a
+    notice that only ever shows the foreign amount makes the eventual approval
+    look like a different claim.
+    """
+    stated = _in(claim.currency, claim.amount_claimed)
+    if claim.amount_converted is None or not is_foreign(claim):
+        return stated
+    return f"{stated} ({_in(POLICY_CURRENCY, claim.amount_converted)})"
+
+
+def _settled(amount: float | None) -> str:
+    """An amount WE decided — approved or paid.
+
+    Always the policy currency, never `claim.currency`. On a foreign claim these
+    two differ, and rendering an SGD approval with the claim's own currency code
+    tells a member they are getting USD 675 when the figure is SGD 675 — a ~35%
+    overstatement written by the system that is about to pay them.
+    """
+    return _in(POLICY_CURRENCY, amount)
 
 
 def _what(claim: Claim) -> str:
@@ -103,12 +130,12 @@ def _system_copy(claim: Claim, event: str, note: str | None) -> tuple[str, str]:
     if event == EVENT_SUBMITTED:
         return (
             "We have your claim",
-            f"Your {_what(claim)} claim for {_money(claim, claim.amount_claimed)} "
+            f"Your {_what(claim)} claim for {_claimed(claim)} "
             f"on {when} is with us. You don't need to send it again — if we need "
             f"anything else, it will appear here.",
         )
     if event == EVENT_APPROVED:
-        approved = _money(claim, claim.amount_approved)
+        approved = _settled(claim.amount_approved)
         body = (
             f"Your {_what(claim)} claim for {when} has been approved"
             + (f" for {approved}." if approved else ".")
@@ -132,11 +159,10 @@ def _system_copy(claim: Claim, event: str, note: str | None) -> tuple[str, str]:
         # offset against an excess), and `ClaimPaymentIn` accepts it for exactly
         # that reason. `or` falls through to what we approved and tells the
         # member they were paid a sum that never left the insurer.
-        paid = _money(
-            claim,
+        paid = _settled(
             claim.payment_amount
             if claim.payment_amount is not None
-            else claim.amount_approved,
+            else claim.amount_approved
         )
         on = claim.paid_on.strftime("%d %b %Y") if claim.paid_on else None
         return (

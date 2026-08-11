@@ -68,6 +68,14 @@ class ClaimCreateIn(BaseModel):
     # "not applicable" declaration (recorded for the broker + AI review).
     referral_document_id: str | None = None
     referral_not_applicable: bool = False
+    # The claimant accepting the SGD figure their foreign bill converts to, and
+    # the figure their form actually displayed. The second is what makes the
+    # first mean anything: a quote can move between the form loading and the
+    # claim saving, and consent to a number that has since changed is not
+    # consent. A mismatch simply leaves the claim unacknowledged and submit asks
+    # again (`claims._stamp_fx_acknowledgement`).
+    fx_acknowledged: bool = False
+    fx_quoted_amount: float | None = Field(default=None, ge=0)
 
 
 # Amendable fields the CLAIM cannot hold as NULL. Sending an explicit `null` for
@@ -91,7 +99,9 @@ _NOT_CLEARABLE = frozenset(
 # Fields that STEER an amendment rather than being part of it. They must not
 # count towards "did this request change anything", or a body carrying nothing
 # but a reason would bump the revision and announce an edit that never happened.
-_AMEND_CONTROL_FIELDS = frozenset({"expected_revision", "reason"})
+_AMEND_CONTROL_FIELDS = frozenset(
+    {"expected_revision", "reason", "fx_acknowledged", "fx_quoted_amount"}
+)
 
 
 class _ClaimAmendBase(BaseModel):
@@ -129,7 +139,6 @@ class _ClaimAmendBase(BaseModel):
     dependant_id: str | None = None
     referral_document_id: str | None = None
     referral_not_applicable: bool | None = None
-
     # The revision the client actually read (see `Claim.revision`). Optional —
     # a mismatch 409s, absence skips the check. Both UIs always send it.
     expected_revision: int | None = Field(default=None, ge=0)
@@ -152,6 +161,25 @@ class ClaimAmendIn(_ClaimAmendBase):
     """A member correcting their own claim, until a broker decides it."""
 
     remarks: str | None = Field(default=None, max_length=500)
+
+    # Re-accepting the converted figure in the same request that changes the
+    # amount, the currency or the date — the ordinary path, since correcting any
+    # of those three re-prices the claim and drops the previous acknowledgement.
+    #
+    # **On the MEMBER's body only, never the shared base.** `fx_acknowledged_at`
+    # records that the CLAIMANT accepted the figure, and it is what
+    # `assert_fx_acknowledged` gates submit on — so a broker request carrying
+    # this flag would write a false record of the member's consent and open the
+    # gate on their behalf. The broker UI never sent it; the schema is what makes
+    # that impossible rather than merely unused.
+    #
+    # A CONTROL field, so acknowledging is never an amendment ON ITS OWN: it
+    # changes no claim fact, and letting it through would bump `revision`,
+    # supersede the AI review and post the member an "you changed your claim"
+    # notice for an edit that never happened. Accepting a figure without
+    # correcting anything is `POST /claims/{id}/confirm-conversion`.
+    fx_acknowledged: bool = False
+    fx_quoted_amount: float | None = Field(default=None, ge=0)
 
 
 class ClaimBrokerAmendIn(_ClaimAmendBase):
@@ -245,7 +273,26 @@ class ClaimOut(_Base):
     referral_not_applicable: bool = False
     amount_claimed: float
     currency: str
+    # ── Currency conversion (services/claim_fx.py) ────────────────────────────
+    #
+    # `amount_converted` is `amount_claimed` in the POLICY currency. NULL means
+    # either "the claim is already in it" or "no rate could be had" — which is
+    # why `fx_state` is SERVED rather than left to the client to infer from a
+    # null, exactly as `member_editable` is. A UI that treats NULL as "no
+    # conversion needed" prints a foreign figure under an SGD heading.
     amount_converted: float | None = None
+    fx_state: str = "not_required"  # not_required | converted | unavailable
+    fx_rate: float | None = None
+    fx_rate_date: date | None = None
+    fx_source: str | None = None
+    # The rate is from a day EARLIER than the receipt — no rate is published for
+    # weekends or holidays, so this is the ordinary case for a Saturday bill,
+    # not an error. Served so both surfaces say so in the same words.
+    fx_stale: bool = False
+    fx_acknowledged_at: datetime | None = None
+    # The policy currency itself, so no client hardcodes "SGD" in a label.
+    policy_currency: str = "SGD"
+    # ALWAYS in `policy_currency`, never in `currency` — see `Claim.amount_approved`.
     amount_approved: float | None = None
     status: str
     # The human-quotable reference, minted at submit. Member-visible on purpose:
@@ -689,7 +736,16 @@ class MessagesReadOut(BaseModel):
 class ClaimDecisionIn(BaseModel):
     action: str = Field(pattern="^(approve|reject|needs_info)$")
     note: str | None = Field(default=None, max_length=2000)
+    # **In the POLICY currency, always** — never in the claim's own. A foreign
+    # claim states its bill in one currency and consumes its limit in another;
+    # an assessor approving "500" on a USD claim is approving SGD 500.
     approved_amount: float | None = Field(default=None, gt=0)
+    # The SGD equivalent of `amount_claimed`, keyed in by the assessor because
+    # no reference rate could be fetched. REQUIRED to approve such a claim (422
+    # `fx_amount_required`) — without it there is no figure to compare to a
+    # limit, and approving anyway is how a foreign amount ends up spending an
+    # SGD budget at face value. Ignored on a claim that already has one.
+    converted_amount: float | None = Field(default=None, gt=0, le=1_000_000)
     # Approving beyond the bucket's remaining limit 409s (`limit_exceeded`)
     # unless the broker explicitly acknowledges the overrun.
     acknowledge: bool = False
@@ -716,6 +772,13 @@ class UtilizationBucket(BaseModel):
     approved: float = 0.0
     pending: float = 0.0  # in-flight claims — shown separately, never subtracted
     remaining: float | None = None  # limit - approved
+    # In-flight claims in a foreign currency whose SGD equivalent could not be
+    # resolved, and which are therefore ABSENT from `pending`. Every figure in
+    # this bucket is policy-currency, so a raw foreign amount cannot be added to
+    # one; a count is the honest way to say "and this many more, worth an amount
+    # nobody has established yet". Non-zero means a broker owes someone a
+    # conversion — the claims cannot be approved until they do.
+    pending_unconverted: int = 0
     claim_count: int = 0
     # The claims `pending` was summed FROM — same contract as
     # `FlexUtilization.pending_claim_ids`, and served for the same reason:
@@ -770,6 +833,9 @@ class FlexUtilization(BaseModel):
     flex_balance: float | None = None  # wallet - enrollment price-tags
     approved: float = 0.0  # approved flex claims
     pending: float = 0.0
+    # Foreign flex claims with no resolved SGD equivalent — excluded from
+    # `pending` for the same reason as `UtilizationBucket.pending_unconverted`.
+    pending_unconverted: int = 0
     # The claims `pending` was summed FROM, so a surface that prints the figure
     # can open what is behind it. Served rather than re-derived in the client:
     # "which statuses count as pending" is `utilization.PENDING_STATUSES`, which
@@ -885,6 +951,10 @@ class CoverageOptionsOut(BaseModel):
     dependants: list[dict[str, Any]] = Field(default_factory=list)  # {id, name, relationship}
     # Single source of truth for the currency picker (claim_intake.py).
     currencies: list[str] = Field(default_factory=list)
+    # The one currency the member's limits, wallet and reimbursement are in.
+    # Everything else in `currencies` is converted into it before it touches a
+    # limit, so the form can name it without hardcoding "SGD".
+    policy_currency: str = "SGD"
     # Hospital picker for inpatient claims (sg_hospitals.py) — sector drives
     # the document requirements.
     hospitals: list[HospitalOut] = Field(default_factory=list)
@@ -1174,3 +1244,66 @@ class PortalDependantCreateIn(BaseModel):
 class DependantApprovalIn(BaseModel):
     action: str = Field(pattern="^(approve|reject)$")
     note: str | None = Field(default=None, max_length=2000)
+
+
+# ── Currency conversion (services/fx.py) ──────────────────────────────────────
+
+
+class FxQuoteOut(BaseModel):
+    """A live conversion preview, for a form that has not saved anything yet.
+
+    Served to BOTH the member's claim form and the broker's LOG-case form off
+    one builder, so the figure a member is asked to accept and the figure an
+    assessor sees are produced by the same code against the same cache. Two
+    endpoints computing "the SGD equivalent" independently is how they come to
+    differ in the last cent.
+    """
+
+    currency: str
+    policy_currency: str
+    amount: float
+    # NULL together with `available=False` — the rate could not be fetched. The
+    # form must let the claim through anyway: a currency API being down is not a
+    # reason a member cannot file, and the claim reaches the broker flagged.
+    converted: float | None = None
+    rate: float | None = None
+    # The date asked for (the receipt's) and the date the rate is FROM. The
+    # second is earlier whenever the first is a weekend, a holiday, or a day not
+    # yet published — the ordinary case, not a fault.
+    as_of_date: date | None = None
+    rate_date: date | None = None
+    stale: bool = False
+    source: str | None = None
+    available: bool = False
+    # One sentence stating what was done, in the words both surfaces show. Built
+    # server-side so the member's confirmation and the broker's evidence line
+    # cannot describe the same conversion differently.
+    note: str | None = None
+
+
+class ClaimConversionIn(BaseModel):
+    """An assessor stating the policy-currency value of a foreign claim by hand.
+
+    The fallback when no reference rate could be fetched. Separate from
+    `ClaimDecisionIn.approved_amount` because they are different quantities: this
+    is what the BILL is worth, that is what we agree to PAY. Collapsing them
+    would make a partial approval silently restate the claim's value and shrink
+    the pending figure every other member of the household is measured against.
+    """
+
+    converted_amount: float = Field(gt=0, le=1_000_000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class FxAcknowledgeIn(BaseModel):
+    """A claimant accepting the converted figure on a claim already saved.
+
+    ``converted_amount`` is what their screen displayed. Optional but always
+    sent by the portal: a rate can publish between the form rendering and the
+    button being pressed, and a stamp recorded against a figure that has since
+    moved would minute the member as having agreed to a number they never saw.
+    A mismatch is not an error — the claim simply stays unacknowledged and the
+    form re-asks with the current figure.
+    """
+
+    converted_amount: float | None = Field(default=None, ge=0)

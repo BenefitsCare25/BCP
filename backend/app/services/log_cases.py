@@ -42,6 +42,7 @@ from app.models.claim import (
 )
 from app.models.policy_year import PolicyYearStatus
 from app.schemas.claims import LogCaseCreateIn
+from app.services.claim_fx import apply_conversion
 from app.services.claim_intake import ALLOWED_CURRENCIES, normalize_sub_type
 from app.services.claim_settlement import mint_reference_no
 from app.services.claims import assert_coverage_claimable, assert_incurred_in_period
@@ -194,6 +195,12 @@ def create_log_case(
         },
     )
     assert_log_valid(db, employee, claim, year)
+    # A LOG case skips `submit_claim`, so it would otherwise reach the queue at
+    # `submitted` with no SGD figure at all — invisible to the approve guard and
+    # to every utilization bucket. No acknowledgement is asked for: the assessor
+    # recording the case is the one who will decide it, and there is no claimant
+    # in the loop to confirm anything.
+    apply_conversion(db, claim)
     db.add(claim)
     db.flush()
     # A LOG case lands at `submitted` WITHOUT going through `submit_claim`, so

@@ -21,7 +21,9 @@ from app.models.claim import (
     CLAIM_STATUS_DRAFT,
     LOG_CLAIM_TYPE,
 )
+from app.services.claim_fx import is_foreign, policy_amount
 from app.services.claims import prefetch_claim_relations
+from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_reports import (
     append_safe,
     autosize,
@@ -48,7 +50,9 @@ CLAIMS_REGISTER_HEADER = [
     "Invoice No.",
     "Currency",
     "Amount Claimed",
-    "Amount Approved",
+    f"Amount Claimed ({POLICY_CURRENCY})",
+    # Approved is ALWAYS the policy currency — see `Claim.amount_approved`.
+    f"Amount Approved ({POLICY_CURRENCY})",
     "Submitted On",
     "Decided On",
 ]
@@ -114,6 +118,7 @@ def build_claims_register_workbook(
             claim.invoice_number or "",
             claim.currency,
             claim.amount_claimed,
+            policy_amount(claim) if is_foreign(claim) else None,
             claim.amount_approved,
             naive(claim.submitted_at),
             naive(claim.decided_at),

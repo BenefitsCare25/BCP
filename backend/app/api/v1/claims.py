@@ -6,7 +6,7 @@ Phase 3 — these endpoints are its data layer and already usable directly.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from io import BytesIO
 
 from fastapi import (
@@ -74,13 +74,24 @@ from app.schemas.claims import (
     ClaimAssessmentIn,
     ClaimBrokerAmendIn,
     ClaimCaseTypeIn,
+    ClaimConversionIn,
     ClaimDecisionIn,
     ClaimMessageOut,
     ClaimPaymentIn,
     ClaimSendToInsurerIn,
+    FxQuoteOut,
     LogCaseCreateIn,
     MessagesReadOut,
     StoredDocumentOut,
+)
+from app.services.claim_fx import (
+    FX_STATE_CONVERTED,
+    FX_STATE_UNAVAILABLE,
+    apply_conversion,
+    build_quote,
+    fx_state,
+    policy_amount,
+    set_manual_conversion,
 )
 from app.services.claim_intake import DOC_SLOT_LABELS, is_inpatient_product
 from app.services.claim_messages import (
@@ -117,6 +128,7 @@ from app.services.claims import (
 )
 from app.services.claims_register import build_claims_register_workbook
 from app.services.claims_review.pipeline import run_review
+from app.services.fx import POLICY_CURRENCY, reset_breaker
 from app.services.log_cases import (
     case_type_or_400,
     create_log_case,
@@ -325,6 +337,35 @@ def download_claims_register(
     )
 
 
+@router.get("/fx-quote", response_model=FxQuoteOut)
+@limiter.limit("60/minute")
+def broker_fx_quote(
+    request: Request,
+    currency: str = Query(min_length=3, max_length=8),
+    amount: float = Query(gt=0, le=1_000_000),
+    on: date = Query(description="The date on the receipt."),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FxQuoteOut:
+    """Preview what a foreign amount is worth, for the LOG-case form.
+
+    **Declared before `/{claim_id}`.** FastAPI matches routes in declaration
+    order, so a literal segment registered after a path-parameter route on
+    the same prefix is never reached — the request arrives at `load_claim`
+    as a claim id of "fx-quote" and 404s.
+
+    No claim and no tenant resource is touched — an exchange rate is public
+    market data — so there is nothing here to scope. Authentication alone gates
+    it, and the rate limit is what stops it being used as a free FX proxy.
+
+    Commits for the same reason the member's quote does: `get_db` never commits,
+    so the fetched rate would be thrown away and the cache would never warm.
+    """
+    out = build_quote(db, currency=currency, amount=amount, on=on)
+    db.commit()
+    return out
+
+
 @router.get("/{claim_id}", response_model=BrokerClaimOut)
 def get_claim(
     claim: Claim = Depends(load_claim),
@@ -355,16 +396,50 @@ def decide_claim(
     # it has to fail before the approval, not after it.
     assert_claim_revision(claim, body.expected_revision)
 
-    before = {"status": claim.status, "amount_approved": claim.amount_approved}
+    before = {
+        "status": claim.status,
+        "amount_approved": claim.amount_approved,
+        "amount_converted": claim.amount_converted,
+    }
     if body.action == "approve":
-        approving = (
-            body.approved_amount
-            if body.approved_amount is not None
-            else (claim.amount_converted or claim.amount_claimed)
-        )
+        # An assessor supplying the missing SGD value of a foreign claim. Applied
+        # BEFORE the figure is resolved below, so one request can both price the
+        # claim and approve it — the assessor is looking at the receipt once.
+        if body.converted_amount is not None and fx_state(claim) == FX_STATE_UNAVAILABLE:
+            set_manual_conversion(claim, body.converted_amount)
+
+        # **Everything from here is in the policy currency.** `policy_amount`
+        # returns None precisely when nobody has established what the claim is
+        # worth in it, and there is no defensible number to substitute: the
+        # claimed figure is in another currency, and approving it as though it
+        # were SGD is the failure this guard exists for.
+        approving = body.approved_amount
+        if approving is None:
+            approving = policy_amount(claim)
+        if approving is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "fx_amount_required",
+                    "message": (
+                        f"This claim is for {claim.currency} "
+                        f"{claim.amount_claimed:,.2f} and no exchange rate could "
+                        f"be obtained for {claim.incurred_date.isoformat()}. "
+                        f"Enter what it is worth in {POLICY_CURRENCY} before "
+                        "approving it."
+                    ),
+                    "currency": claim.currency,
+                    "amount_claimed": claim.amount_claimed,
+                    "policy_currency": POLICY_CURRENCY,
+                    "incurred_date": claim.incurred_date.isoformat(),
+                },
+            )
         # Approving beyond the bucket's remaining limit needs an explicit
         # acknowledgement — the utilization math already excludes this claim
-        # (only *approved* claims count against the limit).
+        # (only *approved* claims count against the limit). Both sides of the
+        # comparison are policy-currency now; before the conversion existed,
+        # `approving` could be a foreign figure and a USD 500 bill passed a
+        # guard holding SGD 600.
         if not body.acknowledge:
             employee = db.get(Employee, claim.employee_id)
             remaining = (
@@ -378,12 +453,14 @@ def decide_claim(
                     detail={
                         "code": "limit_exceeded",
                         "message": (
-                            f"Approving {approving:.2f} exceeds the remaining "
-                            f"limit of {remaining:.2f} for this coverage. "
-                            "Resend with acknowledge=true to approve anyway."
+                            f"Approving {POLICY_CURRENCY} {approving:,.2f} "
+                            f"exceeds the remaining limit of {POLICY_CURRENCY} "
+                            f"{remaining:,.2f} for this coverage. Resend with "
+                            "acknowledge=true to approve anyway."
                         ),
                         "remaining": remaining,
                         "approving": approving,
+                        "policy_currency": POLICY_CURRENCY,
                     },
                 )
         claim.amount_approved = approving
@@ -419,6 +496,11 @@ def decide_claim(
         after={
             "status": claim.status,
             "amount_approved": claim.amount_approved,
+            # The SGD value the decision was made against — audited because on a
+            # foreign claim an assessor may have supplied it in this very
+            # request, and "approved 675" means nothing without it.
+            "amount_converted": claim.amount_converted,
+            "fx_source": claim.fx_source,
             "note": body.note,
         },
         employee_id=claim.employee_id,
@@ -426,6 +508,98 @@ def decide_claim(
     db.commit()
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
+
+
+@router.post("/{claim_id}/conversion", response_model=BrokerClaimOut)
+def set_claim_conversion(
+    body: ClaimConversionIn,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """State the policy-currency value of a foreign claim by hand.
+
+    The way out of `fx_amount_required` for an assessor who would rather price
+    the claim now than at the moment they approve it — and the only way at all
+    when the rate is simply not obtainable.
+
+    Refused on a claim that already has a conversion. Overwriting a fetched
+    reference rate with a typed number would let a claim be quietly re-priced
+    with no correction to the amount that produced it; correcting the amount
+    itself (which re-runs the conversion) is what the amendment endpoint is for.
+    """
+    if fx_state(claim) != FX_STATE_UNAVAILABLE:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "fx_not_needed",
+                "message": (
+                    f"This claim is already valued in {POLICY_CURRENCY}. Correct "
+                    "the claimed amount instead if the figure is wrong."
+                ),
+            },
+        )
+    before = {"amount_converted": claim.amount_converted, "fx_source": claim.fx_source}
+    set_manual_conversion(claim, body.converted_amount)
+    write_audit(
+        db, user, "claim.conversion_set", "claim", claim.id,
+        before=before,
+        after={
+            "amount_converted": claim.amount_converted,
+            "fx_rate": claim.fx_rate,
+            "fx_source": claim.fx_source,
+            "note": body.note,
+        },
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return _broker_out(db, claim, db.get(Employee, claim.employee_id))
+
+
+@router.post("/{claim_id}/fx-refresh", response_model=BrokerClaimOut)
+@limiter.limit("20/minute")
+def refresh_claim_conversion(
+    request: Request,
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BrokerClaimOut:
+    """Try the reference rate again on a claim that arrived unconverted.
+
+    The common case is the honest one: the rate service was briefly unreachable
+    when the member filed, and is fine now. Clearing the breaker first is the
+    point of the button — an assessor clicking it is telling us to try NOW, not
+    to wait out a cooldown started by someone else's submit.
+
+    Refused once the claim has a figure, for the same reason as
+    `set_claim_conversion`: a re-fetch that moved an already-decided value would
+    change what a claim is worth without changing anything about the claim.
+    """
+    if fx_state(claim) != FX_STATE_UNAVAILABLE:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "fx_not_needed",
+                "message": f"This claim is already valued in {POLICY_CURRENCY}.",
+            },
+        )
+    reset_breaker()
+    apply_conversion(db, claim)
+    if fx_state(claim) == FX_STATE_CONVERTED:
+        write_audit(
+            db, user, "claim.conversion_refreshed", "claim", claim.id,
+            after={
+                "amount_converted": claim.amount_converted,
+                "fx_rate": claim.fx_rate,
+                "fx_rate_date": (
+                    claim.fx_rate_date.isoformat() if claim.fx_rate_date else None
+                ),
+                "fx_source": claim.fx_source,
+            },
+            employee_id=claim.employee_id,
+        )
+    db.commit()
+    return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
 
 @router.post("/{claim_id}/send-to-insurer", response_model=BrokerClaimOut)

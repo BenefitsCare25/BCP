@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import today as business_today
 from app.models import Claim, Employee, PolicyYear
 from app.models.claim import CLAIM_KIND_FLEX, SETTLED_STATUSES
+from app.services.claim_fx import policy_amount
 from app.services.flex_pricing_resolver import (
     FlexYearContext,
     flex_year_context,
@@ -222,8 +223,11 @@ def _flex_claims(db: Session, py: PolicyYear) -> dict[str, list[Claim]]:
     return out
 
 
-def _claim_amount(claim: Claim) -> float:
-    return float(claim.amount_converted or claim.amount_claimed or 0.0)
+# `claim_fx.policy_amount` — returns None when a foreign claim has no resolved
+# policy-currency value. The old local version (`amount_converted or
+# amount_claimed`) had no way to express that and returned the foreign figure,
+# which the ledger then added to an SGD wallet.
+_claim_amount = policy_amount
 
 
 def member_flex(
@@ -320,8 +324,13 @@ def member_flex(
             ))
         elif claim.status not in ("draft", "rejected"):
             # In flight. Reported separately and NEVER subtracted from the
-            # balance — the member has not spent it yet.
-            pending += _claim_amount(claim)
+            # balance — the member has not spent it yet. A foreign claim with no
+            # resolved conversion contributes nothing rather than its face
+            # value: the wallet is in the policy currency and adding a USD
+            # figure to it would overstate what the member has committed.
+            amount = _claim_amount(claim)
+            if amount is not None:
+                pending += amount
 
     return MemberFlex(
         employee=employee,

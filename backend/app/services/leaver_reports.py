@@ -47,10 +47,12 @@ from app.models.claim import (
     CLAIM_STATUS_DRAFT,
 )
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED
+from app.services.claim_fx import policy_amount
 from app.services.claims import dependant_display_name
 from app.services.claims_reports import status_label
 from app.services.flex_ledger import WALLET_NAME, _flex_claims, member_flex
 from app.services.flex_pricing_resolver import flex_year_context
+from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_reports import (
     _last_day_of_service,
     append_safe,
@@ -87,7 +89,8 @@ LEAVER_DETAILS_HEADER = [
     "Claim Type", "LOG", "Claim Category",
     "Incurred Date", "Incurred After Cover End",
     "Service Provider", "Currency", "Incurred Amt",
-    "Converted Incurred Amt", "Payment Amt", "Status", "Paid Date",
+    f"Converted Incurred Amt ({POLICY_CURRENCY})",
+    f"Payment Amt ({POLICY_CURRENCY})", "Status", "Paid Date",
     "Admin Remark",
 ]
 
@@ -283,9 +286,9 @@ def build_leaver_details_workbook(
                 claim.provider_name or "",
                 claim.currency,
                 claim.amount_claimed,
-                claim.amount_converted
-                if claim.amount_converted is not None
-                else claim.amount_claimed,
+                # Blank when unresolved rather than the foreign figure — the
+                # column is policy-currency and gets totalled.
+                policy_amount(claim),
                 claim.payment_amount
                 if claim.payment_amount is not None
                 else claim.amount_approved,

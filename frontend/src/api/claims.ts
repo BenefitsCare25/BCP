@@ -124,9 +124,27 @@ export interface BrokerClaim {
   diagnosis: string | null;
   remarks: string | null;
   amount_claimed: number;
+  /** The currency the MEMBER was billed in — not the one we settle in. */
   currency: string;
-  /** Claimed amount converted to the policy currency (null = same currency). */
+  /** `amount_claimed` in `policy_currency`. NULL means EITHER "already in it"
+   *  OR "no rate could be fetched" — read `fx_state`, never this. */
   amount_converted?: number | null;
+  /** SERVED. "not_required" | "converted" | "unavailable". An `unavailable`
+   *  claim has no policy-currency value at all: it cannot be compared to a
+   *  limit and the approve endpoint refuses it until someone supplies one. */
+  fx_state: "not_required" | "converted" | "unavailable";
+  fx_rate: number | null;
+  /** The day the rate was published — earlier than `incurred_date` across a
+   *  weekend or holiday, which is ordinary rather than a discrepancy. */
+  fx_rate_date: string | null;
+  /** "frankfurter" (the reference rate) or "broker" (keyed in by an assessor). */
+  fx_source: string | null;
+  fx_stale: boolean;
+  fx_acknowledged_at: string | null;
+  /** The currency limits, approvals and payments are denominated in. */
+  policy_currency: string;
+  /** ALWAYS in `policy_currency`. Labelling it with `currency` overstates a
+   *  foreign approval by the exchange rate. */
   amount_approved: number | null;
   status: string;
   dependant_id: string | null;
@@ -508,11 +526,31 @@ export function useEmployeeUtilization(employeeId: string | null) {
   });
 }
 
+/** A live conversion preview. `available: false` = no rate could be fetched;
+ *  the case is still recordable and a person converts it. */
+export interface FxQuote {
+  currency: string;
+  policy_currency: string;
+  amount: number;
+  converted: number | null;
+  rate: number | null;
+  as_of_date: string | null;
+  rate_date: string | null;
+  stale: boolean;
+  source: string | null;
+  available: boolean;
+  note: string | null;
+}
+
 export interface ClaimDecisionInput {
   claimId: string;
   action: "approve" | "reject" | "needs_info";
   note?: string;
   approvedAmount?: number;
+  /** The policy-currency value of a foreign claim, keyed in by the assessor
+   *  because no reference rate could be fetched. REQUIRED to approve such a
+   *  claim — the server 422s `fx_amount_required` without it. */
+  convertedAmount?: number;
   /** Approve past the remaining limit (after a 409 `limit_exceeded`). */
   acknowledge?: boolean;
   /** The `revision` the assessor actually read. A mismatch 409s
@@ -528,6 +566,7 @@ export function useDecideClaim() {
         action: input.action,
         note: input.note ?? null,
         approved_amount: input.approvedAmount ?? null,
+        converted_amount: input.convertedAmount ?? null,
         acknowledge: input.acknowledge ?? false,
         expected_revision: input.expectedRevision ?? null,
       }),
@@ -543,6 +582,52 @@ export function useDecideClaim() {
 
 /** Dispatch an approved claim to the insurer. Dates optional — the server
  *  defaults to now plus the standard turnaround. */
+/** Try the reference rate again on a claim that arrived unconverted.
+ *
+ * Clears the server's outage breaker first: an assessor pressing this is saying
+ * "try now", not "wait out a cooldown somebody else's submit started". */
+export function useRefreshClaimConversion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (claimId: string) =>
+      api.post<BrokerClaim>(`/claims/${claimId}/fx-refresh`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      // The claim moves from `pending_unconverted` into the pending SUM.
+      void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** What a foreign amount is worth, for the LOG-case form. */
+export function useBrokerFxQuote(
+  currency: string,
+  amount: number | null,
+  on: string,
+) {
+  const enabled =
+    Boolean(currency) && currency !== "SGD" && Boolean(on) && (amount ?? 0) > 0;
+  return useQuery({
+    queryKey: ["fx-quote", currency, amount, on],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        currency,
+        amount: String(amount),
+        on,
+      });
+      return api.get<FxQuote>(`/claims/fx-quote?${params.toString()}`);
+    },
+    enabled,
+    meta: { localErrorHandling: true },
+    // A rate for a given day is fixed; re-asking on focus spends the limit to
+    // be told the same number.
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
 export function useSendToInsurer() {
   const qc = useQueryClient();
   return useMutation({
