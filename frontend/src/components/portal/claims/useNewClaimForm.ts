@@ -164,13 +164,24 @@ export function useNewClaimForm() {
   const fxMatchesInput =
     fxQuote.isSuccess && fxQuote.data.amount === amountUsable;
   const fxUnresolved = fxForeign && amountUsable !== null && !fxMatchesInput;
+  // Unresolved because the answer is still COMING, as opposed to having failed.
+  // `isFetching` cannot carry this on its own: during the debounce the query key
+  // still holds the previous amount, so nothing is in flight and the old quote
+  // is still `data`. Without this the notice renders a settled conversion for a
+  // figure the member has already typed over, while submit refuses it. A failed
+  // request is excluded — that state has its own retry, and treating it as a
+  // wait would hide the retry behind a spinner that never stops.
+  const fxAwaiting = fxUnresolved && !fxQuote.isError;
   // A quote for THIS amount is on screen, so submitting the claim accepts it.
   // There is no separate tick — see `ConversionNotice`.
   const fxShown = fxForeign && !fxUnavailable && !fxUnresolved;
   // Foreign, and we still cannot say what it converts to. Blocks submit with a
   // retry rather than letting them send into a 409 they cannot satisfy.
   const fxBlocked = fxUnresolved;
-  const convertedAmount = fxQuote.data?.converted ?? null;
+  // Same gate as `fxShown`: the acknowledged figure and the quoted figure must
+  // be the same one, and neither may be the previous amount's answer.
+  const fxQuoteForInput = fxMatchesInput ? (fxQuote.data ?? null) : null;
+  const convertedAmount = fxQuoteForInput?.converted ?? null;
 
   const selectedProduct: InsuredClaimOption | null = useMemo(
     () => insured.find((p) => p.product_code === productCode) ?? null,
@@ -758,8 +769,11 @@ export function useNewClaimForm() {
     effectiveCurrency,
     policyCurrency,
     // currency conversion
-    fxQuote: fxQuote.data ?? null,
-    fxLoading: fxQuote.isFetching,
+    // Only the quote for the amount on screen is shown. Handing over the raw
+    // `data` let the previous amount's conversion sit there looking settled
+    // while submit answered "we're still checking the exchange rate".
+    fxQuote: fxQuoteForInput,
+    fxLoading: fxQuote.isFetching || fxAwaiting,
     fxFailed: fxForeign && fxQuote.isError,
     retryFxQuote: () => void fxQuote.refetch(),
     // fields

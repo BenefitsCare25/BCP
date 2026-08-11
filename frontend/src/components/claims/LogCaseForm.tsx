@@ -235,14 +235,27 @@ export function LogCaseForm({
   const fxQuote = useBrokerFxQuote(currency, quotedAmount, incurredDate);
   // Only trusted when the quote is for the amount currently typed — mid-debounce
   // it still holds the previous figure, and comparing THAT to the remaining
-  // limit would warn (or fail to warn) about a number nobody entered.
+  // limit would warn (or fail to warn) about a number nobody entered. The server
+  // echoes the amount it priced, so this compares the two rather than tracking
+  // the timer.
+  const fxQuoteForInput =
+    fxQuote.data?.amount === amountValue ? (fxQuote.data ?? null) : null;
   const policyAmount = inPolicyCurrency
     ? amountValid
       ? amountValue
       : null
-    : fxQuote.data?.amount === amountValue
-      ? (fxQuote.data?.converted ?? null)
-      : null;
+    : (fxQuoteForInput?.converted ?? null);
+  // A foreign amount is typed and the conversion for THAT amount has not landed
+  // yet — either the debounce has not fired or the request is in flight.
+  // `isFetching` is false throughout the debounce window (the query key still
+  // holds the previous amount), so it cannot carry this on its own. A failed
+  // request is excluded: that is a state with its own retry, not a wait.
+  const fxAwaiting =
+    !inPolicyCurrency && amountValid && !fxQuoteForInput && !fxQuote.isError;
+  // Deliberately NOT gated on the conversion. This form exists to get an emailed
+  // request recorded, and a currency API is never allowed to stand between an
+  // assessor and that. The limit line below says "checking" instead, so a
+  // missing overrun warning is never read as "there is no overrun".
   const canSave =
     !!employeeId && !!productCode && !!incurredDate && amountValid && !create.isPending;
 
@@ -466,21 +479,42 @@ export function LogCaseForm({
                     Remaining limit {POLICY_CURRENCY} {remaining.toFixed(2)}
                     {policyAmount != null && policyAmount > remaining
                       ? " — this exceeds it"
-                      : ""}
+                      : fxAwaiting
+                        ? " — checking whether this exceeds it…"
+                        : ""}
                   </p>
                 )}
                 {/* What the case will actually be recorded as. Shown for the
                     same reason the member is asked to accept it: the figure the
-                    assessor typed is not the figure the limit is spent in. */}
-                {!inPolicyCurrency && amountValid && (
-                  <p className="text-xs tabular-nums text-muted-foreground">
-                    {fxQuote.isFetching && !fxQuote.data
-                      ? `Converting to ${POLICY_CURRENCY}…`
-                      : (fxQuote.data?.note ??
-                        `No exchange rate for ${currency} — you will be asked ` +
-                          `for the ${POLICY_CURRENCY} value when you approve this.`)}
-                  </p>
-                )}
+                    assessor typed is not the figure the limit is spent in.
+
+                    THREE states, not two. "The request failed" is not "there is
+                    no rate": stating the second on a 429 or a network blip is a
+                    settled answer we do not have, and it sends the assessor to
+                    the approve screen expecting to be asked for a figure that a
+                    retry would have supplied. */}
+                {!inPolicyCurrency &&
+                  amountValid &&
+                  (fxQuote.isError ? (
+                    <p className="text-xs text-warn">
+                      Couldn&apos;t check the exchange rate.{" "}
+                      <button
+                        type="button"
+                        onClick={() => void fxQuote.refetch()}
+                        className="focus-ring rounded-sm underline underline-offset-2"
+                      >
+                        Try again
+                      </button>
+                    </p>
+                  ) : (
+                    <p className="text-xs tabular-nums text-muted-foreground">
+                      {fxAwaiting
+                        ? `Converting to ${POLICY_CURRENCY}…`
+                        : (fxQuoteForInput?.note ??
+                          `No exchange rate for ${currency} — you will be asked ` +
+                            `for the ${POLICY_CURRENCY} value when you approve this.`)}
+                    </p>
+                  ))}
               </Field>
               <Field label="Currency" htmlFor="log-currency">
                 <NativeSelect
