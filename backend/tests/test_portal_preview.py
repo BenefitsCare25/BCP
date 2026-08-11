@@ -312,6 +312,14 @@ def test_preview_claim_matches_portal(broker: TestClient) -> None:
     )
     assert preview.status_code == portal.status_code == 200
     assert preview.json() == portal.json()
+    # Named explicitly, because whole-payload equality would hold just as well
+    # if BOTH sides had dropped the field. The preview's contract is that a
+    # broker sees what the member sees, and "can this member still edit?" is
+    # the flag the member's own screen renders its edit button off — a preview
+    # that silently stopped carrying it would look identical here forever.
+    # Alice's claim is `submitted`: in review, not yet decided, so editable.
+    assert preview.json()["member_editable"] is True
+    assert preview.json()["member_edit_block"] is None
 
 
 def test_preview_claim_of_another_employee_404s(broker: TestClient) -> None:

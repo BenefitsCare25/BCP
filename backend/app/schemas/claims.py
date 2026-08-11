@@ -158,6 +158,26 @@ class ClaimOut(_Base):
     # the draft/needs_info detail page so resubmission can satisfy every slot.
     required_doc_slots: list[DocSlotOut] = Field(default_factory=list)
 
+    # ── Amendment (docs/CLAIM_AMENDMENT_PLAN.md) ─────────────────────────────
+    #
+    # Whether the CLAIMANT may still change this claim, and the sentence to show
+    # them when they may not. Both filled by `claims.member_editability` through
+    # the shared `populate_claim_out`.
+    #
+    # **SERVED, never re-derived in TypeScript.** The portal used to answer this
+    # itself (`status === "draft" || status === "needs_info"`), which is the
+    # same drift class as mirroring `PENDING_STATUSES` into the client — and
+    # exactly the mirror that stopped being true when the window widened to
+    # "until the broker decides". The frontend renders the button off this flag
+    # and the notice off this string; it must never switch on `status`.
+    member_editable: bool = False
+    member_edit_block: str | None = None
+    # The optimistic-concurrency token (see `Claim.revision`). Member-visible
+    # because the member's own amendment sends it back — two devices on one
+    # claim is the ordinary case, not an exotic one.
+    revision: int = 0
+    amended_at: datetime | None = None
+
 
 class ClaimList(BaseModel):
     total: int

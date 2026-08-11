@@ -24,12 +24,16 @@ from app.core.uploads import saved_upload
 from app.models import Claim, Dependant, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
     CASE_TYPE_CLAIM,
+    CASE_TYPE_LOG,
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
     CLAIM_STATUS_DRAFT,
+    CLAIM_STATUS_REJECTED,
     CLAIM_STATUS_SUBMITTED,
     LIVE_STATUSES,
+    MEMBER_EDITABLE_STATUSES,
     ORIGIN_PORTAL,
+    SETTLED_STATUSES,
     VALID_TRANSITIONS,
 )
 from app.models.policy_year import PolicyYearStatus
@@ -116,6 +120,64 @@ def dependant_display_name(dep: Dependant | None) -> str | None:
     return first_value(dep.attribute_values or {}, NAME_KEYS)
 
 
+# Why the claimant may no longer change a claim, in their own words. One owner
+# for the sentence as well as for the boolean beside it — the portal's lock
+# notice reads this string, so a member cannot be given two different accounts
+# of why the form is closed (same discipline as `ClaimWindow.empty_note`).
+_EDIT_BLOCKED_LOG = (
+    "Your broker is handling this case directly. Message us if something "
+    "needs changing."
+)
+_EDIT_BLOCKED_SETTLED = (
+    "This claim has been assessed, so it can no longer be changed here. "
+    "Message us if something needs correcting."
+)
+_EDIT_BLOCKED_REJECTED = (
+    "This claim was closed, so it can no longer be changed here. Message us "
+    "if you think that's wrong."
+)
+_EDIT_BLOCKED_DEFAULT = (
+    "This claim can no longer be changed here. Message us if something needs "
+    "correcting."
+)
+
+
+def member_editability(claim: Claim) -> tuple[bool, str | None]:
+    """Whether the CLAIMANT may still change this claim, and why not.
+
+    **Served, never re-derived in the client.** `ClaimDetailLeaf` used to answer
+    this itself with `status === "draft" || status === "needs_info"` — the same
+    drift class as mirroring `PENDING_STATUSES` into TypeScript, and it silently
+    stops agreeing with the server the day the window moves. It moved.
+
+    Fail-closed by construction: everything outside `MEMBER_EDITABLE_STATUSES`
+    is refused, and a status this function has no sentence for still gets the
+    default one rather than falling through to editable. A new status is far
+    more likely to be post-decision than pre-, and wrongly denying an edit costs
+    a message to the broker while wrongly allowing one rewrites a settled claim.
+    """
+    # A case the member never filed. They cannot reach it at all
+    # (`load_member_claim` 404s on it), so there is nothing to explain to them —
+    # this is here for the BROKER payload, which shares this builder.
+    if claim.origin != ORIGIN_PORTAL:
+        return False, None
+    # Their own submission, reclassified by an assessor. It stays VISIBLE to
+    # them — the portal filters on origin precisely so reclassifying can't
+    # retract someone's own record — but it stops being theirs to edit: a LOG
+    # case is created outside `submit_claim` and may legitimately carry no
+    # documents at all, so re-validating one would refuse it with "attach at
+    # least one receipt" on a case they never attached to and cannot satisfy.
+    if claim.case_type == CASE_TYPE_LOG:
+        return False, _EDIT_BLOCKED_LOG
+    if claim.status in MEMBER_EDITABLE_STATUSES:
+        return True, None
+    if claim.status in SETTLED_STATUSES:
+        return False, _EDIT_BLOCKED_SETTLED
+    if claim.status == CLAIM_STATUS_REJECTED:
+        return False, _EDIT_BLOCKED_REJECTED
+    return False, _EDIT_BLOCKED_DEFAULT
+
+
 def populate_claim_out(
     db: Session,
     claim: Claim,
@@ -170,6 +232,10 @@ def populate_claim_out(
             if dep_names is not None
             else dependant_display_name(db.get(Dependant, claim.dependant_id))
         )
+    # Filled HERE — in the one builder the member payload, the broker payload
+    # and the broker's employee-view preview all share — so the three cannot
+    # answer "may this member still edit?" differently.
+    out.member_editable, out.member_edit_block = member_editability(claim)
     return out
 
 

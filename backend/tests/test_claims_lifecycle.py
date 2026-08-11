@@ -38,6 +38,7 @@ from app.models import (  # noqa: E402
     MemberAccount,
     PolicyYear,
 )
+from app.models.claim import MEMBER_EDITABLE_STATUSES  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from app.schemas.api import (  # noqa: E402
     BenefitStatementOut,
@@ -47,6 +48,7 @@ from app.schemas.api import (  # noqa: E402
     FlexCoverageLine,
     StatementEmployee,
 )
+from app.services.claims import _EDIT_BLOCKED_DEFAULT  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
 PY = "00000000-0000-0000-0000-00000000cl01"
@@ -563,6 +565,124 @@ def test_tcm_claim_binds_benefit_row(anon: TestClient):
     res = _submit(anon, claim["id"])
     assert res.status_code == 200, res.text
     assert res.json()["benefit_key"] == "TCM & Chiropractor"
+
+
+# ── Served editability (docs/CLAIM_AMENDMENT_PLAN.md, phase 3) ───────────────
+
+
+def test_member_editable_is_served_and_closes_at_the_decision(
+    anon: TestClient, broker: TestClient
+):
+    """The flag the portal renders its edit button off.
+
+    SERVED, so the client never switches on `status` — the mirror it used to
+    keep (`draft || needs_info`) is exactly what stopped being true when the
+    window widened to "until the broker decides".
+    """
+    claim = _draft(anon)
+    body = anon.get(
+        f"/api/v1/portal/claims/{claim['id']}", headers=_auth(ACC_A)
+    ).json()
+    assert body["member_editable"] is True
+    assert body["member_edit_block"] is None
+    # The concurrency token rides along from the first read.
+    assert body["revision"] == 0
+    assert body["amended_at"] is None
+
+    assert _upload(anon, claim["id"], PDF + b" editable-1").status_code == 200
+    assert _submit(anon, claim["id"]).status_code == 200
+
+    # In review, undecided — still theirs.
+    assert anon.get(
+        f"/api/v1/portal/claims/{claim['id']}", headers=_auth(ACC_A)
+    ).json()["member_editable"] is True
+
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
+    ).status_code == 200
+
+    body = anon.get(
+        f"/api/v1/portal/claims/{claim['id']}", headers=_auth(ACC_A)
+    ).json()
+    assert body["member_editable"] is False
+    assert "has been assessed" in body["member_edit_block"]
+
+
+def test_a_rejected_claim_says_closed_not_assessed(
+    anon: TestClient, broker: TestClient
+):
+    """Two different refusals. "Assessed" invites a correction; "closed"
+    invites a challenge, and a rejected claimant is asking the second
+    question."""
+    claim_id = _submitted_claim(anon, b" editable-rej")
+    assert broker.post(
+        f"/api/v1/claims/{claim_id}/decision", json={"action": "reject"}
+    ).status_code == 200
+    body = anon.get(
+        f"/api/v1/portal/claims/{claim_id}", headers=_auth(ACC_A)
+    ).json()
+    assert body["member_editable"] is False
+    assert "was closed" in body["member_edit_block"]
+
+
+def test_reclassifying_to_a_LOG_case_takes_editing_away_not_visibility(
+    anon: TestClient, broker: TestClient
+):
+    """The member keeps SEEING their own submission — the portal filters on
+    `origin`, so reclassifying can never retract someone's own record — but it
+    stops being theirs to edit.
+
+    A LOG case is created outside `submit_claim` and may legitimately carry no
+    documents at all, so re-validating one would refuse the member with "attach
+    at least one receipt" on a case they never attached to and cannot satisfy.
+    """
+    claim_id = _submitted_claim(anon, b" editable-log")
+    assert broker.patch(
+        f"/api/v1/claims/{claim_id}/case-type",
+        json={"case_type": "log", "reason": "recorded from the insurer's email"},
+    ).status_code == 200
+
+    res = anon.get(f"/api/v1/portal/claims/{claim_id}", headers=_auth(ACC_A))
+    assert res.status_code == 200, "still visible — reclassifying is not a retraction"
+    assert res.json()["member_editable"] is False
+    assert "handling this case directly" in res.json()["member_edit_block"]
+
+
+def test_member_editability_is_fail_closed():
+    """Everything outside `MEMBER_EDITABLE_STATUSES` is refused, and a status
+    with no sentence of its own still gets the default one rather than falling
+    through to editable. A new status is far likelier to be post-decision than
+    pre-, and wrongly denying an edit costs a message to the broker while
+    wrongly allowing one rewrites a settled claim."""
+    from app.models.claim import CASE_TYPE_CLAIM, CLAIM_STATUSES, ORIGIN_PORTAL
+    from app.services.claims import member_editability
+
+    def _at(status_value: str) -> Claim:
+        # `origin` and `case_type` are pinned EXPLICITLY. Their column defaults
+        # are Python-side and only run at flush, so a transient Claim() carries
+        # `origin=None` and every status would fall into the fail-closed branch
+        # — the test would pass for the wrong reason on exactly the statuses it
+        # exists to check. This varies the status axis and holds the rest at
+        # what a persisted member claim actually has.
+        return Claim(
+            client_id=DEMO_CLIENT_ID, policy_year_id=PY, employee_id=EMP_A,
+            claim_kind="insured", product_code="GHS", claim_type="x",
+            incurred_date=date(2027, 6, 15), amount_claimed=1.0,
+            origin=ORIGIN_PORTAL, case_type=CASE_TYPE_CLAIM,
+            status=status_value,
+        )
+
+    for status_value in CLAIM_STATUSES:
+        editable, block = member_editability(_at(status_value))
+        assert editable is (status_value in MEMBER_EDITABLE_STATUSES), status_value
+        # Exactly one of the two is set — a refusal always carries its reason.
+        assert (block is None) is editable, status_value
+
+    # An unknown status is refused, not admitted.
+    assert member_editability(_at("some_future_status")) == (
+        False,
+        _EDIT_BLOCKED_DEFAULT,
+    )
 
 
 # ── The shared validation chain (docs/CLAIM_AMENDMENT_PLAN.md, phase 2) ──────
