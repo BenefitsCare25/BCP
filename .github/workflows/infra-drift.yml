@@ -5,8 +5,35 @@ name: Infra drift check
 # firewall rule changed by hand in the portal would otherwise persist until the
 # next infra commit, which could be months.
 #
-# This re-asserts main.bicep weekly so drift self-corrects within 7 days, and
-# gives a `what-if` preview on demand for checking BEFORE applying.
+# **The SCHEDULED run REPORTS drift; it does not apply it.** It used to run a
+# full `az deployment group create` every Sunday, and that cost a production
+# restart every week whether or not anything had actually drifted — with a
+# failed one about as often as not:
+#
+#   2026-08-02 20:06-20:11 drift run -> ContainerStartupFailure at 20:09:48
+#   2026-08-09 19:25-19:30 drift run -> ContainerStartupFailure at 19:28:50
+#
+# Both are the same shape in the container log: "Shutting down: Master" and
+# "Site container: inspro-portal terminated during site startup" — a second
+# bounce cancelling a startup still in its ~45s warm-up, because re-applying the
+# template PUTs `Microsoft.Web/sites` *and* its diagnostic settings *and* the
+# role assignments in one deployment. The site self-heals (the smoke test below
+# passed both times, ~90s later), so this was a brief 03:00-Monday-SGT blip
+# rather than an outage — but it was a weekly self-inflicted one.
+#
+# And it bought nothing, because there was no drift to correct. A `what-if` on
+# an untouched environment reports "14 to modify", all of it ARM noise: for the
+# web app it lists `ftpsState`, `healthCheckPath`, `localMySqlEnabled`,
+# `minTlsVersion` and `netFrameworkVersion` as ADDITIONS on every single run,
+# because the provider does not return them on GET so what-if cannot see they
+# are already set. `healthCheckPath` is live and correct in prod right now.
+#
+# That noise is also why this does not fail the run when what-if reports
+# changes: it would be red every week for phantom diffs, and an alert that cries
+# wolf weekly is worse than none. The diff goes to the job summary instead —
+# read it for anything OUTSIDE that known-noise set, which is what real drift
+# looks like. Correcting it is then one deliberate click:
+# `workflow_dispatch` -> mode=apply.
 
 on:
   schedule:
@@ -70,11 +97,27 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "Running image: $IMAGE"
 
-      - name: Apply or preview
+      # The SCHEDULE never applies — see the header. `create` is reachable only
+      # by someone choosing it on a manual dispatch, so nothing touches prod on
+      # a timer.
+      - name: Decide mode
+        id: mode
         run: |
-          MODE="${{ github.event.inputs.mode || 'apply' }}"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MODE=what-if
+          else
+            MODE="${{ github.event.inputs.mode || 'what-if' }}"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "Mode: $MODE (event: ${{ github.event_name }})"
+
+      - name: Apply or preview
+        id: run
+        run: |
+          MODE="${{ steps.mode.outputs.mode }}"
           if [ "$MODE" = "what-if" ]; then VERB="what-if"; else VERB="create"; fi
           echo "Running az deployment group $VERB"
+          set -o pipefail
           az deployment group $VERB \
             --resource-group ${{ env.PROD_RG }} \
             --template-file infra/bicep/main.bicep \
@@ -87,13 +130,42 @@ jobs:
               aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ steps.img.outputs.image }}" \
-              alertEmail="${{ secrets.ALERT_EMAIL }}"
+              alertEmail="${{ secrets.ALERT_EMAIL }}" \
+            | tee /tmp/drift-output.txt
 
-      # Re-asserting the template can restart the app if anything had drifted,
-      # so prove it came back rather than assuming a green deployment means a
-      # healthy site.
+      # A green run nobody opens tells nobody anything, so the diff goes where
+      # it is visible without digging through logs.
+      - name: Publish the diff to the run summary
+        if: always() && steps.mode.outputs.mode == 'what-if'
+        run: |
+          {
+            echo "## Prod infrastructure drift — preview only, nothing was changed"
+            echo
+            echo "ARM reports several properties as additions on EVERY run because"
+            echo "the provider does not return them on GET. Known noise, safe to ignore:"
+            echo '`ftpsState`, `healthCheckPath`, `localMySqlEnabled`, `minTlsVersion`,'
+            echo '`netFrameworkVersion`, and `retentionPolicy.days` on diagnostic settings.'
+            echo
+            echo "**Anything else is real drift** — re-run this workflow with"
+            echo "\`mode=apply\` to correct it."
+            echo
+            echo '```'
+            # `always()` means this also runs when the what-if itself failed, so
+            # the file may be absent or empty — say so rather than failing the
+            # summary step and masking the real error above.
+            if [ -s /tmp/drift-output.txt ]; then
+              sed -n '/Resource and property changes/,$p' /tmp/drift-output.txt | head -200
+            else
+              echo "(no what-if output — the preview step failed; see its log)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only meaningful after a real apply — a what-if never touches the site.
+      # Applying CAN restart it (that is the whole reason the schedule no longer
+      # does), so prove it came back rather than trusting a green deployment.
       - name: Smoke-test prod
-        if: github.event.inputs.mode != 'what-if'
+        if: steps.mode.outputs.mode != 'what-if'
         run: |
           curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_APP }}.azurewebsites.net/health"
