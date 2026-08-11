@@ -4,7 +4,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class _Base(BaseModel):
@@ -62,6 +68,78 @@ class ClaimCreateIn(BaseModel):
     # "not applicable" declaration (recorded for the broker + AI review).
     referral_document_id: str | None = None
     referral_not_applicable: bool = False
+
+
+# Amendable fields the CLAIM cannot hold as NULL. Sending an explicit `null` for
+# one of these is a request to clear a column the model requires, which would
+# either 500 on flush or store a claim nothing downstream can render. Absence
+# means "don't touch"; `null` means "clear it", and for these two there is no
+# difference worth the ambiguity.
+_NOT_CLEARABLE = frozenset(
+    {
+        "claim_kind",
+        "claim_type",
+        "incurred_date",
+        "provider_name",
+        "invoice_number",
+        "amount_claimed",
+        "currency",
+    }
+)
+
+
+class ClaimAmendIn(BaseModel):
+    """A member correcting their own claim, until a broker decides it.
+
+    A PARTIAL update driven by `model_fields_set`, for the same reason
+    `ClaimAssessmentIn` is: an edit sheet that touches one control must not
+    blank everything else. Absence = leave alone; an explicit `null` = clear
+    (which is how a claim stops being for a dependant, or loses a diagnosis).
+
+    Every value is re-validated by `claims.validate_claim_facts` over the MERGED
+    claim, so an amendment can only ever produce a claim that would pass
+    submit — including the duplicate-invoice refusal, which has no member-side
+    override here either.
+
+    `remarks` is amendable and `admin_remarks` is not: one is the member's own
+    note and the other is the assessor's, and the member must never write the
+    second. See `docs/CLAIM_AMENDMENT_PLAN.md` §3.
+    """
+
+    claim_kind: str | None = Field(default=None, pattern="^(insured|flex)$")
+    product_code: str | None = Field(default=None, max_length=64)
+    flex_category_name: str | None = Field(default=None, max_length=255)
+    claim_type: str | None = Field(default=None, min_length=1, max_length=64)
+    sub_type: str | None = Field(default=None, max_length=64)
+    visit_type: str | None = Field(default=None, max_length=16)
+    incurred_date: date | None = None
+    provider_name: str | None = Field(default=None, min_length=2, max_length=255)
+    invoice_number: str | None = Field(default=None, min_length=1, max_length=128)
+    doctor_name: str | None = Field(default=None, max_length=255)
+    diagnosis: str | None = Field(default=None, max_length=512)
+    remarks: str | None = Field(default=None, max_length=500)
+    amount_claimed: float | None = Field(default=None, gt=0, le=1_000_000)
+    currency: str | None = Field(default=None, min_length=3, max_length=8)
+    dependant_id: str | None = None
+    referral_document_id: str | None = None
+    referral_not_applicable: bool | None = None
+
+    # The revision the client actually read (see `Claim.revision`). Optional —
+    # a mismatch 409s, absence skips the check. The portal always sends it.
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _is_a_real_change(self) -> ClaimAmendIn:
+        touched = self.model_fields_set - {"expected_revision"}
+        if not touched:
+            # Otherwise an empty body bumps the revision, supersedes the AI
+            # review and posts the member a notice saying they changed
+            # something — for a request that changed nothing.
+            raise ValueError("name at least one field to change")
+        cleared = sorted(f for f in touched & _NOT_CLEARABLE if getattr(self, f) is None)
+        if cleared:
+            raise ValueError(f"these fields cannot be cleared: {', '.join(cleared)}")
+        return self
 
 
 class LogCaseCreateIn(BaseModel):

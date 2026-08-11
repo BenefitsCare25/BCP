@@ -5,9 +5,11 @@ rules live in one place.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -21,8 +23,16 @@ from app.core.storage import (
     get_storage,
 )
 from app.core.uploads import saved_upload
-from app.models import Claim, Dependant, Employee, PolicyYear, StoredDocument
+from app.models import (
+    Claim,
+    ClaimAIReview,
+    Dependant,
+    Employee,
+    PolicyYear,
+    StoredDocument,
+)
 from app.models.claim import (
+    AI_REVIEW_STATUSES,
     CASE_TYPE_CLAIM,
     CASE_TYPE_LOG,
     CLAIM_KIND_FLEX,
@@ -330,6 +340,39 @@ def claims_to_out(db: Session, claims: list[Claim]) -> list[ClaimOut]:
     ]
 
 
+def form_snapshot(claim: Claim, *, referral_not_applicable: bool) -> dict[str, Any]:
+    """The member-entered form, as the AI review compares documents against it.
+
+    ONE builder, shared by create and by every amendment. The review's field
+    maps (`claims_review/field_maps.py`) key on these exact names, so a second
+    spelling would not fail — it would quietly stop matching, and every
+    comparison would report the document as unsubstantiated.
+
+    Read off the CLAIM rather than off a request body, so it says what the claim
+    now holds whichever way it got there. Call it AFTER validation:
+    `validate_claim_facts` normalizes `sub_type` and may relink the referral
+    letter, and a snapshot taken before that records values the claim no longer
+    has.
+    """
+    doctor = (claim.doctor_name or "").strip() or None
+    return {
+        "claim_type": claim.claim_type,
+        "sub_type": claim.sub_type,
+        "visit_type": claim.visit_type,
+        "incurred_date": claim.incurred_date.isoformat(),
+        "provider_name": claim.provider_name,
+        "invoice_number": claim.invoice_number,
+        # Only when stated — an empty key on every GP receipt would give the
+        # review's rules a blank to reason about on claims that never ask for
+        # one.
+        **({"doctor_name": doctor} if doctor else {}),
+        "diagnosis": claim.diagnosis,
+        "amount_claimed": claim.amount_claimed,
+        "currency": claim.currency,
+        "referral_not_applicable": referral_not_applicable,
+    }
+
+
 def create_claim(
     db: Session,
     employee: Employee,
@@ -418,25 +461,9 @@ def create_claim(
         currency=body.currency.upper(),
         referral_document_id=referral_document_id,
         submitted_by_member_id=submitted_by_member_id,
-        # Snapshot of the member-entered form — the AI review compares the
-        # uploaded documents against exactly what was claimed at the time.
-        # `remarks` is a free-text note, not a document-matched field.
-        form_fields={
-            "claim_type": body.claim_type,
-            "sub_type": sub_type,
-            "visit_type": body.visit_type,
-            "incurred_date": body.incurred_date.isoformat(),
-            "provider_name": body.provider_name,
-            "invoice_number": body.invoice_number,
-            # Only when stated — an empty key on every GP receipt would give the
-            # review's rules a blank to reason about on claims that never ask
-            # for one.
-            **({"doctor_name": doctor_name} if doctor_name else {}),
-            "diagnosis": body.diagnosis,
-            "amount_claimed": body.amount_claimed,
-            "currency": body.currency.upper(),
-            "referral_not_applicable": body.referral_not_applicable,
-        },
+    )
+    claim.form_fields = form_snapshot(
+        claim, referral_not_applicable=body.referral_not_applicable
     )
     db.add(claim)
     db.flush()
@@ -688,12 +715,9 @@ def duplicate_invoice_claim_ids(db: Session, claim: Claim) -> list[str]:
     )
 
 
-def _assert_no_duplicate_invoice(
-    db: Session, claim: Claim, documents: list[StoredDocument] | None = None
-) -> None:
+def _assert_no_duplicate_invoice(db: Session, claim: Claim) -> None:
     """Structured 409 when this claim's invoice number is already on another
-    live claim of the member's. ``documents`` may be passed by a caller that
-    already loaded them to avoid a second query.
+    live claim of the member's.
 
     **A hard refusal — there is deliberately no member-side override.** One
     invoice is one claim, full stop. The cost of that is real and worth knowing:
@@ -702,13 +726,12 @@ def _assert_no_duplicate_invoice(
     the member cannot change the number printed on the bill. That case now has
     no portal route at all — an assessor records it broker-side as a LOG case,
     which does not go through this path.
+
+    The "attach at least one receipt" check used to live in here too. It moved
+    to `validate_claim_facts`, beside the slot check, because it is a
+    DOCUMENT-COMPLETENESS rule and shares that rule's exemption for drafts —
+    bundled in here it made every draft amendment demand a receipt.
     """
-    docs = documents if documents is not None else claim_documents(db, claim)
-    if not docs:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Attach at least one receipt before submitting.",
-        )
     live = duplicate_invoice_claim_ids(db, claim)
     if live:
         raise HTTPException(
@@ -832,6 +855,7 @@ def validate_claim_facts(
     employee: Employee,
     *,
     enforce_doctor_name: bool,
+    enforce_documents: bool = True,
     clear_rider_key: bool = False,
     window: ClaimWindow | None = None,
 ) -> ClaimWindow:
@@ -865,6 +889,15 @@ def validate_claim_facts(
     any pre-/post- claim recorded before the field existed. An AMENDMENT passes
     True: that form *does* carry the field, so the reason for the carve-out is
     gone.
+
+    ``enforce_documents`` is False when amending a DRAFT, and it has to be: a
+    draft is incomplete BY DEFINITION — that is the whole difference between a
+    draft and a claim — so demanding a full document set on every edit would
+    make a draft uneditable until it was already finished. `create_claim` runs
+    no document check either, for the same reason. Everything else in this
+    chain still applies to a draft, so it can never be edited into a shape it
+    could not have been created in; only the completeness rules wait for
+    submit.
     """
     if window is None:
         year = db.get(PolicyYear, claim.policy_year_id)
@@ -919,20 +952,25 @@ def validate_claim_facts(
     statement = build_member_statement(db, employee)
     _apply_gp_rider_benefit_key(statement, claim, clear_rider_key=clear_rider_key)
     assert_coverage_claimable(statement, claim)
-    # Every required document slot must be filled (tagged uploads); the
-    # generic invoice/receipt slot accepts any attached document. Load the
-    # documents once and share with the duplicate-invoice check.
-    documents = claim_documents(db, claim)
-    assert_documents_satisfy_slots(
-        required_doc_slots(
-            claim.product_code,
-            claim.sub_type,
-            claim.provider_name,
-            claim_kind=claim.claim_kind,
-        ),
-        documents,
-    )
-    _assert_no_duplicate_invoice(db, claim, documents)
+    if enforce_documents:
+        # Every required document slot must be filled (tagged uploads); the
+        # generic invoice/receipt slot accepts any attached document.
+        documents = claim_documents(db, claim)
+        if not documents:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Attach at least one receipt before submitting.",
+            )
+        assert_documents_satisfy_slots(
+            required_doc_slots(
+                claim.product_code,
+                claim.sub_type,
+                claim.provider_name,
+                claim_kind=claim.claim_kind,
+            ),
+            documents,
+        )
+    _assert_no_duplicate_invoice(db, claim)
     return window
 
 
@@ -1007,6 +1045,273 @@ def submit_claim(
     # between submissions is one neither side can look the claim up by.
     mint_reference_no(db, claim)
     return claim
+
+
+# ── Amendment (docs/CLAIM_AMENDMENT_PLAN.md) ─────────────────────────────────
+
+# Columns a MEMBER's amendment may write — the claim facts they stated. The
+# broker's set differs at two edges (§3): `remarks` is the member's own note and
+# a broker rewriting it is forgery, while `benefit_key` is broker attribution
+# and never theirs. `referral_not_applicable` is in here but is NOT a column —
+# it is a form declaration living in `form_fields`, handled separately below.
+MEMBER_AMENDABLE_FIELDS = frozenset(
+    {
+        "claim_kind",
+        "product_code",
+        "flex_category_name",
+        "claim_type",
+        "sub_type",
+        "visit_type",
+        "incurred_date",
+        "provider_name",
+        "invoice_number",
+        "doctor_name",
+        "diagnosis",
+        "remarks",
+        "amount_claimed",
+        "currency",
+        "dependant_id",
+        "referral_document_id",
+        "referral_not_applicable",
+    }
+)
+
+_REFERRAL_FLAG = "referral_not_applicable"
+
+
+def assert_member_may_amend(claim: Claim) -> None:
+    """403 unless the claimant may still change this claim.
+
+    The refusal carries the SERVED sentence, so what the member is told when
+    they somehow reach the endpoint is word-for-word what their claim page
+    already showed them — one wording, one owner (`member_editability`).
+
+    A 403 and not a 404: the member owns this claim and can see it. Hiding its
+    existence at this point would be a lie, and the not-403 convention exists
+    for claims that are not theirs, which `load_member_claim` has already
+    settled.
+    """
+    editable, block = member_editability(claim)
+    if editable:
+        return
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        detail={"code": "claim_not_editable", "message": block or _EDIT_BLOCKED_DEFAULT},
+    )
+
+
+def assert_claim_revision(claim: Claim, expected: int | None) -> None:
+    """409 when the claim moved under whoever is writing to it.
+
+    `None` skips the check deliberately — a LOG case created and decided in one
+    assessor flow has no stale read to guard against, and making it mandatory
+    would break every existing caller. Both UIs send it.
+    """
+    if expected is None or expected == claim.revision:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "code": "claim_amended",
+            "message": (
+                "This claim was changed after you opened it. Reload it to see "
+                "the current details before making changes."
+            ),
+            "revision": claim.revision,
+        },
+    )
+
+
+def apply_claim_amendment(
+    db: Session,
+    claim: Claim,
+    body: Any,
+    employee: Employee,
+    *,
+    allowed: frozenset[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Merge a partial amendment onto a claim, re-validate it, stamp it.
+
+    Returns ``(before, after)`` for the audit row. Shared by the member and
+    broker endpoints, which differ only in ``allowed`` and in what their callers
+    do afterwards — the merge, the validation and the stamping are one
+    implementation so the two surfaces cannot store a claim differently.
+
+    Does NOT commit, and does not touch status: superseding the AI review is
+    `supersede_review_for_amendment`, and it is a member-side rule.
+    """
+    patch = set(body.model_fields_set) & allowed
+    if not patch:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "This request changes nothing."
+        )
+    columns = patch - {_REFERRAL_FLAG}
+
+    # **Snapshot BEFORE anything is written.** Taken after the merge, `before`
+    # reads off an already-mutated claim: a correction from 1,200.00 to 120.00
+    # would write an audit row saying before=120.00, after=120.00, losing the
+    # only figure the row existed to preserve. `update_claim_assessment` learned
+    # this the hard way; the trail is for money and dates precisely.
+    before: dict[str, Any] = {c: getattr(claim, c) for c in columns}
+    previous_sub_type = claim.sub_type
+    previous_key = claim.benefit_key
+    previous_flag = bool((claim.form_fields or {}).get(_REFERRAL_FLAG))
+
+    for name in columns:
+        setattr(claim, name, getattr(body, name))
+    # The same normalizations `create_claim` applies, so a claim that was
+    # amended into a shape and one that was created in it are stored alike.
+    if claim.currency:
+        claim.currency = claim.currency.upper()
+    claim.doctor_name = (claim.doctor_name or "").strip() or None
+
+    flag = body.referral_not_applicable if _REFERRAL_FLAG in patch else previous_flag
+    # In place BEFORE validation: `assert_intake_valid` reads the "not
+    # applicable" declaration out of `form_fields`, so validating against the
+    # OLD flag would refuse a member who has just ticked it.
+    claim.form_fields = {**(claim.form_fields or {}), _REFERRAL_FLAG: bool(flag)}
+
+    validate_claim_facts(
+        db,
+        claim,
+        employee,
+        # The amendment form DOES carry the doctor field, so the drafts-only
+        # carve-out submit needs does not apply here.
+        enforce_doctor_name=True,
+        # A draft is incomplete by definition — see the function's docstring.
+        enforce_documents=claim.status != CLAIM_STATUS_DRAFT,
+        # Only when the sub-type actually moved — see the function's docstring
+        # for why a blanket clear would wreck legacy rows.
+        clear_rider_key="sub_type" in columns and claim.sub_type != previous_sub_type,
+    )
+    # Re-snapshot in FULL after validation, which normalizes `sub_type` and may
+    # relink the referral letter.
+    claim.form_fields = form_snapshot(claim, referral_not_applicable=bool(flag))
+    claim.revision += 1
+    claim.amended_at = datetime.now(UTC)
+
+    after: dict[str, Any] = {c: getattr(claim, c) for c in columns}
+    if _REFERRAL_FLAG in patch:
+        before[_REFERRAL_FLAG], after[_REFERRAL_FLAG] = previous_flag, bool(flag)
+    # `benefit_key` can move as a SIDE EFFECT of the rider clear without ever
+    # appearing in the patch — and it decides which limit the claim draws on, so
+    # the trail has to show it moving.
+    if claim.benefit_key != previous_key:
+        before["benefit_key"], after["benefit_key"] = previous_key, claim.benefit_key
+    return before, after
+
+
+# What each amendable field is CALLED to the member. Several map onto one
+# phrase on purpose — a member who switches an inpatient claim from one
+# sub-type to another has changed "the claim type", and naming the columns that
+# moved underneath ("sub_type, claim_type") describes our schema rather than
+# their edit. A field absent from this map is still recorded in the audit; it
+# just isn't narrated.
+_AMENDMENT_LABELS: dict[str, str] = {
+    "amount_claimed": "the amount claimed",
+    "currency": "the currency",
+    "incurred_date": "the date of treatment",
+    "provider_name": "the clinic or hospital",
+    "invoice_number": "the invoice number",
+    "doctor_name": "the doctor's name",
+    "diagnosis": "the diagnosis",
+    "claim_type": "the claim type",
+    "sub_type": "the claim type",
+    "visit_type": "the claim type",
+    "claim_kind": "the benefit claimed against",
+    "product_code": "the benefit claimed against",
+    "flex_category_name": "the benefit claimed against",
+    "dependant_id": "who the claim is for",
+    "remarks": "your note",
+    "referral_document_id": "the referral letter",
+    _REFERRAL_FLAG: "the referral letter",
+}
+
+
+def amendment_summary(changed: Iterable[str]) -> str | None:
+    """"You changed X and Y", for the member's thread notice.
+
+    Deduped and ORDERED by `_AMENDMENT_LABELS`, not by the set's iteration
+    order, which is a hash order and would list the same edit differently on
+    two runs. None when nothing narratable changed.
+    """
+    wanted = set(changed)
+    seen: list[str] = []
+    for field, label in _AMENDMENT_LABELS.items():
+        if field in wanted and label not in seen:
+            seen.append(label)
+    if not seen:
+        return None
+    if len(seen) == 1:
+        return f"You changed {seen[0]}."
+    return f"You changed {', '.join(seen[:-1])} and {seen[-1]}."
+
+
+def audit_cells(source: dict[str, Any]) -> dict[str, Any]:
+    """Audit before/after values as JSON — dates and datetimes serialized.
+
+    Shared by every claim-mutating endpoint's audit write, so a date lands in
+    the trail the same way whichever surface moved it.
+    """
+    return {
+        k: (v.isoformat() if hasattr(v, "isoformat") else v)
+        for k, v in source.items()
+    }
+
+
+def stamp_document_amendment(db: Session, claim: Claim) -> bool:
+    """A claim's EVIDENCE changed — record it as an amendment.
+
+    Adding or removing a document invalidates an AI verdict exactly as changing
+    a figure does: comparing the documents against what was claimed IS the
+    review's job, so one whose document set has moved describes a claim that no
+    longer exists. It bumps `revision` for the same reason an edit does — a
+    broker who read the claim before the document landed must not be able to
+    decide on it as if they had seen everything.
+
+    A DRAFT is in front of nobody: nothing to stamp, and no review to supersede.
+    """
+    if claim.status == CLAIM_STATUS_DRAFT:
+        return False
+    claim.revision += 1
+    claim.amended_at = datetime.now(UTC)
+    return supersede_review_for_amendment(db, claim)
+
+
+def supersede_review_for_amendment(db: Session, claim: Claim) -> bool:
+    """Invalidate any AI verdict on an amended claim. Returns whether the claim
+    fell back to `submitted`.
+
+    A review is a statement about a specific set of claimed values — it compares
+    the documents against `form_fields` — so once those change it describes a
+    claim that no longer exists. Leaving it standing is the plausible-but-wrong
+    figure this codebase guards against everywhere else.
+
+    Deliberately NOT an automatic re-run: a member can amend repeatedly, so
+    auto-rerun would turn an edit loop into an AI-spend loop. The claim lands
+    where the pipeline's own fault path lands it — plain `submitted`, manual
+    review — and the broker's existing Re-run review button is there for when
+    they want one.
+
+    A DRAFT has no review and no thread; nothing to do.
+    """
+    if claim.status == CLAIM_STATUS_DRAFT:
+        return False
+    for old in db.execute(
+        select(ClaimAIReview).where(
+            ClaimAIReview.claim_id == claim.id,
+            ClaimAIReview.superseded.is_(False),
+        )
+    ).scalars():
+        old.superseded = True
+    # `submitted` and `needs_info` already say what is true; only the three
+    # AI-owned states have to move. (`submitted → submitted` is not a legal
+    # transition, so this cannot be an unconditional call.)
+    if claim.status in AI_REVIEW_STATUSES:
+        assert_transition(claim, CLAIM_STATUS_SUBMITTED)
+        claim.status = CLAIM_STATUS_SUBMITTED
+        return True
+    return False
 
 
 def assert_transition(claim: Claim, new_status: str) -> None:

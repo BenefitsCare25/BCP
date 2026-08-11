@@ -28,11 +28,12 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models import Claim, ClaimMessage, Employee, MemberEnquiry, User
-from app.models.claim import member_visible_claims
+from app.models.claim import CLAIM_STATUS_NEEDS_INFO, member_visible_claims
 from app.models.claim_message import (
     AUTHOR_BROKER,
     AUTHOR_MEMBER,
     AUTHOR_SYSTEM,
+    EVENT_AMENDED,
     EVENT_APPROVED,
     EVENT_NEEDS_INFO,
     EVENT_PAID,
@@ -146,6 +147,22 @@ def _system_copy(claim: Claim, event: str, note: str | None) -> tuple[str, str]:
                 + (f" on {on}." if on else "."),
                 note,
                 "It can take a few working days to reach your account.",
+            ),
+        )
+    if event == EVENT_AMENDED:
+        # The closing line has to match where the claim actually IS. Amending a
+        # `needs_info` claim does not answer it — the member still has to press
+        # send — so telling them there is nothing more to do would leave the
+        # claim sitting in a state neither side is working on.
+        return (
+            "You updated this claim",
+            _join(
+                f"Your {_what(claim)} claim for {when} has been updated.",
+                note,
+                "Open the claim to send it again when you're ready."
+                if claim.status == CLAIM_STATUS_NEEDS_INFO
+                else "We'll carry on with it as it now stands — there's nothing "
+                "more you need to send.",
             ),
         )
     if event == EVENT_NEEDS_INFO:

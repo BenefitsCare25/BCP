@@ -46,9 +46,10 @@ from app.models.claim import (
     MEMBER_EDITABLE_STATUSES,
     member_visible_claims,
 )
-from app.models.claim_message import EVENT_SUBMITTED
+from app.models.claim_message import EVENT_AMENDED, EVENT_SUBMITTED
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import (
+    ClaimAmendIn,
     ClaimCreateIn,
     ClaimIntakeSuggestionOut,
     ClaimList,
@@ -75,6 +76,7 @@ from app.services.claim_intake import (
     DOC_SLOT_LABELS,
     HOSPITALISATION_SLOTS_BY_SECTOR,
     SUB_TYPE_HOSPITALISATION,
+    assert_documents_satisfy_slots,
     benefit_row_for_sub_type,
     claim_profile_for,
     required_doc_slots,
@@ -83,7 +85,14 @@ from app.services.claim_intake import (
 from app.services.claim_intake_suggest import build_intake_suggestion
 from app.services.claim_messages import post_system_message
 from app.services.claims import (
+    MEMBER_AMENDABLE_FIELDS,
+    amendment_summary,
+    apply_claim_amendment,
+    assert_claim_revision,
+    assert_member_may_amend,
     attach_document,
+    audit_cells,
+    claim_documents,
     claim_period_window,
     claim_to_out,
     claims_to_out,
@@ -91,7 +100,9 @@ from app.services.claims import (
     delete_documents,
     delete_stored_document,
     load_member_claim,
+    stamp_document_amendment,
     submit_claim,
+    supersede_review_for_amendment,
 )
 from app.services.claims_review.pipeline import run_review
 from app.services.doc_images import DocImageError, vision_blocks_for_document
@@ -693,13 +704,148 @@ async def upload_my_claim_document(
         uploaded_by_member_id=member.member_account_id,
         doc_type=doc_type,
     )
+    # Adding evidence moves the claim just as removing it does — a verdict that
+    # ran without this document is describing a different claim, and a broker
+    # who read the claim before it landed must not decide as if they had seen
+    # it. No-op on a draft.
+    stamp_document_amendment(db, claim)
     write_member_audit(
         db, member, "claim.document_added", "claim", claim.id,
-        after={"file_name": doc.file_name, "sha256": doc.sha256, "doc_type": doc.doc_type},
+        after={
+            "file_name": doc.file_name,
+            "sha256": doc.sha256,
+            "doc_type": doc.doc_type,
+            "revision": claim.revision,
+        },
         employee_id=employee.id,
     )
     db.commit()
     return StoredDocumentOut.model_validate(doc)
+
+
+@router.patch("/{claim_id}", response_model=ClaimOut)
+@limiter.limit("20/minute")
+def amend_my_claim(
+    request: Request,
+    claim_id: str,
+    body: ClaimAmendIn,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> ClaimOut:
+    """Correct a claim the broker has not yet decided.
+
+    RESPOND, plus CLAIM on a draft — the same split as `submit_my_claim`, for
+    the same reason: correcting an open claim is acting on something that
+    already exists (exactly what the `settling` state exists to keep possible),
+    while finishing a draft is starting a new claim and must not be available to
+    someone past their run-off.
+
+    The merged claim is re-validated by the same chain submit runs, so an
+    amendment can only ever leave behind a claim that would pass submit — the
+    broker's queue can never hold an invalid row.
+    """
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
+    claim = _own_claim(db, claim_id, employee.id)
+    if claim.status == CLAIM_STATUS_DRAFT:
+        assert_member_capability(db, employee, Capability.CLAIM)
+    assert_member_may_amend(claim)
+    assert_claim_revision(claim, body.expected_revision)
+
+    before, after = apply_claim_amendment(
+        db, claim, body, employee, allowed=MEMBER_AMENDABLE_FIELDS
+    )
+    supersede_review_for_amendment(db, claim)
+    # Their own record of what they did, and what tells the broker the claim
+    # they are holding has moved. A DRAFT has no thread — nothing has been sent.
+    if claim.status != CLAIM_STATUS_DRAFT:
+        post_system_message(
+            db, claim, EVENT_AMENDED, note=amendment_summary(after)
+        )
+    write_member_audit(
+        db, member, "claim.amended", "claim", claim.id,
+        before=audit_cells(before),
+        after={**audit_cells(after), "revision": claim.revision},
+        employee_id=employee.id,
+    )
+    db.commit()
+    return claim_to_out(db, claim)
+
+
+@router.delete(
+    "/{claim_id}/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_my_claim_document(
+    claim_id: str,
+    doc_id: str,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove a document from a claim the broker has not yet decided.
+
+    Correcting a claim usually means replacing the wrong receipt, so this is
+    the other half of the amendment surface and shares its gate exactly.
+
+    **On a non-draft claim the remaining documents must still satisfy every
+    required slot.** A submitted claim is in front of an assessor, and deleting
+    its only receipt would park a claim there that can never be progressed. A
+    draft may go empty — it is in front of nobody, and submit will ask for the
+    documents when it is sent.
+    """
+    employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
+    claim = _own_claim(db, claim_id, employee.id)
+    if claim.status == CLAIM_STATUS_DRAFT:
+        assert_member_capability(db, employee, Capability.CLAIM)
+    assert_member_may_amend(claim)
+
+    doc = db.get(StoredDocument, doc_id)
+    # This claim's OWN attachments only. The member-level referral letter has
+    # its own endpoint with its own in-use guard — reaching it through here
+    # would strand every other claim riding on the same letter.
+    if (
+        doc is None
+        or doc.entity_type != DOC_ENTITY_CLAIM
+        or doc.entity_id != claim.id
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+
+    if claim.status != CLAIM_STATUS_DRAFT:
+        remaining = [d for d in claim_documents(db, claim) if d.id != doc.id]
+        try:
+            assert_documents_satisfy_slots(
+                required_doc_slots(
+                    claim.product_code,
+                    claim.sub_type,
+                    claim.provider_name,
+                    claim_kind=claim.claim_kind,
+                ),
+                remaining,
+            )
+        except HTTPException as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "documents_required",
+                    "message": (
+                        "Removing this would leave the claim without a document "
+                        "it needs. Add the replacement first, then remove this "
+                        "one."
+                    ),
+                    "detail": exc.detail,
+                },
+            ) from exc
+
+    delete_stored_document(db, doc)
+    # Evidence IS what a verdict is about, so removing a document invalidates
+    # one exactly as changing a figure does.
+    stamp_document_amendment(db, claim)
+    write_member_audit(
+        db, member, "claim.document_removed", "claim", claim.id,
+        before={"file_name": doc.file_name, "sha256": doc.sha256,
+                "doc_type": doc.doc_type},
+        after={"revision": claim.revision},
+        employee_id=employee.id,
+    )
+    db.commit()
 
 
 @router.delete("/{claim_id}", status_code=status.HTTP_204_NO_CONTENT)

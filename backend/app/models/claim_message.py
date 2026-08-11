@@ -54,6 +54,15 @@ EVENT_NEEDS_INFO = "needs_info"
 # is this one. Folding it into the approval notice would have us tell them the
 # money had arrived before it had.
 EVENT_PAID = "paid"
+# The MEMBER changed their own claim, or its documents, before it was decided.
+#
+# Posted to their thread rather than left to the audit log alone, for two
+# reasons: it is the member's own record of what they did, and it is what tells
+# the broker the claim they are holding has moved. The notice names WHICH fields
+# changed and not their values — the claim page the thread sits on already
+# prints every current value, and the before/after belongs in `AuditLog`, which
+# is the one history (see docs/CLAIM_AMENDMENT_PLAN.md §4.5).
+EVENT_AMENDED = "amended"
 
 # NOTE: no AUTHOR_TYPES set and no MAX_BODY_CHARS here. Both existed, both were
 # referenced by nothing, and the body caps that are actually ENFORCED live on

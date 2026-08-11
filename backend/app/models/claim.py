@@ -69,6 +69,23 @@ CLAIM_STATUSES = frozenset(
     }
 )
 
+# States whose position in the machine is OWNED by the AI review — it either
+# has the claim or has just answered on it.
+#
+# An amendment invalidates any verdict on the claim (the review compares
+# documents against `form_fields`, so once those change it describes a claim
+# that no longer exists), and these are exactly the states that then have to
+# fall back to plain `submitted` for manual review. `needs_info` and `submitted`
+# do not: the review is superseded either way, but their status already says
+# what is true.
+AI_REVIEW_STATUSES = frozenset(
+    {
+        CLAIM_STATUS_AI_REVIEW_PENDING,
+        CLAIM_STATUS_AI_VERIFIED,
+        CLAIM_STATUS_AI_FLAGGED,
+    }
+)
+
 # States a broker may decide from (approve / reject / needs_info).
 DECIDABLE_STATUSES = frozenset(
     {

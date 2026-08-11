@@ -244,6 +244,33 @@ def test_claim_thread_of_an_unknown_claim_404(anon: TestClient):
     )
 
 
+def test_amending_an_unknown_claim_404(anon: TestClient):
+    """The amendment surface goes through `load_member_claim` like everything
+    else, so a claim id the member doesn't own is simply not found — never a
+    403, which would confirm the id exists.
+
+    Both endpoints, because they are separate handlers: an edit that scoped
+    correctly beside a document delete that didn't would leak exactly the same
+    thing.
+    """
+    ghost = "00000000-0000-0000-0000-0000000000ff"
+    assert (
+        anon.patch(
+            f"/api/v1/portal/claims/{ghost}",
+            json={"amount_claimed": 12.0},
+            headers=_auth(ACC_ALICE),
+        ).status_code
+        == 404
+    )
+    assert (
+        anon.delete(
+            f"/api/v1/portal/claims/{ghost}/documents/{ghost}",
+            headers=_auth(ACC_ALICE),
+        ).status_code
+        == 404
+    )
+
+
 def test_token_client_mismatch_401(anon: TestClient):
     """A token minted for another client than the account's is refused —
     same staff_id in two clients must never cross."""
