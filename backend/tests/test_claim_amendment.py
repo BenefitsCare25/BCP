@@ -429,6 +429,54 @@ def test_an_amendment_supersedes_the_ai_verdict(anon: TestClient):
         assert reviews and all(r.superseded for r in reviews)
 
 
+def test_a_verdict_cannot_land_on_a_claim_amended_under_it(anon: TestClient):
+    """The pipeline's status guard has to read the DATABASE, not its own copy.
+
+    `run_review` opens its own session, loads the claim ONCE, then spends tens
+    of seconds in the provider and commits only at the very end — `ai_gateway`
+    commits its spend counter on a SEPARATE session, so nothing expires the
+    pipeline's copy in between. So `claim.status` in memory is the status as it
+    was when the run STARTED, and a member amending inside that window was
+    silently overwritten.
+
+    The result was the bad kind of wrong: the claim lands on `ai_verified` while
+    its only review is superseded, so `_latest_review` returns None and the
+    broker is shown a verified verdict with no review behind it — computed
+    against values the claim no longer holds.
+
+    This reproduces the interleaving directly: hold the claim in one session,
+    amend it through another, then let the first one finalize.
+    """
+    from app.models.claim_ai_review import REVIEW_VERDICT_CLEAN
+    from app.services.claims_review.pipeline import _finalize_claim_status
+
+    claim = _submitted(anon, b" race")  # parked at ai_review_pending
+    assert _get(anon, claim["id"])["status"] == "ai_review_pending"
+
+    pipeline_db = SessionLocal()
+    try:
+        # The pipeline's copy, loaded before the AI calls. No rollback here:
+        # `Session.rollback()` EXPIRES every object, which would reload the very
+        # staleness this test is about. pysqlite opens no transaction for a
+        # plain SELECT, so nothing is holding a lock against the write below.
+        loaded = pipeline_db.get(Claim, claim["id"])
+        assert loaded.status == "ai_review_pending"
+
+        # ── the member amends, in their own committed transaction ──
+        assert _amend(anon, claim["id"], amount_claimed=77.0).status_code == 200
+
+        # ── the pipeline finishes and writes its verdict ──
+        _finalize_claim_status(pipeline_db, loaded, REVIEW_VERDICT_CLEAN)
+        pipeline_db.commit()
+    finally:
+        pipeline_db.close()
+
+    # The amendment stands, and the verdict did not land on top of it.
+    body = _get(anon, claim["id"])
+    assert body["status"] == "submitted"
+    assert body["amount_claimed"] == 77.0
+
+
 def test_a_stale_revision_is_refused(anon: TestClient):
     """Two devices on one claim is the ordinary case, not an exotic one."""
     claim = _submitted(anon, b" stale")
@@ -991,6 +1039,52 @@ def test_switching_a_claim_to_flex_drops_the_insured_benefit_key(
     )
     assert res.status_code == 200, res.text
     assert res.json()["benefit_key"] is None
+
+
+def test_a_settled_claim_stays_correctable_after_its_coverage_moves(
+    anon: TestClient, broker: TestClient, monkeypatch
+):
+    """Re-asking "is this member covered for this?" is ADMITTING the claim, and
+    an amendment that does not repoint it is not re-admitting it.
+
+    The statement resolves CURRENT coverage, and coverage moves — a slip
+    re-upload rematches categories. Re-running the gate on every amendment made
+    a claim uncorrectable the moment its line shifted, including a PAID one,
+    which is precisely the case the reason-required path exists to allow.
+    """
+    claim = _submitted(anon, b" cover-moved")
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
+    ).status_code == 200
+
+    # The member's coverage no longer carries GHS at all.
+    def _no_ghs(db, emp):
+        statement = _statement_for(emp)
+        statement.coverage = [
+            line for line in statement.coverage if line.product_code != "GHS"
+        ]
+        return statement
+
+    from app.services import claims as claims_service
+
+    monkeypatch.setattr(claims_service, "build_member_statement", _no_ghs)
+
+    # Correcting a figure still works — the claim was admitted long ago.
+    res = broker.patch(
+        f"/api/v1/claims/{claim['id']}",
+        json={"amount_claimed": 51.0, "reason": "Invoice re-read"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 51.0
+
+    # REPOINTING it still runs the gate in full, so a claim can never be moved
+    # onto cover the member does not have.
+    res = broker.patch(
+        f"/api/v1/claims/{claim['id']}",
+        json={"product_code": "GHS", "reason": "wrong product"},
+    )
+    assert res.status_code == 422
+    assert "no GHS coverage" in res.json()["detail"]
 
 
 def test_a_broker_amendment_runs_the_same_validation(

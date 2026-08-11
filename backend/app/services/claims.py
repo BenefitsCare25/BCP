@@ -882,6 +882,7 @@ def validate_claim_facts(
     enforce_doctor_name: bool,
     enforce_documents: bool = True,
     clear_rider_key: bool = False,
+    recheck_coverage: bool = True,
     window: ClaimWindow | None = None,
 ) -> ClaimWindow:
     """Everything submit checks about the CLAIM ITSELF. Returns its window.
@@ -997,9 +998,29 @@ def validate_claim_facts(
                 claim.doctor_name,
                 claim_kind=claim.claim_kind,
             )
-    statement = build_member_statement(db, employee)
-    _apply_gp_rider_benefit_key(statement, claim, clear_rider_key=clear_rider_key)
-    assert_coverage_claimable(statement, claim)
+    # **Re-asking "is this member covered for this?" is ADMITTING the claim, and
+    # an amendment that does not touch what the claim draws on is not
+    # re-admitting it.**
+    #
+    # The statement is resolved from CURRENT coverage, and coverage moves: a
+    # slip re-upload rematches categories, a product gets marked non-member-
+    # claimable. Re-running the gate on every amendment therefore made a claim
+    # UNCORRECTABLE the moment its coverage line shifted — including a PAID one,
+    # which is exactly the case the reason-required path exists to allow. The
+    # question was already answered, by us, when the claim was admitted; asking
+    # it again years later against mutated data is a data-freshness accident
+    # blocking a correction, not a safety check.
+    #
+    # What it still protects is REPOINTING a claim: change the product, the
+    # kind, the claimant or the benefit item and the gate runs in full. So a
+    # broker cannot move a claim onto cover the member never had, which is the
+    # only thing this was ever guarding.
+    if recheck_coverage:
+        statement = build_member_statement(db, employee)
+        _apply_gp_rider_benefit_key(
+            statement, claim, clear_rider_key=clear_rider_key
+        )
+        assert_coverage_claimable(statement, claim)
     # The document requirements are the member form's too — a LOG case is
     # routinely recorded with nothing attached yet (see above).
     if enforce_documents and from_member_form:
@@ -1164,6 +1185,21 @@ BROKER_AMENDABLE_FIELDS = (MEMBER_AMENDABLE_FIELDS - {"remarks"}) | {"benefit_ke
 
 _REFERRAL_FLAG = "referral_not_applicable"
 
+# The fields that decide WHAT a claim draws on. Touch one and the amendment is
+# repointing the claim, so the coverage gate runs in full; touch none and it is
+# correcting a figure or a date on a claim that was already admitted. See
+# `validate_claim_facts`'s `recheck_coverage`.
+COVERAGE_FIELDS = frozenset(
+    {
+        "claim_kind",
+        "product_code",
+        "flex_category_name",
+        "sub_type",
+        "dependant_id",
+        "benefit_key",
+    }
+)
+
 # States in which correcting a claim is rewriting settled history rather than
 # fixing a live record, and therefore has to say why. `rejected` is in here with
 # the settled three: the member has been told the outcome either way.
@@ -1309,6 +1345,8 @@ def apply_claim_amendment(
             or "claim_kind" in columns
             or "product_code" in columns
         ),
+        # Only when the amendment REPOINTS the claim — see the function.
+        recheck_coverage=bool(columns & COVERAGE_FIELDS),
     )
     # Re-snapshot in FULL after validation, which normalizes `sub_type` and may
     # relink the referral letter.
