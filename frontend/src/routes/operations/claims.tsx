@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
 import {
   DOC_TYPE_LABELS,
@@ -244,6 +245,7 @@ function QueueTab({
   const [relabelTo, setRelabelTo] = useState<CaseType | null>(null);
   const [relabelReason, setRelabelReason] = useState("");
 
+  const qc = useQueryClient();
   const decide = useDecideClaim();
   const sendToInsurer = useSendToInsurer();
   const recordPayment = useRecordClaimPayment();
@@ -381,8 +383,16 @@ function QueueTab({
         // The member corrected the claim while this sheet was open. CLOSE the
         // dialog and refetch rather than letting them confirm again — the whole
         // point is that they have not yet seen what they would be deciding on.
+        //
+        // The LIST is what has to be invalidated, not just the detail: `selected`
+        // prefers the list row (see its memo), and that query has a 30s
+        // staleTime — so refetching only the detail left the sheet showing the
+        // pre-amendment figures and re-confirming sent the same stale
+        // `expectedRevision` straight into another 409. Which is the failure
+        // this branch exists to end, not to repeat.
         setDecision(null);
-        void detail.refetch();
+        void qc.invalidateQueries({ queryKey: ["claims"] });
+        void qc.invalidateQueries({ queryKey: ["claim-detail"] });
         toast.error(err.message);
         return;
       }
@@ -515,20 +525,27 @@ function QueueTab({
                             {c.unread_member_messages} new
                           </Badge>
                         )}
-                        {/* The member changed this claim. Its OWN signal, not a
+                        {/* The MEMBER changed this claim. Its OWN signal, not a
                             reuse of the unread badge: that one counts
                             MEMBER-AUTHORED messages and would never fire for an
                             automatic amendment notice — so a claim that moved
                             under an assessor would otherwise look untouched
                             until they opened it.
 
+                            Read off `amended_by`, NOT `amended_at`. Three
+                            writers stamp that timestamp — the member's edit,
+                            the member's document change, and the ASSESSOR'S OWN
+                            correction — so gated on it this flagged an
+                            assessor's own save straight back at them, which is
+                            the one thing the badge must never mean.
+
                             Scoped to claims still awaiting a decision. Nothing
-                            ever clears `amended_at`, so an unscoped chip is
+                            ever clears the stamp, so an unscoped chip is
                             permanent: every claim ever corrected would wear it
                             forever, including ones long since decided, and a
                             badge that never goes away stops meaning "look at
                             this" — which is the only thing it is for. */}
-                        {c.amended_at && DECIDABLE.has(c.status) && (
+                        {c.amended_by === "member" && DECIDABLE.has(c.status) && (
                           <Badge variant="warn" className="ml-2 align-middle">
                             Amended
                           </Badge>
@@ -777,13 +794,12 @@ function QueueTab({
                     different audit actions, and once a claim is settled two
                     different bars. */}
                 <DetailSection title="Claim details">
-                  <ClaimAmendPanel
-                    // Remounted per revision so the form always starts from the
-                    // current values — including after a member amended it
-                    // under us.
-                    key={selected.revision}
-                    claim={selected}
-                  />
+                  {/* Keyed on the CLAIM, not on its revision. Per-revision
+                      remounting threw away whatever the assessor had typed
+                      every time the claim moved — including on the member's own
+                      document uploads. The panel now holds its own baseline and
+                      says when the claim has moved past it. */}
+                  <ClaimAmendPanel key={selected.id} claim={selected} />
                 </DetailSection>
 
                 {/* The assessor's own fields. Directly above Documents because

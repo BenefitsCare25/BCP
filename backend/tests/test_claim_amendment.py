@@ -1095,3 +1095,93 @@ def test_a_broker_amendment_runs_the_same_validation(
     claim = _submitted(anon, b" bk-valid")
     assert _broker_amend(broker, claim["id"], incurred_date="2030-01-01").status_code == 422
     assert _broker_amend(broker, claim["id"], product_code="NOPE").status_code == 422
+
+
+def test_a_settled_claim_stays_correctable_after_its_cover_period_moves(
+    anon: TestClient, broker: TestClient, monkeypatch
+):
+    """The same trap as the coverage gate above, one branch up — and it survived
+    the first fix.
+
+    A claim's window is resolved from CURRENT data and the window MOVES: the end
+    is `cover_end(employee)`, which arrives from a roster or ADC load AFTER the
+    claim was filed. So a member incurs on 15 June, the claim is approved, the
+    termination is loaded later with a last day in May — and every correction to
+    that settled claim 422'd on a date nobody was changing, permanently
+    disabling the reason-required path for exactly the claim it exists for.
+    """
+    claim = _submitted(anon, b" period-moved")
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
+    ).status_code == 200
+
+    # The termination lands afterwards: cover ended a month BEFORE the visit.
+    from app.services import claims as claims_service
+
+    monkeypatch.setattr(
+        claims_service, "cover_end", lambda emp: date(2027, 5, 1)
+    )
+
+    res = broker.patch(
+        f"/api/v1/claims/{claim['id']}",
+        json={"amount_claimed": 61.0, "reason": "Invoice re-read"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 61.0
+
+    # MOVING the date still runs the window in full — that is the only edit that
+    # can put a claim outside its period.
+    res = broker.patch(
+        f"/api/v1/claims/{claim['id']}",
+        json={"incurred_date": "2027-06-20", "reason": "wrong day"},
+    )
+    assert res.status_code == 422
+    assert "cover period" in res.json()["detail"]
+
+
+def test_a_broker_may_not_silently_repoint_a_riders_benefit_key(
+    anon: TestClient, broker: TestClient
+):
+    """`benefit_key` is the one field the broker's set adds, and on a rider claim
+    it is DERIVED from the sub-type — so it used to be overwritten by the
+    derivation with the audit row recording the overwrite as the broker's edit.
+    A stated key that disagrees is refused; the matching one is a no-op."""
+    claim = _submitted(
+        anon, b" bk-explicit",
+        product_code="GCGP",
+        claim_type="TCM (Traditional Chinese Medicine)",
+        sub_type="TCM (Traditional Chinese Medicine)",
+        diagnosis="Other: lower back pain",
+    )
+    assert claim["benefit_key"] == "TCM & Chiropractor"
+
+    res = _broker_amend(broker, claim["id"], benefit_key="Consultation")
+    assert res.status_code == 422
+    assert _code(res) == "benefit_key_derived"
+    # And nothing was written.
+    assert _get(anon, claim["id"])["benefit_key"] == "TCM & Chiropractor"
+
+    # Restating the derived value changes nothing and is not an error.
+    res = _broker_amend(broker, claim["id"], benefit_key="TCM & Chiropractor")
+    assert res.status_code == 200, res.text
+    assert res.json()["benefit_key"] == "TCM & Chiropractor"
+
+
+def test_the_amendment_actor_is_recorded(anon: TestClient, broker: TestClient):
+    """The queue's "Amended" chip means "this moved UNDER you", and all three
+    amendment writers stamp `amended_at` — including the assessor's own
+    correction, which the chip would then flag straight back at them."""
+    claim = _submitted(anon, b" actor")
+    assert claim["amended_by"] is None
+
+    assert _amend(anon, claim["id"], amount_claimed=90.0).status_code == 200
+    assert _get(anon, claim["id"])["amended_by"] == "member"
+
+    res = _broker_amend(broker, claim["id"], amount_claimed=95.0)
+    assert res.status_code == 200, res.text
+    assert res.json()["amended_by"] == "broker"
+
+    # A document the member attaches is theirs too — the assessor has not seen
+    # it, which is the whole reason it bumps the revision.
+    assert _upload(anon, claim["id"], b" actor-doc").status_code == 200
+    assert _get(anon, claim["id"])["amended_by"] == "member"

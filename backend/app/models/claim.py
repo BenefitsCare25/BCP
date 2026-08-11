@@ -270,6 +270,14 @@ CASE_TYPES = frozenset({CASE_TYPE_CLAIM, CASE_TYPE_LOG})
 # column). Broker vocabulary — members never see the string "LOG".
 LOG_CLAIM_TYPE = "LOG"
 
+# ── Amendment actor ──────────────────────────────────────────────────────────
+#
+# Who last corrected the claim (`Claim.amended_by`). Deliberately the SURFACE
+# and not a user id: the only question anyone asks of it is "did this move under
+# me?", and the audit trail already records exactly who did it.
+AMENDED_BY_MEMBER = "member"
+AMENDED_BY_BROKER = "broker"
+
 # ── Origin ───────────────────────────────────────────────────────────────────
 #
 # Who put this row here, which is a DIFFERENT question from what kind of case it
@@ -418,15 +426,23 @@ class Claim(Base, TimestampMixin):
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
-    # When the claim was last amended. Drives the queue's "Amended" chip, so a
-    # broker sees a claim moved under them without opening it — the unread badge
-    # counts MEMBER-authored messages and would not fire for a system notice.
+    # When the claim was last amended.
     #
     # A server-set instant (the moment the edit happened), not a date anyone
     # typed, so `datetime.now(UTC)` is right here and `stamp_for_day` is not.
     amended_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # WHO made that last amendment — `member` or `broker`.
+    #
+    # It exists because the queue's "Amended" chip means one specific thing:
+    # this claim moved UNDER the assessor. Three writers stamp `amended_at` —
+    # the member's edit, the member adding or removing a document, and the
+    # broker's own correction — so a chip gated on the timestamp alone flags an
+    # assessor's own edit back at them the instant they save it, which is the
+    # one reading the badge must never have. Nothing else reads this column;
+    # `revision` remains the concurrency guard for every actor alike.
+    amended_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # ── Human-quotable reference ─────────────────────────────────────────────
     #

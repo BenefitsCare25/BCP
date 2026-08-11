@@ -92,12 +92,18 @@ function changedFields(before: Draft, now: Draft): ClaimAmendInput {
 
 export function ClaimEditSheet({
   claim,
+  expectedRevision,
   saving = false,
   error,
   onSave,
   onCancel,
 }: {
   claim: PortalClaim;
+  /** The revision the member has actually SEEN — owned by the page, because
+   *  only it knows which bumps were the member's own doing (see the caller).
+   *  Sent with the save so a change nobody showed them is refused rather than
+   *  silently overwritten. */
+  expectedRevision: number;
   saving?: boolean;
   /** Whatever the server said — this form does not second-guess it. */
   error?: string | null;
@@ -124,9 +130,7 @@ export function ClaimEditSheet({
       onSubmit={(e) => {
         e.preventDefault();
         if (!dirty || !amountValid) return;
-        // The revision the sheet OPENED on, so a change that landed while it
-        // was open is refused rather than silently overwritten.
-        onSave({ ...patch, expected_revision: claim.revision });
+        onSave({ ...patch, expected_revision: expectedRevision });
       }}
     >
       {error && <FormAlert>{error}</FormAlert>}

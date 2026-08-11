@@ -298,6 +298,12 @@ class ClaimOut(_Base):
     # claim is the ordinary case, not an exotic one.
     revision: int = 0
     amended_at: datetime | None = None
+    # Which SURFACE made that last correction — `member` or `broker`, NULL on a
+    # claim amended before the column existed. The broker queue's "Amended" chip
+    # reads this and not the timestamp: all three amendment writers stamp
+    # `amended_at`, so a chip on the timestamp alone flags an assessor's own
+    # correction back at them. See `Claim.amended_by`.
+    amended_by: str | None = None
 
 
 class ClaimList(BaseModel):

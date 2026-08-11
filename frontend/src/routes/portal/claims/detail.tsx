@@ -68,6 +68,22 @@ export function PortalClaimDetailPage() {
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [removingDocId, setRemovingDocId] = useState<string | null>(null);
+  // The revision the member has SEEN, which is NOT simply the latest one.
+  //
+  // Every document they attach or remove bumps the claim's revision server-side
+  // (`stamp_document_amendment`) — and "fix the figure AND replace the receipt"
+  // is the ordinary correction, with the Documents card sitting live below the
+  // open sheet. So the sheet cannot key its concurrency token off the current
+  // revision (a broker's correction would then be overwritten unseen) NOR off
+  // the one it opened on (the member's own upload would 409 them out of their
+  // own edit). It tracks the bumps THEY caused: set when the sheet opens,
+  // advanced by their own document changes, and left behind by anyone else's.
+  //
+  // For the same reason the sheet is NOT remounted on `data.revision`. It was,
+  // and attaching a receipt mid-edit silently discarded everything typed — the
+  // form re-captured its baseline from the refetch with nothing on screen to
+  // say so. It unmounts on close, which is all the reset a reopen needs.
+  const [seenRevision, setSeenRevision] = useState(0);
   useDocumentTitle(claim.data ? claimTitle(claim.data) : "Claim");
 
   // Opening the claim IS opening the thread — it is rendered in full below, so
@@ -104,6 +120,13 @@ export function PortalClaimDetailPage() {
 
   const data = claim.data;
 
+  /** Refetch, and record the resulting revision as one the member has seen —
+   *  for use after an action THEY took. */
+  const refetchAsSeen = async () => {
+    const next = await claim.refetch();
+    if (next.data) setSeenRevision(next.data.revision);
+  };
+
   const addDocument = async (file: File | undefined, docType?: string) => {
     if (!file) return;
     if (file.size > CLAIM_DOC_MAX_BYTES) {
@@ -112,7 +135,7 @@ export function PortalClaimDetailPage() {
     }
     try {
       await uploadDoc.mutateAsync({ claimId: data.id, file, docType });
-      await claim.refetch();
+      await refetchAsSeen();
       toast.success("Added");
     } catch (err) {
       toast.error(formatError(err));
@@ -143,7 +166,7 @@ export function PortalClaimDetailPage() {
     setEditError(null);
     try {
       await amendClaim.mutateAsync({ claimId: data.id, patch });
-      await claim.refetch();
+      await refetchAsSeen();
       setEditing(false);
       toast.success("Updated");
     } catch (err) {
@@ -151,6 +174,13 @@ export function PortalClaimDetailPage() {
       // the one they need — a duplicate invoice number, a date outside the
       // policy year, a claim someone decided while the sheet was open.
       setEditError(formatError(err));
+      // And the page BEHIND the sheet is refreshed, deliberately without
+      // advancing `seenRevision`. A refusal is often a refusal ABOUT the record
+      // ("this claim was changed after you opened it" / "a broker has decided
+      // it"), and without this the member was reading a stale claim under an
+      // error explaining it — with no way back but leaving the page. What they
+      // typed is untouched; only the record below it catches up.
+      void claim.refetch();
     }
   };
 
@@ -158,7 +188,7 @@ export function PortalClaimDetailPage() {
     setRemovingDocId(docId);
     try {
       await removeDoc.mutateAsync({ claimId: data.id, docId });
-      await claim.refetch();
+      await refetchAsSeen();
       toast.success("Removed");
     } catch (err) {
       toast.error(formatError(err));
@@ -191,6 +221,7 @@ export function PortalClaimDetailPage() {
       submitting={submitClaim.isPending}
       onEdit={() => {
         setEditError(null);
+        setSeenRevision(data.revision);
         setEditing(true);
       }}
       onRemoveDocument={(docId) => void removeDocument(docId)}
@@ -198,11 +229,8 @@ export function PortalClaimDetailPage() {
       editing={
         editing ? (
           <ClaimEditSheet
-            // Remounted per revision, so a save that succeeded and then a
-            // reopen starts from the CURRENT values rather than the ones the
-            // component first captured.
-            key={data.revision}
             claim={data}
+            expectedRevision={seenRevision}
             saving={amendClaim.isPending}
             error={editError}
             onSave={(patch) => void saveEdit(patch)}

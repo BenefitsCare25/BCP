@@ -39,6 +39,7 @@ from app.core.uploads import saved_upload
 from app.db.session import get_db
 from app.models import Claim, ClaimAIReview, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
+    AMENDED_BY_MEMBER,
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
     CLAIM_STATUS_AI_REVIEW_PENDING,
@@ -754,7 +755,9 @@ def amend_my_claim(
     assert_claim_revision(claim, body.expected_revision)
 
     before, after = apply_claim_amendment(
-        db, claim, body, employee, allowed=MEMBER_AMENDABLE_FIELDS
+        db, claim, body, employee,
+        allowed=MEMBER_AMENDABLE_FIELDS,
+        actor=AMENDED_BY_MEMBER,
     )
     supersede_review_for_amendment(db, claim)
     # Their own record of what they did, and what tells the broker the claim

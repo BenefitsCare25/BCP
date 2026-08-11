@@ -178,9 +178,13 @@ export interface BrokerClaim {
    *  it an assessor can read $150, have it changed to $105 under them, and
    *  approve a figure that is no longer on the claim. */
   revision: number;
-  /** When the claim was last corrected — drives the queue's Amended chip, so a
-   *  claim that moved is visible without opening it. Null = never amended. */
+  /** When the claim was last corrected. Null = never amended. */
   amended_at: string | null;
+  /** WHICH SURFACE made that correction — `"member"` or `"broker"`, null on a
+   *  claim amended before the column existed. The queue's Amended chip reads
+   *  THIS: `amended_at` is stamped by the assessor's own correction too, so a
+   *  chip on the timestamp flagged their own save back at them. */
+  amended_by: "member" | "broker" | null;
   /** Whether the CLAIMANT may still edit. Broker-side this is context, not a
    *  gate: a broker may amend in any status (with a reason once settled). */
   member_editable: boolean;

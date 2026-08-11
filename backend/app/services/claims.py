@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.models.claim import (
     AI_REVIEW_STATUSES,
+    AMENDED_BY_MEMBER,
     CASE_TYPE_CLAIM,
     CASE_TYPE_LOG,
     CLAIM_KIND_FLEX,
@@ -566,7 +567,11 @@ def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
 
 
 def _apply_gp_rider_benefit_key(
-    statement: BenefitStatementOut, claim: Claim, *, clear_rider_key: bool = False
+    statement: BenefitStatementOut,
+    claim: Claim,
+    *,
+    clear_rider_key: bool = False,
+    explicit_benefit_key: bool = False,
 ) -> None:
     """TCM/Physio claims ride on GP coverage: bind the claim to the plan's
     matching schedule row — 422 when the member's plan doesn't carry one — so
@@ -585,12 +590,22 @@ def _apply_gp_rider_benefit_key(
     never at submit: a legacy row carries a `benefit_key` from before the column
     stopped being populated, and blanking those on a `needs_info` resubmission
     would move their bucket for no reason at all.
+
+    ``explicit_benefit_key`` says the CALLER named the key — only a broker
+    amendment can, `benefit_key` being the one field their set adds. Without it
+    this function silently overwrote exactly the claims where the key matters:
+    a rider claim's key is derived from its sub-type, so a broker who set one
+    got the derived value stored and the audit row recorded the overwrite as
+    though it were their edit. A stated key that disagrees is now REFUSED rather
+    than swallowed — and on a non-rider claim it survives the rider clear, since
+    an assessor naming a bucket in the same patch that moves the sub-type plainly
+    means the one they named.
     """
     is_rider = (
         claim.claim_kind == CLAIM_KIND_INSURED and claim.sub_type in GP_SUB_TYPES
     )
     if not is_rider:
-        if clear_rider_key:
+        if clear_rider_key and not explicit_benefit_key:
             # Also correct for an insured→flex amendment: a flex claim has no
             # business carrying an insured schedule row.
             claim.benefit_key = None
@@ -607,6 +622,17 @@ def _apply_gp_rider_benefit_key(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"Your {claim.product_code} plan does not include "
             f"{claim.sub_type} cover.",
+        )
+    if explicit_benefit_key and (claim.benefit_key or "").strip() != row:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "benefit_key_derived",
+                "message": (
+                    f"A {claim.sub_type} claim always draws on '{row}'. Change "
+                    "the claim type to move it to a different benefit."
+                ),
+            },
         )
     claim.benefit_key = row
 
@@ -883,6 +909,8 @@ def validate_claim_facts(
     enforce_documents: bool = True,
     clear_rider_key: bool = False,
     recheck_coverage: bool = True,
+    recheck_period: bool = True,
+    explicit_benefit_key: bool = False,
     window: ClaimWindow | None = None,
 ) -> ClaimWindow:
     """Everything submit checks about the CLAIM ITSELF. Returns its window.
@@ -933,7 +961,25 @@ def validate_claim_facts(
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "Policy year not found"
             )
-        window = assert_incurred_in_period(db, year, claim, employee)
+        # **The same trap as `recheck_coverage` below, one branch up.** The
+        # window is resolved from CURRENT data and the window MOVES: a leaver's
+        # end is `cover_end(employee)`, which arrives from a roster or ADC load
+        # AFTER the claim was filed, and a flex claim's is the scheme's
+        # `meta.effective_start/_end`, which a broker can edit. Re-asserting it
+        # on every amendment therefore made a claim uncorrectable the moment its
+        # window narrowed underneath it — a member incurs on 1 March, the claim
+        # is paid, the termination is loaded later with a last day of 15
+        # February, and every broker correction to that PAID claim 422s on a
+        # date nobody is changing. That is precisely the claim the
+        # reason-required path exists to allow.
+        #
+        # It still runs in full whenever the amendment touches the date or the
+        # kind that selects the window, which is the only way a claim can be
+        # moved OUTSIDE its period by an edit.
+        if recheck_period:
+            window = assert_incurred_in_period(db, year, claim, employee)
+        else:
+            window = claim_period_window(db, year, claim.claim_kind, employee)
 
     # Re-run the intake rules so a draft created before a rule (or profile)
     # change can't slip through with a missing sub-type/referral. A draft
@@ -1018,7 +1064,10 @@ def validate_claim_facts(
     if recheck_coverage:
         statement = build_member_statement(db, employee)
         _apply_gp_rider_benefit_key(
-            statement, claim, clear_rider_key=clear_rider_key
+            statement,
+            claim,
+            clear_rider_key=clear_rider_key,
+            explicit_benefit_key=explicit_benefit_key,
         )
         assert_coverage_claimable(statement, claim)
     # The document requirements are the member form's too — a LOG case is
@@ -1200,6 +1249,13 @@ COVERAGE_FIELDS = frozenset(
     }
 )
 
+# The fields that can move a claim OUTSIDE its period — the date itself, and the
+# kind that selects WHICH period applies (flex effective window vs policy year).
+# Touch neither and the amendment cannot have broken a window that was already
+# satisfied, so re-asserting it can only refuse a correction for a reason the
+# correction did not create. See `validate_claim_facts`'s `recheck_period`.
+PERIOD_FIELDS = frozenset({"incurred_date", "claim_kind"})
+
 # States in which correcting a claim is rewriting settled history rather than
 # fixing a live record, and therefore has to say why. `rejected` is in here with
 # the settled three: the member has been told the outcome either way.
@@ -1282,13 +1338,19 @@ def apply_claim_amendment(
     employee: Employee,
     *,
     allowed: frozenset[str],
+    actor: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge a partial amendment onto a claim, re-validate it, stamp it.
 
     Returns ``(before, after)`` for the audit row. Shared by the member and
-    broker endpoints, which differ only in ``allowed`` and in what their callers
-    do afterwards — the merge, the validation and the stamping are one
-    implementation so the two surfaces cannot store a claim differently.
+    broker endpoints, which differ only in ``allowed``, in ``actor``, and in
+    what their callers do afterwards — the merge, the validation and the
+    stamping are one implementation so the two surfaces cannot store a claim
+    differently.
+
+    ``actor`` is stamped on `Claim.amended_by` and is what the queue's "Amended"
+    chip reads: the badge means "this moved under you", so a broker's own
+    correction must not raise it. See the column.
 
     Does NOT commit, and does not touch status: superseding the AI review is
     `supersede_review_for_amendment`, and it is a member-side rule.
@@ -1347,12 +1409,17 @@ def apply_claim_amendment(
         ),
         # Only when the amendment REPOINTS the claim — see the function.
         recheck_coverage=bool(columns & COVERAGE_FIELDS),
+        # Only when it could have moved the claim out of its period — likewise.
+        recheck_period=bool(columns & PERIOD_FIELDS),
+        # The broker NAMED a bucket, so it must not be silently derived over.
+        explicit_benefit_key="benefit_key" in columns,
     )
     # Re-snapshot in FULL after validation, which normalizes `sub_type` and may
     # relink the referral letter.
     claim.form_fields = form_snapshot(claim, referral_not_applicable=bool(flag))
     claim.revision += 1
     claim.amended_at = datetime.now(UTC)
+    claim.amended_by = actor
 
     after: dict[str, Any] = {c: getattr(claim, c) for c in columns}
     if _REFERRAL_FLAG in patch:
@@ -1439,6 +1506,9 @@ def stamp_document_amendment(db: Session, claim: Claim) -> bool:
         return False
     claim.revision += 1
     claim.amended_at = datetime.now(UTC)
+    # Only the portal attaches and removes documents on a live claim, so this is
+    # always the member — and it is a change the assessor has not seen.
+    claim.amended_by = AMENDED_BY_MEMBER
     return supersede_review_for_amendment(db, claim)
 
 

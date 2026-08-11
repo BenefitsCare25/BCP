@@ -96,8 +96,19 @@ def _still_ours(db: Session, claim: Claim) -> bool:
     Only the CLAIM is refreshed. `review` carries this run's unflushed results
     and refreshing it would discard them; a superseded review being filled in
     is harmless, since `_latest_review` already filters it out.
+
+    **The row LOCK is what makes the answer survive being acted on.** A bare
+    refresh only narrows the window: the read and the write below it are two
+    statements, so an amendment committing between them is still overwritten —
+    and because the flush carries only the dirty `status` column, the result is
+    exactly the state this guard exists to prevent (`ai_verified` with its sole
+    review superseded, so the broker reads a verified verdict with no review
+    behind it). `SELECT … FOR UPDATE` holds the row from here to `db.commit()`,
+    a few statements away, so a concurrent amendment either lands before the
+    read — and is seen — or waits and applies on top. SQLite's dialect renders
+    no `FOR UPDATE` clause at all, so the test suite is unaffected.
     """
-    db.refresh(claim)
+    db.refresh(claim, with_for_update=True)
     return claim.status == CLAIM_STATUS_AI_REVIEW_PENDING
 
 
@@ -158,7 +169,9 @@ def run_review(claim_id: str, review_id: str, broker_firm_id: str | None) -> Non
         # survives a failed review persist.
         try:
             set_search_path(db, broker_firm_id)
-            claim = db.get(Claim, claim_id)
+            # Locked for the same reason as `_still_ours`: this re-reads a
+            # status another transaction may be moving, and then writes over it.
+            claim = db.get(Claim, claim_id, with_for_update=True)
             if claim is not None and claim.status == CLAIM_STATUS_AI_REVIEW_PENDING:
                 claim.status = CLAIM_STATUS_SUBMITTED
                 review = db.get(ClaimAIReview, review_id)

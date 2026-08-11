@@ -29,7 +29,12 @@ import { toast } from "sonner";
  *   actually required, so an ordinary queue correction is not slowed by a box
  *   nobody needs to fill.
  * - **`expected_revision` goes with every save.** A member may be correcting
- *   the same claim from the portal.
+ *   the same claim from the portal — and this panel is NOT remounted when that
+ *   happens. It used to be (the caller keyed it on `claim.revision`), which
+ *   meant a member's amendment, or their attaching a document, wiped whatever
+ *   an assessor had half-typed the moment the list refetched. Instead the
+ *   baseline is held here, the assessor's work is kept, and the claim moving
+ *   underneath is SAID rather than silently applied.
  * - **No validation is duplicated here.** The server re-runs the whole submit
  *   chain over the merged claim (`claims.validate_claim_facts`), so a date
  *   outside the policy year or an invoice number already on another live claim
@@ -72,12 +77,30 @@ const REASON_REQUIRED = new Set([
 ]);
 
 export function ClaimAmendPanel({ claim }: { claim: BrokerClaim }) {
-  // Keyed on the revision by the caller, so this captures the CURRENT values
-  // and the baseline for the diff exactly once per version of the claim.
-  const [original] = useState(() => draftFrom(claim));
+  // The values this form is a diff AGAINST, and the revision they came from —
+  // one piece of state, because they are one fact ("the claim as this assessor
+  // last saw it"). Re-based only by this panel's OWN successful save; a change
+  // from anywhere else is reported below instead of being applied silently.
+  const [base, setBase] = useState(() => ({
+    draft: draftFrom(claim),
+    revision: claim.revision,
+  }));
+  const original = base.draft;
   const [draft, setDraft] = useState(original);
   const [reason, setReason] = useState("");
   const amend = useAmendClaim();
+
+  // The claim moved since this form was based — the member corrected it, or
+  // attached a document, or another assessor got there first. The save would
+  // 409 (`expected_revision`), so the honest thing is to say so before they
+  // spend the keystrokes, and to offer the reload as a deliberate act rather
+  // than performing it under them.
+  const movedUnderUs = claim.revision !== base.revision;
+  const rebase = () => {
+    const next = draftFrom(claim);
+    setBase({ draft: next, revision: claim.revision });
+    setDraft(next);
+  };
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -103,12 +126,21 @@ export function ClaimAmendPanel({ claim }: { claim: BrokerClaim }) {
 
   const save = async () => {
     try {
-      await amend.mutateAsync({
+      const saved = await amend.mutateAsync({
         claimId: claim.id,
         patch,
         reason: needsReason ? reason.trim() : undefined,
-        expectedRevision: claim.revision,
+        // The revision this form is BASED on, not the latest one — otherwise
+        // the guard would happily send back whatever the member had just
+        // changed the claim to, which is the overwrite it exists to refuse.
+        expectedRevision: base.revision,
       });
+      // Re-base onto what the server stored, so the form settles clean instead
+      // of reading as unsaved. The response is authoritative: it carries the
+      // normalizations (a trimmed provider, a derived benefit key) and the new
+      // revision, which the list invalidation has not necessarily delivered yet.
+      setBase({ draft: draftFrom(saved), revision: saved.revision });
+      setDraft(draftFrom(saved));
       setReason("");
       toast.success("Claim corrected");
     } catch (err) {
@@ -123,6 +155,25 @@ export function ClaimAmendPanel({ claim }: { claim: BrokerClaim }) {
         What the member stated. Corrections are recorded on the claim&rsquo;s
         audit trail.
       </p>
+
+      {movedUnderUs && (
+        <div className="rounded-md border border-border bg-muted p-3 text-xs">
+          <p className="text-foreground">
+            This claim changed after you opened it. Saving will be refused until
+            you load the current details — anything you have typed here is still
+            based on the old ones.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="mt-2"
+            onClick={rebase}
+          >
+            Load the current details
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="space-y-1">
@@ -208,7 +259,9 @@ export function ClaimAmendPanel({ claim }: { claim: BrokerClaim }) {
         <Button
           type="button"
           size="sm"
-          disabled={!canSave || amend.isPending}
+          // Disabled while the base is stale: the server would refuse it, and a
+          // notice they can act on beats a toast after the round-trip.
+          disabled={!canSave || amend.isPending || movedUnderUs}
           onClick={() => void save()}
         >
           {amend.isPending && (

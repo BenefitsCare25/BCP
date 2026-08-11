@@ -46,6 +46,7 @@ from app.models import (
     StoredDocument,
 )
 from app.models.claim import (
+    AMENDED_BY_BROKER,
     CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_APPROVED,
     CLAIM_STATUS_NEEDS_INFO,
@@ -611,7 +612,9 @@ def amend_claim(
     assert_amendment_reason(claim, body.reason)
 
     before, after = apply_claim_amendment(
-        db, claim, body, employee, allowed=BROKER_AMENDABLE_FIELDS
+        db, claim, body, employee,
+        allowed=BROKER_AMENDABLE_FIELDS,
+        actor=AMENDED_BY_BROKER,
     )
     write_audit(
         db, user, "claim.amended", "claim", claim.id,
