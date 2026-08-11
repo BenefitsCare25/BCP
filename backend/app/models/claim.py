@@ -35,6 +35,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
 )
@@ -96,8 +97,21 @@ SETTLED_STATUSES = frozenset(
     }
 )
 
-# States in which the member may still edit / add documents / submit.
-MEMBER_EDITABLE_STATUSES = frozenset({CLAIM_STATUS_DRAFT, CLAIM_STATUS_NEEDS_INFO})
+# States in which the CLAIMANT may still change their own claim — edit its
+# fields, add or remove documents, submit it.
+#
+# Derived BY UNION from `DECIDABLE_STATUSES`, not spelled out: "a member may
+# correct their claim for exactly as long as a broker has not yet decided it" is
+# ONE fact, and a second spelling of it starts disagreeing the day a
+# pre-decision status is added. Same discipline as `PENDING_STATUSES` below,
+# which is derived by subtraction for the same reason.
+#
+# It used to be `{draft, needs_info}`, i.e. document-attachment only, because
+# there was no field-edit endpoint at all. Widening it opens BOTH — and that is
+# deliberate: a claim whose amount a member may correct but whose receipt they
+# may not replace is incoherent, since the wrong figure and the wrong receipt
+# are the same mistake. See `docs/CLAIM_AMENDMENT_PLAN.md`.
+MEMBER_EDITABLE_STATUSES = DECIDABLE_STATUSES | {CLAIM_STATUS_DRAFT}
 
 # States that count against limits/duplicate checks ("live" claims).
 LIVE_STATUSES = frozenset(CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED})
@@ -157,6 +171,16 @@ VALID_TRANSITIONS: dict[str, frozenset[str]] = {
             CLAIM_STATUS_NEEDS_INFO,
             # Broker rerun-review re-enters the pipeline.
             CLAIM_STATUS_AI_REVIEW_PENDING,
+            # A MEMBER AMENDMENT invalidates the verdict. A review is a
+            # statement about a specific set of claimed values — it compares
+            # the documents against `form_fields` — so once those values
+            # change it describes a claim that no longer exists. The claim
+            # falls back to plain `submitted` (manual review) and the review
+            # row is superseded, which is the same landing the pipeline's own
+            # fault path uses. Deliberately NOT an automatic re-run: a member
+            # can amend repeatedly, so auto-rerun would make an edit loop an
+            # AI-spend loop. See `docs/CLAIM_AMENDMENT_PLAN.md`.
+            CLAIM_STATUS_SUBMITTED,
         }
     ),
     CLAIM_STATUS_AI_FLAGGED: frozenset(
@@ -165,6 +189,8 @@ VALID_TRANSITIONS: dict[str, frozenset[str]] = {
             CLAIM_STATUS_REJECTED,
             CLAIM_STATUS_NEEDS_INFO,
             CLAIM_STATUS_AI_REVIEW_PENDING,
+            # Member amendment — see AI_VERIFIED above.
+            CLAIM_STATUS_SUBMITTED,
         }
     ),
     CLAIM_STATUS_NEEDS_INFO: frozenset(
@@ -340,7 +366,35 @@ class Claim(Base, TimestampMixin):
     decided_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     decision_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Member-entered claim-form snapshot the AI review compares documents against.
+    #
+    # RE-SNAPSHOTTED on amendment, so the original statement is overwritten. The
+    # `AuditLog` before/after is the history — one store, not two; a parallel
+    # copy here would be a second thing to keep true.
     form_fields: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
+
+    # ── Amendment ────────────────────────────────────────────────────────────
+    #
+    # Bumped by EVERY amendment, member-side or broker-side. It is a concurrency
+    # guard, not a counter anybody displays: a broker reads $150 in the queue,
+    # the member corrects it to $105, and the broker then approves a figure that
+    # is no longer on the claim. `ClaimDecisionIn.expected_revision` carries the
+    # value the broker actually read and 409s on a mismatch.
+    #
+    # An optimistic guard rather than a lock, because a lock needs an owner, a
+    # timeout and a release path, and gets stuck holding a claim the moment an
+    # assessor closes the tab.
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # When the claim was last amended. Drives the queue's "Amended" chip, so a
+    # broker sees a claim moved under them without opening it — the unread badge
+    # counts MEMBER-authored messages and would not fire for a system notice.
+    #
+    # A server-set instant (the moment the edit happened), not a date anyone
+    # typed, so `datetime.now(UTC)` is right here and `stamp_for_day` is not.
+    amended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # ── Human-quotable reference ─────────────────────────────────────────────
     #

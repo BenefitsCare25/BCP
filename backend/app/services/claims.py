@@ -447,13 +447,35 @@ def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
         db.delete(doc)
 
 
-def _apply_gp_rider_benefit_key(statement: BenefitStatementOut, claim: Claim) -> None:
+def _apply_gp_rider_benefit_key(
+    statement: BenefitStatementOut, claim: Claim, *, clear_rider_key: bool = False
+) -> None:
     """TCM/Physio claims ride on GP coverage: bind the claim to the plan's
     matching schedule row — 422 when the member's plan doesn't carry one — so
     utilization and the broker's over-limit approve guard track that row's
     limit. Runs before `assert_coverage_claimable`, which then re-validates
-    the stamped `benefit_key` against the schedule like any other."""
-    if claim.claim_kind != CLAIM_KIND_INSURED or claim.sub_type not in GP_SUB_TYPES:
+    the stamped `benefit_key` against the schedule like any other.
+
+    ``clear_rider_key`` handles the OTHER direction, which only an AMENDMENT can
+    reach. This function used to only ever SET the key, so editing a GP-TCM
+    claim back down to plain GP left `benefit_key="TCM"` in place — and that
+    passes `assert_coverage_claimable` (TCM is a real row on the schedule) while
+    utilization keeps drawing the claim against the TCM sub-limit instead of the
+    GP one. Silent, and in the money.
+
+    The flag is passed ONLY when the amendment actually changed `sub_type`, and
+    never at submit: a legacy row carries a `benefit_key` from before the column
+    stopped being populated, and blanking those on a `needs_info` resubmission
+    would move their bucket for no reason at all.
+    """
+    is_rider = (
+        claim.claim_kind == CLAIM_KIND_INSURED and claim.sub_type in GP_SUB_TYPES
+    )
+    if not is_rider:
+        if clear_rider_key:
+            # Also correct for an insured→flex amendment: a flex claim has no
+            # business carrying an insured schedule row.
+            claim.benefit_key = None
         return
     line = next(
         (c for c in statement.coverage if c.product_code == claim.product_code),
@@ -738,55 +760,65 @@ def assert_incurred_in_period(
     return window
 
 
-def submit_claim(
+def validate_claim_facts(
     db: Session,
     claim: Claim,
     employee: Employee,
     *,
-    submitted_by_member_id: str | None,
-) -> Claim:
-    """Validate + move a claim to `submitted`. Caller commits (after audit)."""
-    assert_transition(claim, CLAIM_STATUS_SUBMITTED)
+    enforce_doctor_name: bool,
+    clear_rider_key: bool = False,
+    window: ClaimWindow | None = None,
+) -> ClaimWindow:
+    """Everything submit checks about the CLAIM ITSELF. Returns its window.
 
-    year = db.get(PolicyYear, claim.policy_year_id)
-    if year is None or year.status != PolicyYearStatus.active:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Claims can only be submitted against the active policy year.",
-        )
-    window = assert_incurred_in_period(db, year, claim, employee)
+    **The one validation chain, shared by submit and by both amendment
+    endpoints.** Running it over the merged claim is what guarantees an EDITED
+    claim is always a claim that would pass submit — change the product to one
+    whose required documents aren't attached and the amendment is refused with
+    the exact message submit would have given, so nothing invalid can land in
+    the broker's queue.
 
-    # Submission grace period: once configured, claims can only be submitted up
-    # to N days after the enforced period ends. Anchored to `period_end` (the
-    # flex effective end for flex claims, the policy-year end otherwise) — NOT
-    # to `window.end`, which for a leaver is their own last day. How long a
-    # claim may be sent in for is a property of the YEAR; how long a member was
-    # covered is a separate bound with its own control
-    # (`PolicyYear.leaver_access_days`). Anchoring grace on the member would
-    # apply the leaver bound twice and could close their filing window before
-    # their run-off even expires. None = no deadline.
-    if year.claim_grace_period_days is not None:
-        deadline = window.period_end + timedelta(days=year.claim_grace_period_days)
-        # Business date, not the UTC one: a UTC rollover closes the window at
-        # 8am Singapore on its final day, so a member submitting on the last
-        # morning would be refused a day early (`core/clock.py`).
-        if business_today() > deadline:
+    It deliberately EXCLUDES the two filing-window rules — the policy year being
+    active, and the submission grace deadline — which stay in `submit_claim`.
+    Those are properties of the ACT of submitting, not of the claim: a claim
+    already in the system was filed in time, and re-checking grace on an
+    amendment would make a `needs_info` the broker sent back on the last grace
+    day unanswerable the next morning. Same trap, and the same shape of
+    carve-out, as ``enforce_doctor_name`` below.
+
+    The window is RETURNED rather than re-resolved by the caller: for a flex
+    claim that repeat costs another `flex_effective_window` read, and the grace
+    deadline is anchored to `period_end` off this very object. ``window`` is the
+    other half of that — a caller that has ALREADY asserted the incurred date
+    (submit does, because its grace deadline has to be evaluated in between)
+    passes the result back in rather than paying for the resolve twice. Passing
+    it therefore SKIPS the date check here; only pass a window you asserted.
+
+    ``enforce_doctor_name`` is False for a `needs_info` resubmission, whose only
+    control is attaching documents — re-checking there would permanently strand
+    any pre-/post- claim recorded before the field existed. An AMENDMENT passes
+    True: that form *does* carry the field, so the reason for the carve-out is
+    gone.
+    """
+    if window is None:
+        year = db.get(PolicyYear, claim.policy_year_id)
+        if year is None:
+            # Unreachable from `submit_claim`, which checks the year first and
+            # passes its window in; the amendment paths rely on it.
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"The claim submission window for this {window.period_label} closed on "
-                f"{deadline.isoformat()} (period end + "
-                f"{year.claim_grace_period_days} days grace).",
+                status.HTTP_404_NOT_FOUND, "Policy year not found"
             )
+        window = assert_incurred_in_period(db, year, claim, employee)
 
-    # Re-run the intake rules at submit so a draft created before a rule (or
-    # profile) change can't slip through with missing sub-type/referral. A
-    # draft holding a pre-rename sub-type label is folded onto the current one.
+    # Re-run the intake rules so a draft created before a rule (or profile)
+    # change can't slip through with a missing sub-type/referral. A draft
+    # holding a pre-rename sub-type label is folded onto the current one.
     claim.sub_type = normalize_sub_type(claim.sub_type)
-    # Re-validate the specialist referral at submit: a legacy draft that used
-    # the removed "not applicable" escape (visit_type=None, no referral) is
-    # caught here, and a follow-up draft that still has no referral_document_id
-    # gets the latest letter on file linked. A draft that already names a
-    # letter keeps it (the member's explicit choice at draft time).
+    # Re-validate the specialist referral: a legacy draft that used the removed
+    # "not applicable" escape (visit_type=None, no referral) is caught here, and
+    # a follow-up draft that still has no referral_document_id gets the latest
+    # letter on file linked. A draft that already names a letter keeps it (the
+    # member's explicit choice at draft time).
     if (
         claim.claim_kind == CLAIM_KIND_INSURED
         and claim_profile_for(claim.product_code).requires_referral
@@ -811,13 +843,7 @@ def submit_claim(
         currency=claim.currency,
         visit_type=claim.visit_type,
     )
-    # DRAFTS only. A `needs_info` resubmission cannot reach this field — the
-    # member's only control on that screen is attaching documents — so
-    # re-checking it there would permanently strand any pre-/post- claim
-    # recorded before the doctor became required, with no member-side way to
-    # satisfy the refusal. Nothing real escapes: a claim created since cleared
-    # the rule at create, and a draft can always be deleted and refiled.
-    if claim.status == CLAIM_STATUS_DRAFT:
+    if enforce_doctor_name:
         assert_doctor_name_valid(
             claim.product_code,
             claim.sub_type,
@@ -825,7 +851,7 @@ def submit_claim(
             claim_kind=claim.claim_kind,
         )
     statement = build_member_statement(db, employee)
-    _apply_gp_rider_benefit_key(statement, claim)
+    _apply_gp_rider_benefit_key(statement, claim, clear_rider_key=clear_rider_key)
     assert_coverage_claimable(statement, claim)
     # Every required document slot must be filled (tagged uploads); the
     # generic invoice/receipt slot accepts any attached document. Load the
@@ -841,6 +867,69 @@ def submit_claim(
         documents,
     )
     _assert_no_duplicate_invoice(db, claim, documents)
+    return window
+
+
+def submit_claim(
+    db: Session,
+    claim: Claim,
+    employee: Employee,
+    *,
+    submitted_by_member_id: str | None,
+) -> Claim:
+    """Validate + move a claim to `submitted`. Caller commits (after audit).
+
+    Submit = the FILING rules (year active, grace deadline) + the shared
+    `validate_claim_facts` chain + the status/reference bookkeeping.
+    """
+    assert_transition(claim, CLAIM_STATUS_SUBMITTED)
+
+    year = db.get(PolicyYear, claim.policy_year_id)
+    if year is None or year.status != PolicyYearStatus.active:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Claims can only be submitted against the active policy year.",
+        )
+    # Asserted HERE rather than inside the shared chain, and the order is not
+    # incidental: the grace deadline below is anchored to this window's
+    # `period_end`, and an out-of-period date has always been reported ahead of
+    # an expired grace window. The window is handed to `validate_claim_facts`
+    # so the resolve isn't paid for twice.
+    window = assert_incurred_in_period(db, year, claim, employee)
+
+    # Submission grace period: once configured, claims can only be submitted up
+    # to N days after the enforced period ends. Anchored to `period_end` (the
+    # flex effective end for flex claims, the policy-year end otherwise) — NOT
+    # to `window.end`, which for a leaver is their own last day. How long a
+    # claim may be sent in for is a property of the YEAR; how long a member was
+    # covered is a separate bound with its own control
+    # (`PolicyYear.leaver_access_days`). Anchoring grace on the member would
+    # apply the leaver bound twice and could close their filing window before
+    # their run-off even expires. None = no deadline.
+    #
+    # **This check is submit-only.** It does not move into
+    # `validate_claim_facts` — see that function's docstring.
+    if year.claim_grace_period_days is not None:
+        deadline = window.period_end + timedelta(days=year.claim_grace_period_days)
+        # Business date, not the UTC one: a UTC rollover closes the window at
+        # 8am Singapore on its final day, so a member submitting on the last
+        # morning would be refused a day early (`core/clock.py`).
+        if business_today() > deadline:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"The claim submission window for this {window.period_label} closed on "
+                f"{deadline.isoformat()} (period end + "
+                f"{year.claim_grace_period_days} days grace).",
+            )
+
+    validate_claim_facts(
+        db,
+        claim,
+        employee,
+        # DRAFTS only — a `needs_info` resubmission cannot reach this field.
+        enforce_doctor_name=claim.status == CLAIM_STATUS_DRAFT,
+        window=window,
+    )
 
     claim.status = CLAIM_STATUS_SUBMITTED
     claim.submitted_at = datetime.now(UTC)

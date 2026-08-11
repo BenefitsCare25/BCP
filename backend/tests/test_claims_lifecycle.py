@@ -565,6 +565,100 @@ def test_tcm_claim_binds_benefit_row(anon: TestClient):
     assert res.json()["benefit_key"] == "TCM & Chiropractor"
 
 
+# ── The shared validation chain (docs/CLAIM_AMENDMENT_PLAN.md, phase 2) ──────
+#
+# `validate_claim_facts` is everything submit checks about the CLAIM ITSELF,
+# extracted so member and broker amendments run the identical rules. These pin
+# the two things the split has to get right; the amendment ENDPOINTS that call
+# it land in phase 4.
+
+
+def test_editing_a_rider_claim_away_clears_its_benefit_key(anon: TestClient):
+    """`_apply_gp_rider_benefit_key` used to only ever SET the key.
+
+    Edit a GP-TCM claim back down to plain GP and `benefit_key="TCM &
+    Chiropractor"` stayed behind — which passes `assert_coverage_claimable`
+    (it is a real row on the schedule) while utilization keeps drawing the
+    claim against the TCM sub-limit instead of the GP one. Silent, and in the
+    money. Only an amendment can reach it, so only an amendment passes the flag.
+    """
+    from app.services.claims import validate_claim_facts
+
+    claim = _draft(
+        anon,
+        product_code="GCGP",
+        claim_type="TCM (Traditional Chinese Medicine)",
+        sub_type="TCM (Traditional Chinese Medicine)",
+        diagnosis="Other: lower back pain",
+    )
+    assert _upload(anon, claim["id"], PDF + b" rider-clear").status_code == 200
+    assert _submit(anon, claim["id"]).json()["benefit_key"] == "TCM & Chiropractor"
+
+    with SessionLocal() as s:
+        row, emp = s.get(Claim, claim["id"]), s.get(Employee, EMP_A)
+        row.sub_type = None
+        row.claim_type = "Group Clinical GP"
+
+        # Submit's own call never passes the flag: a legacy row carries a
+        # benefit_key from before the column stopped being populated, and
+        # blanking those on a needs_info resubmission would move their bucket
+        # for no reason.
+        validate_claim_facts(s, row, emp, enforce_doctor_name=False)
+        assert row.benefit_key == "TCM & Chiropractor"
+
+        # The amendment path, which changed the sub-type, does.
+        validate_claim_facts(
+            s, row, emp, enforce_doctor_name=False, clear_rider_key=True
+        )
+        assert row.benefit_key is None
+
+
+def test_the_grace_deadline_is_a_SUBMIT_rule_not_a_claim_rule(anon: TestClient):
+    """Grace bounds the ACT of submitting, never the claim.
+
+    A claim already in the system was filed in time, so re-checking grace when
+    it is amended would make a `needs_info` the broker sent back on the last
+    grace day unanswerable the next morning — the member would be asked for a
+    document and refused when they sent it. So `validate_claim_facts` passes a
+    claim whose filing window has closed, and `submit_claim` still refuses it.
+    """
+    from fastapi import HTTPException
+
+    from app.services.claims import submit_claim, validate_claim_facts
+
+    claim = _draft(anon, incurred_date="2027-06-15")
+    assert _upload(anon, claim["id"], PDF + b" grace-1").status_code == 200
+
+    with SessionLocal() as s:
+        year = s.get(PolicyYear, PY)
+        original = (year.start_date, year.end_date, year.claim_grace_period_days)
+        # Move the whole year into the past so the deadline can actually bite —
+        # `business_today()` sits before the fixture's 2027 year.
+        year.start_date, year.end_date = date(2025, 1, 1), date(2025, 12, 31)
+        year.claim_grace_period_days = 0
+        row, emp = s.get(Claim, claim["id"]), s.get(Employee, EMP_A)
+        row.incurred_date = date(2025, 6, 1)  # inside the shifted year
+        s.flush()
+        try:
+            # The claim itself is entirely valid.
+            validate_claim_facts(s, row, emp, enforce_doctor_name=False)
+
+            # Filing it is not.
+            with pytest.raises(HTTPException) as exc:
+                submit_claim(s, row, emp, submitted_by_member_id=None)
+            assert exc.value.status_code == 422
+            assert "closed on 2025-12-31" in exc.value.detail
+        finally:
+            s.rollback()
+            year = s.get(PolicyYear, PY)
+            (
+                year.start_date,
+                year.end_date,
+                year.claim_grace_period_days,
+            ) = original
+            s.commit()
+
+
 def test_physio_without_plan_row_422(anon: TestClient):
     # The canned GP schedule has no physiotherapy row — the claim type isn't
     # available to this plan, so submit refuses it.
@@ -1220,9 +1314,30 @@ def test_broker_document_download(anon: TestClient, broker: TestClient):
     assert "receipt.pdf" in res.headers["content-disposition"]
 
 
-def test_upload_after_submit_409(anon: TestClient):
+def test_upload_is_open_until_the_broker_decides(
+    anon: TestClient, broker: TestClient
+):
+    """`MEMBER_EDITABLE_STATUSES` is `DECIDABLE_STATUSES | {draft}`.
+
+    This used to assert a 409 the moment the claim was submitted. It was
+    widened with member claim editing (`docs/CLAIM_AMENDMENT_PLAN.md`): a claim
+    whose amount a member may correct but whose receipt they may not replace is
+    incoherent, so the field-edit window and the evidence window are ONE
+    constant. Both ends are pinned here — open while the broker has still to
+    decide, shut the moment they have.
+    """
     claim_id = _submitted_claim(anon, b" locked-1")
-    assert _upload(anon, claim_id, PDF + b" locked-1b").status_code == 409
+
+    # In review, no decision yet — the member may still add evidence.
+    assert _upload(anon, claim_id, PDF + b" locked-1b").status_code == 200
+
+    res = broker.post(
+        f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"}
+    )
+    assert res.status_code == 200, res.text
+
+    # Decided. Shut.
+    assert _upload(anon, claim_id, PDF + b" locked-1c").status_code == 409
 
 
 # ── Claim messages (the member <-> broker thread) ────────────────────────────
