@@ -273,10 +273,21 @@ jobs:
       #
       # Confirmed 3/3 — every run that applied the template (2026-08-02 and
       # 2026-08-09 drift, 2026-08-11 05:18 deploy) logged it, while the deploy
-      # 90 minutes earlier that SKIPPED the apply started cleanly in 42.6s. It
-      # self-heals in ~90s and the release still lands, but it is a real failed
-      # restart and it is avoidable: waiting here turns two overlapping bounces
-      # into two sequential ones.
+      # 90 minutes earlier that SKIPPED the apply started cleanly in 42.6s.
+      #
+      # **This does NOT eliminate the failure, and measuring it is how we know.**
+      # The 2026-08-11 05:27 deploy — the first with this step — still logged one
+      # at 05:30:36, i.e. INSIDE `az deployment group create` and before this
+      # step began at 05:31:07: applying the template bounces the site more than
+      # once on its own, which nothing here can reach. What this step does fix is
+      # the compounding: that run's final restart came up clean (`LastError`
+      # empty, 44.2s probe) instead of ending still carrying the error, because
+      # the image restart no longer lands on top of an unfinished one.
+      #
+      # So the residual is one self-healing failed startup per INFRA-touching
+      # deploy, gated by `Smoke-test prod`. The weekly unattended occurrence is
+      # gone for a different reason — infra-drift.yml no longer applies on a
+      # schedule.
       #
       # The fixed wait is deliberate. `curl` alone would return 200 instantly
       # from the OLD container, which is still serving while the platform gets
