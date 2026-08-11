@@ -172,6 +172,11 @@ export const portalApi = {
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  /** A PARTIAL update — the body carries only what changed. Used by the claim
+   * edit sheet, where sending the whole object would let one edited field blank
+   * every other one the member never touched. */
+  patch: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   /** A POST whose BODY carries a credential the member just typed — the 6-digit
    * code confirming 2FA enrolment, the password confirming they may turn it
    * off. Here a 401 means "that value is wrong", not "your session expired",

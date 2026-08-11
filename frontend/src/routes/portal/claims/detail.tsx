@@ -11,15 +11,19 @@
  * the three conditions under which motion carries information rather than
  * decorating. The list deliberately renders its strikes complete.
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import {
+  useAmendClaim,
+  useDeleteClaimDocument,
   usePortalClaim,
   useSubmitClaim,
   useUploadClaimDocument,
+  type ClaimAmendInput,
 } from "@/api/portal";
+import { ClaimEditSheet } from "@/components/portal/claims/ClaimEditSheet";
 import {
   useMarkClaimMessagesRead,
   usePortalClaimMessages,
@@ -55,6 +59,15 @@ export function PortalClaimDetailPage() {
   const markRead = useMarkClaimMessagesRead();
   const uploadDoc = useUploadClaimDocument();
   const submitClaim = useSubmitClaim();
+  const amendClaim = useAmendClaim();
+  const removeDoc = useDeleteClaimDocument();
+  // The edit sheet's open state, and the SERVER's last word on the attempt.
+  // The error is held here rather than toasted because it belongs beside the
+  // field it is about — a duplicate invoice number or an out-of-period date is
+  // something to fix in the form, not an event to acknowledge and dismiss.
+  const [editing, setEditing] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [removingDocId, setRemovingDocId] = useState<string | null>(null);
   useDocumentTitle(claim.data ? claimTitle(claim.data) : "Claim");
 
   // Opening the claim IS opening the thread — it is rendered in full below, so
@@ -126,6 +139,34 @@ export function PortalClaimDetailPage() {
 
   const isDraft = data.status === "draft";
 
+  const saveEdit = async (patch: ClaimAmendInput) => {
+    setEditError(null);
+    try {
+      await amendClaim.mutateAsync({ claimId: data.id, patch });
+      await claim.refetch();
+      setEditing(false);
+      toast.success("Updated");
+    } catch (err) {
+      // Stays in the sheet, holding what they typed. The server's sentence is
+      // the one they need — a duplicate invoice number, a date outside the
+      // policy year, a claim someone decided while the sheet was open.
+      setEditError(formatError(err));
+    }
+  };
+
+  const removeDocument = async (docId: string) => {
+    setRemovingDocId(docId);
+    try {
+      await removeDoc.mutateAsync({ claimId: data.id, docId });
+      await claim.refetch();
+      toast.success("Removed");
+    } catch (err) {
+      toast.error(formatError(err));
+    } finally {
+      setRemovingDocId(null);
+    }
+  };
+
   return (
     <ClaimDetailLeaf
       claim={data}
@@ -148,6 +189,30 @@ export function PortalClaimDetailPage() {
       uploading={uploadDoc.isPending}
       onSubmit={() => void resubmit()}
       submitting={submitClaim.isPending}
+      onEdit={() => {
+        setEditError(null);
+        setEditing(true);
+      }}
+      onRemoveDocument={(docId) => void removeDocument(docId)}
+      removingDocumentId={removingDocId}
+      editing={
+        editing ? (
+          <ClaimEditSheet
+            // Remounted per revision, so a save that succeeded and then a
+            // reopen starts from the CURRENT values rather than the ones the
+            // component first captured.
+            key={data.revision}
+            claim={data}
+            saving={amendClaim.isPending}
+            error={editError}
+            onSave={(patch) => void saveEdit(patch)}
+            onCancel={() => {
+              setEditError(null);
+              setEditing(false);
+            }}
+          />
+        ) : undefined
+      }
       sending={sendMessage.isPending}
       replyDisabledReason={
         isDraft

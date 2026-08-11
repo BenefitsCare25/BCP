@@ -57,6 +57,7 @@ import {
   useAwaitingReplyCount,
 } from "@/components/claims/ConversationQueue";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
+import { ClaimAmendPanel } from "@/components/claims/ClaimAmendPanel";
 import { ClaimAssessmentPanel } from "@/components/claims/ClaimAssessmentPanel";
 import {
   ClaimSettlementFacts,
@@ -348,6 +349,10 @@ function QueueTab({
         note: note.trim() || undefined,
         approvedAmount: decision === "approve" ? amount : undefined,
         acknowledge: limitWarning !== null,
+        // The revision this sheet is showing. A member may correct their claim
+        // right up to the decision, so deciding without it can approve a figure
+        // that changed while the sheet was open.
+        expectedRevision: selected.revision,
       });
       toast.success(
         decision === "approve"
@@ -367,6 +372,18 @@ function QueueTab({
       ) {
         // Keep the dialog open; confirming again acknowledges the overrun.
         setLimitWarning(err.message);
+        return;
+      }
+      if (
+        err instanceof ConflictDetailError &&
+        err.detail.code === "claim_amended"
+      ) {
+        // The member corrected the claim while this sheet was open. CLOSE the
+        // dialog and refetch rather than letting them confirm again — the whole
+        // point is that they have not yet seen what they would be deciding on.
+        setDecision(null);
+        void detail.refetch();
+        toast.error(err.message);
         return;
       }
       toast.error(formatError(err));
@@ -496,6 +513,17 @@ function QueueTab({
                         {c.unread_member_messages > 0 && (
                           <Badge variant="warn" className="ml-2 align-middle">
                             {c.unread_member_messages} new
+                          </Badge>
+                        )}
+                        {/* The member changed this claim. Its OWN signal, not a
+                            reuse of the unread badge: that one counts
+                            MEMBER-AUTHORED messages and would never fire for an
+                            automatic amendment notice — so a claim that moved
+                            under an assessor would otherwise look untouched
+                            until they opened it. */}
+                        {c.amended_at && (
+                          <Badge variant="warn" className="ml-2 align-middle">
+                            Amended
                           </Badge>
                         )}
                         <div className="text-2xs text-muted-foreground font-normal">
@@ -735,6 +763,21 @@ function QueueTab({
                     <ClaimSettlementFacts claim={selected} />
                   </DetailSection>
                 )}
+
+                {/* Correcting what the MEMBER stated — kept apart from
+                    Assessment below it, which records facts the broker owns
+                    and the member never stated. Two different acts, two
+                    different audit actions, and once a claim is settled two
+                    different bars. */}
+                <DetailSection title="Claim details">
+                  <ClaimAmendPanel
+                    // Remounted per revision so the form always starts from the
+                    // current values — including after a member amended it
+                    // under us.
+                    key={selected.revision}
+                    claim={selected}
+                  />
+                </DetailSection>
 
                 {/* The assessor's own fields. Directly above Documents because
                     the sector and admission window are read OFF those

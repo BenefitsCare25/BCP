@@ -171,6 +171,20 @@ export interface BrokerClaim {
   servicer_days: number | null;
   insurer_days: number | null;
   days_over_deadline: number | null;
+
+  // ── Amendment ─────────────────────────────────────────────────────────────
+  /** Optimistic-concurrency token. **Send it back on every decision.** A member
+   *  may correct their claim right up to the moment it is decided, so without
+   *  it an assessor can read $150, have it changed to $105 under them, and
+   *  approve a figure that is no longer on the claim. */
+  revision: number;
+  /** When the claim was last corrected — drives the queue's Amended chip, so a
+   *  claim that moved is visible without opening it. Null = never amended. */
+  amended_at: string | null;
+  /** Whether the CLAIMANT may still edit. Broker-side this is context, not a
+   *  gate: a broker may amend in any status (with a reason once settled). */
+  member_editable: boolean;
+  member_edit_block: string | null;
 }
 
 export interface BrokerClaimList {
@@ -497,6 +511,9 @@ export interface ClaimDecisionInput {
   approvedAmount?: number;
   /** Approve past the remaining limit (after a 409 `limit_exceeded`). */
   acknowledge?: boolean;
+  /** The `revision` the assessor actually read. A mismatch 409s
+   *  (`claim_amended`) instead of deciding on a figure that has since moved. */
+  expectedRevision?: number;
 }
 
 export function useDecideClaim() {
@@ -508,6 +525,7 @@ export function useDecideClaim() {
         note: input.note ?? null,
         approved_amount: input.approvedAmount ?? null,
         acknowledge: input.acknowledge ?? false,
+        expected_revision: input.expectedRevision ?? null,
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
@@ -598,6 +616,52 @@ export function useUpdateClaimAssessment() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Correcting what the MEMBER stated — a different act from
+ *  `useUpdateClaimAssessment`, which records facts the broker owns and the
+ *  member never stated (sector, admission dates, payroll treatment).
+ *
+ *  Available in every status, but a settled claim demands a `reason`: by then
+ *  the figure has been given to the member and, on a dispatched claim, to the
+ *  insurer. Partial, like everything else here. */
+export interface BrokerClaimAmendInput {
+  claimId: string;
+  patch: Partial<{
+    claim_type: string;
+    incurred_date: string;
+    provider_name: string;
+    invoice_number: string;
+    doctor_name: string | null;
+    diagnosis: string | null;
+    amount_claimed: number;
+    currency: string;
+    benefit_key: string | null;
+  }>;
+  /** Required once the claim is settled — the server 422s (`reason_required`)
+   *  without it, because a blank reason on a corrected payment figure is an
+   *  audit row that explains nothing. */
+  reason?: string;
+  expectedRevision?: number;
+}
+
+export function useAmendClaim() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BrokerClaimAmendInput) =>
+      api.patch<BrokerClaim>(`/claims/${input.claimId}`, {
+        ...input.patch,
+        ...(input.reason ? { reason: input.reason } : {}),
+        expected_revision: input.expectedRevision ?? null,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      // The claimed figure feeds the utilization buckets.
+      void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
     },
     meta: { localErrorHandling: true },
   });

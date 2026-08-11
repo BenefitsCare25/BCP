@@ -380,6 +380,20 @@ export interface PortalClaim {
   documents: PortalClaimDocument[];
   /** Slots this claim must fill at submit — drives the tagged-upload UI. */
   required_doc_slots: DocSlot[];
+  /** Whether the claimant may still change this claim, and the sentence to
+   * show when they may not.
+   *
+   * **SERVED — never re-derive this from `status`.** The window is "until the
+   * broker decides", which is six statuses and grows; this page used to answer
+   * it itself with `status === "draft" || status === "needs_info"` and that
+   * mirror silently stopped being true the day the window widened. Same drift
+   * class as mirroring the pending-status list (see `UsageLeaf`). */
+  member_editable: boolean;
+  member_edit_block: string | null;
+  /** Optimistic-concurrency token. Sent back on every amendment so two devices
+   * on one claim cannot silently clobber each other. */
+  revision: number;
+  amended_at: string | null;
 }
 
 export interface PortalClaimList {
@@ -698,6 +712,48 @@ export function useDeleteReferralLetter() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["portal", "referral-letters"] });
     },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** A partial correction to a claim. Only the keys PRESENT are applied — the
+ * sheet sends what the member actually touched, so an edit to one field cannot
+ * blank the rest. `expected_revision` is the `revision` the sheet opened on; a
+ * mismatch 409s (`claim_amended`) rather than overwriting someone else's edit. */
+export interface ClaimAmendInput {
+  claim_type?: string;
+  incurred_date?: string;
+  provider_name?: string;
+  invoice_number?: string;
+  doctor_name?: string | null;
+  diagnosis?: string | null;
+  remarks?: string | null;
+  amount_claimed?: number;
+  currency?: string;
+  expected_revision?: number;
+}
+
+export function useAmendClaim() {
+  const qc = usePortalQueryInvalidator();
+  return useMutation({
+    mutationFn: (input: { claimId: string; patch: ClaimAmendInput }) =>
+      portalApi.patch<PortalClaim>(
+        `/portal/claims/${input.claimId}`,
+        input.patch,
+      ),
+    onSuccess: qc,
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDeleteClaimDocument() {
+  const qc = usePortalQueryInvalidator();
+  return useMutation({
+    mutationFn: (input: { claimId: string; docId: string }) =>
+      portalApi.delete<void>(
+        `/portal/claims/${input.claimId}/documents/${input.docId}`,
+      ),
+    onSuccess: qc,
     meta: { localErrorHandling: true },
   });
 }

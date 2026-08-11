@@ -19,7 +19,7 @@
  * their unread badge.
  */
 import { useRef, type ReactNode } from "react";
-import { Check, FileText, Loader2, Paperclip, Send } from "lucide-react";
+import { Check, FileText, Loader2, Paperclip, Pencil, Send, X } from "lucide-react";
 import type { PortalClaim } from "@/api/portal";
 import type { ClaimMessage } from "@/api/portalMessages";
 import { cn } from "@/lib/cn";
@@ -129,6 +129,49 @@ function AttachControl({
   );
 }
 
+/** Remove one attached file.
+ *
+ * HIDDEN when there is no handler, where every other control on this page
+ * renders disabled instead. The rule those follow — show the member's
+ * affordances where the member has them — is about controls the member is meant
+ * to reach; a permanently dead DESTRUCTIVE control next to someone's document
+ * is only an invitation to keep clicking at it. The preview loses nothing: it
+ * still shows the file.
+ *
+ * The server refuses a delete that would leave a required slot empty on a sent
+ * claim (409 `documents_required`), so this does not try to predict which
+ * removals are allowed — one rule, server-side, reported when it fires.
+ */
+function RemoveDocument({
+  docId,
+  fileName,
+  busy,
+  onRemove,
+}: {
+  docId: string;
+  fileName: string;
+  busy?: boolean;
+  onRemove?: (docId: string) => void;
+}) {
+  if (!onRemove) return null;
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => onRemove(docId)}
+      className="leaf-focus ml-2 inline-flex items-center gap-1 align-baseline text-2xs text-label underline underline-offset-2 hover:text-strike-rejected disabled:opacity-60"
+    >
+      {busy ? (
+        <Loader2 className="size-3 animate-spin" aria-hidden />
+      ) : (
+        <X className="size-3" aria-hidden />
+      )}
+      Remove
+      <span className="sr-only"> {fileName}</span>
+    </button>
+  );
+}
+
 export interface ClaimDetailLeafProps {
   claim: PortalClaim;
   /** The claim's conversation, oldest first. */
@@ -145,6 +188,18 @@ export interface ClaimDetailLeafProps {
   /** Omitted ⇒ the send-claim control renders disabled. */
   onSubmit?: () => void;
   submitting?: boolean;
+  /** Open the edit sheet. Omitted ⇒ the Correct details control renders
+   *  disabled, which is how the broker preview shows the member's affordance
+   *  without being able to use it. */
+  onEdit?: () => void;
+  /** Remove one attached document. Omitted ⇒ no remove control at all — unlike
+   *  the others this one is HIDDEN rather than disabled, because a dead
+   *  destructive control beside a file is an invitation to keep clicking. */
+  onRemoveDocument?: (docId: string) => void;
+  removingDocumentId?: string | null;
+  /** Replaces the whole edit/send block. The sheet the member is editing in,
+   *  hoisted here by the route so this component stays free of state. */
+  editing?: ReactNode;
   /** Title on every control this surface has disabled. */
   disabledTitle?: string;
   /** How to get back to the ledger. The route navigates; the preview pops its
@@ -166,13 +221,23 @@ export function ClaimDetailLeaf({
   uploading = false,
   onSubmit,
   submitting = false,
+  onEdit,
+  onRemoveDocument,
+  removingDocumentId = null,
+  editing,
   disabledTitle,
   back,
   receipt = false,
 }: ClaimDetailLeafProps) {
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const editable = claim.status === "draft" || claim.status === "needs_info";
+  // SERVED, not derived. This was `status === "draft" || status ===
+  // "needs_info"` — a mirror of a server rule, and the exact mirror that
+  // stopped being true when the edit window widened to "until the broker
+  // decides". The rule has one owner (`claims.member_editability`) and the
+  // sentence explaining a refusal comes from the same place, so the member is
+  // never given two accounts of why the form is shut.
+  const editable = claim.member_editable;
   const slots = claim.required_doc_slots ?? [];
   const state = STATE[claim.status] ?? {
     label: claim.status,
@@ -262,6 +327,12 @@ export function ClaimDetailLeaf({
           </Strike>
         }
       >
+        {/* Editing happens WHERE the values are read, not on a page of its
+            own: the member is correcting one figure against a receipt in their
+            hand, and a separate screen would take away the rest of the record
+            they are checking it against. */}
+        {editing ?? (
+        <>
         {/* One column on a phone. The old two-up grid never collapsed, so a
             long diagnosis and a currency figure shared ~147px each. */}
         <dl className="divide-y divide-hairline/75">
@@ -319,6 +390,37 @@ export function ClaimDetailLeaf({
             <p className="text-row text-record">{claim.decision_notes}</p>
           </>
         )}
+
+        {/* Correcting the record the member is looking at. Quiet ink, not the
+            page's brand fill — that belongs to sending the claim, which is
+            what they came to do; fixing a mistyped figure is maintenance. */}
+        {editable && (
+          <>
+            <MountRule className="my-3" />
+            <Action
+              type="button"
+              block="phone"
+              className="h-11"
+              disabled={!onEdit}
+              title={onEdit ? undefined : disabledTitle}
+              onClick={onEdit}
+            >
+              <Pencil className="size-4" aria-hidden />
+              Correct these details
+            </Action>
+          </>
+        )}
+
+        {/* Why the controls are gone. The server owns this sentence, so what
+            they read here is what a refused request would have told them. */}
+        {!editable && claim.member_edit_block && (
+          <>
+            <MountRule className="my-3" />
+            <p className="text-row text-label">{claim.member_edit_block}</p>
+          </>
+        )}
+        </>
+        )}
       </Mount>
 
       {/* ── Documents ─────────────────────────────────────────────────────
@@ -371,6 +473,12 @@ export function ClaimDetailLeaf({
                             className="block break-all text-2xs text-label"
                           >
                             {f.file_name} · {(f.size_bytes / 1024).toFixed(0)} KB
+                            <RemoveDocument
+                              docId={f.id}
+                              fileName={f.file_name}
+                              busy={removingDocumentId === f.id}
+                              onRemove={onRemoveDocument}
+                            />
                           </span>
                         ))
                       ) : (
@@ -411,6 +519,12 @@ export function ClaimDetailLeaf({
                 </span>
                 <span className="shrink-0 text-2xs tabular-nums text-label">
                   {(doc.size_bytes / 1024).toFixed(0)} KB · additional
+                  <RemoveDocument
+                    docId={doc.id}
+                    fileName={doc.file_name}
+                    busy={removingDocumentId === doc.id}
+                    onRemove={onRemoveDocument}
+                  />
                 </span>
               </li>
             ))}
