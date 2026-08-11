@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from app.db.session import SessionLocal
 from app.db.tenancy import set_search_path
 from app.models import Claim, ClaimAIReview, Employee, StoredDocument
@@ -69,10 +71,39 @@ def _apply_call_metadata(review: ClaimAIReview, calls: list[dict[str, Any]]) -> 
     review.cost_estimate_usd = round(cost, 6)
 
 
-def _finalize_claim_status(claim: Claim, verdict: str) -> None:
-    """Move the claim per the verdict — but only if it's still waiting on us
-    (the broker may have decided while the pipeline ran)."""
-    if claim.status != CLAIM_STATUS_AI_REVIEW_PENDING:
+def _still_ours(db: Session, claim: Claim) -> bool:
+    """Is the claim STILL waiting on this run — read from the DATABASE, not
+    from the copy this session loaded before the AI calls?
+
+    **The refresh is the whole point.** This session loads the claim once, then
+    spends tens of seconds in the provider, and commits only at the very end
+    (`ai_gateway` commits its spend counter on a SEPARATE session, so nothing
+    expires ours in between). So `claim.status` in memory is the status as it
+    was when the run STARTED, and guarding on it is not a guard at all.
+
+    Two things move the claim inside that window, and both are ordinary:
+    - a MEMBER AMENDMENT, which sets the status to `submitted` and supersedes
+      this review;
+    - a BROKER DECISION.
+
+    Without the refresh the verdict is written over either of them. The
+    amendment case is the worse one: the claim ends at `ai_verified` with its
+    only review superseded, so `_latest_review` returns None and the broker is
+    shown a verified verdict with no review behind it — computed against values
+    the claim no longer holds. A plausible answer that is silently wrong, which
+    is exactly the class this codebase spends its comments on.
+
+    Only the CLAIM is refreshed. `review` carries this run's unflushed results
+    and refreshing it would discard them; a superseded review being filled in
+    is harmless, since `_latest_review` already filters it out.
+    """
+    db.refresh(claim)
+    return claim.status == CLAIM_STATUS_AI_REVIEW_PENDING
+
+
+def _finalize_claim_status(db: Session, claim: Claim, verdict: str) -> None:
+    """Move the claim per the verdict — but only if it's still waiting on us."""
+    if not _still_ours(db, claim):
         return
     claim.status = (
         CLAIM_STATUS_AI_VERIFIED
@@ -81,8 +112,11 @@ def _finalize_claim_status(claim: Claim, verdict: str) -> None:
     )
 
 
-def _fall_back_to_manual(claim: Claim) -> None:
-    if claim.status == CLAIM_STATUS_AI_REVIEW_PENDING:
+def _fall_back_to_manual(db: Session, claim: Claim) -> None:
+    """Same staleness applies here: a member who amended a `needs_info` claim
+    mid-run leaves it at `needs_info`, and writing `submitted` over that would
+    move a claim nobody is waiting on back into the queue."""
+    if _still_ours(db, claim):
         claim.status = CLAIM_STATUS_SUBMITTED
 
 
@@ -106,12 +140,12 @@ def run_review(claim_id: str, review_id: str, broker_firm_id: str | None) -> Non
         except AINotConfiguredError as exc:
             review.status = REVIEW_STATUS_ERROR
             review.error_detail = str(exc)
-            _fall_back_to_manual(claim)
+            _fall_back_to_manual(db, claim)
             logger.warning("Claim %s AI review skipped: %s", claim.id, exc)
         except Exception as exc:
             review.status = REVIEW_STATUS_ERROR
             review.error_detail = f"{type(exc).__name__}: {exc}"
-            _fall_back_to_manual(claim)
+            _fall_back_to_manual(db, claim)
             logger.exception("Claim %s AI review failed", claim.id)
         db.commit()
     except Exception:
@@ -178,7 +212,7 @@ def _run_stages(
         review.input_tokens = 0
         review.output_tokens = 0
         review.cost_estimate_usd = 0.0
-        _finalize_claim_status(claim, REVIEW_VERDICT_FLAGGED)
+        _finalize_claim_status(db, claim, REVIEW_VERDICT_FLAGGED)
         return
 
     docs = claim_documents(db, claim)
@@ -235,4 +269,4 @@ def _run_stages(
         else (ai_review["summary"] + "\n\nFlagged: " + "; ".join(reasons)).strip()
     )
     _apply_call_metadata(review, all_calls)
-    _finalize_claim_status(claim, verdict)
+    _finalize_claim_status(db, claim, verdict)

@@ -46,13 +46,16 @@ interface Draft {
   amount_claimed: string;
 }
 
+/** Trimmed baseline — see `ClaimEditSheet.draftFrom`. Values are stored
+ *  verbatim, so an untrimmed baseline opens this form already dirty and saves a
+ *  phantom change nobody made. */
 function draftFrom(claim: BrokerClaim): Draft {
   return {
     incurred_date: claim.incurred_date,
-    provider_name: claim.provider_name ?? "",
-    invoice_number: claim.invoice_number ?? "",
-    doctor_name: claim.doctor_name ?? "",
-    diagnosis: claim.diagnosis ?? "",
+    provider_name: (claim.provider_name ?? "").trim(),
+    invoice_number: (claim.invoice_number ?? "").trim(),
+    doctor_name: (claim.doctor_name ?? "").trim(),
+    diagnosis: (claim.diagnosis ?? "").trim(),
     amount_claimed: String(claim.amount_claimed),
   };
 }

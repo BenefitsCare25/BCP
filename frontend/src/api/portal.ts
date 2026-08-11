@@ -395,6 +395,10 @@ export interface PortalClaim {
    * submit control on this one; gating both on `member_editable` put a Send
    * button on every claim in the queue that could only ever 409. */
   member_can_submit: boolean;
+  /** Whether this claim must name the treating doctor. SERVED — never infer it
+   * from whether `doctor_name` is already set: a legacy pre/post claim has
+   * none, which is precisely the claim that needs the field. */
+  requires_doctor_name: boolean;
   /** Optimistic-concurrency token. Sent back on every amendment so two devices
    * on one claim cannot silently clobber each other. */
   revision: number;

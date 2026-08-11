@@ -62,6 +62,7 @@ from app.services.claim_intake import (
     normalize_invoice_number,
     normalize_sub_type,
     required_doc_slots,
+    requires_doctor_name,
     resolve_sp_referral,
 )
 from app.services.claim_settlement import mint_reference_no
@@ -262,6 +263,14 @@ def populate_claim_out(
     # answer "may this member still edit?" differently.
     out.member_editable, out.member_edit_block = member_editability(claim)
     out.member_can_submit = member_can_submit(claim)
+    # Whether THIS claim must name the treating doctor. Served for the same
+    # reason `ClaimTypeOption.requires_doctor_name` is on the create form: the
+    # client cannot infer it, and inferring it from whether the claim already
+    # HOLDS a doctor is precisely backwards — a legacy pre/post claim recorded
+    # before the field existed has none, so the edit sheet hid the control while
+    # the amendment kept requiring it, and every save 422'd with nothing the
+    # member could do about it.
+    out.requires_doctor_name = requires_doctor_name(claim.product_code, claim.sub_type)
     return out
 
 
@@ -1011,7 +1020,18 @@ def validate_claim_facts(
             ),
             documents,
         )
-    _assert_no_duplicate_invoice(db, claim)
+    if from_member_form:
+        # **A LOG case is the ESCAPE HATCH from this rule, so it cannot be
+        # subject to it.** One invoice is one claim on the member's surface,
+        # with no override — and the cost of that (documented in `CLAUDE.md`)
+        # is a family clinic visit seen by the member AND their child: ONE
+        # receipt that has to be filed as two claims, which the member cannot
+        # do. The answer is an assessor recording the second BROKER-side as a
+        # LOG case, which "never runs `submit_claim`, so it bypasses this gate
+        # entirely". Re-imposing it here made the very case created to solve
+        # the problem permanently uncorrectable — it carries the duplicate
+        # number by design.
+        _assert_no_duplicate_invoice(db, claim)
     return window
 
 
@@ -1277,9 +1297,18 @@ def apply_claim_amendment(
         enforce_doctor_name=True,
         # A draft is incomplete by definition — see the function's docstring.
         enforce_documents=claim.status != CLAIM_STATUS_DRAFT,
-        # Only when the sub-type actually moved — see the function's docstring
-        # for why a blanket clear would wreck legacy rows.
-        clear_rider_key="sub_type" in columns and claim.sub_type != previous_sub_type,
+        # Only when the claim's IDENTITY moved — see the function's docstring
+        # for why a blanket clear would wreck legacy rows. `claim_kind` and
+        # `product_code` count alongside `sub_type`: an insured→flex amendment
+        # changes neither the sub-type nor anything the flex branch of
+        # `assert_coverage_claimable` validates, so a stale insured
+        # `benefit_key` would otherwise ride along on a flex claim with nothing
+        # to catch it.
+        clear_rider_key=(
+            ("sub_type" in columns and claim.sub_type != previous_sub_type)
+            or "claim_kind" in columns
+            or "product_code" in columns
+        ),
     )
     # Re-snapshot in FULL after validation, which normalizes `sub_type` and may
     # relink the referral letter.

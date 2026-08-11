@@ -520,8 +520,15 @@ function QueueTab({
                             MEMBER-AUTHORED messages and would never fire for an
                             automatic amendment notice — so a claim that moved
                             under an assessor would otherwise look untouched
-                            until they opened it. */}
-                        {c.amended_at && (
+                            until they opened it.
+
+                            Scoped to claims still awaiting a decision. Nothing
+                            ever clears `amended_at`, so an unscoped chip is
+                            permanent: every claim ever corrected would wear it
+                            forever, including ones long since decided, and a
+                            badge that never goes away stops meaning "look at
+                            this" — which is the only thing it is for. */}
+                        {c.amended_at && DECIDABLE.has(c.status) && (
                           <Badge variant="warn" className="ml-2 align-middle">
                             Amended
                           </Badge>

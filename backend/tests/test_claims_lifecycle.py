@@ -1456,8 +1456,15 @@ def test_upload_is_open_until_the_broker_decides(
     )
     assert res.status_code == 200, res.text
 
-    # Decided. Shut.
-    assert _upload(anon, claim_id, PDF + b" locked-1c").status_code == 409
+    # Decided. Shut — a 403 carrying the SERVED refusal sentence, because this
+    # route now asks `member_editability` like the amend and delete routes do
+    # rather than testing the status set itself. It used to be a bare 409 with
+    # its own wording, which is how the three came to disagree: a claim
+    # reclassified as a LOG case is refused by the other two and was still
+    # accepting documents here.
+    res = _upload(anon, claim_id, PDF + b" locked-1c")
+    assert res.status_code == 403
+    assert res.json()["detail"]["code"] == "claim_not_editable"
 
 
 # ── Claim messages (the member <-> broker thread) ────────────────────────────

@@ -46,12 +46,18 @@ interface Draft {
   amount_claimed: string;
 }
 
+/** The BASELINE is trimmed to match how the diff below compares — `create_claim`
+ * stores `provider_name` / `invoice_number` verbatim, so a claim filed as
+ * `"Raffles Clinic "` opened the sheet already dirty against an untrimmed
+ * baseline. Saving then sent a phantom change: a bumped revision, an audit row,
+ * and the member told "You changed the clinic or hospital" for an edit nobody
+ * made. */
 function draftFrom(claim: PortalClaim): Draft {
   return {
     incurred_date: claim.incurred_date,
-    provider_name: claim.provider_name ?? "",
-    invoice_number: claim.invoice_number ?? "",
-    doctor_name: claim.doctor_name ?? "",
+    provider_name: (claim.provider_name ?? "").trim(),
+    invoice_number: (claim.invoice_number ?? "").trim(),
+    doctor_name: (claim.doctor_name ?? "").trim(),
     diagnosis: claim.diagnosis ?? "",
     remarks: claim.remarks ?? "",
     amount_claimed: String(claim.amount_claimed),
@@ -184,12 +190,14 @@ export function ClaimEditSheet({
           )}
         </Field>
 
-        {/* Shown only when the claim already names a doctor — whether one is
-            REQUIRED is a property of the claim type (`requires_doctor_name`,
-            served to the create form), and this sheet does not change the claim
-            type. Offering the field on a claim that never asked for one would
-            invite a value the review then has to reason about. */}
-        {claim.doctor_name !== null && (
+        {/* Gated on the SERVED `requires_doctor_name`, not on whether the claim
+            already holds one — which is exactly backwards. A pre/post claim
+            recorded before the field existed has `doctor_name: null`, so keying
+            off that hid the control on the one claim that needs it, while the
+            amendment kept requiring it: every save 422'd with nothing on screen
+            the member could use to satisfy it. `||` so a claim that carries a
+            doctor can still have it corrected even if its type no longer asks. */}
+        {(claim.requires_doctor_name || claim.doctor_name !== null) && (
           <Field label="Doctor seen" required>
             {(p) => (
               <input

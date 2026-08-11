@@ -868,6 +868,131 @@ def test_a_LOG_case_stays_correctable(broker: TestClient):
     ).status_code == 422
 
 
+def test_a_LOG_case_may_carry_a_duplicate_invoice(
+    anon: TestClient, broker: TestClient
+):
+    """The LOG case IS the escape hatch from the duplicate-invoice rule, so it
+    cannot be subject to it.
+
+    One receipt for a clinic visit seen by the member AND their child has to be
+    filed as two claims (the claimant is per-claim), the member cannot change
+    the number printed on the bill, and the portal refuses the second with no
+    override. The documented answer is an assessor recording it broker-side as a
+    LOG case, which never runs `submit_claim` and so bypasses the gate. Applying
+    the gate on amendment made exactly that case permanently uncorrectable.
+    """
+    member_claim = _submitted(anon, b" log-dup")
+    shared_invoice = member_claim["invoice_number"]
+
+    res = broker.post(
+        f"/api/v1/employees/{EMP_A}/log-cases",
+        json={
+            "claim_kind": "insured",
+            "product_code": "GHS",
+            "incurred_date": "2027-06-15",
+            "amount_claimed": 120.0,
+            "invoice_number": shared_invoice,  # the SAME bill, by design
+            "received_via": "email",
+        },
+    )
+    assert res.status_code == 201, res.text
+    case = res.json()
+
+    res = broker.patch(
+        f"/api/v1/claims/{case['id']}", json={"amount_claimed": 130.0}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 130.0
+
+    # The member's own surface is unchanged — still a hard refusal.
+    other = _submitted(anon, b" log-dup-2")
+    assert _amend(
+        anon, other["id"], invoice_number=shared_invoice
+    ).status_code == 409
+
+
+def test_a_legacy_pre_post_claim_is_correctable(anon: TestClient):
+    """`requires_doctor_name` is SERVED so the edit form can render the control.
+
+    A pre-/post-hospitalisation claim recorded before the doctor became required
+    holds `doctor_name = None` — and a form that decides whether to show the
+    field by looking at that gets it exactly backwards: it hides the control on
+    the one claim that needs it, while the amendment keeps requiring it. Every
+    save then 422s with nothing on screen to satisfy it.
+    """
+    claim = _submitted(
+        anon, b" legacy-doctor",
+        sub_type="Follow up Pre-/Post-Hospitalisation",
+        claim_type="Follow up Pre-/Post-Hospitalisation",
+        doctor_name="Dr Tan Wei Ming",
+    )
+    assert _get(anon, claim["id"])["requires_doctor_name"] is True
+
+    # The legacy shape: the column was never populated.
+    with SessionLocal() as s:
+        s.get(Claim, claim["id"]).doctor_name = None
+        s.commit()
+
+    body = _get(anon, claim["id"])
+    assert body["doctor_name"] is None
+    # Still served as required — which is what puts the field on screen.
+    assert body["requires_doctor_name"] is True
+
+    # And the amendment that supplies it succeeds.
+    assert _amend(
+        anon, claim["id"], doctor_name="Dr Lim Mei Ling"
+    ).status_code == 200
+
+
+def test_a_reclassified_case_refuses_documents_too(
+    anon: TestClient, broker: TestClient
+):
+    """`member_editability` is the ONE owner of "may the claimant still change
+    this claim", and the upload endpoint has to ask it like everything else.
+
+    Gating on the raw status set instead let a member keep posting documents to
+    a case the broker had taken over — bumping its revision and superseding its
+    review each time — while the amend and delete endpoints refused them.
+    """
+    claim = _submitted(anon, b" log-upload")
+    assert broker.patch(
+        f"/api/v1/claims/{claim['id']}/case-type",
+        json={"case_type": "log", "reason": "recorded from the insurer's email"},
+    ).status_code == 200
+
+    assert _upload(anon, claim["id"], b" log-upload-2").status_code == 403
+    assert _amend(anon, claim["id"], amount_claimed=5.0).status_code == 403
+
+
+def test_switching_a_claim_to_flex_drops_the_insured_benefit_key(
+    anon: TestClient,
+):
+    """The rider clear has to fire on an identity change, not only a sub-type
+    one: the flex branch of `assert_coverage_claimable` never looks at
+    `benefit_key`, so a stale insured one rides along with nothing to catch
+    it."""
+    claim = _submitted(
+        anon, b" kind-switch",
+        product_code="GCGP",
+        claim_type="TCM (Traditional Chinese Medicine)",
+        sub_type="TCM (Traditional Chinese Medicine)",
+        diagnosis="Other: lower back pain",
+    )
+    assert claim["benefit_key"] == "TCM & Chiropractor"
+
+    res = _amend(
+        anon, claim["id"],
+        claim_kind="flex",
+        flex_category_name="Dental",
+        product_code=None,
+        claim_type="Dental",
+        sub_type=None,
+        diagnosis=None,
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["benefit_key"] is None
+
+
 def test_a_broker_amendment_runs_the_same_validation(
     anon: TestClient, broker: TestClient
 ):

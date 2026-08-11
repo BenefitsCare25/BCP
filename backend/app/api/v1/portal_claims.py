@@ -43,7 +43,6 @@ from app.models.claim import (
     CLAIM_KIND_INSURED,
     CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_DRAFT,
-    MEMBER_EDITABLE_STATUSES,
     member_visible_claims,
 )
 from app.models.claim_message import EVENT_AMENDED, EVENT_SUBMITTED
@@ -682,11 +681,14 @@ async def upload_my_claim_document(
     # onto a stale draft they can neither submit nor delete.
     if claim.status == CLAIM_STATUS_DRAFT:
         assert_member_capability(db, employee, Capability.CLAIM)
-    if claim.status not in MEMBER_EDITABLE_STATUSES:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Documents can only be added while the claim is editable.",
-        )
+    # `assert_member_may_amend`, not a raw status check: `member_editability` is
+    # the ONE owner of "may the claimant still change this claim", and the two
+    # answers differ — a portal claim reclassified to a LOG case is refused by
+    # the amend and delete endpoints but its status is still in
+    # `MEMBER_EDITABLE_STATUSES`, so a raw check let a member keep posting
+    # documents to a case the broker had taken over (bumping `revision` and
+    # superseding the review each time).
+    assert_member_may_amend(claim)
     # The slot tag must be a known slot key — the submit-time requirement
     # check trusts these values.
     if doc_type is not None and doc_type not in DOC_SLOT_LABELS:

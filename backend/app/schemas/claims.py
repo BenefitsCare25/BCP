@@ -288,6 +288,11 @@ class ClaimOut(_Base):
     # send again, and one flag answering both questions put a Send button on
     # every claim in the queue that could only ever 409.
     member_can_submit: bool = False
+    # Whether this claim must name the treating doctor (pre-/post-hospitalisation
+    # only). SERVED, never inferred — an edit form that decides by looking at
+    # whether `doctor_name` is already set gets a legacy claim exactly wrong: it
+    # hides the control on the one claim that needs it.
+    requires_doctor_name: bool = False
     # The optimistic-concurrency token (see `Claim.revision`). Member-visible
     # because the member's own amendment sends it back — two devices on one
     # claim is the ordinary case, not an exotic one.
