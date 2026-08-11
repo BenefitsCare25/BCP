@@ -172,13 +172,15 @@ def _setup_db(tmp_path_factory):
 def _canned_statement(monkeypatch):
     from app.api.v1 import portal_claims
     from app.services import claims as claims_service
+    from app.services import log_cases
 
-    monkeypatch.setattr(
-        claims_service, "build_member_statement", lambda db, emp: _statement_for(emp)
-    )
-    monkeypatch.setattr(
-        portal_claims, "build_member_statement", lambda db, emp: _statement_for(emp)
-    )
+    for module in (claims_service, portal_claims, log_cases):
+        # `log_cases` too: it resolves the statement itself for the LOG-case
+        # coverage gate, and without it a LOG case in this module is refused
+        # with "you have no GHS coverage" before the amendment under test runs.
+        monkeypatch.setattr(
+            module, "build_member_statement", lambda db, emp: _statement_for(emp)
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -643,6 +645,57 @@ def test_a_draft_amendment_posts_nothing(anon: TestClient):
     assert _thread(anon, claim["id"]) == []
 
 
+def test_a_claim_in_review_may_be_corrected_but_not_re_sent(anon: TestClient):
+    """Editing and SENDING are different questions, and they diverged the moment
+    the edit window stayed open past submission.
+
+    Found in the browser, not by a test: the portal gated its Send button on the
+    edit flag, so every claim in the queue grew a control that could only 409.
+    The server half is the one that mattered — `VALID_TRANSITIONS` gained
+    `ai_verified/ai_flagged → submitted` for the amendment fallback, so
+    `assert_transition` ALONE would have accepted a member re-sending a claim
+    already in review, re-posting them a "we have your claim" notice and
+    resetting its status.
+    """
+    claim = _submitted(anon, b" resend")
+    body = _get(anon, claim["id"])
+    assert body["member_editable"] is True
+    assert body["member_can_submit"] is False
+
+    res = anon.post(
+        f"/api/v1/portal/claims/{claim['id']}/submit", headers=_auth()
+    )
+    assert res.status_code == 409
+    assert _code(res) == "invalid_transition"
+
+    # The AI-verdict states are the ones the transition table would have let
+    # through, so they are pinned explicitly.
+    for status_value in ("ai_review_pending", "ai_verified", "ai_flagged"):
+        with SessionLocal() as s:
+            s.get(Claim, claim["id"]).status = status_value
+            s.commit()
+        assert _get(anon, claim["id"])["member_can_submit"] is False
+        res = anon.post(
+            f"/api/v1/portal/claims/{claim['id']}/submit", headers=_auth()
+        )
+        assert res.status_code == 409, status_value
+
+
+def test_the_two_states_a_member_may_send_from(
+    anon: TestClient, broker: TestClient
+):
+    """A draft, and a claim the broker sent back."""
+    draft = _draft(anon)
+    assert _get(anon, draft["id"])["member_can_submit"] is True
+
+    claim = _submitted(anon, b" sendable")
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision",
+        json={"action": "needs_info", "note": "Itemised bill please."},
+    ).status_code == 200
+    assert _get(anon, claim["id"])["member_can_submit"] is True
+
+
 # ── The broker's amendment ───────────────────────────────────────────────────
 
 
@@ -775,6 +828,44 @@ def test_a_decision_without_a_revision_still_works(
     assert broker.post(
         f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
     ).status_code == 200
+
+
+def test_a_LOG_case_stays_correctable(broker: TestClient):
+    """A LOG case never went through the member form, so the form's rules must
+    not be applied when correcting one.
+
+    Found by amending a real LOG case in the browser, not by a test. The case is
+    created through `LogCaseCreateIn`, which deliberately accepts no sub-type,
+    no provider, no invoice and no documents — an admission-guarantee email
+    carries none of them. Running the member intake rules over an amendment
+    demanded all of it back, so EVERY LOG case was permanently uncorrectable,
+    which is the exact opposite of what the endpoint is for.
+    """
+    res = broker.post(
+        f"/api/v1/employees/{EMP_A}/log-cases",
+        json={
+            "claim_kind": "insured",
+            "product_code": "GHS",  # GHS-family: the member form REQUIRES a sub-type
+            "incurred_date": "2027-06-15",
+            "amount_claimed": 8400.0,
+            "received_via": "email",
+        },
+    )
+    assert res.status_code == 201, res.text
+    case = res.json()
+    assert case["sub_type"] is None and case["documents"] == []
+
+    res = broker.patch(
+        f"/api/v1/claims/{case['id']}",
+        json={"amount_claimed": 840.0, "expected_revision": case["revision"]},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["amount_claimed"] == 840.0
+
+    # The rules that are facts about the CLAIM, not about the form, still bind.
+    assert broker.patch(
+        f"/api/v1/claims/{case['id']}", json={"incurred_date": "2030-01-01"}
+    ).status_code == 422
 
 
 def test_a_broker_amendment_runs_the_same_validation(

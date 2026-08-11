@@ -282,6 +282,12 @@ class ClaimOut(_Base):
     # and the notice off this string; it must never switch on `status`.
     member_editable: bool = False
     member_edit_block: str | None = None
+    # Whether the member may SEND it — narrower than `member_editable`, and
+    # served separately because the two diverged the moment editing stayed open
+    # after submission. A claim in review is theirs to CORRECT but not theirs to
+    # send again, and one flag answering both questions put a Send button on
+    # every claim in the queue that could only ever 409.
+    member_can_submit: bool = False
     # The optimistic-concurrency token (see `Claim.revision`). Member-visible
     # because the member's own amendment sends it back — two devices on one
     # claim is the ordinary case, not an exotic one.

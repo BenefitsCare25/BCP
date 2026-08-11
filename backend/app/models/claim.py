@@ -130,6 +130,21 @@ SETTLED_STATUSES = frozenset(
 # are the same mistake. See `docs/CLAIM_AMENDMENT_PLAN.md`.
 MEMBER_EDITABLE_STATUSES = DECIDABLE_STATUSES | {CLAIM_STATUS_DRAFT}
 
+# States from which the MEMBER may (re)send the claim to us. A NARROWER
+# question than editability: a claim already in review is theirs to correct but
+# not theirs to send again.
+#
+# **This is deliberately NOT derived from `VALID_TRANSITIONS[status] ∋
+# submitted`**, which now admits three states it must not: `ai_verified` and
+# `ai_flagged` gained that edge so an AMENDMENT could knock a stale verdict back
+# to manual review, and `ai_review_pending → submitted` has always been the
+# pipeline's own fault path. None of the three is a member pressing Send, and
+# reading the transition table here would let one POST /submit on a claim
+# already in review — re-notifying the member and resetting its status.
+MEMBER_SUBMITTABLE_STATUSES = frozenset(
+    {CLAIM_STATUS_DRAFT, CLAIM_STATUS_NEEDS_INFO}
+)
+
 # States that count against limits/duplicate checks ("live" claims).
 LIVE_STATUSES = frozenset(CLAIM_STATUSES - {CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED})
 

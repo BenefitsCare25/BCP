@@ -42,6 +42,7 @@ from app.models.claim import (
     CLAIM_STATUS_SUBMITTED,
     LIVE_STATUSES,
     MEMBER_EDITABLE_STATUSES,
+    MEMBER_SUBMITTABLE_STATUSES,
     ORIGIN_PORTAL,
     SETTLED_STATUSES,
     VALID_TRANSITIONS,
@@ -188,6 +189,20 @@ def member_editability(claim: Claim) -> tuple[bool, str | None]:
     return False, _EDIT_BLOCKED_DEFAULT
 
 
+def member_can_submit(claim: Claim) -> bool:
+    """Whether the member may SEND this claim — a narrower question than
+    whether they may edit it, and served separately for exactly that reason.
+
+    Widening the edit window to "until the broker decides" made the two diverge:
+    a claim in review is theirs to CORRECT but not theirs to send again. The
+    portal offered Send on both because one flag answered both questions, and
+    the button 409'd. See `MEMBER_SUBMITTABLE_STATUSES` for why this cannot be
+    read off the transition table either.
+    """
+    editable, _ = member_editability(claim)
+    return editable and claim.status in MEMBER_SUBMITTABLE_STATUSES
+
+
 def populate_claim_out(
     db: Session,
     claim: Claim,
@@ -246,6 +261,7 @@ def populate_claim_out(
     # and the broker's employee-view preview all share — so the three cannot
     # answer "may this member still edit?" differently.
     out.member_editable, out.member_edit_block = member_editability(claim)
+    out.member_can_submit = member_can_submit(claim)
     return out
 
 
@@ -913,46 +929,71 @@ def validate_claim_facts(
     # change can't slip through with a missing sub-type/referral. A draft
     # holding a pre-rename sub-type label is folded onto the current one.
     claim.sub_type = normalize_sub_type(claim.sub_type)
-    # Re-validate the specialist referral: a legacy draft that used the removed
-    # "not applicable" escape (visit_type=None, no referral) is caught here, and
-    # a follow-up draft that still has no referral_document_id gets the latest
-    # letter on file linked. A draft that already names a letter keeps it (the
-    # member's explicit choice at draft time).
-    if (
-        claim.claim_kind == CLAIM_KIND_INSURED
-        and claim_profile_for(claim.product_code).requires_referral
-    ):
-        claim.referral_document_id = resolve_sp_referral(
+
+    # **A LOG case never went through the member form, so the form's rules do
+    # not apply to it.** `create_log_case` runs none of them, and
+    # `LogCaseCreateIn` deliberately accepts a case with no provider, no
+    # invoice, no diagnosis and no documents — an admission-guarantee email
+    # carries none of those, and a form that refuses to save without them means
+    # the request never gets recorded at all.
+    #
+    # Without this carve-out an assessor could not correct a LOG case AT ALL:
+    # the amendment would demand a sub-type (and a receipt) the case was never
+    # created with, so every one of them would be permanently uncorrectable —
+    # the exact opposite of what the endpoint exists for. Found by amending a
+    # real LOG case, not by a test.
+    #
+    # Same carve-out, and the same reasoning, as the `member_claimable` gate in
+    # `assert_coverage_claimable`: the exemption is a property of the CASE, not
+    # of who is calling. What still applies to a LOG case is everything that is
+    # a fact about the claim rather than about the form — the date window, the
+    # coverage, the benefit key, the duplicate-invoice rule.
+    from_member_form = claim.case_type != CASE_TYPE_LOG
+
+    if from_member_form:
+        # Re-validate the specialist referral: a legacy draft that used the
+        # removed "not applicable" escape (visit_type=None, no referral) is
+        # caught here, and a follow-up draft that still has no
+        # referral_document_id gets the latest letter on file linked. A draft
+        # that already names a letter keeps it (the member's explicit choice at
+        # draft time).
+        if (
+            claim.claim_kind == CLAIM_KIND_INSURED
+            and claim_profile_for(claim.product_code).requires_referral
+        ):
+            claim.referral_document_id = resolve_sp_referral(
+                db,
+                employee,
+                visit_type=claim.visit_type,
+                referral_document_id=claim.referral_document_id,
+            )
+        assert_intake_valid(
             db,
             employee,
-            visit_type=claim.visit_type,
-            referral_document_id=claim.referral_document_id,
-        )
-    assert_intake_valid(
-        db,
-        employee,
-        claim_kind=claim.claim_kind,
-        product_code=claim.product_code,
-        sub_type=claim.sub_type,
-        diagnosis=claim.diagnosis,
-        referral_document_id=claim.referral_document_id,
-        referral_not_applicable=bool(
-            (claim.form_fields or {}).get("referral_not_applicable")
-        ),
-        currency=claim.currency,
-        visit_type=claim.visit_type,
-    )
-    if enforce_doctor_name:
-        assert_doctor_name_valid(
-            claim.product_code,
-            claim.sub_type,
-            claim.doctor_name,
             claim_kind=claim.claim_kind,
+            product_code=claim.product_code,
+            sub_type=claim.sub_type,
+            diagnosis=claim.diagnosis,
+            referral_document_id=claim.referral_document_id,
+            referral_not_applicable=bool(
+                (claim.form_fields or {}).get("referral_not_applicable")
+            ),
+            currency=claim.currency,
+            visit_type=claim.visit_type,
         )
+        if enforce_doctor_name:
+            assert_doctor_name_valid(
+                claim.product_code,
+                claim.sub_type,
+                claim.doctor_name,
+                claim_kind=claim.claim_kind,
+            )
     statement = build_member_statement(db, employee)
     _apply_gp_rider_benefit_key(statement, claim, clear_rider_key=clear_rider_key)
     assert_coverage_claimable(statement, claim)
-    if enforce_documents:
+    # The document requirements are the member form's too — a LOG case is
+    # routinely recorded with nothing attached yet (see above).
+    if enforce_documents and from_member_form:
         # Every required document slot must be filled (tagged uploads); the
         # generic invoice/receipt slot accepts any attached document.
         documents = claim_documents(db, claim)
@@ -986,6 +1027,25 @@ def submit_claim(
     Submit = the FILING rules (year active, grace deadline) + the shared
     `validate_claim_facts` chain + the status/reference bookkeeping.
     """
+    # **Checked BEFORE `assert_transition`, and not replaced by it.**
+    # `VALID_TRANSITIONS` now admits `ai_verified/ai_flagged → submitted` (so an
+    # AMENDMENT can knock a stale verdict back to manual review) and has always
+    # admitted `ai_review_pending → submitted` (the pipeline's fault path) — so
+    # the transition table alone would let a member POST /submit on a claim
+    # that is already in review, re-posting them a "we have your claim" notice
+    # and resetting its status. The transition check stays as the backstop for
+    # everything else.
+    if claim.status not in MEMBER_SUBMITTABLE_STATUSES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "invalid_transition",
+                "message": (
+                    f"A {claim.status.replace('_', ' ')} claim has already been "
+                    "sent — there is nothing more to send."
+                ),
+            },
+        )
     assert_transition(claim, CLAIM_STATUS_SUBMITTED)
 
     year = db.get(PolicyYear, claim.policy_year_id)

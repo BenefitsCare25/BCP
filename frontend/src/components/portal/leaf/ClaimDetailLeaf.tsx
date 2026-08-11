@@ -604,28 +604,38 @@ export function ClaimDetailLeaf({
                   Add another document
                 </Action>
                 {/* The page's one brand fill — sending the claim is what the
-                    member came here to do. */}
-                <Action
-                  tone="primary"
-                  block="phone"
-                  disabled={submitting || !allSlotsSatisfied || !onSubmit}
-                  title={onSubmit ? undefined : disabledTitle}
-                  onClick={onSubmit}
-                >
-                  {submitting ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden />
-                  ) : (
-                    <Send className="size-4" aria-hidden />
-                  )}
-                  {claim.status === "needs_info"
-                    ? "Send again"
-                    : "Send this claim"}
-                </Action>
+                    member came here to do.
+
+                    Gated on `member_can_submit`, NOT on `editable`. The two
+                    were one flag until editing stayed open after submission,
+                    at which point every claim in the queue grew a Send button
+                    that could only 409: a claim in review is theirs to CORRECT
+                    but not theirs to send again. */}
+                {claim.member_can_submit && (
+                  <Action
+                    tone="primary"
+                    block="phone"
+                    disabled={submitting || !allSlotsSatisfied || !onSubmit}
+                    title={onSubmit ? undefined : disabledTitle}
+                    onClick={onSubmit}
+                  >
+                    {submitting ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden />
+                    ) : (
+                      <Send className="size-4" aria-hidden />
+                    )}
+                    {claim.status === "needs_info"
+                      ? "Send again"
+                      : "Send this claim"}
+                  </Action>
+                )}
               </div>
               {/* Naming what's missing beats a disabled button with no
                   explanation — the member can't otherwise tell whether it's
-                  broken or waiting on them. */}
-              {!allSlotsSatisfied && (
+                  broken or waiting on them. Only alongside a Send control: on
+                  a claim already in review it is not what they are waiting to
+                  do, and the assessor will ask if something is missing. */}
+              {claim.member_can_submit && !allSlotsSatisfied && (
                 <p className="text-row text-label">
                   Attach {missing.map((s) => s.label).join(" and ")} first.
                 </p>

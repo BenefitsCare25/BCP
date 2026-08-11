@@ -390,6 +390,11 @@ export interface PortalClaim {
    * class as mirroring the pending-status list (see `UsageLeaf`). */
   member_editable: boolean;
   member_edit_block: string | null;
+  /** Whether the member may SEND it. NARROWER than `member_editable` — a claim
+   * in review is theirs to correct but not theirs to send again. Gate the
+   * submit control on this one; gating both on `member_editable` put a Send
+   * button on every claim in the queue that could only ever 409. */
+  member_can_submit: boolean;
   /** Optimistic-concurrency token. Sent back on every amendment so two devices
    * on one claim cannot silently clobber each other. */
   revision: number;
