@@ -832,6 +832,11 @@ class DuplicateEntry(BaseModel):
 class UploadResult(BaseModel):
     inserted: int
     skipped: int
+    #: Rows already on file that this upload ADOPTED onto the employee it names
+    #: — dependants stored before their sponsor existed. Neither inserted nor
+    #: skipped: counting them as either would report a roster that gained
+    #: nothing, when what changed is that somebody is now covered.
+    linked: int = 0
     errors: list[str]
     #: Advisory notes about rows that WERE imported (e.g. an identification
     #: number that fails its checksum). Separate from `errors` on purpose: a

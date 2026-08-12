@@ -549,6 +549,8 @@ async def upload_dependants(
     # incoming row is unlinked (`dependant_agnostic_keys`). Merged into
     # `existing_keys` they would swallow the second parent's child again.
     linked_agnostic: dict[str, str] = {}
+    # Rows on file with no sponsor yet — the ones a later file can ADOPT.
+    unlinked_ids: set[str] = set()
     for did, d_emp_id, d_nid, d_attrs in db.execute(
         select(
             Dependant.id,
@@ -570,6 +572,8 @@ async def upload_dependants(
         if d_emp_id:
             for k in dependant_agnostic_keys(d_attrs, nric=d_nid):
                 linked_agnostic.setdefault(k, did)
+        else:
+            unlinked_ids.add(did)
 
     inserted = 0
     errors: list[str] = list(no_dependant_rows)
@@ -582,6 +586,8 @@ async def upload_dependants(
     seen: set[str] = set()
     # Stored rows already absorbed by an earlier row of this file.
     claimed: set[str] = set()
+    # Orphans this file names a sponsor for: {dependant_id: (employee_id, method)}.
+    to_link: dict[str, tuple[str, str]] = {}
     # NRIC → the employee already carrying that life, across the rows on file
     # and the rows in this upload. Used only to COUNT dual coverage for the
     # upload summary; nothing is skipped on the strength of it.
@@ -638,6 +644,17 @@ async def upload_dependants(
                 linked_agnostic, dependant_agnostic_keys(rec.attributes), claimed
             )
         in_file_hit = any(k in seen for k in own_keys)
+        if existing_hit and emp_id and existing_hit in unlinked_ids:
+            # The row is already on file, stored before its sponsor existed, and
+            # this row names the sponsor — so ADOPT it rather than reporting a
+            # duplicate. Skipping instead left the orphan on nobody's plan while
+            # the file that could have fixed it reported success, and with one
+            # stored row per claim the second parent's line was never created
+            # either.
+            claimed.add(existing_hit)
+            to_link[existing_hit] = (emp_id, method or "unlinked")
+            seen.update(own_keys)
+            continue
         if existing_hit or in_file_hit:
             # One stored row absorbs ONE incoming row. Where the stored row is
             # unlinked, both parents' rows reach it through the same bridge key;
@@ -675,6 +692,19 @@ async def upload_dependants(
         )
         inserted += 1
 
+    if to_link:
+        for dep in db.execute(
+            select(Dependant).where(Dependant.id.in_(to_link))
+        ).scalars():
+            dep.employee_id, dep.link_method = to_link[dep.id]
+        n = len(to_link)
+        warnings.append(
+            f"{n} dependant{'' if n == 1 else 's'} already on file "
+            f"{'was' if n == 1 else 'were'} linked to the employee named here. "
+            "They were stored before that employee existed, so nothing was "
+            "paying for them until now."
+        )
+
     if ambiguous_hits:
         names = ", ".join(sorted(ambiguous_hits))
         errors.append(
@@ -699,6 +729,7 @@ async def upload_dependants(
         after={
             "inserted": inserted,
             "skipped": len(duplicates),
+            "linked": len(to_link),
             "filename": file.filename,
         },
     )
@@ -715,6 +746,7 @@ async def upload_dependants(
     return UploadResult(
         inserted=inserted,
         skipped=len(duplicates),
+        linked=len(to_link),
         errors=errors,
         warnings=warnings,
         duplicates=duplicates,

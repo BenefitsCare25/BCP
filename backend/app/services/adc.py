@@ -150,6 +150,7 @@ class _DepChange:
     target: Dependant
     merged: dict[str, Any]
     employee_id: str | None
+    link_method: str
     nric: str | None
     diffs: list[AdcFieldDiff]
 
@@ -646,13 +647,29 @@ def _plan_dependants(
             continue
 
         merged, diffs = _merge_and_diff(target.attribute_values or {}, rec.attributes)
+        # A roster row stored before its sponsor existed — the ordinary result of
+        # uploading dependants ahead of employees. This file names the employee,
+        # so the row is ADOPTED rather than left orphaned: an unlinked dependant
+        # is on the roster but on nobody's plan, so it is not covered, does not
+        # price, and does not appear on the member's statement. Only ever from
+        # unlinked to linked; re-parenting a linked row would move a child
+        # between two employees on the strength of a name collision.
+        if target.employee_id is None and emp_id is not None:
+            diffs = [
+                *diffs,
+                AdcFieldDiff(
+                    field="employee",
+                    old=None,
+                    new=(emp.staff_id if emp else None) or emp_id,
+                ),
+            ]
         leaving = _leaving_date(rec.attributes, _DEP_LEAVING_KEYS,
                                 target.attribute_values or {})
         if leaving is not None:
             plan.dep_delete.append(_DepDelete(rec.row, target, leaving, merged))
         elif diffs:
             plan.dep_change.append(
-                _DepChange(rec.row, target, merged, emp_id,
+                _DepChange(rec.row, target, merged, emp_id, method,
                            dependant_nric(rec.attributes), diffs)
             )
         else:
@@ -924,13 +941,13 @@ def apply_listing(
         )
         deleted += 1
 
-    for a in plan.dep_add:
-        emp_id = a.employee_id
-        link_method = a.link_method
+    for dep_a in plan.dep_add:
+        emp_id = dep_a.employee_id
+        link_method = dep_a.link_method
         # Link to an employee added earlier in this same file, if not already linked.
         if emp_id is None:
-            staff = str(a.attrs.get("employee_staff_id") or "").strip().lower()
-            name = str(a.attrs.get("employee_name") or "").strip().lower()
+            staff = str(dep_a.attrs.get("employee_staff_id") or "").strip().lower()
+            name = str(dep_a.attrs.get("employee_name") or "").strip().lower()
             if staff and staff in new_by_staff:
                 emp_id, link_method = new_by_staff[staff], "staff_id"
             elif name and name in new_by_name:
@@ -940,30 +957,36 @@ def apply_listing(
                 client_id=client_id,
                 policy_year_id=policy_year_id,
                 employee_id=emp_id,
-                attribute_values=a.attrs,
+                attribute_values=dep_a.attrs,
                 link_method=link_method,
-                national_id_normalized=a.nric,
+                national_id_normalized=dep_a.nric,
             )
         )
         added += 1
-    for c in plan.dep_change:
-        c.target.attribute_values = c.merged
-        c.target.national_id_normalized = c.nric or c.target.national_id_normalized
+    for dep_c in plan.dep_change:
+        dep_c.target.attribute_values = dep_c.merged
+        dep_c.target.national_id_normalized = dep_c.nric or dep_c.target.national_id_normalized
+        # Adopt an orphan onto the sponsor this file names — see `_plan_dependants`.
+        # Guarded on the row being unlinked, so a file that cannot resolve its
+        # employee column (emp_id None) can never detach a live coverage line.
+        if dep_c.target.employee_id is None and dep_c.employee_id is not None:
+            dep_c.target.employee_id = dep_c.employee_id
+            dep_c.target.link_method = dep_c.link_method
         write_audit(
             db, user, action="adc_change", entity_type="dependant",
-            entity_id=c.target.id,
-            after={"diffs": [d.model_dump() for d in c.diffs]},
+            entity_id=dep_c.target.id,
+            after={"diffs": [d.model_dump() for d in dep_c.diffs]},
         )
         changed += 1
-    for d in plan.dep_delete:
-        if d.merged is not None:
-            d.target.attribute_values = d.merged
-        d.target.status = DEPENDANT_STATUS_TERMINATED
-        d.target.terminated_effective = d.effective
+    for dep_d in plan.dep_delete:
+        if dep_d.merged is not None:
+            dep_d.target.attribute_values = dep_d.merged
+        dep_d.target.status = DEPENDANT_STATUS_TERMINATED
+        dep_d.target.terminated_effective = dep_d.effective
         write_audit(
             db, user, action="adc_delete", entity_type="dependant",
-            entity_id=d.target.id,
-            after={"effective": d.effective.isoformat(), "source": "leaving_date"},
+            entity_id=dep_d.target.id,
+            after={"effective": dep_d.effective.isoformat(), "source": "leaving_date"},
         )
         deleted += 1
 
