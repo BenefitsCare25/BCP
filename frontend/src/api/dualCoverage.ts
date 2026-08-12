@@ -88,12 +88,25 @@ export function livesByDependant(data?: DualCoverage): Map<string, DualLifeRef> 
   return new Map((data?.lives ?? []).map((l) => [l.dependant_id, l]));
 }
 
-export function useDualCoverage(policyYearId: string | undefined) {
+/**
+ * `focus` names one case the response must contain whatever `preview_cap` does.
+ * The table marks its rows from `lives`, which is uncapped, so without it a row
+ * past the cap opened the sheet onto a case that wasn't in `cases` — reported as
+ * "Nothing open for this person" on the row that had just been clicked.
+ */
+export function useDualCoverage(
+  policyYearId: string | undefined,
+  focus?: string | null,
+) {
   const clientId = useSession((s) => s.activeClientId);
   return useQuery({
-    queryKey: ["dependants", "dual-coverage", clientId, policyYearId],
+    queryKey: ["dependants", "dual-coverage", clientId, policyYearId, focus ?? null],
     queryFn: () =>
-      api.get<DualCoverage>(`/policy-years/${policyYearId}/dual-coverage`),
+      api.get<DualCoverage>(
+        `/policy-years/${policyYearId}/dual-coverage${
+          focus ? `?focus=${encodeURIComponent(focus)}` : ""
+        }`,
+      ),
     enabled: !!policyYearId,
   });
 }

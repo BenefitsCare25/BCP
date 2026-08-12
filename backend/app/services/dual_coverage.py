@@ -302,6 +302,22 @@ def _group_lives(roster: ResolvedRoster) -> list[tuple[list[Dependant], list[Ide
 # ── Coverage: who is actually being paid for ────────────────────────────────
 
 
+def dependants_by_employee(roster: ResolvedRoster) -> dict[str, list[Dependant]]:
+    """The dependants each employee sponsors — the set the cohort default sweeps.
+
+    Shared with ``dual_coverage_assignment``, which has to recognise that set
+    exactly: a restore that reproduces it must CLEAR the override rather than
+    re-state it, or the sweep stays off and a dependant added later is silently
+    uncovered. Two derivations of "who would be swept in" would disagree the
+    first time either side changed.
+    """
+    out: dict[str, list[Dependant]] = {}
+    for dep in roster.dependants:
+        if dep.employee_id:
+            out.setdefault(dep.employee_id, []).append(dep)
+    return out
+
+
 def coverage_by_employee(
     db: Session,
     py: PolicyYear,
@@ -342,10 +358,7 @@ def coverage_by_employee(
                 cat.raw_description,
             )
 
-    deps_by_emp: dict[str, list[Dependant]] = {}
-    for dep in roster.dependants:
-        if dep.employee_id:
-            deps_by_emp.setdefault(dep.employee_id, []).append(dep)
+    deps_by_emp = dependants_by_employee(roster)
 
     out: dict[str, dict[str, set[str]]] = {}
     for emp_id, matched in plans.items():

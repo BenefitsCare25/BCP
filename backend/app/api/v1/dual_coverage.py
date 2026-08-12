@@ -163,9 +163,18 @@ def _party_out(p: svc.Party) -> DualPartyOut:
 )
 def get_dual_coverage(
     policy_year_id: str,
+    focus: str | None = None,
     py: PolicyYear = Depends(load_policy_year),
     db: Session = Depends(get_db),
 ) -> DualCoverageOut:
+    """Every dual-coverage case, capped for the preview.
+
+    ``focus`` is the ``subject_key`` of a case the caller must be able to render
+    whatever the cap does. The Dependants table marks its rows from ``lives``,
+    which is deliberately uncapped, so a row on page 40 could open the sheet
+    onto a case the capped list did not contain — the sheet then reported
+    nothing open for a person it had just been opened for.
+    """
     found = svc.detect(db, py)
     rows = _decisions_for(db, py)
     names = _decider_names(db, rows)
@@ -222,13 +231,19 @@ def get_dual_coverage(
         for o in found.opportunities
     ]
 
+    shown = cases[: svc.PREVIEW_CAP]
+    if focus and not any(c.subject_key == focus for c in shown):
+        pinned = next((c for c in cases if c.subject_key == focus), None)
+        if pinned is not None:
+            shown = [pinned, *shown]
+
     return DualCoverageOut(
         # Only CASES are counted into the alert. Opportunities are the normal
         # state of a dual-employee family and would bury the real duplicates.
         unresolved_cases=unresolved,
         total_cases=len(found.cases),
         total_opportunities=len(found.opportunities),
-        cases=cases[: svc.PREVIEW_CAP],
+        cases=shown,
         opportunities=opportunities[: svc.PREVIEW_CAP],
         preview_cap=svc.PREVIEW_CAP,
         lives=lives,
@@ -264,14 +279,10 @@ def set_dependant_cover_endpoint(
         changed = set_dependant_cover(db, py, user, dependant=dep, covered=body.covered)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-    write_audit(
-        db,
-        user,
-        action="dual_coverage.set_cover",
-        entity_type="dependant",
-        entity_id=dep.id,
-        after={"covered": body.covered, "products": changed},
-    )
+    # No audit row here: each product's move is filed inside the service, in the
+    # same transaction as the write it describes. `set_plan_override` commits per
+    # product, so a summary written at this point recorded only the runs that
+    # got all the way through — the half-applied ones left nothing behind.
     db.commit()
     return DualCoverIn(covered=body.covered, products_changed=changed)
 

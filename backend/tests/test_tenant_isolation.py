@@ -1169,6 +1169,16 @@ def test_dual_coverage_decision_cross_tenant_404(client_as_a: TestClient) -> Non
     assert res.status_code == 404
 
 
+def test_dual_coverage_set_cover_cross_tenant_404(client_as_a: TestClient) -> None:
+    """The one endpoint here that MOVES MONEY — it writes plan overrides, so a
+    cross-tenant hit would change another firm's premiums, not just read them."""
+    res = client_as_a.put(
+        f"/api/v1/policy-years/{PY_B}/dual-coverage/dependants/whatever/cover",
+        json={"covered": False},
+    )
+    assert res.status_code == 404
+
+
 def test_dual_coverage_decisions_is_a_tenant_table() -> None:
     """A model missing from `models/__init__` is invisible to Alembic
     autogenerate AND to `sync_firm_schema` — so on Postgres every firm's queries

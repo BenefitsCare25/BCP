@@ -32,11 +32,11 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.models import Dependant, Employee, EmployeePlanOverride, PolicyYear
-from app.models.dependant import DEPENDANT_STATUS_ACTIVE
 from app.schemas.enrollment import PlanOverrideUpsert
-from app.services.dual_coverage import coverage_by_employee
+from app.services.dual_coverage import coverage_by_employee, dependants_by_employee
 from app.services.flex_membership import resolve_roster
 from app.services.plan_hydration import hydrate_plans
 
@@ -55,7 +55,7 @@ def set_dependant_cover(
     the request agreed with what was already on file, which is a no-op rather
     than an error (the same click arriving twice must not cost a premium).
     """
-    from app.api.v1.plan_overrides import set_plan_override
+    from app.api.v1.plan_overrides import delete_plan_override, set_plan_override
 
     employee = db.get(Employee, dependant.employee_id or "")
     if employee is None:
@@ -87,14 +87,19 @@ def set_dependant_cover(
     # re-match or slip change would stop reaching this member. Passing None
     # blindly is the opposite hazard: it would wipe a plan the member actually
     # elected, so an existing election is carried through untouched.
-    pinned = {
-        row.product_code: row.plan_code
+    stored = {
+        row.product_code: row
         for row in db.execute(
             select(EmployeePlanOverride).where(
                 EmployeePlanOverride.employee_id == employee.id
             )
         ).scalars()
     }
+    pinned = {code: row.plan_code for code, row in stored.items()}
+
+    # What the cohort default WOULD sweep in for this employee — the one set a
+    # restore has to recognise, read through the same helper the resolver uses.
+    sweep = {d.id for d in dependants_by_employee(roster).get(employee.id, [])}
 
     changed: list[str] = []
     for mp in plans:
@@ -109,33 +114,87 @@ def set_dependant_cover(
         wanted = set(current) | {dependant.id} if covered else set(current) - {dependant.id}
         if wanted == set(current):
             continue
-        set_plan_override(
+        # Restoring the whole cohort set leaves nothing for this override to
+        # say. `coverage_by_employee` short-circuits on ANY explicit list, so
+        # re-stating the set left the sweep permanently off: a drop followed by
+        # a restore looked like a clean round trip, and the next dependant added
+        # to that employee was silently uncovered on every product the broker
+        # had touched. So a restore to the default RETRACTS the override
+        # instead — entirely where it carries nothing else, or down to just its
+        # covered list where it also holds an elected plan worth keeping.
+        row = stored.get(mp.product_code)
+        back_to_default = covered and wanted == sweep
+        drop_row = back_to_default and not _has_other_opinion(row)
+
+        # Filed BEFORE the write, in the same uncommitted transaction, so the
+        # two land together or not at all. Every write below commits on its own,
+        # so a summary row written after the loop was simply lost when a later
+        # product raised — leaving cover half-moved and nothing to say so.
+        write_audit(
+            db,
+            user,
+            action="dual_coverage.set_cover",
+            entity_type="dependant",
+            entity_id=dependant.id,
+            after={
+                "covered": covered,
+                "product": mp.product_code,
+                "employee_staff_id": employee.staff_id,
+            },
             employee_id=employee.id,
-            product_code=mp.product_code,
-            body=PlanOverrideUpsert(
-                plan_code=pinned.get(mp.product_code),
-                declined=False,
-                # Omitted deliberately, NOT passed as None: the endpoint reads
-                # `model_fields_set` to tell "leave the stored level alone" from
-                # "clear it", and clearing a member's elected dependant option
-                # as a side effect of a dual-coverage click would silently
-                # change what they are covered for.
-                covered_dependant_ids=sorted(wanted),
-            ),
-            emp=employee,
-            user=user,
-            db=db,
         )
+        if drop_row:
+            delete_plan_override(
+                employee_id=employee.id,
+                product_code=mp.product_code,
+                emp=employee,
+                user=user,
+                db=db,
+            )
+        else:
+            set_plan_override(
+                employee_id=employee.id,
+                product_code=mp.product_code,
+                body=PlanOverrideUpsert(
+                    plan_code=pinned.get(mp.product_code),
+                    declined=False,
+                    # None CLEARS the stored list (`override_writer` keeps a
+                    # value only at its `_KEEP` sentinel). The schema refuses an
+                    # override that states nothing at all, which is why the
+                    # plan_code has to survive for this branch to be legal.
+                    # `dependant_option_ids` is omitted rather than nulled: the
+                    # endpoint reads `model_fields_set`, and clearing a member's
+                    # elected dependant option as a side effect of a
+                    # dual-coverage click would change what they are covered
+                    # for, not just who is covered.
+                    covered_dependant_ids=(
+                        None
+                        if back_to_default and pinned.get(mp.product_code)
+                        else sorted(wanted)
+                    ),
+                ),
+                emp=employee,
+                user=user,
+                db=db,
+            )
         changed.append(mp.product_code)
     return changed
 
 
-def active_dependant_ids(db: Session, employee_id: str) -> set[str]:
-    return set(
-        db.execute(
-            select(Dependant.id).where(
-                Dependant.employee_id == employee_id,
-                Dependant.status == DEPENDANT_STATUS_ACTIVE,
-            )
-        ).scalars()
+def _has_other_opinion(row: EmployeePlanOverride | None) -> bool:
+    """Whether the override says anything beyond who is covered.
+
+    Decides retract-vs-clear on a restore. A row created purely to exclude one
+    dual-covered life holds nothing else and must go, or the cohort sweep never
+    resumes; a row carrying an elected plan, a decline, an elected dependant
+    option level or a dated effective_from is somebody's real election and is
+    kept.
+    """
+    if row is None:
+        return False
+    return bool(
+        row.plan_code
+        or row.declined
+        or row.dependant_option_ids
+        or row.effective_from
     )

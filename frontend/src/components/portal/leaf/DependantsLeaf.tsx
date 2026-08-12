@@ -26,8 +26,10 @@ import { formatDay } from "./date";
  * true the moment cover could be set per person — an enrollment election that
  * leaves someone out, or a broker taking one side of a dual-covered life off
  * cover — and the member was still told they were covered while no plan would
- * pay for them. `covered` is undefined where the caller cannot resolve it (the
- * broker preview), and the old wording stands there rather than guessing. */
+ * pay for them. Both callers resolve `covered` from the benefit statement, the
+ * broker preview included, so the two surfaces answer identically; it stays
+ * optional so a caller without a statement to read falls back to the row's own
+ * status rather than asserting cover it cannot see. */
 function DependantState({
   status,
   covered,

@@ -138,7 +138,10 @@ export function DualCoverageSheet({
   focusKey?: string | null;
   onClearFocus: () => void;
 }) {
-  const { data } = useDualCoverage(policyYearId);
+  // The focused key is sent to the server, which pins that case into the
+  // response past `preview_cap`. Filtering a capped list here instead is how a
+  // row on a later page opened an empty sheet.
+  const { data } = useDualCoverage(policyYearId, focusKey);
   const [filter, setFilter] = useState<Filter>("open");
 
   const decidedCount = useMemo(
@@ -177,7 +180,9 @@ export function DualCoverageSheet({
           {focused ? (
             <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
               <p className="text-sm text-muted-foreground">
-                {focused.length === 0 ? "Nothing open for this person." : "Showing one person."}
+                {focused.length === 0
+                  ? "This person is no longer listed twice."
+                  : "Showing one person."}
               </p>
               <Button size="sm" variant="ghost" onClick={onClearFocus}>
                 Show all {data.total_cases}
@@ -205,11 +210,15 @@ export function DualCoverageSheet({
 
           <section className="space-y-3">
             {shown.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {filter === "decided"
-                  ? "No decisions recorded yet."
-                  : "Nothing left to review."}
-              </p>
+              // Silent when focused — the header above has already said it, and
+              // two empty-state lines stacked read as two separate problems.
+              !focused && (
+                <p className="text-sm text-muted-foreground">
+                  {filter === "decided"
+                    ? "No decisions recorded yet."
+                    : "Nothing left to review."}
+                </p>
+              )
             ) : (
               shown.map((c) => (
                 <CaseCard key={c.subject_key} c={c} policyYearId={policyYearId} />
