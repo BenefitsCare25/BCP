@@ -13,7 +13,7 @@ unlike the insurer catalog.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -28,11 +28,22 @@ from app.services.matching_engine import normalize_entity
 router = APIRouter(tags=["entity-aliases"])
 
 
+def _canonicals(row: EntityAlias) -> list[str]:
+    """The alias's entity list, falling back to the single `canonical` for a
+    row written before the `canonicals` column existed."""
+    stored = row.canonicals
+    if isinstance(stored, list) and stored:
+        return list(stored)
+    return [row.canonical]
+
+
 def _out(row: EntityAlias) -> EntityAliasOut:
+    canonicals = _canonicals(row)
     return EntityAliasOut(
         id=row.id,
         alias=row.alias,
-        canonical=row.canonical,
+        canonical=canonicals[0],
+        canonicals=canonicals,
         alias_normalized=row.alias_normalized,
     )
 
@@ -45,39 +56,55 @@ def _load_owned(alias_id: str, client_id: str, db: Session) -> EntityAlias:
     return row
 
 
-def _assert_usable(alias: str, canonical: str, client_id: str, db: Session,
-                   *, exclude_id: str | None = None) -> str:
-    """Validate the pair and return the normalized alias.
+def _prepare(alias: str, canonicals: list[str]) -> tuple[str, list[str]]:
+    """Validate an alias + its entity list; return (normalized alias, deduped
+    raw canonicals).
 
-    Rejects a self-mapping (normalizes to the same thing, so it would do
-    nothing) and a duplicate alias. Chains are NOT rejected — `resolve_entity`
-    is single-hop, so an A→B, B→C map resolves deterministically rather than
-    looping — but the alias side must be unique or the map is ambiguous.
+    Rejects a canonical that normalizes to the alias itself (it would do
+    nothing) and collapses canonicals that normalize to the same entity, keeping
+    the first spelling. Chains are NOT rejected — `resolve_entities` is
+    single-hop, so an A→B, B→C map resolves deterministically rather than
+    looping.
     """
     norm_alias = normalize_entity(alias)
-    norm_canon = normalize_entity(canonical)
-    if not norm_alias or not norm_canon:
+    if not norm_alias:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "The alias must be a real name."
+        )
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in canonicals:
+        nc = normalize_entity(c)
+        if not nc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, f"{c!r} is not a real name."
+            )
+        if nc == norm_alias:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{alias!r} and {c!r} already compare equal — no alias needed.",
+            )
+        if nc in seen:
+            continue
+        seen.add(nc)
+        out.append(c)
+    if not out:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Both the alias and the entity it maps to must be real names.",
+            "An alias must map to at least one entity.",
         )
-    if norm_alias == norm_canon:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"{alias!r} and {canonical!r} already compare equal — no alias needed.",
-        )
-    clash = db.execute(
+    return norm_alias, out
+
+
+def _find_by_alias(
+    norm_alias: str, client_id: str, db: Session
+) -> EntityAlias | None:
+    return db.execute(
         select(EntityAlias).where(
             EntityAlias.client_id == client_id,
             EntityAlias.alias_normalized == norm_alias,
         )
     ).scalar_one_or_none()
-    if clash is not None and clash.id != exclude_id:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"{alias!r} is already mapped to {clash.canonical!r}.",
-        )
-    return norm_alias
 
 
 @router.get("/entity-aliases", response_model=list[EntityAliasOut])
@@ -101,16 +128,51 @@ def list_entity_aliases(
 )
 def create_entity_alias(
     payload: EntityAliasIn,
+    response: Response,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EntityAliasOut:
+    """Create the alias, or — when it already exists — MERGE the new entities
+    into it. One row per alias (the unique constraint is unchanged), so adding a
+    second entity to an existing alias appends rather than conflicts. This is
+    what lets a roster spelling stand for several subsidiaries, and it makes the
+    reconciliation panel's one-click "same entity" idempotent."""
     client_id = require_client_id(user)
-    norm = _assert_usable(payload.alias, payload.canonical, client_id, db)
+    norm_alias, targets = _prepare(payload.alias, payload.canonicals)
+
+    existing = _find_by_alias(norm_alias, client_id, db)
+    if existing is not None:
+        current = _canonicals(existing)
+        seen = {normalize_entity(c) for c in current}
+        merged = list(current)
+        for c in targets:
+            if normalize_entity(c) not in seen:
+                seen.add(normalize_entity(c))
+                merged.append(c)
+        before = {"alias": existing.alias, "canonicals": current}
+        existing.canonicals = merged
+        existing.canonical = merged[0]
+        db.flush()
+        write_audit(
+            db,
+            user,
+            action="update",
+            entity_type="entity_alias",
+            entity_id=existing.id,
+            before=before,
+            after={"alias": existing.alias, "canonicals": merged},
+        )
+        db.commit()
+        db.refresh(existing)
+        response.status_code = status.HTTP_200_OK
+        return _out(existing)
+
     row = EntityAlias(
         client_id=client_id,
         alias=payload.alias,
-        canonical=payload.canonical,
-        alias_normalized=norm,
+        canonical=targets[0],
+        canonicals=targets,
+        alias_normalized=norm_alias,
     )
     db.add(row)
     db.flush()
@@ -120,7 +182,7 @@ def create_entity_alias(
         action="create",
         entity_type="entity_alias",
         entity_id=row.id,
-        after=payload.model_dump(),
+        after={"alias": payload.alias, "canonicals": targets},
     )
     db.commit()
     db.refresh(row)
@@ -136,12 +198,27 @@ def update_entity_alias(
 ) -> EntityAliasOut:
     client_id = require_client_id(user)
     row = _load_owned(alias_id, client_id, db)
-    patch = payload.model_dump(exclude_unset=True)
-    alias = patch.get("alias", row.alias)
-    canonical = patch.get("canonical", row.canonical)
-    norm = _assert_usable(alias, canonical, client_id, db, exclude_id=row.id)
-    before = {"alias": row.alias, "canonical": row.canonical}
-    row.alias, row.canonical, row.alias_normalized = alias, canonical, norm
+    alias = payload.alias or row.alias
+    # A supplied list REPLACES the alias's entities; omit it to keep them.
+    raw_targets = (
+        payload.canonicals if payload.canonicals is not None else _canonicals(row)
+    )
+    norm_alias, targets = _prepare(alias, raw_targets)
+
+    clash = _find_by_alias(norm_alias, client_id, db)
+    if clash is not None and clash.id != row.id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{alias!r} is already an alias — edit that one to add entities.",
+        )
+
+    before = {"alias": row.alias, "canonicals": _canonicals(row)}
+    row.alias, row.canonical, row.canonicals, row.alias_normalized = (
+        alias,
+        targets[0],
+        targets,
+        norm_alias,
+    )
     db.flush()
     write_audit(
         db,
@@ -150,7 +227,7 @@ def update_entity_alias(
         entity_type="entity_alias",
         entity_id=row.id,
         before=before,
-        after=patch,
+        after={"alias": alias, "canonicals": targets},
     )
     db.commit()
     db.refresh(row)

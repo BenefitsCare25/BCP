@@ -52,7 +52,9 @@ export function EntityReconciliationPanel({
   const link = async (alias: string, canonical: string) => {
     setLinking(alias);
     try {
-      await createAlias.mutateAsync({ alias, canonical });
+      // Merges into the alias if it already exists, so linking a second entity
+      // to the same roster spelling appends rather than conflicts.
+      await createAlias.mutateAsync({ alias, canonicals: [canonical] });
       toast.success(`${alias} now matches ${canonical} — re-run matching`);
     } catch (err) {
       toast.error(formatError(err));

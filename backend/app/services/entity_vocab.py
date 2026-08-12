@@ -34,8 +34,9 @@ from app.services.matching_engine import (
     entity_alias_map,
     insured_names,
     jaccard,
+    normalize_entity,
     product_entities,
-    resolve_entity,
+    resolve_entities,
     tokenize,
 )
 
@@ -59,16 +60,21 @@ class EntityVocab:
     known: list[EntityValue]
 
 
-def _tally(bucket: dict[str, dict[str, Any]], raw: object, aliases: EntityAliases) -> None:
+def _tally(
+    bucket: dict[frozenset[str], dict[str, Any]], raw: object, aliases: EntityAliases
+) -> None:
     s = str(raw or "").strip()
     if not s:
         return
     # Resolve through the alias map, exactly as the gate does — otherwise an
     # entity already bridged by an alias would be reported as unreconciled.
-    norm = resolve_entity(s, aliases)
-    if not norm:
+    # An alias may expand to SEVERAL entities, so the bucket is keyed by the
+    # whole resolved set; two roster spellings that resolve to the same set
+    # (e.g. an abbreviation and its expansion) collapse into one row.
+    keys = resolve_entities(s, aliases)
+    if not keys:
         return
-    slot = bucket.setdefault(norm, {"value": s, "count": 0})
+    slot = bucket.setdefault(keys, {"value": s, "count": 0})
     slot["count"] += 1
 
 
@@ -104,15 +110,21 @@ def _identity_tokens(norm: str) -> frozenset[str]:
     return frozenset(t for t in tokenize(norm) if t not in _SUFFIX_TOKENS)
 
 
-def _index_candidates(bucket: dict[str, dict[str, Any]]) -> list[_Candidate]:
-    return [
-        _Candidate(
-            value=slot["value"],
-            tokens=_identity_tokens(norm),
-            acronym=_acronym(norm),
+def _index_candidates(bucket: dict[Any, dict[str, Any]]) -> list[_Candidate]:
+    # Suggestions match against a roster entity's OWN spelling (an unreconciled
+    # config name has no alias yet), so index by the representative value's
+    # normalized form rather than the alias-resolved bucket key.
+    out: list[_Candidate] = []
+    for slot in bucket.values():
+        norm = normalize_entity(slot["value"])
+        out.append(
+            _Candidate(
+                value=slot["value"],
+                tokens=_identity_tokens(norm),
+                acronym=_acronym(norm),
+            )
         )
-        for norm, slot in bucket.items()
-    ]
+    return out
 
 
 def _closest(norm: str, candidates: list[_Candidate]) -> str | None:
@@ -160,7 +172,9 @@ def _gating_entities(
 
     def _add(raw_value: object) -> None:
         for name in insured_names(raw_value):
-            if norm := resolve_entity(name, aliases):
+            # An aliased entity may expand to several — record every one, so a
+            # roster spelling covering any of them counts as claimed.
+            for norm in resolve_entities(name, aliases):
                 out.setdefault(norm, name)
 
     cats = list(
@@ -217,7 +231,7 @@ def _setup_header_entities(
             continue
         for key in ("insured", "entities"):
             for name in insured_names(header.get(key)):
-                if norm := resolve_entity(name, aliases):
+                for norm in resolve_entities(name, aliases):
                     out.setdefault(norm, name)
     return out
 
@@ -234,39 +248,55 @@ def entity_vocabulary(db: Session, policy_year: PolicyYear) -> EntityVocab:
         ).scalars()
     )
     aliases = entity_alias_map(db, policy_year.client_id)
-    roster_bucket: dict[str, dict[str, Any]] = {}
+    roster_bucket: dict[frozenset[str], dict[str, Any]] = {}
     for emp in employees:
         _tally(roster_bucket, (emp.attribute_values or {}).get("entity"), aliases)
 
     claimed = _gating_entities(db, policy_year.id, aliases)
+    claimed_norms = set(claimed)
     configured = {
         **_setup_header_entities(db, policy_year.id, aliases),
         **claimed,
     }
+    # Flat set of every entity any roster spelling resolves to — a config
+    # entity is reconciled (out of `known`) when SOME roster row covers it.
+    roster_norms: set[str] = set().union(*roster_bucket.keys()) if roster_bucket else set()
 
     # Both lists are capped: a roster with dirty free-text entity data can hold
     # thousands of distinct spellings, and every picker/panel refetches this.
     # Roster is sorted by headcount so the cap drops the long tail, not the
-    # entities that matter.
+    # entities that matter. A roster row is claimed when ANY entity it resolves
+    # to is named by a category.
     roster = [
         EntityValue(
-            value=slot["value"], count=slot["count"], claimed=norm in claimed
+            value=slot["value"],
+            count=slot["count"],
+            claimed=not keys.isdisjoint(claimed_norms),
         )
-        for norm, slot in sorted(
-            roster_bucket.items(), key=lambda kv: (-kv[1]["count"], kv[0])
+        for keys, slot in sorted(
+            roster_bucket.items(), key=lambda kv: (-kv[1]["count"], kv[1]["value"])
         )
     ][:MAX_LIMIT]
     candidates = _index_candidates(roster_bucket)
-    known = [
-        EntityValue(
-            value=raw,
-            count=0,
-            claimed=norm in claimed,
-            suggestion=_closest(norm, candidates),
+    # De-dup by display spelling: a config cell that is itself an alias expands
+    # to several norms all pointing at the SAME raw name, which would otherwise
+    # list that one name once per entity it stands for.
+    known: list[EntityValue] = []
+    seen_values: set[str] = set()
+    for norm, raw in sorted(configured.items()):
+        if norm in roster_norms or raw in seen_values:
+            continue
+        seen_values.add(raw)
+        known.append(
+            EntityValue(
+                value=raw,
+                count=0,
+                claimed=norm in claimed_norms,
+                suggestion=_closest(norm, candidates),
+            )
         )
-        for norm, raw in sorted(configured.items())
-        if norm not in roster_bucket
-    ][:MAX_LIMIT]
+        if len(known) >= MAX_LIMIT:
+            break
     return EntityVocab(
         employees_total=len(employees), roster=roster, known=known
     )

@@ -444,11 +444,11 @@ def test_insured_names_shapes() -> None:
 
 
 def test_alias_bridges_either_side() -> None:
-    """`resolve_entity` applies the alias map to BOTH sides, so the abbreviation
-    may sit on the roster or on the category."""
-    from app.services.matching_engine import resolve_entity
+    """`resolve_entities` applies the alias map to BOTH sides, so the
+    abbreviation may sit on the roster or on the category."""
+    from app.services.matching_engine import resolve_entities
 
-    aliases = {"cso": "city serviced offices pte ltd"}
+    aliases = {"cso": frozenset({"city serviced offices pte ltd"})}
 
     # Roster carries the abbreviation, category the legal name.
     cats = [_cat("c1", "All Employees", insured=["City Serviced Offices Pte Ltd"])]
@@ -477,9 +477,50 @@ def test_alias_bridges_either_side() -> None:
     )
     assert out2.category_id == "c2"
 
+    # Resolution expands to a SET; a name with no alias is a one-element set,
+    # a blank name the empty set.
+    assert resolve_entities("City Serviced Offices Pte Ltd") == frozenset(
+        {"city serviced offices pte ltd"}
+    )
+    assert resolve_entities(None) == frozenset()
+
     # Single-hop: A->B, B->C must not chain A->C.
-    chain = {"a": "b", "b": "c"}
-    assert resolve_entity("A", chain) == "b"
+    chain = {"a": frozenset({"b"}), "b": frozenset({"c"})}
+    assert resolve_entities("A", chain) == frozenset({"b"})
+
+
+def test_multi_entity_alias_matches_every_subsidiary() -> None:
+    """One roster spelling can stand for several registered subsidiaries, each
+    a separate insured block — the employee must match EVERY one."""
+    aliases = {
+        "stmicroelectronics pte ltd": frozenset(
+            {"stmicroelectronics pte ltd amk", "stmicroelectronics pte ltd tpy"}
+        )
+    }
+    cats = [
+        _cat("amk", "All Employees", priority=0, insured=["STMicroelectronics Pte Ltd AMK"]),
+        _cat("tpy", "All Employees", priority=1, insured=["STMicroelectronics Pte Ltd TPY"]),
+    ]
+    idx = {c.id: category_insured_entities(c, aliases) for c in cats}
+    tokens = {c.id: tokenize(canonicalize_category_name(c.display_name)) for c in cats}
+
+    emp = _emp("All Employees", entity="STMICROELECTRONICS PTE LTD")
+    # Employee lands on the first-priority category, but the gate lets EITHER
+    # through — verify neither is excluded by resolving the gate directly.
+    from app.services.matching_engine import _entity_allows, employee_entity
+
+    emp_entities = employee_entity(emp.attribute_values, aliases)
+    assert _entity_allows(idx["amk"], emp_entities)
+    assert _entity_allows(idx["tpy"], emp_entities)
+
+    out = match_one(emp, cats, _build_exact_lookup(cats), tokens, idx, entity_aliases=aliases)
+    assert out.category_id == "amk"  # priority tie-break, but both were allowed
+
+    # An unaliased roster entity is excluded from the sibling it doesn't name.
+    other = _emp("All Employees", entity="Some Other Co Pte Ltd")
+    other_entities = employee_entity(other.attribute_values, aliases)
+    assert not _entity_allows(idx["amk"], other_entities)
+    assert not _entity_allows(idx["tpy"], other_entities)
 
 
 def test_entity_vocab_reconciliation_and_suggestions() -> None:

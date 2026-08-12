@@ -12,14 +12,17 @@ import { useSession } from "@/stores/session";
 export interface EntityAlias {
   id: string;
   alias: string;
+  /** First entity — kept for display and legacy readers. */
   canonical: string;
+  /** Every entity the alias stands for. One alias may cover several. */
+  canonicals: string[];
   /** normalize_entity(alias) — shown so it's clear why two spellings already match. */
   alias_normalized: string;
 }
 
 export interface EntityAliasInput {
   alias: string;
-  canonical: string;
+  canonicals: string[];
 }
 
 function useAliasInvalidator() {

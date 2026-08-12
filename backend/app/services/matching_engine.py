@@ -110,35 +110,49 @@ def insured_names(raw: object) -> list[str]:
     return [name for part in parts if (name := str(part).strip())]
 
 
-EntityAliases = dict[str, str]
-"""{normalized alias -> normalized canonical}, per client. See `resolve_entity`."""
+EntityAliases = dict[str, frozenset[str]]
+"""{normalized alias -> set of normalized canonicals}, per client.
+
+An alias may stand for MORE than one entity (a roster spelling that covers
+several registered subsidiaries), so the value is a set, not a scalar. See
+`resolve_entities`."""
 
 
-def resolve_entity(name: str | None, aliases: EntityAliases | None = None) -> str:
-    """`normalize_entity` plus a SINGLE-HOP alias lookup.
+def resolve_entities(
+    name: str | None, aliases: EntityAliases | None = None
+) -> frozenset[str]:
+    """`normalize_entity` plus a SINGLE-HOP alias lookup, expanded to a SET.
 
     Normalization folds punctuation and corporate suffixes, but it can't bridge
     an abbreviation or rebrand ("CSO" vs "City Serviced Offices Pte Ltd") — that
     needs the explicit map. Applied to BOTH sides of the gate, so either the
     category or the roster may carry the alias spelling.
 
+    An alias expands to the SET of entities it stands for: "STM PTE LTD" →
+    {"stm pte ltd amk", "stm pte ltd tpy"}. A name with no alias resolves to
+    itself as a one-element set; a blank name resolves to the empty set.
+
     Deliberately single-hop: an alias never resolves through another alias, so a
     map containing A→B and B→C can't loop or depend on iteration order.
     """
     norm = normalize_entity(name)
-    if not norm or not aliases:
-        return norm
-    return aliases.get(norm, norm)
+    if not norm:
+        return frozenset()
+    if aliases and (expanded := aliases.get(norm)):
+        return expanded
+    return frozenset((norm,))
 
 
 def insured_entities(
     raw: object, aliases: EntityAliases | None = None
 ) -> frozenset[str]:
     """The set of RESOLVED entity names in an Insured cell. Empty set = no
-    entity restriction."""
-    return frozenset(
-        norm for part in insured_names(raw) if (norm := resolve_entity(part, aliases))
-    )
+    entity restriction. Each name expands through the alias map, so a single
+    aliased cell may contribute several entities."""
+    out: set[str] = set()
+    for part in insured_names(raw):
+        out |= resolve_entities(part, aliases)
+    return frozenset(out)
 
 
 def category_insured_entities(
@@ -166,33 +180,48 @@ def product_entities(
 
 def employee_entity(
     attribute_values: dict[str, Any] | None, aliases: EntityAliases | None = None
-) -> str:
-    """Resolved legal entity employing this member, from the roster's Entity
-    column (attribute id "entity"). "" when the roster doesn't carry one."""
+) -> frozenset[str]:
+    """Resolved legal entities employing this member, from the roster's Entity
+    column (attribute id "entity"). Empty set when the roster doesn't carry one;
+    more than one only when the roster spelling is an alias standing for
+    several entities."""
     if not attribute_values:
-        return ""
-    return resolve_entity(attribute_values.get("entity"), aliases)
+        return frozenset()
+    return resolve_entities(attribute_values.get("entity"), aliases)
 
 
 def entity_alias_map(db: Session, client_id: str | None) -> EntityAliases:
     """Load a client's alias map. Built ONCE per matching run — never per
-    employee — and passed down through the match indices."""
+    employee — and passed down through the match indices.
+
+    Each row's ``canonicals`` list becomes a set of normalized targets; a row
+    predating that column (``canonicals`` NULL) falls back to its single
+    ``canonical`` so nothing needs back-filling in the per-firm schemas."""
     if not client_id:
         return {}
     rows = db.execute(
-        select(EntityAlias.alias_normalized, EntityAlias.canonical).where(
-            EntityAlias.client_id == client_id
-        )
+        select(
+            EntityAlias.alias_normalized,
+            EntityAlias.canonical,
+            EntityAlias.canonicals,
+        ).where(EntityAlias.client_id == client_id)
     ).all()
-    return {
-        alias: canon
-        for alias, raw in rows
-        if alias and (canon := normalize_entity(raw))
-    }
+    out: EntityAliases = {}
+    for alias, canonical, canonicals in rows:
+        if not alias:
+            continue
+        raw_targets = canonicals if isinstance(canonicals, list) and canonicals else [canonical]
+        norms = frozenset(n for c in raw_targets if (n := normalize_entity(c)))
+        if norms:
+            out[alias] = norms
+    return out
 
 
-def _entity_allows(cat_entities: frozenset[str], emp_entity: str) -> bool:
-    return not cat_entities or not emp_entity or emp_entity in cat_entities
+def _entity_allows(cat_entities: frozenset[str], emp_entities: frozenset[str]) -> bool:
+    """A blank on EITHER side is a wildcard; otherwise the two sets must
+    overlap. Both sides are alias-expanded, so a roster spelling covering
+    several entities matches a category insured on any one of them."""
+    return not cat_entities or not emp_entities or not cat_entities.isdisjoint(emp_entities)
 
 
 @dataclass(frozen=True)
@@ -302,10 +331,10 @@ def match_one(
             c.id: category_insured_entities(c, entity_aliases)
             for c in categories_by_priority
         }
-    emp_entity = employee_entity(employee.attribute_values, entity_aliases)
+    emp_entities = employee_entity(employee.attribute_values, entity_aliases)
 
     def _allowed(cat: Category) -> bool:
-        return _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entity)
+        return _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entities)
 
     raw_category: str | None = (
         employee.attribute_values.get("category") if employee.attribute_values else None
@@ -683,6 +712,6 @@ __all__ = [
     "match_policy_year",
     "normalize_entity",
     "product_entities",
-    "resolve_entity",
+    "resolve_entities",
     "tokenize",
 ]
