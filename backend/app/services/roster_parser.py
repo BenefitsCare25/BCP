@@ -19,6 +19,11 @@ EMPLOYEE_COLUMN_MAP: dict[str, str] = {
     "subsidiary": "entity",
     "company name": "entity",
     "staff id": "staff_id",
+    # The incumbent platform's own extract titles the staff id "User ID", so
+    # its built-in listing re-imports without a hand edit. Exact-match only —
+    # the loose prefix pass would otherwise let a "User ID Type" column claim
+    # it, and this map is also what the built-in listing writes back out.
+    "user id": "staff_id",
     "employee name": "employee_name",
     "identification no. (nric/fin)": "id_no",
     "identification no.": "id_no",
@@ -40,9 +45,19 @@ EMPLOYEE_COLUMN_MAP: dict[str, str] = {
     "last day of service": "last_day_of_service",
     "category": "category",
     "job grade": "job_grade",
+    # "Current Job Grade" cannot reach `job_grade` on the loose pass — that one
+    # matches by PREFIX and this header starts with the wrong word.
+    "current job grade": "job_grade",
     "division": "division",
     "department": "department",
     "cost centre": "cost_centre",
+    # Where the member sits, as the incumbent's built-in listing names it:
+    # the employing company and the physical site. Descriptive only — neither
+    # is the `entity` that drives the insured-entity gate in matching.
+    "company description": "company_description",
+    "location description": "location_description",
+    # "Employee" / "Director" / … — the incumbent's own line-type marker.
+    "person class": "person_class",
     "email": "email",
     "mobile": "mobile",
     "bank code": "bank_code",

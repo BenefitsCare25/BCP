@@ -126,6 +126,10 @@ def _setup_db():
                      "entity": "Builtin Co Pte Ltd",
                      "id_no": "S1234567D",
                      "category": "All Employees",
+                     # A roster types salary however the sheet was typed —
+                     # "5,500" must still print as a number.
+                     "salary": "5,500",
+                     "company_description": "Builtin Co BHQ",
                      "insurer_member_ids": {"AIA": "AIA-99", "Zurich": "ZUR-77"},
                  },
                  matched_categories=[
@@ -188,6 +192,50 @@ def _emp_sheet(client, **params):
 
 def _dep_sheet(client, **params):
     return _sheet(client.get(MEMBER_REGISTER, params=params), "Dependants")
+
+
+def test_employee_sheet_opens_with_the_incumbent_column_block(client):
+    """Columns 1-28 are a column-for-column clone of the file being replaced.
+
+    Asserted literally, not against the module constant: the two files are
+    diffed side by side during the migration, so a rename here has to be a
+    deliberate edit in two places rather than a constant quietly following the
+    code that reads it.
+    """
+    header, _ = _emp_sheet(client)
+    assert list(header[:28]) == [
+        "Entity", "User ID", "Employee Name", "Identification No.",
+        "Date of Birth", "Gender", "Marital Status",
+        "Foreigner Employment Pass", "Nationality", "Monthly Salary",
+        "Date of Hire", "Confirmation Date", "Effective Date",
+        "Last Day of Service", "Category", "Division", "Department",
+        "Cost Centre", "Email Address", "Mobile Phone", "Bank Code",
+        "Branch Code", "Bank Account No.", "Company Description",
+        "Location Description", "Current Job Grade", "Person Class", "Remarks",
+    ]
+    # Ours follow the clone rather than being interleaved into it.
+    assert header[28] == "Employee Status"
+
+
+def test_dependant_sheet_opens_with_the_incumbent_column_block(client):
+    header, _ = _dep_sheet(client)
+    assert list(header[:13]) == [
+        "Entity", "Staff ID", "Employee Name", "Employee's Identification No.",
+        "Dependant Name", "Dependant's Identification No.", "Relationship",
+        "Date of Marriage", "Gender", "Date of Birth", "Effective Date",
+        "Remarks", "Deletion Date",
+    ]
+    assert header[13] == "Termination Date"
+
+
+def test_salary_is_a_number_and_person_class_defaults(client):
+    """Salary must be summable, and Person Class must mean the same thing on a
+    roster that has never carried the column."""
+    header, rows = _emp_sheet(client)
+    row = next(r for r in rows if r[1] == "BI-1")
+    assert row[header.index("Monthly Salary")] == 5500.0
+    assert row[header.index("Person Class")] == "Employee"
+    assert row[header.index("Company Description")] == "Builtin Co BHQ"
 
 
 def test_employee_listing_spans_every_insurer(client):

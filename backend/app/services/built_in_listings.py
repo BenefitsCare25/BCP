@@ -15,6 +15,30 @@ What genuinely differs is the product columns. An insurer wants the sum it is
 being asked to carry (`Eligible` / `Pending U/W` / `Last Accepted`); a broker
 wants the level the member sits at (`Default Plan ID` / `Default Group Option`),
 which is what the incumbent platform's built-in listing prints.
+
+**The leading block of each sheet is a COLUMN-FOR-COLUMN clone of the
+incumbent's own built-in listing** (`REFERENCE_EMPLOYEE_HEADER`, columns 1-28;
+`REFERENCE_DEPENDANT_HEADER`, columns 1-13) — same names, same order, including
+its vocabulary where it differs from ours ("User ID" for the staff id on the
+employee sheet but "Staff ID" on the dependant one; "Current Job Grade" for the
+job grade). These two files are diffed side by side during the migration, so a
+renamed or reordered column reads as a data difference. Anything we carry that
+the incumbent does not follows AFTER that block (`EXTRA_*_HEADER`, then one
+`{Insurer} Member ID` per insurer, then the product columns) rather than being
+interleaved into it.
+
+Each extra column is here because something ELSE in the platform reads the
+field, so a broker chasing that behaviour can see its input:
+`Designation` drives flex tier matching + leave rates, `Eligible to Sell Leave`
+gates the sell-leave election, `Has Insurance Cover Last Year` is COMPUTED from
+last year's roster (not a column anyone typed), `Employee Status` is the only
+leaver/active signal on a sheet that defaults to every person on file, the
+member ids are what the portal quotes on a claim, and on the dependant sheet
+`Termination Date` (roster-stated, read by ADC) is a different fact from
+`Deletion Date` (system-recorded `terminated_effective`). Employment Status,
+Country of Work and salary Currency were dropped WITH the incumbent's layout:
+nothing in the app reads them, and both still ship on the insurer listing and
+the member-listing upload template.
 """
 from __future__ import annotations
 
@@ -76,27 +100,83 @@ EMPLOYEE_STATUSES = frozenset({STATUS_ALL, STATUS_ACTIVE})
 
 _ENTITY_KEYS = ("entity", "company", "subsidiary")
 
-BASE_EMPLOYEE_HEADER = [
-    "Entity", "Staff ID", "Employee Name", "Identification No.",
-    "Date of Birth", "Gender", "Marital Status", "Employment Status",
-    "Designation", "Country of Work", "Foreigner Employment Pass",
-    "Nationality", "Date of Hire", "Confirmation Date", "Effective Date",
-    "Last Day of Service", "Category", "Job Grade", "Division",
-    "Department", "Cost Centre", "Email Address", "Mobile Phone",
-    "Bank Code", "Branch Code", "Bank Account No.",
+# Columns 1-28, in the incumbent's own names and order. Do not reorder, and do
+# not "fix" the vocabulary: the staff id is `User ID` here and `Staff ID` on the
+# dependant sheet because that is how the file being replaced prints them.
+REFERENCE_EMPLOYEE_HEADER = [
+    "Entity", "User ID", "Employee Name", "Identification No.",
+    "Date of Birth", "Gender", "Marital Status",
+    "Foreigner Employment Pass", "Nationality", "Monthly Salary",
+    "Date of Hire", "Confirmation Date", "Effective Date",
+    "Last Day of Service", "Category", "Division", "Department",
+    "Cost Centre", "Email Address", "Mobile Phone", "Bank Code",
+    "Branch Code", "Bank Account No.", "Company Description",
+    "Location Description", "Current Job Grade", "Person Class", "Remarks",
+]
+
+# Ours, appended after the clone rather than interleaved. See the module
+# docstring for why each one survived the cut.
+EXTRA_EMPLOYEE_HEADER = [
+    "Employee Status", "Designation",
     "Has Insurance Cover Last Year", "Eligible to Sell Leave",
 ]
 
-BASE_EMPLOYEE_TAIL = ["Currency", "Monthly Salary", "Remarks", "Employee Status"]
-
-BASE_DEPENDANT_HEADER = [
+REFERENCE_DEPENDANT_HEADER = [
     "Entity", "Staff ID", "Employee Name", "Employee's Identification No.",
     "Dependant Name", "Dependant's Identification No.", "Relationship",
     "Date of Marriage", "Gender", "Date of Birth", "Effective Date",
-    "Termination Date", "Remarks",
+    "Remarks", "Deletion Date",
 ]
 
-BASE_DEPENDANT_TAIL = ["Deletion Date", "Dependant Status"]
+EXTRA_DEPENDANT_HEADER = ["Termination Date"]
+
+EXTRA_DEPENDANT_TAIL = ["Dependant Status"]
+
+# 1-based indexes into REFERENCE_EMPLOYEE_HEADER / REFERENCE_DEPENDANT_HEADER
+# whose cells carry a real date or a real number, so Excel is told to draw them
+# as one. The incumbent's file prints dates `dd/mm/yyyy` and money `#,##0.00`;
+# openpyxl otherwise defaults a date to ISO and — because `first_value` returns
+# a string — would store the salary as TEXT, which no broker can sum.
+_DATE_FMT = "dd/mm/yyyy"
+_MONEY_FMT = "#,##0.00"
+_EMPLOYEE_DATE_COLUMNS = (5, 11, 12, 13, 14)
+_EMPLOYEE_MONEY_COLUMNS = (10,)
+# 8/10/11/13 are Date of Marriage, Date of Birth, Effective Date and Deletion
+# Date; 14 is our own Termination Date, the first column after the clone.
+_DEPENDANT_DATE_COLUMNS = (8, 10, 11, 13, 14)
+
+
+def _number(raw: object) -> object:
+    """A roster figure as a NUMBER where it is one, else untouched.
+
+    Rosters carry salaries as "5,500", "5500.00" or a real float depending on
+    how the sheet was typed. A value we cannot read as a number is printed as
+    it stands rather than blanked — "TBC" in a salary cell is worth seeing.
+    """
+    if raw in (None, ""):
+        return ""
+    if isinstance(raw, bool):
+        return str(raw)
+    if isinstance(raw, (int, float)):
+        return raw
+    try:
+        return float(str(raw).replace(",", "").strip())
+    except ValueError:
+        return str(raw)
+
+
+def _format_columns(ws, dates: tuple[int, ...], money: tuple[int, ...]) -> None:
+    for row in ws.iter_rows(min_row=2):
+        for idx in dates:
+            cell = row[idx - 1]
+            if isinstance(cell.value, date):
+                cell.number_format = _DATE_FMT
+        for idx in money:
+            cell = row[idx - 1]
+            if isinstance(cell.value, (int, float)) and not isinstance(
+                cell.value, bool
+            ):
+                cell.number_format = _MONEY_FMT
 
 
 def normalize_employee_status(value: str | None) -> str:
@@ -167,16 +247,20 @@ def build_built_in_employee_listing(
     id_columns = _member_id_columns(db, py)
 
     header = [
-        *BASE_EMPLOYEE_HEADER,
+        *REFERENCE_EMPLOYEE_HEADER,
+        *EXTRA_EMPLOYEE_HEADER,
         *(c.header for c in id_columns),
-        *BASE_EMPLOYEE_TAIL,
     ]
+    money_columns = list(_EMPLOYEE_MONEY_COLUMNS)
     for b in blocks:
         if b.lump_sum:
             header += [
                 f"{b.report_code} EE Default Plan ID",
                 f"{b.report_code} EE Last Accepted Sum Assured",
             ]
+            # The sum assured is the one product column carrying a real figure
+            # (the dependant amounts render through `_money` as text).
+            money_columns.append(len(header))
             # The household's dependant option level, where the product offers
             # one. Deliberately NO "Last Accepted" for these: acceptance is a
             # per-dependant underwriting decision and one employee row cannot
@@ -209,17 +293,14 @@ def build_built_in_employee_listing(
             as_date(first_value(attrs, ("date_of_birth", "dob"))),
             first_value(attrs, ("gender", "sex")) or "",
             first_value(attrs, ("marital_status",)) or "",
-            first_value(attrs, ("employment_status",)) or "",
-            first_value(attrs, ("designation",)) or "",
-            first_value(attrs, ("country_of_work",)) or "",
             first_value(attrs, ("pass",)) or "",
             first_value(attrs, ("nationality",)) or "",
+            _number(first_value(attrs, ("salary",))),
             as_date(first_value(attrs, ("date_of_hire", "hire_date"))),
             as_date(first_value(attrs, ("confirmation_date",))),
             as_date(first_value(attrs, ("effective_date",))),
             _last_day_of_service(emp),
             first_value(attrs, ("category",)) or "",
-            first_value(attrs, ("job_grade", "grade")) or "",
             first_value(attrs, ("division",)) or "",
             first_value(attrs, ("department",)) or "",
             first_value(attrs, ("cost_centre",)) or "",
@@ -228,6 +309,20 @@ def build_built_in_employee_listing(
             first_value(attrs, ("bank_code",)) or "",
             first_value(attrs, ("branch_code",)) or "",
             first_value(attrs, ("bank_account_no",)) or "",
+            first_value(attrs, ("company_description",)) or "",
+            first_value(attrs, ("location_description",)) or "",
+            first_value(attrs, ("job_grade", "grade")) or "",
+            # The incumbent prints "Employee" on every row of this sheet — it is
+            # what tells an employee line apart from a dependant one in their
+            # combined extracts. Defaulted rather than left blank so the column
+            # means the same thing when a roster has never carried it.
+            first_value(attrs, ("person_class",)) or "Employee",
+            first_value(attrs, ("remarks",)) or "",
+            # The status column exists because the sheet defaults to `all`: a
+            # leaver and an active member are otherwise distinguishable only by
+            # a Last Day of Service that many rosters leave blank.
+            (emp.status or "").title(),
+            first_value(attrs, ("designation",)) or "",
             _prior_cover_flag(emp, prior_people),
             # `_flag`, not a local Yes/No: the column beside it
             # (`_prior_cover_flag`) already renders through it, and two
@@ -235,15 +330,6 @@ def build_built_in_employee_listing(
             _flag(leave_sell_eligible(emp)),
         ]
         row += [member_id_for_insurer(attrs, c.insurer) for c in id_columns]
-        row += [
-            first_value(attrs, ("currency",)) or "",
-            first_value(attrs, ("salary",)) or "",
-            first_value(attrs, ("remarks",)) or "",
-            # The status column exists because the sheet defaults to `all`: a
-            # leaver and an active member are otherwise distinguishable only by
-            # a Last Day of Service that many rosters leave blank.
-            (emp.status or "").title(),
-        ]
 
         per_product = coverage.get(emp.id, {})
         for b in blocks:
@@ -270,6 +356,7 @@ def build_built_in_employee_listing(
                     row += [cov.plan_code or cov.plan_label or "", cov.grouping]
         append_safe(ws, row)
 
+    _format_columns(ws, _EMPLOYEE_DATE_COLUMNS, tuple(money_columns))
     autosize(ws)
     return wb
 
@@ -308,9 +395,10 @@ def build_built_in_dependant_listing(
     )
 
     header = [
-        *BASE_DEPENDANT_HEADER,
+        *REFERENCE_DEPENDANT_HEADER,
+        *EXTRA_DEPENDANT_HEADER,
         *(c.header for c in id_columns),
-        *BASE_DEPENDANT_TAIL,
+        *EXTRA_DEPENDANT_TAIL,
     ]
 
     wb = Workbook()
@@ -338,8 +426,14 @@ def build_built_in_dependant_listing(
             first_value(dattrs, ("gender", "sex")) or "",
             as_date(first_value(dattrs, ("date_of_birth", "dob"))),
             as_date(first_value(dattrs, ("effective_date",))),
-            as_date(first_value(dattrs, ("termination_date",))),
             first_value(dattrs, ("remarks",)) or "",
+            # Deletion Date is the SYSTEM's record of the removal
+            # (`terminated_effective`); Termination Date below is the date the
+            # roster stated, which is what ADC reads to terminate in the first
+            # place. They agree after a sync and disagree while one is pending,
+            # which is the whole reason both are printed.
+            dep.terminated_effective,
+            as_date(first_value(dattrs, ("termination_date",))),
         ]
         # A dependant's insurer member id usually sits on the EMPLOYEE row —
         # rosters rarely repeat it per life — so fall back the same way the
@@ -349,12 +443,10 @@ def build_built_in_dependant_listing(
             or member_id_for_insurer(emp.attribute_values or {}, c.insurer)
             for c in id_columns
         ]
-        row += [
-            dep.terminated_effective,
-            (dep.status or "").replace("_", " ").title(),
-        ]
+        row.append((dep.status or "").replace("_", " ").title())
         append_safe(ws, row)
 
+    _format_columns(ws, _DEPENDANT_DATE_COLUMNS, ())
     autosize(ws)
     return wb
 
