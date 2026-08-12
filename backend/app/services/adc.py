@@ -82,6 +82,7 @@ from app.services.roster_attributes import (
     parse_dob,
 )
 from app.services.roster_dedup import (
+    dependant_agnostic_keys,
     dependant_candidate_keys,
     dependant_nric,
     employee_candidate_keys,
@@ -505,6 +506,10 @@ def _plan_dependants(
     # employee are indistinguishable, and keeping one made the other
     # permanently "missing".
     by_key: dict[str, list[Dependant]] = {}
+    # The agnostic keys of LINKED roster rows, kept in their own index and read
+    # only when the UPLOADED row is unlinked (`dependant_agnostic_keys`). In
+    # `by_key` they would collapse both parents' children again.
+    linked_agnostic: dict[str, list[Dependant]] = {}
     for d in dependants:
         # The agnostic keys are emitted only for rows that are themselves
         # unlinked, so a linked dependant can't false-match another family's.
@@ -517,6 +522,11 @@ def _plan_dependants(
             nric=d.national_id_normalized,
         ):
             by_key.setdefault(key, []).append(d)
+        if d.employee_id:
+            for key in dependant_agnostic_keys(
+                d.attribute_values, nric=d.national_id_normalized
+            ):
+                linked_agnostic.setdefault(key, []).append(d)
 
     seen_targets: set[str] = set()
     touched: set[str] = set()
@@ -558,6 +568,18 @@ def _plan_dependants(
             # unlinked row — but if an earlier row already claimed it, this is a
             # DIFFERENT coverage line rather than a repeat, so it is added.
             bridge = _resolve(by_key, keys, seen_targets)
+            if bridge.target is None and not bridge.conflict and emp_id is None:
+                # The reverse bridge, for a row this file could not link. It
+                # names no sponsor, so it is not a second parent's coverage line
+                # — it is the roster row itself, on a sheet with no usable Staff
+                # ID. Without it a round trip proposed the child as an ADDITION
+                # and reported the live row MISSING, terminating it under the
+                # terminate-missing opt-in.
+                bridge = _resolve(
+                    linked_agnostic,
+                    dependant_agnostic_keys(rec.attributes),
+                    seen_targets,
+                )
             match = (
                 bridge
                 if bridge.target is not None or bridge.conflict

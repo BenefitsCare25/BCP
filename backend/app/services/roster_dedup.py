@@ -113,3 +113,33 @@ def dependant_candidate_keys(
         if include_agnostic:
             keys.append(f"dep:{sig}")
     return keys
+
+
+def dependant_agnostic_keys(
+    attrs: dict[str, Any] | None, *, nric: str | None = None
+) -> list[str]:
+    """The employee-agnostic keys ALONE — the reverse bridge, for LINKED rows.
+
+    ``dependant_candidate_keys`` emits these for existing rows that are
+    themselves unlinked, which bridges one direction: stored without a sponsor,
+    re-uploaded once the employee exists. The mirror had no bridge at all. A
+    stored LINKED row re-uploaded on a file whose employee link fails — blank
+    Staff ID, or a name two employees share — carries only ``nric:-|X`` and
+    ``dep:sig``; the stored row carries only its scoped keys. The sets are
+    disjoint, so the same child imported as a second person, and an ADC round
+    trip proposed an addition AND a termination for one unchanged life.
+
+    So a linked row's agnostic keys are indexed SEPARATELY and read only when
+    the INCOMING row is unlinked. Folding them back into the main index is the
+    74-dropped-dependants bug: both parents' rows carry an identical bridge key,
+    so the second parent's child would be swallowed again. An incoming row that
+    names its sponsor must never reach here.
+    """
+    keys: list[str] = []
+    found = nric or dependant_nric(attrs)
+    if found:
+        keys.append(f"nric:-|{found}")
+    sig = _dep_signature(attrs)
+    if sig:
+        keys.append(f"dep:{sig}")
+    return keys

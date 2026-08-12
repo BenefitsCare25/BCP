@@ -54,7 +54,11 @@ from app.services.roster_attributes import (
     mask_nric,
     suspect_nric_warning,
 )
-from app.services.roster_dedup import dependant_candidate_keys, dependant_nric
+from app.services.roster_dedup import (
+    dependant_agnostic_keys,
+    dependant_candidate_keys,
+    dependant_nric,
+)
 from app.services.roster_parser import parse_dependant_workbook
 from app.services.roster_reports import build_dependant_report_workbook
 
@@ -86,6 +90,22 @@ def _employee_link_indexes(
     by_name = {nm: emps[0] for nm, emps in name_groups.items() if len(emps) == 1}
     ambiguous = {nm for nm, emps in name_groups.items() if len(emps) > 1}
     return by_staff, by_name, ambiguous
+
+
+def _first_free(
+    index: dict[str, str], keys: list[str], claimed: set[str]
+) -> str | None:
+    """The first stored row these keys reach that no earlier row has claimed.
+
+    One stored row absorbs one uploaded row, mirroring ``adc._resolve``. Without
+    the claim check a single stored row answers for every row that reaches it,
+    which is how two parents' dependants were both discarded against one orphan.
+    """
+    for k in keys:
+        hit = index.get(k)
+        if hit is not None and hit not in claimed:
+            return hit
+    return None
 
 
 @router.get("", response_model=DependantList)
@@ -525,6 +545,10 @@ async def upload_dependants(
     # the sponsoring employee, so a row under a DIFFERENT employee is a second
     # coverage line rather than a collision.
     existing_keys: dict[str, str] = {}
+    # The agnostic keys of LINKED rows, indexed apart and read ONLY when the
+    # incoming row is unlinked (`dependant_agnostic_keys`). Merged into
+    # `existing_keys` they would swallow the second parent's child again.
+    linked_agnostic: dict[str, str] = {}
     for did, d_emp_id, d_nid, d_attrs in db.execute(
         select(
             Dependant.id,
@@ -543,6 +567,9 @@ async def upload_dependants(
             d_attrs, d_emp_id, include_agnostic=d_emp_id is None, nric=d_nid
         ):
             existing_keys.setdefault(k, did)
+        if d_emp_id:
+            for k in dependant_agnostic_keys(d_attrs, nric=d_nid):
+                linked_agnostic.setdefault(k, did)
 
     inserted = 0
     errors: list[str] = list(no_dependant_rows)
@@ -553,6 +580,8 @@ async def upload_dependants(
         warnings.append(nric_warning)
     duplicates: list[DuplicateEntry] = []
     seen: set[str] = set()
+    # Stored rows already absorbed by an earlier row of this file.
+    claimed: set[str] = set()
     # NRIC → the employee already carrying that life, across the rows on file
     # and the rows in this upload. Used only to COUNT dual coverage for the
     # upload summary; nothing is skipped on the strength of it.
@@ -599,9 +628,23 @@ async def upload_dependants(
         own_keys = dependant_candidate_keys(
             rec.attributes, emp_id, include_agnostic=False
         )
-        existing_hit = next((existing_keys[k] for k in keys if k in existing_keys), None)
+        existing_hit = _first_free(existing_keys, keys, claimed)
+        if existing_hit is None and emp_id is None:
+            # The reverse bridge. This row names no sponsor, so it cannot be a
+            # second parent's coverage line — it is a row already on file,
+            # re-uploaded on a sheet whose employee link failed. Without this it
+            # imported as a second person on every re-upload.
+            existing_hit = _first_free(
+                linked_agnostic, dependant_agnostic_keys(rec.attributes), claimed
+            )
         in_file_hit = any(k in seen for k in own_keys)
         if existing_hit or in_file_hit:
+            # One stored row absorbs ONE incoming row. Where the stored row is
+            # unlinked, both parents' rows reach it through the same bridge key;
+            # leaving it unclaimed skipped them both, so neither coverage line
+            # was created and the orphan stayed orphaned.
+            if existing_hit:
+                claimed.add(existing_hit)
             duplicates.append(
                 DuplicateEntry(
                     row=rec.row,
