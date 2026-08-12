@@ -71,26 +71,45 @@ def dependant_candidate_keys(
     employee_id: str | None,
     *,
     include_agnostic: bool = True,
+    nric: str | None = None,
 ) -> list[str]:
     """Every identity key a dependant row could collide on.
 
-    - ``nric:<n>`` when an NRIC is present (the durable key).
-    - ``comp:<emp>|<sig>`` — the employee-scoped composite (keeps two families'
-      NRIC-less dependants that share a name+DOB from colliding).
-    - ``dep:<sig>`` — an *employee-agnostic* composite, emitted for incoming
-      rows and for EXISTING dependants that are currently UNLINKED. This bridges
-      the case where a dependant was first stored unlinked and is re-uploaded
-      after its employee exists (the two emp-scoped composites would differ);
-      linked existing rows omit it, so linked dependants of different employees
-      never false-match on name+DOB alone.
+    **A dependant's identity is scoped to the employee who sponsors them, and
+    that is the whole rule.** The same child genuinely appears twice when both
+    parents work here — two coverage lines for one human, which is a fact about
+    the payroll, not a duplicate row. A globally-unique NRIC key made the second
+    parent's row unimportable: 74 of STM's 4,867 dependants were dropped as
+    "Repeated in this file", and the child silently ended up under whichever
+    parent the file happened to list first. Dual coverage is DETECTED and
+    reviewed (``services/dual_coverage.py``), never prevented at the door.
+
+    - ``nric:<emp>|<n>`` — the durable key, scoped to the sponsor.
+    - ``comp:<emp>|<sig>`` — the employee-scoped composite (name+DOB+relationship),
+      for rows that withhold an NRIC.
+    - ``nric:-|<n>`` / ``dep:<sig>`` — the employee-AGNOSTIC pair, emitted for
+      incoming rows and for EXISTING dependants that are currently UNLINKED.
+      They bridge one case only: a dependant first stored unlinked, re-uploaded
+      once its employee exists (the scoped keys would differ and duplicate it).
+      Linked existing rows omit them, so two families' dependants never
+      false-match. **Callers deduping WITHIN one file must pass
+      ``include_agnostic=False``** — the bridge keys are identical for both
+      parents, which is the collision this scoping exists to remove.
+
+    ``nric`` overrides the value read from ``attrs`` — existing rows carry the
+    canonical form in ``national_id_normalized``, which a row stamped by the
+    portal has when its attributes do not.
     """
     keys: list[str] = []
-    nric = dependant_nric(attrs)
-    if nric:
-        keys.append(f"nric:{nric}")
+    found = nric or dependant_nric(attrs)
+    scope = employee_id or "-"
+    if found:
+        keys.append(f"nric:{scope}|{found}")
+        if include_agnostic and employee_id:
+            keys.append(f"nric:-|{found}")
     sig = _dep_signature(attrs)
     if sig:
-        keys.append(f"comp:{employee_id or '-'}|{sig}")
+        keys.append(f"comp:{scope}|{sig}")
         if include_agnostic:
             keys.append(f"dep:{sig}")
     return keys

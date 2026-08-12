@@ -15,10 +15,17 @@
  * previously answer from it**: who is doubled, which two employees they reach
  * this company through, and what pressing a button commits them to. So each
  * case reads as one sentence, the two sides are drawn as two named sides rather
- * than a list of staff ids, every button names a PERSON, and the header states
- * once — in plain words — that recording a decision changes nobody's cover. The
+ * than a list of staff ids, every button names a PERSON, and the header says in
+ * plain words which controls record and which one actually moves money. The
  * earlier version put that fact behind an ⓘ, labelled its buttons with bare
  * staff numbers, and offered no way to tell 4 open cases from 112.
+ *
+ * **Two different powers live on one card, and keeping them apart is the point.**
+ * The decision buttons RECORD who carries the life. "Drop this side's cover"
+ * CHANGES it — it writes a real per-dependant exclusion on that employee
+ * (`services/dual_coverage_assignment.py`), so the company stops paying that
+ * side. Both rows stay on the roster either way, and the drop is reversible from
+ * the same place.
  *
  * The sheet is split from the banner because the Dependants table's own
  * "Covered twice" column opens it focused on a single life; a sheet that owned
@@ -34,6 +41,7 @@ import {
   useDualCoverage,
   useRecordDualDecision,
   useReopenDualDecision,
+  useSetDualCover,
 } from "@/api/dualCoverage";
 import { formatError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
@@ -54,7 +62,7 @@ type Filter = "open" | "decided" | "all";
 
 /** The one sentence that was missing: what a decision does, and what it doesn't. */
 const WHAT_A_DECISION_DOES =
-  "Recording who keeps them clears the flag and leaves a note for whoever looks next. It does not change anyone's cover.";
+  "Both sides are covered until you say otherwise. Recording who keeps them clears the flag and leaves a note — it changes no cover on its own; use “Drop this side's cover” on a side to actually stop paying for it.";
 
 export function DualCoverageBanner({
   policyYearId,
@@ -165,8 +173,8 @@ export function DualCoverageSheet({
             <p>
               These people reach this company twice — listed as a dependant of two
               employees, or holding their own cover while also carried as
-              someone's spouse. Each side is a separate premium line, and a claim
-              can be paid on both.
+              someone's spouse. Both sides stay on the roster, and each is a
+              separate premium line, so a claim can be paid on both.
             </p>
             <p className="text-foreground/80">{WHAT_A_DECISION_DOES}</p>
           </div>
@@ -258,7 +266,37 @@ export function reachLabel(p: DualParty): string {
   return `Listed as ${rel} of`;
 }
 
-function SideBlock({ p }: { p: DualParty }) {
+function SideBlock({
+  p,
+  policyYearId,
+}: {
+  p: DualParty;
+  policyYearId: string;
+}) {
+  const setCover = useSetDualCover(policyYearId);
+  // Only a DEPENDANT line can be dropped here. A party with no dependant row is
+  // the person's own employee cover, and ending that is declining their
+  // insurance — a different decision, taken on their own coverage pane.
+  const editable = !!p.dependant_id && !p.unlinked && !!p.employee_id;
+
+  const toggle = async (covered: boolean) => {
+    try {
+      const r = await setCover.mutateAsync({
+        dependantId: p.dependant_id!,
+        covered,
+      });
+      toast.success(
+        r.products_changed.length === 0
+          ? "Already set that way — nothing changed"
+          : covered
+            ? `Cover restored under ${p.employee_name ?? p.staff_id} (${r.products_changed.join(", ")})`
+            : `Dropped from ${p.employee_name ?? p.staff_id} (${r.products_changed.join(", ")})`,
+      );
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
+
   return (
     <div className="min-w-0 space-y-1 p-3">
       <p className="text-2xs uppercase tracking-wide text-subtle">{reachLabel(p)}</p>
@@ -276,6 +314,31 @@ function SideBlock({ p }: { p: DualParty }) {
         </p>
       ) : (
         <p className="text-2xs text-subtle">No cover in force</p>
+      )}
+      {editable && (
+        <div className="pt-1">
+          {setCover.isPending ? (
+            <span className="inline-flex items-center gap-1 text-2xs text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" aria-hidden /> Updating…
+            </span>
+          ) : p.covered ? (
+            <button
+              type="button"
+              className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onClick={() => toggle(false)}
+            >
+              Drop this side's cover
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onClick={() => toggle(true)}
+            >
+              Cover under this employee
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -349,7 +412,11 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
           rule rather than two bordered boxes — a card inside a card is noise. */}
       <div className="grid grid-cols-1 divide-y divide-border rounded bg-muted/40 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
         {c.parties.map((p, i) => (
-          <SideBlock key={`${p.employee_id}-${p.dependant_id}-${i}`} p={p} />
+          <SideBlock
+            key={`${p.employee_id}-${p.dependant_id}-${i}`}
+            p={p}
+            policyYearId={policyYearId}
+          />
         ))}
       </div>
 

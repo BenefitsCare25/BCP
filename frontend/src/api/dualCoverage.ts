@@ -115,6 +115,46 @@ export function useRecordDualDecision(policyYearId: string | undefined) {
   });
 }
 
+/**
+ * Drop or restore ONE side's cover for a life listed under two employees.
+ *
+ * This is the only control here that MOVES MONEY — the decision buttons record
+ * who carries the life, this changes who pays for them. Both rows stay on the
+ * roster either way. Invalidates the coverage-bearing queries too, since a
+ * dropped side changes the benefit statement and the member's flex tier.
+ */
+export function useSetDualCover(policyYearId: string | undefined) {
+  const qc = useQueryClient();
+  const clientId = useSession((s) => s.activeClientId);
+  return useMutation({
+    mutationFn: ({
+      dependantId,
+      covered,
+    }: {
+      dependantId: string;
+      covered: boolean;
+    }) =>
+      api.put<{ covered: boolean; products_changed: string[] }>(
+        `/policy-years/${policyYearId}/dual-coverage/dependants/${dependantId}/cover`,
+        { covered },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ["dependants", "dual-coverage", clientId, policyYearId],
+      });
+      for (const key of [
+        "benefit-statement",
+        "plan-overrides",
+        "flex-membership",
+        "flex-coverage",
+        "employees",
+      ]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+}
+
 export function useReopenDualDecision(policyYearId: string | undefined) {
   const qc = useQueryClient();
   const clientId = useSession((s) => s.activeClientId);

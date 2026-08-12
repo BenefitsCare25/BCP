@@ -302,7 +302,7 @@ def _group_lives(roster: ResolvedRoster) -> list[tuple[list[Dependant], list[Ide
 # ── Coverage: who is actually being paid for ────────────────────────────────
 
 
-def _coverage_by_employee(
+def coverage_by_employee(
     db: Session,
     py: PolicyYear,
     roster: ResolvedRoster,
@@ -495,7 +495,7 @@ def detect(db: Session, py: PolicyYear) -> DualCoverage:
             )
         )
 
-    coverage = _coverage_by_employee(
+    coverage = coverage_by_employee(
         db, py, roster, {p.employee_id for c in cases for p in c.parties if p.employee_id}
     )
     for case in cases:

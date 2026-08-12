@@ -766,3 +766,71 @@ def test_a_login_user_id_never_steals_the_staff_id_column() -> None:
     # Alone, it IS the staff id — the incumbent's own export has no other.
     only = ["Entity", "User ID", "Employee Name", "Date of Birth"]
     assert _build_column_map(only, EMPLOYEE_COLUMN_MAP)[1] == "staff_id"
+
+
+def test_one_child_under_two_employees_loads_both_rows(client: TestClient) -> None:
+    """Both parents work here, so the child is TWO coverage lines, not a repeat.
+
+    Identity is scoped to the sponsoring employee. A globally-unique dependant
+    NRIC made the second parent's row unimportable — STM lost 74 of 4,867
+    dependants that way, and each of those children silently ended up under
+    whichever parent the file happened to list first. Dual coverage is detected
+    and reviewed after the fact; it is never prevented at the door.
+    """
+    py = _py(client)
+    twin = ["Dee Twin", "T0512345A", "Child", "2005-05-05", ""]
+    res = _apply(client, py, _listing(ROSTER, [
+        ["A-1", "Anna Lim", *twin],
+        ["A-2", "Ben Ong", *twin],
+    ]))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["added"] == 2, body
+    assert body["issues"] == []
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(Dependant).where(Dependant.national_id_normalized == "T0512345A")
+        ).scalars().all()
+        assert len(rows) == 2
+        sponsors = {
+            db.get(Employee, d.employee_id).staff_id for d in rows if d.employee_id
+        }
+        assert sponsors == {"A-1", "A-2"}
+    finally:
+        db.close()
+
+
+def test_the_same_child_twice_under_ONE_employee_is_still_a_repeat(
+    client: TestClient,
+) -> None:
+    """The scoping opens up cross-employee rows only. Two identical rows under
+    one employee remain what they always were — a duplicated line."""
+    py = _py(client)
+    dupe = ["Eve Once", "T0698765B", "Child", "2006-06-06", ""]
+    res = _apply(client, py, _listing(ROSTER, [
+        ["A-3", "Cara Tan", *dupe],
+        ["A-3", "Cara Tan", *dupe],
+    ]))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["added"] == 1, body
+    assert any("Repeated in this file" in i["message"] for i in body["issues"])
+
+
+def test_a_dual_covered_child_round_trips_without_proposing_anything(
+    client: TestClient,
+) -> None:
+    """Re-uploading the same file must propose NOTHING — the two rows have to
+    match their own sponsor's row rather than fight over one."""
+    py = _py(client)
+    twin = ["Dee Twin", "T0512345A", "Child", "2005-05-05", ""]
+    content = _listing(ROSTER, [
+        ["A-1", "Anna Lim", *twin],
+        ["A-2", "Ben Ong", *twin],
+    ])
+    body = _preview(client, py, content).json()
+    assert body["counts"]["additions"] == 0, body["additions"]
+    assert body["counts"]["changes"] == 0
+    assert body["issues"] == []

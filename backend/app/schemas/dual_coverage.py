@@ -50,6 +50,18 @@ class DualCaseOut(BaseModel):
     decision: DualDecisionOut | None = None
 
 
+class DualCoverIn(BaseModel):
+    """Drop (``covered=False``) or restore one side's cover for a shared life.
+
+    ``products_changed`` is served back so the caller can say what actually
+    moved — a request that agrees with what is already on file changes nothing
+    and returns an empty list rather than failing.
+    """
+
+    covered: bool
+    products_changed: list[str] = Field(default_factory=list)
+
+
 class DualLifeRefOut(BaseModel):
     """One dependant ROW's membership in a shared life.
 

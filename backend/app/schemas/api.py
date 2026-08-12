@@ -819,14 +819,14 @@ class DuplicateEntry(BaseModel):
     name: str | None = None
     staff_id: str | None = None
     nric_masked: str | None = None
-    # "in_file"                 repeated within this workbook
-    # "existing"                already on file under the SAME employee
-    # "existing_other_employee" already on file under a DIFFERENT employee —
-    #                           i.e. dual coverage, not a re-upload
+    # "in_file"   repeated within this workbook, under the same employee
+    # "existing"   already on file under the SAME employee
+    #
+    # There is deliberately no cross-employee reason: the same life under a
+    # DIFFERENT employee is a second coverage line (both parents work here), so
+    # it is inserted and counted as dual coverage rather than skipped.
     reason: str
     existing_id: str | None = None  # the record it collides with, when known
-    # The other employee's staff id, when the collision crosses employees.
-    existing_staff_id: str | None = None
 
 
 class UploadResult(BaseModel):

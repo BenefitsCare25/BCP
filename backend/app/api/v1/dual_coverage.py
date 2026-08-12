@@ -21,11 +21,12 @@ from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import load_policy_year
 from app.db.session import get_db
-from app.models import Employee, PolicyYear
+from app.models import Dependant, Employee, PolicyYear
 from app.models.dual_coverage_decision import DualCoverageDecision
 from app.schemas.dual_coverage import (
     DualCaseOut,
     DualCoverageOut,
+    DualCoverIn,
     DualDecisionIn,
     DualDecisionOut,
     DualLifeRefOut,
@@ -33,6 +34,7 @@ from app.schemas.dual_coverage import (
     DualPartyOut,
 )
 from app.services import dual_coverage as svc
+from app.services.dual_coverage_assignment import set_dependant_cover
 
 router = APIRouter(tags=["dual-coverage"])
 
@@ -172,6 +174,47 @@ def get_dual_coverage(
         preview_cap=svc.PREVIEW_CAP,
         lives=lives,
     )
+
+
+@router.put(
+    "/policy-years/{policy_year_id}/dual-coverage/dependants/{dependant_id}/cover",
+    response_model=DualCoverIn,
+)
+def set_dependant_cover_endpoint(
+    policy_year_id: str,
+    dependant_id: str,
+    body: DualCoverIn,
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DualCoverIn:
+    """Drop or restore ONE side's cover for a life listed under two employees.
+
+    The roster keeps both rows either way — this changes who PAYS for them, not
+    who is on file, which is the distinction the review sheet is built around.
+    """
+    dep = db.execute(
+        select(Dependant).where(
+            Dependant.id == dependant_id,
+            Dependant.policy_year_id == py.id,
+        )
+    ).scalars().one_or_none()
+    if dep is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such dependant.")
+    try:
+        changed = set_dependant_cover(db, py, user, dependant=dep, covered=body.covered)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    write_audit(
+        db,
+        user,
+        action="dual_coverage.set_cover",
+        entity_type="dependant",
+        entity_id=dep.id,
+        after={"covered": body.covered, "products": changed},
+    )
+    db.commit()
+    return DualCoverIn(covered=body.covered, products_changed=changed)
 
 
 @router.post(

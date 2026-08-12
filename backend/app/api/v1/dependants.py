@@ -518,16 +518,13 @@ async def upload_dependants(
         .all()
     )
     by_staff, by_name, ambiguous_names = _employee_link_indexes(employees)
-    staff_by_emp = {e.id: e.staff_id for e in employees}
     ambiguous_hits: set[str] = set()
 
     # Existing dependant identity keys — dedup fixes the historical bug where a
-    # re-uploaded dependant file blindly doubled every row.
+    # re-uploaded dependant file blindly doubled every row. Keys are scoped to
+    # the sponsoring employee, so a row under a DIFFERENT employee is a second
+    # coverage line rather than a collision.
     existing_keys: dict[str, str] = {}
-    # dependant id -> the employee it already hangs off. A collision with
-    # ANOTHER employee's dependant is dual coverage, not a re-upload, and the
-    # manifest has to say which.
-    existing_owner: dict[str, str | None] = {}
     for did, d_emp_id, d_nid, d_attrs in db.execute(
         select(
             Dependant.id,
@@ -539,14 +536,11 @@ async def upload_dependants(
             Dependant.policy_year_id == policy_year_id,
         )
     ).all():
-        existing_owner[did] = d_emp_id
-        if d_nid:
-            existing_keys.setdefault(f"nric:{d_nid}", did)
         # Emit the employee-agnostic key only for currently-unlinked existing
         # dependants, so a later linked re-upload still dedups against them
         # without letting two families' NRIC-less dependants false-match.
         for k in dependant_candidate_keys(
-            d_attrs, d_emp_id, include_agnostic=d_emp_id is None
+            d_attrs, d_emp_id, include_agnostic=d_emp_id is None, nric=d_nid
         ):
             existing_keys.setdefault(k, did)
 
@@ -559,6 +553,20 @@ async def upload_dependants(
         warnings.append(nric_warning)
     duplicates: list[DuplicateEntry] = []
     seen: set[str] = set()
+    # NRIC → the employee already carrying that life, across the rows on file
+    # and the rows in this upload. Used only to COUNT dual coverage for the
+    # upload summary; nothing is skipped on the strength of it.
+    cross_owner: dict[str, str | None] = {
+        nid: owner
+        for nid, owner in db.execute(
+            select(Dependant.national_id_normalized, Dependant.employee_id).where(
+                Dependant.client_id == client_id,
+                Dependant.policy_year_id == policy_year_id,
+                Dependant.national_id_normalized.isnot(None),
+            )
+        ).all()
+    }
+    dual_covered: set[str] = set()
     for rec in records:
         emp = None
         method = None
@@ -582,35 +590,36 @@ async def upload_dependants(
 
         emp_id = emp.id if emp else None
         keys = dependant_candidate_keys(rec.attributes, emp_id)
+        # Identity is scoped to the sponsor, so a row under a DIFFERENT employee
+        # never collides here — the same child under both parents is two
+        # coverage lines, not a duplicate, and dropping the second is what left
+        # a child on whichever parent the file listed first. It is COUNTED
+        # instead, and the Dependants tab's "Covered twice" column names both
+        # employees once the upload lands.
+        own_keys = dependant_candidate_keys(
+            rec.attributes, emp_id, include_agnostic=False
+        )
         existing_hit = next((existing_keys[k] for k in keys if k in existing_keys), None)
-        in_file_hit = any(k in seen for k in keys)
+        in_file_hit = any(k in seen for k in own_keys)
         if existing_hit or in_file_hit:
-            # Whose row did it collide with? A hit under a DIFFERENT employee
-            # is the same life on two payrolls — reporting that as a bare
-            # "duplicate" is what made dual coverage invisible at upload.
-            other_emp = existing_owner.get(existing_hit) if existing_hit else None
-            cross = bool(other_emp) and other_emp != emp_id
             duplicates.append(
                 DuplicateEntry(
                     row=rec.row,
                     name=first_value(rec.attributes, ("dependant_name", "name")),
                     staff_id=rec.employee_staff_id,
                     nric_masked=mask_nric(dependant_nric(rec.attributes)) or None,
-                    reason=(
-                        "existing_other_employee"
-                        if cross
-                        else "existing"
-                        if existing_hit
-                        else "in_file"
-                    ),
+                    reason="existing" if existing_hit else "in_file",
                     existing_id=existing_hit,
-                    existing_staff_id=(
-                        staff_by_emp.get(other_emp or "") if cross else None
-                    ),
                 )
             )
             continue
-        seen.update(keys)
+        row_nric = dependant_nric(rec.attributes)
+        if row_nric:
+            other = cross_owner.get(row_nric)
+            if other is not None and other != emp_id:
+                dual_covered.add(row_nric)
+            cross_owner.setdefault(row_nric, emp_id)
+        seen.update(own_keys)
         db.add(
             Dependant(
                 client_id=client_id,
@@ -628,6 +637,14 @@ async def upload_dependants(
         errors.append(
             "Left unlinked — the employee name matches more than one person; "
             f"link manually: {names}"
+        )
+    if dual_covered:
+        n = len(dual_covered)
+        warnings.append(
+            f"{n} dependant{'' if n == 1 else 's'} "
+            f"{'is' if n == 1 else 'are'} listed under two employees — usually a "
+            "child whose parents both work here. Both are on file and both are "
+            "covered; see “Covered twice” on the Dependants tab to change that."
         )
 
     write_audit(

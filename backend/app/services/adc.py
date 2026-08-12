@@ -506,13 +506,15 @@ def _plan_dependants(
     # permanently "missing".
     by_key: dict[str, list[Dependant]] = {}
     for d in dependants:
-        if d.national_id_normalized:
-            by_key.setdefault(f"nric:{d.national_id_normalized}", []).append(d)
-        # The employee-agnostic (dep:) key is emitted only for rows that are
-        # themselves unlinked, so a linked dependant can't false-match another
-        # family's NRIC-less dependant sharing a name + DOB.
+        # The agnostic keys are emitted only for rows that are themselves
+        # unlinked, so a linked dependant can't false-match another family's.
+        # `nric=` passes the stored canonical id, which a portal self-add has
+        # even when its attributes don't.
         for key in dependant_candidate_keys(
-            d.attribute_values, d.employee_id, include_agnostic=d.employee_id is None
+            d.attribute_values,
+            d.employee_id,
+            include_agnostic=d.employee_id is None,
+            nric=d.national_id_normalized,
         ):
             by_key.setdefault(key, []).append(d)
 
@@ -523,7 +525,7 @@ def _plan_dependants(
     # two different dependants while both claiming one fresh NRIC would silently
     # break the app-enforced uniqueness (`models/dependant.py`), and there is no
     # DB constraint behind it.
-    run_nric: dict[str, str] = {}
+    run_nric: dict[tuple[str | None, str], str] = {}
     for rec in records:
         staff_key = (rec.employee_staff_id or "").strip().lower()
         name_key = (rec.employee_name or "").strip().lower()
@@ -534,6 +536,15 @@ def _plan_dependants(
             emp, method = by_name[name_key], "name"
         emp_id = emp.id if emp else None
 
+        # Two key sets, and the split is what lets both parents keep the child.
+        # `own` is this row's identity UNDER ITS SPONSOR — the only thing that
+        # can make it a repeat of another row in the same file. `keys` adds the
+        # employee-agnostic bridge, which may only reach an EXISTING unlinked
+        # row; both parents' rows carry an identical bridge key, so deduping on
+        # it is what dropped the second parent's child.
+        own_keys = dependant_candidate_keys(
+            rec.attributes, emp_id, include_agnostic=False
+        )
         keys = dependant_candidate_keys(rec.attributes, emp_id)
         if not keys:
             plan.issues.append(
@@ -541,7 +552,17 @@ def _plan_dependants(
                          message="No NRIC, name or date of birth on this row — skipped")
             )
             continue
-        match = _resolve(by_key, keys, seen_targets)
+        match = _resolve(by_key, own_keys, seen_targets)
+        if match.target is None and not match.conflict and not match.exhausted:
+            # Nothing of this employee's to update. The bridge may still reach an
+            # unlinked row — but if an earlier row already claimed it, this is a
+            # DIFFERENT coverage line rather than a repeat, so it is added.
+            bridge = _resolve(by_key, keys, seen_targets)
+            match = (
+                bridge
+                if bridge.target is not None or bridge.conflict
+                else _Match(candidates=match.candidates | bridge.candidates)
+            )
         # A skipped row still names these dependants — see `_plan_employees`.
         touched |= match.candidates
         target = match.target
@@ -559,8 +580,11 @@ def _plan_dependants(
             continue
         nric = dependant_nric(rec.attributes)
         if nric:
-            row_key = target.id if target is not None else keys[0]
-            claimed_by = run_nric.get(nric)
+            row_key = target.id if target is not None else own_keys[0]
+            # Scoped to the sponsor, like the identity itself: one NRIC on two of
+            # ONE employee's dependants is a transcription error, the same NRIC
+            # under two employees is a child whose parents both work here.
+            claimed_by = run_nric.get((emp_id, nric))
             if claimed_by is not None and claimed_by != row_key:
                 plan.issues.append(
                     AdcIssue(row=rec.row, record_type="dependant",
@@ -568,7 +592,7 @@ def _plan_dependants(
                                       "in this file — skipped"))
                 )
                 continue
-            run_nric[nric] = row_key
+            run_nric[(emp_id, nric)] = row_key
             # Advisory, never a skip: a checksum failure is evidence of a
             # transcription typo, not proof, and the roster is the customer's
             # record. The masked form is enough to find the row.
@@ -581,13 +605,14 @@ def _plan_dependants(
                     )
                 )
         if target is None:
-            if any(k in seen_file_keys for k in keys):
+            # Scoped keys only — see `own_keys` above.
+            if any(k in seen_file_keys for k in own_keys):
                 plan.issues.append(
                     AdcIssue(row=rec.row, record_type="dependant",
                              message="Repeated in this file — skipped")
                 )
                 continue
-            seen_file_keys.update(keys)
+            seen_file_keys.update(own_keys)
             plan.dep_add.append(
                 _DepAdd(rec.row, rec.attributes, emp_id, method, nric)
             )

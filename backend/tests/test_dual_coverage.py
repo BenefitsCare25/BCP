@@ -613,3 +613,73 @@ def test_a_decided_life_is_marked_resolved_for_the_table(client: TestClient) -> 
         client.delete(
             f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
         )
+
+
+# ── Dropping and restoring one side's cover ─────────────────────────────────
+
+
+def _cover(client: TestClient, dependant_id: str, covered: bool):
+    return client.put(
+        f"/api/v1/policy-years/{PY_ID}/dual-coverage/dependants/{dependant_id}/cover",
+        json={"covered": covered},
+    )
+
+
+def test_dropping_one_side_leaves_the_row_on_file(client: TestClient) -> None:
+    """The ask was flexibility, not deletion: both parents keep the child on
+    their roster, and only who PAYS moves. A dropped side must still appear as a
+    party to the case — otherwise the case dissolves and the broker loses the
+    control that put it there."""
+    case = _case_named(_get(client), "Tan Wei Ming")
+    assert case is not None
+    side = next(p for p in case["parties"] if p["dependant_id"] and p["covered"])
+
+    res = _cover(client, side["dependant_id"], False)
+    assert res.status_code == 200, res.text
+    try:
+        after = _case_named(_get(client), "Tan Wei Ming")
+        assert after is not None
+        dropped = next(
+            p for p in after["parties"] if p["dependant_id"] == side["dependant_id"]
+        )
+        assert dropped["covered"] is False
+        assert dropped["covered_products"] == []
+        # Still on file, still a side of the case.
+        assert len(after["parties"]) == len(case["parties"])
+        # And no longer double-paid.
+        assert after["overlapping_products"] == []
+        assert after["severity"] == "info"
+    finally:
+        _cover(client, side["dependant_id"], True)
+
+
+def test_restoring_a_side_puts_the_cover_back(client: TestClient) -> None:
+    case = _case_named(_get(client), "Tan Wei Ming")
+    assert case is not None
+    side = next(p for p in case["parties"] if p["dependant_id"] and p["covered"])
+    before = sorted(side["covered_products"])
+
+    assert _cover(client, side["dependant_id"], False).status_code == 200
+    assert _cover(client, side["dependant_id"], True).status_code == 200
+
+    after = _case_named(_get(client), "Tan Wei Ming")
+    assert after is not None
+    restored = next(
+        p for p in after["parties"] if p["dependant_id"] == side["dependant_id"]
+    )
+    assert sorted(restored["covered_products"]) == before
+
+
+def test_setting_the_cover_it_already_has_changes_nothing(client: TestClient) -> None:
+    """The same click arriving twice must not cost a premium."""
+    case = _case_named(_get(client), "Tan Wei Ming")
+    assert case is not None
+    side = next(p for p in case["parties"] if p["dependant_id"] and p["covered"])
+    res = _cover(client, side["dependant_id"], True)
+    assert res.status_code == 200, res.text
+    assert res.json()["products_changed"] == []
+
+
+def test_cover_cannot_be_set_on_another_tenants_dependant(client: TestClient) -> None:
+    res = _cover(client, "00000000-0000-0000-0000-00000000dead", False)
+    assert res.status_code == 404
