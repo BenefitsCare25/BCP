@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from openpyxl import Workbook
+from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -166,7 +167,9 @@ def _number(raw: object) -> object:
         return str(raw)
 
 
-def _format_columns(ws, dates: tuple[int, ...], money: tuple[int, ...]) -> None:
+def _format_columns(
+    ws: Worksheet, dates: tuple[int, ...], money: tuple[int, ...]
+) -> None:
     for row in ws.iter_rows(min_row=2):
         for idx in dates:
             cell = row[idx - 1]
