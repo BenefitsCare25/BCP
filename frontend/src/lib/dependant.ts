@@ -5,7 +5,7 @@
  * (the member's list, the enrollment pickers, the broker's employee-view
  * preview) so a person can't be called one thing on one screen and another
  * somewhere else. */
-import type { Dependant } from "@/types";
+import type { BenefitStatement, Dependant } from "@/types";
 
 const NAME_KEYS = ["name", "dependant_name", "full_name"];
 const REL_KEYS = ["relationship", "relation", "rel", "dependant_type", "type"];
@@ -43,4 +43,31 @@ export function dependantRelationship(dep: Dependant): string | null {
 export function dependantDob(dep: Dependant): string | null {
   const raw = attr(dep, DOB_KEYS);
   return raw ? raw.split(/[ T]/)[0] : null;
+}
+
+
+/**
+ * dependant id → the plans covering them, NAMED.
+ *
+ * Every row gets an entry, including the ones nothing covers: an empty list
+ * says "no plan covers them", a missing one says "not known", and the family
+ * page prints those differently. Shared by the member's own page and the
+ * broker's employee-view preview, which must not disagree about what a member
+ * is covered for.
+ *
+ * The product NAME, falling back to its code — a member surface never prints
+ * GHS where "Group Hospital & Surgical" is available.
+ */
+export function coverByDependant(
+  statement: BenefitStatement | undefined,
+  rows: Dependant[],
+): Map<string, string[]> | undefined {
+  if (!statement) return undefined;
+  const map = new Map<string, string[]>(rows.map((d) => [d.id, []]));
+  for (const line of statement.coverage) {
+    for (const covered of line.covered_dependants) {
+      map.get(covered.id)?.push(line.product_name ?? line.product_code);
+    }
+  }
+  return map;
 }

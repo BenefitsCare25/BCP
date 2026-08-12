@@ -20,12 +20,14 @@
  * earlier version put that fact behind an ⓘ, labelled its buttons with bare
  * staff numbers, and offered no way to tell 4 open cases from 112.
  *
- * **Two different powers live on one card, and keeping them apart is the point.**
- * The decision buttons RECORD who carries the life. "Drop this side's cover"
- * CHANGES it — it writes a real per-dependant exclusion on that employee
- * (`services/dual_coverage_assignment.py`), so the company stops paying that
- * side. Both rows stay on the roster either way, and the drop is reversible from
- * the same place.
+ * **One action, not two ways of saying it.** "Drop this side's cover" writes a
+ * real per-dependant exclusion (`services/dual_coverage_assignment.py`) AND
+ * files the decision it states, because choosing who keeps the life and taking
+ * the other side off cover are the same choice. A "Kept under <person>" button
+ * per side used to sit below, naming the same two people and only writing a
+ * note; two rows for one intent, and the one that moved the premium was not the
+ * obvious one. What is left below is the pair a cover change cannot express —
+ * the dual cover is deliberate, or the match is wrong.
  *
  * The sheet is split from the banner because the Dependants table's own
  * "Covered twice" column opens it focused on a single life; a sheet that owned
@@ -34,6 +36,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, Check, Loader2, RotateCcw, Users } from "lucide-react";
 import { toast } from "sonner";
+import { useUpdateDependant } from "@/api/hooks";
 import {
   type DualCase,
   type DualOpportunity,
@@ -48,21 +51,19 @@ import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Segmented } from "@/components/ui/segmented";
 import {
   Sheet,
   SheetBody,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
 
 type Filter = "open" | "decided" | "all";
-
-/** The one sentence that was missing: what a decision does, and what it doesn't. */
-const WHAT_A_DECISION_DOES =
-  "Both sides are covered until you say otherwise. Recording who keeps them clears the flag and leaves a note — it changes no cover on its own; use “Drop this side's cover” on a side to actually stop paying for it.";
 
 export function DualCoverageBanner({
   policyYearId,
@@ -167,24 +168,16 @@ export function DualCoverageSheet({
       <SheetContent className="w-full sm:max-w-2xl">
         <SheetHeader>
           <SheetTitle>Covered under two employees</SheetTitle>
+          <SheetDescription>
+            The same person, reached through two employees. Each side is a
+            separate premium.
+          </SheetDescription>
         </SheetHeader>
-        <SheetBody className="space-y-6">
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <p>
-              These people reach this company twice — listed as a dependant of two
-              employees, or holding their own cover while also carried as
-              someone's spouse. Both sides stay on the roster, and each is a
-              separate premium line, so a claim can be paid on both.
-            </p>
-            <p className="text-foreground/80">{WHAT_A_DECISION_DOES}</p>
-          </div>
-
+        <SheetBody className="space-y-5">
           {focused ? (
             <div className="flex items-center justify-between gap-3 border-t border-border pt-4">
               <p className="text-sm text-muted-foreground">
-                Showing one person.{" "}
-                {focused.length === 0 &&
-                  "This case is no longer open — it may have been decided already."}
+                {focused.length === 0 ? "Nothing open for this person." : "Showing one person."}
               </p>
               <Button size="sm" variant="ghost" onClick={onClearFocus}>
                 Show all {data.total_cases}
@@ -224,8 +217,7 @@ export function DualCoverageSheet({
             )}
             {!focused && data.total_cases > data.cases.length && (
               <p className="text-2xs text-subtle">
-                Showing the first {data.cases.length} of {data.total_cases}. Decide
-                these and the rest follow.
+                Showing {data.cases.length} of {data.total_cases}.
               </p>
             )}
           </section>
@@ -233,11 +225,6 @@ export function DualCoverageSheet({
           {!focused && data.opportunities.length > 0 && (
             <section className="space-y-3 border-t border-border pt-5">
               <SectionLabel>Both parents work here</SectionLabel>
-              <p className="text-sm text-muted-foreground">
-                Their child is listed under one parent only. Nothing is wrong and
-                there is nothing to decide — it is here so the second cover is
-                visible if the family asks for it.
-              </p>
               {data.opportunities.map((o) => (
                 <OpportunityRow key={`${o.subject_key}-${o.child_name}`} o={o} />
               ))}
@@ -269,90 +256,102 @@ export function reachLabel(p: DualParty): string {
 function SideBlock({
   p,
   policyYearId,
+  canUnlink,
 }: {
   p: DualParty;
   policyYearId: string;
+  /** Whether detaching this row still leaves the life reachable. Counting
+   *  LINKED DEPENDANT rows alone hid the control on an employee-also-a-spouse
+   *  case — the very shape where a wrong spouse link needs detaching, and where
+   *  removing it orphans nobody because the person is an employee here. */
+  canUnlink: boolean;
 }) {
   const setCover = useSetDualCover(policyYearId);
-  // Only a DEPENDANT line can be dropped here. A party with no dependant row is
-  // the person's own employee cover, and ending that is declining their
-  // insurance — a different decision, taken on their own coverage pane.
-  const editable = !!p.dependant_id && !p.unlinked && !!p.employee_id;
+  const update = useUpdateDependant();
+  const linked = !!p.dependant_id && !p.unlinked && !!p.employee_id;
 
   const toggle = async (covered: boolean) => {
     try {
-      const r = await setCover.mutateAsync({
-        dependantId: p.dependant_id!,
-        covered,
-      });
-      toast.success(
-        r.products_changed.length === 0
-          ? "Already set that way — nothing changed"
-          : covered
-            ? `Cover restored under ${p.employee_name ?? p.staff_id} (${r.products_changed.join(", ")})`
-            : `Dropped from ${p.employee_name ?? p.staff_id} (${r.products_changed.join(", ")})`,
-      );
+      await setCover.mutateAsync({ dependantId: p.dependant_id!, covered });
     } catch (err) {
       toast.error(formatError(err));
     }
   };
 
   return (
-    <div className="min-w-0 space-y-1 p-3">
-      <p className="text-2xs uppercase tracking-wide text-subtle">{reachLabel(p)}</p>
-      <p className="truncate text-sm font-medium text-foreground">
-        {p.employee_name ?? "Unknown employee"}
-      </p>
-      <p className="font-mono text-2xs text-muted-foreground">{p.staff_id || "—"}</p>
-      {p.unlinked ? (
-        <Badge variant="warn" title="This row is not linked to an active employee">
-          Not linked
-        </Badge>
-      ) : p.covered_products.length > 0 ? (
-        <p className="text-2xs text-muted-foreground">
-          Covers {p.covered_products.join(", ")}
+    <div className="min-w-0 space-y-2 p-3">
+      <div>
+        <p className="truncate text-sm font-medium text-foreground">
+          {p.employee_name ?? "Unknown employee"}
         </p>
+        <p className="font-mono text-2xs text-muted-foreground">
+          {p.staff_id || "—"}
+        </p>
+      </div>
+      <p className="text-2xs text-subtle">
+        {p.dependant_id === null
+          ? "Own employee cover"
+          : `Linked as ${(p.relationship || "dependant").toLowerCase()}`}
+      </p>
+
+      {p.unlinked ? (
+        <Badge variant="warn">Not linked</Badge>
       ) : (
-        <p className="text-2xs text-subtle">No cover in force</p>
-      )}
-      {editable && (
-        <div className="pt-1">
-          {setCover.isPending ? (
-            <span className="inline-flex items-center gap-1 text-2xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" aria-hidden /> Updating…
-            </span>
-          ) : p.covered ? (
-            <button
-              type="button"
-              className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              onClick={() => toggle(false)}
-            >
-              Drop this side's cover
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              onClick={() => toggle(true)}
-            >
-              Cover under this employee
-            </button>
-          )}
-        </div>
+        linked && (
+          <>
+            <label className="flex items-center gap-2 text-2xs text-foreground">
+              <Switch
+                checked={p.covered}
+                disabled={setCover.isPending}
+                onCheckedChange={toggle}
+                aria-label={`Covered under ${p.employee_name ?? p.staff_id}`}
+              />
+              Covered under this employee
+            </label>
+            <p className="text-2xs text-muted-foreground">
+              {p.covered_products.length > 0 ? p.covered_products.join(", ") : "—"}
+            </p>
+            {canUnlink && (
+              <button
+                type="button"
+                className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                disabled={update.isPending}
+                onClick={async () => {
+                  try {
+                    await update.mutateAsync({
+                      dependantId: p.dependant_id!,
+                      employee_id: null,
+                      relink: true,
+                    });
+                    toast.success(
+                      `Unlinked from ${p.employee_name ?? p.staff_id}`,
+                    );
+                  } catch (err) {
+                    toast.error(formatError(err));
+                  }
+                }}
+              >
+                Remove link
+              </button>
+            )}
+          </>
+        )
       )}
     </div>
   );
 }
 
-/** The plain-English verdict, replacing a line of flag codes. */
+/** What the row states, in one line: how many employees it reaches, and how
+ *  many of them are actually paying. Linking is not covering — a life can be
+ *  listed under two employees while only one plan carries them. */
 function verdict(c: DualCase): string {
+  const inForce = c.parties.filter((p) => p.covered).length;
   if (c.overlapping_products.length > 0) {
-    return `Both sides cover ${c.overlapping_products.join(", ")} — that is the same benefit paid for twice.`;
+    return `Both cover ${c.overlapping_products.join(", ")} — paid for twice.`;
   }
-  if (c.parties.filter((p) => p.covered).length >= 2) {
-    return "Covered on both sides, but no benefit is on both.";
-  }
-  return "Only one side is covering them at the moment.";
+  if (inForce >= 2) return "Covered on both sides, no benefit on both.";
+  if (inForce === 1) return "Covered under one side only.";
+  return "Neither side is covering them.";
 }
 
 function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
@@ -361,6 +360,9 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const settled = isSettled(c);
+  // Any OTHER party — a second dependant row, or the person's own employee
+  // record — is what makes a link safe to remove.
+  const otherSides = c.parties.length - 1;
 
   const decide = async (
     decision: Parameters<typeof record.mutateAsync>[0]["decision"],
@@ -378,8 +380,6 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
       toast.error(formatError(err));
     }
   };
-
-  const keepers = c.parties.filter((p) => p.employee_id && !p.unlinked);
 
   return (
     <div className="space-y-3 rounded-md border border-border bg-card p-3">
@@ -416,6 +416,7 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
             key={`${p.employee_id}-${p.dependant_id}-${i}`}
             p={p}
             policyYearId={policyYearId}
+            canUnlink={otherSides >= 1}
           />
         ))}
       </div>
@@ -427,7 +428,12 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
           {c.decision!.decided_at && (
             <span className="text-2xs text-subtle">
               {c.decision!.decided_at.slice(0, 10)}
-              {c.decision!.decided_by ? ` · ${c.decision!.decided_by}` : ""}
+              {/* The NAME, never `decided_by` — that is a uuid, and printing it
+                  put an unreadable identifier on the one line meant to say who
+                  is answerable for the decision. */}
+              {c.decision!.decided_by_name
+                ? ` · ${c.decision!.decided_by_name}`
+                : ""}
             </span>
           )}
           {c.decision!.note && (
@@ -458,35 +464,23 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
               The family changed after this was decided — please confirm again.
             </p>
           )}
-          <SectionLabel>Record who keeps them</SectionLabel>
-          <div className="flex flex-wrap gap-1.5">
-            {keepers.map((p) => (
-              <Button
-                key={p.employee_id}
-                size="sm"
-                variant="outline"
-                disabled={record.isPending}
-                onClick={() => decide("carried_by", p.employee_id)}
-              >
-                {record.isPending && <Loader2 className="size-3.5 animate-spin" />}
-                {p.employee_name ?? p.staff_id}
-              </Button>
-            ))}
+          {/* There used to be a "Kept under <person>" button per side here. It
+              named the same two people as the sides above and did NOT do what
+              those do — one wrote a note, the other moved the premium — so the
+              two rows read as duplicates of each other and the one that mattered
+              was not obvious. Choosing who keeps the life is now said by
+              dropping the other side, once, where the consequence is written.
+              What remains are the two outcomes a cover change CANNOT express:
+              the dual cover is deliberate, or the match is wrong. */}
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button
               size="sm"
               variant="outline"
               disabled={record.isPending}
-              onClick={() => decide("intentional_both")}
+              onClick={() => decide("dismissed")}
             >
-              Both, on purpose
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={record.isPending}
-              onClick={() => decide("not_a_match")}
-            >
-              Not the same person
+              {record.isPending && <Loader2 className="size-3.5 animate-spin" />}
+              Mark reviewed
             </Button>
           </div>
           {noteOpen ? (

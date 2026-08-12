@@ -18,6 +18,7 @@ import {
   dependantFiltersAreEmpty,
   toDependantQuery,
 } from "@/components/operations/DependantFilterBar";
+import { cn } from "@/lib/cn";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -80,49 +81,85 @@ const PAGE_SIZE = 50;
 const LINK_HINT_KEYS = new Set(["employee_staff_id", "employee_name", "employee_id_no"]);
 
 /**
- * The "Covered twice" cell. It NAMES both employees rather than saying the life
- * is doubled and leaving the broker to go looking: the table shows a
- * dependant's link method but never which employee they hang off, so "also
- * somewhere else" would be unanswerable from this page.
+ * The "Covered twice" cell, which is per ROW and not per case.
  *
- * A button, not a row click — the row itself opens the dependant's detail pane,
- * and these two destinations must not fight.
+ * A dependant row belongs to ONE employee, and "Linked" on the row beside it
+ * means that employee's plan is in force for them. So this cell has to answer
+ * two things about THIS row: which employee it hangs off, and whether its cover
+ * is actually still on after a side was dropped. It first listed both employees
+ * identically on both rows with a single case-level badge — from a row you
+ * could not tell whose child it was, and a dropped side still read "Same
+ * benefit twice" while no longer being paid at all.
+ *
+ * This row's own side is drawn in the foreground; the other is muted. Each side
+ * carries its own in-force / dropped state, so the cell can never contradict
+ * the Linked badge next to it.
  */
 function DualCell({
   life,
+  dependantId,
   onOpen,
 }: {
   life: DualLifeRef | undefined;
+  dependantId: string;
   onOpen: (subjectKey: string) => void;
 }) {
   if (!life) return <span className="text-subtle">—</span>;
+  const inForce = life.parties.filter((p) => p.covered).length;
+  const label =
+    inForce >= 2
+      ? life.severity === "warn"
+        ? "Paid twice"
+        : "Covered twice"
+      : inForce === 1
+        ? "One side dropped"
+        : "Neither side covered";
   return (
     <button
       type="button"
-      className="-m-1 block max-w-56 space-y-0.5 rounded p-1 text-left hover:bg-muted focus-ring"
+      className="-m-1 block max-w-60 space-y-0.5 rounded p-1 text-left hover:bg-muted focus-ring"
       onClick={(e) => {
         e.stopPropagation();
         onOpen(life.subject_key);
       }}
     >
-      {life.resolved ? (
-        <span className="inline-flex items-center gap-1 text-2xs text-good">
-          <Check className="size-3" aria-hidden /> Decided
+      <Badge variant={inForce >= 2 && life.severity === "warn" ? "warn" : "info"}>
+        {label}
+      </Badge>
+      {life.parties.map((p, i) => {
+        const mine = p.dependant_id === dependantId;
+        return (
+          <span
+            key={`${p.employee_id}-${p.dependant_id}-${i}`}
+            className="flex items-baseline gap-1 text-2xs"
+          >
+            {/* The NAME truncates, never the state — a cover that reads
+                "dropp…" is the one word on this row that must survive. */}
+            <span
+              className={cn(
+                "truncate",
+                mine ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              <span className="font-mono">{p.staff_id || "—"}</span>{" "}
+              {p.employee_name ?? "Unknown"}
+            </span>
+            <span
+              className={cn(
+                "shrink-0",
+                p.covered ? "text-good" : "text-subtle",
+              )}
+            >
+              · {p.covered ? "in force" : "dropped"}
+            </span>
+          </span>
+        );
+      })}
+      {life.resolved && (
+        <span className="inline-flex items-center gap-1 text-2xs text-subtle">
+          <Check className="size-3" aria-hidden /> Reviewed
         </span>
-      ) : (
-        <Badge variant={life.severity === "warn" ? "warn" : "info"}>
-          {life.severity === "warn" ? "Same benefit twice" : "Two employees"}
-        </Badge>
       )}
-      {life.parties.map((p, i) => (
-        <span
-          key={`${p.employee_id}-${p.dependant_id}-${i}`}
-          className="block truncate text-2xs text-muted-foreground"
-        >
-          <span className="font-mono">{p.staff_id || "—"}</span>{" "}
-          {p.employee_name ?? "Unknown"}
-        </span>
-      ))}
     </button>
   );
 }
@@ -388,6 +425,7 @@ export function DependantsPage() {
                       <TableCell>
                         <DualCell
                           life={dualLives.get(d.id)}
+                          dependantId={d.id}
                           onOpen={(key) => {
                             setDualFocus(key);
                             setDualOpen(true);

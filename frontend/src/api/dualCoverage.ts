@@ -29,6 +29,8 @@ export interface DualDecision {
   carried_by_staff_id: string | null;
   note: string | null;
   decided_by: string | null;
+  /** The decider's name. `decided_by` is a uuid and must never be printed. */
+  decided_by_name: string | null;
   decided_at: string | null;
   /** The family changed after the decision was taken, so it no longer describes
    *  the situation and the case is counted as unresolved again. */

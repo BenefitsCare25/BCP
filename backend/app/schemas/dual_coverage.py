@@ -25,6 +25,10 @@ class DualDecisionOut(BaseModel):
     carried_by_staff_id: str | None = None
     note: str | None = None
     decided_by: str | None = None
+    # The decider's NAME. `decided_by` is a user uuid, which the sheet printed
+    # verbatim — a broker cannot read that, and it is the only unresolved
+    # identifier on the surface.
+    decided_by_name: str | None = None
     decided_at: str | None = None
     # True when the family composition changed after the decision was taken. The
     # case re-surfaces — the failure mode is always "ask again", never "silently

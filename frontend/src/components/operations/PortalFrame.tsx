@@ -37,6 +37,7 @@ import { CardLeaf } from "@/components/portal/leaf/CardLeaf";
 import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
 import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
+import { coverByDependant } from "@/lib/dependant";
 import type { DependantRef } from "@/components/enrollment/electionCore";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import { ClaimDetailLeaf } from "@/components/portal/leaf/ClaimDetailLeaf";
@@ -304,6 +305,9 @@ function UtilizationTab({ employeeId }: { employeeId: string }) {
  * sentence the employee would read. */
 function DependantsTab({ employeeId }: { employeeId: string }) {
   const dependants = usePreviewDependants(employeeId);
+  // Same statement the member's own page reads, so the two cannot disagree
+  // about what a dependant is covered for.
+  const statement = usePreviewStatement(employeeId);
   if (dependants.isLoading) return <LeafSkeleton label="Loading family" mounts={2} />;
   if (dependants.isError && !isNotFoundError(dependants.error)) {
     return <PortalErrorState onRetry={() => void dependants.refetch()} />;
@@ -321,7 +325,7 @@ function DependantsTab({ employeeId }: { employeeId: string }) {
           Add a family member
         </Action>
       </div>
-      <DependantsLeaf rows={rows} />
+      <DependantsLeaf rows={rows} cover={coverByDependant(statement.data, rows)} />
     </div>
   );
 }

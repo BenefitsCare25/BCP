@@ -307,6 +307,7 @@ def coverage_by_employee(
     py: PolicyYear,
     roster: ResolvedRoster,
     employee_ids: set[str],
+    covers_dependants: dict[str, set[str]] | None = None,
 ) -> dict[str, dict[str, set[str]]]:
     """``{employee_id: {product_code: covered dependant ids}}``.
 
@@ -317,6 +318,8 @@ def coverage_by_employee(
     opinion", so resolving overrides directly would apply the cohort-default
     sweep to a declined employee and report them as covering their spouse.
     """
+    if covers_dependants is None:
+        covers_dependants = {}
     employees = [roster.emp_by_id[i] for i in sorted(employee_ids) if i in roster.emp_by_id]
     if not employees:
         return {}
@@ -349,15 +352,26 @@ def coverage_by_employee(
         per_product: dict[str, set[str]] = {}
         own = deps_by_emp.get(emp_id, [])
         for mp in matched:
-            if mp.covered_dependant_ids is not None:
-                per_product[mp.product_code] = set(mp.covered_dependant_ids)
-                continue
             info = cat_info.get(mp.category_id or "")
+            # Whether this product's cover EXTENDS to dependants at all, read
+            # from the cohort and never from the current selection. The two are
+            # different questions: an override listing nobody means "this
+            # employee covers no dependant here", not "this product cannot".
+            # Only the second may decide where a dependant can be ADDED, and
+            # conflating them let a restore put a child on every product the
+            # employee held — group term life included — after a drop had
+            # removed them from the three that actually carry dependants.
             covers = (
                 _category_covers_dependants(bool(own), info[1], info[2], info[3])
                 if info
                 else False
             )
+            covers_dependants.setdefault(emp_id, set())
+            if covers:
+                covers_dependants[emp_id].add(mp.product_code)
+            if mp.covered_dependant_ids is not None:
+                per_product[mp.product_code] = set(mp.covered_dependant_ids)
+                continue
             # No explicit election: the cohort heuristic sweeps in every active
             # dependant of that employee, exactly as the benefit statement does.
             per_product[mp.product_code] = {d.id for d in own} if covers else set()

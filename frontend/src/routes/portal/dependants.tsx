@@ -7,8 +7,10 @@ import { toast } from "sonner";
 import {
   useAddDependant,
   usePortalDependants,
+  usePortalStatement,
   useUploadDependantProof,
 } from "@/api/portal";
+import { coverByDependant } from "@/lib/dependant";
 import { formatError, isNotFoundError } from "@/lib/errors";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
 import { Field, FormAlert, leafControl } from "@/components/portal/leaf/Field";
@@ -19,6 +21,12 @@ import { PortalErrorState } from "@/components/portal/PortalErrorState";
 
 export function PortalDependantsPage() {
   const dependants = usePortalDependants();
+  // WHAT each person is covered for, from the same plans "What's covered"
+  // draws. The page used to print a relationship and a date of birth — two
+  // facts the member supplied — and a "Covered" badge taken from the row's
+  // status, which stopped being the same fact once cover could be set per
+  // person.
+  const statement = usePortalStatement();
   const addDependant = useAddDependant();
   const uploadProof = useUploadDependantProof();
 
@@ -222,7 +230,7 @@ export function PortalDependantsPage() {
         </Mount>
       )}
 
-      {rows.length > 0 && <DependantsLeaf rows={rows} />}
+      {rows.length > 0 && <DependantsLeaf rows={rows} cover={coverByDependant(statement.data, rows)} />}
       {rows.length === 0 && !showForm && <DependantsLeaf rows={[]} />}
     </div>
   );

@@ -66,7 +66,18 @@ def set_dependant_cover(
     # with no explicit election. Reading overrides directly would disagree with
     # the sheet the broker is looking at while they click.
     roster = resolve_roster(db, py.id, py.client_id, with_dependant_detail=True)
-    effective = coverage_by_employee(db, py, roster, {employee.id}).get(employee.id, {})
+    # `scope` is the set of products whose cover EXTENDS to dependants at all,
+    # read from the cohort rather than from who happens to be selected now.
+    # Restoring must be bounded by it: without that, dropping a child from the
+    # three products that carry dependants and then restoring them put the child
+    # on all eight the employee held — group term life among them — because a
+    # product covering no dependants looks identical to one this employee simply
+    # has not elected. Found in the browser, not by a test.
+    scope: dict[str, set[str]] = {}
+    effective = coverage_by_employee(db, py, roster, {employee.id}, scope).get(
+        employee.id, {}
+    )
+    covering = scope.get(employee.id, set())
     plans = hydrate_plans([employee], db, py.id).get(employee.id, [])
 
     # Whatever plan each product already has an OPINION about. An override with
@@ -89,7 +100,12 @@ def set_dependant_cover(
     for mp in plans:
         current = effective.get(mp.product_code)
         if current is None:
-            continue  # product carries no dependant cover at all
+            continue
+        # A product that does not carry dependants can still be DROPPED from —
+        # an override may have put the life there before this rule existed — but
+        # it can never be added to.
+        if covered and mp.product_code not in covering:
+            continue
         wanted = set(current) | {dependant.id} if covered else set(current) - {dependant.id}
         if wanted == set(current):
             continue

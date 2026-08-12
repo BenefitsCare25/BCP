@@ -683,3 +683,23 @@ def test_setting_the_cover_it_already_has_changes_nothing(client: TestClient) ->
 def test_cover_cannot_be_set_on_another_tenants_dependant(client: TestClient) -> None:
     res = _cover(client, "00000000-0000-0000-0000-00000000dead", False)
     assert res.status_code == 404
+
+
+def test_a_cover_change_does_not_settle_the_review(client: TestClient) -> None:
+    """Cover and review are separate steps, and the sheet is built on that split:
+    a broker sets who is covered, then marks the case reviewed. Filing the
+    decision on the cover change instead made the card vanish out of the "to
+    review" list the moment a switch was touched, mid-edit."""
+    case = _case_named(_get(client), "Tan Wei Ming")
+    assert case is not None
+    side = next(p for p in case["parties"] if p["dependant_id"] and p["covered"])
+    before = _get(client)["unresolved_cases"]
+    assert _cover(client, side["dependant_id"], False).status_code == 200
+    try:
+        body = _get(client)
+        after = _case_named(body, "Tan Wei Ming")
+        assert after is not None
+        assert after["decision"] is None
+        assert body["unresolved_cases"] == before
+    finally:
+        _cover(client, side["dependant_id"], True)

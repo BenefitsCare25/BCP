@@ -21,7 +21,7 @@ from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import load_policy_year
 from app.db.session import get_db
-from app.models import Dependant, Employee, PolicyYear
+from app.models import Dependant, Employee, PolicyYear, User
 from app.models.dual_coverage_decision import DualCoverageDecision
 from app.schemas.dual_coverage import (
     DualCaseOut,
@@ -49,6 +49,61 @@ def _decisions_for(db: Session, py: PolicyYear) -> list[DualCoverageDecision]:
     )
 
 
+def _decider_names(
+    db: Session, rows: list[DualCoverageDecision]
+) -> dict[str, str]:
+    """user id → the name to print. A decision is only useful if a broker can
+    tell WHO took it, and the stored value is a uuid."""
+    ids = {r.decided_by for r in rows if r.decided_by}
+    if not ids:
+        return {}
+    found = db.execute(
+        select(User.id, User.display_name, User.email).where(User.id.in_(ids))
+    ).all()
+    return {uid: (name or email or "") for uid, name, email in found if (name or email)}
+
+
+def _upsert_decision(
+    db: Session,
+    py: PolicyYear,
+    user: CurrentUser,
+    *,
+    subject_key: str,
+    subject_keys: list[str],
+    parties_digest: str,
+    decision: str,
+    carried_by: str | None,
+    carried_by_staff_id: str | None,
+    note: str | None,
+    existing: DualCoverageDecision | None,
+    subject_kind: str = "life",
+) -> DualCoverageDecision:
+    """Write one life's decision."""
+    row = existing
+    if row is None:
+        row = DualCoverageDecision(
+            id=str(uuid.uuid4()),
+            client_id=py.client_id,
+            policy_year_id=py.id,
+            subject_key=subject_key,
+        )
+        db.add(row)
+    else:
+        # Re-key the existing row onto the subject's CURRENT key so later exact
+        # lookups (and the unique constraint) track the life as it is now known.
+        row.subject_key = subject_key
+    row.decided_at = datetime.now(UTC).replace(tzinfo=None)
+    row.subject_kind = subject_kind
+    row.subject_keys = subject_keys
+    row.decision = decision
+    row.carried_by_employee_id = carried_by
+    row.carried_by_staff_id = carried_by_staff_id
+    row.note = note
+    row.decided_by = user.user_id
+    row.parties_digest = parties_digest
+    return row
+
+
 def _match_decision(
     rows: list[DualCoverageDecision], subject_key: str, keys: list[str]
 ) -> DualCoverageDecision | None:
@@ -70,7 +125,9 @@ def _match_decision(
 
 
 def _decision_out(
-    row: DualCoverageDecision | None, parties_digest: str
+    row: DualCoverageDecision | None,
+    parties_digest: str,
+    names: dict[str, str] | None = None,
 ) -> DualDecisionOut | None:
     if row is None:
         return None
@@ -80,6 +137,7 @@ def _decision_out(
         carried_by_staff_id=row.carried_by_staff_id,
         note=row.note,
         decided_by=row.decided_by,
+        decided_by_name=(names or {}).get(row.decided_by or ""),
         decided_at=row.decided_at.isoformat() if row.decided_at else None,
         # A recorded digest that no longer describes the family means the
         # decision was taken about a different set of people.
@@ -110,13 +168,14 @@ def get_dual_coverage(
 ) -> DualCoverageOut:
     found = svc.detect(db, py)
     rows = _decisions_for(db, py)
+    names = _decider_names(db, rows)
 
     cases: list[DualCaseOut] = []
     lives: list[DualLifeRefOut] = []
     unresolved = 0
     for case in found.cases:
         row = _match_decision(rows, case.life_key, case.life_keys)
-        decision = _decision_out(row, case.parties_digest)
+        decision = _decision_out(row, case.parties_digest, names)
         # Undecided, or decided about a family that has since changed.
         if decision is None or decision.stale:
             unresolved += 1
@@ -158,7 +217,7 @@ def get_dual_coverage(
             child_dob=o.child_dob or None,
             listed_under_staff_id=o.listed_under_staff_id,
             other_staff_id=o.other_staff_id,
-            decision=_decision_out(_match_decision(rows, o.couple_key, []), ""),
+            decision=_decision_out(_match_decision(rows, o.couple_key, []), "", names),
         )
         for o in found.opportunities
     ]
@@ -271,27 +330,20 @@ def record_decision(
         if row
         else None
     )
-    if row is None:
-        row = DualCoverageDecision(
-            id=str(uuid.uuid4()),
-            client_id=py.client_id,
-            policy_year_id=py.id,
-            subject_key=body.subject_key,
-        )
-        db.add(row)
-    else:
-        # Re-key the existing row onto the subject's CURRENT key so later exact
-        # lookups (and the unique constraint) track the life as it is now known.
-        row.subject_key = body.subject_key
-    row.decided_at = datetime.now(UTC).replace(tzinfo=None)
-    row.subject_kind = body.subject_kind
-    row.subject_keys = keys
-    row.decision = body.decision
-    row.carried_by_employee_id = carried_by
-    row.carried_by_staff_id = staff_id
-    row.note = body.note
-    row.decided_by = user.user_id
-    row.parties_digest = digest
+    row = _upsert_decision(
+        db,
+        py,
+        user,
+        subject_key=body.subject_key,
+        subject_keys=keys,
+        parties_digest=digest,
+        decision=body.decision,
+        carried_by=carried_by,
+        carried_by_staff_id=staff_id,
+        note=body.note,
+        existing=row,
+        subject_kind=body.subject_kind,
+    )
 
     write_audit(
         db,
