@@ -440,7 +440,11 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
   const revoke = useRevokeInvitation();
 
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [role, setRole] = useState("broker_viewer");
+  // Which row is having its name edited, and the draft value.
+  const [editingUser, setEditingUser] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
 
   const roleOptions = meRole === "system_admin"
     ? [...ASSIGNABLE_ROLES, "system_admin"]
@@ -451,6 +455,7 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
     try {
       await invite.mutateAsync({
         email: email.trim(),
+        ...(name.trim() ? { display_name: name.trim() } : {}),
         role,
         client_ids: [],
         ...(firmId ? { broker_firm_id: firmId } : {}),
@@ -460,6 +465,24 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
       // sign-in matches this row by email, with or without a delivered token.
       toast.success("User invited — they can now sign in with Microsoft");
       setEmail("");
+      setName("");
+    } catch (e) {
+      toast.error(formatError(e));
+    }
+  };
+
+  const onSaveName = async (u: AdminUser) => {
+    const next = editName.trim();
+    if (next === (u.display_name ?? "")) {
+      setEditingUser(null);
+      return;
+    }
+    try {
+      // Empty string CLEARS the name (the API reads "" as "unset"); null would
+      // mean "leave it alone", which is not what an emptied box is asking for.
+      await patch.mutateAsync({ id: u.id, patch: { display_name: next } });
+      toast.success(next ? "Name updated" : "Name removed");
+      setEditingUser(null);
     } catch (e) {
       toast.error(formatError(e));
     }
@@ -503,7 +526,7 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_180px_auto] gap-2 items-end">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_180px_auto] gap-2 items-end">
             <div className="flex flex-col gap-1.5">
               <Label>Email</Label>
               <Input
@@ -511,6 +534,17 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="person@company.com"
+              />
+            </div>
+            {/* Optional, and the invite is not blocked on it — an invite is
+                often sent from an email address alone. Without it the list
+                shows the email twice until someone fills the name in. */}
+            <div className="flex flex-col gap-1.5">
+              <Label>Name</Label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Optional"
               />
             </div>
             <div className="flex flex-col gap-1.5">
@@ -547,12 +581,58 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
             const inv = pendingByEmail.get(u.email);
             return (
               <li key={u.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">
-                    {u.display_name || u.email}
+                {editingUser === u.id ? (
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <Input
+                      autoFocus
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") onSaveName(u);
+                        if (e.key === "Escape") setEditingUser(null);
+                      }}
+                      className="h-8 max-w-64"
+                      placeholder="Full name"
+                      aria-label={`Name for ${u.email}`}
+                    />
+                    <Button size="sm" onClick={() => onSaveName(u)} disabled={patch.isPending}>
+                      Save
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingUser(null)}>
+                      Cancel
+                    </Button>
                   </div>
-                  <div className="text-xs text-muted-foreground truncate">{u.email}</div>
-                </div>
+                ) : (
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <div className="min-w-0">
+                      {/* Only the email when there is no name — printing it as
+                          the title AND the subtitle just says it twice. */}
+                      {u.display_name ? (
+                        <>
+                          <div className="text-sm font-medium truncate">
+                            {u.display_name}
+                          </div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {u.email}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-sm truncate">{u.email}</div>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0 text-muted-foreground"
+                      onClick={() => {
+                        setEditName(u.display_name ?? "");
+                        setEditingUser(u.id);
+                      }}
+                    >
+                      {u.display_name ? "Rename" : "Add name"}
+                    </Button>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 shrink-0">
                   <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
                   <Select value={u.role} onValueChange={(v) => onRoleChange(u, v)}>

@@ -166,6 +166,45 @@ def test_invite_client_role_grants_client_access(broker: TestClient) -> None:
     assert u["client_ids"] == [target_client]
 
 
+def test_invite_can_carry_a_name_and_it_survives_to_the_user_row(
+    broker: TestClient,
+) -> None:
+    """Without this the users list shows the email as the name AND as the
+    subtitle — the same string twice — until someone edits it by hand."""
+    res = broker.post(
+        "/api/v1/admin/invitations",
+        json={"email": "named@inspro.test", "role": "broker_viewer",
+              "display_name": "  Chee Leong Ong  "},
+    )
+    assert res.status_code == 201, res.text
+    users = broker.get("/api/v1/admin/users").json()
+    u = next(u for u in users if u["email"] == "named@inspro.test")
+    assert u["display_name"] == "Chee Leong Ong"  # trimmed
+
+
+def test_a_users_name_can_be_set_and_cleared_after_the_fact(
+    broker: TestClient,
+) -> None:
+    """Most rows predate the name field, so editing is the path that matters.
+    An emptied box CLEARS the name; omitting the key leaves it alone."""
+    broker.post("/api/v1/admin/invitations",
+                json={"email": "rename@inspro.test", "role": "broker_viewer"})
+    users = broker.get("/api/v1/admin/users").json()
+    uid = next(u["id"] for u in users if u["email"] == "rename@inspro.test")
+
+    named = broker.patch(f"/api/v1/admin/users/{uid}",
+                         json={"display_name": "Fiona Lee"})
+    assert named.status_code == 200, named.text
+    assert named.json()["display_name"] == "Fiona Lee"
+
+    # A patch that doesn't mention the name must not wipe it.
+    kept = broker.patch(f"/api/v1/admin/users/{uid}", json={"role": "broker_admin"})
+    assert kept.json()["display_name"] == "Fiona Lee"
+
+    cleared = broker.patch(f"/api/v1/admin/users/{uid}", json={"display_name": ""})
+    assert cleared.json()["display_name"] is None
+
+
 def test_invite_duplicate_email_conflicts(broker: TestClient) -> None:
     broker.post("/api/v1/admin/invitations",
                 json={"email": "dup@inspro.test", "role": "broker_viewer"})

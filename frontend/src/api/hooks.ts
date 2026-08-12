@@ -1137,6 +1137,7 @@ export function useCreateInvitation() {
   return useMutation({
     mutationFn: (body: {
       email: string;
+      display_name?: string;
       role: string;
       client_ids?: string[];
       broker_firm_id?: string; // system_admin only; see useCreateClient

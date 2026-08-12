@@ -510,6 +510,10 @@ def patch_user(
 # ── Invitations ───────────────────────────────────────────────────────────────
 class InvitationCreate(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+    # Optional, and deliberately not required: an invite is often sent from an
+    # email address alone, and blocking on a name would only get a guess typed
+    # in. Absent, the list falls back to the email until someone fills it in.
+    display_name: str | None = Field(default=None, max_length=255)
     role: str
     client_ids: list[str] = Field(default_factory=list)
     broker_firm_id: str | None = None  # system_admin only
@@ -554,8 +558,9 @@ def create_invitation(
 
     # Provision the user up front (status invited); first Entra sign-in links
     # the oid by email and flips status to active.
+    display_name = (body.display_name or "").strip() or None
     new_user = User(
-        external_id=None, email=email, display_name=None,
+        external_id=None, email=email, display_name=display_name,
         broker_firm_id=firm_id, role=body.role, status=USER_STATUS_INVITED,
     )
     db.add(new_user)
@@ -573,7 +578,8 @@ def create_invitation(
     db.add(invite)
     db.flush()
     write_audit(db, user, action="create", entity_type="invitation", entity_id=invite.id,
-                after={"email": email, "role": body.role, "broker_firm_id": firm_id})
+                after={"email": email, "display_name": display_name,
+                       "role": body.role, "broker_firm_id": firm_id})
     try:
         db.commit()
     except IntegrityError as exc:
