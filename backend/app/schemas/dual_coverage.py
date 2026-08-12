@@ -50,6 +50,24 @@ class DualCaseOut(BaseModel):
     decision: DualDecisionOut | None = None
 
 
+class DualLifeRefOut(BaseModel):
+    """One dependant ROW's membership in a shared life.
+
+    What a roster table needs to mark the row and NAME both employees, without
+    carrying the case's decision workflow. Keyed by dependant row rather than by
+    life because that is what a table has in hand.
+    """
+
+    dependant_id: str
+    subject_key: str
+    severity: Literal["warn", "info"]
+    # Decided, and the decision still describes this family.
+    resolved: bool
+    # Every side of the life, in case order — the table names them all rather
+    # than saying "also somewhere else".
+    parties: list[DualPartyOut] = Field(default_factory=list)
+
+
 class DualOpportunityOut(BaseModel):
     subject_key: str
     employees: list[DualPartyOut]
@@ -69,6 +87,11 @@ class DualCoverageOut(BaseModel):
     cases: list[DualCaseOut]
     opportunities: list[DualOpportunityOut]
     preview_cap: int
+    # Deliberately NOT capped, unlike `cases`. This drives a per-row marker on a
+    # PAGINATED table, so a cap would silently leave rows on later pages
+    # unmarked — the one failure this column exists to prevent. Each entry is
+    # small, and the list is bounded by the duplicates a roster actually has.
+    lives: list[DualLifeRefOut] = Field(default_factory=list)
 
 
 class DualDecisionIn(BaseModel):

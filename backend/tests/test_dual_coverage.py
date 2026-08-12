@@ -548,3 +548,68 @@ def test_re_deciding_updates_one_row_and_stamps_the_time(client: TestClient) -> 
     client.delete(
         f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
     )
+
+
+# ── The per-row marker the dependant table reads ────────────────────────────
+
+
+def test_every_doubled_dependant_row_is_named_in_lives(client: TestClient) -> None:
+    """`lives` keys the same detection by DEPENDANT ROW, which is what a
+    paginated table has in hand.
+
+    Both of a doubled child's rows appear — the marker has to render on
+    whichever of them the broker is looking at — and each carries EVERY party,
+    so the cell can name both employees rather than saying "also somewhere
+    else" and leaving them to go hunting.
+    """
+    body = _get(client)
+    case = _case_named(body, "Tan Wei Ming")
+    assert case is not None
+
+    mine = [life for life in body["lives"] if life["subject_key"] == case["subject_key"]]
+    dep_ids = {p["dependant_id"] for p in case["parties"] if p["dependant_id"]}
+    assert {life["dependant_id"] for life in mine} == dep_ids
+    for life in mine:
+        assert sorted(p["staff_id"] for p in life["parties"]) == ["D-100", "D-200"]
+        assert life["severity"] == case["severity"]
+        assert life["resolved"] is False
+
+
+def test_lives_is_not_capped_like_the_case_list(client: TestClient) -> None:
+    """The cases list is a preview; `lives` drives a per-row marker on a
+    paginated table, so a cap would silently leave later pages unmarked."""
+    body = _get(client)
+    # Every case's dependant-backed party is represented, not just the first
+    # `preview_cap` of them.
+    expected = sum(
+        1 for c in body["cases"] for p in c["parties"] if p["dependant_id"]
+    )
+    keys = {c["subject_key"] for c in body["cases"]}
+    assert sum(1 for life in body["lives"] if life["subject_key"] in keys) == expected
+
+
+def test_a_decided_life_is_marked_resolved_for_the_table(client: TestClient) -> None:
+    body = _get(client)
+    case = _case_named(body, "Tan Wei Ming")
+    assert case is not None
+    keeper = next(p for p in case["parties"] if p["employee_id"])
+    res = client.post(
+        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions",
+        json={
+            "subject_key": case["subject_key"],
+            "decision": "carried_by",
+            "carried_by_employee_id": keeper["employee_id"],
+        },
+    )
+    assert res.status_code == 200, res.text
+    try:
+        after = _get(client)
+        marked = [
+            life for life in after["lives"]
+            if life["subject_key"] == case["subject_key"]
+        ]
+        assert marked and all(life["resolved"] for life in marked)
+    finally:
+        client.delete(
+            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
+        )

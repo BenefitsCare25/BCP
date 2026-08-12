@@ -49,6 +49,18 @@ export interface DualCase {
   decision: DualDecision | null;
 }
 
+/** One dependant ROW's membership in a shared life — enough for a roster table
+ *  to mark the row and name every employee the life reaches. Never capped
+ *  server-side: the table is paginated, so a cap would leave later pages
+ *  silently unmarked. */
+export interface DualLifeRef {
+  dependant_id: string;
+  subject_key: string;
+  severity: "warn" | "info";
+  resolved: boolean;
+  parties: DualParty[];
+}
+
 export interface DualOpportunity {
   subject_key: string;
   employees: DualParty[];
@@ -66,6 +78,12 @@ export interface DualCoverage {
   cases: DualCase[];
   opportunities: DualOpportunity[];
   preview_cap: number;
+  lives: DualLifeRef[];
+}
+
+/** dependant row id → the shared life it belongs to. */
+export function livesByDependant(data?: DualCoverage): Map<string, DualLifeRef> {
+  return new Map((data?.lives ?? []).map((l) => [l.dependant_id, l]));
 }
 
 export function useDualCoverage(policyYearId: string | undefined) {

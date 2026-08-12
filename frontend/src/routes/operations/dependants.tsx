@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link2, Loader2, Save, Sparkles, Trash2, Unlink } from "lucide-react";
+import { Check, Link2, Loader2, Save, Sparkles, Trash2, Unlink } from "lucide-react";
 import {
   useAutoMatchDependants,
   useBulkDeleteDependants,
@@ -56,7 +56,15 @@ import {
   ListingImportBar,
 } from "@/components/operations/ListingImportBar";
 import { DependantApprovals } from "@/components/operations/DependantApprovals";
-import { DualCoveragePanel } from "@/components/operations/DualCoveragePanel";
+import {
+  DualCoverageBanner,
+  DualCoverageSheet,
+} from "@/components/operations/DualCoveragePanel";
+import {
+  type DualLifeRef,
+  livesByDependant,
+  useDualCoverage,
+} from "@/api/dualCoverage";
 import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
 import { coerceAttrs } from "@/lib/attrs";
@@ -70,6 +78,54 @@ const PAGE_SIZE = 50;
 // Employee-identifying fields stored for re-linking — shown read-only in link
 // section, excluded from the editable attributes grid.
 const LINK_HINT_KEYS = new Set(["employee_staff_id", "employee_name", "employee_id_no"]);
+
+/**
+ * The "Covered twice" cell. It NAMES both employees rather than saying the life
+ * is doubled and leaving the broker to go looking: the table shows a
+ * dependant's link method but never which employee they hang off, so "also
+ * somewhere else" would be unanswerable from this page.
+ *
+ * A button, not a row click — the row itself opens the dependant's detail pane,
+ * and these two destinations must not fight.
+ */
+function DualCell({
+  life,
+  onOpen,
+}: {
+  life: DualLifeRef | undefined;
+  onOpen: (subjectKey: string) => void;
+}) {
+  if (!life) return <span className="text-subtle">—</span>;
+  return (
+    <button
+      type="button"
+      className="-m-1 block max-w-56 space-y-0.5 rounded p-1 text-left hover:bg-muted focus-ring"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(life.subject_key);
+      }}
+    >
+      {life.resolved ? (
+        <span className="inline-flex items-center gap-1 text-2xs text-good">
+          <Check className="size-3" aria-hidden /> Decided
+        </span>
+      ) : (
+        <Badge variant={life.severity === "warn" ? "warn" : "info"}>
+          {life.severity === "warn" ? "Same benefit twice" : "Two employees"}
+        </Badge>
+      )}
+      {life.parties.map((p, i) => (
+        <span
+          key={`${p.employee_id}-${p.dependant_id}-${i}`}
+          className="block truncate text-2xs text-muted-foreground"
+        >
+          <span className="font-mono">{p.staff_id || "—"}</span>{" "}
+          {p.employee_name ?? "Unknown"}
+        </span>
+      ))}
+    </button>
+  );
+}
 
 export function DependantsPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
@@ -86,6 +142,11 @@ export function DependantsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
   const [linkStaffId, setLinkStaffId] = useState("");
+  // The review sheet is opened from two places — the banner (everything) and a
+  // row's "Covered twice" cell (that one life) — so its state lives here rather
+  // than inside either of them.
+  const [dualOpen, setDualOpen] = useState(false);
+  const [dualFocus, setDualFocus] = useState<string | null>(null);
   // Only the SEARCH text is debounced; a picker click should move the table
   // at once.
   const query = useMemo(
@@ -103,6 +164,11 @@ export function DependantsPage() {
   // limit=1 queries on them).
   const { data: facets } = useDependantFacets(policyYearId ?? undefined);
   const { data: memberFacets } = useMemberFacets(policyYearId ?? undefined);
+  // Same query the banner and sheet read — one detection pass serves the marker
+  // on every row and the review list, so a row can never disagree with the
+  // sheet it opens.
+  const { data: dual } = useDualCoverage(policyYearId ?? undefined);
+  const dualLives = useMemo(() => livesByDependant(dual), [dual]);
   const dependantsTotal = facets?.active_total ?? 0;
   const unlinkedTotal = facets?.unlinked ?? 0;
   // Whether anything has EVER been uploaded spans every status: a roster
@@ -141,7 +207,20 @@ export function DependantsPage() {
       <DependantApprovals policyYearId={policyYearId} />
 
       {/* Lives insured twice — renders nothing when the roster is clean. */}
-      <DualCoveragePanel policyYearId={policyYearId} />
+      <DualCoverageBanner
+        policyYearId={policyYearId}
+        onReview={() => {
+          setDualFocus(null);
+          setDualOpen(true);
+        }}
+      />
+      <DualCoverageSheet
+        policyYearId={policyYearId}
+        open={dualOpen}
+        onOpenChange={setDualOpen}
+        focusKey={dualFocus}
+        onClearFocus={() => setDualFocus(null)}
+      />
 
       <ListingImportBar
         policyYearId={policyYearId}
@@ -270,6 +349,17 @@ export function DependantsPage() {
                         </InfoHint>
                       </span>
                     </TableHead>
+                    <TableHead>
+                      <span className="inline-flex items-center gap-1">
+                        Covered twice
+                        <InfoHint>
+                          The same person also reaches this company through
+                          another employee — usually a child whose parents both
+                          work here. Both employees are named; select one to
+                          record which of them keeps the cover.
+                        </InfoHint>
+                      </span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -294,6 +384,15 @@ export function DependantsPage() {
                         ) : (
                           <Badge variant="error">Unlinked</Badge>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <DualCell
+                          life={dualLives.get(d.id)}
+                          onOpen={(key) => {
+                            setDualFocus(key);
+                            setDualOpen(true);
+                          }}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}

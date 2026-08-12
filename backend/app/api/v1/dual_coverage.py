@@ -28,6 +28,7 @@ from app.schemas.dual_coverage import (
     DualCoverageOut,
     DualDecisionIn,
     DualDecisionOut,
+    DualLifeRefOut,
     DualOpportunityOut,
     DualPartyOut,
 )
@@ -109,6 +110,7 @@ def get_dual_coverage(
     rows = _decisions_for(db, py)
 
     cases: list[DualCaseOut] = []
+    lives: list[DualLifeRefOut] = []
     unresolved = 0
     for case in found.cases:
         row = _match_decision(rows, case.life_key, case.life_keys)
@@ -116,6 +118,20 @@ def get_dual_coverage(
         # Undecided, or decided about a family that has since changed.
         if decision is None or decision.stale:
             unresolved += 1
+        parties = [_party_out(p) for p in case.parties]
+        # Built from every case, BEFORE the preview cap, so a row on page 40 of
+        # the dependant table is marked as reliably as one on page 1.
+        lives.extend(
+            DualLifeRefOut(
+                dependant_id=p.dependant_id,
+                subject_key=case.life_key,
+                severity=case.severity,  # type: ignore[arg-type]
+                resolved=decision is not None and not decision.stale,
+                parties=parties,
+            )
+            for p in case.parties
+            if p.dependant_id
+        )
         cases.append(
             DualCaseOut(
                 subject_key=case.life_key,
@@ -125,7 +141,7 @@ def get_dual_coverage(
                 relationship=case.relationship,
                 match_tier=case.match_tier,  # type: ignore[arg-type]
                 flags=case.flags,
-                parties=[_party_out(p) for p in case.parties],
+                parties=parties,
                 overlapping_products=case.overlapping_products,
                 severity=case.severity,  # type: ignore[arg-type]
                 decision=decision,
@@ -154,6 +170,7 @@ def get_dual_coverage(
         cases=cases[: svc.PREVIEW_CAP],
         opportunities=opportunities[: svc.PREVIEW_CAP],
         preview_cap=svc.PREVIEW_CAP,
+        lives=lives,
     )
 
 
