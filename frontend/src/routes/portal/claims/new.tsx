@@ -12,6 +12,7 @@
  * in-period, duplicates). */
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Loader2, Send } from "lucide-react";
+import { AnchorField } from "@/components/portal/claims/AnchorField";
 import { AutofillCard } from "@/components/portal/claims/AutofillCard";
 import { ClaimTypeFields } from "@/components/portal/claims/ClaimTypeFields";
 import { DocumentFields } from "@/components/portal/claims/DocumentFields";
@@ -130,6 +131,9 @@ export function PortalNewClaimPage() {
           />
           <PendingClaimsNotice form={form} />
           <ClaimTypeFields form={form} />
+          {/* Before the visit details, because it changes what they are
+              prefilled with. */}
+          <AnchorField form={form} />
           <VisitFields form={form} />
           <ReferralField form={form} />
           <DocumentFields form={form} />

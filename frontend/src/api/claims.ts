@@ -88,6 +88,21 @@ export interface ClaimAIReview extends ClaimAIReviewSummary {
   superseded: boolean;
 }
 
+/** An earlier visit a claim is anchored to. Mirrors the portal's `ClaimAnchor`
+ * — one server-side projection, so the broker and the member describe the same
+ * visit in the same words. */
+export interface ClaimAnchor {
+  id: string;
+  provider_name: string | null;
+  incurred_date: string;
+  admission_date: string | null;
+  discharge_date: string | null;
+  diagnosis: string | null;
+  doctor_name: string | null;
+  referral_document_id: string | null;
+  from_records: boolean;
+}
+
 export interface BrokerClaim {
   id: string;
   client_id: string;
@@ -116,6 +131,13 @@ export interface BrokerClaim {
   referral_document_id: string | null;
   referral_document: StoredDocumentMeta | null;
   referral_not_applicable: boolean;
+  /** The visit this claim continues — the admission a pre-/post-hospitalisation
+   * consult is claimed against, or the first visit of a specialist course.
+   * Resolved to a summary server-side (`services/claim_episodes.anchor_out`),
+   * which is also what decides how much of a broker-recorded case a MEMBER may
+   * see of it — so never re-fetch the anchor claim to render this. */
+  related_claim_id: string | null;
+  related_claim: ClaimAnchor | null;
   incurred_date: string;
   provider_name: string | null;
   invoice_number: string | null;

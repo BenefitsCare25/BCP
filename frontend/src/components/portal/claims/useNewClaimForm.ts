@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
+  useClaimAnchors,
   useCoverageOptions,
   useCreateClaim,
   useDeleteDraftClaim,
@@ -27,6 +28,7 @@ import {
   useSubmitClaim,
   useUploadClaimDocument,
   useUploadReferralLetter,
+  type AnchorMode,
   type ClaimIntakeSuggestion,
   type InsuredClaimOption,
 } from "@/api/portal";
@@ -95,6 +97,10 @@ export function useNewClaimForm() {
   const [remarks, setRemarks] = useState("");
   const [referralMode, setReferralMode] = useState<ReferralMode>("");
   const [referralFile, setReferralFile] = useState<File | null>(null);
+  // The date printed on a NEWLY uploaded referral letter. Optional — a member
+  // who can't read a date off their letter must still be able to attach it, and
+  // the review's validity check simply doesn't run without one.
+  const [referralIssuedOn, setReferralIssuedOn] = useState("");
   const [referralExistingId, setReferralExistingId] = useState("");
   // One file per required-document slot (keyed by slot key) + optional extras.
   const [slotFiles, setSlotFiles] = useState<Record<string, File | null>>({});
@@ -115,6 +121,12 @@ export function useNewClaimForm() {
   // Autofill files the member has manually removed from a slot — the auto-place
   // effect must not re-add them on a later claim-type change.
   const clearedFiles = useRef<Set<File>>(new Set());
+  // The earlier visit this claim continues ("" = none chosen yet or "a new
+  // condition"). `anchorTouched` records that the member has ANSWERED the
+  // question — including answering "not related" — so the single-candidate
+  // auto-select below can never undo their choice.
+  const [anchorId, setAnchorId] = useState("");
+  const anchorTouched = useRef(false);
 
   // Kind + identifiers + sub-type are DERIVED from the single selection.
   const effectiveKind: "insured" | "flex" | null = selection.startsWith(
@@ -271,12 +283,126 @@ export function useNewClaimForm() {
   const needsReferral = selectedProduct?.requires_referral ?? false;
   const referralLetters = useReferralLetters(needsReferral);
 
-  // Follow-up visits reuse the member's latest referral letter on file —
-  // auto-select it once the letters load; the member can still change it.
+  // ── The episode: which earlier visit this claim continues ─────────────────
+  //
+  // SERVED per claim type (`anchor_mode`), never matched on a sub-type label
+  // here. A specialist type reports "sp_course" on both visit types because the
+  // TYPE can carry a course; only a follow-up may actually name one, and
+  // `visitType` is a control this form already owns, so narrowing it here is
+  // not the label-matching drift the served flag guards against.
+  const rawAnchorMode = selectedClaimType?.anchor_mode ?? null;
+  const anchorMode: AnchorMode | null =
+    rawAnchorMode === "sp_course"
+      ? visitType === "follow_up"
+        ? "sp_course"
+        : null
+      : rawAnchorMode;
+  const claimAnchors = useClaimAnchors(anchorMode, dependantId, true);
+  const anchorOptions = claimAnchors.data ?? [];
+  const selectedAnchor = anchorOptions.find((a) => a.id === anchorId) ?? null;
+
+  // One plausible previous visit and no answer yet → pick it. This is what
+  // makes the control feel like autofill instead of an interrogation; anything
+  // the member does to the picker sets `anchorTouched` and stops it forever.
+  useEffect(() => {
+    if (anchorTouched.current || anchorId || anchorMode === null) return;
+    if (claimAnchors.data?.length === 1) setAnchorId(claimAnchors.data[0].id);
+  }, [claimAnchors.data, anchorMode, anchorId]);
+
+  // Prefill from the anchor — the CLINICAL context only, never the bill.
+  //
+  // **The member beats the document, which beats the anchor.** A field the
+  // member typed or the AI read off THIS visit's invoice is already non-empty,
+  // so filling only blanks is the whole precedence rule. The one exception is a
+  // value extraction produced with LOW confidence: the anchor's is a confirmed
+  // fact from a claim that was already assessed, which a blurry read is not, so
+  // it wins and the "double-check this" hint drops the field it no longer
+  // applies to.
+  //
+  // Amount, date, invoice number and documents are never carried: those are
+  // facts about one visit, and copying them forward walks into the
+  // duplicate-invoice refusal — which has no member-side override.
+  // What the anchor put there, so deselecting it can take it back. Anything the
+  // member has since retyped is no longer the anchor's and stays.
+  const anchorFilled = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!selectedAnchor) {
+      // Deselected — including "This is for a new condition" after the
+      // single-candidate auto-select fired. Undoing the prefill is not tidiness:
+      // leaving `referralMode`/`referralExistingId` set files the claim with the
+      // PREVIOUS course's referral letter and no link to explain it, which is
+      // exactly the wrong-letter failure anchor precedence exists to prevent —
+      // and the review's `_check_referral` passes it, because a letter IS
+      // attached.
+      const filled = anchorFilled.current;
+      if (Object.keys(filled).length === 0) return;
+      if (filled.diagnosis && diagnosis === filled.diagnosis) setDiagnosis("");
+      if (filled.doctor_name && doctorName === filled.doctor_name)
+        setDoctorName("");
+      if (filled.provider_name && provider === filled.provider_name)
+        setProvider("");
+      if (
+        filled.referral_document_id &&
+        referralExistingId === filled.referral_document_id
+      ) {
+        // Back to unset, which re-arms the "latest letter on file" fallback
+        // below — the documented behaviour for a follow-up naming no course.
+        setReferralMode("");
+        setReferralExistingId("");
+      }
+      anchorFilled.current = {};
+      return;
+    }
+    const anchorWins = (value: string, field: string) =>
+      !value || lowConfidence.includes(field);
+    // Rebuilt, not appended: switching straight from one anchor to another must
+    // not leave the first one's values recorded as the second's.
+    const filled: Record<string, string> = {};
+    if (selectedAnchor.diagnosis && anchorWins(diagnosis, "diagnosis")) {
+      setDiagnosis(selectedAnchor.diagnosis);
+      setLowConfidence((prev) => prev.filter((f) => f !== "diagnosis"));
+      filled.diagnosis = selectedAnchor.diagnosis;
+    }
+    if (selectedAnchor.doctor_name && anchorWins(doctorName, "doctor_name")) {
+      setDoctorName(selectedAnchor.doctor_name);
+      setLowConfidence((prev) => prev.filter((f) => f !== "doctor_name"));
+      filled.doctor_name = selectedAnchor.doctor_name;
+    }
+    // The clinic, on a specialist course only. A pre-/post- consult is billed
+    // by the specialist while the ANCHOR is the hospital, so carrying the
+    // provider there would be wrong on every single claim.
+    if (
+      anchorMode === "sp_course" &&
+      selectedAnchor.provider_name &&
+      anchorWins(provider, "provider_name")
+    ) {
+      setProvider(selectedAnchor.provider_name);
+      setLowConfidence((prev) => prev.filter((f) => f !== "provider_name"));
+      filled.provider_name = selectedAnchor.provider_name;
+    }
+    // The referral of the course this claim CONTINUES — authoritative, not a
+    // blank-fill: the anchor is the course, so its letter is the right one even
+    // if the newest-on-file rule below has already chosen another.
+    if (selectedAnchor.referral_document_id) {
+      setReferralMode("existing");
+      setReferralExistingId(selectedAnchor.referral_document_id);
+      filled.referral_document_id = selectedAnchor.referral_document_id;
+    }
+    anchorFilled.current = filled;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAnchor, anchorMode]);
+
+  // Follow-up visits with no anchor chosen fall back to the member's latest
+  // referral letter on file — auto-select it once the letters load; the member
+  // can still change it. Guarded on the anchor because "newest" is wrong the
+  // moment a member is under two specialists at once, and the anchor knows
+  // which course this is.
   useEffect(() => {
     if (
       visitType === "follow_up" &&
       !referralMode &&
+      !selectedAnchor?.referral_document_id &&
       (referralLetters.data?.length ?? 0) > 0
     ) {
       const latest = [...(referralLetters.data ?? [])].sort((a, b) =>
@@ -285,7 +411,7 @@ export function useNewClaimForm() {
       setReferralMode("existing");
       setReferralExistingId(latest.id);
     }
-  }, [visitType, referralMode, referralLetters.data]);
+  }, [visitType, referralMode, referralLetters.data, selectedAnchor]);
 
   // Each autofill document fills a required-document slot once a claim type is
   // chosen — the slot the AI matched it to (discharge summary → the
@@ -363,8 +489,14 @@ export function useNewClaimForm() {
     setSlotFiles({});
     setReferralMode("");
     setReferralFile(null);
+    setReferralIssuedOn("");
     setReferralExistingId("");
     setFieldErrors({});
+    // The anchor belongs to the claim TYPE — an admission cannot be the
+    // follow-up target of a dental claim. Clearing `anchorTouched` too so the
+    // single-candidate auto-select is offered again for the new type.
+    setAnchorId("");
+    anchorTouched.current = false;
   };
 
   const changeSelection = (next: string) => {
@@ -613,7 +745,10 @@ export function useNewClaimForm() {
       // upload it first, then reference it from the claim.
       let referralDocumentId: string | null = null;
       if (needsReferral && referralMode === "upload" && referralFile) {
-        const letter = await uploadReferral.mutateAsync(referralFile);
+        const letter = await uploadReferral.mutateAsync({
+          file: referralFile,
+          issuedOn: referralIssuedOn || null,
+        });
         referralDocumentId = letter.id;
         uploadedReferralId = letter.id;
       } else if (needsReferral && referralMode === "existing") {
@@ -641,6 +776,9 @@ export function useNewClaimForm() {
         dependant_id: dependantId || null,
         referral_document_id: referralDocumentId,
         referral_not_applicable: false,
+        // Only when this claim type actually takes one — a stale id left over
+        // from a type the member switched away from would be refused.
+        related_claim_id: anchorMode ? anchorId || null : null,
         // Sending the claim with the figure on screen IS the acceptance, so
         // this rides along automatically. The amount is what was ACTUALLY
         // DISPLAYED: the server re-computes and stamps the acknowledgement only
@@ -762,6 +900,14 @@ export function useNewClaimForm() {
     isHospitalisation,
     needsReferral,
     requiresDoctorName,
+    // episode
+    anchorMode,
+    anchorOptions,
+    anchorId,
+    changeAnchor: (next: string) => {
+      anchorTouched.current = true;
+      setAnchorId(next);
+    },
     showDiagnosisPicker:
       effectiveKind === "insured" &&
       (selectedProduct?.diagnosis_group ?? null) !== null,
@@ -798,6 +944,8 @@ export function useNewClaimForm() {
     referralMode,
     referralFile,
     setReferralFile,
+    referralIssuedOn,
+    setReferralIssuedOn,
     referralExistingId,
     setReferralExistingId,
     slotFiles,
@@ -823,11 +971,17 @@ export function useNewClaimForm() {
       setVisitType(next);
       setReferralMode("");
       setReferralFile(null);
+      setReferralIssuedOn("");
       setReferralExistingId("");
+      // First visit ⇄ follow-up decides whether this claim continues anything
+      // at all, so a link chosen under the other answer must not survive it.
+      setAnchorId("");
+      anchorTouched.current = false;
     },
     setReferralMode: (next: ReferralMode) => {
       setReferralMode(next);
       setReferralFile(null);
+      setReferralIssuedOn("");
       setReferralExistingId("");
     },
     runAutofill,

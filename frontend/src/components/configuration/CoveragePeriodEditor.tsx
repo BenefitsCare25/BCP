@@ -59,6 +59,14 @@ export function CoveragePeriodEditor({
   const [nelAge, setNelAge] = useState<string>(
     term.nel_age_limit != null ? String(term.nel_age_limit) : "",
   );
+  // Pre-/post-hospitalisation claim window. Blank is NOT zero — it means the
+  // product states no window, and the review's check does not run.
+  const [preDays, setPreDays] = useState<string>(
+    term.pre_hosp_days != null ? String(term.pre_hosp_days) : "",
+  );
+  const [postDays, setPostDays] = useState<string>(
+    term.post_hosp_days != null ? String(term.post_hosp_days) : "",
+  );
   const setTerm = useSetProductTerm(policyYearId);
   const resetTerm = useResetProductTerm(policyYearId);
   // Reset (DELETE) clears the whole row incl. the activation-locked coverage
@@ -68,6 +76,9 @@ export function CoveragePeriodEditor({
   const { data: policyYears = [] } = usePolicyYears();
   const activeYear = policyYears.find((y) => y.id === policyYearId);
   const locked = activeYear !== undefined && activeYear.status !== "draft";
+  // SERVED (`ProductTermOut.is_inpatient`), never matched on the code or the
+  // line here: product-type knowledge lives in `product_registry.py` alone.
+  const isInpatientLine = term.is_inpatient;
 
   const datesDirty = start !== term.coverage_start || end !== term.coverage_end;
   const parsedRate = gstRate.trim() === "" ? null : Number(gstRate);
@@ -79,7 +90,12 @@ export function CoveragePeriodEditor({
   const fclDirty = parsedFcl !== term.free_cover_limit;
   const parsedNelAge = nelAge.trim() === "" ? null : Number(nelAge);
   const nelAgeDirty = parsedNelAge !== term.nel_age_limit;
-  const dirty = datesDirty || gstDirty || fclDirty || nelAgeDirty;
+  const parsedPre = preDays.trim() === "" ? null : Number(preDays);
+  const parsedPost = postDays.trim() === "" ? null : Number(postDays);
+  const preDirty = parsedPre !== term.pre_hosp_days;
+  const postDirty = parsedPost !== term.post_hosp_days;
+  const dirty =
+    datesDirty || gstDirty || fclDirty || nelAgeDirty || preDirty || postDirty;
 
   const datesValid = Boolean(start) && Boolean(end) && end >= start;
   const rateValid =
@@ -91,7 +107,15 @@ export function CoveragePeriodEditor({
   const nelAgeValid =
     parsedNelAge === null ||
     (Number.isInteger(parsedNelAge) && parsedNelAge >= 1 && parsedNelAge <= 120);
-  const valid = datesValid && rateValid && fclValid && nelAgeValid;
+  const daysValid = (v: number | null) =>
+    v === null || (Number.isInteger(v) && v >= 0 && v <= 365);
+  const valid =
+    datesValid &&
+    rateValid &&
+    fclValid &&
+    nelAgeValid &&
+    daysValid(parsedPre) &&
+    daysValid(parsedPost);
   const busy = setTerm.isPending || resetTerm.isPending;
   // The server row exists in some non-default form (dates or a GST opinion).
   const hasOverride =
@@ -99,7 +123,9 @@ export function CoveragePeriodEditor({
     term.gst_included !== null ||
     term.gst_rate != null ||
     term.free_cover_limit != null ||
-    term.nel_age_limit != null;
+    term.nel_age_limit != null ||
+    term.pre_hosp_days != null ||
+    term.post_hosp_days != null;
 
   const save = async () => {
     try {
@@ -116,6 +142,8 @@ export function CoveragePeriodEditor({
           : {}),
         ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
         ...(nelAgeDirty ? { nelAgeLimit: parsedNelAge } : {}),
+        ...(preDirty ? { preHospDays: parsedPre } : {}),
+        ...(postDirty ? { postHospDays: parsedPost } : {}),
       });
       toast.success(`Updated ${term.code} terms`);
     } catch (err) {
@@ -219,6 +247,45 @@ export function CoveragePeriodEditor({
               aria-label={`${term.code} NEL age limit`}
             />
           </div>
+
+          {/* Only on products whose claims draw on an inpatient benefit — the
+              window is meaningless on a dental or GP line, and an input that
+              can never matter is noise on a row that already carries five. */}
+          {isInpatientLine && (
+            <div className="flex items-center gap-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Pre / post days
+              </Label>
+              <InfoHint>
+                How long before an admission and after a discharge a
+                consultation is still claimable against it ("within 90 days
+                prior / 100 days after" in the policy wording). Blank = no
+                window stated, and the claim review simply won't check it —
+                blank is not zero.
+              </InfoHint>
+              <Input
+                type="number"
+                min={0}
+                max={365}
+                className="w-[70px]"
+                value={preDays}
+                onChange={(e) => setPreDays(e.target.value)}
+                placeholder="—"
+                aria-label={`${term.code} pre-hospitalisation days`}
+              />
+              <span className="text-xs text-muted-foreground">/</span>
+              <Input
+                type="number"
+                min={0}
+                max={365}
+                className="w-[70px]"
+                value={postDays}
+                onChange={(e) => setPostDays(e.target.value)}
+                placeholder="—"
+                aria-label={`${term.code} post-hospitalisation days`}
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3">

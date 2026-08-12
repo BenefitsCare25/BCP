@@ -1395,6 +1395,8 @@ interface ProductTermArgs {
   freeCoverLimit?: number | null;
   nelAgeLimit?: number | null;
   policyNumber?: string | null;
+  preHospDays?: number | null;
+  postHospDays?: number | null;
 }
 
 export function useSetProductTerm(policyYearId: string) {
@@ -1409,6 +1411,8 @@ export function useSetProductTerm(policyYearId: string) {
       freeCoverLimit,
       nelAgeLimit,
       policyNumber,
+      preHospDays,
+      postHospDays,
     }: ProductTermArgs) => {
       // Only include keys the caller actually set — the backend applies exactly
       // the fields present (model_fields_set), so omitted dimensions are kept.
@@ -1420,6 +1424,8 @@ export function useSetProductTerm(policyYearId: string) {
       if (freeCoverLimit !== undefined) body.free_cover_limit = freeCoverLimit;
       if (nelAgeLimit !== undefined) body.nel_age_limit = nelAgeLimit;
       if (policyNumber !== undefined) body.policy_number = policyNumber;
+      if (preHospDays !== undefined) body.pre_hosp_days = preHospDays;
+      if (postHospDays !== undefined) body.post_hosp_days = postHospDays;
       return api.put<ProductTerm>(
         `/policy-years/${policyYearId}/product-terms/${productId}`,
         body,

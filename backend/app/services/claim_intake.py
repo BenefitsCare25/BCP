@@ -24,10 +24,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Employee, StoredDocument
+from app.models import Claim, Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
 from app.models.stored_document import DOC_ENTITY_REFERRAL
 from app.services.sg_hospitals import SECTOR_GOVT, hospital_sector
@@ -282,6 +282,37 @@ SUB_TYPE_HOSPITALISATION = GHS_SUB_TYPES[1]
 SUB_TYPE_PRE_POST = GHS_SUB_TYPES[0]
 
 
+# The anchor a claim type may name — the visit it CONTINUES. Served on
+# `ClaimTypeOption.anchor_mode` and consumed by `services/claim_episodes.py`.
+# "admission" = the hospital stay a pre-/post- consult is claimed against;
+# "sp_course" = the first visit of a specialist course of treatment.
+ANCHOR_ADMISSION = "admission"
+ANCHOR_SP_COURSE = "sp_course"
+ANCHOR_MODES: tuple[str, ...] = (ANCHOR_ADMISSION, ANCHOR_SP_COURSE)
+
+
+def is_pre_post_consult(
+    product_code: str | None,
+    sub_type: str | None,
+    *,
+    claim_kind: str = CLAIM_KIND_INSURED,
+) -> bool:
+    """The consult that sits before or after an admission.
+
+    Extracted because two unrelated rules test it — the treating doctor is
+    required here and nowhere else, and this is the claim type that names an
+    admission — and a second spelling of the test would let one of them drift
+    onto a different set of claims than the other.
+    """
+    if claim_kind != CLAIM_KIND_INSURED:
+        return False
+    profile = claim_profile_for(product_code)
+    return (
+        profile.category == CATEGORY_INPATIENT
+        and normalize_sub_type(sub_type) == SUB_TYPE_PRE_POST
+    )
+
+
 def requires_doctor_name(
     product_code: str | None,
     sub_type: str | None,
@@ -297,13 +328,34 @@ def requires_doctor_name(
     re-derived in TypeScript — the sub-type label is a string the frontend must
     never have to match on.
     """
+    return is_pre_post_consult(product_code, sub_type, claim_kind=claim_kind)
+
+
+def anchor_mode_for(
+    product_code: str | None,
+    sub_type: str | None,
+    *,
+    claim_kind: str = CLAIM_KIND_INSURED,
+) -> str | None:
+    """Which earlier visit this claim type may be anchored to, if any.
+
+    SERVED on `ClaimTypeOption.anchor_mode` for the same reason
+    `requires_doctor_name` is: the client would otherwise have to match on the
+    sub-type LABEL, and a relabel there is silent — the picker would simply stop
+    appearing while the server kept accepting the link.
+
+    Note this answers the question for a claim TYPE, so a specialist claim
+    reports `sp_course` whichever visit type it carries. Only a follow-up may
+    actually name one; that narrowing is `claim_episodes.anchor_mode_for_claim`,
+    and on the form it is the `visit_type` control the member has already set.
+    """
+    if is_pre_post_consult(product_code, sub_type, claim_kind=claim_kind):
+        return ANCHOR_ADMISSION
     if claim_kind != CLAIM_KIND_INSURED:
-        return False
-    profile = claim_profile_for(product_code)
-    return (
-        profile.category == CATEGORY_INPATIENT
-        and normalize_sub_type(sub_type) == SUB_TYPE_PRE_POST
-    )
+        return None
+    if claim_profile_for(product_code).requires_referral:
+        return ANCHOR_SP_COURSE
+    return None
 
 # Hospitalisation/Day Surgery document sets by hospital sector — also exposed
 # through /portal/coverage-options so the form can switch slots as the member
@@ -373,16 +425,65 @@ def assert_documents_satisfy_slots(
         )
 
 
+def person_employee_ids(db: Session, employee: Employee) -> list[str]:
+    """Every `Employee` row that is THIS person, across benefit years.
+
+    `Employee` rows are per policy YEAR — a renewal creates a new one — so "the
+    same person" is not "the same id", and anything keyed on a single row stops
+    resolving the day the year turns over. That is not cosmetic here: a referral
+    letter is stamped with the employee id current when it was uploaded, so a
+    specialist course begun in November is still the course being followed up in
+    February, riding a letter that now belongs to last year's row.
+
+    The binding rule mirrors `member_access.locate_employee`: a row the same
+    member account is stamped on, or an UNCLAIMED row carrying the same staff id
+    (how a new year's roster arrives, before anyone has signed in against it).
+    **A row bound to a DIFFERENT account is never claimed** — a recycled or
+    placeholder staff id would otherwise hand one person another's referral
+    letters and, through the anchor picker, their diagnoses.
+    """
+    if not employee.staff_id:
+        return [employee.id]
+    owned = Employee.member_account_id.is_(None)
+    if employee.member_account_id:
+        owned = or_(owned, Employee.member_account_id == employee.member_account_id)
+    ids = list(
+        db.execute(
+            select(Employee.id).where(
+                Employee.client_id == employee.client_id,
+                Employee.staff_id == employee.staff_id,
+                owned,
+            )
+        ).scalars()
+    )
+    if employee.id not in ids:
+        ids.append(employee.id)
+    return ids
+
+
+def referral_letters_for(db: Session, employee: Employee) -> list[StoredDocument]:
+    """The member's referral letters, newest first — across benefit years.
+
+    Scoped through `person_employee_ids`, not `employee.id`: letters that
+    vanished from the picker at renewal would make a member re-upload a letter
+    we already hold, and `resolve_sp_referral` would 422 a follow-up whose
+    course started in the previous year.
+    """
+    return list(
+        db.execute(
+            select(StoredDocument)
+            .where(
+                StoredDocument.entity_type == DOC_ENTITY_REFERRAL,
+                StoredDocument.entity_id.in_(person_employee_ids(db, employee)),
+            )
+            .order_by(StoredDocument.created_at.desc())
+        ).scalars()
+    )
+
+
 def latest_referral_letter(db: Session, employee: Employee) -> StoredDocument | None:
-    return db.execute(
-        select(StoredDocument)
-        .where(
-            StoredDocument.entity_type == DOC_ENTITY_REFERRAL,
-            StoredDocument.entity_id == employee.id,
-        )
-        .order_by(StoredDocument.created_at.desc())
-        .limit(1)
-    ).scalars().first()
+    letters = referral_letters_for(db, employee)
+    return letters[0] if letters else None
 
 
 def resolve_sp_referral(
@@ -391,10 +492,20 @@ def resolve_sp_referral(
     *,
     visit_type: str | None,
     referral_document_id: str | None,
+    anchor: Claim | None = None,
 ) -> str | None:
     """The referral letter a specialist claim rides on. First visits must name
-    one; follow-ups auto-link the member's latest letter on file and only
-    422 when the system can't track any."""
+    one; follow-ups reuse the letter of the visit they CONTINUE, falling back to
+    the latest on file, and only 422 when the system can't track any.
+
+    ``anchor`` is the first visit of this course (`services/claim_episodes.py`).
+    It takes precedence over the newest letter because "newest" is wrong the
+    moment a member is under two specialists at once: a cardiology referral
+    uploaded last week would be attached to this month's orthopaedic follow-up,
+    silently — and the review's `_check_referral` passes it, because a letter IS
+    attached. The fallback stays for a follow-up with no anchor chosen, which is
+    every claim filed before episodes existed.
+    """
     if visit_type not in VISIT_TYPES:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -404,6 +515,8 @@ def resolve_sp_referral(
     if referral_document_id:
         return referral_document_id
     if visit_type == VISIT_FOLLOW_UP:
+        if anchor is not None and anchor.referral_document_id:
+            return anchor.referral_document_id
         letter = latest_referral_letter(db, employee)
         if letter is not None:
             return letter.id
@@ -540,7 +653,13 @@ def assert_intake_valid(
         if (
             doc is None
             or doc.entity_type != DOC_ENTITY_REFERRAL
-            or doc.entity_id != employee.id
+            # The PERSON, not this year's row (`person_employee_ids`). A course
+            # begun before the renewal carries a letter stamped with the old
+            # employee id, and the anchor picker offers that course across the
+            # year boundary on purpose — checking a single row here would refuse
+            # the letter the member was just told to use, naming a document they
+            # never chose and cannot fix.
+            or doc.entity_id not in person_employee_ids(db, employee)
         ):
             # Same not-403 convention as tenant scoping: someone else's letter
             # simply doesn't exist.

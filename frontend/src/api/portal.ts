@@ -345,6 +345,9 @@ export interface PortalClaimDocument {
   mime_type: string | null;
   size_bytes: number;
   sha256: string;
+  /** What the document states its own date is (referral letters). NOT the
+   * upload time — that is `created_at`. */
+  issued_on: string | null;
   created_at: string;
 }
 
@@ -359,6 +362,10 @@ export interface PortalClaim {
   visit_type: string | null;
   referral_document_id: string | null;
   referral_document: PortalClaimDocument | null;
+  /** The visit this claim continues, resolved to a summary so the detail page
+   * doesn't fetch a second claim to say "follows your admission at …". */
+  related_claim_id: string | null;
+  related_claim: ClaimAnchor | null;
   referral_not_applicable: boolean;
   incurred_date: string;
   provider_name: string | null;
@@ -455,6 +462,9 @@ export interface ClaimCreateInput {
   dependant_id?: string | null;
   referral_document_id?: string | null;
   referral_not_applicable?: boolean;
+  /** The earlier visit this claim continues. Always optional — an admission
+   * settled by Letter of Guarantee may not be findable at all. */
+  related_claim_id?: string | null;
   /** The member ticked "I accept the converted amount", plus the figure their
    *  screen actually showed. The second is what makes the first mean anything:
    *  if the quote moved between rendering and saving, the server leaves the
@@ -470,6 +480,27 @@ export interface DocSlot {
   label: string;
 }
 
+/** Which earlier visit a claim continues — see `services/claim_episodes.py`. */
+export type AnchorMode = "admission" | "sp_course";
+
+/** An earlier visit a claim may be anchored to.
+ *
+ * Deliberately minimal, and one of these may be a case the broker recorded on
+ * the member's behalf (a Letter of Guarantee admission they never filed). Such
+ * an anchor carries `from_records` and serves NO diagnosis, doctor or referral:
+ * it LINKS, it does not PREFILL. */
+export interface ClaimAnchor {
+  id: string;
+  provider_name: string | null;
+  incurred_date: string;
+  admission_date: string | null;
+  discharge_date: string | null;
+  diagnosis: string | null;
+  doctor_name: string | null;
+  referral_document_id: string | null;
+  from_records: boolean;
+}
+
 /** One claim-type dropdown entry — the sub-type rides in the selection. */
 export interface ClaimTypeOption {
   label: string;
@@ -479,6 +510,13 @@ export interface ClaimTypeOption {
    * label here — a relabel there would silently stop the form asking for a
    * field the server still requires. */
   requires_doctor_name: boolean;
+  /** Which earlier visit this claim type may be anchored to, or null when it
+   * continues nothing. SERVED for the same reason as the flag above.
+   *
+   * A specialist type reports `sp_course` on BOTH visit types — only a
+   * follow-up may actually name one, and that narrowing is the `visit_type`
+   * control the form already owns (`anchorMode` in `useNewClaimForm`). */
+  anchor_mode: AnchorMode | null;
   /** Required-document slots (unlisted-hospital default for inpatient). */
   doc_slots: DocSlot[];
   /** Hospitalisation/Day Surgery only: govt/private slot sets. */
@@ -792,6 +830,29 @@ export function useClaimDiagnoses(productCode: string | null, q: string) {
   });
 }
 
+/** The earlier visits this claim could be a follow-up to.
+ *
+ * `dependantId` selects the CLAIMANT — it is matched against each candidate's
+ * own claimant server-side, so switching claimant genuinely changes the list
+ * and must be in the query key. */
+export function useClaimAnchors(
+  mode: AnchorMode | null,
+  dependantId: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["portal", "claim-anchors", mode, dependantId || null],
+    queryFn: () =>
+      portalApi.get<ClaimAnchor[]>(
+        `/portal/claim-anchors?mode=${mode}` +
+          (dependantId ? `&dependant_id=${encodeURIComponent(dependantId)}` : ""),
+      ),
+    enabled: enabled && mode !== null,
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
 export function useReferralLetters(enabled: boolean) {
   return useQuery({
     queryKey: ["portal", "referral-letters"],
@@ -806,9 +867,14 @@ export function useReferralLetters(enabled: boolean) {
 export function useUploadReferralLetter() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => {
+    /** `issuedOn` is the date printed on the LETTER, not the upload date — an
+     * insurer measures a referral's validity from it, and a member routinely
+     * scans a months-old letter the day they first claim. Optional, and it
+     * stays optional: a letter whose date can't be read must still attach. */
+    mutationFn: ({ file, issuedOn }: { file: File; issuedOn?: string | null }) => {
       const fd = new FormData();
       fd.append("file", file);
+      if (issuedOn) fd.append("issued_on", issuedOn);
       return portalApi.upload<PortalClaimDocument>(
         "/portal/referral-letters",
         fd,

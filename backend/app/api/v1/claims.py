@@ -198,12 +198,13 @@ def _broker_out(
     referral_docs: dict[str, StoredDocument] | None = None,
     dep_names: dict[str, str | None] | None = None,
     documents: dict[str, list[StoredDocument]] | None = None,
+    anchors: dict[str, Claim] | None = None,
     unread_messages: dict[str, int] | None = None,
     doc_dates: dict[str, object] | None = None,
 ) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
-    # Shared filler (documents, referral letter, claimant name) — keeps the
-    # broker payload in lockstep with the member's claim_to_out.
+    # Shared filler (documents, referral letter, claimant name, episode anchor)
+    # — keeps the broker payload in lockstep with the member's claim_to_out.
     populate_claim_out(
         db,
         claim,
@@ -211,6 +212,11 @@ def _broker_out(
         referral_docs=referral_docs,
         dep_names=dep_names,
         documents=documents,
+        anchors=anchors,
+        # The assessor sees a LOG anchor whole — they hold that claim in full on
+        # this same queue, and the episode rules ask them to compare its
+        # diagnosis with this one's.
+        for_broker=True,
     )
     if employee is not None:
         out.staff_id = employee.staff_id
@@ -279,7 +285,7 @@ def list_claims(
         .offset(offset)
         .limit(limit)
     ).all()
-    referral_docs, dep_names, documents = prefetch_claim_relations(
+    referral_docs, dep_names, documents, anchors = prefetch_claim_relations(
         db, [c for c, _ in rows]
     )
     unread = _unread_member_messages(db, [c.id for c, _ in rows])
@@ -296,6 +302,7 @@ def list_claims(
                 referral_docs=referral_docs,
                 dep_names=dep_names,
                 documents=documents,
+                anchors=anchors,
                 unread_messages=unread,
                 doc_dates=doc_dates,
             )

@@ -325,6 +325,10 @@ class Claim(Base, TimestampMixin):
         # exactly the environment that needs it. NULLs are exempt from uniqueness
         # on both dialects, so drafts and pre-existing claims are unaffected.
         Index("ix_claims_reference_no", "reference_no", unique=True),
+        # The episode read — "this claim plus everything that follows it" —
+        # and the anchor picker's eligibility query. Declared HERE for the same
+        # reason as the two above.
+        Index("ix_claims_related_claim", "related_claim_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
@@ -377,6 +381,29 @@ class Claim(Base, TimestampMixin):
     # (stored_documents row with entity_type="referral"). Plain string, not an
     # FK — referral letters are member-owned and never cascade with the claim.
     referral_document_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The claim this one CONTINUES — the hospital admission a pre-/post-
+    # hospitalisation consult belongs to, or the first visit of a specialist
+    # course (`services/claim_episodes.py`). NULL is an ordinary, complete
+    # answer: a first visit, a new condition, or an admission that was never
+    # filed here. It is never required, because a member must not be unable to
+    # file a claim for want of a record only the broker holds.
+    #
+    # Self-referential and depth-1 BY CONSTRUCTION: `resolve_anchor_root`
+    # normalizes a chosen anchor to its own root before storing, so "everything
+    # in this episode" stays `WHERE id = :x OR related_claim_id = :x` and a
+    # follow-up-of-a-follow-up cannot drift away from the admission it started
+    # at.
+    #
+    # A plain string and NOT a self-FK, for the same reason
+    # `referral_document_id` above is one: `tenancy.sync_firm_schema` adds
+    # columns with `CreateColumn`, which renders the type and nullability but
+    # NOT a REFERENCES clause. A firm schema provisioned before this column
+    # existed would therefore gain the column without the constraint, while one
+    # provisioned after (built from `to_metadata`) gains both — a per-firm
+    # schema divergence nothing would ever surface or correct. The integrity the
+    # FK would buy is enforced in `claim_episodes.assert_anchor_valid`, which
+    # has to run anyway: eligibility is far narrower than "a claims row exists".
+    related_claim_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     incurred_date: Mapped[date] = mapped_column(Date, nullable=False)
     provider_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # The treating doctor. Required only on pre-/post-hospitalisation consults

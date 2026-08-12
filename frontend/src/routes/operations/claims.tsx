@@ -824,6 +824,30 @@ function QueueTab({
                       {selected.diagnosis}
                     </DetailField>
                   )}
+                  {/* The visit this claim continues — the admission a pre-/post-
+                      consult is claimed against, or the first visit of a
+                      specialist course. This is the fact the insurer pays the
+                      consultation ON, so an assessor needs it in front of them
+                      alongside the doctor and the diagnosis it is matched by. */}
+                  {selected.related_claim && (
+                    <DetailField label="Follows" wide>
+                      {[
+                        selected.related_claim.provider_name,
+                        selected.related_claim.admission_date &&
+                        selected.related_claim.discharge_date
+                          ? `${fmtDate(selected.related_claim.admission_date)} – ${fmtDate(
+                              selected.related_claim.discharge_date,
+                            )}`
+                          : fmtDate(
+                              selected.related_claim.admission_date ??
+                                selected.related_claim.incurred_date,
+                            ),
+                        selected.related_claim.diagnosis,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </DetailField>
+                  )}
                   {selected.claim_kind === "insured" &&
                     (selected.referral_document ||
                       selected.referral_not_applicable) && (

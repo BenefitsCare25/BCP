@@ -44,7 +44,7 @@ export function ReferralField({ form }: { form: NewClaimForm }) {
       </select>
 
       {form.referralMode === "upload" && (
-        <div>
+        <div className="space-y-1.5">
           <input
             ref={input}
             type="file"
@@ -62,6 +62,26 @@ export function ReferralField({ form }: { form: NewClaimForm }) {
               {form.referralFile?.name ?? "Attach referral letter"}
             </span>
           </Action>
+          {/* The letter's OWN date, and optional on purpose: a referral is
+              usually valid for about a year, measured from when it was
+              written — but a member who can't find a date on their letter must
+              still be able to attach it. Left blank, nothing checks the age.
+              Only offered on an upload: a letter already on file was dated (or
+              not) when it was first attached. */}
+          {form.referralFile && (
+            <label className="block space-y-1">
+              <span className="leaf-label block">
+                Date on the letter (optional)
+              </span>
+              <input
+                type="date"
+                className={leafControl}
+                max={form.maxIncurred || undefined}
+                value={form.referralIssuedOn}
+                onChange={(e) => form.setReferralIssuedOn(e.target.value)}
+              />
+            </label>
+          )}
         </div>
       )}
 

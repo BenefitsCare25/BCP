@@ -25,6 +25,7 @@ from app.core.deps import assert_policy_year_editable, load_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear, Product, ProductTerm
 from app.schemas.api import ProductTermOut, ProductTermUpdate
+from app.services.claim_intake import is_inpatient_product
 from app.services.product_terms import (
     product_ids_in_year,
     resolve_terms,
@@ -68,6 +69,9 @@ def list_product_terms(
             free_cover_limit=r.free_cover_limit,
             nel_age_limit=r.nel_age_limit,
             policy_number=r.policy_number,
+            is_inpatient=is_inpatient_product(r.code),
+            pre_hosp_days=r.pre_hosp_days,
+            post_hosp_days=r.post_hosp_days,
         )
         for r in resolved
     ]
@@ -111,6 +115,9 @@ def list_product_terms(
                     free_cover_limit=t.free_cover_limit if t else None,
                     nel_age_limit=t.nel_age_limit if t else None,
                     policy_number=t.policy_number if t else None,
+                    is_inpatient=is_inpatient_product(cp.code),
+                    pre_hosp_days=t.pre_hosp_days if t else None,
+                    post_hosp_days=t.post_hosp_days if t else None,
                 )
             )
     items.sort(key=lambda x: (x.code, x.display_name))
@@ -166,6 +173,9 @@ def set_product_term(
         term.free_cover_limit = body.free_cover_limit
     if "nel_age_limit" in sent:
         term.nel_age_limit = body.nel_age_limit
+    for field in ("pre_hosp_days", "post_hosp_days"):
+        if field in sent:
+            setattr(term, field, getattr(body, field))
     if "policy_number" in sent:
         cleaned = (body.policy_number or "").strip()
         term.policy_number = cleaned or None
@@ -192,6 +202,8 @@ def set_product_term(
             "gst_rate": term.gst_rate,
             "free_cover_limit": term.free_cover_limit,
             "nel_age_limit": term.nel_age_limit,
+            "pre_hosp_days": term.pre_hosp_days,
+            "post_hosp_days": term.post_hosp_days,
             "policy_number": term.policy_number,
         },
     )
@@ -209,6 +221,9 @@ def set_product_term(
         free_cover_limit=term.free_cover_limit,
         nel_age_limit=term.nel_age_limit,
         policy_number=term.policy_number,
+        is_inpatient=is_inpatient_product(product.code),
+        pre_hosp_days=term.pre_hosp_days,
+        post_hosp_days=term.post_hosp_days,
     )
 
 

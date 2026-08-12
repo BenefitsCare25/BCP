@@ -35,6 +35,10 @@ class StoredDocumentOut(_Base):
     mime_type: str | None = None
     size_bytes: int
     sha256: str
+    # What the document says its own date is (referral letters). NOT the upload
+    # time — that is `created_at`, and the two differ by however long the member
+    # held the letter before claiming.
+    issued_on: date | None = None
     created_at: datetime
 
 
@@ -68,6 +72,11 @@ class ClaimCreateIn(BaseModel):
     # "not applicable" declaration (recorded for the broker + AI review).
     referral_document_id: str | None = None
     referral_not_applicable: bool = False
+    # The earlier visit this claim continues — the admission a pre-/post-
+    # consult is claimed against, or the first visit of a specialist course.
+    # ALWAYS optional: a member must be able to file when the admission was
+    # guaranteed and never filed, or simply can't be found.
+    related_claim_id: str | None = None
     # The claimant accepting the SGD figure their foreign bill converts to, and
     # the figure their form actually displayed. The second is what makes the
     # first mean anything: a quote can move between the form loading and the
@@ -139,6 +148,9 @@ class _ClaimAmendBase(BaseModel):
     dependant_id: str | None = None
     referral_document_id: str | None = None
     referral_not_applicable: bool | None = None
+    # Clearable on purpose (an explicit null): "this turned out to be a new
+    # condition" is a correction like any other.
+    related_claim_id: str | None = None
     # The revision the client actually read (see `Claim.revision`). Optional —
     # a mismatch 409s, absence skips the check. Both UIs always send it.
     expected_revision: int | None = Field(default=None, ge=0)
@@ -248,6 +260,37 @@ class ClaimCaseTypeIn(BaseModel):
         return cleaned
 
 
+class ClaimAnchorOut(BaseModel):
+    """An earlier visit a claim may be anchored to (`services/claim_episodes.py`).
+
+    Also the shape served back on `ClaimOut.related_claim`, so the picker and
+    both detail surfaces describe the same visit in the same words.
+
+    Deliberately minimal, because one of these can be a LOG case — a
+    broker-recorded admission the member cannot otherwise see. There is no
+    amount, no status, no reference number and no assessor note anywhere in it;
+    a broker-recorded anchor additionally serves no diagnosis, doctor or
+    referral, so nothing broker-entered can prefill a member's form. See
+    `claim_episodes.anchor_out`.
+    """
+
+    id: str
+    provider_name: str | None = None
+    incurred_date: date
+    # Present on an admission the broker has assessed (or guaranteed); the form
+    # shows the stay as a range when it has both.
+    admission_date: date | None = None
+    discharge_date: date | None = None
+    diagnosis: str | None = None
+    doctor_name: str | None = None
+    # The referral letter a specialist follow-up rides on — the ANCHOR's letter,
+    # not the newest on file. Null on a broker-recorded anchor.
+    referral_document_id: str | None = None
+    # This visit came from the broker's records rather than the member's own
+    # submissions, so the UI can say so instead of implying they filed it.
+    from_records: bool = False
+
+
 class ClaimOut(_Base):
     id: str
     claim_kind: str
@@ -271,6 +314,13 @@ class ClaimOut(_Base):
     referral_document: StoredDocumentOut | None = None
     # Mirrors the form declaration (from form_fields) for display.
     referral_not_applicable: bool = False
+    # The visit this claim continues (`services/claim_episodes.py`). Served as
+    # the resolved SUMMARY, not just the id, so neither detail surface has to
+    # fetch a second claim to render "follows your admission at …" — and so the
+    # broker-recorded case that a member may be anchored to is projected through
+    # the one function that decides what of it they may see.
+    related_claim_id: str | None = None
+    related_claim: ClaimAnchorOut | None = None
     amount_claimed: float
     currency: str
     # ── Currency conversion (services/claim_fx.py) ────────────────────────────
@@ -871,6 +921,13 @@ class ClaimTypeOption(BaseModel):
     # on the sub-type LABEL, and a relabel there is silent — the field would
     # simply stop being asked for while the server kept requiring it.
     requires_doctor_name: bool = False
+    # Which earlier visit this claim type may be anchored to — "admission"
+    # (pre-/post-hospitalisation), "sp_course" (a specialist follow-up), or null
+    # for the types that continue nothing. SERVED for the same reason as the
+    # flag above. A specialist type reports "sp_course" on both visit types; the
+    # form renders the picker only once `visit_type` is "follow_up", which is a
+    # control it already owns.
+    anchor_mode: str | None = None
     # Required-document slots for this claim type. When the requirement
     # depends on the hospital (Hospitalisation/Day Surgery), `doc_slots` is
     # the unlisted-hospital default and `doc_slots_by_sector` carries the

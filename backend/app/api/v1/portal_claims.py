@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
+from app.core.clock import today as business_today
 from app.core.pagination import MAX_LIMIT
 from app.core.portal_auth import (
     CurrentMember,
@@ -51,6 +52,7 @@ from app.models.claim_message import EVENT_AMENDED, EVENT_SUBMITTED
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import (
     ClaimAmendIn,
+    ClaimAnchorOut,
     ClaimCreateIn,
     ClaimIntakeSuggestionOut,
     ClaimList,
@@ -73,6 +75,7 @@ from app.services.ai_breaker import CircuitOpenError
 from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError
 from app.services.claim_doc_types import resolve_doc_types
+from app.services.claim_episodes import anchor_out, eligible_anchors
 from app.services.claim_fx import (
     FX_STATE_CONVERTED,
     apply_conversion,
@@ -85,9 +88,12 @@ from app.services.claim_intake import (
     DOC_SLOT_LABELS,
     HOSPITALISATION_SLOTS_BY_SECTOR,
     SUB_TYPE_HOSPITALISATION,
+    anchor_mode_for,
     assert_documents_satisfy_slots,
     benefit_row_for_sub_type,
     claim_profile_for,
+    person_employee_ids,
+    referral_letters_for,
     required_doc_slots,
     requires_doctor_name,
 )
@@ -180,6 +186,7 @@ def _claim_type_option(
         label=label,
         sub_type=sub_type,
         requires_doctor_name=requires_doctor_name(line.product_code, sub_type),
+        anchor_mode=anchor_mode_for(line.product_code, sub_type),
         doc_slots=_slots(required_doc_slots(line.product_code, sub_type)),
         doc_slots_by_sector=by_sector,
     )
@@ -545,22 +552,48 @@ def my_fx_quote(
     return out
 
 
+@options_router.get("/claim-anchors", response_model=list[ClaimAnchorOut])
+def list_my_claim_anchors(
+    mode: str = Query(..., pattern="^(admission|sp_course)$"),
+    dependant_id: str | None = Query(default=None),
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> list[ClaimAnchorOut]:
+    """The earlier visits this claim may be a follow-up to.
+
+    `dependant_id` selects the CLAIMANT, not a data scope — it is matched
+    against the anchor's own claimant so a spouse's admission can't anchor the
+    member's consult, and everything is scoped to the employee
+    `resolve_member_employee` resolves from the token. An id belonging to
+    someone else therefore returns an empty list rather than anything about
+    them.
+    """
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
+    return [
+        anchor_out(c)
+        for c in eligible_anchors(
+            db, employee, mode=mode, dependant_id=dependant_id or None
+        )
+    ]
+
+
 @options_router.get("/referral-letters", response_model=list[StoredDocumentOut])
 def list_my_referral_letters(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[StoredDocumentOut]:
-    """The member's own referral letters (reusable across specialist claims)."""
+    """The member's own referral letters (reusable across specialist claims).
+
+    Across benefit YEARS — see `claim_intake.referral_letters_for`. A letter that
+    dropped out of this list at renewal would be re-requested from a member we
+    already hold it for, and the anchor picker would offer a course whose letter
+    the control could not display.
+    """
     employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
-    docs = db.execute(
-        select(StoredDocument)
-        .where(
-            StoredDocument.entity_type == DOC_ENTITY_REFERRAL,
-            StoredDocument.entity_id == employee.id,
-        )
-        .order_by(StoredDocument.created_at.desc())
-    ).scalars().all()
-    return [StoredDocumentOut.model_validate(d) for d in docs]
+    return [
+        StoredDocumentOut.model_validate(d)
+        for d in referral_letters_for(db, employee)
+    ]
 
 
 @options_router.post(
@@ -572,10 +605,20 @@ def list_my_referral_letters(
 async def upload_my_referral_letter(
     request: Request,
     file: UploadFile = File(...),
+    # The date printed on the letter. OPTIONAL, and stays optional: a member
+    # holding a letter they cannot read a date off must still be able to attach
+    # it — the referral requirement is what gates the claim, not our ability to
+    # date it. Absent, the age rule simply does not run.
+    issued_on: date | None = Form(default=None),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> StoredDocumentOut:
     employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
+    if issued_on is not None and issued_on > business_today():
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A referral letter can't be dated in the future.",
+        )
     doc = await attach_document(
         db,
         client_id=employee.client_id,
@@ -584,10 +627,15 @@ async def upload_my_referral_letter(
         entity_id=employee.id,
         file=file,
         uploaded_by_member_id=member.member_account_id,
+        issued_on=issued_on,
     )
     write_member_audit(
         db, member, "referral_letter.uploaded", "stored_document", doc.id,
-        after={"file_name": doc.file_name, "sha256": doc.sha256},
+        after={
+            "file_name": doc.file_name,
+            "sha256": doc.sha256,
+            "issued_on": issued_on.isoformat() if issued_on else None,
+        },
         employee_id=employee.id,
     )
     db.commit()
@@ -610,7 +658,9 @@ def delete_my_referral_letter(
     if (
         doc is None
         or doc.entity_type != DOC_ENTITY_REFERRAL
-        or doc.entity_id != employee.id
+        # Same person-wide scope the list is served under, or a member could see
+        # a letter carried over from last year and not be able to remove it.
+        or doc.entity_id not in person_employee_ids(db, employee)
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Referral letter not found")
     in_use = db.scalar(

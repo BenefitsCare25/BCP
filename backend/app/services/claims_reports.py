@@ -204,6 +204,13 @@ def _header(scope: str) -> list[str]:
     # missing data rather than as inapplicable.
     if scope != SCOPE_OUTPATIENT:
         header += ["Hospital Type", "LOG"]
+        # The admission a pre-/post-hospitalisation consult is claimed against,
+        # by ITS reference number (`services/claim_episodes.py`). This is what
+        # makes the episode reconcilable on the insurer's side — a consult sent
+        # on its own is a loose line someone has to reunite with the stay by
+        # hand. Inpatient scopes only: pre/post is an inpatient sub-type, so on
+        # an outpatient sheet the column is blank on every row.
+        header.append("Follows Claim Ref")
     if scope != SCOPE_INPATIENT:
         header.append("Referral Letter")
     header += ["Incurred Date"]
@@ -265,6 +272,18 @@ def build_insurance_claims_workbook(
     """Insurance claims in the benefit year, optionally narrowed by setting."""
     wanted = normalize_scope(scope)
     rows, doc_dates = _claim_rows(db, py, masked=masked)
+    # One lookup for every anchor the page references. The anchor can sit in a
+    # DIFFERENT benefit year — a December stay with its January consults is the
+    # ordinary pre/post shape — so this cannot be resolved from `rows`.
+    anchor_ids = {r.claim.related_claim_id for r in rows if r.claim.related_claim_id}
+    anchor_refs: dict[str, str] = {}
+    if anchor_ids:
+        anchor_refs = {
+            cid: (ref or "")
+            for cid, ref in db.execute(
+                select(Claim.id, Claim.reference_no).where(Claim.id.in_(anchor_ids))
+            ).all()
+        }
 
     wb = Workbook()
     ws = wb.active
@@ -307,6 +326,7 @@ def build_insurance_claims_workbook(
             cells += [
                 _hospital_label(claim),
                 "Yes" if claim.case_type == CASE_TYPE_LOG else "No",
+                anchor_refs.get(claim.related_claim_id or "", ""),
             ]
         if wanted != SCOPE_INPATIENT:
             cells.append("Yes" if claim.referral_document_id else "No")

@@ -21,6 +21,7 @@ from app.models import Claim, Dependant, Employee, MemberAccount, PolicyYear
 from app.models.claim import member_visible_claims
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import (
+    ClaimAnchorOut,
     ClaimList,
     ClaimMessageOut,
     ClaimOut,
@@ -39,6 +40,7 @@ from app.schemas.portal import (
     PortalPolicyYearOut,
     PortalPreviewOut,
 )
+from app.services.claim_episodes import anchor_out, eligible_anchors
 from app.services.claim_messages import (
     member_conversation_out,
     member_conversations,
@@ -146,6 +148,24 @@ def portal_preview_coverage_options(
     year = db.get(PolicyYear, employee.policy_year_id)
     statement = build_member_statement(db, employee)
     return build_coverage_options(db, statement, employee, year)
+
+
+@router.get("/claim-anchors", response_model=list[ClaimAnchorOut])
+def portal_preview_claim_anchors(
+    mode: str = Query(..., pattern="^(admission|sp_course)$"),
+    dependant_id: str | None = Query(default=None),
+    employee: Employee = Depends(load_employee),
+    db: Session = Depends(get_db),
+) -> list[ClaimAnchorOut]:
+    """Mirror of `GET /portal/claim-anchors` — the follow-up picker's options,
+    through the same builder so the preview shows the member exactly the visits
+    the member would be offered."""
+    return [
+        anchor_out(c)
+        for c in eligible_anchors(
+            db, employee, mode=mode, dependant_id=dependant_id or None
+        )
+    ]
 
 
 @router.get("/enrollment", response_model=PortalEnrollmentOut)

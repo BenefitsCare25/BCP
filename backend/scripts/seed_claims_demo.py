@@ -47,6 +47,7 @@ from app.models import (
     Plan,
     PolicyYear,
     Product,
+    ProductTerm,
     StoredDocument,
 )
 from app.models.policy_year import PolicyYearStatus
@@ -62,6 +63,13 @@ ACC_A = _P + "06"
 ACC_B = _P + "07"
 DEP_PENDING = _P + "08"
 FLEX_ID = _P + "09"
+# Episode demo (docs/CLAIM_EPISODES_PLAN.md): a specialist line to run a course
+# on, and the two referral letters that prove a follow-up rides the letter of
+# the visit it CONTINUES rather than whichever was uploaded most recently.
+SP_PLAN_ID = _P + "0a"
+SP_CAT_ID = _P + "0b"
+REF_CARDIO = _P + "0c"
+REF_ORTHO = _P + "0d"
 
 MEMBER_EMAIL = "demo.member@inspro.test"
 COLLEAGUE_EMAIL = "demo.colleague@inspro.test"
@@ -111,29 +119,97 @@ def make_receipt_pdf(lines: list[str]) -> bytes:
 
 
 def _cleanup(db) -> None:
-    if db.get(PolicyYear, PY_ID) is not None:
-        claim_ids = list(
-            db.execute(select(Claim.id).where(Claim.policy_year_id == PY_ID)).scalars()
-        )
-        if claim_ids:
-            storage = get_storage()
-            docs = db.execute(
-                select(StoredDocument).where(StoredDocument.entity_id.in_(claim_ids))
-            ).scalars().all()
-            for doc in docs:
-                try:
-                    storage.delete(doc.storage_path)
-                except Exception:
-                    pass
-                db.delete(doc)
-            db.flush()
-        # Bulk DELETE (not ORM delete): the DB-level ON DELETE CASCADE clears
-        # categories, plans, employees, claims, reviews, dependants, and the
-        # flex scheme with the year — the ORM would instead try to NULL the
-        # children's FKs.
-        db.execute(delete(PolicyYear).where(PolicyYear.id == PY_ID))
+    # Documents are swept by their own DETERMINISTIC ids, not by looking up the
+    # claims that own them. Every id this script writes shares the `_P` prefix,
+    # so this converges from ANY partial state — including the one that used to
+    # wedge it: a run that got as far as deleting the policy year and then
+    # failed left its receipts orphaned (the cascade drops the claims, so a
+    # claim-scoped sweep can no longer find their documents), and every later
+    # run then died on a UNIQUE violation re-inserting the same ids.
+    #
+    # It also covers referral letters for free. Those hang off the EMPLOYEE row
+    # rather than a claim — that is what makes one reusable across a course of
+    # treatment — so a claim-scoped sweep never saw them either.
+    storage = get_storage()
+    for doc in db.execute(
+        select(StoredDocument).where(StoredDocument.id.like(_P + "%"))
+    ).scalars().all():
+        try:
+            storage.delete(doc.storage_path)
+        except Exception:
+            pass
+        db.delete(doc)
+    db.flush()
+    # Bulk DELETE (not ORM delete): the DB-level ON DELETE CASCADE clears
+    # categories, plans, employees, claims, reviews, dependants, product terms
+    # and the flex scheme with the year — the ORM would instead try to NULL the
+    # children's FKs.
+    db.execute(delete(PolicyYear).where(PolicyYear.id == PY_ID))
     db.execute(delete(MemberAccount).where(MemberAccount.id.in_((ACC_A, ACC_B))))
     db.flush()
+
+
+# ── Document ids ──────────────────────────────────────────────────────────────
+#
+# Receipt ids come from a counter over the `e0…ff` tail, which is free of every
+# fixed id above. They used to be `_P + "9" + suffix[1:]` — which DROPS the
+# first digit of the claim suffix, so claims "10" and "20" both wanted document
+# id `…d390` and the second insert died on the primary key. It was invisible for
+# as long as every suffix happened to start with a 1.
+_doc_seq = iter(range(0xE0, 0x100))
+
+
+def _next_doc_id() -> str:
+    return _P + format(next(_doc_seq), "02x")
+
+
+# ── Referral letters (member-level documents) ─────────────────────────────────
+
+
+def _add_referral(
+    db, *, doc_id: str, file_name: str, issued_on: date, specialty: str
+) -> str:
+    """A referral letter on the member's file.
+
+    `entity_id` is the EMPLOYEE row, not a claim: a referral is reusable across
+    the claims of one course of treatment, which is the whole reason a follow-up
+    can inherit one. `issued_on` is the date printed on the LETTER — distinct
+    from `created_at` (when it was scanned), and the only thing the review's
+    validity check can measure against.
+    """
+    import io
+
+    content = make_receipt_pdf(
+        [
+            f"{specialty.upper()} REFERRAL",
+            "Demo Family Clinic, 12 Demo Street, Singapore 049999",
+            f"Date of issue: {issued_on.isoformat()}",
+            "Patient: Demo Member",
+            f"Referred to: {specialty}",
+            "Reason: further assessment and management",
+        ]
+    )
+    path = document_path(
+        DEMO_BROKER_FIRM_ID, DEMO_CLIENT_ID, "referral", EMP_A, doc_id, ".pdf"
+    )
+    blob = get_storage().save(io.BytesIO(content), path)
+    db.add(
+        StoredDocument(
+            id=doc_id,
+            client_id=DEMO_CLIENT_ID,
+            entity_type="referral",
+            entity_id=EMP_A,
+            file_name=file_name,
+            mime_type="application/pdf",
+            size_bytes=blob.size_bytes,
+            sha256=blob.sha256,
+            storage_path=blob.path,
+            uploaded_by_member_id=ACC_A,
+            issued_on=issued_on,
+        )
+    )
+    db.flush()
+    return doc_id
 
 
 # ── Claim factory ─────────────────────────────────────────────────────────────
@@ -154,24 +230,54 @@ def _add_claim(
     provider: str = "Demo Family Clinic",
     decision_notes: str | None = None,
     receipt_lines: list[str] | None = None,
+    # ── Episode + intake facts. All default to what the original claims here
+    # carried, so every pre-existing call is unchanged.
+    product_code: str = "GHS",
+    sub_type: str | None = None,
+    visit_type: str | None = None,
+    diagnosis: str | None = None,
+    doctor_name: str | None = None,
+    admission: date | None = None,
+    discharge: date | None = None,
+    related_claim_id: str | None = None,
+    referral_document_id: str | None = None,
+    reference_no: str | None = None,
+    # A LOG case is broker-recorded: `origin="broker"` is what keeps it out of
+    # the member's own claim list (`claim.member_visible_claims`), which is
+    # exactly the condition the anchor picker's carve-out exists for.
+    case_type: str = "claim",
+    origin: str = "portal",
 ) -> Claim:
+    by_member = origin == "portal"
     claim = Claim(
         id=_P + suffix,
         client_id=DEMO_CLIENT_ID,
         policy_year_id=PY_ID,
         employee_id=EMP_A,
         claim_kind=kind,
-        product_code="GHS" if kind == "insured" else None,
+        case_type=case_type,
+        origin=origin,
+        product_code=product_code if kind == "insured" else None,
         benefit_key=benefit_key,
         flex_category_name=flex_category,
         claim_type=claim_type,
+        sub_type=sub_type,
+        visit_type=visit_type,
+        referral_document_id=referral_document_id,
+        related_claim_id=related_claim_id,
         incurred_date=incurred,
         provider_name=provider,
+        doctor_name=doctor_name,
+        diagnosis=diagnosis,
+        admission_date=admission,
+        discharge_date=discharge,
+        reference_no=reference_no,
         amount_claimed=amount,
         amount_approved=approved,
         currency="SGD",
         status=status,
-        submitted_by_member_id=ACC_A,
+        submitted_by_member_id=ACC_A if by_member else None,
+        created_by_user_id=None if by_member else "00000000-0000-0000-0000-000000000001",
         submitted_at=NOW - timedelta(days=3),
         decided_at=NOW - timedelta(days=1) if status in ("approved", "rejected") else None,
         decision_notes=decision_notes,
@@ -179,7 +285,7 @@ def _add_claim(
             "claim_type": claim_type,
             "incurred_date": incurred.isoformat(),
             "provider_name": provider,
-            "diagnosis": None,
+            "diagnosis": diagnosis,
             "amount_claimed": amount,
             "currency": "SGD",
         },
@@ -199,7 +305,7 @@ def _add_claim(
         "Payment: PAID - NETS",
     ]
     content = make_receipt_pdf(lines)
-    doc_id = _P + "9" + suffix[1:]  # unique per claim
+    doc_id = _next_doc_id()
     path = document_path(DEMO_BROKER_FIRM_ID, DEMO_CLIENT_ID, "claim", claim.id, doc_id, ".pdf")
     import io
 
@@ -292,6 +398,70 @@ def seed_claims_demo() -> None:
             )
         )
 
+        # ── Coverage: SP product → the specialist line an episode runs on.
+        # Its own product, not a GHS benefit row: a specialist FOLLOW-UP is the
+        # `sp_course` anchor mode, and that keys off `claim_intake._PROFILES`
+        # ("SP" → requires_referral), which reads the PRODUCT code.
+        sp = db.execute(
+            select(Product).where(Product.code == "SP", Product.client_id.is_(None))
+        ).scalars().first()
+        if sp is None:
+            sp = Product(
+                client_id=None, code="SP",
+                display_name="Specialist",
+                has_dependants=True, is_outpatient=True,
+            )
+            db.add(sp)
+            db.flush()
+
+        db.add(
+            Plan(
+                id=SP_PLAN_ID,
+                product_id=sp.id,
+                policy_year_id=PY_ID,
+                code="P1",
+                display_name="SP Plan P1 (demo)",
+                cover_description="Demo specialist cover",
+                # Deliberately no annual limit: the GHS figures above are tuned
+                # to the "approve anyway" guard demo, and a second limited line
+                # would give the episode claims a way to disturb them.
+                annual_policy_limit=None,
+                benefit_schedule={
+                    "items": [
+                        {"number": "1", "name": "Specialist Consultation", "value": "As charged"},
+                    ]
+                },
+                source="manual",
+                status="confirmed",
+            )
+        )
+        db.add(
+            Category(
+                id=SP_CAT_ID,
+                policy_year_id=PY_ID,
+                product_id=sp.id,
+                display_name="All Employees — SP Plan P1 (demo)",
+                raw_description="All employees (claims demo)",
+                matching_rule={"and": []},
+                rule_human_readable="All employees",
+                plan_assignments={"plan_code": "P1"},
+                source="manual",
+                status="confirmed",
+            )
+        )
+
+        # The pre-/post-hospitalisation window this product states. NULL would
+        # mean "no rule" — these are what make the review's window check run at
+        # all (`claims_review/rules.py::_check_pre_post_window`).
+        db.add(
+            ProductTerm(
+                policy_year_id=PY_ID,
+                product_id=ghs.id,
+                pre_hosp_days=90,
+                post_hosp_days=100,
+            )
+        )
+
         # ── Flex scheme (confirmed) + members with assigned wallets.
         db.add(
             FlexScheme(
@@ -330,7 +500,8 @@ def seed_claims_demo() -> None:
         db.flush()
 
         matched = [
-            {"category_id": CAT_ID, "product_code": "GHS", "method": "manual", "confidence": 1.0}
+            {"category_id": CAT_ID, "product_code": "GHS", "method": "manual", "confidence": 1.0},
+            {"category_id": SP_CAT_ID, "product_code": "SP", "method": "manual", "confidence": 1.0},
         ]
         # flex_assigned_at slightly in the future of the scheme's updated_at so
         # the statement never shows the "assignment stale" hint.
@@ -441,6 +612,77 @@ def seed_claims_demo() -> None:
             db, suffix="18", kind="flex", flex_category="Dental", claim_type="Dental",
             incurred=date(2026, 6, 28), amount=400.0, status="submitted",
             provider="Demo Dental Surgery",
+        )
+
+        # ── Episodes (docs/CLAIM_EPISODES_PLAN.md) ────────────────────────────
+        #
+        # Everything below exists to be an ANCHOR — an earlier visit a new claim
+        # can say it continues. All are `submitted`, never `approved`: a settled
+        # claim counts against the limits, and the GHS figures above are tuned
+        # to the "approve anyway" guard demo. Pending amounts are reported
+        # separately and never subtracted from remaining, so these disturb
+        # nothing while still being offerable (only DRAFTS are ineligible).
+        _add_claim(
+            db, suffix="20",
+            claim_type="Group Hospital & Surgical",
+            sub_type="Hospitalisation/Day Surgery/Other Inpatient Treatment",
+            incurred=date(2026, 5, 4), amount=8400.0, status="submitted",
+            provider="Mount Elizabeth Hospital",
+            diagnosis="Acute appendicitis",
+            admission=date(2026, 5, 4), discharge=date(2026, 5, 8),
+            reference_no="CLM-2026-0201",
+            receipt_lines=[
+                "MOUNT ELIZABETH HOSPITAL",
+                "3 Mount Elizabeth, Singapore 228510",
+                "FINAL TAX INVOICE",
+                "Invoice no: MEH-2026-8841",
+                "Admission: 2026-05-04   Discharge: 2026-05-08",
+                "Patient: Demo Member",
+                "Procedure: Laparoscopic appendicectomy",
+                "Total amount: SGD 8400.00",
+            ],
+        )
+        # The commonest anchor there is, and the one a member can never see in
+        # their own claim list: an admission settled by Letter of Guarantee.
+        # The diagnosis here is deliberately broker-worded — `anchor_out` must
+        # withhold it, so if it ever shows up in the member's form the carve-out
+        # has leaked.
+        _add_claim(
+            db, suffix="21",
+            claim_type="Letter of Guarantee",
+            sub_type="Hospitalisation/Day Surgery/Other Inpatient Treatment",
+            incurred=date(2026, 2, 12), amount=12000.0, status="submitted",
+            provider="Raffles Hospital",
+            diagnosis="BROKER NOTE — cholecystectomy, guarantee issued 12 Feb",
+            admission=date(2026, 2, 12), discharge=date(2026, 2, 15),
+            reference_no="CLM-2026-0118",
+            case_type="log", origin="broker",
+        )
+
+        # A specialist COURSE: the first visit rides the cardiology referral,
+        # and a newer orthopaedic letter lands on file afterwards. A follow-up
+        # anchored to this visit must inherit the CARDIOLOGY letter — picking
+        # "the latest on file" is the defect the anchor closes. The cardiology
+        # letter is also deliberately over a year old, so the same follow-up
+        # trips the referral-validity flag.
+        _add_referral(
+            db, doc_id=REF_CARDIO, file_name="referral-cardiology.pdf",
+            issued_on=date(2025, 6, 1), specialty="Cardiology",
+        )
+        _add_referral(
+            db, doc_id=REF_ORTHO, file_name="referral-orthopaedic.pdf",
+            issued_on=date(2026, 7, 1), specialty="Orthopaedics",
+        )
+        _add_claim(
+            db, suffix="22",
+            product_code="SP", claim_type="SP (Specialist)",
+            benefit_key="Specialist Consultation",
+            visit_type="first",
+            incurred=date(2026, 3, 9), amount=280.0, status="submitted",
+            provider="Novena Heart Centre",
+            diagnosis="Atrial fibrillation",
+            referral_document_id=REF_CARDIO,
+            reference_no="CLM-2026-0155",
         )
 
         # ── Canned AI reviews (panel renders with NO provider key configured).

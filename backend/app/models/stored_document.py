@@ -6,7 +6,9 @@ tampering detection), and who uploaded it (member or broker user).
 """
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Index, Integer, String
+from datetime import date
+
+from sqlalchemy import Date, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, new_uuid
@@ -34,6 +36,14 @@ class StoredDocument(Base, TimestampMixin):
     # Which required-document slot a claim upload fills (claim_intake.DOC_SLOT
     # keys, e.g. "itemised_tax_invoice"); NULL = untagged/additional document.
     doc_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The date the DOCUMENT ITSELF states it was issued — distinct from
+    # `created_at`, which is when it was uploaded. Only the referral-letter flow
+    # asks for it today, and only referral letters need it: a referral has a
+    # validity period an insurer measures from its issue date, and the upload
+    # date is not a proxy for it (a member scans a six-month-old letter the day
+    # they first claim). NULL everywhere else, and NULL on a referral whose date
+    # the member did not supply — the age rule skips rather than guesses.
+    issued_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

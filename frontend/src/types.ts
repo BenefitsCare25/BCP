@@ -185,6 +185,14 @@ export interface ProductTerm {
   nel_age_limit: number | null;
   // Insurer-issued policy number for this product's placement.
   policy_number: string | null;
+  // Whether this product's claims draw on an inpatient benefit. SERVED from the
+  // product registry — never re-derive it from the code or the line here.
+  is_inpatient: boolean;
+  // How many days before an admission / after a discharge a consultation is
+  // still claimable against it. Null = NO RULE, never 0 — the review's pre/post
+  // window check simply doesn't run for products that state no window.
+  pre_hosp_days: number | null;
+  post_hosp_days: number | null;
 }
 
 export type SourceKind =

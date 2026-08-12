@@ -391,6 +391,28 @@ export function ClaimDetailLeaf({
                 : "Not needed"}
             </MountRow>
           )}
+          {/* The visit this claim continues. Shown on BOTH detail surfaces —
+              the member's and the broker's — because a link nobody can see is
+              a link nobody can correct, and this is the one that decides
+              whether the insurer pays the consultation at all. */}
+          {claim.related_claim && (
+            <MountRow term="Follows">
+              {[
+                claim.related_claim.provider_name?.trim(),
+                claim.related_claim.admission_date &&
+                claim.related_claim.discharge_date
+                  ? `${formatDay(claim.related_claim.admission_date)} – ${formatDay(
+                      claim.related_claim.discharge_date,
+                    )}`
+                  : formatDay(
+                      claim.related_claim.admission_date ??
+                        claim.related_claim.incurred_date,
+                    ),
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </MountRow>
+          )}
           {claim.remarks && <MountRow term="Your note">{claim.remarks}</MountRow>}
         </dl>
 

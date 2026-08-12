@@ -38,6 +38,9 @@ class ResolvedTerm:
     nel_age_limit: int | None = None
     # Insurer-issued policy number — None until the placement is issued.
     policy_number: str | None = None
+    # Pre-/post-hospitalisation claim window in days. None = no rule.
+    pre_hosp_days: int | None = None
+    post_hosp_days: int | None = None
 
 
 def term_window(
@@ -154,6 +157,8 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
                 free_cover_limit=term.free_cover_limit if term else None,
                 nel_age_limit=term.nel_age_limit if term else None,
                 policy_number=term.policy_number if term else None,
+                pre_hosp_days=term.pre_hosp_days if term else None,
+                post_hosp_days=term.post_hosp_days if term else None,
             )
         )
     out.sort(key=lambda r: (r.code, r.display_name))

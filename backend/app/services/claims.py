@@ -52,6 +52,7 @@ from app.models.policy_year import PolicyYearStatus
 from app.models.stored_document import DOC_ENTITY_CLAIM
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, DocSlotOut, StoredDocumentOut
+from app.services.claim_episodes import anchor_out, resolve_anchor
 from app.services.claim_fx import (
     FX_INPUT_FIELDS,
     FX_STATE_CONVERTED,
@@ -220,17 +221,24 @@ def populate_claim_out(
     referral_docs: dict[str, StoredDocument] | None = None,
     dep_names: dict[str, str | None] | None = None,
     documents: dict[str, list[StoredDocument]] | None = None,
+    anchors: dict[str, Claim] | None = None,
+    for_broker: bool = False,
 ) -> ClaimOut:
     """Fill the derived fields every claim payload carries (documents, referral
-    letter, claimant name). Shared by the member `claim_to_out` and the broker
-    `_broker_out` so the two surfaces can't drift.
+    letter, claimant name, episode anchor). Shared by the member `claim_to_out`
+    and the broker `_broker_out` so the two surfaces can't drift.
 
-    ``referral_docs`` / ``dep_names`` / ``documents`` are optional per-page
-    lookups the list endpoints prefetch in one query each, so rendering N claims
-    doesn't fan out into N document + N referral + N dependant point-loads.
-    **Every list endpoint must pass them** (`prefetch_claim_relations` returns
-    all three) — the page size is 200, so the fan-out is the difference between
-    3 queries and ~400."""
+    ``for_broker`` is the ONE thing the two surfaces are allowed to differ on:
+    an anchor that is a LOG case is redacted for the member and whole for the
+    assessor (`claim_episodes.anchor_out`). It defaults to the member's view, so
+    a caller that forgets it under-discloses rather than leaks.
+
+    ``referral_docs`` / ``dep_names`` / ``documents`` / ``anchors`` are optional
+    per-page lookups the list endpoints prefetch in one query each, so rendering
+    N claims doesn't fan out into N document + N referral + N dependant + N
+    anchor point-loads. **Every list endpoint must pass them**
+    (`prefetch_claim_relations` returns all four) — the page size is 200, so the
+    fan-out is the difference between 4 queries and ~600."""
     docs = (
         documents.get(claim.id, [])
         if documents is not None
@@ -248,6 +256,17 @@ def populate_claim_out(
     out.referral_not_applicable = bool(
         (claim.form_fields or {}).get("referral_not_applicable")
     )
+    if claim.related_claim_id:
+        anchor = (
+            anchors.get(claim.related_claim_id)
+            if anchors is not None
+            else db.get(Claim, claim.related_claim_id)
+        )
+        if anchor is not None:
+            # Through `anchor_out`, never by dumping the anchor claim: a member
+            # may be anchored to a LOG case they cannot otherwise see, and that
+            # function is the single place deciding what of one is shown.
+            out.related_claim = anchor_out(anchor, for_broker=for_broker)
     # The document slots this claim must fill (resolved from its own fields, so
     # a needs_info/draft edit surface can render tagged uploads that match what
     # submit enforces). Same helper the coverage-options form uses.
@@ -326,12 +345,18 @@ def claim_documents_for(
 
 def prefetch_claim_relations(
     db: Session, claims: list[Claim]
-) -> tuple[dict[str, StoredDocument], dict[str, str | None], dict[str, list[StoredDocument]]]:
-    """One query each for the documents, referral letters and dependant names a
-    page of claims references — pass the results to `populate_claim_out` to
-    avoid the per-claim point-loads."""
+) -> tuple[
+    dict[str, StoredDocument],
+    dict[str, str | None],
+    dict[str, list[StoredDocument]],
+    dict[str, Claim],
+]:
+    """One query each for the documents, referral letters, dependant names and
+    episode anchors a page of claims references — pass the results to
+    `populate_claim_out` to avoid the per-claim point-loads."""
     referral_ids = {c.referral_document_id for c in claims if c.referral_document_id}
     dep_ids = {c.dependant_id for c in claims if c.dependant_id}
+    anchor_ids = {c.related_claim_id for c in claims if c.related_claim_id}
     referral_docs: dict[str, StoredDocument] = {}
     if referral_ids:
         for d in db.execute(
@@ -344,7 +369,16 @@ def prefetch_claim_relations(
             select(Dependant).where(Dependant.id.in_(dep_ids))
         ).scalars():
             dep_names[dep.id] = dependant_display_name(dep)
-    return referral_docs, dep_names, claim_documents_for(db, [c.id for c in claims])
+    anchors: dict[str, Claim] = {}
+    if anchor_ids:
+        for c in db.execute(select(Claim).where(Claim.id.in_(anchor_ids))).scalars():
+            anchors[c.id] = c
+    return (
+        referral_docs,
+        dep_names,
+        claim_documents_for(db, [c.id for c in claims]),
+        anchors,
+    )
 
 
 def delete_stored_document(db: Session, doc: StoredDocument) -> None:
@@ -376,7 +410,7 @@ def claims_to_out(db: Session, claims: list[Claim]) -> list[ClaimOut]:
     one is the single-claim path and point-loads each claim's documents,
     referral letter and dependant name. At the portal's page size (200) the
     difference is ~400 queries per claims-tab open versus three."""
-    referral_docs, dep_names, documents = prefetch_claim_relations(db, claims)
+    referral_docs, dep_names, documents, anchors = prefetch_claim_relations(db, claims)
     return [
         populate_claim_out(
             db,
@@ -385,6 +419,7 @@ def claims_to_out(db: Session, claims: list[Claim]) -> list[ClaimOut]:
             referral_docs=referral_docs,
             dep_names=dep_names,
             documents=documents,
+            anchors=anchors,
         )
         for c in claims
     ]
@@ -457,8 +492,24 @@ def create_claim(
     # Canonical sub-type label (folds pre-rename values from stale clients).
     sub_type = normalize_sub_type(body.sub_type)
 
+    # The earlier visit this claim continues, validated and normalized to the
+    # root of its episode (`services/claim_episodes.py`). Resolved BEFORE the
+    # referral, because a specialist follow-up rides the ANCHOR's letter.
+    related_claim_id = resolve_anchor(
+        db,
+        employee,
+        anchor_id=body.related_claim_id,
+        claim_kind=body.claim_kind,
+        product_code=body.product_code,
+        sub_type=sub_type,
+        visit_type=body.visit_type,
+        dependant_id=body.dependant_id,
+    )
+    anchor = db.get(Claim, related_claim_id) if related_claim_id else None
+
     # Specialist claims: resolve the referral letter from the visit type
-    # (first → must name one; follow-up → auto-link the latest on file).
+    # (first → must name one; follow-up → the anchor's letter, else the latest
+    # on file).
     referral_document_id = body.referral_document_id
     if (
         body.claim_kind == CLAIM_KIND_INSURED
@@ -469,6 +520,7 @@ def create_claim(
             employee,
             visit_type=body.visit_type,
             referral_document_id=referral_document_id,
+            anchor=anchor,
         )
 
     # Profile-driven intake rules (sub-type / diagnosis / referral / currency).
@@ -510,6 +562,7 @@ def create_claim(
         amount_claimed=body.amount_claimed,
         currency=body.currency.upper(),
         referral_document_id=referral_document_id,
+        related_claim_id=related_claim_id,
         submitted_by_member_id=submitted_by_member_id,
     )
     claim.form_fields = form_snapshot(
@@ -559,6 +612,7 @@ async def attach_document(
     uploaded_by_member_id: str | None = None,
     uploaded_by_user_id: str | None = None,
     doc_type: str | None = None,
+    issued_on: date | None = None,
 ) -> StoredDocument:
     """Persist an uploaded document to retained storage + metadata row.
     Does NOT commit — the caller owns the transaction."""
@@ -584,6 +638,7 @@ async def attach_document(
         entity_id=entity_id,
         file_name=file.filename or f"document{suffix}",
         doc_type=doc_type,
+        issued_on=issued_on,
         mime_type=_sniff_mime(head, suffix),
         size_bytes=blob.size_bytes,
         sha256=blob.sha256,
@@ -1059,12 +1114,27 @@ def validate_claim_facts(
     from_member_form = claim.case_type != CASE_TYPE_LOG
 
     if from_member_form:
+        # The anchor, re-resolved over the MERGED claim: an amendment can move
+        # the claimant or the claim type out from under a link that was valid
+        # when it was made. A type that no longer takes one has it CLEARED
+        # rather than refused — see `claim_episodes.resolve_anchor`.
+        claim.related_claim_id = resolve_anchor(
+            db,
+            employee,
+            anchor_id=claim.related_claim_id,
+            claim_kind=claim.claim_kind,
+            product_code=claim.product_code,
+            sub_type=claim.sub_type,
+            visit_type=claim.visit_type,
+            dependant_id=claim.dependant_id,
+            exclude_claim_id=claim.id,
+        )
         # Re-validate the specialist referral: a legacy draft that used the
         # removed "not applicable" escape (visit_type=None, no referral) is
         # caught here, and a follow-up draft that still has no
-        # referral_document_id gets the latest letter on file linked. A draft
-        # that already names a letter keeps it (the member's explicit choice at
-        # draft time).
+        # referral_document_id gets the anchor's letter (else the latest on
+        # file) linked. A draft that already names a letter keeps it (the
+        # member's explicit choice at draft time).
         if (
             claim.claim_kind == CLAIM_KIND_INSURED
             and claim_profile_for(claim.product_code).requires_referral
@@ -1074,6 +1144,11 @@ def validate_claim_facts(
                 employee,
                 visit_type=claim.visit_type,
                 referral_document_id=claim.referral_document_id,
+                anchor=(
+                    db.get(Claim, claim.related_claim_id)
+                    if claim.related_claim_id
+                    else None
+                ),
             )
         assert_intake_valid(
             db,
@@ -1320,6 +1395,7 @@ MEMBER_AMENDABLE_FIELDS = frozenset(
         "dependant_id",
         "referral_document_id",
         "referral_not_applicable",
+        "related_claim_id",
     }
 )
 

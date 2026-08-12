@@ -42,6 +42,13 @@ CLAIMS_REGISTER_HEADER = [
     "Coverage",
     "Claim Type",
     "Sub-type",
+    # The admission a pre-/post-hospitalisation consult is claimed against, or
+    # the first visit of a specialist course (`services/claim_episodes.py`),
+    # by ITS reference number. This is what makes the episode reconcilable on
+    # the insurer's side: a consult submitted on its own is a loose line an
+    # assessor has to reunite with the stay by hand. Blank on a claim that
+    # follows nothing, which is most of them.
+    "Follows Claim Ref",
     "Incurred Date",
     "Provider",
     # Pre-/post-hospitalisation claims name the treating doctor — the link back
@@ -60,6 +67,21 @@ CLAIMS_REGISTER_HEADER = [
 
 def _status_label(status: str) -> str:
     return status.replace("_", " ").title()
+
+
+def _anchor_ref(claim: Claim, anchors: dict[str, Claim]) -> str:
+    """The reference number of the visit this claim follows.
+
+    The REFERENCE, not the internal id: this column exists to be read next to
+    the insurer's own ledger, and the reference is the only claim identifier
+    that appears there. An anchor with none is a claim that was never submitted,
+    which the picker cannot offer — so the fallback is blank rather than an id
+    that means nothing outside this system.
+    """
+    if not claim.related_claim_id:
+        return ""
+    anchor = anchors.get(claim.related_claim_id)
+    return (anchor.reference_no or "") if anchor is not None else ""
 
 
 def build_claims_register_workbook(
@@ -81,7 +103,7 @@ def build_claims_register_workbook(
         ).all()
     )
     claims = [c for c, _ in rows]
-    _, dep_names, _ = prefetch_claim_relations(db, claims)
+    _, dep_names, _, anchors = prefetch_claim_relations(db, claims)
 
     wb = Workbook()
     ws = wb.active
@@ -112,6 +134,7 @@ def build_claims_register_workbook(
             coverage,
             claim.claim_type or "",
             claim.sub_type or "",
+            _anchor_ref(claim, anchors),
             claim.incurred_date,
             claim.provider_name or "",
             claim.doctor_name or "",

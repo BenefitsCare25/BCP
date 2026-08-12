@@ -244,6 +244,71 @@ def test_claim_thread_of_an_unknown_claim_404(anon: TestClient):
     )
 
 
+def test_claim_anchors_scoped_to_own_employee(anon: TestClient):
+    """The follow-up picker resolves through `resolve_member_employee` and
+    matches `dependant_id` against each candidate's OWN claimant.
+
+    `dependant_id` is a query parameter, which makes it the shape of thing that
+    leaks: passing another member's dependant must return nothing about them,
+    not their visits. And a member of a client with no active year gets the
+    same 404 every other portal data endpoint gives.
+    """
+    for mode in ("admission", "sp_course"):
+        res = anon.get(
+            f"/api/v1/portal/claim-anchors?mode={mode}", headers=_auth(ACC_ALICE)
+        )
+        assert res.status_code == 200, res.text
+        assert res.json() == []
+
+    # Carol's dependant, asked for with Alice's token.
+    res = anon.get(
+        f"/api/v1/portal/claim-anchors?mode=admission&dependant_id={DEP_CAROL}",
+        headers=_auth(ACC_ALICE),
+    )
+    assert res.status_code == 200
+    assert res.json() == []
+
+    # An unrecognised mode is refused by the route, not silently treated as one.
+    assert (
+        anon.get(
+            "/api/v1/portal/claim-anchors?mode=everything", headers=_auth(ACC_ALICE)
+        ).status_code
+        == 422
+    )
+
+    res = anon.get(
+        "/api/v1/portal/claim-anchors?mode=admission",
+        headers=_auth(ACC_BOB_B, CLIENT_B_ID),
+    )
+    assert res.status_code == 404
+
+
+def test_anchoring_to_an_unknown_claim_404(anon: TestClient):
+    """The anchor is validated through the same not-403 convention: a claim id
+    the member doesn't own must be indistinguishable from one that doesn't
+    exist, or the create endpoint becomes a probe for which ids are real."""
+    ghost = "00000000-0000-0000-0000-0000000000fe"
+    res = anon.post(
+        "/api/v1/portal/claims",
+        headers=_auth(ACC_ALICE),
+        json={
+            "claim_kind": "insured",
+            "product_code": "GHS",
+            "claim_type": "Group Hospital & Surgical",
+            "sub_type": "Follow up Pre-/Post-Hospitalisation",
+            "incurred_date": "2027-06-15",
+            "provider_name": "Novena Specialist Clinic",
+            "invoice_number": "PI-ANCHOR-1",
+            "doctor_name": "Dr Tan",
+            "diagnosis": "Appendicitis",
+            "amount_claimed": 180.0,
+            "currency": "SGD",
+            "related_claim_id": ghost,
+        },
+    )
+    assert res.status_code == 404, res.text
+
+
 def test_amending_an_unknown_claim_404(anon: TestClient):
     """The amendment surface goes through `load_member_claim` like everything
     else, so a claim id the member doesn't own is simply not found — never a

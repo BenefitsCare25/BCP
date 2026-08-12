@@ -74,3 +74,15 @@ class ProductTerm(Base, TimestampMixin):
     # Insurer-issued policy number for this product's placement. Operational
     # metadata (issued after activation) — editable on active years, like FCL.
     policy_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # How long before an admission, and after a discharge, a consultation is
+    # still claimable against it ("within 90 days prior / 100 days after" in the
+    # policy wording). Drives the pre-/post-hospitalisation window check in
+    # `claims_review/rules.py`.
+    #
+    # **NULL means NO RULE, not zero days.** These are transcribed from the
+    # policy wording, so most products will not carry them for a long time —
+    # and a claim must never be flagged (still less refused) because a broker
+    # has not filled in a term. Same shape, and the same reasoning, as
+    # `nel_age_limit`.
+    pre_hosp_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    post_hosp_days: Mapped[int | None] = mapped_column(Integer, nullable=True)

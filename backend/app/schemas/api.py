@@ -336,6 +336,16 @@ class ProductTermOut(BaseModel):
     nel_age_limit: int | None = None
     # Insurer-issued policy number for this product's placement.
     policy_number: str | None = None
+    # Whether this product's claims draw on an inpatient benefit. SERVED from
+    # `claim_intake.is_inpatient_product` (which reads the product registry —
+    # the ONE place product-type knowledge lives) so the terms form can hide the
+    # pre/post window on lines it cannot apply to without reimplementing the
+    # taxonomy in TypeScript.
+    is_inpatient: bool = False
+    # Pre-/post-hospitalisation claim window, in days either side of the stay.
+    # NULL = no rule (see the model) — never rendered as 0.
+    pre_hosp_days: int | None = None
+    post_hosp_days: int | None = None
 
 
 class ProductTermUpdate(BaseModel):
@@ -350,6 +360,11 @@ class ProductTermUpdate(BaseModel):
     free_cover_limit: float | None = Field(default=None, ge=0)
     nel_age_limit: int | None = Field(default=None, ge=1, le=120)
     policy_number: str | None = Field(default=None, max_length=64)
+    # Bounded at a year: these are transcribed from policy wording, where the
+    # figures are 30 to 180 days. An unbounded field invites a typo that silently
+    # turns the window off (999 days passes everything) rather than erroring.
+    pre_hosp_days: int | None = Field(default=None, ge=0, le=365)
+    post_hosp_days: int | None = Field(default=None, ge=0, le=365)
 
     @model_validator(mode="after")
     def _check_range(self) -> ProductTermUpdate:

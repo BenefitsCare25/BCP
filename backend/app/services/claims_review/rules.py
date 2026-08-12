@@ -6,6 +6,7 @@ without spending a single AI token.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -271,6 +272,230 @@ def _check_referral(claim: Claim) -> dict[str, Any] | None:
     )
 
 
+# How long a specialist referral is treated as valid. A CONVENTION, not a term
+# we hold: Singapore group policies commonly accept a referral for 12 months,
+# and no product configuration records it. So this only ever WARNS — it can
+# never be the reason a claim is refused, and a broker who knows the insurer's
+# actual rule can wave it through.
+REFERRAL_VALIDITY_DAYS = 365
+
+
+def _norm_text(value: str | None) -> str:
+    """Compare clinical free text the way a person reads it, not byte-wise.
+
+    Folds the "Other: " prefix the diagnosis picker adds to free text, so a
+    catalog diagnosis on the admission and the same words typed on the consult
+    are not reported as a mismatch.
+    """
+    text = (value or "").strip().lower()
+    if text.startswith("other:"):
+        text = text[len("other:") :].strip()
+    return " ".join(text.split())
+
+
+def _anchor_of(db: Session, claim: Claim) -> Claim | None:
+    if not claim.related_claim_id:
+        return None
+    return db.get(Claim, claim.related_claim_id)
+
+
+def _stay_dates(anchor: Claim) -> tuple[Any, Any]:
+    """The admission's start and end. Falls back to the incurred date on both
+    ends — a LOG case recorded from a guarantee request routinely carries no
+    assessed dates, and a one-day window is the honest reading of what we know
+    rather than an open-ended one."""
+    start = anchor.admission_date or anchor.incurred_date
+    end = anchor.discharge_date or anchor.admission_date or anchor.incurred_date
+    return start, end
+
+
+def _check_pre_post_window(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """A pre-/post-hospitalisation consult must fall within the policy's window
+    either side of the stay it is claimed against.
+
+    Runs only when there is an anchor AND the product states a window. NULL days
+    mean NO RULE (`models/product_term.py`): most products will not carry these
+    figures for a long time, and a claim must never be flagged because a broker
+    has not transcribed a term.
+    """
+    from app.services.claim_episodes import anchor_mode_for_claim
+    from app.services.claim_intake import ANCHOR_ADMISSION
+
+    if anchor_mode_for_claim(claim) != ANCHOR_ADMISSION:
+        return None
+    anchor = _anchor_of(db, claim)
+    if anchor is None:
+        return None
+    pre_days, post_days = _product_window_days(db, claim)
+    if pre_days is None and post_days is None:
+        return None
+    rule = "Consultation falls within the pre-/post-hospitalisation window."
+    start, end = _stay_dates(anchor)
+    if pre_days is not None and claim.incurred_date < start - timedelta(days=pre_days):
+        return _flagging(
+            rule,
+            f"The consultation on {claim.incurred_date.isoformat()} is more than "
+            f"{pre_days} days before the admission on {start.isoformat()}, so it "
+            "falls outside the pre-hospitalisation window for this product.",
+        )
+    if post_days is not None and claim.incurred_date > end + timedelta(days=post_days):
+        return _flagging(
+            rule,
+            f"The consultation on {claim.incurred_date.isoformat()} is more than "
+            f"{post_days} days after the discharge on {end.isoformat()}, so it "
+            "falls outside the post-hospitalisation window for this product.",
+        )
+    return _result(
+        rule, "pass",
+        f"{claim.incurred_date.isoformat()} falls within the window around the "
+        f"stay of {start.isoformat()} to {end.isoformat()}.",
+    )
+
+
+def _product_window_days(
+    db: Session, claim: Claim
+) -> tuple[int | None, int | None]:
+    """The product's pre/post window, or (None, None) when it states none."""
+    from app.core.deps import tenant_or_global
+    from app.models import Product
+    from app.models.product_term import ProductTerm
+
+    if not claim.product_code:
+        return None, None
+    product_id = db.scalar(
+        select(Product.id).where(
+            tenant_or_global(Product.client_id, claim.client_id),
+            func.upper(Product.code) == claim.product_code.strip().upper(),
+        )
+    )
+    if product_id is None:
+        return None, None
+    term = db.execute(
+        select(ProductTerm).where(
+            ProductTerm.policy_year_id == claim.policy_year_id,
+            ProductTerm.product_id == product_id,
+        )
+    ).scalar_one_or_none()
+    if term is None:
+        return None, None
+    return term.pre_hosp_days, term.post_hosp_days
+
+
+def _check_episode_link(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """A pre-/post-hospitalisation consult with no admission on record.
+
+    The insurer pays this consult BECAUSE of an admission; a consult that names
+    none cannot be matched to one, and today that is discovered by the insurer
+    rather than by us. Flagged rather than failed — the admission may have been
+    settled by Letter of Guarantee under a different broker, or predate the data
+    we hold, and neither is the member's fault.
+    """
+    from app.services.claim_episodes import anchor_mode_for_claim
+    from app.services.claim_intake import ANCHOR_ADMISSION
+
+    if anchor_mode_for_claim(claim) != ANCHOR_ADMISSION:
+        return None
+    rule = "Pre-/post-hospitalisation consultation names the admission it follows."
+    if claim.related_claim_id:
+        return _result(rule, "pass", "The claim names the hospital stay it follows.")
+    return _flagging(
+        rule,
+        "This consultation is claimed as pre- or post-hospitalisation but names "
+        "no admission. Match it to the hospital stay before sending it on, or "
+        "reclassify it as an outpatient specialist claim.",
+    )
+
+
+def _check_episode_diagnosis(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """The follow-up should be for the condition the anchor visit was for.
+
+    An insurer rejects a pre/post consult — and a specialist follow-up — for an
+    unrelated condition, so a mismatch here is the difference between a paid
+    claim and one that comes back weeks later.
+    """
+    anchor = _anchor_of(db, claim)
+    if anchor is None:
+        return None
+    mine, theirs = _norm_text(claim.diagnosis), _norm_text(anchor.diagnosis)
+    if not mine or not theirs:
+        return None
+    rule = "Diagnosis matches the visit this claim follows."
+    if mine == theirs:
+        return _result(rule, "pass", f"Both visits state {claim.diagnosis!r}.")
+    return _flagging(
+        rule,
+        f"This claim states {claim.diagnosis!r} but the visit it follows states "
+        f"{anchor.diagnosis!r}. A follow-up for a different condition is not "
+        "claimable against the earlier visit.",
+    )
+
+
+def _check_episode_doctor(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """The consult's doctor against the anchor's.
+
+    Advisory only, and deliberately so: a different consultant in the same team
+    routinely sees the patient at the follow-up, so this is context for an
+    assessor rather than a finding. It also seldom runs — an admission claim has
+    no reason to name a doctor, since only pre/post consults are asked for one.
+    """
+    anchor = _anchor_of(db, claim)
+    if anchor is None:
+        return None
+    mine, theirs = _norm_text(claim.doctor_name), _norm_text(anchor.doctor_name)
+    if not mine or not theirs or mine == theirs:
+        return None
+    return _result(
+        "Treating doctor matches the visit this claim follows.",
+        "warning",
+        f"This claim names {claim.doctor_name!r}; the visit it follows names "
+        f"{anchor.doctor_name!r}. Confirm this is the same course of treatment.",
+    )
+
+
+def _check_referral_age(db: Session, claim: Claim) -> dict[str, Any] | None:
+    """A specialist visit riding a referral letter older than its validity.
+
+    Only runs when the letter carries its OWN issue date
+    (`stored_documents.issued_on`). The upload date is deliberately not used as
+    a stand-in: a member routinely scans a months-old letter the day they first
+    claim, and reading that as the issue date would date every letter to the
+    first claim it was used on.
+    """
+    if not claim.referral_document_id:
+        return None
+    doc = db.get(StoredDocument, claim.referral_document_id)
+    if doc is None or doc.issued_on is None:
+        return None
+    rule = "Referral letter is still valid at the date of the visit."
+    age = (claim.incurred_date - doc.issued_on).days
+    if age < 0:
+        # A letter that postdates the visit did not authorise it. Reading the
+        # negative age as "well within validity" made the strongest signal here
+        # the quietest one — it passed, printing `max(age, 0)` as "0 days
+        # before the visit", which is not a thing that happened.
+        return _flagging(
+            rule,
+            f"The referral letter is dated {doc.issued_on.isoformat()}, "
+            f"{-age} days AFTER the visit on "
+            f"{claim.incurred_date.isoformat()}. A referral is written before "
+            "the consultation it authorises — check the letter belongs to this "
+            "visit and that neither date was mis-keyed.",
+        )
+    if age <= REFERRAL_VALIDITY_DAYS:
+        return _result(
+            rule, "pass",
+            f"The referral was issued on {doc.issued_on.isoformat()}, "
+            f"{age} days before the visit.",
+        )
+    return _flagging(
+        rule,
+        f"The referral letter was issued on {doc.issued_on.isoformat()}, "
+        f"{age} days before this visit. Most policies treat a referral as valid "
+        f"for {REFERRAL_VALIDITY_DAYS // 30} months — confirm the insurer "
+        "accepts it or ask the member for a current referral.",
+    )
+
+
 def _check_future_date(claim: Claim) -> dict[str, Any] | None:
     # Business date, not the UTC one — the same clock submit and the served
     # claim window use (`core/clock.py`). On UTC, every day between midnight and
@@ -350,8 +575,15 @@ def deterministic_rule_results(
     for extra in (
         _check_shared_documents(db, claim),
         _check_referral(claim),
+        _check_referral_age(db, claim),
         _check_future_date(claim),
         _check_dependant_age(db, claim),
+        # Episode checks (`services/claim_episodes.py`) — every one of them
+        # returns None when the claim continues nothing, which is most claims.
+        _check_episode_link(db, claim),
+        _check_pre_post_window(db, claim),
+        _check_episode_diagnosis(db, claim),
+        _check_episode_doctor(db, claim),
     ):
         if extra is not None:
             results.append(extra)
