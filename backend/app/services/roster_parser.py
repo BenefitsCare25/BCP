@@ -51,6 +51,12 @@ EMPLOYEE_COLUMN_MAP: dict[str, str] = {
     "division": "division",
     "department": "department",
     "cost centre": "cost_centre",
+    # Exact aliases for the incumbent's wording. Both would ALSO resolve on the
+    # loose prefix pass ("email address" starts with "email"), but that pass
+    # only runs on columns nothing claimed exactly — and these two are written
+    # by our own template, which must never depend on the fallback.
+    "email address": "email",
+    "mobile phone": "mobile",
     # Where the member sits, as the incumbent's built-in listing names it:
     # the employing company and the physical site. Descriptive only — neither
     # is the `entity` that drives the insured-entity gate in matching.
@@ -102,6 +108,13 @@ DEPENDANT_COLUMN_MAP: dict[str, str] = {
     "date of birth": "date_of_birth",
     "effective date": "effective_date",
     "termination date": "termination_date",
+    # The incumbent's name for the same date, and the one our own template and
+    # built-in listing now print. Both spellings feed `termination_date`
+    # because ADC reads exactly one key to decide a dependant came off cover;
+    # a second date column would be honoured on one upload path and not the
+    # other.
+    "deletion date": "termination_date",
+    "user id": "staff_id",
     "remarks": "remarks",
 }
 

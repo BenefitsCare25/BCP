@@ -33,12 +33,15 @@ field, so a broker chasing that behaviour can see its input:
 gates the sell-leave election, `Has Insurance Cover Last Year` is COMPUTED from
 last year's roster (not a column anyone typed), `Employee Status` is the only
 leaver/active signal on a sheet that defaults to every person on file, the
-member ids are what the portal quotes on a claim, and on the dependant sheet
-`Termination Date` (roster-stated, read by ADC) is a different fact from
-`Deletion Date` (system-recorded `terminated_effective`). Employment Status,
-Country of Work and salary Currency were dropped WITH the incumbent's layout:
-nothing in the app reads them, and both still ship on the insurer listing and
-the member-listing upload template.
+member ids are what the portal quotes on a claim, and `Dependant Status` is
+what makes a pending self-add visible. Employment Status, Country of Work and
+salary Currency were dropped WITH the incumbent's layout: nothing in the app
+reads them, and they still ship on the insurer listing.
+
+The upload template (`member_listing_template.py`) carries the SAME leading
+block, so a file exported from the incumbent uploads here untouched and HR
+learns one vocabulary. Both write `Deletion Date` and both mean the roster's
+`termination_date`.
 """
 from __future__ import annotations
 
@@ -128,8 +131,6 @@ REFERENCE_DEPENDANT_HEADER = [
     "Remarks", "Deletion Date",
 ]
 
-EXTRA_DEPENDANT_HEADER = ["Termination Date"]
-
 EXTRA_DEPENDANT_TAIL = ["Dependant Status"]
 
 # 1-based indexes into REFERENCE_EMPLOYEE_HEADER / REFERENCE_DEPENDANT_HEADER
@@ -141,9 +142,8 @@ _DATE_FMT = "dd/mm/yyyy"
 _MONEY_FMT = "#,##0.00"
 _EMPLOYEE_DATE_COLUMNS = (5, 11, 12, 13, 14)
 _EMPLOYEE_MONEY_COLUMNS = (10,)
-# 8/10/11/13 are Date of Marriage, Date of Birth, Effective Date and Deletion
-# Date; 14 is our own Termination Date, the first column after the clone.
-_DEPENDANT_DATE_COLUMNS = (8, 10, 11, 13, 14)
+# Date of Marriage, Date of Birth, Effective Date and Deletion Date.
+_DEPENDANT_DATE_COLUMNS = (8, 10, 11, 13)
 
 
 def _number(raw: object) -> object:
@@ -396,7 +396,6 @@ def build_built_in_dependant_listing(
 
     header = [
         *REFERENCE_DEPENDANT_HEADER,
-        *EXTRA_DEPENDANT_HEADER,
         *(c.header for c in id_columns),
         *EXTRA_DEPENDANT_TAIL,
     ]
@@ -427,13 +426,15 @@ def build_built_in_dependant_listing(
             as_date(first_value(dattrs, ("date_of_birth", "dob"))),
             as_date(first_value(dattrs, ("effective_date",))),
             first_value(dattrs, ("remarks",)) or "",
-            # Deletion Date is the SYSTEM's record of the removal
-            # (`terminated_effective`); Termination Date below is the date the
-            # roster stated, which is what ADC reads to terminate in the first
-            # place. They agree after a sync and disagree while one is pending,
-            # which is the whole reason both are printed.
-            dep.terminated_effective,
-            as_date(first_value(dattrs, ("termination_date",))),
+            # ONE deletion date, under the incumbent's name for it. Prefer the
+            # system's record of the removal; fall back to the date the roster
+            # STATED, which is what ADC reads and is all there is while a
+            # termination is uploaded but not yet applied. Printing both as
+            # separate columns made the sheet un-round-trippable — two headers
+            # competing for the same `termination_date` key on re-upload, where
+            # only the leftmost wins and a pending date could be blanked.
+            dep.terminated_effective
+            or as_date(first_value(dattrs, ("termination_date",))),
         ]
         # A dependant's insurer member id usually sits on the EMPLOYEE row —
         # rosters rarely repeat it per life — so fall back the same way the

@@ -24,50 +24,62 @@ from app.services.insurer_listings import configured_insurers_for_year
 from app.services.insurer_reports import safe_cell
 from app.services.roster_parser import INSURER_MEMBER_ID_KEY
 
-# (header, attribute key) pairs, in insurer-listing column order. ``staff_id``
-# and ``employee_name`` are real Employee columns, marked with a leading "@".
+# (header, attribute key) pairs. The leading block is the INCUMBENT platform's
+# own column names and order — the same clone the built-in listing prints
+# (`built_in_listings.REFERENCE_*_HEADER`), so HR fills one vocabulary whether
+# they start from their existing extract or from this template, and a file
+# exported there uploads here untouched. Anything of ours the incumbent has no
+# column for follows after `Remarks`. ``staff_id`` and ``employee_name`` are
+# real Employee columns, marked with a leading "@".
+#
+# Every header here MUST resolve through `roster_parser.EMPLOYEE_COLUMN_MAP` /
+# `DEPENDANT_COLUMN_MAP` — a column that maps to nothing silently discards
+# whatever HR types into it. `test_member_listing_template_round_trips` is what
+# holds that line.
 _EMPLOYEE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Entity", "entity"),
-    ("Staff ID", "@staff_id"),
+    ("User ID", "@staff_id"),
     ("Employee Name", "@employee_name"),
-    ("Identification No. (NRIC/FIN)", "id_no"),
+    ("Identification No.", "id_no"),
     ("Date of Birth", "date_of_birth"),
     ("Gender", "gender"),
     ("Marital Status", "marital_status"),
-    ("Employment Status", "employment_status"),
-    ("Designation", "designation"),
-    ("Country of Work", "country_of_work"),
     ("Foreigner Employment Pass", "pass"),
     ("Nationality", "nationality"),
+    ("Monthly Salary", "salary"),
     ("Date of Hire", "date_of_hire"),
     ("Confirmation Date", "confirmation_date"),
     ("Effective Date", "effective_date"),
     ("Last Day of Service", "last_day_of_service"),
     ("Category", "category"),
-    ("Job Grade", "job_grade"),
     ("Division", "division"),
     ("Department", "department"),
     ("Cost Centre", "cost_centre"),
-    ("Email", "email"),
-    ("Mobile", "mobile"),
+    ("Email Address", "email"),
+    ("Mobile Phone", "mobile"),
     ("Bank Code", "bank_code"),
     ("Branch Code", "branch_code"),
     ("Bank Account No.", "bank_account_no"),
     ("Company Description", "company_description"),
     ("Location Description", "location_description"),
+    ("Current Job Grade", "job_grade"),
     ("Person Class", "person_class"),
+    ("Remarks", "remarks"),
+    # Ours. Each is an INPUT something else reads: designation drives flex tier
+    # matching + leave rates, and the two flags gate prior-year cover and the
+    # sell-leave election. Dropping them would leave no way to state them at
+    # all. (Employment Status, Country of Work and salary Currency went with
+    # the incumbent's layout — nothing in the app reads them.)
+    ("Designation", "designation"),
     ("Has Insurance Cover Last Year", "prior_year_cover"),
     ("Eligible to Sell Leave", "leave_sell_eligible"),
-    ("Monthly Salary", "salary"),
-    ("Currency", "currency"),
-    ("Remarks", "remarks"),
 )
 
 _DEPENDANT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Entity", "entity"),
     ("Staff ID", "employee_staff_id"),
     ("Employee Name", "employee_name"),
-    ("Employee's Identification No. (NRIC/FIN)", "employee_id_no"),
+    ("Employee's Identification No.", "employee_id_no"),
     ("Dependant Name", "dependant_name"),
     ("Dependant's Identification No.", "dependant_id_no"),
     ("Relationship", "relationship"),
@@ -75,8 +87,12 @@ _DEPENDANT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Gender", "gender"),
     ("Date of Birth", "date_of_birth"),
     ("Effective Date", "effective_date"),
-    ("Termination Date", "termination_date"),
     ("Remarks", "remarks"),
+    # The incumbent's name for the date a dependant came off cover. It is the
+    # SAME fact our roster calls `termination_date` — the one ADC reads to
+    # terminate — so it maps there rather than becoming a second date column
+    # that only one of the two surfaces honours.
+    ("Deletion Date", "termination_date"),
 )
 
 # Identifier columns forced to Text format so Excel keeps leading zeros

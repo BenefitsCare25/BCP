@@ -1156,17 +1156,22 @@ def test_member_listing_template_round_trips(client: TestClient) -> None:
     wb = load_workbook(BytesIO(res.content))
     assert wb.sheetnames == ["Employees", "Dependants"]
     emp_rows = _sheet_rows(res.content, sheet=0)
-    fam = next(r for r in emp_rows if r["Staff ID"] == "IL-1")
+    # The employee sheet names the staff id "User ID" and the dependant sheet
+    # "Staff ID" — the incumbent's own asymmetry, kept so their extract uploads
+    # here unedited.
+    fam = next(r for r in emp_rows if r["User ID"] == "IL-1")
     # Pre-filled with the current roster, UNMASKED (it re-imports).
-    assert fam["Identification No. (NRIC/FIN)"] == "S1234567D"
+    assert fam["Identification No."] == "S1234567D"
     assert fam["TestSure Member ID"] == "TS-001"
     assert "Eligible to Sell Leave" in fam
     dep_rows = _sheet_rows(res.content, sheet=1)
     assert {r["Dependant Name"] for r in dep_rows} == {"Spo Use", "Chi Ld"}
+    assert "Deletion Date" in dep_rows[0]
 
-    # Every employee header round-trips through the upload parser: all 31
-    # attribute columns map (the "<Insurer> Member ID" column is handled by
-    # the dynamic member-ID pass, not the alias map).
+    # Every employee header round-trips through the upload parser: every
+    # attribute column maps (the "<Insurer> Member ID" column is handled by
+    # the dynamic member-ID pass, not the alias map). A header that maps to
+    # nothing silently discards whatever HR typed into it.
     from app.services.roster_parser import (
         EMPLOYEE_COLUMN_MAP,
         _build_column_map,

@@ -124,6 +124,29 @@ class _OpenpyxlWorkbook:
 
     def sheet(self, name: str) -> Sheet:
         ws = self._wb[name]
+        # A sheet's size is DECLARED in its XML (`<dimension ref="A1:AK4807"/>`)
+        # and `read_only=True` trusts that declaration rather than counting.
+        # Several non-Excel writers — Go Excelize, which the incumbent
+        # platform's exports come from — stamp a placeholder `ref="A1"` and
+        # never update it, so a 4,807-row roster reads back as ONE cell.
+        # Nothing raises: the header row is a single "Entity", no column maps
+        # to Staff ID, every row is skipped, and the upload reports zero
+        # records with no error to explain it.
+        #
+        # `reset_dimensions()` drops the declared bounds so openpyxl computes
+        # them while streaming. Only taken when the declaration is degenerate,
+        # so the normal path keeps its phantom-column cap (some workbooks in
+        # the wild report ~16k columns) — and a genuinely 1x1 sheet costs one
+        # cheap extra pass.
+        if (ws.max_row or 0) <= 1 or (ws.max_column or 0) <= 1:
+            ws.reset_dimensions()
+            return Sheet(
+                name=name,
+                rows=[
+                    [_coerce(v) for v in row[:MAX_SCAN_COLS]]
+                    for row in ws.iter_rows(values_only=True)
+                ],
+            )
         rows: list[list[Cell]] = []
         max_col = min(ws.max_column or MAX_SCAN_COLS, MAX_SCAN_COLS)
         for row in ws.iter_rows(max_col=max_col, values_only=True):

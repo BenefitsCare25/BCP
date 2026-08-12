@@ -225,7 +225,6 @@ def test_dependant_sheet_opens_with_the_incumbent_column_block(client):
         "Date of Marriage", "Gender", "Date of Birth", "Effective Date",
         "Remarks", "Deletion Date",
     ]
-    assert header[13] == "Termination Date"
 
 
 def test_salary_is_a_number_and_person_class_defaults(client):
