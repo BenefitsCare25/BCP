@@ -140,11 +140,19 @@ class _OpenpyxlWorkbook:
         # cheap extra pass.
         if (ws.max_row or 0) <= 1 or (ws.max_column or 0) <= 1:
             ws.reset_dimensions()
+            # With no declared width, openpyxl sizes each row to its own last
+            # populated cell — a blank row comes back empty and a row with
+            # trailing blanks comes back short. Every reader here indexes by
+            # POSITION, so the grid is padded back to rectangular; this is the
+            # only path in the module that could return ragged rows, and a
+            # positional read of one is wrong rather than loud.
+            raw = [list(r[:MAX_SCAN_COLS]) for r in ws.iter_rows(values_only=True)]
+            width = max((len(r) for r in raw), default=0)
             return Sheet(
                 name=name,
                 rows=[
-                    [_coerce(v) for v in row[:MAX_SCAN_COLS]]
-                    for row in ws.iter_rows(values_only=True)
+                    [_coerce(v) for v in r] + [None] * (width - len(r))
+                    for r in raw
                 ],
             )
         rows: list[list[Cell]] = []

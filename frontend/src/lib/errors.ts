@@ -73,7 +73,14 @@ export function errorFromText(
       // not JSON — fall through to the plain-text error
     }
   }
-  return new ApiError(parseErrorText(text, statusText), status);
+  // A message is NOT guaranteed: when the server dies mid-request the gateway
+  // answers with an empty body, and HTTP/2 carries no reason phrase, so both
+  // inputs are "". That rendered as a red banner with nothing written in it —
+  // the failure looked silent to the user while the server log had the cause.
+  // The status alone is enough to make it reportable.
+  const message =
+    parseErrorText(text, statusText) || `Request failed (HTTP ${status})`;
+  return new ApiError(message, status);
 }
 
 /** One FastAPI validation item ({loc, msg, type}) → its message. */

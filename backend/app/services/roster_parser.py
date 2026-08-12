@@ -20,9 +20,8 @@ EMPLOYEE_COLUMN_MAP: dict[str, str] = {
     "company name": "entity",
     "staff id": "staff_id",
     # The incumbent platform's own extract titles the staff id "User ID", so
-    # its built-in listing re-imports without a hand edit. Exact-match only —
-    # the loose prefix pass would otherwise let a "User ID Type" column claim
-    # it, and this map is also what the built-in listing writes back out.
+    # its built-in listing re-imports without a hand edit. A FALLBACK spelling
+    # (`_FALLBACK_HEADERS`) — a file carrying both headers keys off "Staff ID".
     "user id": "staff_id",
     "employee name": "employee_name",
     "identification no. (nric/fin)": "id_no",
@@ -114,6 +113,8 @@ DEPENDANT_COLUMN_MAP: dict[str, str] = {
     # a second date column would be honoured on one upload path and not the
     # other.
     "deletion date": "termination_date",
+    # Fallback spelling, same rule as the employee map: a dependant sheet
+    # carrying both "Staff ID" and a login "User ID" keys off the former.
     "user id": "staff_id",
     "remarks": "remarks",
 }
@@ -122,6 +123,14 @@ DEPENDANT_COLUMN_MAP: dict[str, str] = {
 # Attribute keys that only a DEPENDANT sheet can produce — every one of them is
 # absent from EMPLOYEE_COLUMN_MAP, so their presence is what tells a dependant
 # listing apart from an employee listing handed to the wrong parser.
+# Header spellings that are a LAST RESORT for their attribute. The incumbent
+# platform titles the staff id "User ID", but plenty of HR extracts carry a
+# "User ID" (an AD/login handle) NEXT TO the real "Staff ID" — and the staff id
+# is the roster's primary key, so binding the wrong column proposes the entire
+# roster as joiners and the existing rows as missing. Listed here, the spelling
+# binds only when no primary spelling claimed the attribute first.
+_FALLBACK_HEADERS = frozenset({"user id"})
+
 DEPENDANT_MARKER_KEYS = (
     "dependant_name",
     "dependant_id_no",
@@ -423,12 +432,20 @@ def _build_column_map(header_row: list[Cell], spec: dict[str, str]) -> dict[int,
 
     out: dict[int, str] = {}
     taken: set[str] = set()
-    # Pass 1 — exact matches win.
-    for idx, key in keys:
-        attr_id = spec.get(key)
-        if attr_id is not None and attr_id not in taken:
-            out[idx] = attr_id
-            taken.add(attr_id)
+    # Pass 1 — exact matches win, PRIMARY spellings before fallback ones.
+    # Order matters within this pass because a column binds by position: a file
+    # carrying both "User ID" and "Staff ID" would otherwise key every employee
+    # by whichever came first, and the real staff id column would be dropped
+    # (pass 2 skips claimed attributes). Splitting the pass makes the fallback
+    # spelling mean what it says — used only when nothing better is present.
+    for fallback in (False, True):
+        for idx, key in keys:
+            if idx in out or (key in _FALLBACK_HEADERS) is not fallback:
+                continue
+            attr_id = spec.get(key)
+            if attr_id is not None and attr_id not in taken:
+                out[idx] = attr_id
+                taken.add(attr_id)
     # Pass 2 — loose prefix match for slight variations ("Monthly Salary (SGD)"),
     # but only onto attributes no exact column already claimed.
     for idx, key in keys:

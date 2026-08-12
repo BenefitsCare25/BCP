@@ -35,8 +35,9 @@ last year's roster (not a column anyone typed), `Employee Status` is the only
 leaver/active signal on a sheet that defaults to every person on file, the
 member ids are what the portal quotes on a claim, and `Dependant Status` is
 what makes a pending self-add visible. Employment Status, Country of Work and
-salary Currency were dropped WITH the incumbent's layout: nothing in the app
-reads them, and they still ship on the insurer listing.
+salary Currency were dropped WITH the incumbent's layout — they are printed on
+the INSURER submission listing, which is the sheet whose question they answer,
+and the upload template still offers them so they can be stated.
 
 The upload template (`member_listing_template.py`) carries the SAME leading
 block, so a file exported from the incumbent uploads here untouched and HR

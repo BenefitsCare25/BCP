@@ -105,9 +105,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # shell swallows it, the container is SIGKILLed, and in-flight background claim
 # reviews are stranded (recoverable via the startup reaper, but needlessly).
 # `--graceful-timeout 60` gives those background reviews a chance to land.
+# `--timeout 120` (default 30) is the arbiter's patience for a worker HEARTBEAT,
+# not for a request. An endpoint that blocks the event loop stops beating, so a
+# long roster apply read as a hung worker and was SIGKILLed mid-request at 30s —
+# no response, no error message in the browser. The endpoints themselves now run
+# their blocking work in a thread (`api/v1/adc.py`); this is the backstop for
+# any that still don't, and 120s stays well inside App Service's own ~230s
+# front-end idle timeout, which is the real ceiling on a request here.
 CMD ["sh", "-c", "exec gunicorn -w ${WEB_CONCURRENCY:-2} -k uvicorn.workers.UvicornWorker \
      --bind 0.0.0.0:8000 \
      --forwarded-allow-ips '*' \
+     --timeout 120 \
      --graceful-timeout 60 \
      --access-logfile - \
      --error-logfile - \

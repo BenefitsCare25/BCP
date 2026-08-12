@@ -20,6 +20,7 @@ from fastapi import (
     status,
 )
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import assert_policy_year_for_user, require_client_id
@@ -45,7 +46,10 @@ async def preview_listing_upload(
     client_id = require_client_id(user)
     assert_policy_year_for_user(policy_year_id, user, db)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
-        return preview_listing(db, policy_year_id, client_id, tmp_path)
+        # Off the event loop — see `apply_listing_upload` below.
+        return await run_in_threadpool(
+            preview_listing, db, policy_year_id, client_id, tmp_path
+        )
 
 
 @router.post("/{policy_year_id}/adc/apply", response_model=AdcApplyResult)
@@ -69,11 +73,23 @@ async def apply_listing_upload(
     assert_policy_year_for_user(policy_year_id, user, db)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         try:
-            return apply_listing(
-                db, user, policy_year_id, client_id, tmp_path,
-                terminate_missing=terminate_missing,
-                expected_missing_digest=missing_digest,
-                source_filename=file.filename,
+            # A whole-roster apply is minutes of BLOCKING work (per-row inserts
+            # + audit, then re-match + re-flex), and this is an `async def`
+            # endpoint, so running it inline would hold the event loop. The
+            # gunicorn UvicornWorker heartbeats FROM that loop: a held loop
+            # stops beating, the arbiter reads the worker as hung and SIGKILLs
+            # it at `--timeout`, the connection dies with no response, and the
+            # browser shows an error with no message. That is exactly how a
+            # 4,806-member apply failed in prod on 2026-08-12 — twice, at 30s
+            # each. In a thread the loop keeps beating and the request simply
+            # takes as long as it takes.
+            return await run_in_threadpool(
+                lambda: apply_listing(
+                    db, user, policy_year_id, client_id, tmp_path,
+                    terminate_missing=terminate_missing,
+                    expected_missing_digest=missing_digest,
+                    source_filename=file.filename,
+                )
             )
         except StaleListingPreview as exc:
             raise HTTPException(

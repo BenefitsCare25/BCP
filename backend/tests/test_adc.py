@@ -740,3 +740,29 @@ def test_a_non_nric_identifier_never_warns(client: TestClient) -> None:
     body = _preview(client, py, content).json()
     assert body["warnings"] == []
 
+
+
+def test_a_login_user_id_never_steals_the_staff_id_column() -> None:
+    """`User ID` is the incumbent's name for the staff id — but plenty of HR
+    extracts carry a login "User ID" NEXT TO the real "Staff ID".
+
+    The staff id is the roster's primary key: bind the wrong column and every
+    employee arrives keyed by their login, so ADC matches nobody, proposes the
+    whole roster as joiners and the people already on file as missing. The
+    fallback spelling must lose to the primary one whatever order they sit in.
+    """
+    from app.services.roster_parser import EMPLOYEE_COLUMN_MAP, _build_column_map
+
+    both = ["Entity", "User ID", "Employee Name", "Staff ID", "Date of Birth"]
+    mapped = _build_column_map(both, EMPLOYEE_COLUMN_MAP)
+    assert mapped[3] == "staff_id", mapped
+    assert mapped.get(1) != "staff_id", mapped
+    # Every other column still binds — the fallback loses its attribute, not
+    # the whole pass.
+    assert mapped[0] == "entity"
+    assert mapped[2] == "employee_name"
+    assert mapped[4] == "date_of_birth"
+
+    # Alone, it IS the staff id — the incumbent's own export has no other.
+    only = ["Entity", "User ID", "Employee Name", "Date of Birth"]
+    assert _build_column_map(only, EMPLOYEE_COLUMN_MAP)[1] == "staff_id"

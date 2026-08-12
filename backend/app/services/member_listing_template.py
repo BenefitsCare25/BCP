@@ -65,12 +65,19 @@ _EMPLOYEE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("Current Job Grade", "job_grade"),
     ("Person Class", "person_class"),
     ("Remarks", "remarks"),
-    # Ours. Each is an INPUT something else reads: designation drives flex tier
-    # matching + leave rates, and the two flags gate prior-year cover and the
-    # sell-leave election. Dropping them would leave no way to state them at
-    # all. (Employment Status, Country of Work and salary Currency went with
-    # the incumbent's layout — nothing in the app reads them.)
+    # Ours, and every one of them is an INPUT something else reads: designation
+    # drives flex tier matching + leave rates, the two flags gate prior-year
+    # cover and the sell-leave election, and Employment Status / Country of
+    # Work / Currency are printed on the INSURER submission listing
+    # (`insurer_listings.py`). This template is the only upload file the
+    # platform emits, so a column dropped here is a value a client onboarded
+    # from it can never state — their insurer listing would ship those columns
+    # permanently blank. The built-in listing omits them because it clones the
+    # incumbent's layout; that is a report's business, not the intake's.
     ("Designation", "designation"),
+    ("Employment Status", "employment_status"),
+    ("Country of Work", "country_of_work"),
+    ("Currency", "currency"),
     ("Has Insurance Cover Last Year", "prior_year_cover"),
     ("Eligible to Sell Leave", "leave_sell_eligible"),
 )
