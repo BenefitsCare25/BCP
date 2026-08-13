@@ -63,7 +63,10 @@ interface Props {
   /** Save the whole scheme draft (all tiers) from within this tab, so edits
    *  aren't lost on navigation. Disabled until there are unsaved changes. */
   onSave: () => void;
+  /** Any scheme action in flight — disables this tab's controls. */
   saving: boolean;
+  /** The Save-draft action specifically is in flight — spins THIS button only. */
+  savePending?: boolean;
   dirty: boolean;
 }
 
@@ -78,6 +81,7 @@ export function FlexTierEditor({
   onRemove,
   onSave,
   saving,
+  savePending = false,
   dirty,
 }: Props) {
   const patch = (partial: Partial<FlexTier>) => onChange({ ...tier, ...partial });
@@ -209,6 +213,7 @@ export function FlexTierEditor({
               size="sm"
               onClick={onSave}
               disabled={!dirty || saving}
+              loading={savePending}
               title="Save the whole scheme draft (all tiers)"
             >
               <Save className="size-4" /> Save draft

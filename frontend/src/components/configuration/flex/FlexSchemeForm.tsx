@@ -79,6 +79,13 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
   // Set when confirm is blocked by the "employees with no wallet" coverage guard;
   // holds the count so the acknowledge dialog can show it.
   const [unmatchedWarn, setUnmatchedWarn] = useState<number | null>(null);
+  // Which action is in flight. The save/confirm/… mutations are SHARED across
+  // handlers (Confirm and Suggest both call `save.mutate` first), so a bare
+  // `save.isPending` would spin the wrong button. This names the button the user
+  // actually pressed, so only that one shows a spinner.
+  const [pending, setPending] = useState<
+    "save" | "confirm" | "assign" | "suggest" | null
+  >(null);
 
   const save = useSaveFlexScheme(policyYearId);
   const confirm = useConfirmFlexScheme(policyYearId);
@@ -175,16 +182,20 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
       },
     });
 
-  const onSave = () =>
+  const onSave = () => {
+    setPending("save");
     save.mutate(body, {
       onSuccess: () => {
         setDirty(false);
         toast.success("Flex scheme saved");
       },
       onError: (e) => toast.error(formatError(e)),
+      onSettled: () => setPending(null),
     });
+  };
 
-  const runConfirm = (acknowledge: boolean) =>
+  const runConfirm = (acknowledge: boolean) => {
+    setPending("confirm");
     confirm.mutate(acknowledge, {
       onSuccess: () => {
         setDirty(false);
@@ -204,21 +215,29 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
         }
         toast.error(formatError(e));
       },
+      onSettled: () => setPending(null),
     });
+  };
 
   const onConfirm = () => {
     if (errors.length > 0) {
       toast.error("Resolve the validation issues before confirming.");
       return;
     }
-    // Persist any pending edits first, then confirm.
+    // Persist any pending edits first, then confirm. Keep `pending` on "confirm"
+    // across BOTH requests so the Confirm button spins for the whole chain.
+    setPending("confirm");
     save.mutate(body, {
       onSuccess: () => runConfirm(false),
-      onError: (e) => toast.error(formatError(e)),
+      onError: (e) => {
+        toast.error(formatError(e));
+        setPending(null);
+      },
     });
   };
 
-  const onAssign = () =>
+  const onAssign = () => {
+    setPending("assign");
     assign.mutate(undefined, {
       onSuccess: (r) =>
         toast.success(
@@ -226,7 +245,9 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
             `${r.employees_total.toLocaleString()} employees`,
         ),
       onError: (e) => toast.error(formatError(e)),
+      onSettled: () => setPending(null),
     });
+  };
 
   const onDiscard = () =>
     discard.mutate(undefined, {
@@ -234,7 +255,8 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
       onError: (e) => toast.error(formatError(e)),
     });
 
-  const onSuggest = () =>
+  const onSuggest = () => {
+    setPending("suggest");
     // Persist pending edits first so they aren't lost when the server scheme
     // re-seeds; seeding preserves already-reconciled tiers and only fills empties.
     save.mutate(body, {
@@ -245,9 +267,14 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
             toast.success("Match suggestions pulled from the roster");
           },
           onError: (e) => toast.error(formatError(e)),
+          onSettled: () => setPending(null),
         }),
-      onError: (e) => toast.error(formatError(e)),
+      onError: (e) => {
+        toast.error(formatError(e));
+        setPending(null);
+      },
     });
+  };
 
   const busy =
     save.isPending ||
@@ -453,6 +480,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                 size="sm"
                 onClick={onSuggest}
                 disabled={busy}
+                loading={pending === "suggest"}
                 title="Fill unreconciled tiers' match sets from the current roster"
               >
                 <Sparkles className="size-4" /> Suggest from roster
@@ -509,6 +537,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                     onRemove={() => removeTier(i)}
                     onSave={onSave}
                     saving={busy}
+                    savePending={pending === "save"}
                     dirty={dirty}
                   />
                 </TabsContent>
@@ -536,15 +565,29 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
       )}
 
       <div className="flex items-center justify-end gap-2 flex-wrap border-t border-border pt-4">
-        <Button variant="outline" onClick={onSave} disabled={busy || !dirty}>
+        <Button
+          variant="outline"
+          onClick={onSave}
+          disabled={busy || !dirty}
+          loading={pending === "save"}
+        >
           <Save className="size-4" /> Save draft
         </Button>
         {scheme.status === "confirmed" && (
-          <Button variant="outline" onClick={onAssign} disabled={busy}>
+          <Button
+            variant="outline"
+            onClick={onAssign}
+            disabled={busy}
+            loading={pending === "assign"}
+          >
             <Wallet className="size-4" /> Re-assign wallets
           </Button>
         )}
-        <Button onClick={onConfirm} disabled={busy || errors.length > 0}>
+        <Button
+          onClick={onConfirm}
+          disabled={busy || errors.length > 0}
+          loading={pending === "confirm"}
+        >
           <CheckCircle2 className="size-4" /> Confirm
         </Button>
         <Button
