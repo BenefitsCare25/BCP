@@ -76,14 +76,11 @@ import { formatError } from "@/lib/errors";
 import { fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 10;
 
 const STATUS_FILTERS = [
   { value: "", label: "All" },
   { value: "ai_flagged", label: "Flagged" },
-  { value: "ai_verified", label: "Verified" },
-  { value: "submitted", label: "Manual" },
-  { value: "ai_review_pending", label: "Running" },
   { value: "needs_info", label: "Needs info" },
   { value: "approved", label: "Approved" },
   // The settlement leg. Without these two the filter rail would silently stop
