@@ -131,11 +131,14 @@ const CASE_TYPE_FILTERS: { value: CaseType | ""; label: string }[] = [
 function VerdictBadge({ claim }: { claim: BrokerClaim }) {
   const r = claim.ai_review;
   if (!r) return <span className="text-xs text-subtle">—</span>;
-  if (r.status === "pending") {
+  if (["queued", "running", "retry_wait"].includes(r.status)) {
     return <Badge variant="outline">running…</Badge>;
   }
   if (r.status === "error") {
     return <Badge variant="warn">review failed</Badge>;
+  }
+  if (r.status === "cancelled") {
+    return <Badge variant="outline">cancelled</Badge>;
   }
   return r.verdict === "clean" ? (
     <Badge variant="good">clean</Badge>
@@ -161,11 +164,8 @@ const RELABELLABLE = DECIDABLE;
 // the server is the authority, this only decides whether to offer the control.
 const SENDABLE = new Set(["approved"]);
 const PAYABLE = new Set(["sent_to_insurer"]);
-// ai_review_pending is rerunnable (self-transition) so stuck reviews can be
-// re-queued from the sheet.
 const RERUNNABLE = new Set([
   "submitted",
-  "ai_review_pending",
   "ai_verified",
   "ai_flagged",
 ]);
@@ -282,9 +282,10 @@ function QueueTab({
   // because it was decided or reclassified — is not on the current page, and
   // without the fallback the sheet would open over nothing.
   const selected = useMemo(() => {
+    if (detail.data?.id === selectedId) return detail.data;
     const fromList = data?.items.find((c) => c.id === selectedId) ?? null;
     if (fromList) return fromList;
-    return detail.data?.id === selectedId ? detail.data : null;
+    return null;
   }, [data, selectedId, detail.data]);
 
   // What the claim is worth in the currency every limit is stated in. NULL on a

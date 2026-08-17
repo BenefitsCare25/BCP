@@ -12,7 +12,6 @@ from typing import Any
 from anthropic import RateLimitError
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -39,12 +38,11 @@ from app.core.rate_limit import limiter
 from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES
 from app.core.uploads import saved_upload
 from app.db.session import get_db
-from app.models import Claim, ClaimAIReview, Employee, PolicyYear, StoredDocument
+from app.models import Claim, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
     AMENDED_BY_MEMBER,
     CLAIM_KIND_FLEX,
     CLAIM_KIND_INSURED,
-    CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_DRAFT,
     member_visible_claims,
 )
@@ -119,7 +117,7 @@ from app.services.claims import (
     submit_claim,
     supersede_review_for_amendment,
 )
-from app.services.claims_review.pipeline import run_review
+from app.services.claims_review.queue import enqueue_claim_review
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 from app.services.enrollment_products import resolve_products_by_codes
 from app.services.fx import POLICY_CURRENCY
@@ -1022,7 +1020,6 @@ def confirm_my_conversion(
 def submit_my_claim(
     request: Request,
     claim_id: str,
-    background_tasks: BackgroundTasks,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
@@ -1037,13 +1034,11 @@ def submit_my_claim(
     submit_claim(
         db, claim, employee, submitted_by_member_id=member.member_account_id
     )
-    # Queue the AI review — it runs after the response; a pipeline fault
-    # degrades the claim back to plain `submitted` (manual review), so the
-    # member is never blocked.
-    claim.status = CLAIM_STATUS_AI_REVIEW_PENDING
-    review = ClaimAIReview(client_id=claim.client_id, claim_id=claim.id)
-    db.add(review)
-    db.flush()
+    if not member.broker_firm_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Claim tenant is not configured.")
+    enqueue_claim_review(
+        db, claim, member.broker_firm_id, supersede=True
+    )
     # The "we have it" notice. Posted on every submit INCLUDING a needs_info
     # resubmission — the member has just been asked for something and sent it,
     # which is exactly when they need the acknowledgement most.
@@ -1060,5 +1055,4 @@ def submit_my_claim(
         employee_id=employee.id,
     )
     db.commit()
-    background_tasks.add_task(run_review, claim.id, review.id, member.broker_firm_id)
     return claim_to_out(db, claim)

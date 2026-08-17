@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 import { useClaimReview } from "@/api/claims";
 import { FieldComparisonTable } from "@/components/claims/FieldComparisonTable";
@@ -28,7 +30,15 @@ function Section({
   );
 }
 
-const RUNNING_POLL_MS = 5_000;
+const STAGE_LABELS: Record<string, string> = {
+  queued: "Waiting for a review worker",
+  deterministic: "Running system checks",
+  extraction: "Reading claim documents",
+  comparison: "Comparing claim details",
+  vision: "Verifying uncertain fields",
+  verdict: "Preparing the recommendation",
+  persist: "Saving the review",
+};
 
 /** The AI review of one claim — verdict banner, summary, field comparisons,
  * rule results, vision checks. Broker-only (members never see fraud signals). */
@@ -41,14 +51,27 @@ export function ClaimReviewPanel({
    * for the finished review instead of asking the broker to refresh. */
   claimStatus?: string;
 }) {
-  const polling = claimStatus === "ai_review_pending";
+  const qc = useQueryClient();
+  const previousStatus = useRef<string | null>(null);
   const {
     data: review,
     isLoading,
     isError,
     error,
     refetch,
-  } = useClaimReview(claimId, polling ? RUNNING_POLL_MS : false);
+  } = useClaimReview(claimId, claimStatus === "ai_review_pending");
+
+  useEffect(() => {
+    const status = review?.status ?? null;
+    const wasActive = previousStatus.current &&
+      ["queued", "running", "retry_wait"].includes(previousStatus.current);
+    const isTerminal = status && ["complete", "error", "cancelled"].includes(status);
+    if (wasActive && isTerminal) {
+      void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+    }
+    previousStatus.current = status;
+  }, [qc, review?.status]);
 
   if (isLoading) {
     return (
@@ -68,27 +91,57 @@ export function ClaimReviewPanel({
     );
   }
   if (!review) {
+    if (claimStatus === "ai_review_pending") {
+      return (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground p-4 border border-border rounded-md bg-muted">
+          <Loader2 className="size-4 animate-spin" /> Creating the durable review job…
+        </div>
+      );
+    }
     return (
       <div className="text-sm text-muted-foreground p-4 text-center border border-dashed border-border rounded-md">
         No AI review yet.
       </div>
     );
   }
-  if (review.status === "pending") {
+  if (["queued", "running", "retry_wait"].includes(review.status)) {
+    const elapsed = review.started_at
+      ? Math.max(0, Math.floor((Date.now() - new Date(review.started_at).getTime()) / 1_000))
+      : null;
+    const progress = review.progress_total > 0
+      ? ` · ${Math.min(review.progress_current, review.progress_total)}/${review.progress_total} documents`
+      : "";
     return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground p-4 border border-border rounded-md bg-muted">
-        <Loader2 className="size-4 animate-spin" /> AI review is running — this
-        panel refreshes automatically.
+      <div className="flex items-start gap-2 text-sm text-muted-foreground p-4 border border-border rounded-md bg-muted">
+        <Loader2 className="size-4 animate-spin mt-0.5" />
+        <div>
+          <div className="font-medium text-foreground">
+            {review.status === "retry_wait"
+              ? "Review interrupted — retrying automatically"
+              : STAGE_LABELS[review.stage] ?? "AI review is running"}
+          </div>
+          <div className="text-xs mt-1">
+            Attempt {Math.max(review.attempt, 1)}{progress}
+            {elapsed != null ? ` · ${elapsed}s elapsed` : ""}. This panel refreshes automatically.
+          </div>
+        </div>
       </div>
     );
   }
-  if (review.status === "error") {
+  if (review.status === "error" || review.status === "cancelled") {
     return (
       <div className="space-y-3">
         <div className="flex items-start gap-2 text-sm p-3 border border-border rounded-md bg-warn-soft text-warn">
           <AlertTriangle className="size-4 shrink-0 mt-0.5" />
           <div>
-            <div className="font-medium">AI review did not complete — review manually.</div>
+            <div className="font-medium">
+              {review.status === "cancelled"
+                ? "AI review was cancelled because the claim changed."
+                : "AI review did not complete — review manually."}
+            </div>
+            {review.error_code && (
+              <div className="text-xs mt-0.5 opacity-80">Code: {review.error_code}</div>
+            )}
             {review.error_detail && (
               <div className="text-xs mt-0.5 opacity-80">{review.error_detail}</div>
             )}
@@ -120,7 +173,11 @@ export function ClaimReviewPanel({
         )}
         <div className="min-w-0">
           <div className="flex items-center gap-1 font-medium">
-            {flagged ? "Flagged for attention" : "AI-verified — no concerns found"}
+            {review.deterministic_short_circuit
+              ? "Flagged by system checks — AI document review was not run"
+              : flagged
+                ? "Flagged for attention"
+                : "AI-verified — no concerns found"}
             <InfoHint>
               {flagged
                 ? "One or more checks need a human look — the AI found a discrepancy or couldn't confirm a value. You still make the final decision."

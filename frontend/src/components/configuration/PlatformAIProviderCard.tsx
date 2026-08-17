@@ -56,9 +56,15 @@ export function PlatformAIProviderCard() {
       await save.mutateAsync({
         location: draft.location.trim() || null,
         model: draft.model.trim() || null,
+        capacity_mode: draft.capacityMode,
         service_account_json: draft.serviceAccountJson,
       });
-      toast.success(configured ? "Platform AI key updated" : "Platform AI key saved");
+      const validation = await test.mutateAsync(undefined);
+      if (!validation.ok) {
+        toast.error(validation.error ?? "Saved, but validation failed");
+        return;
+      }
+      toast.success(configured ? "Platform AI key updated and validated" : "Platform AI key saved and validated");
       setOpen(false);
     } catch (err) {
       toast.error(formatError(err));
@@ -72,6 +78,7 @@ export function PlatformAIProviderCard() {
           ? {
               location: draft.location.trim() || null,
               model: draft.model.trim() || null,
+              capacity_mode: draft.capacityMode,
               service_account_json: draft.serviceAccountJson || null,
             }
           : undefined,

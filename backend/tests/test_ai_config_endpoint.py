@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -211,6 +212,45 @@ def test_put_then_get_roundtrip(client_as_admin_a: AsUser) -> None:
     body2 = res2.json()
     assert body2["key_fingerprint"] == body["key_fingerprint"]
     assert body2["key_masked"] == body["key_masked"]
+
+
+def test_only_stored_probe_activates_saved_configuration(
+    client_as_admin_a: AsUser,
+) -> None:
+    client_as_admin_a.put(
+        "/api/v1/ai-config",
+        json={
+            "provider": "vertex",
+            "endpoint": "asia-southeast1",
+            "model": "gemini-2.5-flash",
+            "api_key": REAL_KEY,
+        },
+    )
+    with patch(
+        "app.api.v1.ai_config.probe_vertex",
+        return_value=(None, 5, "gemini-draft"),
+    ):
+        draft = client_as_admin_a.post(
+            "/api/v1/ai-config/test",
+            json={"model": "gemini-draft"},
+        )
+    assert draft.status_code == 200
+    with SessionLocal() as db:
+        row = db.query(ClientAIConfig).filter_by(client_id=DEMO_CLIENT_ID).one()
+        assert row.validation_status == "unvalidated"
+        assert row.validated_model is None
+
+    with patch(
+        "app.api.v1.ai_config.probe_vertex",
+        return_value=(None, 5, "gemini-2.5-flash"),
+    ):
+        stored = client_as_admin_a.post("/api/v1/ai-config/test")
+    assert stored.status_code == 200
+    with SessionLocal() as db:
+        row = db.query(ClientAIConfig).filter_by(client_id=DEMO_CLIENT_ID).one()
+        assert row.validation_status == "active"
+        assert row.validated_model == "gemini-2.5-flash"
+        assert row.validated_fingerprint == row.key_fingerprint
 
 
 def test_db_stores_ciphertext_not_plaintext(client_as_admin_a: AsUser) -> None:

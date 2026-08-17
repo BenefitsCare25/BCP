@@ -1731,6 +1731,9 @@ def supersede_review_for_amendment(db: Session, claim: Claim) -> bool:
     """
     if claim.status == CLAIM_STATUS_DRAFT:
         return False
+    from app.services.claims_review.queue import cancel_active_review_job
+
+    cancel_active_review_job(db, claim.id, "Claim amended while review was active")
     for old in db.execute(
         select(ClaimAIReview).where(
             ClaimAIReview.claim_id == claim.id,

@@ -53,6 +53,8 @@ CONTROL_TABLES: frozenset[str] = frozenset(
         # all firms/clients, so they must live in public (not per-firm schemas).
         "platform_ai_settings",
         "platform_ai_usage",
+        # Durable claim-review work is polled before a tenant is selected.
+        "claim_review_jobs",
         # Cached FX reference rates. A rate is a fact about the market on a
         # date, owned by no firm — per-schema copies would let two firms convert
         # the same receipt to two different figures, and would multiply the
@@ -201,20 +203,32 @@ def sync_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
             # creates these via to_metadata(schema=...), which rewrites
             # auto-generated names with the firm-schema prefix, so comparing
             # names would create duplicates and never converge.
-            existing_idx_cols = {
-                tuple(i["column_names"])
+            existing_idx_signatures = {
+                (
+                    tuple(i["column_names"]),
+                    bool(i.get("unique")),
+                    str((i.get("dialect_options") or {}).get("postgresql_where") or ""),
+                )
                 for i in insp.get_indexes(tbl.name, schema=schema)
             }
             for idx in tbl.indexes:
                 colset = tuple(c.name for c in idx.columns)
-                if colset in existing_idx_cols:
+                predicate = idx.dialect_options["postgresql"].get("where")
+                predicate_text = str(predicate) if predicate is not None else ""
+                signature = (colset, bool(idx.unique), predicate_text)
+                if signature in existing_idx_signatures:
                     continue
                 cols = ", ".join(f'"{c}"' for c in colset)
                 unique = "UNIQUE " if idx.unique else ""
                 name = idx.name or f"ix_{tbl.name}_{'_'.join(colset)}"
+                where = (
+                    " WHERE " + str(predicate.compile(dialect=conn.dialect))
+                    if predicate is not None
+                    else ""
+                )
                 conn.execute(
                     text(f'CREATE {unique}INDEX IF NOT EXISTS "{name}" '
-                         f'ON "{schema}".{tbl.name} ({cols})')
+                         f'ON "{schema}".{tbl.name} ({cols}){where}')
                 )
             existing_uc_cols = {
                 tuple(u["column_names"])

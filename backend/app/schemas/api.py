@@ -937,9 +937,15 @@ class AIConfigOut(_Base):
     provider: AIProviderStr
     endpoint: str | None
     model: str | None
+    capacity_mode: str | None = None
     key_fingerprint: str
     last_validated_at: datetime | None
     last_validation_error: str | None
+    validated_fingerprint: str | None = None
+    validated_model: str | None = None
+    validated_location: str | None = None
+    validated_capacity_mode: str | None = None
+    validation_status: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -967,6 +973,7 @@ class AIConfigUpsert(BaseModel):
     # endpoint = the GCP location; model = the Gemini model id.
     endpoint: str | None = None
     model: str | None = Field(default=None, max_length=128)
+    capacity_mode: Literal["standard_paygo", "provisioned_throughput"] = "standard_paygo"
     # The service-account JSON key (hence the larger max_length).
     api_key: str = Field(min_length=8, max_length=8192)
 
@@ -988,6 +995,7 @@ class AIConfigTestPayload(BaseModel):
     provider: AIProviderStr | None = None
     endpoint: str | None = None
     model: str | None = Field(default=None, max_length=128)
+    capacity_mode: Literal["standard_paygo", "provisioned_throughput"] | None = None
     api_key: str | None = Field(default=None, min_length=8, max_length=8192)
 
     @model_validator(mode="after")
@@ -1029,9 +1037,15 @@ class PlatformAICredentialsOut(BaseModel):
     provider: AIProviderStr | None = None
     location: str | None = None
     model: str | None = None
+    capacity_mode: str | None = None
     key_fingerprint: str | None = None
     last_validated_at: datetime | None = None
     last_validation_error: str | None = None
+    validated_fingerprint: str | None = None
+    validated_model: str | None = None
+    validated_location: str | None = None
+    validated_capacity_mode: str | None = None
+    validation_status: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -1067,6 +1081,7 @@ class PlatformAICredentialsUpsert(BaseModel):
     # location = the GCP region; model = the Gemini model id.
     location: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=128)
+    capacity_mode: Literal["standard_paygo", "provisioned_throughput"] = "standard_paygo"
     service_account_json: str = Field(min_length=8, max_length=8192)
 
     @model_validator(mode="after")
@@ -1084,4 +1099,5 @@ class PlatformAICredentialsTestPayload(BaseModel):
 
     location: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=128)
+    capacity_mode: Literal["standard_paygo", "provisioned_throughput"] | None = None
     service_account_json: str | None = Field(default=None, min_length=8, max_length=8192)

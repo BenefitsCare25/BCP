@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "15528065731846367173"
+      "templateHash": "1603375358086102429"
     }
   },
   "parameters": {
@@ -67,7 +67,21 @@
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Enable geo-redundant Postgres backups. Recommend true for prod."
+        "description": "Enable geo-redundant Postgres backups. NOTE: the paired region for southeastasia is East Asia (Hong Kong), so enabling this copies member/claims data OUT of Singapore. Leave false unless that has been signed off against PDPA."
+      }
+    },
+    "postgresStorageGB": {
+      "type": "int",
+      "defaultValue": 32,
+      "metadata": {
+        "description": "Postgres data disk size. IOPS is derived from it, NOT from the compute SKU: 32GiB=120, 64GiB=240, 128GiB=500, 256GiB=1100. 32GiB is the throughput floor."
+      }
+    },
+    "postgresHighAvailability": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable zone-redundant Postgres HA. Not supported on the Burstable tier, and roughly doubles cost (a standby duplicates compute+storage)."
       }
     },
     "redisSku": {
@@ -80,6 +94,13 @@
       "type": "int",
       "metadata": {
         "description": "Redis size."
+      }
+    },
+    "deployRedis": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Provision Redis at all. Both consumers degrade gracefully without it — the AI response cache falls back to in-memory and SlowAPI to per-process counters (see app/services/ai_cache.py and app/core/rate_limit.py) — so non-prod can skip the cost. Prod keeps it: per-process rate-limit counters would multiply every limit by the worker count."
       }
     },
     "entraTenantId": {
@@ -122,6 +143,66 @@
       "type": "string",
       "metadata": {
         "description": "ACR registry hostname for the webapp to pull from, e.g. insproacr.azurecr.io."
+      }
+    },
+    "acrResourceGroup": {
+      "type": "string",
+      "defaultValue": "rg-inspro-shared",
+      "metadata": {
+        "description": "Resource group holding the shared container registry."
+      }
+    },
+    "siteName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Web app / hostname. Defaults to inspro-<env>-api; prod uses inspro-portal so the public URL is inspro-portal.azurewebsites.net."
+      }
+    },
+    "baseDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Apex domain for tenant-per-subdomain routing. Empty on single-host deployments (no custom domain)."
+      }
+    },
+    "tenantMode": {
+      "type": "string",
+      "defaultValue": "header",
+      "allowedValues": [
+        "subdomain",
+        "header"
+      ],
+      "metadata": {
+        "description": "How HR/portal requests name their tenant. \"subdomain\" needs wildcard DNS + a wildcard cert; \"header\" is for a single shared hostname."
+      }
+    },
+    "webConcurrency": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Gunicorn worker processes. Keep at or below the plan vCPU count — it also divides the AI concurrency limit and multiplies the DB pool."
+      }
+    },
+    "dbPoolSize": {
+      "type": "int",
+      "defaultValue": 3,
+      "metadata": {
+        "description": "SQLAlchemy pool size PER WORKER. Ceiling is workers x (pool + overflow) x instances; keep it under the server max_connections."
+      }
+    },
+    "dbMaxOverflow": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "SQLAlchemy overflow connections per worker."
+      }
+    },
+    "enableVnetIntegration": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Integrate the web app with the VNet so it reaches Postgres over the private endpoint. Setting this to false stops NEW deployments wiring the subnet, but does not tear down existing integration — for a rollback run `az webapp vnet-integration remove` as well, which reverts the app to the public path."
       }
     },
     "alertEmail": {
@@ -182,9 +263,11 @@
   "variables": {
     "prefix": "[format('inspro-{0}', parameters('env'))]",
     "isProd": "[equals(parameters('env'), 'prod')]",
+    "appName": "[if(empty(parameters('siteName')), format('{0}-api', variables('prefix')), parameters('siteName'))]",
+    "acrName": "[split(parameters('acrLoginServer'), '.')[0]]",
     "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
-    "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d",
-    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+    "redisAppSettings": "[if(parameters('deployRedis'), createArray(createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=redis-url)', format('{0}-kv', variables('prefix'))))), createArray())]"
   },
   "resources": [
     {
@@ -227,7 +310,7 @@
         "enableRbacAuthorization": true,
         "enableSoftDelete": true,
         "softDeleteRetentionInDays": "[if(variables('isProd'), 90, 30)]",
-        "enablePurgeProtection": "[variables('isProd')]"
+        "enablePurgeProtection": "[if(variables('isProd'), true(), null())]"
       }
     },
     {
@@ -244,7 +327,7 @@
         "administratorLogin": "[parameters('postgresAdminUser')]",
         "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
         "storage": {
-          "storageSizeGB": 32,
+          "storageSizeGB": "[parameters('postgresStorageGB')]",
           "autoGrow": "Enabled"
         },
         "backup": {
@@ -252,7 +335,7 @@
           "geoRedundantBackup": "[if(parameters('postgresGeoRedundantBackup'), 'Enabled', 'Disabled')]"
         },
         "highAvailability": {
-          "mode": "[if(variables('isProd'), 'ZoneRedundant', 'Disabled')]"
+          "mode": "[if(parameters('postgresHighAvailability'), 'ZoneRedundant', 'Disabled')]"
         }
       }
     },
@@ -269,18 +352,7 @@
       ]
     },
     {
-      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
-      "apiVersion": "2024-08-01",
-      "name": "[format('{0}/{1}', format('{0}-pg', variables('prefix')), 'AllowAzureServices')]",
-      "properties": {
-        "startIpAddress": "0.0.0.0",
-        "endIpAddress": "0.0.0.0"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
-      ]
-    },
-    {
+      "condition": "[parameters('deployRedis')]",
       "type": "Microsoft.Cache/redis",
       "apiVersion": "2024-11-01",
       "name": "[format('{0}-redis', variables('prefix'))]",
@@ -293,9 +365,7 @@
         },
         "enableNonSslPort": false,
         "minimumTlsVersion": "1.2",
-        "redisConfiguration": {
-          "aof-backup-enabled": "[if(and(variables('isProd'), equals(parameters('redisSku'), 'Premium')), 'true', 'false')]"
-        }
+        "redisConfiguration": "[if(equals(parameters('redisSku'), 'Premium'), createObject('aof-backup-enabled', 'true'), createObject())]"
       }
     },
     {
@@ -322,6 +392,7 @@
       ]
     },
     {
+      "condition": "[parameters('deployRedis')]",
       "type": "Microsoft.KeyVault/vaults/secrets",
       "apiVersion": "2024-04-01-preview",
       "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'redis-url')]",
@@ -361,7 +432,7 @@
       "name": "[replace(format('{0}docs', variables('prefix')), '-', '')]",
       "location": "[parameters('location')]",
       "sku": {
-        "name": "[if(variables('isProd'), 'Standard_GRS', 'Standard_LRS')]"
+        "name": "[if(variables('isProd'), 'Standard_ZRS', 'Standard_LRS')]"
       },
       "kind": "StorageV2",
       "properties": {
@@ -417,7 +488,7 @@
     {
       "type": "Microsoft.Web/sites",
       "apiVersion": "2024-04-01",
-      "name": "[format('{0}-api', variables('prefix'))]",
+      "name": "[variables('appName')]",
       "location": "[parameters('location')]",
       "kind": "app,linux,container",
       "identity": {
@@ -426,7 +497,8 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
         "httpsOnly": true,
-        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', format('api://{0}', parameters('entraClientId'))), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('https://login.microsoftonline.com/{0}/v2.0', parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('https://login.microsoftonline.com/{0}/discovery/v2.0/keys', parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'redis-url')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', parameters('smtpPassword')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix'))))), createObject('alwaysOn', variables('isProd')))]"
+        "virtualNetworkSubnetId": "[if(parameters('enableVnetIntegration'), reference(resourceId('Microsoft.Resources/deployments', format('private-networking-{0}', parameters('env'))), '2025-04-01').outputs.appSubnetId.value, null())]",
+        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('https://login.microsoftonline.com/{0}/v2.0', parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('https://login.microsoftonline.com/{0}/discovery/v2.0/keys', parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('dbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('dbMaxOverflow'))), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', parameters('smtpPassword')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'WEB_CONCURRENCY', 'value', string(parameters('webConcurrency'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix')))))), createObject('alwaysOn', variables('isProd')))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
@@ -437,14 +509,14 @@
         "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')]",
         "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'redis-url')]",
         "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
+        "[resourceId('Microsoft.Resources/deployments', format('private-networking-{0}', parameters('env')))]",
         "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
       ]
     },
     {
-      "condition": "[variables('isProd')]",
-      "type": "Microsoft.Web/sites/slots",
+      "type": "Microsoft.Web/sites",
       "apiVersion": "2024-04-01",
-      "name": "[format('{0}/{1}', format('{0}-api', variables('prefix')), 'staging')]",
+      "name": "[format('{0}-review-worker', variables('appName'))]",
       "location": "[parameters('location')]",
       "kind": "app,linux,container",
       "identity": {
@@ -453,7 +525,18 @@
       "properties": {
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
         "httpsOnly": true,
-        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', format('api://{0}', parameters('entraClientId'))), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('https://login.microsoftonline.com/{0}/v2.0', parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('https://login.microsoftonline.com/{0}/discovery/v2.0/keys', parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'redis-url')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', parameters('smtpPassword')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix'))))), createObject('alwaysOn', true()))]"
+        "virtualNetworkSubnetId": "[if(parameters('enableVnetIntegration'), reference(resourceId('Microsoft.Resources/deployments', format('private-networking-{0}', parameters('env'))), '2025-04-01').outputs.appSubnetId.value, null())]",
+        "siteConfig": {
+          "linuxFxVersion": "[format('DOCKER|{0}', parameters('containerImage'))]",
+          "appCommandLine": "python -m app.workers.claim_review",
+          "acrUseManagedIdentityCreds": true,
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "http20Enabled": true,
+          "healthCheckPath": "/readyz",
+          "alwaysOn": true,
+          "appSettings": "[concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('https://login.microsoftonline.com/{0}/v2.0', parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('https://login.microsoftonline.com/{0}/discovery/v2.0/keys', parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('dbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('dbMaxOverflow'))), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', parameters('smtpPassword')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8081'), createObject('name', 'PORT', 'value', '8081'), createObject('name', 'WEB_CONCURRENCY', 'value', '1'), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-claim-review-worker', variables('prefix')))))]"
+        }
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
@@ -464,89 +547,74 @@
         "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')]",
         "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'redis-url')]",
         "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
-        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
-        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
-      ]
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
-      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix'))), resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), 'kv-secrets-user')]",
-      "properties": {
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
-        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
-      ]
-    },
-    {
-      "condition": "[variables('isProd')]",
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
-      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix'))), resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), 'kv-secrets-user-slot')]",
-      "properties": {
-        "principalId": "[reference(resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), '2024-04-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
-        "[resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging')]"
-      ]
-    },
-    {
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
-      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), 'blob-contributor')]",
-      "properties": {
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
-        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
-      ]
-    },
-    {
-      "condition": "[variables('isProd')]",
-      "type": "Microsoft.Authorization/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "scope": "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
-      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), 'blob-contributor-slot')]",
-      "properties": {
-        "principalId": "[reference(resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging'), '2024-04-01', 'full').identity.principalId]",
-        "principalType": "ServicePrincipal",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.Web/sites/slots', format('{0}-api', variables('prefix')), 'staging')]",
+        "[resourceId('Microsoft.Resources/deployments', format('private-networking-{0}', parameters('env')))]",
         "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
       ]
     },
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
-      "name": "[guid(resourceGroup().id, resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), 'acr-pull')]",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix'))), resourceId('Microsoft.Web/sites', variables('appName')), 'kv-secrets-user')]",
       "properties": {
-        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01', 'full').identity.principalId]",
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('appName')), '2024-04-01', 'full').identity.principalId]",
         "principalType": "ServicePrincipal",
-        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix'))), resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName'))), 'kv-secrets-user')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName'))), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), resourceId('Microsoft.Web/sites', variables('appName')), 'blob-contributor')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', variables('appName')), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+        "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName'))), 'blob-contributor')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName'))), '2024-04-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
       ]
     },
     {
       "type": "Microsoft.Insights/diagnosticSettings",
       "apiVersion": "2021-05-01-preview",
-      "scope": "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]",
+      "scope": "[resourceId('Microsoft.Web/sites', variables('appName'))]",
       "name": "to-law",
       "properties": {
         "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
@@ -565,7 +633,32 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
-        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+        "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]",
+      "name": "to-law",
+      "properties": {
+        "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]"
       ]
     },
     {
@@ -646,7 +739,7 @@
         "severity": 2,
         "enabled": true,
         "scopes": [
-          "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+          "[resourceId('Microsoft.Web/sites', variables('appName'))]"
         ],
         "evaluationFrequency": "PT5M",
         "windowSize": "PT15M",
@@ -668,14 +761,482 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
-        "[resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix')))]"
+        "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-review-worker-health-alert', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "severity": 1,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]"
+        ],
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "WorkerHealthCheck",
+              "metricName": "HealthCheckStatus",
+              "metricNamespace": "Microsoft.Web/sites",
+              "operator": "LessThan",
+              "threshold": 100,
+              "timeAggregation": "Average",
+              "criterionType": "StaticThresholdCriterion"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}-review-queue-alert', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "displayName": "Claim review queue age exceeded",
+        "description": "The oldest available claim-review job exceeded the configured queue-age threshold.",
+        "severity": 1,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT10M",
+        "criteria": {
+          "allOf": [
+            {
+              "query": "            traces\n            | where tostring(customDimensions.error_code) == \"queue_age_exceeded\"\n          ",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('alertEmail')))]",
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}-review-failure-alert', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "displayName": "Claim review operational failure",
+        "description": "A lease, provider, terminal-job, or state-invariant failure requires attention.",
+        "severity": 1,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT10M",
+        "criteria": {
+          "allOf": [
+            {
+              "query": "            traces\n            | extend code = tostring(customDimensions.error_code)\n            | where code == \"lease_expired\"\n                or code startswith \"ai_configuration\"\n                or code in (\"pending_without_job\", \"active_missing_record\")\n                or message == \"Claim-review job terminated\"\n          ",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('private-networking-{0}', parameters('env'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "prefix": {
+            "value": "[variables('prefix')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "postgresName": {
+            "value": "[format('{0}-pg', variables('prefix'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "17592380297601537339"
+            }
+          },
+          "parameters": {
+            "prefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource name prefix, e.g. inspro-prod."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region. Must match the app and the database — regional VNet integration requires all three in the same region."
+              }
+            },
+            "postgresName": {
+              "type": "string",
+              "metadata": {
+                "description": "Existing Postgres Flexible Server to place behind a private endpoint."
+              }
+            },
+            "vnetAddressPrefix": {
+              "type": "string",
+              "defaultValue": "10.20.0.0/16",
+              "metadata": {
+                "description": "VNet address space. 10.0.0.0/16 and 10.1.0.0/16 are already taken by rg-ivm and rg-supabase-sea in this subscription."
+              }
+            },
+            "appSubnetPrefix": {
+              "type": "string",
+              "defaultValue": "10.20.1.0/24",
+              "metadata": {
+                "description": "Subnet delegated to App Service for regional VNet integration. Microsoft recommends at least a /26 — App Service consumes addresses per instance during scale and slot swaps."
+              }
+            },
+            "privateEndpointSubnetPrefix": {
+              "type": "string",
+              "defaultValue": "10.20.2.0/24",
+              "metadata": {
+                "description": "Subnet holding the Postgres private endpoint NIC."
+              }
+            }
+          },
+          "variables": {
+            "privateDnsZoneName": "privatelink.postgres.database.azure.com"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}-vnet', parameters('prefix'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "[parameters('vnetAddressPrefix')]"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "snet-app",
+                    "properties": {
+                      "addressPrefix": "[parameters('appSubnetPrefix')]",
+                      "delegations": [
+                        {
+                          "name": "appservice",
+                          "properties": {
+                            "serviceName": "Microsoft.Web/serverFarms"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "snet-pe",
+                    "properties": {
+                      "addressPrefix": "[parameters('privateEndpointSubnetPrefix')]",
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2020-06-01",
+              "name": "[variables('privateDnsZoneName')]",
+              "location": "global"
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2020-06-01",
+              "name": "[format('{0}/{1}', variables('privateDnsZoneName'), format('{0}-vnet-link', parameters('prefix')))]",
+              "location": "global",
+              "properties": {
+                "virtualNetwork": {
+                  "id": "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('prefix')))]"
+                },
+                "registrationEnabled": false
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]",
+                "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('prefix')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}-pg-pe', parameters('prefix'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "subnet": {
+                  "id": "[format('{0}/subnets/snet-pe', resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('prefix'))))]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "postgres",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('postgresName'))]",
+                      "groupIds": [
+                        "postgresqlServer"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('prefix')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', format('{0}-pg-pe', parameters('prefix')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "postgres",
+                    "properties": {
+                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pg-pe', parameters('prefix')))]",
+                "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "appSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet the web app integrates with. Consumed by main.bicep as virtualNetworkSubnetId."
+              },
+              "value": "[format('{0}/subnets/snet-app', resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('prefix'))))]"
+            },
+            "vnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('prefix')))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('acr-pull-{0}', parameters('env'))]",
+      "resourceGroup": "[parameters('acrResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "acrName": {
+            "value": "[variables('acrName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', variables('appName')), '2024-04-01', 'full').identity.principalId]"
+          },
+          "roleNameSeed": {
+            "value": "[variables('appName')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "17726577044977250158"
+            }
+          },
+          "parameters": {
+            "acrName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the container registry in THIS resource group."
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the managed identity that needs pull access."
+              }
+            },
+            "roleNameSeed": {
+              "type": "string",
+              "metadata": {
+                "description": "Stable discriminator so multiple apps can each hold a grant."
+              }
+            }
+          },
+          "variables": {
+            "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('principalId'), parameters('roleNameSeed'))]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('acr-pull-worker-{0}', parameters('env'))]",
+      "resourceGroup": "[parameters('acrResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "acrName": {
+            "value": "[variables('acrName')]"
+          },
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName'))), '2024-04-01', 'full').identity.principalId]"
+          },
+          "roleNameSeed": {
+            "value": "[format('{0}-review-worker', variables('appName'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "17726577044977250158"
+            }
+          },
+          "parameters": {
+            "acrName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the container registry in THIS resource group."
+              }
+            },
+            "principalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the managed identity that needs pull access."
+              }
+            },
+            "roleNameSeed": {
+              "type": "string",
+              "metadata": {
+                "description": "Stable discriminator so multiple apps can each hold a grant."
+              }
+            }
+          },
+          "variables": {
+            "acrPullRoleId": "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('principalId'), parameters('roleNameSeed'))]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('acrPullRoleId'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName')))]"
       ]
     }
   ],
   "outputs": {
     "appServiceUrl": {
       "type": "string",
-      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', format('{0}-api', variables('prefix'))), '2024-04-01').defaultHostName)]"
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('appName')), '2024-04-01').defaultHostName)]"
+    },
+    "reviewWorkerUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', format('{0}-review-worker', variables('appName'))), '2024-04-01').defaultHostName)]"
     },
     "postgresFqdn": {
       "type": "string",
@@ -683,7 +1244,7 @@
     },
     "redisHost": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Cache/redis', format('{0}-redis', variables('prefix'))), '2024-11-01').hostName]"
+      "value": "[if(parameters('deployRedis'), reference(resourceId('Microsoft.Cache/redis', format('{0}-redis', variables('prefix'))), '2024-11-01').hostName, '')]"
     },
     "keyVaultName": {
       "type": "string",

@@ -15,6 +15,7 @@ from app.models.claim_ai_review import ClaimAIReview
 from app.models.claim_doc_type import ClaimDocType
 from app.models.claim_message import ClaimMessage
 from app.models.claim_review_config import ClaimReviewConfig
+from app.models.claim_review_job import ClaimReviewJob
 from app.models.client import BrokerFirm, Client
 from app.models.client_ai_config import ClientAIConfig
 from app.models.dependant import Dependant
@@ -64,6 +65,7 @@ __all__ = [
     "ClaimDocType",
     "ClaimMessage",
     "ClaimReviewConfig",
+    "ClaimReviewJob",
     "Client",
     "ClientAIConfig",
     "ClientAuthPolicy",

@@ -25,12 +25,14 @@ export const DEFAULT_VERTEX_MODEL = "gemini-3.5-flash";
 export interface VertexKeyDraft {
   location: string;
   model: string;
+  capacityMode: "standard_paygo" | "provisioned_throughput";
   serviceAccountJson: string;
 }
 
 export const EMPTY_VERTEX_DRAFT: VertexKeyDraft = {
   location: VERTEX_LOCATION,
   model: "",
+  capacityMode: "standard_paygo",
   serviceAccountJson: "",
 };
 
@@ -63,7 +65,11 @@ interface Props {
   /** Extra context line above the fields (who this key applies to). */
   scopeNote: React.ReactNode;
   /** Location/model of the stored key, seeded into the draft when opening. */
-  initial: { location?: string | null; model?: string | null } | null;
+  initial: {
+    location?: string | null;
+    model?: string | null;
+    capacity_mode?: string | null;
+  } | null;
   /** Masked stored key, used only as the textarea placeholder. */
   storedKeyMasked?: string | null;
   saving: boolean;
@@ -112,9 +118,13 @@ export function VertexKeyDrawer({
       // seeding that would round-trip it straight back into a 400 on save.
       location: VERTEX_LOCATION,
       model: initial?.model ?? "",
+      capacityMode:
+        initial?.capacity_mode === "provisioned_throughput"
+          ? "provisioned_throughput"
+          : "standard_paygo",
       serviceAccountJson: "",
     });
-  }, [open, initial?.model]);
+  }, [open, initial?.model, initial?.capacity_mode]);
 
   const keyTouched = draft.serviceAccountJson.trim() !== "";
 
@@ -164,6 +174,24 @@ export function VertexKeyDrawer({
             />
           </div>
           <div className="flex flex-col gap-1.5">
+            <FieldLabel hint="Choose the capacity configured for this exact model in the Google project. Gemini 3.5 Flash in Singapore requires Provisioned Throughput; Standard PayGo will not activate unless the live structured-output probe succeeds.">
+              Capacity mode
+            </FieldLabel>
+            <select
+              value={draft.capacityMode}
+              onChange={(event) =>
+                setDraft({
+                  ...draft,
+                  capacityMode: event.target.value as VertexKeyDraft["capacityMode"],
+                })
+              }
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground"
+            >
+              <option value="standard_paygo">Standard PayGo</option>
+              <option value="provisioned_throughput">Provisioned Throughput</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
             <FieldLabel hint="The full service-account JSON key file for a service account with the Vertex AI User role. Encrypted at rest; the project id is read from it. Never returned to the browser.">
               Service account JSON key
             </FieldLabel>
@@ -208,7 +236,7 @@ export function VertexKeyDrawer({
             ) : (
               <Wand2 className="size-3.5" />
             )}
-            Test connection (uses ~1 token)
+            Test structured output
           </Button>
         </SheetBody>
         <SheetFooter>

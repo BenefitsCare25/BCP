@@ -30,11 +30,20 @@ from app.core.ai_config import (
 
 logger = logging.getLogger(__name__)
 
-_TEST_PROMPT = "ping"
+_TEST_PROMPT = "Call emit_probe with ok=true."
 # Vertex's first call builds google-auth credentials + a fresh HTTP client, so
 # it needs headroom beyond a bare HTTP call.
 VERTEX_TEST_TIMEOUT_SECONDS = 20.0
-_TEST_MAX_TOKENS = 1
+_TEST_MAX_TOKENS = 64
+_PROBE_TOOL = {
+    "name": "emit_probe",
+    "description": "Return the structured connectivity probe.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+    },
+}
 
 
 def project_id_from_service_account(service_account_json: str) -> str | None:
@@ -54,7 +63,7 @@ def probe_vertex(
     project_id: str | None,
     source: str,
 ) -> tuple[str | None, int, str]:
-    """Make a 1-token Gemini call. Returns ``(error, latency_ms, model)``.
+    """Make a minimal structured Gemini call. Returns ``(error, latency_ms, model)``.
 
     ``error`` is None on success. Never raises: every provider failure is
     translated to a short operator-readable string, because this runs behind a
@@ -90,30 +99,39 @@ def probe_vertex(
     error: str | None = None
     try:
         client = build_gemini_client(cfg, timeout=VERTEX_TEST_TIMEOUT_SECONDS)
-        client.messages.create(
+        response = client.messages.create(
             model=resolved_model,
             max_tokens=_TEST_MAX_TOKENS,
             messages=[{"role": "user", "content": _TEST_PROMPT}],
+            tools=[_PROBE_TOOL],
+            tool_choice={"type": "tool", "name": "emit_probe"},
         )
+        block = next(
+            (part for part in response.content if getattr(part, "type", None) == "tool_use"),
+            None,
+        )
+        if block is None or getattr(block, "name", None) != "emit_probe":
+            error = "Vertex responded but did not support the required structured output."
+        elif getattr(block, "input", {}).get("ok") is not True:
+            error = "Vertex structured-output probe returned an invalid payload."
     except (AuthenticationError, PermissionDeniedError) as exc:
         error = f"Google credentials rejected: {exc.__class__.__name__}"
-    except BadRequestError as exc:
-        # Truncate whichever form we use: callers persist this into a
-        # String(512) column, and a Vertex 400 that echoes the request (model
-        # not found, quota project) can blow past it — on Postgres that turns
-        # "Test connection" into a 500 and loses the validation status.
-        error = f"Bad request: {str(getattr(exc, 'message', exc))[:200]}"
+    except BadRequestError:
+        error = "Vertex rejected the model, region, capacity, or probe request."
     except APITimeoutError:
         error = f"Vertex did not respond within {int(VERTEX_TEST_TIMEOUT_SECONDS)}s."
-    except APIConnectionError as exc:
-        error = f"Could not reach Vertex: {str(exc)[:200]}"
+    except APIConnectionError:
+        error = "Could not reach Vertex. Check network access and the configured region."
     except APIStatusError as exc:
-        error = f"Vertex returned {exc.status_code}: {str(exc)[:200]}"
+        error = f"Vertex returned HTTP {exc.status_code}."
     except RuntimeError as exc:
         # e.g. google-genai not installed, or credential build failure.
-        error = str(exc)[:200]
+        error = f"Vertex client could not start: {exc.__class__.__name__}."
     except Exception as exc:
-        logger.exception("Unexpected error during Vertex %s test", source)
-        error = f"Unexpected error: {exc.__class__.__name__}: {str(exc)[:160]}"
+        logger.error(
+            "Unexpected error during Vertex test",
+            extra={"source": source, "error_code": exc.__class__.__name__},
+        )
+        error = f"Unexpected Vertex probe error: {exc.__class__.__name__}."
     latency_ms = int((time.perf_counter() - started) * 1000)
     return error, latency_ms, resolved_model

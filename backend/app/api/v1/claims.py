@@ -11,7 +11,6 @@ from io import BytesIO
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -127,7 +126,10 @@ from app.services.claims import (
     prefetch_claim_relations,
 )
 from app.services.claims_register import build_claims_register_workbook
-from app.services.claims_review.pipeline import run_review
+from app.services.claims_review.queue import (
+    cancel_active_review_job,
+    enqueue_claim_review,
+)
 from app.services.fx import POLICY_CURRENCY, reset_breaker
 from app.services.log_cases import (
     case_type_or_400,
@@ -480,6 +482,7 @@ def decide_claim(
     else:  # needs_info reopens the claim for the member — not a decision
         claim.decided_at = None
         claim.decided_by = None
+    cancel_active_review_job(db, claim.id, f"Broker decision: {body.action}")
     claim.status = new_status
     claim.decision_notes = body.note
 
@@ -1006,7 +1009,6 @@ def get_claim_review(
 @limiter.limit("10/minute")
 def rerun_claim_review(
     request: Request,
-    background_tasks: BackgroundTasks,
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1014,27 +1016,24 @@ def rerun_claim_review(
     """Supersede the current AI review and re-run the pipeline."""
     assert_transition(claim, CLAIM_STATUS_AI_REVIEW_PENDING)
 
-    for old in db.execute(
-        select(ClaimAIReview).where(
-            ClaimAIReview.claim_id == claim.id,
-            ClaimAIReview.superseded.is_(False),
-        )
-    ).scalars():
-        old.superseded = True
-
-    review = ClaimAIReview(client_id=claim.client_id, claim_id=claim.id)
-    db.add(review)
-    db.flush()
     before = {"status": claim.status}
-    claim.status = CLAIM_STATUS_AI_REVIEW_PENDING
+    if not user.broker_firm_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Claim tenant is not configured.")
+    queued = enqueue_claim_review(
+        db, claim, user.broker_firm_id, supersede=True
+    )
     write_audit(
         db, user, "claim.rerun_review", "claim", claim.id,
         before=before,
-        after={"status": claim.status, "review_id": review.id},
+        after={
+            "status": claim.status,
+            "review_id": queued.review.id,
+            "job_id": queued.job.id if queued.job else None,
+            "existing": queued.existing,
+        },
         employee_id=claim.employee_id,
     )
     db.commit()
-    background_tasks.add_task(run_review, claim.id, review.id, user.broker_firm_id)
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
 

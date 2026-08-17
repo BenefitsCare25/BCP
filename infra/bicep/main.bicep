@@ -369,7 +369,6 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
 // managed-identity Secret User role grant below makes them readable at
 // runtime. Plain values stay inline.
 var commonAppSettings = [
-  { name: 'WEBSITES_PORT', value: '8000' }
   { name: 'DOCKER_REGISTRY_SERVER_URL', value: 'https://${acrLoginServer}' }
   { name: 'INSPRO_ENV', value: env }
   { name: 'INSPRO_AUTH_MODE', value: 'entra' }
@@ -392,7 +391,6 @@ var commonAppSettings = [
   { name: 'INSPRO_BASE_DOMAIN', value: baseDomain }
   // Runtime sizing. WEB_CONCURRENCY also divides the AI concurrency limit and
   // multiplies the DB pool — change it and the DB tier together.
-  { name: 'WEB_CONCURRENCY', value: string(webConcurrency) }
   { name: 'INSPRO_DB_POOL_SIZE', value: string(dbPoolSize) }
   { name: 'INSPRO_DB_MAX_OVERFLOW', value: string(dbMaxOverflow) }
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
@@ -411,8 +409,6 @@ var commonAppSettings = [
   { name: 'INSPRO_STORAGE_ACCOUNT_URL', value: storage.properties.primaryEndpoints.blob }
   { name: 'INSPRO_STORAGE_CONTAINER', value: documentsContainer.name }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
-  // Auto-instrument FastAPI/SQLAlchemy via azure-monitor-opentelemetry distro.
-  { name: 'OTEL_SERVICE_NAME', value: '${prefix}-api' }
 ]
 
 // Appended only when Redis exists. An unset INSPRO_REDIS_URL is the documented
@@ -421,6 +417,11 @@ var commonAppSettings = [
 var redisAppSettings = deployRedis ? [
   { name: 'INSPRO_REDIS_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=redis-url)' }
 ] : []
+var webAppSettings = concat(commonAppSettings, redisAppSettings, [
+  { name: 'WEBSITES_PORT', value: '8000' }
+  { name: 'WEB_CONCURRENCY', value: string(webConcurrency) }
+  { name: 'OTEL_SERVICE_NAME', value: '${prefix}-api' }
+])
 
 // Container-based deploy with ACR pull via managed identity.
 var siteConfig = {
@@ -430,7 +431,7 @@ var siteConfig = {
   minTlsVersion: '1.2'
   http20Enabled: true
   healthCheckPath: '/health'
-  appSettings: concat(commonAppSettings, redisAppSettings)
+  appSettings: webAppSettings
 }
 
 resource webapp 'Microsoft.Web/sites@2024-04-01' = {
@@ -465,6 +466,39 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
   dependsOn: deployRedis ? [kvSecretRedisUrl] : []
 }
 
+// Dedicated durable claim-review executor. It shares the image and private
+// dependencies but has an independent process lifetime from Gunicorn.
+var workerAppSettings = concat(commonAppSettings, redisAppSettings, [
+  { name: 'WEBSITES_PORT', value: '8081' }
+  { name: 'PORT', value: '8081' }
+  { name: 'WEB_CONCURRENCY', value: '1' }
+  { name: 'OTEL_SERVICE_NAME', value: '${prefix}-claim-review-worker' }
+])
+
+resource reviewWorker 'Microsoft.Web/sites@2024-04-01' = {
+  name: '${appName}-review-worker'
+  location: location
+  kind: 'app,linux,container'
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    serverFarmId: plan.id
+    httpsOnly: true
+    virtualNetworkSubnetId: enableVnetIntegration ? privateNetworking.outputs.appSubnetId : null
+    siteConfig: {
+      linuxFxVersion: 'DOCKER|${containerImage}'
+      appCommandLine: 'python -m app.workers.claim_review'
+      acrUseManagedIdentityCreds: true
+      ftpsState: 'Disabled'
+      minTlsVersion: '1.2'
+      http20Enabled: true
+      healthCheckPath: '/readyz'
+      alwaysOn: true
+      appSettings: workerAppSettings
+    }
+  }
+  dependsOn: deployRedis ? [kvSecretRedisUrl] : []
+}
+
 // NOTE: there is deliberately no deployment slot.
 // Deployment slots require Standard tier or higher — Basic offers zero. This
 // deployment runs on Basic (B1 staging / B2 prod), so prod releases are
@@ -484,12 +518,32 @@ resource kvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+resource workerKvSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kv
+  name: guid(kv.id, reviewWorker.id, 'kv-secrets-user')
+  properties: {
+    principalId: reviewWorker.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUserRoleId)
+  }
+}
+
 // Blob access for retained documents — managed identity, no account keys.
 resource storageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: storage
   name: guid(storage.id, webapp.id, 'blob-contributor')
   properties: {
     principalId: webapp.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+  }
+}
+
+resource workerStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: storage
+  name: guid(storage.id, reviewWorker.id, 'blob-contributor')
+  properties: {
+    principalId: reviewWorker.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
   }
@@ -509,9 +563,33 @@ module acrPullGrant 'modules/acr-pull.bicep' = {
   }
 }
 
+module workerAcrPullGrant 'modules/acr-pull.bicep' = {
+  name: 'acr-pull-worker-${env}'
+  scope: resourceGroup(acrResourceGroup)
+  params: {
+    acrName: acrName
+    principalId: reviewWorker.identity.principalId
+    roleNameSeed: '${appName}-review-worker'
+  }
+}
+
 // ── Diagnostic settings — ship logs/metrics to Log Analytics ────────────────
 resource webappDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: webapp
+  name: 'to-law'
+  properties: {
+    workspaceId: law.id
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
+resource reviewWorkerDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: reviewWorker
   name: 'to-law'
   properties: {
     workspaceId: law.id
@@ -594,7 +672,109 @@ resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(
   }
 }
 
+resource reviewWorkerHealthAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(alertEmail)) {
+  name: '${prefix}-review-worker-health-alert'
+  location: 'global'
+  properties: {
+    severity: 1
+    enabled: true
+    scopes: [reviewWorker.id]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          name: 'WorkerHealthCheck'
+          metricName: 'HealthCheckStatus'
+          metricNamespace: 'Microsoft.Web/sites'
+          operator: 'LessThan'
+          threshold: 100
+          timeAggregation: 'Average'
+          criterionType: 'StaticThresholdCriterion'
+        }
+      ]
+    }
+    actions: [
+      { actionGroupId: alertActionGroup.id }
+    ]
+  }
+}
+
+resource reviewQueueAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(alertEmail)) {
+  name: '${prefix}-review-queue-alert'
+  location: location
+  properties: {
+    displayName: 'Claim review queue age exceeded'
+    description: 'The oldest available claim-review job exceeded the configured queue-age threshold.'
+    severity: 1
+    enabled: true
+    scopes: [appInsights.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT10M'
+    criteria: {
+      allOf: [
+        {
+          query: '''
+            traces
+            | where tostring(customDimensions.error_code) == "queue_age_exceeded"
+          '''
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [alertActionGroup.id]
+    }
+  }
+}
+
+resource reviewFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(alertEmail)) {
+  name: '${prefix}-review-failure-alert'
+  location: location
+  properties: {
+    displayName: 'Claim review operational failure'
+    description: 'A lease, provider, terminal-job, or state-invariant failure requires attention.'
+    severity: 1
+    enabled: true
+    scopes: [appInsights.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT10M'
+    criteria: {
+      allOf: [
+        {
+          query: '''
+            traces
+            | extend code = tostring(customDimensions.error_code)
+            | where code == "lease_expired"
+                or code startswith "ai_configuration"
+                or code in ("pending_without_job", "active_missing_record")
+                or message == "Claim-review job terminated"
+          '''
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [alertActionGroup.id]
+    }
+  }
+}
+
 output appServiceUrl string = 'https://${webapp.properties.defaultHostName}'
+output reviewWorkerUrl string = 'https://${reviewWorker.properties.defaultHostName}'
 output postgresFqdn string = postgres.properties.fullyQualifiedDomainName
 output redisHost string = deployRedis ? redis.properties.hostName : ''
 output keyVaultName string = kv.name

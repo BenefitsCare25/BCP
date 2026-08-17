@@ -9,6 +9,7 @@ value; a CONFIRMED verdict flips a MISMATCH/UNCERTAIN comparison to MATCH
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,8 @@ def run_vision_checks(
     docs: list[StoredDocument],
     field_comparisons: list[dict[str, Any]],
     vision_fields: frozenset[str] | None = None,
+    checkpoint: Callable[[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]], None]
+    | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Returns ``(updated_comparisons, vision_checks, call_metadata)``.
 
@@ -121,12 +124,18 @@ def run_vision_checks(
                 comparison["notes"] = (
                     f"Vision-verified in \"{doc.file_name}\": {result.explanation}"
                 )
+                if checkpoint:
+                    checkpoint(updated, vision_checks, call_metadata)
                 break
             if result.verdict == "REFUTED":
                 comparison["notes"] = (
                     f"Vision re-check confirmed the discrepancy: {result.explanation}"
                 )
+                if checkpoint:
+                    checkpoint(updated, vision_checks, call_metadata)
                 break
             # UNCERTAIN → try the next document (if any budget remains).
+            if checkpoint:
+                checkpoint(updated, vision_checks, call_metadata)
 
     return updated, vision_checks, call_metadata

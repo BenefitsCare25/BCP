@@ -16,6 +16,7 @@ from sqlalchemy import select
 from app.db.session import SessionLocal, engine
 from app.db.tenancy import is_postgres, sync_firm_schema
 from app.models import BrokerFirm
+from app.services.claims_review.recovery import reconcile_legacy_reviews
 
 
 def main() -> None:
@@ -26,7 +27,8 @@ def main() -> None:
         firm_ids = list(db.execute(select(BrokerFirm.id)).scalars().all())
     for fid in firm_ids:
         schema = sync_firm_schema(engine, fid)
-        print(f"  synced {schema}")
+        reconciled = reconcile_legacy_reviews(fid)
+        print(f"  synced {schema}; reconciled {reconciled} legacy review(s)")
     print(f"Done: {len(firm_ids)} firm schema(s) provisioned/synced.")
 
 

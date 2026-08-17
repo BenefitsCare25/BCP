@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import itertools
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -38,6 +38,7 @@ from app.models import (  # noqa: E402
     AuditLog,
     Claim,
     ClaimAIReview,
+    ClaimReviewJob,
     Dependant,
     Employee,
     MemberAccount,
@@ -183,16 +184,6 @@ def _canned_statement(monkeypatch):
         )
 
 
-@pytest.fixture(autouse=True)
-def _no_pipeline(monkeypatch):
-    """Submit parks the claim at `ai_review_pending` — the pipeline itself is
-    covered by test_claims_review_pipeline.py."""
-    from app.api.v1 import claims as broker_claims
-    from app.api.v1 import portal_claims
-
-    monkeypatch.setattr(portal_claims, "run_review", lambda *a, **k: None)
-    monkeypatch.setattr(broker_claims, "run_review", lambda *a, **k: None)
-
 
 @pytest.fixture
 def anon() -> TestClient:
@@ -273,6 +264,26 @@ def _get(anon: TestClient, claim_id: str) -> dict:
     res = anon.get(f"/api/v1/portal/claims/{claim_id}", headers=_auth())
     assert res.status_code == 200, res.text
     return res.json()
+
+
+def _mark_review_complete(claim_id: str) -> None:
+    with SessionLocal() as db:
+        review = (
+            db.query(ClaimAIReview)
+            .filter_by(claim_id=claim_id, superseded=False)
+            .one()
+        )
+        now = datetime.now(UTC)
+        review.status = "complete"
+        review.stage = "persist"
+        review.verdict = "clean"
+        review.completed_at = now
+        job = db.query(ClaimReviewJob).filter_by(review_id=review.id).one()
+        job.state = "succeeded"
+        job.stage = "persist"
+        job.finished_at = now
+        db.get(Claim, claim_id).status = "ai_verified"
+        db.commit()
 
 
 def _thread(anon: TestClient, claim_id: str) -> list[dict]:
@@ -409,16 +420,7 @@ def test_an_amendment_supersedes_the_ai_verdict(anon: TestClient):
     auto-rerun, which would make an edit loop an AI-spend loop.
     """
     claim = _submitted(anon, b" verdict")
-    with SessionLocal() as s:
-        row = s.get(Claim, claim["id"])
-        row.status = "ai_verified"
-        s.add(
-            ClaimAIReview(
-                client_id=DEMO_CLIENT_ID, claim_id=row.id,
-                status="complete", verdict="clean",
-            )
-        )
-        s.commit()
+    _mark_review_complete(claim["id"])
 
     res = _amend(anon, claim["id"], amount_claimed=42.0)
     assert res.status_code == 200, res.text
@@ -607,15 +609,7 @@ def test_a_document_change_stamps_the_claim(anon: TestClient):
     """Evidence IS what a verdict is about, so the document set moving has to
     invalidate a review and bump the revision exactly as a figure moving does."""
     claim = _submitted(anon, b" doc-stamp")
-    with SessionLocal() as s:
-        s.add(
-            ClaimAIReview(
-                client_id=DEMO_CLIENT_ID, claim_id=claim["id"],
-                status="complete", verdict="clean",
-            )
-        )
-        s.get(Claim, claim["id"]).status = "ai_verified"
-        s.commit()
+    _mark_review_complete(claim["id"])
 
     assert _upload(anon, claim["id"], b" doc-stamp-2").status_code == 200
     after = _get(anon, claim["id"])
@@ -813,15 +807,7 @@ def test_a_broker_amendment_leaves_the_review_and_the_thread_alone(
     what a member claimed needs a sentence a person wrote, not a generated
     one."""
     claim = _submitted(anon, b" bk-quiet")
-    with SessionLocal() as s:
-        s.add(
-            ClaimAIReview(
-                client_id=DEMO_CLIENT_ID, claim_id=claim["id"],
-                status="complete", verdict="clean",
-            )
-        )
-        s.get(Claim, claim["id"]).status = "ai_verified"
-        s.commit()
+    _mark_review_complete(claim["id"])
     before_thread = len(_thread(anon, claim["id"]))
 
     assert _broker_amend(broker, claim["id"], amount_claimed=64.0).status_code == 200

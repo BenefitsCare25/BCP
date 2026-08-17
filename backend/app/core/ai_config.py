@@ -38,6 +38,8 @@ AISource = Literal["byok", "platform", "env", "none"]
 # complete, not a starting point.
 DEFAULT_VERTEX_LOCATION = "asia-southeast1"
 DEFAULT_VERTEX_MODEL = "gemini-3.5-flash"
+DEFAULT_VERTEX_CAPACITY_MODE = "standard_paygo"
+VERTEX_CAPACITY_MODES = frozenset({"standard_paygo", "provisioned_throughput"})
 APPROVED_VERTEX_LOCATIONS = frozenset({"asia-southeast1"})
 
 
@@ -53,6 +55,7 @@ class AIConfig:
     source: AISource = "env"
     gcp_project: str | None = None
     gcp_location: str | None = None
+    capacity_mode: str = DEFAULT_VERTEX_CAPACITY_MODE
 
 
 def _prod_env() -> bool:
@@ -126,8 +129,21 @@ def _load_vertex_from_env() -> AIConfig | None:
     project = os.environ.get("VERTEX_PROJECT", "").strip()
     location = os.environ.get("VERTEX_LOCATION", "").strip() or DEFAULT_VERTEX_LOCATION
     model = os.environ.get("VERTEX_MODEL", "").strip() or DEFAULT_VERTEX_MODEL
+    capacity_mode = (
+        os.environ.get("VERTEX_CAPACITY_MODE", "").strip()
+        or DEFAULT_VERTEX_CAPACITY_MODE
+    )
     if not project:
         logger.error("INSPRO_AI_PROVIDER=vertex but VERTEX_PROJECT is unset.")
+        return None
+    if capacity_mode not in VERTEX_CAPACITY_MODES:
+        logger.error("VERTEX_CAPACITY_MODE=%r is unsupported.", capacity_mode)
+        return None
+    if _prod_env() and os.environ.get("INSPRO_AI_CONFIG_VALIDATED", "").lower() != "true":
+        logger.error(
+            "Environment Vertex configuration is not activated; set "
+            "INSPRO_AI_CONFIG_VALIDATED=true only after the structured-output probe."
+        )
         return None
     assert_vertex_residency(location)
     return AIConfig(
@@ -138,6 +154,7 @@ def _load_vertex_from_env() -> AIConfig | None:
         gcp_project=project,
         gcp_location=location,
         source="env",
+        capacity_mode=capacity_mode,
     )
 
 
@@ -169,6 +186,7 @@ def _vertex_from_secret(
     secret_blob: str,
     source: AISource,
     label: str,
+    capacity_mode: str | None = None,
 ) -> AIConfig | None:
     """Build a Vertex AIConfig from a decrypted stored secret.
 
@@ -181,6 +199,10 @@ def _vertex_from_secret(
     """
     resolved_location = (location or "").strip() or DEFAULT_VERTEX_LOCATION
     resolved_model = (model or "").strip() or DEFAULT_VERTEX_MODEL
+    resolved_capacity_mode = capacity_mode or DEFAULT_VERTEX_CAPACITY_MODE
+    if resolved_capacity_mode not in VERTEX_CAPACITY_MODES:
+        logger.warning("Vertex credentials for %s use invalid capacity mode", label)
+        return None
     try:
         packed = json.loads(secret_blob)
         project_id = str(packed["project_id"])
@@ -214,6 +236,7 @@ def _vertex_from_secret(
         gcp_project=project_id,
         gcp_location=resolved_location,
         source=source,
+        capacity_mode=resolved_capacity_mode,
     )
 
 
@@ -262,11 +285,18 @@ def _load_byok(db: Session, client_id: str) -> AIConfig | None:
             row.provider,
         )
         return None
+    if _prod_env() and not _row_is_activated(
+        row, row.endpoint, row.model, row.capacity_mode
+    ):
+        logger.warning("BYOK row for client %s is saved but not activated", client_id)
+        return None
     label = f"BYOK client {client_id}"
     secret = _decrypt_or_none(row.encrypted_api_key, label)
     if secret is None:
         return None
-    return _vertex_from_secret(row.endpoint, row.model, secret, "byok", label)
+    return _vertex_from_secret(
+        row.endpoint, row.model, secret, "byok", label, row.capacity_mode
+    )
 
 
 def _load_platform(db: Session) -> AIConfig | None:
@@ -287,11 +317,28 @@ def _load_platform(db: Session) -> AIConfig | None:
             row.provider,
         )
         return None
+    if _prod_env() and not _row_is_activated(
+        row, row.location, row.model, row.capacity_mode
+    ):
+        logger.warning("Platform Vertex credentials are saved but not activated")
+        return None
     label = "the platform AI key"
     secret = _decrypt_or_none(row.encrypted_service_account, label)
     if secret is None:
         return None
-    return _vertex_from_secret(row.location, row.model, secret, "platform", label)
+    return _vertex_from_secret(
+        row.location, row.model, secret, "platform", label, row.capacity_mode
+    )
+
+
+def _row_is_activated(row, location: str | None, model: str | None, capacity: str | None) -> bool:
+    return bool(
+        row.validation_status == "active"
+        and row.validated_fingerprint == row.key_fingerprint
+        and row.validated_location == (location or DEFAULT_VERTEX_LOCATION)
+        and row.validated_model == (model or DEFAULT_VERTEX_MODEL)
+        and row.validated_capacity_mode == (capacity or DEFAULT_VERTEX_CAPACITY_MODE)
+    )
 
 
 def load_ai_config(

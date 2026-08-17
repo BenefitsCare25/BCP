@@ -86,9 +86,15 @@ export function AIProviderPage() {
         provider: "vertex",
         endpoint: draft.location.trim() || null,
         model: draft.model.trim() || null,
+        capacity_mode: draft.capacityMode,
         api_key: draft.serviceAccountJson,
       });
-      toast.success(config ? "Company AI key updated" : "Company AI key saved");
+      const validation = await test.mutateAsync(undefined);
+      if (!validation.ok) {
+        toast.error(validation.error ?? "Saved, but validation failed");
+        return;
+      }
+      toast.success(config ? "Company AI key updated and validated" : "Company AI key saved and validated");
       setOpen(false);
     } catch (err) {
       toast.error(formatError(err));
@@ -103,6 +109,7 @@ export function AIProviderPage() {
               provider: "vertex",
               endpoint: draft.location.trim() || null,
               model: draft.model.trim() || null,
+              capacity_mode: draft.capacityMode,
               api_key: draft.serviceAccountJson || null,
             }
           : undefined,
@@ -134,7 +141,15 @@ export function AIProviderPage() {
             overrides the platform key.
           </>
         }
-        initial={config ? { location: config.endpoint, model: config.model } : null}
+        initial={
+          config
+            ? {
+                location: config.endpoint,
+                model: config.model,
+                capacity_mode: config.capacity_mode,
+              }
+            : null
+        }
         storedKeyMasked={config?.key_masked}
         saving={put.isPending}
         testing={test.isPending}

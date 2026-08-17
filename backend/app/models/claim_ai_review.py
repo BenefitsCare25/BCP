@@ -16,16 +16,22 @@ at decision time. JSON payload shapes follow the IVM review pipeline:
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import JSON, Base, TimestampMixin, new_uuid
 
-REVIEW_STATUS_PENDING = "pending"
+REVIEW_STATUS_QUEUED = "queued"
+REVIEW_STATUS_RUNNING = "running"
+REVIEW_STATUS_RETRY_WAIT = "retry_wait"
 REVIEW_STATUS_COMPLETE = "complete"
 REVIEW_STATUS_ERROR = "error"
+REVIEW_STATUS_CANCELLED = "cancelled"
+# Compatibility name for callers migrating from the in-process executor.
+REVIEW_STATUS_PENDING = REVIEW_STATUS_QUEUED
 
 REVIEW_VERDICT_CLEAN = "clean"
 REVIEW_VERDICT_FLAGGED = "flagged"
@@ -33,6 +39,15 @@ REVIEW_VERDICT_FLAGGED = "flagged"
 
 class ClaimAIReview(Base, TimestampMixin):
     __tablename__ = "claim_ai_reviews"
+    __table_args__ = (
+        Index(
+            "uq_claim_ai_reviews_active_claim",
+            "claim_id",
+            unique=True,
+            postgresql_where=text("superseded = false"),
+            sqlite_where=text("superseded = 0"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     client_id: Mapped[str] = mapped_column(
@@ -56,6 +71,25 @@ class ClaimAIReview(Base, TimestampMixin):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cost_estimate_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="queued", server_default="queued"
+    )
+    progress_current: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    progress_total: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deterministic_short_circuit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     superseded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Which per-claim-type rule setup drove this run (claim_review_configs) —
     # NULL = the in-code defaults. Deliberately no FK: the provenance must

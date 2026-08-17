@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +35,7 @@ from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     Claim,
     ClaimAIReview,
+    ClaimReviewJob,
     Employee,
     MemberAccount,
     PolicyYear,
@@ -60,6 +61,7 @@ from app.services.ai_gateway import (  # noqa: E402
 )
 from app.services.claims_review import pipeline  # noqa: E402
 from app.services.claims_review.pipeline import run_review  # noqa: E402
+from app.workers.claim_review import process_one_job  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
 PY = "00000000-0000-0000-0000-00000000cr01"
@@ -392,7 +394,8 @@ def test_provider_error_degrades_to_manual_review():
     claim, review = _load(claim_id, review_id)
     assert claim.status == CLAIM_STATUS_SUBMITTED  # back to manual review
     assert review.status == "error"
-    assert "provider down" in review.error_detail
+    assert review.error_detail == "Claim review failed. Route the claim to manual review."
+    assert "provider down" not in review.error_detail
 
 
 def test_ai_not_configured_saves_deterministic_results():
@@ -458,6 +461,7 @@ def test_rerun_supersedes_previous_review(broker: TestClient):
          patch("app.services.ai_gateway.review_claim",
                return_value=_review_result([_match("amount_claimed")])):
         res = broker.post(f"/api/v1/claims/{claim_id}/rerun-review")
+        assert process_one_job("test-rerun-worker") is True
     assert res.status_code == 200, res.text
 
     with SessionLocal() as s:
@@ -521,6 +525,7 @@ def test_submit_dispatches_pipeline_and_broker_sees_verdict(broker: TestClient):
          patch("app.services.ai_gateway.review_claim",
                return_value=_review_result([_match("amount_claimed")])) as review_mock:
         res = anon.post(f"/api/v1/portal/claims/{claim_id}/submit", headers=headers)
+        assert process_one_job("test-submit-worker") is True
     assert res.status_code == 200, res.text
     # The review receives the claimant identity — without it the patient-name
     # rule has nothing to compare the documents against.
@@ -541,6 +546,40 @@ def test_submit_dispatches_pipeline_and_broker_sees_verdict(broker: TestClient):
     # The member payload never exposes the AI review.
     member_view = anon.get(f"/api/v1/portal/claims/{claim_id}", headers=headers)
     assert "ai_review" not in member_view.json()
+
+
+def test_durable_worker_redacts_provider_failure_detail() -> None:
+    claim_id, review_id = _mk_claim(marker=b"durable-error")
+    with SessionLocal() as session:
+        session.add(
+            ClaimReviewJob(
+                broker_firm_id=DEMO_BROKER_FIRM_ID,
+                client_id=DEMO_CLIENT_ID,
+                claim_id=claim_id,
+                review_id=review_id,
+                claim_revision=0,
+                idempotency_key=f"test:{review_id}",
+                available_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        side_effect=RuntimeError("provider echoed sensitive claim content"),
+    ):
+        assert process_one_job("test-failure-worker") is True
+
+    with SessionLocal() as session:
+        claim = session.get(Claim, claim_id)
+        review = session.get(ClaimAIReview, review_id)
+        job = session.query(ClaimReviewJob).filter_by(review_id=review_id).one()
+        assert claim.status == CLAIM_STATUS_SUBMITTED
+        assert review.status == "error"
+        assert review.error_detail == "Claim review failed. Route the claim to manual review."
+        assert job.state == "failed"
+        assert job.last_error_detail == review.error_detail
+        assert "sensitive claim content" not in job.last_error_detail
 
 
 def test_dependant_age_rule_warns_on_aged_out_child():

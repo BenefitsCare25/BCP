@@ -217,15 +217,6 @@ def _canned_statement(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_pipeline(monkeypatch):
-    from app.api.v1 import claims as broker_claims
-    from app.api.v1 import portal_claims
-
-    monkeypatch.setattr(portal_claims, "run_review", lambda *a, **k: None)
-    monkeypatch.setattr(broker_claims, "run_review", lambda *a, **k: None)
-
-
-@pytest.fixture(autouse=True)
 def _clean_claims():
     yield
     with SessionLocal() as session:

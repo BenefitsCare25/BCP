@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,6 +43,7 @@ from app.services.claim_ai import (
     review_claim_via_ai,
     verify_claim_concern_via_ai,
 )
+from app.services.claims_review import metrics as review_metrics
 from app.services.platform_ai_settings import (
     PlatformAILimits,
     resolve_platform_ai_limits,
@@ -530,6 +532,16 @@ def _slot(limit: int, db: Session | None = None) -> Any:
         sem.release()
 
 
+def _record_provider_metric(cfg: Any, operation: str, started: float, outcome: str) -> None:
+    review_metrics.provider_call(
+        provider=cfg.provider,
+        model=cfg.model,
+        operation=operation,
+        outcome=outcome,
+        seconds=time.monotonic() - started,
+    )
+
+
 def _run_cached_ai_call(
     db: Session,
     *,
@@ -553,6 +565,7 @@ def _run_cached_ai_call(
     cache = get_cache()
     cached = cache.get(cache_key)
     if cached is not None:
+        review_metrics.cache_request(operation=operation, hit=True)
         # Log cache hits so admins see hit-rate; zero on-wire tokens.
         _record_spend(
             db, client_id=client_id, policy_year_id=policy_year_id,
@@ -560,6 +573,7 @@ def _run_cached_ai_call(
             input_tokens=0, output_tokens=0, cache_hit=True,
         )
         return on_hit(cached)
+    review_metrics.cache_request(operation=operation, hit=False)
 
     # Resolve platform limits once (DB row → env → default) and reuse for both
     # the budget check and the concurrency slot.
@@ -568,6 +582,7 @@ def _run_cached_ai_call(
 
     breaker = get_breaker()
     breaker.before_call()
+    provider_started = time.monotonic()
     try:
         # Bound concurrent live calls (backpressure) so a burst can't stampede
         # the shared provider quota. Queues here until a slot frees, releasing
@@ -580,13 +595,19 @@ def _run_cached_ai_call(
     except AINotConfiguredError:
         raise
     except AIParseError:
+        _record_provider_metric(cfg, operation, provider_started, "parse_failure")
         # Our parser bug — don't trip the breaker; re-raise so the caller 502s.
-        logger.exception("AI response parse failure (does not trip breaker)")
+        logger.error(
+            "AI response parse failure (does not trip breaker)",
+            extra={"error_code": "AIParseError", "operation": operation},
+        )
         raise
     except (AuthenticationError, PermissionDeniedError):
+        _record_provider_metric(cfg, operation, provider_started, "auth_failure")
         logger.warning("AI provider rejected credentials for client %s", client_id)
         raise
     except RateLimitError:
+        _record_provider_metric(cfg, operation, provider_started, "throttled")
         # Provider throttling (HTTP 429) is transient backpressure, not an
         # outage — re-raise so the caller degrades, but DON'T trip the breaker.
         # Tripping it here would take every AI feature down for the whole
@@ -594,10 +615,12 @@ def _run_cached_ai_call(
         logger.warning("AI provider throttled request for client %s (429)", client_id)
         raise
     except Exception:
+        _record_provider_metric(cfg, operation, provider_started, "provider_error")
         # Genuine provider/network failure — trip the breaker.
         breaker.record_failure()
         raise
     breaker.record_success()
+    _record_provider_metric(cfg, operation, provider_started, "succeeded")
 
     cache.set(cache_key, payload)
     _record_spend(

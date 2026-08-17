@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,8 @@ def extract_documents(
     claim: Claim,
     docs: list[StoredDocument],
     broker_firm_id: str | None = None,
+    checkpoint: Callable[[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]], None]
+    | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract every document's fields.
 
@@ -106,6 +109,8 @@ def extract_documents(
                     "evidence": f'"{doc.file_name}" could not be read for AI review.',
                 }
             )
+            if checkpoint:
+                checkpoint(extractions, warnings, call_metadata)
             continue
 
         result = _extract_with_throttle_retry(db, claim, doc, blocks, broker_firm_id)
@@ -119,6 +124,8 @@ def extract_documents(
                 "fields": result.document.get("fields", []),
             }
         )
+        if checkpoint:
+            checkpoint(extractions, warnings, call_metadata)
 
     # Deterministic guard: if EVERY attached document was unreadable there is
     # zero verified evidence — that must be a hard fail, not a warning the

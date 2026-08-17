@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -159,6 +160,39 @@ def _put_platform_key(client: TestClient, **overrides) -> dict:
     r = client.put("/api/v1/platform-ai-settings/credentials", json=body)
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def test_only_stored_platform_probe_activates_saved_configuration() -> None:
+    app.dependency_overrides[get_current_user] = _system_admin
+    client = TestClient(app)
+    _put_platform_key(client, model="gemini-2.5-flash")
+
+    with patch(
+        "app.api.v1.platform_ai_settings.probe_vertex",
+        return_value=(None, 5, "gemini-draft"),
+    ):
+        draft = client.post(
+            "/api/v1/platform-ai-settings/credentials/test",
+            json={"model": "gemini-draft"},
+        )
+    assert draft.status_code == 200
+    with SessionLocal() as db:
+        row = db.get(PlatformAISetting, SINGLETON_ID)
+        assert row.validation_status == "unvalidated"
+        assert row.validated_model is None
+
+    with patch(
+        "app.api.v1.platform_ai_settings.probe_vertex",
+        return_value=(None, 5, "gemini-2.5-flash"),
+    ):
+        stored = client.post("/api/v1/platform-ai-settings/credentials/test")
+    assert stored.status_code == 200
+    with SessionLocal() as db:
+        row = db.get(PlatformAISetting, SINGLETON_ID)
+        assert row.validation_status == "active"
+        assert row.validated_model == "gemini-2.5-flash"
+        assert row.validated_fingerprint == row.key_fingerprint
+    client.delete("/api/v1/platform-ai-settings/credentials")
 
 
 def test_credentials_roundtrip_and_never_leak_cleartext() -> None:

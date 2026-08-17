@@ -739,10 +739,12 @@ export interface AIConfig {
   // `endpoint` is the GCP location; `model` is the Gemini model id.
   endpoint: string | null;
   model: string | null;
+  capacity_mode: "standard_paygo" | "provisioned_throughput" | null;
   key_masked: string;
   key_fingerprint: string;
   last_validated_at: string | null;
   last_validation_error: string | null;
+  validation_status: string | null;
 }
 
 export interface AIConfigUpsert {
@@ -750,6 +752,7 @@ export interface AIConfigUpsert {
   // `endpoint` = GCP location; `api_key` = the service-account JSON key.
   endpoint?: string | null;
   model?: string | null;
+  capacity_mode: "standard_paygo" | "provisioned_throughput";
   api_key: string;
 }
 
@@ -757,6 +760,7 @@ export interface AIConfigTestPayload {
   provider?: AIProvider | null;
   endpoint?: string | null;
   model?: string | null;
+  capacity_mode?: "standard_paygo" | "provisioned_throughput";
   api_key?: string | null;
 }
 

@@ -445,10 +445,12 @@ export interface PlatformAICredentials {
   provider: string | null;
   location: string | null;
   model: string | null;
+  capacity_mode: "standard_paygo" | "provisioned_throughput" | null;
   key_fingerprint: string | null;
   key_masked: string | null;
   last_validated_at: string | null;
   last_validation_error: string | null;
+  validation_status: string | null;
 }
 
 export interface PlatformAILimits {
@@ -464,12 +466,14 @@ export interface PlatformAISettings extends PlatformAILimits {
 export interface PlatformAICredentialsUpsert {
   location?: string | null;
   model?: string | null;
+  capacity_mode: "standard_paygo" | "provisioned_throughput";
   service_account_json: string;
 }
 
 export interface PlatformAICredentialsTestPayload {
   location?: string | null;
   model?: string | null;
+  capacity_mode?: "standard_paygo" | "provisioned_throughput";
   service_account_json?: string | null;
 }
 
@@ -530,7 +534,7 @@ export function useTestPlatformAICredentials() {
     mutationFn: (payload: PlatformAICredentialsTestPayload | undefined) =>
       api.post<AIConfigTestResult>(
         "/platform-ai-settings/credentials/test",
-        payload ?? {},
+        payload ?? null,
       ),
     onSuccess: () => {
       // Testing the stored key updates last_validated_at; refresh.
@@ -1207,7 +1211,7 @@ export function useTestAIConfig() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: AIConfigTestPayload | undefined) =>
-      api.post<AIConfigTestResult>("/ai-config/test", payload ?? {}),
+      api.post<AIConfigTestResult>("/ai-config/test", payload ?? null),
     onSuccess: () => {
       // Test against the stored config updates last_validated_at; refresh.
       qc.invalidateQueries({ queryKey: ["ai-config"] });

@@ -101,10 +101,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # smaller AND silently multiplies two per-process limits: the AI concurrency
 # semaphore and the SQLAlchemy pool. Raise it in lockstep with the plan size.
 #
-# `exec` so gunicorn is PID 1 and actually receives SIGTERM — otherwise the
-# shell swallows it, the container is SIGKILLed, and in-flight background claim
-# reviews are stranded (recoverable via the startup reaper, but needlessly).
-# `--graceful-timeout 60` gives those background reviews a chance to land.
+# `exec` so gunicorn is PID 1 and receives SIGTERM. Claim reviews run in the
+# separately commanded durable worker (`python -m app.workers.claim_review`),
+# never in this web process.
 # `--timeout 120` (default 30) is the arbiter's patience for a worker HEARTBEAT,
 # not for a request. An endpoint that blocks the event loop stops beating, so a
 # long roster apply read as a hung worker and was SIGKILLed mid-request at 30s —

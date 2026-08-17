@@ -415,10 +415,19 @@ class ClaimList(BaseModel):
 
 class ClaimAIReviewSummary(_Base):
     id: str
-    status: str  # pending | complete | error
+    status: str  # queued | running | retry_wait | complete | error | cancelled
     verdict: str | None = None  # clean | flagged
     confidence: float | None = None
     summary: str | None = None
+    stage: str = "queued"
+    progress_current: int = 0
+    progress_total: int = 0
+    attempt: int = 0
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_code: str | None = None
+    deterministic_short_circuit: bool = False
     created_at: datetime
 
 

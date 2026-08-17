@@ -30,6 +30,7 @@ class ClientAIConfig(Base, TimestampMixin):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     endpoint: Mapped[str | None] = mapped_column(String(512), nullable=True)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    capacity_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     encrypted_api_key: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     # First 16 hex chars of sha256(plaintext) — non-reversible change marker.
     key_fingerprint: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -37,5 +38,10 @@ class ClientAIConfig(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     last_validation_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    validated_fingerprint: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    validated_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    validated_location: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    validated_capacity_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    validation_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
     client: Mapped[Client] = relationship(back_populates="ai_config")

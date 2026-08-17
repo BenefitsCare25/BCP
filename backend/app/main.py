@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -92,40 +90,6 @@ def _allowed_origins() -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
-async def _startup_recovery() -> None:
-    # Recover claims left in `ai_review_pending` by an interrupted background
-    # review (a deploy IS a restart, so this fires exactly when strandings
-    # happen). Run off the event loop (to_thread) so a slow cross-schema sweep
-    # can't delay readiness. Never raises.
-    import asyncio
-
-    from app.services.claims_review.recovery import recover_stranded_reviews
-
-    try:
-        recovered = await asyncio.to_thread(recover_stranded_reviews)
-        if recovered:
-            logger.warning(
-                "Startup: reverted %s stranded claim review(s) to manual review",
-                recovered,
-            )
-    except Exception:  # pragma: no cover - belt-and-braces; the sweep is self-guarding
-        logger.exception("Startup stranded-review recovery raised")
-
-
-@asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    import asyncio
-
-    # Skip under pytest: the sweep is a production-startup concern and must
-    # never revert a claim a test set up in ai_review_pending (a test entering
-    # the lifespan via `with TestClient(app)` would otherwise trigger it).
-    if "PYTEST_CURRENT_TEST" not in os.environ:
-        # Fire-and-forget so startup (and readiness) never waits on the sweep;
-        # keep a reference so the task isn't garbage-collected mid-run.
-        app.state.recovery_task = asyncio.create_task(_startup_recovery())
-    yield
-
-
 def create_app() -> FastAPI:
     install_log_filter()
     configure_telemetry()
@@ -142,7 +106,6 @@ def create_app() -> FastAPI:
         docs_url="/docs" if docs_enabled else None,
         redoc_url="/redoc" if docs_enabled else None,
         openapi_url="/openapi.json" if docs_enabled else None,
-        lifespan=_lifespan,
     )
 
     # Starlette runs middleware in reverse-add order; RequestIDMiddleware

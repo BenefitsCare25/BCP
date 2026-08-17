@@ -57,9 +57,15 @@ def _credentials_out(row: PlatformAISetting | None) -> PlatformAICredentialsOut:
         provider=row.provider or "vertex",
         location=row.location,
         model=row.model,
+        capacity_mode=row.capacity_mode,
         key_fingerprint=row.key_fingerprint,
         last_validated_at=row.last_validated_at,
         last_validation_error=row.last_validation_error,
+        validated_fingerprint=row.validated_fingerprint,
+        validated_model=row.validated_model,
+        validated_location=row.validated_location,
+        validated_capacity_mode=row.validated_capacity_mode,
+        validation_status=row.validation_status,
     )
 
 
@@ -88,6 +94,7 @@ def _key_snapshot(row: PlatformAISetting) -> dict[str, Any]:
         "provider": row.provider,
         "location": row.location,
         "model": row.model,
+        "capacity_mode": row.capacity_mode,
         "key_fingerprint": row.key_fingerprint,
     }
 
@@ -169,6 +176,7 @@ def put_platform_ai_credentials(
     row.provider = "vertex"
     row.location = location
     row.model = model
+    row.capacity_mode = payload.capacity_mode
     row.encrypted_service_account = encrypt_secret(
         pack_vertex_secret(project_id, payload.service_account_json)
     )
@@ -176,6 +184,11 @@ def put_platform_ai_credentials(
     # New key — clear stale validation status; the operator can re-test.
     row.last_validated_at = None
     row.last_validation_error = None
+    row.validated_fingerprint = None
+    row.validated_model = None
+    row.validated_location = None
+    row.validated_capacity_mode = None
+    row.validation_status = "unvalidated"
     db.flush()
 
     write_audit(
@@ -204,10 +217,16 @@ def delete_platform_ai_credentials(
     row.provider = None
     row.location = None
     row.model = None
+    row.capacity_mode = None
     row.encrypted_service_account = None
     row.key_fingerprint = None
     row.last_validated_at = None
     row.last_validation_error = None
+    row.validated_fingerprint = None
+    row.validated_model = None
+    row.validated_location = None
+    row.validated_capacity_mode = None
+    row.validation_status = None
     write_audit(
         db,
         user,
@@ -237,6 +256,11 @@ def test_platform_ai_credentials(
     draft_key = payload.service_account_json if payload else None
     location = (payload.location if payload else None) or (row.location if row else None)
     model = (payload.model if payload else None) or (row.model if row else None)
+    capacity_mode = (
+        (payload.capacity_mode if payload else None)
+        or (row.capacity_mode if row else None)
+        or "standard_paygo"
+    )
 
     service_account_json: str | None = None
     project_id: str | None = None
@@ -272,9 +296,18 @@ def test_platform_ai_credentials(
         source="platform",
     )
 
-    if not draft_key and row is not None and row.encrypted_service_account:
+    # Draft probes may reuse the stored key, but only an explicit stored-row
+    # probe is allowed to alter activation provenance.
+    if payload is None and row is not None and row.encrypted_service_account:
         if error is None:
             row.last_validated_at = datetime.now(tz=UTC)
+            row.validated_fingerprint = row.key_fingerprint
+            row.validated_model = model or DEFAULT_VERTEX_MODEL
+            row.validated_location = location or DEFAULT_VERTEX_LOCATION
+            row.validated_capacity_mode = capacity_mode
+            row.validation_status = "active"
+        else:
+            row.validation_status = "invalid"
         row.last_validation_error = error
         db.commit()
 

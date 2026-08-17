@@ -42,10 +42,19 @@ export interface StoredDocumentMeta {
 
 export interface ClaimAIReviewSummary {
   id: string;
-  status: "pending" | "complete" | "error";
+  status: "queued" | "running" | "retry_wait" | "complete" | "error" | "cancelled";
   verdict: "clean" | "flagged" | null;
   confidence: number | null;
   summary: string | null;
+  stage: "queued" | "deterministic" | "extraction" | "comparison" | "vision" | "verdict" | "persist";
+  progress_current: number;
+  progress_total: number;
+  attempt: number;
+  started_at: string | null;
+  heartbeat_at: string | null;
+  completed_at: string | null;
+  error_code: string | null;
+  deterministic_short_circuit: boolean;
   created_at: string;
 }
 
@@ -518,7 +527,7 @@ export function useBrokerClaimDetail(claimId: string | null) {
 
 export function useClaimReview(
   claimId: string | null,
-  refetchInterval?: number | false,
+  claimPending = false,
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
@@ -533,7 +542,13 @@ export function useClaimReview(
     },
     enabled: !!claimId,
     retry: false,
-    refetchInterval: refetchInterval ?? false,
+    refetchInterval: (query) => {
+      const review = query.state.data;
+      if (review === null) return claimPending ? 5_000 : false;
+      return review && ["queued", "running", "retry_wait"].includes(review.status)
+        ? 5_000
+        : false;
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -785,8 +800,12 @@ export function useRerunReview() {
       api.post<BrokerClaim>(`/claims/${claimId}/rerun-review`, {}),
     onSuccess: (_data, claimId) => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
+      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
       void qc.invalidateQueries({ queryKey: ["claim-review"], exact: false });
-      void qc.invalidateQueries({ queryKey: ["claim-review", undefined, claimId] });
+      void qc.invalidateQueries({
+        queryKey: ["claim-review"],
+        predicate: (query) => query.queryKey.includes(claimId),
+      });
     },
     meta: { localErrorHandling: true },
   });

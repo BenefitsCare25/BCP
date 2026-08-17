@@ -81,6 +81,7 @@ def put_ai_config(
             "provider": row.provider,
             "endpoint": row.endpoint,
             "model": row.model,
+            "capacity_mode": row.capacity_mode,
             "key_fingerprint": row.key_fingerprint,
             "key_masked": _mask_for_fingerprint(row.key_fingerprint),
         }
@@ -115,6 +116,7 @@ def put_ai_config(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     row.endpoint = location
     row.model = model
+    row.capacity_mode = payload.capacity_mode
     row.encrypted_api_key = encrypt_secret(
         pack_vertex_secret(project_id, payload.api_key)
     )
@@ -122,12 +124,18 @@ def put_ai_config(
     # New key — clear stale validation status; the user can re-test.
     row.last_validated_at = None
     row.last_validation_error = None
+    row.validated_fingerprint = None
+    row.validated_model = None
+    row.validated_location = None
+    row.validated_capacity_mode = None
+    row.validation_status = "unvalidated"
     db.flush()
 
     after = {
         "provider": row.provider,
         "endpoint": row.endpoint,
         "model": row.model,
+        "capacity_mode": row.capacity_mode,
         "key_fingerprint": row.key_fingerprint,
         "key_masked": _mask_for_fingerprint(row.key_fingerprint),
     }
@@ -220,6 +228,11 @@ def _run_vertex_test(
         or (row.model if row else None)
         or DEFAULT_VERTEX_MODEL
     ).strip()
+    capacity_mode = (
+        (payload.capacity_mode if payload else None)
+        or (row.capacity_mode if row else None)
+        or "standard_paygo"
+    )
 
     service_account_json: str | None = None
     project_id: str | None = None
@@ -254,9 +267,20 @@ def _run_vertex_test(
         source="byok",
     )
 
-    is_stored_test = row is not None and (payload is None or payload.api_key is None)
+    # Only a no-payload probe activates the persisted configuration. A draft
+    # model/location may borrow the stored key for testing, but must not replace
+    # the provenance of the configuration that is currently live.
+    is_stored_test = row is not None and payload is None
     if is_stored_test and row is not None:
-        row.last_validated_at = datetime.now(tz=UTC) if error is None else row.last_validated_at
+        if error is None:
+            row.last_validated_at = datetime.now(tz=UTC)
+            row.validated_fingerprint = row.key_fingerprint
+            row.validated_model = model
+            row.validated_location = location
+            row.validated_capacity_mode = capacity_mode
+            row.validation_status = "active"
+        else:
+            row.validation_status = "invalid"
         row.last_validation_error = error
         db.flush()
 

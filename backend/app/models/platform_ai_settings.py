@@ -43,6 +43,7 @@ class PlatformAISetting(Base, TimestampMixin):
     provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     location: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    capacity_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     encrypted_service_account: Mapped[bytes | None] = mapped_column(
         LargeBinary, nullable=True
     )
@@ -52,6 +53,11 @@ class PlatformAISetting(Base, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
     last_validation_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    validated_fingerprint: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    validated_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    validated_location: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    validated_capacity_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    validation_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
 
 class PlatformAIUsage(Base, TimestampMixin):
