@@ -278,6 +278,9 @@ resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2025-07-01' = 
   parent: redis
   name: 'default'
   properties: {
+    // The app reads the TLS access key from Key Vault. Public network access
+    // remains disabled, and this opt-in is required before listKeys() is valid.
+    accessKeysAuthentication: 'Enabled'
     clientProtocol: 'Encrypted'
     clusteringPolicy: 'EnterpriseCluster'
     evictionPolicy: 'AllKeysLRU'
