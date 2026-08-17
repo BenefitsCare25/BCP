@@ -111,14 +111,13 @@ def require_broker_admin(
 ) -> CurrentUser:
     """Gate for tenant-level admin surfaces (BYOK config, billing, etc).
 
-    `system_admin` is intentionally excluded — those endpoints would have to
-    accept an explicit `client_id` query param to disambiguate, which is a
-    footgun we'd rather not ship until needed.
+    A `system_admin` operates through the selected active client, so it has the
+    same tenant-admin powers as `broker_admin` plus the platform-only surfaces.
     """
-    if user.role != "broker_admin":
+    if user.role not in ("broker_admin", ROLE_SYSTEM_ADMIN):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Requires broker_admin role.",
+            "Requires broker_admin or system_admin role.",
         )
     return user
 

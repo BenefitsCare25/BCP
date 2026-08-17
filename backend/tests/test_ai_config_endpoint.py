@@ -74,6 +74,15 @@ def _viewer_a() -> CurrentUser:
     )
 
 
+def _system_admin_a() -> CurrentUser:
+    return CurrentUser(
+        user_id="44444444-4444-4444-4444-444444444444",
+        broker_firm_id=None,
+        client_id=DEMO_CLIENT_ID,
+        role="system_admin",
+    )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _setup_db():
     if TEST_DB.exists():
@@ -212,6 +221,21 @@ def test_put_then_get_roundtrip(client_as_admin_a: AsUser) -> None:
     body2 = res2.json()
     assert body2["key_fingerprint"] == body["key_fingerprint"]
     assert body2["key_masked"] == body["key_masked"]
+
+
+def test_system_admin_can_manage_selected_client_ai_config() -> None:
+    client = AsUser(_system_admin_a)
+    res = client.put(
+        "/api/v1/ai-config",
+        json={
+            "provider": "vertex",
+            "endpoint": "asia-southeast1",
+            "model": "gemini-2.5-flash",
+            "api_key": REAL_KEY,
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert client.get("/api/v1/ai-config").status_code == 200
 
 
 def test_only_stored_probe_activates_saved_configuration(
@@ -412,6 +436,14 @@ def test_set_budget_requires_broker_admin():
         "/api/v1/ai-spend/budget", json={"monthly_token_budget": 1000}
     )
     assert r.status_code == 403
+
+
+def test_system_admin_can_manage_selected_client_budget():
+    r = AsUser(_system_admin_a).put(
+        "/api/v1/ai-spend/budget", json={"monthly_token_budget": 1234}
+    )
+    assert r.status_code == 200
+    assert r.json()["monthly_token_budget"] == 1234
 
 
 def test_set_budget_rejects_negative():

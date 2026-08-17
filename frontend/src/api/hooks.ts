@@ -1168,8 +1168,6 @@ export function useRevokeInvitation() {
 export function useAIConfig(enabled = true) {
   // Scoped by the active client: BYOK config is per-tenant, and a user with
   // access to multiple clients switches between them via the client header.
-  // `enabled=false` for system_admin — /ai-config is broker_admin-only and
-  // would 403 (BYOK is a per-company broker surface, not a platform one).
   const cid = useActiveClientId();
   return useQuery({
     queryKey: ["ai-config", cid],

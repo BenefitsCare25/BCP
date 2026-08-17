@@ -1,8 +1,7 @@
 """BYOK AI provider endpoints — per-tenant encrypted endpoint + API key.
 
-Gated to `broker_admin`. `system_admin` is intentionally excluded; if/when a
-platform-operator surface is needed, it'll get its own router rather than
-muddle the "which tenant am I configuring" semantics here.
+Gated to tenant admins. `system_admin` configures the selected active client;
+fleet-wide platform credentials live in ``platform_ai_settings.py``.
 """
 from __future__ import annotations
 

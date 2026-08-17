@@ -46,10 +46,10 @@ export function AIUsageTile() {
   const setBudget = useSetAIBudget();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  // The per-tenant budget PUT is broker_admin-only (system_admin is excluded by
-  // design — it manages the platform-wide caps instead, and broker_viewer is
-  // read-only), so only show the editor to broker_admin.
-  const canEditBudget = me?.role === "broker_admin";
+  // The per-tenant budget PUT is tenant-admin only; system_admin edits the
+  // selected company here and manages fleet-wide caps on the platform card.
+  const canEditBudget =
+    me?.role === "broker_admin" || me?.role === "system_admin";
 
   if (!status) return null;
   if (!status.configured) {

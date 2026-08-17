@@ -122,7 +122,7 @@ def set_budget(
 ) -> dict[str, Any]:
     """Set the tenant's monthly AI token budget. 0 = unlimited (tracking only).
 
-    Broker-admin gated (mirrors BYOK config). Enforcement lives in the AI
+    Tenant-admin gated (mirrors BYOK config). Enforcement lives in the AI
     gateway's ``_check_budget``, which treats 0 as no cap.
     """
     client_id = require_client_id(user)

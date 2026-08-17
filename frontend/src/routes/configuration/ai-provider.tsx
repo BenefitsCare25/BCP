@@ -42,11 +42,9 @@ import { PageGuide } from "@/components/ui/page-guide";
 export function AIProviderPage() {
   const { data: me, isPending: meLoading } = useMe();
   const isSystemAdmin = me?.role === "system_admin";
-  // Wait for the role before deciding: on a hard reload `me` is briefly
-  // undefined, which read as "not a system admin" and fired /ai-config — a
-  // broker_admin-only endpoint — producing a spurious 403 toast for system
-  // admins every time they landed here directly.
-  const { data: config, isLoading } = useAIConfig(!meLoading && !isSystemAdmin);
+  // Wait for the active identity before loading tenant-scoped AI config, so a
+  // hard reload does not fetch before the active client header is available.
+  const { data: config, isLoading } = useAIConfig(!meLoading);
   const { data: status } = useAIStatus();
   const put = usePutAIConfig();
   const remove = useDeleteAIConfig();
