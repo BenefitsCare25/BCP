@@ -46,13 +46,56 @@ def _field_aliases(field_map: dict[str, Any]) -> set[str]:
 
 def _incomplete_result(kind: str, name: str) -> dict[str, Any]:
     return {
-        "rule": f"AI returned every configured {kind} result.",
+        "rule": f"AI response is missing a configured {kind}.",
         "status": "fail",
         "source": "platform",
         "severity": "critical",
         "error_code": "ai_output_incomplete",
         "evidence": f"The AI response omitted or duplicated {kind}: {name}.",
     }
+
+
+def _summarize_incomplete_results(
+    kind: str, failures: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    incomplete: list[dict[str, Any]] = []
+    passthrough: list[dict[str, Any]] = []
+    prefix = f"The AI response omitted or duplicated {kind}: "
+    for failure in failures:
+        evidence = str(failure.get("evidence") or "")
+        if (
+            failure.get("error_code") == "ai_output_incomplete"
+            and evidence.startswith(prefix)
+        ):
+            incomplete.append(failure)
+        else:
+            passthrough.append(failure)
+    if not incomplete:
+        return failures
+    names = sorted(
+        {
+            str(item.get("evidence") or "")
+            .removeprefix(prefix)
+            .removesuffix(".")
+            for item in incomplete
+        }
+    )
+    return [
+        {
+            "rule": f"AI response incomplete for configured {kind}s.",
+            "status": "fail",
+            "source": "platform",
+            "severity": "critical",
+            "error_code": "ai_output_incomplete",
+            "affected_fields": names,
+            "evidence": (
+                "The AI omitted or duplicated these configured outputs: "
+                f"{', '.join(names)}. Re-run the AI review after confirming "
+                "the claim-type field mapping uses exact claim keys."
+            ),
+        },
+        *passthrough,
+    ]
 
 
 def _reconcile_comparisons(
@@ -117,7 +160,9 @@ def _reconcile_comparisons(
             "confidence": 0.0,
             "notes": "The AI response omitted this configured comparison.",
         }
-    return list(by_field.values()), failures
+    return list(by_field.values()), _summarize_incomplete_results(
+        "field comparison", failures
+    )
 
 
 def _reconcile_rules(
@@ -144,7 +189,7 @@ def _reconcile_rules(
     for rule_id, rule in expected.items():
         if rule_id not in seen:
             failures.append(_incomplete_result("business rule", rule.rule))
-    return attributed + failures
+    return attributed + _summarize_incomplete_results("business rule", failures)
 
 
 def _reconcile_required_documents(
@@ -175,7 +220,9 @@ def _reconcile_required_documents(
     for name, display in expected_names.items():
         if name not in by_name:
             failures.append(_incomplete_result("required-document check", display))
-    return list(by_name.values()), failures
+    return list(by_name.values()), _summarize_incomplete_results(
+        "required-document check", failures
+    )
 
 
 def compare_claim(

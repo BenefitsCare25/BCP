@@ -677,8 +677,8 @@ function QueueTab({
           </SheetHeader>
           {selected && (
             <>
-              {/* pr-10 keeps the title clear of the overlaid close control. */}
-              <div className="flex flex-col gap-3 pr-10">
+              {/* Extra right padding keeps the title clear of the overlaid close control. */}
+              <div className="flex flex-col gap-3 px-6 pb-1 pt-6 pr-14">
                 <h2 className="text-lg font-semibold tracking-tight text-foreground">
                   {selected.claim_type}
                 </h2>

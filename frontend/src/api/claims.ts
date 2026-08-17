@@ -71,8 +71,10 @@ export interface FieldComparison {
 export interface RuleResult {
   rule: string;
   status: "pass" | "fail" | "warning" | "not_applicable";
-  source: "deterministic" | "ai";
+  source: "deterministic" | "ai" | "platform";
   evidence: string;
+  error_code?: string | null;
+  affected_fields?: string[] | null;
 }
 
 export interface VisionCheck {

@@ -1,9 +1,12 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
-import { useClaimReview } from "@/api/claims";
+import { useClaimReview, type FieldComparison, type RuleResult } from "@/api/claims";
 import { FieldComparisonTable } from "@/components/claims/FieldComparisonTable";
-import { RuleResultsList } from "@/components/claims/RuleResultsList";
+import {
+  compactRuleResults,
+  RuleResultsList,
+} from "@/components/claims/RuleResultsList";
 import { VisionCheckList } from "@/components/claims/VisionCheckList";
 import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/ui/section-label";
@@ -42,6 +45,82 @@ const STAGE_LABELS: Record<string, string> = {
 
 /** The AI review of one claim — verdict banner, summary, field comparisons,
  * rule results, vision checks. Broker-only (members never see fraud signals). */
+const FIELD_LABELS: Record<string, string> = {
+  amount_claimed: "Amount claimed",
+  incurred_date: "Incurred date",
+  provider_name: "Provider",
+  invoice_number: "Invoice number",
+  currency: "Currency",
+  diagnosis: "Diagnosis",
+};
+
+function fieldLabel(name: string): string {
+  return FIELD_LABELS[name] ?? name.replace(/_/g, " ");
+}
+
+function ReviewMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: "default" | "good" | "warn" | "error";
+}) {
+  const toneClass =
+    tone === "good"
+      ? "text-good"
+      : tone === "warn"
+        ? "text-warn"
+        : tone === "error"
+          ? "text-error"
+          : "text-foreground";
+  return (
+    <div className="rounded-md border border-border bg-card p-3">
+      <div className={`text-lg font-semibold tabular-nums ${toneClass}`}>
+        {value}
+      </div>
+      <div className="mt-0.5 text-2xs uppercase tracking-wider text-subtle">
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function attentionItems(
+  comparisons: FieldComparison[],
+  rules: RuleResult[],
+): string[] {
+  const items: string[] = [];
+  for (const result of rules) {
+    if (result.error_code !== "ai_output_incomplete") continue;
+    const fields = result.affected_fields?.map(fieldLabel).join(", ");
+    items.push(
+      fields
+        ? `${result.rule} Affected: ${fields}.`
+        : result.evidence || result.rule,
+    );
+  }
+  for (const comparison of comparisons) {
+    if (comparison.status === "MATCH") continue;
+    items.push(
+      `${fieldLabel(comparison.field_name)} is ${comparison.status
+        .replace(/_/g, " ")
+        .toLowerCase()}: ${comparison.notes || "review the claim and document values."}`,
+    );
+  }
+  for (const result of rules) {
+    if (
+      result.error_code === "ai_output_incomplete" ||
+      (result.status !== "fail" && result.status !== "warning")
+    ) {
+      continue;
+    }
+    items.push(`${result.rule}: ${result.evidence}`);
+  }
+  return [...new Set(items)].slice(0, 6);
+}
+
 export function ClaimReviewPanel({
   claimId,
   claimStatus,
@@ -157,6 +236,13 @@ export function ClaimReviewPanel({
   }
 
   const flagged = review.verdict === "flagged";
+  const comparisons = review.field_comparisons ?? [];
+  const ruleResults = compactRuleResults(review.rule_results ?? []);
+  const failedRules = ruleResults.filter((r) => r.status === "fail").length;
+  const warningRules = ruleResults.filter((r) => r.status === "warning").length;
+  const matchingFields = comparisons.filter((c) => c.status === "MATCH").length;
+  const fieldIssues = comparisons.length - matchingFields;
+  const issues = attentionItems(comparisons, ruleResults);
   return (
     <div className="space-y-4">
       <div
@@ -198,18 +284,63 @@ export function ClaimReviewPanel({
         </div>
       </div>
 
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <ReviewMetric
+          label="Field matches"
+          value={`${matchingFields}/${comparisons.length}`}
+          tone={fieldIssues ? "warn" : "good"}
+        />
+        <ReviewMetric
+          label="Field issues"
+          value={fieldIssues}
+          tone={fieldIssues ? "warn" : "good"}
+        />
+        <ReviewMetric
+          label="Failed checks"
+          value={failedRules}
+          tone={failedRules ? "error" : "good"}
+        />
+        <ReviewMetric
+          label="Warnings"
+          value={warningRules}
+          tone={warningRules ? "warn" : "good"}
+        />
+      </div>
+
+      <Section
+        title="What needs attention"
+        hint="A short assessor-focused summary of failed, warning, uncertain, or incomplete AI validation items."
+      >
+        {issues.length > 0 ? (
+          <ol className="space-y-2 rounded-md border border-border bg-card p-3">
+            {issues.map((item, index) => (
+              <li key={item} className="flex gap-2 text-sm text-foreground">
+                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-2xs font-medium text-muted-foreground">
+                  {index + 1}
+                </span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <div className="rounded-md border border-border bg-good-soft p-3 text-sm text-good">
+            No validation issues found in the AI review.
+          </div>
+        )}
+      </Section>
+
       <Section
         title="Field comparisons"
         hint="Each claim value (amount, date, provider) against what the AI read from the uploaded documents."
       >
-        <FieldComparisonTable comparisons={review.field_comparisons ?? []} />
+        <FieldComparisonTable comparisons={comparisons} />
       </Section>
 
       <Section
         title="Rule checks"
         hint="Deterministic system checks (in-period, at least one receipt, no duplicate receipt) plus AI checks. A failed system check flags the claim before any AI spend."
       >
-        <RuleResultsList results={review.rule_results ?? []} />
+        <RuleResultsList results={ruleResults} />
       </Section>
 
       {(review.vision_checks?.length ?? 0) > 0 && (

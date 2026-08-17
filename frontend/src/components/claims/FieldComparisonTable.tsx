@@ -25,7 +25,9 @@ const FIELD_LABELS: Record<string, string> = {
   amount_claimed: "Amount claimed",
   incurred_date: "Incurred date",
   provider_name: "Provider",
+  invoice_number: "Invoice number",
   currency: "Currency",
+  diagnosis: "Diagnosis",
 };
 
 export function FieldComparisonTable({ comparisons }: { comparisons: FieldComparison[] }) {

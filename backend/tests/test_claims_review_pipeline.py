@@ -331,10 +331,14 @@ def test_missing_expected_ai_outputs_force_manual_review():
     claim, review = _load(claim_id, review_id)
     assert claim.status == CLAIM_STATUS_AI_FLAGGED
     assert review.verdict == "flagged"
-    assert any(
-        result.get("error_code") == "ai_output_incomplete"
+    incomplete = [
+        result
         for result in review.rule_results
-    )
+        if result.get("error_code") == "ai_output_incomplete"
+    ]
+    assert len(incomplete) == 3
+    assert all("affected_fields" in result for result in incomplete)
+    assert any("field comparison" in result["rule"] for result in incomplete)
 
 
 def test_labelled_ai_comparison_names_are_reconciled():
