@@ -30,7 +30,13 @@ const FIELD_LABELS: Record<string, string> = {
   diagnosis: "Diagnosis",
 };
 
-export function FieldComparisonTable({ comparisons }: { comparisons: FieldComparison[] }) {
+export function FieldComparisonTable({
+  comparisons,
+  hideOmittedNotes = false,
+}: {
+  comparisons: FieldComparison[];
+  hideOmittedNotes?: boolean;
+}) {
   if (comparisons.length === 0) {
     return (
       <div className="text-sm text-muted-foreground p-4 text-center border border-dashed border-border rounded-md">
@@ -52,6 +58,13 @@ export function FieldComparisonTable({ comparisons }: { comparisons: FieldCompar
       <TableBody>
         {comparisons.map((c) => {
           const cfg = STATUS[c.status] ?? { label: c.status, variant: "outline" as const };
+          const showNotes =
+            c.notes &&
+            !c.vision_verified &&
+            !(
+              hideOmittedNotes &&
+              c.notes === "The AI response omitted this configured comparison."
+            );
           return (
             <TableRow key={c.field_name}>
               <TableCell className="font-medium">
@@ -71,7 +84,7 @@ export function FieldComparisonTable({ comparisons }: { comparisons: FieldCompar
                     </span>
                   )}
                 </div>
-                {c.notes && !c.vision_verified && (
+                {showNotes && (
                   <div className="text-2xs text-muted-foreground mt-1 max-w-56">
                     {c.notes}
                   </div>

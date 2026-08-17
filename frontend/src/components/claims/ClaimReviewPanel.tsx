@@ -87,27 +87,50 @@ function ReviewMetric({
   );
 }
 
+type AttentionItem = {
+  title: string;
+  detail: string;
+  action?: string;
+};
+
 function attentionItems(
   comparisons: FieldComparison[],
   rules: RuleResult[],
-): string[] {
-  const items: string[] = [];
+): AttentionItem[] {
+  const items: AttentionItem[] = [];
   for (const result of rules) {
     if (result.error_code !== "ai_output_incomplete") continue;
     const fields = result.affected_fields?.map(fieldLabel).join(", ");
-    items.push(
-      fields
-        ? `${result.rule} Affected: ${fields}.`
-        : result.evidence || result.rule,
-    );
+    items.push({
+      title: "AI comparison output incomplete",
+      detail: fields
+        ? `The AI did not return usable comparison results for: ${fields}.`
+        : result.evidence || "The AI response missed one or more configured outputs.",
+      action:
+        "Re-run AI review. If it repeats, check the claim-type field mappings and prompt keys.",
+    });
   }
+  const hasIncompleteComparison = rules.some(
+    (result) =>
+      result.error_code === "ai_output_incomplete" &&
+      result.rule.toLowerCase().includes("comparison"),
+  );
   for (const comparison of comparisons) {
     if (comparison.status === "MATCH") continue;
-    items.push(
-      `${fieldLabel(comparison.field_name)} is ${comparison.status
-        .replace(/_/g, " ")
-        .toLowerCase()}: ${comparison.notes || "review the claim and document values."}`,
-    );
+    if (
+      hasIncompleteComparison &&
+      comparison.status === "UNCERTAIN" &&
+      comparison.notes === "The AI response omitted this configured comparison."
+    ) {
+      continue;
+    }
+    items.push({
+      title: `${fieldLabel(comparison.field_name)} needs review`,
+      detail:
+        comparison.notes ||
+        `Comparison result: ${comparison.status.replace(/_/g, " ").toLowerCase()}.`,
+      action: "Compare the claim value against the uploaded document value.",
+    });
   }
   for (const result of rules) {
     if (
@@ -116,9 +139,41 @@ function attentionItems(
     ) {
       continue;
     }
-    items.push(`${result.rule}: ${result.evidence}`);
+    items.push({
+      title: result.rule,
+      detail: result.evidence,
+      action:
+        result.status === "fail"
+          ? "Resolve before approving or record a manual justification."
+          : "Review before making the final decision.",
+    });
   }
-  return [...new Set(items)].slice(0, 6);
+  const seen = new Set<string>();
+  return items
+    .filter((item) => {
+      const key = `${item.title}|${item.detail}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
+}
+
+function ReviewDetails({
+  label,
+  children,
+}: {
+  label: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="rounded-md border border-border bg-card">
+      <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+        {label}
+      </summary>
+      <div className="border-t border-border p-3">{children}</div>
+    </details>
+  );
 }
 
 export function ClaimReviewPanel({
@@ -243,6 +298,21 @@ export function ClaimReviewPanel({
   const matchingFields = comparisons.filter((c) => c.status === "MATCH").length;
   const fieldIssues = comparisons.length - matchingFields;
   const issues = attentionItems(comparisons, ruleResults);
+  const hasIncompleteComparison = ruleResults.some(
+    (result) =>
+      result.error_code === "ai_output_incomplete" &&
+      result.rule.toLowerCase().includes("comparison"),
+  );
+  const platformRules = ruleResults.filter(
+    (r) => r.error_code === "ai_output_incomplete",
+  );
+  const blockingRules = ruleResults.filter((r) =>
+    (r.status === "fail" || r.status === "warning") &&
+    r.error_code !== "ai_output_incomplete"
+  );
+  const passedRules = ruleResults.filter((r) =>
+    r.status === "pass" || r.status === "not_applicable"
+  );
   return (
     <div className="space-y-4">
       <div
@@ -276,11 +346,11 @@ export function ClaimReviewPanel({
               </span>
             )}
           </div>
-          {review.summary && (
-            <div className="text-xs mt-1 whitespace-pre-line opacity-90">
-              {review.summary}
-            </div>
-          )}
+          <div className="text-xs mt-1 opacity-90">
+            {flagged
+              ? issues[0]?.detail ?? "Review the highlighted validation issue before deciding."
+              : "The review did not find validation issues in the configured checks."}
+          </div>
         </div>
       </div>
 
@@ -308,17 +378,30 @@ export function ClaimReviewPanel({
       </div>
 
       <Section
-        title="What needs attention"
-        hint="A short assessor-focused summary of failed, warning, uncertain, or incomplete AI validation items."
+        title="Review outcome"
+        hint="Only unresolved validation items are shown here. Passing checks stay available in the audit details below."
       >
         {issues.length > 0 ? (
           <ol className="space-y-2 rounded-md border border-border bg-card p-3">
             {issues.map((item, index) => (
-              <li key={item} className="flex gap-2 text-sm text-foreground">
+              <li
+                key={`${item.title}-${item.detail}`}
+                className="flex gap-2 text-sm text-foreground"
+              >
                 <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-2xs font-medium text-muted-foreground">
                   {index + 1}
                 </span>
-                <span>{item}</span>
+                <span>
+                  <span className="font-medium">{item.title}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {item.detail}
+                  </span>
+                  {item.action && (
+                    <span className="mt-1 block text-xs text-foreground">
+                      Recommended action: {item.action}
+                    </span>
+                  )}
+                </span>
               </li>
             ))}
           </ol>
@@ -330,18 +413,55 @@ export function ClaimReviewPanel({
       </Section>
 
       <Section
-        title="Field comparisons"
-        hint="Each claim value (amount, date, provider) against what the AI read from the uploaded documents."
+        title="Comparison details"
+        hint="Claim values compared against the uploaded documents. Repeated omitted-comparison notes are hidden when the platform issue above already explains them."
       >
-        <FieldComparisonTable comparisons={comparisons} />
+        <ReviewDetails
+          label={`${fieldIssues} field issue${fieldIssues === 1 ? "" : "s"} · ${matchingFields} matched`}
+        >
+          <FieldComparisonTable
+            comparisons={comparisons}
+            hideOmittedNotes={hasIncompleteComparison}
+          />
+        </ReviewDetails>
       </Section>
 
       <Section
         title="Rule checks"
-        hint="Deterministic system checks (in-period, at least one receipt, no duplicate receipt) plus AI checks. A failed system check flags the claim before any AI spend."
+        hint="Failed or warning checks are shown first. Passed checks are collapsed to keep the review readable."
       >
-        <RuleResultsList results={ruleResults} />
+        <div className="space-y-2">
+          {blockingRules.length > 0 ? (
+            <RuleResultsList results={blockingRules} />
+          ) : (
+            <div className="rounded-md border border-border bg-good-soft p-3 text-sm text-good">
+              No failed or warning rule checks.
+            </div>
+          )}
+          {passedRules.length > 0 && (
+            <ReviewDetails
+              label={`${passedRules.length} passed / not applicable check${
+                passedRules.length === 1 ? "" : "s"
+              }`}
+            >
+              <RuleResultsList results={passedRules} />
+            </ReviewDetails>
+          )}
+          {platformRules.length > 0 && (
+            <ReviewDetails label="Technical AI response issue">
+              <RuleResultsList results={platformRules} />
+            </ReviewDetails>
+          )}
+        </div>
       </Section>
+
+      {review.summary && (
+        <ReviewDetails label="Raw AI summary">
+          <div className="whitespace-pre-line text-xs text-muted-foreground">
+            {review.summary}
+          </div>
+        </ReviewDetails>
+      )}
 
       {(review.vision_checks?.length ?? 0) > 0 && (
         <Section
