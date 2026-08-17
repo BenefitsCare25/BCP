@@ -1,6 +1,6 @@
 # AI Claim Review Production Remediation
 
-Status: implementation and local verification complete; deployment and live-browser validation pending
+Status: deployed; production CDL employee smoke test exposed two follow-up fixes
 Prepared: 2026-08-17
 Scope: claim submission, AI review execution, persistence, recovery, provider validation, broker UI, deployment, and observability
 
@@ -25,13 +25,32 @@ Final local verification completed on 2026-08-17:
 - Bicep compilation and generated ARM template: passed.
 - Ruff and `git diff --check`: passed.
 
-The code is not labelled production-verified until deployment succeeds and the
-Chrome smoke test completes through the signed-in Inspro employee portal with a
-real test PDF. The live test must confirm upload, submission, durable queue
-progress, Gemini extraction/comparison, a terminal review state, broker access,
-and the expected member-visible result. A submitted smoke-test claim is retained
-as an audited record and closed through the normal broker workflow; it must not
-be deleted directly from the database.
+Production deployment completed on 2026-08-17. Chrome testing through the
+signed-in CDL employee portal confirmed upload, Gemini intake extraction, form
+validation, document attachment, and member claim submission. The submitted
+smoke-test claim is:
+
+- Claim ID: `8de175f6-e7cc-4bce-820f-0629444ae7e1`
+- Employee: Chow Wo Keon (Raymond), City Developments Limited
+- Invoice: `QA-20260817-2038`
+- Amount/date: S$48, 17 Aug 2026
+- Member status after submit: Under review
+
+The live test also exposed two production gaps:
+
+- The intake mapper extracted amount/date/provider/invoice from the QA receipt
+  but did not preselect GP when the line item explicitly said "General
+  practitioner consultation". This is remediated by a deterministic GP signal
+  that narrows ambiguous outpatient receipts to GP without inventing diagnosis.
+- The claims hardening pass accidentally excluded `system_admin` from the
+  broker claims review API. This is remediated so system admins can access claim
+  review/configuration while broker viewers remain read-only.
+
+Broker-side AI review inspection could not be completed before the RBAC fix was
+deployed because the live system-admin account received `Claims access requires
+a broker claims role` from the queue API. Re-run broker verification after the
+RBAC fix deployment and close/reject the smoke-test claim through the normal
+broker workflow. Do not delete it directly from the database.
 
 ## Claims-wide production hardening delivered
 

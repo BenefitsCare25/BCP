@@ -33,7 +33,7 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 _READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_CLAIMS_ROLES = frozenset({"broker_admin", "broker_viewer"})
+_CLAIMS_ROLES = frozenset({"broker_admin", "broker_viewer", ROLE_SYSTEM_ADMIN})
 
 
 def _deny_cross_tenant(user: CurrentUser, resource: str, resource_id: str) -> HTTPException:
@@ -98,10 +98,10 @@ def require_claim_configuration(
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
     """Restrict claim-review and document-registry configuration to admins."""
-    if user.role != "broker_admin":
+    if user.role not in ("broker_admin", ROLE_SYSTEM_ADMIN):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Claim configuration requires broker_admin role.",
+            "Claim configuration requires broker_admin or system_admin role.",
         )
     return user
 

@@ -115,6 +115,13 @@ _STRONG_SURGICAL_MARKERS = (
     "pre-admission", "pre admission", "post-discharge", "post discharge",
 )
 
+_GP_CONSULT_RE = re.compile(
+    r"\b(?:gp|general\s+practitioner|family\s+physician|family\s+medicine)\b"
+    r"|general\s+(?:practice|medical)\s+consult(?:ation)?"
+    r"|(?:gp|doctor)\s+consult(?:ation)?",
+    re.IGNORECASE,
+)
+
 
 # ── field accessors ───────────────────────────────────────────────────────────
 
@@ -455,6 +462,22 @@ def _surgical_context(document: dict[str, Any], text: str) -> bool:
     return any(k in body for k in _WEAK_SURGICAL_MARKERS)
 
 
+def _gp_consult_context(document: dict[str, Any]) -> bool:
+    """Whether non-provider document text explicitly names a GP consultation.
+
+    A generic receipt can belong to GP or Dental when both covers exist. The
+    line item "General practitioner consultation" is a stronger signal than the
+    receipt type itself, but provider names are excluded so a clinic brand does
+    not force the route.
+    """
+    body = " ".join(
+        f"{_label(f)} {_val(f)}"
+        for f in _fields(document)
+        if not any(k in _label(f) for k in _PROVIDER_KEYWORDS)
+    )
+    return bool(_GP_CONSULT_RE.search(body))
+
+
 def _target_settings(
     document: dict[str, Any],
     text: str,
@@ -507,6 +530,8 @@ def _target_settings(
             return {"specialist", "inpatient_other"}, True
         return {"specialist"}, False
     if "prescription" in dt:
+        return {"gp"}, False
+    if _gp_consult_context(document):
         return {"gp"}, False
     # Plain receipt / tax invoice — an outpatient bill with no strong signal.
     return {"gp", "dental"}, False

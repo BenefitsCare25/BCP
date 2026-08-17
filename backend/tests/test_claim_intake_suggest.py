@@ -259,6 +259,31 @@ def test_claim_type_ambiguous_leaves_candidates():
     assert set(out.claim_candidates) == {"insured:GP:0", "insured:GD:0"}
 
 
+def test_gp_line_item_narrows_plain_receipt_to_gp_without_guessing_diagnosis():
+    doc = _receipt_document()
+    doc["fields"] = [f for f in doc["fields"] if f["label"] != "Diagnosis"]
+    doc["fields"].append(
+        {
+            "id": "f7",
+            "label": "Description",
+            "value": "General practitioner consultation",
+            "field_type": "text",
+            "confidence": 0.93,
+        }
+    )
+
+    out = suggest_from_extraction(
+        doc,
+        _coverage([_gp_option(), _dental_option()]),
+        _employee(),
+        YEAR,
+    )
+
+    assert out.claim_selection == "insured:GP:0"
+    assert out.claim_candidates == []
+    assert out.fields.diagnosis is None
+
+
 def test_dental_keyword_picks_dental():
     out = suggest_from_extraction(
         _receipt_document(provider="Smile Dental Surgery"),
