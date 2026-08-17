@@ -196,7 +196,9 @@ export const portalApi = {
    * header, so images can't be loaded via a plain <img src> — callers turn
    * the blob into an object URL. */
   blob: async (path: string): Promise<Blob> => {
-    const res = await fetch(`${API_BASE}${path}`, { headers: authHeader() });
+    const res = await fetch(`${API_BASE}${path}`, {
+      headers: { ...tenantHeader(), ...authHeader() },
+    });
     if (!res.ok) return failed(res);
     return await res.blob();
   },
@@ -205,7 +207,7 @@ export const portalApi = {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       body: formData,
-      headers: authHeader(),
+      headers: { ...tenantHeader(), ...authHeader() },
     });
     if (!res.ok) return failed(res);
     return (await res.json()) as T;

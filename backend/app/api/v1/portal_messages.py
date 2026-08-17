@@ -62,6 +62,7 @@ def _own_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
 
 @router.get("/conversations", response_model=ConversationList)
 def list_my_conversations(
+    request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     member: CurrentMember = Depends(get_current_member),
@@ -84,24 +85,47 @@ def list_my_conversations(
     total, rows = member_conversations(
         db, employee.id, employee.policy_year_id, offset=offset, limit=limit
     )
-    return ConversationList(
+    out = ConversationList(
         total=total,
         offset=offset,
         limit=limit,
         unread_total=member_unread_count(db, employee.id, employee.policy_year_id),
         items=[member_conversation_out(r) for r in rows],
     )
+    write_member_audit(
+        db,
+        member,
+        "claim.conversations.view",
+        "employee",
+        employee.id,
+        employee_id=employee.id,
+        request=request,
+    )
+    db.commit()
+    return out
 
 
 @router.get("/claims/{claim_id}/messages", response_model=list[ClaimMessageOut])
 def list_my_claim_messages(
     claim_id: str,
+    request: Request,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> list[ClaimMessageOut]:
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
     claim = _own_claim(db, claim_id, employee.id)
-    return [member_message_out(m) for m in thread_for_claim(db, claim.id)]
+    messages = [member_message_out(m) for m in thread_for_claim(db, claim.id)]
+    write_member_audit(
+        db,
+        member,
+        "claim.messages.view",
+        "claim",
+        claim.id,
+        employee_id=employee.id,
+        request=request,
+    )
+    db.commit()
+    return messages
 
 
 @router.post(

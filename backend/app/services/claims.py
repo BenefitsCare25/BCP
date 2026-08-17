@@ -8,11 +8,13 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import event, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
@@ -23,9 +25,11 @@ from app.core.storage import (
     get_storage,
 )
 from app.core.uploads import saved_upload
+from app.db.tenancy import is_postgres
 from app.models import (
     Claim,
     ClaimAIReview,
+    ClaimCommand,
     Dependant,
     Employee,
     PolicyYear,
@@ -33,6 +37,7 @@ from app.models import (
 )
 from app.models.claim import (
     AI_REVIEW_STATUSES,
+    AMENDED_BY_BROKER,
     AMENDED_BY_MEMBER,
     CASE_TYPE_CLAIM,
     CASE_TYPE_LOG,
@@ -49,7 +54,11 @@ from app.models.claim import (
     VALID_TRANSITIONS,
 )
 from app.models.policy_year import PolicyYearStatus
-from app.models.stored_document import DOC_ENTITY_CLAIM
+from app.models.stored_document import (
+    DOC_ENTITY_CLAIM,
+    STORAGE_AVAILABLE,
+    STORAGE_DELETE_PENDING,
+)
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, DocSlotOut, StoredDocumentOut
 from app.services.claim_episodes import anchor_out, resolve_anchor
@@ -80,6 +89,121 @@ from app.services.member_statement import build_member_statement
 from app.services.roster_attributes import NAME_KEYS, cover_end, first_value
 
 logger = logging.getLogger(__name__)
+_PENDING_BLOBS_KEY = "inspro_pending_document_blobs"
+
+
+@event.listens_for(Session, "after_commit")
+def _forget_committed_document_blobs(session: Session) -> None:
+    session.info.pop(_PENDING_BLOBS_KEY, None)
+
+
+@event.listens_for(Session, "after_rollback")
+def _remove_rolled_back_document_blobs(session: Session) -> None:
+    paths = session.info.pop(_PENDING_BLOBS_KEY, set())
+    for path in paths:
+        try:
+            get_storage().delete(path)
+        except Exception:
+            logger.error(
+                "Failed to remove blob after database rollback: path=%s",
+                path,
+                exc_info=True,
+            )
+
+
+def lock_claim_for_mutation(db: Session, claim: Claim) -> Claim:
+    """Reload and lock a claim before validating or changing its state.
+
+    ``populate_existing`` is essential: FastAPI may already have loaded the
+    dependency before another transaction committed. Without refreshing the
+    identity-map object after acquiring the lock, the second request could
+    validate a stale status/revision even though PostgreSQL serialized it.
+    """
+    stmt = select(Claim).where(Claim.id == claim.id, Claim.client_id == claim.client_id)
+    if is_postgres(db):
+        stmt = stmt.with_for_update()
+    locked = db.execute(stmt.execution_options(populate_existing=True)).scalar_one()
+    return locked
+
+
+def lock_claim_utilization_bucket(db: Session, claim: Claim) -> None:
+    """Serialize approvals drawing on the same employee benefit bucket."""
+    if not is_postgres(db):
+        return
+    bucket = "|".join(
+        (
+            claim.client_id,
+            claim.policy_year_id,
+            claim.employee_id,
+            claim.claim_kind,
+            claim.product_code or "",
+            claim.benefit_key or claim.flex_category_name or "",
+        )
+    )
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:bucket, 0))"),
+        {"bucket": bucket},
+    )
+
+
+def is_replayed_claim_command(
+    db: Session,
+    claim: Claim,
+    action: str,
+    idempotency_key: str | None,
+) -> bool:
+    """Return true for a completed retry; reject cross-command key reuse."""
+    if not idempotency_key:
+        return False
+    existing = db.execute(
+        select(ClaimCommand).where(
+            ClaimCommand.client_id == claim.client_id,
+            ClaimCommand.idempotency_key == idempotency_key,
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        return False
+    if existing.claim_id != claim.id or existing.action != action:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "idempotency_key_reused",
+                "message": "This Idempotency-Key was used for another command.",
+            },
+        )
+    return True
+
+
+def record_claim_command(
+    db: Session,
+    claim: Claim,
+    action: str,
+    idempotency_key: str | None,
+) -> None:
+    if not idempotency_key:
+        return
+    command = ClaimCommand(
+        client_id=claim.client_id,
+        claim_id=claim.id,
+        action=action,
+        idempotency_key=idempotency_key,
+    )
+    db.add(command)
+    try:
+        # Flush only the key reservation here. The claim row remains protected
+        # by its transaction lock, while a simultaneous reuse on another claim
+        # becomes a controlled 409 instead of an unhandled unique violation.
+        db.flush((command,))
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "idempotency_key_reused",
+                "message": "This Idempotency-Key was used for another command.",
+            },
+        ) from None
+
 
 # Magic-byte signatures for the allowed document types. The stored mime_type
 # is derived from the actual bytes (falling back to the extension), never from
@@ -100,8 +224,13 @@ _SUFFIX_MIME = {
 def _sniff_mime(head: bytes, suffix: str) -> str:
     for magic, mime in _MAGIC_MIME:
         if head.startswith(magic):
-            return mime
-    return _SUFFIX_MIME.get(suffix, "application/octet-stream")
+            if _SUFFIX_MIME.get(suffix) == mime:
+                return mime
+            break
+    raise HTTPException(
+        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        "The file contents do not match its PDF or image extension.",
+    )
 
 
 def load_member_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
@@ -129,6 +258,7 @@ def claim_documents(db: Session, claim: Claim) -> list[StoredDocument]:
             .where(
                 StoredDocument.entity_type == DOC_ENTITY_CLAIM,
                 StoredDocument.entity_id == claim.id,
+                StoredDocument.storage_state == STORAGE_AVAILABLE,
             )
             .order_by(StoredDocument.created_at)
         ).scalars().all()
@@ -251,7 +381,7 @@ def populate_claim_out(
             if referral_docs is not None
             else db.get(StoredDocument, claim.referral_document_id)
         )
-        if ref is not None:
+        if ref is not None and ref.storage_state == STORAGE_AVAILABLE:
             out.referral_document = StoredDocumentOut.model_validate(ref)
     out.referral_not_applicable = bool(
         (claim.form_fields or {}).get("referral_not_applicable")
@@ -336,6 +466,7 @@ def claim_documents_for(
         .where(
             StoredDocument.entity_type == DOC_ENTITY_CLAIM,
             StoredDocument.entity_id.in_(claim_ids),
+            StoredDocument.storage_state == STORAGE_AVAILABLE,
         )
         .order_by(StoredDocument.created_at)
     ).scalars():
@@ -360,7 +491,10 @@ def prefetch_claim_relations(
     referral_docs: dict[str, StoredDocument] = {}
     if referral_ids:
         for d in db.execute(
-            select(StoredDocument).where(StoredDocument.id.in_(referral_ids))
+            select(StoredDocument).where(
+                StoredDocument.id.in_(referral_ids),
+                StoredDocument.storage_state == STORAGE_AVAILABLE,
+            )
         ).scalars():
             referral_docs[d.id] = d
     dep_names: dict[str, str | None] = {}
@@ -382,21 +516,15 @@ def prefetch_claim_relations(
 
 
 def delete_stored_document(db: Session, doc: StoredDocument) -> None:
-    """Remove a single stored document (bytes + row). Caller commits."""
-    try:
-        get_storage().delete(doc.storage_path)
-    except Exception:
-        # The blob delete failed but we still drop the row so the caller's flow
-        # (claim/dependant deletion) isn't blocked by a transient storage
-        # outage. That orphans a PII-bearing blob with no DB anchor, so log at
-        # ERROR with enough context (doc id, client, path) for an ops
-        # storage-vs-DB reconciliation sweep to find it later.
-        logger.error(
-            "Orphaned stored-document blob after failed delete: "
-            "doc_id=%s client_id=%s path=%s",
-            doc.id, doc.client_id, doc.storage_path, exc_info=True,
-        )
-    db.delete(doc)
+    """Hide a document atomically and queue its bytes for durable deletion.
+
+    Deleting the blob before the database commit can leave a visible metadata
+    row pointing at missing bytes if that commit rolls back. Marking it pending
+    makes the business deletion transactional; the worker removes the bytes and
+    metadata afterward, retrying safely on storage or database failures.
+    """
+    doc.storage_state = STORAGE_DELETE_PENDING
+    doc.delete_error = None
 
 
 def claim_to_out(db: Session, claim: Claim) -> ClaimOut:
@@ -452,7 +580,7 @@ def form_snapshot(claim: Claim, *, referral_not_applicable: bool) -> dict[str, A
         # one.
         **({"doctor_name": doctor} if doctor else {}),
         "diagnosis": claim.diagnosis,
-        "amount_claimed": claim.amount_claimed,
+        "amount_claimed": float(claim.amount_claimed),
         "currency": claim.currency,
         "referral_not_applicable": referral_not_applicable,
     }
@@ -628,8 +756,10 @@ async def attach_document(
         )
         with tmp_path.open("rb") as stream:
             head = stream.read(16)
+            mime_type = _sniff_mime(head, suffix)
             stream.seek(0)
             blob = get_storage().save(stream, path)
+            db.info.setdefault(_PENDING_BLOBS_KEY, set()).add(blob.path)
 
     doc = StoredDocument(
         id=doc_id,
@@ -639,7 +769,7 @@ async def attach_document(
         file_name=file.filename or f"document{suffix}",
         doc_type=doc_type,
         issued_on=issued_on,
-        mime_type=_sniff_mime(head, suffix),
+        mime_type=mime_type,
         size_bytes=blob.size_bytes,
         sha256=blob.sha256,
         storage_path=blob.path,
@@ -651,8 +781,7 @@ async def attach_document(
 
 
 def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
-    """Remove an entity's stored documents (bytes + rows). Caller commits."""
-    storage = get_storage()
+    """Hide an entity's documents and queue their blob deletion. Caller commits."""
     docs = db.execute(
         select(StoredDocument).where(
             StoredDocument.entity_type == entity_type,
@@ -660,17 +789,35 @@ def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
         )
     ).scalars().all()
     for doc in docs:
+        delete_stored_document(db, doc)
+
+
+def retry_pending_document_deletes(db: Session, *, limit: int = 100) -> int:
+    """Retry retained blob deletions and remove metadata only on success."""
+    docs = list(
+        db.execute(
+            select(StoredDocument)
+            .where(StoredDocument.storage_state == STORAGE_DELETE_PENDING)
+            .order_by(StoredDocument.updated_at)
+            .limit(limit)
+        ).scalars()
+    )
+    deleted = 0
+    for doc in docs:
         try:
-            storage.delete(doc.storage_path)
-        except Exception:
-            # See delete_stored_document: keep the flow moving but log at ERROR
-            # so an orphaned PII blob is discoverable for reconciliation.
-            logger.error(
-                "Orphaned stored-document blob after failed delete: "
-                "doc_id=%s client_id=%s path=%s",
-                doc.id, doc.client_id, doc.storage_path, exc_info=True,
+            get_storage().delete(doc.storage_path)
+        except Exception as exc:
+            doc.delete_error = str(exc)[:255]
+            logger.warning(
+                "Stored-document retry failed: doc_id=%s path=%s",
+                doc.id,
+                doc.storage_path,
+                exc_info=True,
             )
-        db.delete(doc)
+        else:
+            db.delete(doc)
+            deleted += 1
+    return deleted
 
 
 def _apply_gp_rider_benefit_key(
@@ -1259,10 +1406,10 @@ def assert_fx_acknowledged(claim: Claim) -> None:
                 "converted amount before sending this claim."
             ),
             "currency": claim.currency,
-            "amount_claimed": claim.amount_claimed,
+            "amount_claimed": float(claim.amount_claimed),
             "policy_currency": POLICY_CURRENCY,
-            "amount_converted": claim.amount_converted,
-            "rate": claim.fx_rate,
+            "amount_converted": float(claim.amount_converted),
+            "rate": float(claim.fx_rate) if claim.fx_rate is not None else None,
             "rate_date": claim.fx_rate_date.isoformat() if claim.fx_rate_date else None,
         },
     )
@@ -1684,13 +1831,29 @@ def audit_cells(source: dict[str, Any]) -> dict[str, Any]:
     Shared by every claim-mutating endpoint's audit write, so a date lands in
     the trail the same way whichever surface moved it.
     """
-    return {
-        k: (v.isoformat() if hasattr(v, "isoformat") else v)
-        for k, v in source.items()
+    money_fields = {
+        "amount_claimed",
+        "amount_converted",
+        "amount_approved",
+        "payment_amount",
     }
+    values: dict[str, Any] = {}
+    for key, value in source.items():
+        if value is not None and key in money_fields:
+            values[key] = format(Decimal(str(value)).quantize(Decimal("0.01")), "f")
+        elif value is not None and key == "fx_rate":
+            values[key] = format(Decimal(str(value)).quantize(Decimal("0.00000001")), "f")
+        else:
+            values[key] = value.isoformat() if hasattr(value, "isoformat") else value
+    return values
 
 
-def stamp_document_amendment(db: Session, claim: Claim) -> bool:
+def stamp_document_amendment(
+    db: Session,
+    claim: Claim,
+    *,
+    actor: str = AMENDED_BY_MEMBER,
+) -> bool:
     """A claim's EVIDENCE changed — record it as an amendment.
 
     Adding or removing a document invalidates an AI verdict exactly as changing
@@ -1706,9 +1869,11 @@ def stamp_document_amendment(db: Session, claim: Claim) -> bool:
         return False
     claim.revision += 1
     claim.amended_at = datetime.now(UTC)
-    # Only the portal attaches and removes documents on a live claim, so this is
-    # always the member — and it is a change the assessor has not seen.
-    claim.amended_by = AMENDED_BY_MEMBER
+    # Both the portal and broker workspace may change live evidence. Preserve
+    # who made the change so the other party sees the correct amendment marker.
+    if actor not in {AMENDED_BY_MEMBER, AMENDED_BY_BROKER}:
+        raise ValueError(f"Unsupported claim amendment actor: {actor}")
+    claim.amended_by = actor
     return supersede_review_for_amendment(db, claim)
 
 

@@ -16,6 +16,7 @@ import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import {
+  downloadPortalClaimDocument,
   useAmendClaim,
   useDeleteClaimDocument,
   usePortalClaim,
@@ -250,6 +251,13 @@ export function PortalClaimDetailPage() {
         setEditing(true);
       }}
       onRemoveDocument={(docId) => void removeDocument(docId)}
+      onDownloadDocument={(docId) => {
+        const document = data.documents.find((item) => item.id === docId);
+        if (!document) return;
+        void downloadPortalClaimDocument(data.id, document).catch((error) => {
+          toast.error(formatError(error));
+        });
+      }}
       removingDocumentId={removingDocId}
       editing={
         editing ? (

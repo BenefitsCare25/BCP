@@ -156,6 +156,99 @@ def test_set_search_path_resets_to_public(pg_engine) -> None:
         assert schema_for_firm(FIRM_A) not in s.execute(text("SHOW search_path")).scalar()
 
 
+def test_new_tenant_audit_log_is_append_only(pg_engine) -> None:
+    """Provisioning after Alembic must install the same trigger as migration."""
+    from sqlalchemy.exc import DBAPIError
+
+    from app.db.tenancy import provision_firm_schema, set_search_path
+    from app.models import AuditLog, BrokerFirm, Client
+
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+    with Session() as s:
+        if s.get(BrokerFirm, FIRM_A) is None:
+            s.add(BrokerFirm(id=FIRM_A, name="Firm A"))
+            s.flush()
+        if s.get(Client, CLI_A) is None:
+            s.add(Client(id=CLI_A, name="Client A", broker_firm_id=FIRM_A))
+        s.commit()
+    provision_firm_schema(pg_engine, FIRM_A)
+
+    with Session() as s:
+        set_search_path(s, FIRM_A)
+        row = AuditLog(
+            client_id=CLI_A,
+            action="claim.view",
+            entity_type="claim",
+            entity_id="audit-probe",
+            cross_tenant_access=False,
+        )
+        s.add(row)
+        s.commit()
+        audit_id = row.id
+
+    with Session() as s:
+        set_search_path(s, FIRM_A)
+        with pytest.raises(DBAPIError, match="audit_log is append-only"):
+            s.execute(
+                text("UPDATE audit_log SET action='tampered' WHERE id=:id"),
+                {"id": audit_id},
+            )
+            s.commit()
+
+
+def test_tenant_notification_leases_skip_locked(pg_engine) -> None:
+    """Two workers must lease different outbox rows without waiting."""
+    from app.db.tenancy import provision_firm_schema, set_search_path
+    from app.models import BrokerFirm, ClaimNotification, Client
+
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+    with Session() as s:
+        if s.get(BrokerFirm, FIRM_A) is None:
+            s.add(BrokerFirm(id=FIRM_A, name="Firm A"))
+            s.flush()
+        if s.get(Client, CLI_A) is None:
+            s.add(Client(id=CLI_A, name="Client A", broker_firm_id=FIRM_A))
+        s.commit()
+    provision_firm_schema(pg_engine, FIRM_A)
+    with Session() as s:
+        set_search_path(s, FIRM_A)
+        for suffix in ("one", "two"):
+            s.add(
+                ClaimNotification(
+                    client_id=CLI_A,
+                    claim_id=f"claim-{suffix}",
+                    source_message_id=f"message-{suffix}",
+                    recipient_email="test@example.invalid",
+                    available_at=s.execute(text("SELECT now()")).scalar_one(),
+                )
+            )
+        s.commit()
+
+    first = Session()
+    second = Session()
+    try:
+        set_search_path(first, FIRM_A)
+        set_search_path(second, FIRM_A)
+        leased_first = first.execute(
+            text(
+                "SELECT id FROM claim_notifications WHERE status='queued' "
+                "ORDER BY created_at LIMIT 1 FOR UPDATE"
+            )
+        ).scalar_one()
+        leased_second = second.execute(
+            text(
+                "SELECT id FROM claim_notifications WHERE status='queued' "
+                "ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED"
+            )
+        ).scalar_one()
+        assert leased_second != leased_first
+    finally:
+        first.rollback()
+        second.rollback()
+        first.close()
+        second.close()
+
+
 def test_tenant_routing_survives_commit(pg_engine) -> None:
     """A read AFTER commit must still resolve to the firm schema.
 

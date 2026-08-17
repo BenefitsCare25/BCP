@@ -10,7 +10,7 @@ import {
   canAmendPayment,
   hasSettlement,
 } from "@/components/claims/ClaimSettlementFacts";
-import { formatError } from "@/lib/errors";
+import { ConflictDetailError, formatError } from "@/lib/errors";
 import { toast } from "sonner";
 
 /**
@@ -155,12 +155,14 @@ function FormField({
 export function ClaimAssessmentPanel({ claim }: { claim: BrokerClaim }) {
   const base = useMemo(() => draftOf(claim), [claim]);
   const [draft, setDraft] = useState<Draft>(base);
+  const [overpaymentWarning, setOverpaymentWarning] = useState<string | null>(null);
   const save = useUpdateClaimAssessment();
 
   // Re-seed when the sheet moves to another claim, or when a save lands and the
   // server's copy becomes the new baseline.
   useEffect(() => {
     setDraft(base);
+    setOverpaymentWarning(null);
   }, [base]);
 
   const patch = changedFields(draft, base);
@@ -179,14 +181,29 @@ export function ClaimAssessmentPanel({ claim }: { claim: BrokerClaim }) {
     hasSettlement(claim) && base.sent_to_insurer_on !== "" &&
     draft.sent_to_insurer_on === "";
 
-  const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
-    setDraft((d) => ({ ...d, [key]: value }));
+  const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
+    if (key === "payment_amount") setOverpaymentWarning(null);
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
 
   const onSave = async () => {
     try {
-      await save.mutateAsync({ claimId: claim.id, patch });
+      await save.mutateAsync({
+        claimId: claim.id,
+        patch: {
+          ...patch,
+          ...(overpaymentWarning ? { acknowledge_overpayment: true } : {}),
+        },
+      });
       toast.success("Assessment saved");
     } catch (err) {
+      if (
+        err instanceof ConflictDetailError &&
+        err.detail.code === "payment_exceeds_approval"
+      ) {
+        setOverpaymentWarning(err.message);
+        return;
+      }
       toast.error(formatError(err));
     }
   };
@@ -392,6 +409,11 @@ export function ClaimAssessmentPanel({ claim }: { claim: BrokerClaim }) {
           date.
         </p>
       )}
+      {overpaymentWarning && (
+        <p className="rounded-md border border-warn/40 bg-warn-soft px-3 py-2.5 text-sm text-warn">
+          {overpaymentWarning} Save again to record this exception.
+        </p>
+      )}
 
       <div className="flex items-center gap-3">
         <Button
@@ -400,13 +422,16 @@ export function ClaimAssessmentPanel({ claim }: { claim: BrokerClaim }) {
           onClick={onSave}
         >
           {save.isPending && <Loader2 className="size-4 animate-spin" />}
-          Save assessment
+          {overpaymentWarning ? "Save exception" : "Save assessment"}
         </Button>
         {dirty && !save.isPending && (
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setDraft(base)}
+            onClick={() => {
+              setDraft(base);
+              setOverpaymentWarning(null);
+            }}
           >
             Discard
           </Button>

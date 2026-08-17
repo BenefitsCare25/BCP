@@ -32,7 +32,7 @@ PY = "00000000-0000-0000-0000-00000000pd01"
 EMP_A = "00000000-0000-0000-0000-00000000pd02"
 ACC_A = "00000000-0000-0000-0000-00000000pd03"
 
-PNG = b"\x89PNG fake proof bytes"
+PNG = b"\x89PNG\r\n\x1a\nfake proof bytes"
 
 
 @pytest.fixture(scope="module", autouse=True)

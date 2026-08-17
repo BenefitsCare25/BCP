@@ -33,6 +33,7 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 _READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_CLAIMS_ROLES = frozenset({"broker_admin", "broker_viewer"})
 
 
 def _deny_cross_tenant(user: CurrentUser, resource: str, resource_id: str) -> HTTPException:
@@ -66,6 +67,41 @@ def require_write_access(
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "The broker_viewer role is read-only.",
+        )
+    return user
+
+
+def require_claim_access(
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Restrict medical/financial claim records to broker claims staff.
+
+    Client HR identities have a separate HR surface. Merely possessing access
+    to a client must not grant access to diagnoses, receipts, adjudication, or
+    settlement data. Broker viewers remain read-only.
+    """
+    if user.role not in _CLAIMS_ROLES:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Claims access requires a broker claims role.",
+        )
+    if user.role == "broker_viewer" and request.method.upper() not in _READ_ONLY_METHODS:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "The broker_viewer role is read-only.",
+        )
+    return user
+
+
+def require_claim_configuration(
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Restrict claim-review and document-registry configuration to admins."""
+    if user.role != "broker_admin":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Claim configuration requires broker_admin role.",
         )
     return user
 

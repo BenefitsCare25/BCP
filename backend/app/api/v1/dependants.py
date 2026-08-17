@@ -38,7 +38,7 @@ from app.models.dependant import (
     DEPENDANT_STATUS_PENDING,
     DEPENDANT_STATUS_REJECTED,
 )
-from app.models.stored_document import DOC_ENTITY_DEPENDANT
+from app.models.stored_document import DOC_ENTITY_DEPENDANT, STORAGE_AVAILABLE
 from app.schemas.api import (
     AutoMatchResult,
     DependantList,
@@ -383,6 +383,7 @@ def list_dependant_documents(
         .where(
             StoredDocument.entity_type == DOC_ENTITY_DEPENDANT,
             StoredDocument.entity_id == d.id,
+            StoredDocument.storage_state == STORAGE_AVAILABLE,
         )
         .order_by(StoredDocument.created_at)
     ).scalars().all()
@@ -400,6 +401,7 @@ def download_dependant_document(
         doc is None
         or doc.entity_type != DOC_ENTITY_DEPENDANT
         or doc.entity_id != d.id
+        or doc.storage_state != STORAGE_AVAILABLE
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:

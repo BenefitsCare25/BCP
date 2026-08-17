@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_client_id
+from app.core.deps import require_claim_configuration, require_client_id
 from app.core.identity import accessible_clients, assert_client_accessible
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
@@ -48,7 +48,11 @@ from app.services.claim_review_configs import (
 )
 from app.services.product_terms import product_ids_in_year
 
-router = APIRouter(prefix="/claim-review-configs", tags=["claim-review-configs"])
+router = APIRouter(
+    prefix="/claim-review-configs",
+    tags=["claim-review-configs"],
+    dependencies=[Depends(require_claim_configuration)],
+)
 
 
 def _out(row: ClaimReviewConfig) -> ClaimReviewConfigOut:

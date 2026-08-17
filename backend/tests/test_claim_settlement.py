@@ -271,6 +271,32 @@ def test_payment_records_the_insurers_own_figure(client):
     assert body["amount_approved"] == 500.0
 
 
+def test_overpayment_requires_then_accepts_explicit_acknowledgement(client):
+    with SessionLocal() as s:
+        c = _claim(s)
+        s.commit()
+        cid = c.id
+    client.post(f"/api/v1/claims/{cid}/send-to-insurer", json={})
+    body = {"paid_on": "2038-04-10", "amount": 520.0}
+    warning = client.post(f"/api/v1/claims/{cid}/payment", json=body)
+    assert warning.status_code == 409, warning.text
+    assert warning.json()["detail"] == {
+        "code": "payment_exceeds_approval",
+        "message": (
+            "The insurer payment exceeds the approved amount. Resend with "
+            "acknowledge_overpayment=true to record the exception."
+        ),
+        "approved": 500.0,
+        "payment": 520.0,
+    }
+    accepted = client.post(
+        f"/api/v1/claims/{cid}/payment",
+        json={**body, "acknowledge_overpayment": True},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["payment_amount"] == 520.0
+
+
 def test_a_zero_settlement_is_accepted(client):
     """Fully offset against an excess is a real advice; refusing it would
     strand the claim in `sent_to_insurer` forever."""
@@ -640,6 +666,32 @@ def test_settlement_dates_can_be_corrected_after_the_fact(client):
     assert body["days_over_deadline"] == -9
 
 
+def test_assessment_overpayment_warning_is_json_and_acknowledgeable(client):
+    with SessionLocal() as s:
+        c = _claim(
+            s,
+            status=CLAIM_STATUS_PAID,
+            sent_to_insurer_at=NOW - timedelta(days=20),
+            paid_on=date(2038, 4, 10),
+            payment_amount=500.0,
+        )
+        s.commit()
+        cid = c.id
+    warning = client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={"payment_amount": 520.0},
+    )
+    assert warning.status_code == 409, warning.text
+    assert warning.json()["detail"]["approved"] == 500.0
+    assert warning.json()["detail"]["payment"] == 520.0
+    accepted = client.patch(
+        f"/api/v1/claims/{cid}/assessment",
+        json={"payment_amount": 520.0, "acknowledge_overpayment": True},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["payment_amount"] == 520.0
+
+
 def test_an_amendment_audits_the_figure_it_replaced(client):
     """The `before` snapshot must be taken BEFORE the amendment writes.
 
@@ -673,8 +725,8 @@ def test_an_amendment_audits_the_figure_it_replaced(client):
             .order_by(AuditLog.created_at.desc())
             .first()
         )
-    assert row.before["payment_amount"] == 1200.0
-    assert row.after["payment_amount"] == 120.0
+    assert row.before["payment_amount"] == "1200.00"
+    assert row.after["payment_amount"] == "120.00"
 
 
 def test_a_dispatch_only_correction_is_still_audited(client):

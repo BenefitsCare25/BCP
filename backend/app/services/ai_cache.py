@@ -1,6 +1,7 @@
 """AI response cache.
 
-Keys are `(prompt_version, model, sha256(input))`. 30-day TTL by default.
+Keys are `(prompt_version, model, sha256(input))`. 24-hour TTL by default so
+sensitive extracted claim data has a bounded residual lifetime after deletion.
 In-memory `cachetools.TTLCache` is the default impl; Redis is used when
 `INSPRO_REDIS_URL` is set in the environment so prod gets shared cache
 across App Service instances.
@@ -17,7 +18,7 @@ from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+DEFAULT_TTL_SECONDS = 24 * 60 * 60
 DEFAULT_MAX_ENTRIES = 10_000
 
 

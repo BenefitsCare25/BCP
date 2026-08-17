@@ -37,6 +37,7 @@ from app.models.claim_ai_review import (
     REVIEW_VERDICT_CLEAN,
     REVIEW_VERDICT_FLAGGED,
 )
+from app.models.stored_document import STORAGE_AVAILABLE
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
 from app.services.claim_doc_types import resolve_doc_types
@@ -399,7 +400,7 @@ def _extract_stage(
     docs = claim_documents(db, claim)
     if claim.referral_document_id:
         referral = db.get(StoredDocument, claim.referral_document_id)
-        if referral is not None:
+        if referral is not None and referral.storage_state == STORAGE_AVAILABLE:
             docs.append(referral)
     review.progress_total = len(docs)
     review.progress_current = len(review.extractions or [])

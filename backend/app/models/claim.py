@@ -26,16 +26,18 @@ The incumbent's label is applied at the report boundary only.
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
-    Float,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
 )
@@ -301,6 +303,47 @@ RELABELLABLE_STATUSES = DECIDABLE_STATUSES
 class Claim(Base, TimestampMixin):
     __tablename__ = "claims"
     __table_args__ = (
+        CheckConstraint(
+            "claim_kind IN ('insured', 'flex')",
+            name="claim_kind_valid",
+        ),
+        CheckConstraint(
+            "case_type IN ('claim', 'log')",
+            name="case_type_valid",
+        ),
+        CheckConstraint(
+            "origin IN ('portal', 'broker')",
+            name="origin_valid",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'submitted', 'ai_review_pending', "
+            "'ai_verified', 'ai_flagged', 'needs_info', 'approved', "
+            "'rejected', 'sent_to_insurer', 'paid')",
+            name="status_valid",
+        ),
+        CheckConstraint(
+            "amount_claimed > 0 AND amount_claimed <= 1000000",
+            name="amount_claimed_valid",
+        ),
+        CheckConstraint(
+            "amount_converted IS NULL OR "
+            "(amount_converted > 0 AND amount_converted <= 1000000)",
+            name="amount_converted_valid",
+        ),
+        CheckConstraint(
+            "amount_approved IS NULL OR "
+            "(amount_approved > 0 AND amount_approved <= 1000000)",
+            name="amount_approved_valid",
+        ),
+        CheckConstraint(
+            "fx_rate IS NULL OR (fx_rate > 0 AND fx_rate <= 1000000)",
+            name="fx_rate_valid",
+        ),
+        CheckConstraint(
+            "payment_amount IS NULL OR "
+            "(payment_amount >= 0 AND payment_amount <= 1000000)",
+            name="payment_amount_valid",
+        ),
         Index(
             "ix_claims_employee_year_status",
             "employee_id",
@@ -417,7 +460,7 @@ class Claim(Base, TimestampMixin):
     # Free-text member note (not a document-matched field).
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     # What the member was billed, in the currency they were billed in.
-    amount_claimed: Mapped[float] = mapped_column(Float, nullable=False)
+    amount_claimed: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="SGD")
 
     # ── Currency conversion (services/claim_fx.py) ───────────────────────────
@@ -434,13 +477,13 @@ class Claim(Base, TimestampMixin):
     #
     # `amount_converted or amount_claimed` was the shape every reader used, and
     # it silently priced a USD 500 bill as SGD 500 against an SGD limit.
-    amount_converted: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount_converted: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     # Policy-currency units per 1 unit of `currency`, and the date that rate was
     # PUBLISHED on. The publication date can be earlier than `incurred_date` —
     # the reference series has no weekend or holiday entries, so a Sunday
     # receipt converts at Friday's rate. Recording both is what lets an assessor
     # see which day was actually used. NULL date on a broker-keyed figure.
-    fx_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fx_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
     fx_rate_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # "frankfurter" (the ECB reference rate) or "broker" (hand-keyed because no
     # rate could be had). NULL when no conversion applies.
@@ -458,7 +501,7 @@ class Claim(Base, TimestampMixin):
     # `currency`. On a foreign claim it is denominated differently from
     # `amount_claimed` sitting two fields above it, which is why anything
     # rendering it must say SGD rather than reach for `claim.currency`.
-    amount_approved: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount_approved: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=CLAIM_STATUS_DRAFT, index=True
     )
@@ -537,7 +580,7 @@ class Claim(Base, TimestampMixin):
     # shortfall between the two is the whole reason a reconciliation report
     # exists, so collapsing them would hide it. In the POLICY currency, like
     # `amount_approved` it defaults to — not the claim's own `currency`.
-    payment_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
 
     # ── Clinical / assessment detail ─────────────────────────────────────────
     # Sector as the insurer classifies it (HOSPITAL_TYPE_*). Also the tie-break

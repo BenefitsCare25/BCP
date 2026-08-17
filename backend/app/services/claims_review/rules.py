@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.clock import today as business_today
 from app.models import Claim, Dependant, PolicyYear, StoredDocument
 from app.models.claim import CLAIM_KIND_FLEX, LIVE_STATUSES
-from app.models.stored_document import DOC_ENTITY_CLAIM
+from app.models.stored_document import DOC_ENTITY_CLAIM, STORAGE_AVAILABLE
 from app.schemas.api import BenefitStatementOut
 from app.services.claim_fx import (
     FX_SOURCE_BROKER,
@@ -74,6 +74,7 @@ def _check_has_documents(db: Session, claim: Claim) -> dict[str, Any]:
         .where(
             StoredDocument.entity_type == DOC_ENTITY_CLAIM,
             StoredDocument.entity_id == claim.id,
+            StoredDocument.storage_state == STORAGE_AVAILABLE,
         )
     ).scalar_one()
     if not count:
@@ -147,6 +148,7 @@ def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
         select(StoredDocument.sha256).where(
             StoredDocument.entity_type == DOC_ENTITY_CLAIM,
             StoredDocument.entity_id == claim.id,
+            StoredDocument.storage_state == STORAGE_AVAILABLE,
         )
     ).scalars().all()
     if not hashes:
@@ -157,6 +159,7 @@ def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
         .where(
             StoredDocument.entity_type == DOC_ENTITY_CLAIM,
             StoredDocument.sha256.in_(hashes),
+            StoredDocument.storage_state == STORAGE_AVAILABLE,
             Claim.client_id == claim.client_id,
             Claim.employee_id != claim.employee_id,
             Claim.status.in_(LIVE_STATUSES),
@@ -464,7 +467,11 @@ def _check_referral_age(db: Session, claim: Claim) -> dict[str, Any] | None:
     if not claim.referral_document_id:
         return None
     doc = db.get(StoredDocument, claim.referral_document_id)
-    if doc is None or doc.issued_on is None:
+    if (
+        doc is None
+        or doc.storage_state != STORAGE_AVAILABLE
+        or doc.issued_on is None
+    ):
         return None
     rule = "Referral letter is still valid at the date of the visit."
     age = (claim.incurred_date - doc.issued_on).days

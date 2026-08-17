@@ -1,11 +1,14 @@
 """Audit log writer — call from mutating endpoints."""
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser
+from app.core.request_context import client_ip, get_request_id, user_agent
 from app.models.audit_log import AuditLog
 
 if TYPE_CHECKING:
@@ -57,7 +60,14 @@ def _scrub(value: Any) -> Any:
         }
     if isinstance(value, list):
         return [_scrub(v) for v in value]
+    if isinstance(value, Decimal):
+        return format(value, "f")
     return value
+
+
+def _request_user_agent(request: Request | None) -> str | None:
+    value = user_agent(request) if request is not None else None
+    return value[:512] if value else None
 
 
 def write_member_audit(
@@ -69,6 +79,7 @@ def write_member_audit(
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
     employee_id: str | None = None,
+    request: Request | None = None,
 ) -> None:
     """Append an audit row for a portal-member action. Caller must commit.
 
@@ -86,6 +97,9 @@ def write_member_audit(
             entity_type=entity_type,
             entity_id=entity_id,
             employee_id=employee_id,
+            request_id=get_request_id(),
+            ip_address=client_ip(request) if request is not None else None,
+            user_agent=_request_user_agent(request),
             before=_scrub(before) if before is not None else None,
             after=_scrub(after) if after is not None else None,
             cross_tenant_access=False,
@@ -102,6 +116,7 @@ def write_audit(
     before: dict[str, Any] | None = None,
     after: dict[str, Any] | None = None,
     employee_id: str | None = None,
+    request: Request | None = None,
 ) -> None:
     """Append an audit row. Caller must commit.
 
@@ -120,8 +135,37 @@ def write_audit(
             entity_type=entity_type,
             entity_id=entity_id,
             employee_id=employee_id,
+            request_id=get_request_id(),
+            ip_address=client_ip(request) if request is not None else None,
+            user_agent=_request_user_agent(request),
             before=_scrub(before) if before is not None else None,
             after=_scrub(after) if after is not None else None,
             cross_tenant_access=user.role == ROLE_SYSTEM_ADMIN,
         )
+    )
+
+
+def write_access_audit(
+    db: Session,
+    user: CurrentUser,
+    request: Request,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    *,
+    employee_id: str | None = None,
+) -> None:
+    """Record a successful read/download of sensitive claims data.
+
+    Deliberately stores identifiers and request metadata only. Claim values and
+    document contents must never be copied into the access trail.
+    """
+    write_audit(
+        db,
+        user,
+        action,
+        entity_type,
+        entity_id,
+        employee_id=employee_id,
+        request=request,
     )

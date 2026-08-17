@@ -60,6 +60,7 @@ from app.services.ai_gateway import (  # noqa: E402
     ClaimVerifyResult,
 )
 from app.services.claims_review import pipeline  # noqa: E402
+from app.services.claims_review.field_maps import AI_RULES, FIELD_MAPS  # noqa: E402
 from app.services.claims_review.pipeline import run_review  # noqa: E402
 from app.workers.claim_review import process_one_job  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
@@ -228,10 +229,21 @@ def _extract_result(**over) -> ClaimExtractionResult:
 
 
 def _review_result(comparisons, confidence=0.9, rules=None, req_docs=None):
+    present = {item.get("field_name") for item in comparisons}
+    comparisons = list(comparisons) + [
+        _match(field_map["portal_field"])
+        for field_map in FIELD_MAPS
+        if field_map["portal_field"] not in present
+    ]
+    if rules is None:
+        rules = [
+            {"rule": rule, "status": "pass", "evidence": "No concern found."}
+            for rule in AI_RULES
+        ]
     return ClaimReviewAIResult(
         review={
             "field_comparisons": comparisons,
-            "rule_results": rules or [],
+            "rule_results": rules,
             "required_documents_check": req_docs
             or [{"document_type_name": "receipt or tax invoice", "found": True}],
             "summary": "Reviewed.",
@@ -291,6 +303,38 @@ def test_clean_run_verifies_claim():
     assert review.input_tokens == 200 and review.output_tokens == 100
     assert review.cost_estimate_usd > 0
     assert review.model == "claude-test"
+
+
+def test_missing_expected_ai_outputs_force_manual_review():
+    """A provider may satisfy the tool schema with partial arrays. Missing
+    configured comparisons/rules/doc checks must never be interpreted as clean."""
+    claim_id, review_id = _mk_claim(marker=b"partial-ai-output")
+    partial = ClaimReviewAIResult(
+        review={
+            "field_comparisons": [_match("amount_claimed")],
+            "rule_results": [],
+            "required_documents_check": [],
+            "summary": "No discrepancies found.",
+            "confidence": 0.99,
+        },
+        metadata=dict(META),
+        cache_hit=False,
+    )
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(),
+    ), patch("app.services.ai_gateway.review_claim", return_value=partial), patch(
+        "app.services.ai_gateway.verify_claim_concern"
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    assert any(
+        result.get("error_code") == "ai_output_incomplete"
+        for result in review.rule_results
+    )
 
 
 def test_deterministic_fail_short_circuits_with_zero_ai_calls():
@@ -683,11 +727,11 @@ def test_doc_completeness_discharge_summary_optional_surgery():
     )
     assert [r["status"] for r in results] == ["pass"]
 
-    # Missing the REQUIRED Diagnosis field → warning.
+    # Missing the REQUIRED Diagnosis field must block auto-clear.
     results = doc_completeness_results(
         claim, [_ext("After Visit Summary", ["Patient Name", "Ward"])]
     )
-    warn = [r for r in results if r["status"] == "warning"]
+    warn = [r for r in results if r["status"] == "fail"]
     assert len(warn) == 1
     assert "Diagnosis" in warn[0]["evidence"]
     assert "Surgery" not in warn[0]["evidence"]  # optional, never flagged
@@ -714,12 +758,12 @@ def test_doc_completeness_private_final_tax_invoice():
     )
     assert [r["status"] for r in results] == ["pass"]
 
-    # Missing HRN + Final Bill → one warning naming both.
+    # Missing HRN + Final Bill must block auto-clear and name both.
     results = doc_completeness_results(
         claim,
         [_ext("tax invoice", ["Case Number", "Admission Date", "Discharge Date"])],
     )
-    assert [r["status"] for r in results] == ["warning"]
+    assert [r["status"] for r in results] == ["fail"]
     assert "Final Bill" in results[0]["evidence"]
     assert "HRN" in results[0]["evidence"]
 
@@ -735,11 +779,11 @@ def test_doc_completeness_govt_finalised_invoice_and_sector_cross_check():
     results = doc_completeness_results(claim, [_ext("tax invoice", govt_labels)])
     assert [r["status"] for r in results] == ["pass"]
 
-    # Same government-format bill on a PRIVATE-hospital claim → sector warning.
+    # A government-format bill on a private claim must block auto-clear.
     claim = _inpatient_claim("Raffles Hospital")
     results = doc_completeness_results(claim, [_ext("tax invoice", govt_labels)])
     statuses = {r["rule"]: r["status"] for r in results}
-    assert statuses["Invoice format matches the hospital's sector."] == "warning"
+    assert statuses["Invoice format matches the hospital's sector."] == "fail"
 
 
 def test_doc_completeness_ignores_plain_outpatient_receipt():

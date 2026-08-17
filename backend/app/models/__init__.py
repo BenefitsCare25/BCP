@@ -12,8 +12,10 @@ from app.models.bulk_plan_update import BulkPlanUpdate
 from app.models.category import Category
 from app.models.claim import Claim
 from app.models.claim_ai_review import ClaimAIReview
+from app.models.claim_command import ClaimCommand
 from app.models.claim_doc_type import ClaimDocType
 from app.models.claim_message import ClaimMessage
+from app.models.claim_notification import ClaimNotification
 from app.models.claim_review_config import ClaimReviewConfig
 from app.models.claim_review_job import ClaimReviewJob
 from app.models.client import BrokerFirm, Client
@@ -62,8 +64,10 @@ __all__ = [
     "Category",
     "Claim",
     "ClaimAIReview",
+    "ClaimCommand",
     "ClaimDocType",
     "ClaimMessage",
+    "ClaimNotification",
     "ClaimReviewConfig",
     "ClaimReviewJob",
     "Client",

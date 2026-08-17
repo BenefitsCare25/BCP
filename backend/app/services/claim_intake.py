@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Claim, Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
-from app.models.stored_document import DOC_ENTITY_REFERRAL
+from app.models.stored_document import DOC_ENTITY_REFERRAL, STORAGE_AVAILABLE
 from app.services.sg_hospitals import SECTOR_GOVT, hospital_sector
 
 # Currencies a member may incur a bill in — single source of truth, exposed
@@ -475,6 +475,7 @@ def referral_letters_for(db: Session, employee: Employee) -> list[StoredDocument
             .where(
                 StoredDocument.entity_type == DOC_ENTITY_REFERRAL,
                 StoredDocument.entity_id.in_(person_employee_ids(db, employee)),
+                StoredDocument.storage_state == STORAGE_AVAILABLE,
             )
             .order_by(StoredDocument.created_at.desc())
         ).scalars()
@@ -653,6 +654,7 @@ def assert_intake_valid(
         if (
             doc is None
             or doc.entity_type != DOC_ENTITY_REFERRAL
+            or doc.storage_state != STORAGE_AVAILABLE
             # The PERSON, not this year's row (`person_employee_ids`). A course
             # begun before the renewal carries a letter stamped with the old
             # employee id, and the anchor picker offers that course across the

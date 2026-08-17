@@ -10,6 +10,7 @@ company hasn't customized that claim type.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -25,6 +26,138 @@ from app.services.claim_review_configs import (
 )
 from app.services.claims_review.field_maps import required_documents_for
 from app.services.roster_attributes import NAME_KEYS, REL_KEYS, first_value
+
+
+def _key(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _incomplete_result(kind: str, name: str) -> dict[str, Any]:
+    return {
+        "rule": f"AI returned every configured {kind} result.",
+        "status": "fail",
+        "source": "platform",
+        "severity": "critical",
+        "error_code": "ai_output_incomplete",
+        "evidence": f"The AI response omitted or duplicated {kind}: {name}.",
+    }
+
+
+def _reconcile_comparisons(
+    config: ReviewConfig,
+    claim_fields: dict[str, Any],
+    returned: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    expected = {
+        _key(item.get("portal_field")): str(item.get("portal_field"))
+        for item in config.field_maps
+        if claim_fields.get(str(item.get("portal_field"))) not in (None, "")
+    }
+    by_field: dict[str, dict[str, Any]] = {}
+    failures: list[dict[str, Any]] = []
+    for item in returned:
+        field = _key(item.get("field_name"))
+        if field not in expected:
+            continue
+        if not field or field in by_field:
+            failures.append(
+                _incomplete_result(
+                    "field comparison", str(item.get("field_name") or "blank")
+                )
+            )
+            continue
+        status = item.get("status")
+        confidence = item.get("confidence")
+        valid_confidence = isinstance(confidence, (int, float)) and math.isfinite(
+            float(confidence)
+        ) and 0.0 <= float(confidence) <= 1.0
+        if status not in {
+            "MATCH",
+            "MISMATCH",
+            "MISSING_IN_PDF",
+            "MISSING_ON_PAGE",
+            "UNCERTAIN",
+        } or not valid_confidence:
+            failures.append(_incomplete_result("field comparison", expected[field]))
+            by_field[field] = {
+                **item,
+                "status": "UNCERTAIN",
+                "confidence": 0.0,
+                "notes": "The AI returned an invalid comparison result.",
+            }
+            continue
+        by_field[field] = item
+    for field, display in expected.items():
+        if field in by_field:
+            continue
+        failures.append(_incomplete_result("field comparison", display))
+        by_field[field] = {
+            "field_name": display,
+            "claim_value": None,
+            "document_value": None,
+            "status": "UNCERTAIN",
+            "confidence": 0.0,
+            "notes": "The AI response omitted this configured comparison.",
+        }
+    return list(by_field.values()), failures
+
+
+def _reconcile_rules(
+    config: ReviewConfig, attributed: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    expected = {rule.id: rule for rule in config.ai_rules}
+    seen: set[str] = set()
+    failures: list[dict[str, Any]] = []
+    for item in attributed:
+        rule_id = str(item.get("rule_id") or "")
+        if rule_id in expected and rule_id not in seen:
+            seen.add(rule_id)
+            if item.get("status") not in {
+                "pass",
+                "fail",
+                "warning",
+                "not_applicable",
+            }:
+                failures.append(
+                    _incomplete_result("business rule", expected[rule_id].rule)
+                )
+        elif rule_id in expected:
+            failures.append(_incomplete_result("business rule", expected[rule_id].rule))
+    for rule_id, rule in expected.items():
+        if rule_id not in seen:
+            failures.append(_incomplete_result("business rule", rule.rule))
+    return attributed + failures
+
+
+def _reconcile_required_documents(
+    expected: list[str], returned: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    expected_names = {_key(name): name for name in expected}
+    by_name: dict[str, dict[str, Any]] = {}
+    failures: list[dict[str, Any]] = []
+    for item in returned:
+        name = _key(item.get("document_type_name"))
+        if name not in expected_names:
+            continue
+        if not name or name in by_name:
+            failures.append(
+                _incomplete_result(
+                    "required-document check",
+                    str(item.get("document_type_name") or "blank"),
+                )
+            )
+            continue
+        if not isinstance(item.get("found"), bool):
+            failures.append(
+                _incomplete_result("required-document check", expected_names[name])
+            )
+            by_name[name] = {**item, "found": False}
+            continue
+        by_name[name] = item
+    for name, display in expected_names.items():
+        if name not in by_name:
+            failures.append(_incomplete_result("required-document check", display))
+    return list(by_name.values()), failures
 
 
 def compare_claim(
@@ -110,13 +243,27 @@ def compare_claim(
     # Attribute severity/category back onto the AI's echoed rules FIRST —
     # a failed warning/info rule becomes a "warning" result and never
     # auto-flags; unmatched failed rules stay "fail" (fail-safe).
+    comparisons, comparison_failures = _reconcile_comparisons(
+        cfg, claim_fields, list(result.review.get("field_comparisons", []))
+    )
     rule_results = [
         {**r, "source": "ai"}
         for r in attribute_rule_results(
             cfg, list(result.review.get("rule_results", []))
         )
     ]
-    for check in result.review.get("required_documents_check", []):
+    rule_results = _reconcile_rules(cfg, rule_results)
+    doc_checks, doc_failures = _reconcile_required_documents(
+        required_docs, list(result.review.get("required_documents_check", []))
+    )
+    rule_results.extend(comparison_failures + doc_failures)
+    confidence = result.review.get("confidence")
+    if not isinstance(confidence, (int, float)) or not math.isfinite(
+        float(confidence)
+    ) or not 0.0 <= float(confidence) <= 1.0:
+        confidence = 0.0
+        rule_results.append(_incomplete_result("overall confidence", "confidence"))
+    for check in doc_checks:
         found = bool(check.get("found"))
         rule_results.append(
             {
@@ -128,9 +275,9 @@ def compare_claim(
         )
 
     review = {
-        "field_comparisons": result.review.get("field_comparisons", []),
+        "field_comparisons": comparisons,
         "rule_results": rule_results,
         "summary": result.review.get("summary", ""),
-        "confidence": float(result.review.get("confidence") or 0.0),
+        "confidence": float(confidence),
     }
     return review, result.metadata

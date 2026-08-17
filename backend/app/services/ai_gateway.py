@@ -954,7 +954,9 @@ def extract_claim_document(
     """
     cfg = _require_ai_config(db, client_id)
     cache_key = make_key(
-        CLAIM_EXTRACT_PROMPT_VERSION, cfg.model, {"sha256": sha256}
+        CLAIM_EXTRACT_PROMPT_VERSION,
+        cfg.model,
+        {"client_id": client_id, "provider": cfg.provider, "sha256": sha256},
     )
 
     def _on_hit(cached: dict[str, Any]) -> ClaimExtractionResult:
@@ -1003,7 +1005,11 @@ def review_claim(
     cache_key = make_key(
         CLAIM_REVIEW_PROMPT_VERSION,
         cfg.model,
-        {"prompt": hashlib.sha256(prompt.encode("utf-8")).hexdigest()},
+        {
+            "client_id": client_id,
+            "provider": cfg.provider,
+            "prompt": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        },
     )
 
     def _on_hit(cached: dict[str, Any]) -> ClaimReviewAIResult:
@@ -1049,7 +1055,13 @@ def verify_claim_concern(
     cache_key = make_key(
         CLAIM_VERIFY_PROMPT_VERSION,
         cfg.model,
-        {"claim_id": claim_id, "question": question, "sha256": doc_sha256},
+        {
+            "client_id": client_id,
+            "provider": cfg.provider,
+            "claim_id": claim_id,
+            "question": question,
+            "sha256": doc_sha256,
+        },
     )
 
     def _on_hit(cached: dict[str, Any]) -> ClaimVerifyResult:

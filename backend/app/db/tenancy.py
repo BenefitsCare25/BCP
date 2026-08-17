@@ -108,6 +108,27 @@ def _referred_schema(
     return to_schema
 
 
+def _ensure_audit_append_only(conn: Connection, schema: str) -> None:
+    """Install the audit immutability guard for a newly provisioned tenant."""
+    conn.execute(
+        text(
+            "CREATE OR REPLACE FUNCTION public.inspro_prevent_audit_mutation() "
+            "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+            "RAISE EXCEPTION 'audit_log is append-only'; END; $$"
+        )
+    )
+    conn.execute(
+        text(f'DROP TRIGGER IF EXISTS audit_log_append_only ON "{schema}".audit_log')
+    )
+    conn.execute(
+        text(
+            f'CREATE TRIGGER audit_log_append_only BEFORE UPDATE OR DELETE '
+            f'ON "{schema}".audit_log FOR EACH ROW '
+            "EXECUTE FUNCTION public.inspro_prevent_audit_mutation()"
+        )
+    )
+
+
 def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
     """Create a firm's schema and its operational tables. Idempotent.
 
@@ -129,6 +150,7 @@ def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None
         for tbl in tenant_tables():
             tbl.to_metadata(staging, schema=schema, referred_schema_fn=_referred_schema)
         staging.create_all(conn, checkfirst=True)
+        _ensure_audit_append_only(conn, schema)
         # Each firm schema needs its own copy of the global (client_id NULL)
         # product + attribute catalog, sourced from the canonical public copy.
         # Order matters: products before plan_attribute_schemas (FK).

@@ -10,24 +10,29 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_client_id
+from app.core.deps import require_claim_configuration, require_client_id
 from app.db.session import get_db
 from app.models import ClaimDocType
 from app.schemas.claims import ClaimDocKeyField, ClaimDocTypeIn, ClaimDocTypeOut
 from app.services.claim_doc_types import (
+    DEFAULT_DOC_TYPES,
     DEFAULT_KEYS,
+    DocTypeDefinition,
     client_doc_type_rows,
     definition_from_row,
     seed_default_doc_types,
 )
 from app.services.claim_intake import DOC_SLOT_LABELS
 
-router = APIRouter(prefix="/claim-doc-types", tags=["claim-doc-types"])
+router = APIRouter(
+    prefix="/claim-doc-types",
+    tags=["claim-doc-types"],
+    dependencies=[Depends(require_claim_configuration)],
+)
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -53,8 +58,34 @@ def _out(row: ClaimDocType) -> ClaimDocTypeOut:
     )
 
 
+def _default_out(definition: DocTypeDefinition) -> ClaimDocTypeOut:
+    return ClaimDocTypeOut(
+        id=f"default:{definition.key}",
+        key=definition.key,
+        display=definition.display,
+        aliases=list(definition.aliases),
+        key_fields=[
+            ClaimDocKeyField(
+                name=field.name,
+                keywords=list(field.tokens),
+                optional=field.optional,
+            )
+            for field in definition.key_fields
+        ],
+        sector=definition.sector,
+        slot_key=definition.slot_key,
+        is_default=True,
+    )
+
+
 def _own_row(db: Session, doc_type_id: str, client_id: str) -> ClaimDocType:
     row = db.get(ClaimDocType, doc_type_id)
+    if row is None and doc_type_id.startswith("default:"):
+        key = doc_type_id.removeprefix("default:")
+        rows = client_doc_type_rows(db, client_id)
+        if not rows:
+            rows = seed_default_doc_types(db, client_id)
+        row = next((candidate for candidate in rows if candidate.key == key), None)
     if row is None or row.client_id != client_id:
         # Same not-403 convention as tenant scoping everywhere else.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document type not found")
@@ -100,18 +131,7 @@ def _payload(body: ClaimDocTypeIn) -> dict[str, Any]:
 
 
 def _ensure_seeded(db: Session, client_id: str) -> list[ClaimDocType]:
-    """Return the client's rows, seeding the defaults on first read. Tolerates a
-    concurrent first-read: if another request seeds the same client between our
-    empty check and commit, the unique constraint trips — we roll back and read
-    the rows the other request created instead of 500ing."""
-    rows = client_doc_type_rows(db, client_id)
-    if rows:
-        return rows
-    seed_default_doc_types(db, client_id)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
+    """Return configured rows; callers render immutable defaults when absent."""
     return client_doc_type_rows(db, client_id)
 
 
@@ -121,7 +141,10 @@ def list_claim_doc_types(
     db: Session = Depends(get_db),
 ) -> list[ClaimDocTypeOut]:
     client_id = require_client_id(user)
-    return [_out(r) for r in _ensure_seeded(db, client_id)]
+    rows = _ensure_seeded(db, client_id)
+    if rows:
+        return [_out(row) for row in rows]
+    return [_default_out(definition) for definition in DEFAULT_DOC_TYPES]
 
 
 @router.post("", response_model=ClaimDocTypeOut, status_code=status.HTTP_201_CREATED)
@@ -139,6 +162,8 @@ def create_claim_doc_type(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Enter a document type name."
         )
     existing = client_doc_type_rows(db, client_id)
+    if not existing:
+        existing = seed_default_doc_types(db, client_id)
     # A true duplicate is the same DISPLAY (case-insensitive), not merely the
     # same slug — "Referral Memo" and "Referral-Memo" are distinct types that
     # happen to slugify alike, so they must both be creatable.

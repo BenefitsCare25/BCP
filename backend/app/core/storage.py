@@ -152,8 +152,14 @@ class AzureBlobStorage:
     def delete(self, path: str) -> None:
         try:
             self._container.delete_blob(path)
-        except Exception:
-            logger.warning("Failed to delete blob %s (may already be gone)", path)
+        except Exception as exc:
+            try:
+                from azure.core.exceptions import ResourceNotFoundError
+            except ImportError:  # pragma: no cover - Azure mode includes it
+                ResourceNotFoundError = ()  # type: ignore[assignment,misc]
+            if isinstance(exc, ResourceNotFoundError):
+                return
+            raise
 
 
 def get_storage() -> StorageBackend:

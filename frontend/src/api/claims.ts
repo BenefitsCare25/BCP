@@ -191,6 +191,8 @@ export interface BrokerClaim {
   remaining_limit?: number | null;
   /** Member replies nobody here has opened — on the list AND the detail. */
   unread_member_messages: number;
+  /** Server-owned state-machine capabilities for this claim. */
+  allowed_actions: string[];
 
   // ── Settlement (the insurer leg) ───────────────────────────────────────────
   /** Human-quotable reference, minted at submit. Null on a draft. */
@@ -281,13 +283,14 @@ export function useBrokerClaims(
    *  queue never passed it, so the flex panel's "2 claims" link landed on the
    *  whole firm's queue. */
   employeeId?: string,
+  search = "",
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
     // caseType and employeeId are part of the key: without them, switching a
     // filter would serve the previous selection's page from cache.
     queryKey: [
-      "claims", cid, policyYearId, status, caseType, employeeId, offset, limit,
+      "claims", cid, policyYearId, status, caseType, employeeId, search, offset, limit,
     ],
     queryFn: () => {
       const params = new URLSearchParams({
@@ -298,9 +301,13 @@ export function useBrokerClaims(
       if (status) params.set("status", status);
       if (caseType) params.set("case_type", caseType);
       if (employeeId) params.set("employee_id", employeeId);
+      if (search.trim()) params.set("search", search.trim());
       return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
     },
     enabled: !!policyYearId,
+    // Keep the operational queue and unread badges current while it is open.
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -595,6 +602,10 @@ export interface ClaimDecisionInput {
   expectedRevision?: number;
 }
 
+function commandInit(): RequestInit {
+  return { headers: { "Idempotency-Key": crypto.randomUUID() } };
+}
+
 export function useDecideClaim() {
   const qc = useQueryClient();
   return useMutation({
@@ -606,7 +617,7 @@ export function useDecideClaim() {
         converted_amount: input.convertedAmount ?? null,
         acknowledge: input.acknowledge ?? false,
         expected_revision: input.expectedRevision ?? null,
-      }),
+      }, commandInit()),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       // Approval changes the employee's usage-vs-limits view.
@@ -627,7 +638,7 @@ export function useRefreshClaimConversion() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (claimId: string) =>
-      api.post<BrokerClaim>(`/claims/${claimId}/fx-refresh`, {}),
+      api.post<BrokerClaim>(`/claims/${claimId}/fx-refresh`, {}, commandInit()),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
@@ -678,7 +689,7 @@ export function useSendToInsurer() {
         sent_on: input.sentOn ?? null,
         deadline_on: input.deadlineOn ?? null,
         note: input.note ?? null,
-      }),
+      }, commandInit()),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
@@ -696,12 +707,14 @@ export function useRecordClaimPayment() {
       paidOn: string;
       amount?: number;
       note?: string;
+      acknowledgeOverpayment?: boolean;
     }) =>
       api.post<BrokerClaim>(`/claims/${input.claimId}/payment`, {
         paid_on: input.paidOn,
         amount: input.amount ?? null,
         note: input.note ?? null,
-      }),
+        acknowledge_overpayment: input.acknowledgeOverpayment ?? false,
+      }, commandInit()),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
@@ -736,9 +749,14 @@ export function useUpdateClaimAssessment() {
         insurer_deadline_on: string | null;
         paid_on: string | null;
         payment_amount: number | null;
+        acknowledge_overpayment: boolean;
       }>;
     }) =>
-      api.patch<BrokerClaim>(`/claims/${input.claimId}/assessment`, input.patch),
+      api.patch<BrokerClaim>(
+        `/claims/${input.claimId}/assessment`,
+        input.patch,
+        commandInit(),
+      ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
@@ -797,7 +815,11 @@ export function useRerunReview() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (claimId: string) =>
-      api.post<BrokerClaim>(`/claims/${claimId}/rerun-review`, {}),
+      api.post<BrokerClaim>(
+        `/claims/${claimId}/rerun-review`,
+        {},
+        commandInit(),
+      ),
     onSuccess: (_data, claimId) => {
       void qc.invalidateQueries({ queryKey: ["claims"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });

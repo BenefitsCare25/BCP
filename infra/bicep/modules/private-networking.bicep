@@ -17,10 +17,10 @@
 //
 // Deliberately NOT enabling `vnetRouteAllEnabled` on the web app (see
 // main.bicep). Only RFC1918 traffic bound for this VNet is routed through the
-// integration subnet; everything else (Vertex AI, Entra JWKS, SMTP, ACR, Key
-// Vault, Blob) keeps using the normal App Service egress path. Routing all
-// outbound traffic through the VNet would require a NAT Gateway, because Azure
-// has retired default outbound access for new VNet deployments.
+// integration subnet. Blob and Redis use private endpoints below; public
+// services such as Vertex AI, Entra JWKS, SMTP, ACR, and Key Vault keep normal
+// App Service egress. Routing all outbound traffic through the VNet would
+// require a NAT Gateway.
 
 targetScope = 'resourceGroup'
 
@@ -32,6 +32,10 @@ param location string
 
 @description('Existing Postgres Flexible Server to place behind a private endpoint.')
 param postgresName string
+
+param redisName string
+param deployRedis bool
+param storageName string
 
 @description('VNet address space. 10.0.0.0/16 and 10.1.0.0/16 are already taken by rg-ivm and rg-supabase-sea in this subscription.')
 param vnetAddressPrefix string = '10.20.0.0/16'
@@ -49,6 +53,14 @@ var privateDnsZoneName = 'privatelink.postgres.database.azure.com'
 
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' existing = {
   name: postgresName
+}
+
+resource redis 'Microsoft.Cache/redisEnterprise@2025-07-01' existing = if (deployRedis) {
+  name: redisName
+}
+
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
+  name: storageName
 }
 
 resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
@@ -101,6 +113,16 @@ resource privateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
   location: 'global'
 }
 
+resource redisDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (deployRedis) {
+  name: 'privatelink.redis.azure.net'
+  location: 'global'
+}
+
+resource blobDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: 'privatelink.blob.${environment().suffixes.storage}'
+  location: 'global'
+}
+
 // Without this link the zone exists but the VNet never consults it, so the app
 // would still resolve the database's PUBLIC IP and fail against an empty
 // firewall allowlist.
@@ -114,6 +136,26 @@ resource privateDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLin
     }
     // No auto-registration: this zone holds one manually-managed private
     // endpoint record, not VM hostnames.
+    registrationEnabled: false
+  }
+}
+
+resource redisDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (deployRedis) {
+  parent: redisDnsZone
+  name: '${prefix}-vnet-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: { id: vnet.id }
+    registrationEnabled: false
+  }
+}
+
+resource blobDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: blobDnsZone
+  name: '${prefix}-vnet-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: { id: vnet.id }
     registrationEnabled: false
   }
 }
@@ -139,6 +181,40 @@ resource postgresPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01'
   }
 }
 
+resource redisPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = if (deployRedis) {
+  name: '${prefix}-redis-pe'
+  location: location
+  properties: {
+    subnet: { id: '${vnet.id}/subnets/snet-pe' }
+    privateLinkServiceConnections: [
+      {
+        name: 'redis'
+        properties: {
+          privateLinkServiceId: redis.id
+          groupIds: [ 'redisEnterprise' ]
+        }
+      }
+    ]
+  }
+}
+
+resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
+  name: '${prefix}-blob-pe'
+  location: location
+  properties: {
+    subnet: { id: '${vnet.id}/subnets/snet-pe' }
+    privateLinkServiceConnections: [
+      {
+        name: 'blob'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [ 'blob' ]
+        }
+      }
+    ]
+  }
+}
+
 // Writes the A record (inspro-prod-pg.privatelink.postgres.database.azure.com ->
 // the endpoint's private IP) automatically, and removes it if the endpoint is
 // deleted. Doing this by hand leaves a stale record pointing at a dead NIC.
@@ -152,6 +228,32 @@ resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneG
         properties: {
           privateDnsZoneId: privateDnsZone.id
         }
+      }
+    ]
+  }
+}
+
+resource redisDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (deployRedis) {
+  parent: redisPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'redis'
+        properties: { privateDnsZoneId: redisDnsZone.id }
+      }
+    ]
+  }
+}
+
+resource blobDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = {
+  parent: blobPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'blob'
+        properties: { privateDnsZoneId: blobDnsZone.id }
       }
     ]
   }

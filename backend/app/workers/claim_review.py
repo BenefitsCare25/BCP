@@ -44,6 +44,8 @@ from app.models.claim_review_job import (
 from app.services.ai_breaker import CircuitOpenError
 from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AICapacityError
+from app.services.claim_notifications import process_one_claim_notification
+from app.services.claims import retry_pending_document_deletes
 from app.services.claims_review import metrics as review_metrics
 from app.services.claims_review.pipeline import (
     ReviewDeadlineExceeded,
@@ -66,6 +68,7 @@ LOOP_STALE_SECONDS = max(
 )
 QUEUE_ALERT_SECONDS = int(os.environ.get("INSPRO_REVIEW_QUEUE_ALERT_SECONDS", "120"))
 _loop_heartbeat = time.monotonic()
+_notification_heartbeat = time.monotonic()
 _worker_stopping = False
 _last_queue_warning = 0.0
 
@@ -405,6 +408,41 @@ def check_invariants() -> dict[str, int]:
     return counts
 
 
+def purge_pending_document_deletes() -> int:
+    """Retry deferred evidence deletion in every tenant schema."""
+    with SessionLocal() as control_db:
+        firm_ids = control_db.execute(select(BrokerFirm.id)).scalars().all()
+    target_firms = firm_ids if is_postgres(engine) else [None]
+    deleted = 0
+    for firm_id in target_firms:
+        with SessionLocal() as db:
+            set_search_path(db, firm_id)
+            deleted += retry_pending_document_deletes(db)
+            db.commit()
+    if deleted:
+        logger.info("Pending document blobs deleted", extra={"count": deleted})
+    return deleted
+
+
+def _notification_loop(stopping: threading.Event) -> None:
+    """Deliver member emails independently of long-running AI provider calls."""
+    global _notification_heartbeat
+    while not stopping.is_set():
+        _notification_heartbeat = time.monotonic()
+        delivered = False
+        try:
+            with SessionLocal() as control_db:
+                firm_ids = control_db.execute(select(BrokerFirm.id)).scalars().all()
+            target_firms = firm_ids if is_postgres(engine) else [None]
+            for firm_id in target_firms:
+                delivered = process_one_claim_notification(firm_id) or delivered
+        except Exception:
+            logger.exception("Claim notification loop failed")
+            stopping.wait(5)
+            continue
+        stopping.wait(0.5 if delivered else 2)
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path not in {"/healthz", "/readyz"}:
@@ -413,8 +451,10 @@ class _HealthHandler(BaseHTTPRequestHandler):
             return
         ok = True
         if self.path == "/readyz":
-            ok = not _worker_stopping and (
-                time.monotonic() - _loop_heartbeat <= LOOP_STALE_SECONDS
+            now = time.monotonic()
+            ok = not _worker_stopping and all(
+                now - heartbeat <= LOOP_STALE_SECONDS
+                for heartbeat in (_loop_heartbeat, _notification_heartbeat)
             )
             try:
                 with SessionLocal() as db:
@@ -487,8 +527,16 @@ def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_args: stopping.set())
     health = _start_health_server()
+    notification_thread = threading.Thread(
+        target=_notification_loop,
+        args=(stopping,),
+        daemon=True,
+        name="claim-notifications",
+    )
+    notification_thread.start()
     last_reap = 0.0
     last_invariant_check = 0.0
+    last_document_cleanup = 0.0
     logger.info("Claim-review worker started", extra={"lease_owner": owner})
     try:
         while not stopping.is_set():
@@ -499,10 +547,15 @@ def main() -> None:
             if time.monotonic() - last_invariant_check >= 60:
                 check_invariants()
                 last_invariant_check = time.monotonic()
+            if time.monotonic() - last_document_cleanup >= 60:
+                purge_pending_document_deletes()
+                last_document_cleanup = time.monotonic()
             if not process_one_job(owner):
                 stopping.wait(POLL_SECONDS)
     finally:
         _worker_stopping = True
+        stopping.set()
+        notification_thread.join(timeout=5)
         health.shutdown()
         logger.info("Claim-review worker stopped", extra={"lease_owner": owner})
 

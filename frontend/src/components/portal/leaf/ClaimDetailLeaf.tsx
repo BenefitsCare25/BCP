@@ -19,7 +19,7 @@
  * their unread badge.
  */
 import { useRef, type ReactNode } from "react";
-import { Check, FileText, Loader2, Paperclip, Pencil, Send, X } from "lucide-react";
+import { Check, Download, FileText, Loader2, Paperclip, Pencil, Send, X } from "lucide-react";
 import type { PortalClaim } from "@/api/portal";
 import type { ClaimMessage } from "@/api/portalMessages";
 import { cn } from "@/lib/cn";
@@ -173,6 +173,29 @@ function RemoveDocument({
   );
 }
 
+function DownloadDocument({
+  docId,
+  fileName,
+  onDownload,
+}: {
+  docId: string;
+  fileName: string;
+  onDownload?: (docId: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={!onDownload}
+      onClick={() => onDownload?.(docId)}
+      className="leaf-focus ml-2 inline-flex items-center gap-1 align-baseline text-2xs text-label underline underline-offset-2 hover:text-record disabled:opacity-50"
+    >
+      <Download className="size-3" aria-hidden />
+      Download
+      <span className="sr-only"> {fileName}</span>
+    </button>
+  );
+}
+
 export interface ClaimDetailLeafProps {
   claim: PortalClaim;
   /** The claim's conversation, oldest first. */
@@ -197,6 +220,7 @@ export interface ClaimDetailLeafProps {
    *  the others this one is HIDDEN rather than disabled, because a dead
    *  destructive control beside a file is an invitation to keep clicking. */
   onRemoveDocument?: (docId: string) => void;
+  onDownloadDocument?: (docId: string) => void;
   removingDocumentId?: string | null;
   /** Replaces the whole edit/send block. The sheet the member is editing in,
    *  hoisted here by the route so this component stays free of state. */
@@ -243,6 +267,7 @@ export function ClaimDetailLeaf({
   submitting = false,
   onEdit,
   onRemoveDocument,
+  onDownloadDocument,
   removingDocumentId = null,
   editing,
   disabledTitle,
@@ -516,6 +541,11 @@ export function ClaimDetailLeaf({
                             className="block break-all text-2xs text-label"
                           >
                             {f.file_name} · {(f.size_bytes / 1024).toFixed(0)} KB
+                            <DownloadDocument
+                              docId={f.id}
+                              fileName={f.file_name}
+                              onDownload={onDownloadDocument}
+                            />
                             <RemoveDocument
                               docId={f.id}
                               fileName={f.file_name}
@@ -562,6 +592,11 @@ export function ClaimDetailLeaf({
                 </span>
                 <span className="shrink-0 text-2xs tabular-nums text-label">
                   {(doc.size_bytes / 1024).toFixed(0)} KB · additional
+                  <DownloadDocument
+                    docId={doc.id}
+                    fileName={doc.file_name}
+                    onDownload={onDownloadDocument}
+                  />
                   <RemoveDocument
                     docId={doc.id}
                     fileName={doc.file_name}
@@ -590,6 +625,11 @@ export function ClaimDetailLeaf({
                 <span className="shrink-0 text-row tabular-nums text-label">
                   {(doc.size_bytes / 1024).toFixed(0)} KB
                 </span>
+                <DownloadDocument
+                  docId={doc.id}
+                  fileName={doc.file_name}
+                  onDownload={onDownloadDocument}
+                />
               </li>
             ))}
           </ul>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
@@ -147,28 +147,16 @@ function VerdictBadge({ claim }: { claim: BrokerClaim }) {
   );
 }
 
-const DECIDABLE = new Set([
-  "submitted",
-  "ai_review_pending",
-  "ai_verified",
-  "ai_flagged",
-  "needs_info",
-]);
+function can(claim: BrokerClaim, action: string): boolean {
+  return claim.allowed_actions.includes(action);
+}
 // Mirrors `models/claim.RELABELLABLE_STATUSES`: a case is reclassifiable for
 // exactly as long as it is decidable. The server is the authority — this only
 // decides whether the control is offered.
-const RELABELLABLE = DECIDABLE;
 // The settlement leg. A claim we approved is not finished — it still has to go
 // to the insurer and be paid. Each set is exactly the statuses the server
 // accepts the corresponding transition from (`models/claim.VALID_TRANSITIONS`);
 // the server is the authority, this only decides whether to offer the control.
-const SENDABLE = new Set(["approved"]);
-const PAYABLE = new Set(["sent_to_insurer"]);
-const RERUNNABLE = new Set([
-  "submitted",
-  "ai_verified",
-  "ai_flagged",
-]);
 
 type DecisionAction = "approve" | "reject" | "needs_info";
 
@@ -226,6 +214,8 @@ function QueueTab({
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>("");
   const [caseType, setCaseType] = useState<CaseType | "">("");
+  const [searchText, setSearchText] = useState("");
+  const search = useDeferredValue(searchText);
   const [page, setPage] = useState(0);
   // Deep link (`?claim=`) from the employee-level LOG card. Read once as the
   // initial value: syncing selection back into the URL on every row click would
@@ -241,13 +231,14 @@ function QueueTab({
   // BILL is worth, that is what we agree to PAY, and a partial approval must
   // not silently restate the claim's value.
   const [convertedAmount, setConvertedAmount] = useState("");
-  // Set from a 409 limit_exceeded — the dialog re-arms as "Approve anyway".
+  // Set when approval exceeds either the claim value or remaining limit.
   const [limitWarning, setLimitWarning] = useState<string | null>(null);
   const [logFormOpen, setLogFormOpen] = useState(false);
   // Settlement dialog: "send" to the insurer, or "pay" from their advice.
   const [settling, setSettling] = useState<"send" | "pay" | null>(null);
   const [paidOn, setPaidOn] = useState("");
   const [paidAmount, setPaidAmount] = useState("");
+  const [paymentWarning, setPaymentWarning] = useState<string | null>(null);
   // Target of the reclassify dialog; null = closed.
   const [relabelTo, setRelabelTo] = useState<CaseType | null>(null);
   const [relabelReason, setRelabelReason] = useState("");
@@ -266,6 +257,7 @@ function QueueTab({
     PAGE_SIZE,
     caseType,
     employeeId,
+    search,
   );
   // The filtered-to member's name, taken from the rows themselves rather than
   // fetched: every row in a filtered response is theirs, so the first one names
@@ -297,7 +289,7 @@ function QueueTab({
 
   useEffect(() => {
     setPage(0);
-  }, [status, caseType]);
+  }, [status, caseType, search]);
 
   useEffect(() => {
     setNote("");
@@ -313,6 +305,7 @@ function QueueTab({
   useEffect(() => {
     setPaidOn("");
     setPaidAmount("");
+    setPaymentWarning(null);
   }, [settling, selectedId]);
 
   const confirmSettlement = async () => {
@@ -338,6 +331,7 @@ function QueueTab({
           claimId: selected.id,
           paidOn,
           amount,
+          acknowledgeOverpayment: paymentWarning !== null,
         });
         toast.success("Payment recorded");
       }
@@ -346,6 +340,13 @@ function QueueTab({
       // would strand the sheet open over nothing — same rule as a decision.
       if (status) setSelectedId(null);
     } catch (err) {
+      if (
+        err instanceof ConflictDetailError &&
+        err.detail.code === "payment_exceeds_approval"
+      ) {
+        setPaymentWarning(err.message);
+        return;
+      }
       toast.error(formatError(err));
     }
   };
@@ -409,7 +410,7 @@ function QueueTab({
     } catch (err) {
       if (
         err instanceof ConflictDetailError &&
-        err.detail.code === "limit_exceeded"
+        ["limit_exceeded", "claim_amount_exceeded"].includes(err.detail.code)
       ) {
         // Keep the dialog open; confirming again acknowledges the overrun.
         setLimitWarning(err.message);
@@ -476,6 +477,13 @@ function QueueTab({
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <Input
+                aria-label="Search claims"
+                className="h-8 w-56"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+                placeholder="Search ref, member, invoice"
+              />
               <NativeSelect
                 aria-label="Case type"
                 className="h-8"
@@ -584,7 +592,7 @@ function QueueTab({
                             forever, including ones long since decided, and a
                             badge that never goes away stops meaning "look at
                             this" — which is the only thing it is for. */}
-                        {c.amended_by === "member" && DECIDABLE.has(c.status) && (
+                        {c.amended_by === "member" && can(c, "approve") && (
                           <Badge variant="warn" className="ml-2 align-middle">
                             Amended
                           </Badge>
@@ -687,7 +695,7 @@ function QueueTab({
                       so a case with none can only fail and bounce back to
                       manual review. Offering the control there spends an AI
                       call to produce "review failed". */}
-                  {RERUNNABLE.has(selected.status) &&
+                  {can(selected, "rerun_review") &&
                     selected.documents.length > 0 && (
                     <Button
                       size="sm"
@@ -1012,7 +1020,7 @@ function QueueTab({
                       </DetailField>
                     )}
                   </dl>
-                  {RELABELLABLE.has(selected.status) ? (
+                  {can(selected, "reclassify") ? (
                     <Button
                       size="sm"
                       variant="outline"
@@ -1036,7 +1044,7 @@ function QueueTab({
               {/* Pinned: deciding is why this sheet is open, but the buttons sat
                   under the full AI review — every decision meant scrolling past
                   the evidence to reach them. */}
-              {DECIDABLE.has(selected.status) && (
+              {can(selected, "approve") && (
                 <SheetFooter className="justify-start">
                   <Button onClick={() => setDecision("approve")}>Approve</Button>
                   <Button
@@ -1055,14 +1063,14 @@ function QueueTab({
                   mutually exclusive by construction — a claim is either awaiting
                   our decision or awaiting the insurer's — so one footer always
                   shows exactly the next thing to do. */}
-              {SENDABLE.has(selected.status) && (
+              {can(selected, "send_to_insurer") && (
                 <SheetFooter className="justify-start">
                   <Button onClick={() => setSettling("send")}>
                     Send to insurer
                   </Button>
                 </SheetFooter>
               )}
-              {PAYABLE.has(selected.status) && (
+              {can(selected, "record_payment") && (
                 <SheetFooter className="justify-start">
                   <Button onClick={() => setSettling("pay")}>
                     Record payment
@@ -1250,6 +1258,11 @@ function QueueTab({
             )}
             {settling === "pay" && selected && (
               <>
+                {paymentWarning && (
+                  <p className="rounded-md border border-warn/40 bg-warn-soft px-3 py-2.5 text-warn">
+                    {paymentWarning} Confirm again to record this exception.
+                  </p>
+                )}
                 <p>
                   The member is told their claim has been paid. Leave the amount
                   blank if the insurer paid the full{" "}
@@ -1280,7 +1293,10 @@ function QueueTab({
                     min="0"
                     step="0.01"
                     value={paidAmount}
-                    onChange={(e) => setPaidAmount(e.target.value)}
+                    onChange={(e) => {
+                      setPaidAmount(e.target.value);
+                      setPaymentWarning(null);
+                    }}
                     placeholder={(
                       selected.amount_approved ??
                       claimedInPolicyCurrency ??
@@ -1293,7 +1309,13 @@ function QueueTab({
             )}
           </div>
         }
-        confirmLabel={settling === "send" ? "Send" : "Record payment"}
+        confirmLabel={
+          settling === "send"
+            ? "Send"
+            : paymentWarning
+              ? "Record exception"
+              : "Record payment"
+        }
         loading={sendToInsurer.isPending || recordPayment.isPending}
         onConfirm={confirmSettlement}
       />

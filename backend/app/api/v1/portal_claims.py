@@ -18,6 +18,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -26,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
 from app.core.clock import today as business_today
+from app.core.downloads import attachment_header
 from app.core.pagination import MAX_LIMIT
 from app.core.portal_auth import (
     CurrentMember,
@@ -35,7 +37,7 @@ from app.core.portal_auth import (
     resolve_member_employee,
 )
 from app.core.rate_limit import limiter
-from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES
+from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES, get_storage
 from app.core.uploads import saved_upload
 from app.db.session import get_db
 from app.models import Claim, Employee, PolicyYear, StoredDocument
@@ -47,7 +49,11 @@ from app.models.claim import (
     member_visible_claims,
 )
 from app.models.claim_message import EVENT_AMENDED, EVENT_SUBMITTED
-from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
+from app.models.stored_document import (
+    DOC_ENTITY_CLAIM,
+    DOC_ENTITY_REFERRAL,
+    STORAGE_AVAILABLE,
+)
 from app.schemas.claims import (
     ClaimAmendIn,
     ClaimAnchorOut,
@@ -113,6 +119,7 @@ from app.services.claims import (
     delete_documents,
     delete_stored_document,
     load_member_claim,
+    lock_claim_for_mutation,
     stamp_document_amendment,
     submit_claim,
     supersede_review_for_amendment,
@@ -656,6 +663,7 @@ def delete_my_referral_letter(
     if (
         doc is None
         or doc.entity_type != DOC_ENTITY_REFERRAL
+        or doc.storage_state != STORAGE_AVAILABLE
         # Same person-wide scope the list is served under, or a member could see
         # a letter carried over from last year and not be able to remove it.
         or doc.entity_id not in person_employee_ids(db, employee)
@@ -748,11 +756,77 @@ def create_my_claim(
 @router.get("/{claim_id}", response_model=ClaimOut)
 def get_my_claim(
     claim_id: str,
+    request: Request,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    return claim_to_out(db, _own_claim(db, claim_id, employee.id))
+    claim = _own_claim(db, claim_id, employee.id)
+    out = claim_to_out(db, claim)
+    write_member_audit(
+        db,
+        member,
+        "claim.view",
+        "claim",
+        claim.id,
+        employee_id=employee.id,
+        request=request,
+    )
+    db.commit()
+    return out
+
+
+@router.get("/{claim_id}/documents/{doc_id}/download")
+def download_my_claim_document(
+    claim_id: str,
+    doc_id: str,
+    request: Request,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> Response:
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
+    claim = _own_claim(db, claim_id, employee.id)
+    doc = db.get(StoredDocument, doc_id)
+    claim_attachment = (
+        doc is not None
+        and doc.entity_type == DOC_ENTITY_CLAIM
+        and doc.entity_id == claim.id
+    )
+    referral = (
+        doc is not None
+        and doc.id == claim.referral_document_id
+        and doc.entity_type == DOC_ENTITY_REFERRAL
+        and doc.entity_id in person_employee_ids(db, employee)
+    )
+    if (
+        doc is None
+        or doc.client_id != claim.client_id
+        or doc.storage_state != STORAGE_AVAILABLE
+        or not (claim_attachment or referral)
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    try:
+        content = get_storage().read(doc.storage_path)
+    except FileNotFoundError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "Document bytes are no longer available",
+        ) from None
+    write_member_audit(
+        db,
+        member,
+        "claim.document.download",
+        "stored_document",
+        doc.id,
+        employee_id=employee.id,
+        request=request,
+    )
+    db.commit()
+    return Response(
+        content=content,
+        media_type=doc.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": attachment_header(doc.file_name)},
+    )
 
 
 @router.post("/{claim_id}/documents", response_model=StoredDocumentOut)
@@ -769,7 +843,7 @@ async def upload_my_claim_document(
     # `needs_info` claim gets answered, and a member whose run-off has expired
     # must still be able to do it (`services/member_access.py`).
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
-    claim = _own_claim(db, claim_id, employee.id)
+    claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     # Same split as `submit_my_claim`: adding evidence to a DRAFT is building a
     # new claim, so it additionally needs CLAIM. `MEMBER_EDITABLE_STATUSES`
     # includes `draft`, so RESPOND alone let a `settling` member pile documents
@@ -842,7 +916,7 @@ def amend_my_claim(
     broker's queue can never hold an invalid row.
     """
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
-    claim = _own_claim(db, claim_id, employee.id)
+    claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     if claim.status == CLAIM_STATUS_DRAFT:
         assert_member_capability(db, employee, Capability.CLAIM)
     assert_member_may_amend(claim)
@@ -891,7 +965,7 @@ def delete_my_claim_document(
     documents when it is sent.
     """
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
-    claim = _own_claim(db, claim_id, employee.id)
+    claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     if claim.status == CLAIM_STATUS_DRAFT:
         assert_member_capability(db, employee, Capability.CLAIM)
     assert_member_may_amend(claim)
@@ -904,6 +978,7 @@ def delete_my_claim_document(
         doc is None
         or doc.entity_type != DOC_ENTITY_CLAIM
         or doc.entity_id != claim.id
+        or doc.storage_state != STORAGE_AVAILABLE
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
 
@@ -954,7 +1029,7 @@ def delete_my_draft_claim(
     db: Session = Depends(get_db),
 ) -> None:
     employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
-    claim = _own_claim(db, claim_id, employee.id)
+    claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     if claim.status != "draft":
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Only a draft claim can be deleted."
@@ -993,12 +1068,12 @@ def confirm_my_conversion(
     again rather than recording consent to a number nobody saw.
     """
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
-    claim = _own_claim(db, claim_id, employee.id)
+    claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     assert_member_may_amend(claim)
     apply_conversion(db, claim)
     if fx_state(claim) == FX_STATE_CONVERTED and (
         body.converted_amount is None
-        or abs(body.converted_amount - claim.amount_converted) <= 0.005
+        or abs(float(body.converted_amount) - float(claim.amount_converted)) <= 0.005
     ):
         claim.fx_acknowledged_at = datetime.now(UTC)
         write_member_audit(
@@ -1028,7 +1103,7 @@ def submit_my_claim(
     # is starting a new claim, so it additionally needs CLAIM, which is what
     # stops a member past their run-off filing a claim from a stale draft.
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
-    claim = _own_claim(db, claim_id, employee.id)
+    claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     if claim.status == CLAIM_STATUS_DRAFT:
         assert_member_capability(db, employee, Capability.CLAIM)
     submit_claim(

@@ -56,11 +56,8 @@ param postgresStorageGB int = 32
 @description('Enable zone-redundant Postgres HA. Not supported on the Burstable tier, and roughly doubles cost (a standby duplicates compute+storage).')
 param postgresHighAvailability bool = false
 
-@description('Redis SKU.')
+@description('Azure Managed Redis SKU, for example Balanced_B0.')
 param redisSku string
-
-@description('Redis size.')
-param redisCapacity int
 
 @description('Provision Redis at all. Both consumers degrade gracefully without it — the AI response cache falls back to in-memory and SlowAPI to per-process counters (see app/services/ai_cache.py and app/core/rate_limit.py) — so non-prod can skip the cost. Prod keeps it: per-process rate-limit counters would multiply every limit by the worker count.')
 param deployRedis bool = true
@@ -251,27 +248,40 @@ module privateNetworking 'modules/private-networking.bicep' = {
     prefix: prefix
     location: location
     postgresName: postgres.name
+    redisName: '${prefix}-redis'
+    deployRedis: deployRedis
+    storageName: replace('${prefix}docs', '-', '')
   }
+  dependsOn: [
+    redis
+    storage
+  ]
 }
 
 // ── Redis ────────────────────────────────────────────────────────────────────
-resource redis 'Microsoft.Cache/redis@2024-11-01' = if (deployRedis) {
+resource redis 'Microsoft.Cache/redisEnterprise@2025-07-01' = if (deployRedis) {
   name: '${prefix}-redis'
   location: location
+  sku: {
+    name: redisSku
+  }
+  identity: { type: 'None' }
   properties: {
-    sku: {
-      name: redisSku
-      family: redisSku == 'Premium' ? 'P' : 'C'
-      capacity: redisCapacity
-    }
-    enableNonSslPort: false
     minimumTlsVersion: '1.2'
-    // AOF persistence keeps the AI response cache / SlowAPI counters across a
-    // Redis restart, but it is Premium-only — and the key must be ABSENT on
-    // lower SKUs, not merely 'false': Azure rejects any value with "requires a
-    // Premium sku to be set". On Basic, a restart therefore clears the cache
-    // (it refills) and the rate-limit counters (they reset).
-    redisConfiguration: redisSku == 'Premium' ? { 'aof-backup-enabled': 'true' } : {}
+    publicNetworkAccess: 'Disabled'
+    highAvailability: isProd ? 'Enabled' : 'Disabled'
+    encryption: {}
+  }
+}
+
+resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2025-07-01' = if (deployRedis) {
+  parent: redis
+  name: 'default'
+  properties: {
+    clientProtocol: 'Encrypted'
+    clusteringPolicy: 'EnterpriseCluster'
+    evictionPolicy: 'AllKeysLRU'
+    port: 10000
   }
 }
 
@@ -298,7 +308,7 @@ resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview'
   parent: kv
   name: 'redis-url'
   properties: {
-    value: 'rediss://:${redis.listKeys().primaryKey}@${redis.properties.hostName}:6380/0'
+    value: 'rediss://:${uriComponent(redisDatabase!.listKeys().primaryKey)}@${redis!.name}.${location}.redis.azure.net:10000/0'
   }
 }
 
@@ -335,6 +345,11 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
     allowBlobPublicAccess: false
+    publicNetworkAccess: 'Disabled'
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
     allowSharedKeyAccess: false // managed identity only — no key leakage path
     accessTier: 'Hot'
   }
@@ -382,8 +397,8 @@ var commonAppSettings = [
   // fails audience-or-issuer validation, which surfaces as an infinite
   // sign-in redirect loop (401 -> client.ts calls signIn() -> repeat).
   { name: 'INSPRO_ENTRA_AUDIENCE', value: entraClientId }
-  { name: 'INSPRO_ENTRA_ISSUER', value: 'https://login.microsoftonline.com/${entraTenantId}/v2.0' }
-  { name: 'INSPRO_ENTRA_JWKS_URL', value: 'https://login.microsoftonline.com/${entraTenantId}/discovery/v2.0/keys' }
+  { name: 'INSPRO_ENTRA_ISSUER', value: '${environment().authentication.loginEndpoint}${entraTenantId}/v2.0' }
+  { name: 'INSPRO_ENTRA_JWKS_URL', value: '${environment().authentication.loginEndpoint}${entraTenantId}/discovery/v2.0/keys' }
   { name: 'INSPRO_CORS_ORIGINS', value: corsOrigins }
   // Tenant routing. On a single host the Host header can't name a tenant, so
   // the SPA sends X-Inspro-Tenant-Slug instead — see app/core/tenancy_host.py.
@@ -449,9 +464,9 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
     // `vnetRouteAllEnabled` is deliberately LEFT OFF. Only traffic bound for the
     // VNet's own address space is routed through the integration subnet, which
     // is all we need (the private endpoint lives there). Turning route-all on
-    // would push every outbound call — Vertex AI, Entra JWKS, SMTP, ACR, Key
-    // Vault, Blob — through the VNet, which then needs a NAT Gateway because
-    // Azure has retired default outbound access for new VNet deployments.
+    // would push public calls — Vertex AI, Entra JWKS, SMTP, ACR, Key Vault —
+    // through the VNet, which then needs a NAT Gateway. Blob and Redis resolve
+    // to their private endpoints and are already routed privately.
     // Private DNS still resolves without it: an integrated app inherits the
     // VNet's DNS configuration, and the zone is linked to that VNet.
     virtualNetworkSubnetId: enableVnetIntegration ? privateNetworking.outputs.appSubnetId : null
@@ -776,6 +791,6 @@ resource reviewFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' 
 output appServiceUrl string = 'https://${webapp.properties.defaultHostName}'
 output reviewWorkerUrl string = 'https://${reviewWorker.properties.defaultHostName}'
 output postgresFqdn string = postgres.properties.fullyQualifiedDomainName
-output redisHost string = deployRedis ? redis.properties.hostName : ''
+output redisHost string = deployRedis ? '${redis!.name}.${location}.redis.azure.net' : ''
 output keyVaultName string = kv.name
 output appInsightsConnectionString string = appInsights.properties.ConnectionString

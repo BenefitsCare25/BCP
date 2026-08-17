@@ -351,6 +351,21 @@ export interface PortalClaimDocument {
   created_at: string;
 }
 
+export async function downloadPortalClaimDocument(
+  claimId: string,
+  document: PortalClaimDocument,
+): Promise<void> {
+  const blob = await portalApi.blob(
+    `/portal/claims/${claimId}/documents/${document.id}/download`,
+  );
+  const url = URL.createObjectURL(blob);
+  const anchor = window.document.createElement("a");
+  anchor.href = url;
+  anchor.download = document.file_name;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export interface PortalClaim {
   id: string;
   claim_kind: "insured" | "flex";

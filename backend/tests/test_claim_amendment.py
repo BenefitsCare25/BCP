@@ -659,8 +659,8 @@ def test_the_audit_row_keeps_the_figure_it_exists_to_preserve(anon: TestClient):
             .first()
         )
         assert row is not None
-        assert row.before["amount_claimed"] == 1200.0
-        assert row.after["amount_claimed"] == 120.0
+        assert row.before["amount_claimed"] == "1200.00"
+        assert row.after["amount_claimed"] == "120.00"
         assert row.after["revision"] == claim["revision"] + 1
 
 
@@ -799,13 +799,14 @@ def test_the_broker_may_not_rewrite_the_members_note(
     assert res.json()["remarks"] == "I paid cash on the day."
 
 
-def test_a_broker_amendment_leaves_the_review_and_the_thread_alone(
+def test_a_broker_amendment_supersedes_review_but_leaves_thread_alone(
     anon: TestClient, broker: TestClient
 ):
-    """The assessor is READING the review while they correct the claim, so
-    invalidating it under them is the opposite of useful. And a broker changing
-    what a member claimed needs a sentence a person wrote, not a generated
-    one."""
+    """Changed claim facts invalidate the AI snapshot regardless of actor.
+
+    A broker correction still stays quiet in the member thread because that
+    explanation must be a sentence a person deliberately writes.
+    """
     claim = _submitted(anon, b" bk-quiet")
     _mark_review_complete(claim["id"])
     before_thread = len(_thread(anon, claim["id"]))
@@ -813,10 +814,10 @@ def test_a_broker_amendment_leaves_the_review_and_the_thread_alone(
     assert _broker_amend(broker, claim["id"], amount_claimed=64.0).status_code == 200
 
     body = _get(anon, claim["id"])
-    assert body["status"] == "ai_verified"  # not knocked back to submitted
+    assert body["status"] == "submitted"
     assert len(_thread(anon, claim["id"])) == before_thread
     with SessionLocal() as s:
-        assert not any(
+        assert any(
             r.superseded
             for r in s.query(ClaimAIReview).filter_by(claim_id=claim["id"]).all()
         )

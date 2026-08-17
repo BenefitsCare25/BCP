@@ -84,7 +84,7 @@ class ClaimCreateIn(BaseModel):
     # consent. A mismatch simply leaves the claim unacknowledged and submit asks
     # again (`claims._stamp_fx_acknowledgement`).
     fx_acknowledged: bool = False
-    fx_quoted_amount: float | None = Field(default=None, ge=0)
+    fx_quoted_amount: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
 # Amendable fields the CLAIM cannot hold as NULL. Sending an explicit `null` for
@@ -191,7 +191,7 @@ class ClaimAmendIn(_ClaimAmendBase):
     # notice for an edit that never happened. Accepting a figure without
     # correcting anything is `POST /claims/{id}/confirm-conversion`.
     fx_acknowledged: bool = False
-    fx_quoted_amount: float | None = Field(default=None, ge=0)
+    fx_quoted_amount: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class ClaimBrokerAmendIn(_ClaimAmendBase):
@@ -465,6 +465,9 @@ class BrokerClaimOut(ClaimOut):
     # grouped query — a member waiting on an answer is the reason to open the
     # claim, so it has to be visible in the queue rather than inside the sheet.
     unread_member_messages: int = 0
+    # Server-owned capabilities for the current state. Frontends render actions
+    # from this list instead of maintaining a second copy of the state machine.
+    allowed_actions: list[str] = Field(default_factory=list)
 
     # ── Settlement (see services/claim_settlement.py) ────────────────────────
     sent_to_insurer_at: datetime | None = None
@@ -519,7 +522,8 @@ class ClaimPaymentIn(BaseModel):
     # Defaults to `amount_approved` when omitted. `ge=0` not `gt=0`: a zero
     # settlement is a real advice (fully offset against an excess) and refusing
     # it would leave the claim stuck in `sent_to_insurer` forever.
-    amount: float | None = Field(default=None, ge=0)
+    amount: float | None = Field(default=None, ge=0, le=1_000_000)
+    acknowledge_overpayment: bool = False
     note: str | None = Field(default=None, max_length=2000)
 
 
@@ -554,7 +558,8 @@ class ClaimAssessmentIn(BaseModel):
     sent_to_insurer_on: date | None = None
     insurer_deadline_on: date | None = None
     paid_on: date | None = None
-    payment_amount: float | None = Field(default=None, ge=0)
+    payment_amount: float | None = Field(default=None, ge=0, le=1_000_000)
+    acknowledge_overpayment: bool = False
 
 
 class BrokerClaimList(BaseModel):
@@ -798,7 +803,7 @@ class ClaimDecisionIn(BaseModel):
     # **In the POLICY currency, always** — never in the claim's own. A foreign
     # claim states its bill in one currency and consumes its limit in another;
     # an assessor approving "500" on a USD claim is approving SGD 500.
-    approved_amount: float | None = Field(default=None, gt=0)
+    approved_amount: float | None = Field(default=None, gt=0, le=1_000_000)
     # The SGD equivalent of `amount_claimed`, keyed in by the assessor because
     # no reference rate could be fetched. REQUIRED to approve such a claim (422
     # `fx_amount_required`) — without it there is no figure to compare to a
@@ -1372,4 +1377,4 @@ class FxAcknowledgeIn(BaseModel):
     form re-asks with the current figure.
     """
 
-    converted_amount: float | None = Field(default=None, ge=0)
+    converted_amount: float | None = Field(default=None, ge=0, le=1_000_000)

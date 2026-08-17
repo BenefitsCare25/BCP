@@ -29,6 +29,8 @@ class Mailer(Protocol):
         self, email: str, username: str, password: str, sign_in_url: str
     ) -> None: ...
 
+    def send_claim_update(self, email: str, portal_url: str) -> None: ...
+
 
 def _invite_message(
     email: str, username: str, password: str, sign_in_url: str, sender: str
@@ -74,6 +76,21 @@ def _otp_message(email: str, code: str, magic_link: str, sender: str) -> EmailMe
     return msg
 
 
+def _claim_update_message(email: str, portal_url: str, sender: str) -> EmailMessage:
+    """Generic on purpose: no medical or decision detail on a lock screen."""
+    msg = EmailMessage()
+    msg["Subject"] = "You have an update in your benefits portal"
+    msg["From"] = sender
+    msg["To"] = email
+    msg.set_content(
+        "There is an update about one of your claims in the employee benefits "
+        "portal.\n\n"
+        f"Sign in to view it: {portal_url}\n\n"
+        "For your privacy, claim and medical details are not included in email."
+    )
+    return msg
+
+
 class LogMailer:
     def send_otp(self, email: str, code: str, magic_link: str) -> None:
         logger.info("Portal OTP for %s: %s (magic link: %s)", email, code, magic_link)
@@ -85,6 +102,9 @@ class LogMailer:
             "Portal invite for %s: username=%s password=%s (%s)",
             email, username, password, sign_in_url,
         )
+
+    def send_claim_update(self, email: str, portal_url: str) -> None:
+        logger.info("Claim update email accepted for %s (%s)", email, portal_url)
 
 
 class SmtpMailer:
@@ -118,6 +138,9 @@ class SmtpMailer:
     ) -> None:
         self._send(_invite_message(email, username, password, sign_in_url, self.sender))
 
+    def send_claim_update(self, email: str, portal_url: str) -> None:
+        self._send(_claim_update_message(email, portal_url, self.sender))
+
 
 class AcsMailer:
     def __init__(self) -> None:
@@ -131,6 +154,9 @@ class AcsMailer:
     def send_member_invite(  # pragma: no cover
         self, email: str, username: str, password: str, sign_in_url: str
     ) -> None:
+        raise NotImplementedError
+
+    def send_claim_update(self, email: str, portal_url: str) -> None:  # pragma: no cover
         raise NotImplementedError
 
 

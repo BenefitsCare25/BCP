@@ -30,6 +30,7 @@ def _result(rule: str, status: str, evidence: str) -> dict[str, Any]:
         "rule": rule,
         "status": status,
         "source": "deterministic",
+        "severity": "critical" if status == "fail" else "info",
         "evidence": evidence,
     }
 
@@ -58,7 +59,7 @@ def doc_completeness_results(
             results.append(
                 _result(
                     rule,
-                    "warning",
+                    "fail",
                     f'"{name}" was identified as a {defn.display} but is '
                     f"missing: {', '.join(missing)}. Confirm the right "
                     "document was submitted and is complete.",
@@ -78,7 +79,7 @@ def doc_completeness_results(
             results.append(
                 _result(
                     "Invoice format matches the hospital's sector.",
-                    "warning",
+                    "fail",
                     f'"{name}" looks like a '
                     f"{'government' if defn.sector == 'govt' else 'private'}"
                     f"-hospital bill, but the claim names a "

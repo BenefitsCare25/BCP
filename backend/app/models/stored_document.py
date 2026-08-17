@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, Index, Integer, String
+from sqlalchemy import CheckConstraint, Date, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, new_uuid
@@ -18,11 +18,17 @@ DOC_ENTITY_DEPENDANT = "dependant"
 # Member-level referral letters (entity_id = the member's Employee row id) —
 # reusable across specialist claims via Claim.referral_document_id.
 DOC_ENTITY_REFERRAL = "referral"
+STORAGE_AVAILABLE = "available"
+STORAGE_DELETE_PENDING = "delete_pending"
 
 
 class StoredDocument(Base, TimestampMixin):
     __tablename__ = "stored_documents"
     __table_args__ = (
+        CheckConstraint(
+            "storage_state IN ('available', 'delete_pending')",
+            name="storage_state_valid",
+        ),
         Index("ix_stored_documents_entity", "entity_type", "entity_id"),
     )
 
@@ -48,5 +54,12 @@ class StoredDocument(Base, TimestampMixin):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_state: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default=STORAGE_AVAILABLE,
+        server_default=STORAGE_AVAILABLE,
+    )
+    delete_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
     uploaded_by_member_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     uploaded_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

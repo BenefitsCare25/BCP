@@ -289,6 +289,25 @@ def _draft(
     return res.json()
 
 
+def test_client_hr_cannot_access_broker_claims_api(broker: TestClient):
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-00000000hr01",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=DEMO_CLIENT_ID,
+        role="client_hr",
+    )
+    try:
+        response = broker.get("/api/v1/claims", params={"policy_year_id": PY})
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id="00000000-0000-0000-0000-000000000001",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id=DEMO_CLIENT_ID,
+            role="broker_admin",
+        )
+
+
 def _upload(
     anon: TestClient,
     claim_id: str,
@@ -1251,6 +1270,16 @@ def test_upload_wrong_file_type_415(anon: TestClient):
     assert res.status_code == 415
 
 
+def test_upload_rejects_extension_content_mismatch(anon: TestClient):
+    claim = _draft(anon)
+    res = anon.post(
+        f"/api/v1/portal/claims/{claim['id']}/documents",
+        files={"file": ("forged.pdf", b"not actually a pdf", "application/pdf")},
+        headers=_auth(ACC_A),
+    )
+    assert res.status_code == 415
+
+
 # ── Member isolation ─────────────────────────────────────────────────────────
 
 
@@ -1420,6 +1449,56 @@ def test_broker_document_download(anon: TestClient, broker: TestClient):
     assert res.status_code == 200
     assert res.content == PDF + b" download-1"
     assert "receipt.pdf" in res.headers["content-disposition"]
+
+
+def test_member_can_download_own_claim_document(anon: TestClient):
+    claim = _draft(anon)
+    uploaded = _upload(anon, claim["id"], PDF + b" member-download")
+    assert uploaded.status_code == 200
+    doc_id = uploaded.json()["id"]
+    res = anon.get(
+        f"/api/v1/portal/claims/{claim['id']}/documents/{doc_id}/download",
+        headers=_auth(ACC_A),
+    )
+    assert res.status_code == 200
+    assert res.content == PDF + b" member-download"
+
+
+def test_decision_idempotency_key_replays_success(
+    anon: TestClient, broker: TestClient
+):
+    claim_id = _submitted_claim(anon, b" idempotent-decision")
+    headers = {"Idempotency-Key": "decision-test-0001"}
+    first = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve"},
+        headers=headers,
+    )
+    second = broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={"action": "approve"},
+        headers=headers,
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["status"] == second.json()["status"] == "approved"
+
+    from app.models import ClaimNotification
+    from app.services.claim_notifications import process_one_claim_notification
+
+    with SessionLocal() as db:
+        queued = db.query(ClaimNotification).filter_by(claim_id=claim_id).all()
+        assert len(queued) == 1
+        notification_id = queued[0].id
+        pending_count = db.query(ClaimNotification).filter_by(status="queued").count()
+    for _ in range(pending_count):
+        assert process_one_claim_notification(None) is True
+        with SessionLocal() as db:
+            if db.get(ClaimNotification, notification_id).status == "sent":
+                break
+    with SessionLocal() as db:
+        delivered = db.get(ClaimNotification, notification_id)
+        assert delivered.status == "sent"
+        assert delivered.recipient_email == ""
 
 
 def test_upload_is_open_until_the_broker_decides(

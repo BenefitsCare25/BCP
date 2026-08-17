@@ -52,6 +52,7 @@ from app.schemas.claims import (
     ConversationSubjectOut,
 )
 from app.services.claim_fx import is_foreign
+from app.services.claim_notifications import enqueue_claim_notification
 from app.services.fx import POLICY_CURRENCY
 
 # What a member sees as the author of anything written by us. Deliberately a
@@ -246,7 +247,7 @@ def post_system_message(
 ) -> ClaimMessage:
     """Post the automatic notice for a claim event. Caller commits."""
     subject, body = _system_copy(claim, event, note)
-    return _post(
+    message = _post(
         db,
         ClaimMessage(
             client_id=claim.client_id,
@@ -258,6 +259,8 @@ def post_system_message(
             event=event,
         ),
     )
+    enqueue_claim_notification(db, claim, message)
+    return message
 
 
 def post_broker_message(
@@ -270,7 +273,7 @@ def post_broker_message(
 ) -> ClaimMessage:
     """A broker writing to the member. Caller commits."""
     author = db.get(User, user_id)
-    return _post(
+    message = _post(
         db,
         ClaimMessage(
             client_id=claim.client_id,
@@ -286,6 +289,8 @@ def post_broker_message(
             body=body.strip(),
         ),
     )
+    enqueue_claim_notification(db, claim, message)
+    return message
 
 
 def post_member_message(

@@ -14,6 +14,7 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -21,17 +22,19 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.audit import write_audit
+from app.core.audit import write_access_audit, write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.clock import today as business_today
 from app.core.deps import (
     assert_policy_year_for_user,
     load_claim,
     load_employee,
+    require_claim_access,
 )
+from app.core.downloads import attachment_header
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.core.storage import get_storage
@@ -46,12 +49,16 @@ from app.models import (
 )
 from app.models.claim import (
     AMENDED_BY_BROKER,
+    CLAIM_STATUS_AI_FLAGGED,
     CLAIM_STATUS_AI_REVIEW_PENDING,
+    CLAIM_STATUS_AI_VERIFIED,
     CLAIM_STATUS_APPROVED,
     CLAIM_STATUS_NEEDS_INFO,
     CLAIM_STATUS_PAID,
     CLAIM_STATUS_REJECTED,
     CLAIM_STATUS_SENT_TO_INSURER,
+    CLAIM_STATUS_SUBMITTED,
+    DECIDABLE_STATUSES,
     HOSPITAL_TYPES,
     LIVE_STATUSES,
     ORIGIN_PORTAL,
@@ -63,7 +70,11 @@ from app.models.claim_message import (
     EVENT_PAID,
     EVENT_REJECTED,
 )
-from app.models.stored_document import DOC_ENTITY_CLAIM
+from app.models.stored_document import (
+    DOC_ENTITY_CLAIM,
+    DOC_ENTITY_REFERRAL,
+    STORAGE_AVAILABLE,
+)
 from app.schemas.claims import (
     BrokerClaimList,
     BrokerClaimOut,
@@ -122,8 +133,14 @@ from app.services.claims import (
     assert_transition,
     attach_document,
     audit_cells,
+    is_replayed_claim_command,
+    lock_claim_for_mutation,
+    lock_claim_utilization_bucket,
     populate_claim_out,
     prefetch_claim_relations,
+    record_claim_command,
+    stamp_document_amendment,
+    supersede_review_for_amendment,
 )
 from app.services.claims_register import build_claims_register_workbook
 from app.services.claims_review.queue import (
@@ -141,11 +158,23 @@ from app.services.log_cases import (
 from app.services.sg_hospitals import sector_from_provider
 from app.services.utilization import remaining_for_claim
 
-router = APIRouter(prefix="/claims", tags=["claims"])
+router = APIRouter(
+    prefix="/claims",
+    tags=["claims"],
+    dependencies=[Depends(require_claim_access)],
+)
+
+IDEMPOTENCY_HEADER = "Idempotency-Key"  # gitleaks:allow
+
+
 # Employee-scoped claim entry (LOG cases). A separate router so the path can be
 # `/employees/{id}/…` while the handlers stay beside the rest of the claims
 # surface — same split as `panel_listings.year_router`.
-employee_router = APIRouter(prefix="/employees/{employee_id}", tags=["claims"])
+employee_router = APIRouter(
+    prefix="/employees/{employee_id}",
+    tags=["claims"],
+    dependencies=[Depends(require_claim_access)],
+)
 
 _DECISION_STATUS = {
     "approve": CLAIM_STATUS_APPROVED,
@@ -173,6 +202,39 @@ def _latest_review(db: Session, claim_id: str) -> ClaimAIReview | None:
         .order_by(ClaimAIReview.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
+
+
+def _latest_reviews(
+    db: Session, claim_ids: list[str]
+) -> dict[str, ClaimAIReview]:
+    if not claim_ids:
+        return {}
+    rows = db.execute(
+        select(ClaimAIReview).where(
+            ClaimAIReview.claim_id.in_(claim_ids),
+            ClaimAIReview.superseded.is_(False),
+        )
+    ).scalars()
+    return {review.claim_id: review for review in rows}
+
+
+def _allowed_actions(claim: Claim, *, can_mutate: bool) -> list[str]:
+    if not can_mutate:
+        return []
+    actions = ["amend", "assessment", "message", "document_upload"]
+    if claim.status in DECIDABLE_STATUSES:
+        actions.extend(("approve", "reject", "needs_info", "reclassify"))
+    if claim.status == CLAIM_STATUS_APPROVED:
+        actions.append("send_to_insurer")
+    if claim.status == CLAIM_STATUS_SENT_TO_INSURER:
+        actions.append("record_payment")
+    if claim.status in {
+        CLAIM_STATUS_SUBMITTED,
+        CLAIM_STATUS_AI_VERIFIED,
+        CLAIM_STATUS_AI_FLAGGED,
+    }:
+        actions.append("rerun_review")
+    return actions
 
 
 def _unread_member_messages(db: Session, claim_ids: list[str]) -> dict[str, int]:
@@ -203,6 +265,8 @@ def _broker_out(
     anchors: dict[str, Claim] | None = None,
     unread_messages: dict[str, int] | None = None,
     doc_dates: dict[str, object] | None = None,
+    reviews: dict[str, ClaimAIReview] | None = None,
+    can_mutate: bool = True,
 ) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
     # Shared filler (documents, referral letter, claimant name, episode anchor)
@@ -228,7 +292,7 @@ def _broker_out(
     out.received_via = intake_field(claim, "received_via")
     out.received_on = intake_date(claim, "received_on")
     out.requested_by = intake_field(claim, "requested_by")
-    review = _latest_review(db, claim.id)
+    review = reviews.get(claim.id) if reviews is not None else _latest_review(db, claim.id)
     if review is not None:
         out.ai_review = ClaimAIReviewSummary.model_validate(review)
     out.unread_member_messages = (
@@ -249,6 +313,7 @@ def _broker_out(
     # Served, not mirrored — see `BrokerClaimOut.is_inpatient`.
     out.is_inpatient = is_inpatient_product(claim.product_code)
     out.hospital_type_derived = sector_from_provider(claim.provider_name)
+    out.allowed_actions = _allowed_actions(claim, can_mutate=can_mutate)
     return out
 
 
@@ -258,6 +323,7 @@ def list_claims(
     status_filter: str | None = Query(default=None, alias="status"),
     employee_id: str | None = Query(default=None),
     case_type: str | None = Query(default=None),
+    search: str | None = Query(default=None, min_length=1, max_length=100),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     user: CurrentUser = Depends(get_current_user),
@@ -278,7 +344,22 @@ def list_claims(
     wanted_case_type = case_type_or_400(case_type)
     if wanted_case_type:
         conditions.append(Claim.case_type == wanted_case_type)
-    total = db.scalar(select(func.count(Claim.id)).where(*conditions)) or 0
+    if search and search.strip():
+        term = search.strip()
+        conditions.append(
+            or_(
+                Claim.reference_no.icontains(term, autoescape=True),
+                Claim.invoice_number.icontains(term, autoescape=True),
+                Claim.provider_name.icontains(term, autoescape=True),
+                Employee.staff_id.icontains(term, autoescape=True),
+                Employee.employee_name.icontains(term, autoescape=True),
+            )
+        )
+    total = db.scalar(
+        select(func.count(Claim.id))
+        .join(Employee, Claim.employee_id == Employee.id)
+        .where(*conditions)
+    ) or 0
     rows = db.execute(
         select(Claim, Employee)
         .join(Employee, Claim.employee_id == Employee.id)
@@ -292,6 +373,7 @@ def list_claims(
     )
     unread = _unread_member_messages(db, [c.id for c, _ in rows])
     doc_dates = document_dates(db, [c.id for c, _ in rows])
+    reviews = _latest_reviews(db, [c.id for c, _ in rows])
     return BrokerClaimList(
         total=total,
         offset=offset,
@@ -307,6 +389,8 @@ def list_claims(
                 anchors=anchors,
                 unread_messages=unread,
                 doc_dates=doc_dates,
+                reviews=reviews,
+                can_mutate=user.role != "broker_viewer",
             )
             for claim, employee in rows
         ],
@@ -377,26 +461,50 @@ def broker_fx_quote(
 
 @router.get("/{claim_id}", response_model=BrokerClaimOut)
 def get_claim(
+    request: Request,
     claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BrokerClaimOut:
     employee = db.get(Employee, claim.employee_id)
-    out = _broker_out(db, claim, employee)
+    out = _broker_out(
+        db,
+        claim,
+        employee,
+        can_mutate=user.role != "broker_viewer",
+    )
     # The remaining limit for this claim's bucket, shown ahead of the decision
     # (the approve endpoint still enforces it). Detail-only — utilization is
     # computed-on-read and too heavy for the list.
     if employee is not None and claim.status in LIVE_STATUSES:
         out.remaining_limit = remaining_for_claim(db, claim, employee)
+    write_access_audit(
+        db,
+        user,
+        request,
+        "claim.view",
+        "claim",
+        claim.id,
+        employee_id=claim.employee_id,
+    )
+    db.commit()
     return out
 
 
 @router.post("/{claim_id}/decision", response_model=BrokerClaimOut)
 def decide_claim(
     body: ClaimDecisionIn,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BrokerClaimOut:
+    claim = lock_claim_for_mutation(db, claim)
+    command = f"decision:{body.action}"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     new_status = _DECISION_STATUS[body.action]
     assert_transition(claim, new_status)
     # The member may amend right up to this moment, so a decision carries the
@@ -411,6 +519,7 @@ def decide_claim(
         "amount_converted": claim.amount_converted,
     }
     if body.action == "approve":
+        lock_claim_utilization_bucket(db, claim)
         # An assessor supplying the missing SGD value of a foreign claim. Applied
         # BEFORE the figure is resolved below, so one request can both price the
         # claim and approve it — the assessor is looking at the receipt once.
@@ -438,9 +547,30 @@ def decide_claim(
                         "approving it."
                     ),
                     "currency": claim.currency,
-                    "amount_claimed": claim.amount_claimed,
+                    "amount_claimed": float(claim.amount_claimed),
                     "policy_currency": POLICY_CURRENCY,
                     "incurred_date": claim.incurred_date.isoformat(),
+                },
+            )
+        claimed_in_policy_currency = policy_amount(claim)
+        if (
+            claimed_in_policy_currency is not None
+            and approving > claimed_in_policy_currency
+            and not body.acknowledge
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "claim_amount_exceeded",
+                    "message": (
+                        f"Approving {POLICY_CURRENCY} {approving:,.2f} exceeds "
+                        f"the claim value of {POLICY_CURRENCY} "
+                        f"{claimed_in_policy_currency:,.2f}. Resend with "
+                        "acknowledge=true to record this exception."
+                    ),
+                    "claimed": float(claimed_in_policy_currency),
+                    "approving": float(approving),
+                    "policy_currency": POLICY_CURRENCY,
                 },
             )
         # Approving beyond the bucket's remaining limit needs an explicit
@@ -467,8 +597,8 @@ def decide_claim(
                             f"{remaining:,.2f} for this coverage. Resend with "
                             "acknowledge=true to approve anyway."
                         ),
-                        "remaining": remaining,
-                        "approving": approving,
+                        "remaining": float(remaining),
+                        "approving": float(approving),
                         "policy_currency": POLICY_CURRENCY,
                     },
                 )
@@ -515,6 +645,7 @@ def decide_claim(
         },
         employee_id=claim.employee_id,
     )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
@@ -523,6 +654,9 @@ def decide_claim(
 @router.post("/{claim_id}/conversion", response_model=BrokerClaimOut)
 def set_claim_conversion(
     body: ClaimConversionIn,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -538,6 +672,10 @@ def set_claim_conversion(
     with no correction to the amount that produced it; correcting the amount
     itself (which re-runs the conversion) is what the amendment endpoint is for.
     """
+    claim = lock_claim_for_mutation(db, claim)
+    command = "conversion:set"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     if fx_state(claim) != FX_STATE_UNAVAILABLE:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -562,6 +700,7 @@ def set_claim_conversion(
         },
         employee_id=claim.employee_id,
     )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
@@ -570,6 +709,9 @@ def set_claim_conversion(
 @limiter.limit("20/minute")
 def refresh_claim_conversion(
     request: Request,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -585,6 +727,10 @@ def refresh_claim_conversion(
     `set_claim_conversion`: a re-fetch that moved an already-decided value would
     change what a claim is worth without changing anything about the claim.
     """
+    claim = lock_claim_for_mutation(db, claim)
+    command = "conversion:refresh"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     if fx_state(claim) != FX_STATE_UNAVAILABLE:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -608,6 +754,7 @@ def refresh_claim_conversion(
             },
             employee_id=claim.employee_id,
         )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
@@ -615,6 +762,9 @@ def refresh_claim_conversion(
 @router.post("/{claim_id}/send-to-insurer", response_model=BrokerClaimOut)
 def send_claim_to_insurer(
     body: ClaimSendToInsurerIn,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -625,6 +775,10 @@ def send_claim_to_insurer(
     approved; "we forwarded it" is our internal workflow, and narrating it in
     their thread would make an ordinary handoff look like a new decision.
     """
+    claim = lock_claim_for_mutation(db, claim)
+    command = "settlement:send"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     assert_transition(claim, CLAIM_STATUS_SENT_TO_INSURER)
     before = {"status": claim.status}
     send_to_insurer(
@@ -655,6 +809,7 @@ def send_claim_to_insurer(
         },
         employee_id=claim.employee_id,
     )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
@@ -662,6 +817,9 @@ def send_claim_to_insurer(
 @router.post("/{claim_id}/payment", response_model=BrokerClaimOut)
 def record_claim_payment(
     body: ClaimPaymentIn,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -671,7 +829,30 @@ def record_claim_payment(
     The member IS told: "approved" and "the money is in your account" are
     different events and only the second one ends their wait.
     """
+    claim = lock_claim_for_mutation(db, claim)
+    command = "settlement:payment"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     assert_transition(claim, CLAIM_STATUS_PAID)
+    payment = body.amount if body.amount is not None else claim.amount_approved
+    if (
+        payment is not None
+        and claim.amount_approved is not None
+        and payment > claim.amount_approved
+        and not body.acknowledge_overpayment
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "payment_exceeds_approval",
+                "message": (
+                    "The insurer payment exceeds the approved amount. Resend "
+                    "with acknowledge_overpayment=true to record the exception."
+                ),
+                "approved": float(claim.amount_approved),
+                "payment": float(payment),
+            },
+        )
     before = {"status": claim.status}
     record_payment(db, claim, paid_on=body.paid_on, amount=body.amount)
     if body.note:
@@ -688,6 +869,7 @@ def record_claim_payment(
         },
         employee_id=claim.employee_id,
     )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
@@ -695,6 +877,9 @@ def record_claim_payment(
 @router.patch("/{claim_id}/assessment", response_model=BrokerClaimOut)
 def update_claim_assessment(
     body: ClaimAssessmentIn,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -705,7 +890,30 @@ def update_claim_assessment(
     several places at different points in a claim's life, and a full-object PUT
     would let the sector form blank an admission date somebody else keyed in.
     """
-    fields = body.model_fields_set
+    claim = lock_claim_for_mutation(db, claim)
+    command = "assessment:update"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
+    fields = body.model_fields_set - {"acknowledge_overpayment"}
+    if (
+        "payment_amount" in fields
+        and body.payment_amount is not None
+        and claim.amount_approved is not None
+        and body.payment_amount > claim.amount_approved
+        and not body.acknowledge_overpayment
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "payment_exceeds_approval",
+                "message": (
+                    "The insurer payment exceeds the approved amount. Resend "
+                    "with acknowledge_overpayment=true to record the exception."
+                ),
+                "approved": float(claim.amount_approved),
+                "payment": float(body.payment_amount),
+            },
+        )
     if "hospital_type" in fields and body.hospital_type is not None:
         if body.hospital_type not in HOSPITAL_TYPES:
             raise HTTPException(
@@ -760,6 +968,7 @@ def update_claim_assessment(
         after=audit_cells({c: getattr(claim, c) for c in columns}),
         employee_id=claim.employee_id,
     )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     return _broker_out(db, claim, db.get(Employee, claim.employee_id))
 
@@ -783,12 +992,12 @@ def amend_claim(
     claimable as the member who filed it, and two implementations would come to
     disagree about what a valid claim is.
 
-    **No review supersede, and no thread notice** — unlike the member's. The
-    assessor is READING the review while they correct the claim, so
-    invalidating it under them is the opposite of useful; and if a broker
-    changes what a member claimed, that needs a sentence a person wrote, which
-    the message composer and the decision note are both already there for.
+    Any active review is superseded because its evidence snapshot no longer
+    describes the claim. No automatic thread notice is posted: when a broker
+    changes what a member claimed, the member-facing explanation must be a
+    sentence a person wrote through the message composer or decision note.
     """
+    claim = lock_claim_for_mutation(db, claim)
     employee = db.get(Employee, claim.employee_id)
     if employee is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
@@ -800,6 +1009,7 @@ def amend_claim(
         allowed=BROKER_AMENDABLE_FIELDS,
         actor=AMENDED_BY_BROKER,
     )
+    supersede_review_for_amendment(db, claim)
     write_audit(
         db, user, "claim.amended", "claim", claim.id,
         before=audit_cells(before),
@@ -868,6 +1078,7 @@ def change_claim_case_type(
     `origin`, not on case type, precisely so that reclassifying can never
     retract someone's own record from their view.
     """
+    claim = lock_claim_for_mutation(db, claim)
     before = {"case_type": claim.case_type, "claim_type": claim.claim_type}
     changed = set_case_type(
         claim,
@@ -913,6 +1124,7 @@ async def upload_claim_document(
     in review. The slot tag is still validated, because the submit-time
     requirement check trusts these values.
     """
+    claim = lock_claim_for_mutation(db, claim)
     if doc_type is not None and doc_type not in DOC_SLOT_LABELS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -928,6 +1140,7 @@ async def upload_claim_document(
         uploaded_by_user_id=user.user_id,
         doc_type=doc_type,
     )
+    stamp_document_amendment(db, claim, actor=AMENDED_BY_BROKER)
     write_audit(
         db, user, "claim.document_added", "claim", claim.id,
         after={
@@ -943,11 +1156,24 @@ async def upload_claim_document(
 
 @router.get("/{claim_id}/messages", response_model=list[ClaimMessageOut])
 def list_claim_messages(
+    request: Request,
     claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ClaimMessageOut]:
     """The claim's conversation with the member, oldest first."""
-    return [broker_message_out(m) for m in thread_for_claim(db, claim.id)]
+    messages = [broker_message_out(m) for m in thread_for_claim(db, claim.id)]
+    write_access_audit(
+        db,
+        user,
+        request,
+        "claim.messages.view",
+        "claim",
+        claim.id,
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return messages
 
 
 @router.post(
@@ -995,25 +1221,45 @@ def mark_claim_messages_read(
 
 @router.get("/{claim_id}/review", response_model=ClaimAIReviewOut)
 def get_claim_review(
+    request: Request,
     claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ClaimAIReviewOut:
     """Latest (non-superseded) AI review of the claim."""
     review = _latest_review(db, claim.id)
     if review is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No AI review for this claim")
-    return ClaimAIReviewOut.model_validate(review)
+    out = ClaimAIReviewOut.model_validate(review)
+    write_access_audit(
+        db,
+        user,
+        request,
+        "claim.ai_review.view",
+        "claim_ai_review",
+        review.id,
+        employee_id=claim.employee_id,
+    )
+    db.commit()
+    return out
 
 
 @router.post("/{claim_id}/rerun-review", response_model=BrokerClaimOut)
 @limiter.limit("10/minute")
 def rerun_claim_review(
     request: Request,
+    idempotency_key: str | None = Header(
+        default=None, alias=IDEMPOTENCY_HEADER, max_length=128
+    ),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BrokerClaimOut:
     """Supersede the current AI review and re-run the pipeline."""
+    claim = lock_claim_for_mutation(db, claim)
+    command = "review:rerun"
+    if is_replayed_claim_command(db, claim, command, idempotency_key):
+        return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     assert_transition(claim, CLAIM_STATUS_AI_REVIEW_PENDING)
 
     before = {"status": claim.status}
@@ -1033,6 +1279,7 @@ def rerun_claim_review(
         },
         employee_id=claim.employee_id,
     )
+    record_claim_command(db, claim, command, idempotency_key)
     db.commit()
     employee = db.get(Employee, claim.employee_id)
     return _broker_out(db, claim, employee)
@@ -1041,7 +1288,9 @@ def rerun_claim_review(
 @router.get("/{claim_id}/documents/{doc_id}/download")
 def download_claim_document(
     doc_id: str,
+    request: Request,
     claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     doc = db.get(StoredDocument, doc_id)
@@ -1052,8 +1301,17 @@ def download_claim_document(
         and doc.entity_type == DOC_ENTITY_CLAIM
         and doc.entity_id == claim.id
     )
-    is_referral = doc is not None and doc.id == claim.referral_document_id
-    if doc is None or not (is_claim_doc or is_referral):
+    is_referral = (
+        doc is not None
+        and doc.id == claim.referral_document_id
+        and doc.entity_type == DOC_ENTITY_REFERRAL
+    )
+    if (
+        doc is None
+        or doc.client_id != claim.client_id
+        or doc.storage_state != STORAGE_AVAILABLE
+        or not (is_claim_doc or is_referral)
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
         content = get_storage().read(doc.storage_path)
@@ -1061,9 +1319,18 @@ def download_claim_document(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Document bytes are no longer available"
         ) from None
-    safe_name = doc.file_name.replace('"', "")
+    write_access_audit(
+        db,
+        user,
+        request,
+        "claim.document.download",
+        "stored_document",
+        doc.id,
+        employee_id=claim.employee_id,
+    )
+    db.commit()
     return Response(
         content=content,
         media_type=doc.mime_type or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        headers={"Content-Disposition": attachment_header(doc.file_name)},
     )
