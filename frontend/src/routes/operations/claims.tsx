@@ -669,11 +669,19 @@ function QueueTab({
         }}
       >
         <SheetContent className="sm:max-w-2xl">
+          {/* Keep an accessible title mounted even while the selected claim
+              refetches after deep-link navigation. Radix validates the dialog
+              immediately, before async detail data is guaranteed present. */}
+          <SheetHeader className={selected ? "sr-only" : "gap-3 pr-10"}>
+            <SheetTitle>{selected?.claim_type ?? "Claim details"}</SheetTitle>
+          </SheetHeader>
           {selected && (
             <>
               {/* pr-10 keeps the title clear of the overlaid close control. */}
-              <SheetHeader className="gap-3 pr-10">
-                <SheetTitle>{selected.claim_type}</SheetTitle>
+              <div className="flex flex-col gap-3 pr-10">
+                <h2 className="text-lg font-semibold tracking-tight text-foreground">
+                  {selected.claim_type}
+                </h2>
                 {/* The reference is the string the member quotes on the phone
                     and the key a broker reconciles against the insurer's
                     ledger. It was minted at submit and rendered nowhere, which
@@ -720,7 +728,7 @@ function QueueTab({
                     </Button>
                   )}
                 </div>
-              </SheetHeader>
+              </div>
               <SheetBody className="space-y-5">
                 <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                   <DetailField label="Amount claimed">

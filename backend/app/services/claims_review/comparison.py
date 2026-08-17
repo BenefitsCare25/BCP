@@ -29,7 +29,19 @@ from app.services.roster_attributes import NAME_KEYS, REL_KEYS, first_value
 
 
 def _key(value: Any) -> str:
-    return " ".join(str(value or "").split()).casefold()
+    return " ".join(str(value or "").replace("_", " ").split()).casefold()
+
+
+def _field_aliases(field_map: dict[str, Any]) -> set[str]:
+    portal = str(field_map.get("portal_field") or "")
+    document = str(field_map.get("document_field") or "")
+    aliases = {_key(portal), _key(document)}
+    if portal.endswith("_name"):
+        aliases.add(_key(portal.removesuffix("_name")))
+    for part in document.replace("/", "|").split("|"):
+        if part.strip():
+            aliases.add(_key(part))
+    return {alias for alias in aliases if alias}
 
 
 def _incomplete_result(kind: str, name: str) -> dict[str, Any]:
@@ -48,15 +60,20 @@ def _reconcile_comparisons(
     claim_fields: dict[str, Any],
     returned: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    expected = {
-        _key(item.get("portal_field")): str(item.get("portal_field"))
-        for item in config.field_maps
-        if claim_fields.get(str(item.get("portal_field"))) not in (None, "")
-    }
+    expected: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    for item in config.field_maps:
+        portal_field = str(item.get("portal_field") or "")
+        if not portal_field or claim_fields.get(portal_field) in (None, ""):
+            continue
+        canonical = _key(portal_field)
+        expected[canonical] = portal_field
+        for alias in _field_aliases(item):
+            aliases.setdefault(alias, canonical)
     by_field: dict[str, dict[str, Any]] = {}
     failures: list[dict[str, Any]] = []
     for item in returned:
-        field = _key(item.get("field_name"))
+        field = aliases.get(_key(item.get("field_name")))
         if field not in expected:
             continue
         if not field or field in by_field:
@@ -81,12 +98,13 @@ def _reconcile_comparisons(
             failures.append(_incomplete_result("field comparison", expected[field]))
             by_field[field] = {
                 **item,
+                "field_name": expected[field],
                 "status": "UNCERTAIN",
                 "confidence": 0.0,
                 "notes": "The AI returned an invalid comparison result.",
             }
             continue
-        by_field[field] = item
+        by_field[field] = {**item, "field_name": expected[field]}
     for field, display in expected.items():
         if field in by_field:
             continue

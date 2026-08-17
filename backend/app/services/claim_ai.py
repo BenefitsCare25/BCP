@@ -194,6 +194,9 @@ SECURITY BOUNDARY:
 
 FIELD COMPARISON RULES:
 1. Compare ONLY the field pairs listed — never add extra comparisons.
+1a. For each comparison, set `field_name` to the exact configured Claim key \
+shown before the arrow, for example `amount_claimed`. Do not use display \
+labels like "Amount claimed" or document labels like "Total Amount".
 2. MATCH: semantically equivalent even if formatted differently ("27 Mar 2026" \
 vs "2026-03-27"; "$169.60" vs "169.60").
 3. MISMATCH: values clearly differ in meaning or amount.
@@ -330,7 +333,8 @@ def build_claim_review_prompt(
         else:
             desc = "FUZZY match — ignore formatting differences"
         map_lines.append(
-            f'- Claim "{m["portal_field"]}" ↔ Document "{m["document_field"]}" — {desc}'
+            f'- Claim key `{m["portal_field"]}` ↔ Document "{m["document_field"]}" — '
+            f'{desc}. Return field_name="{m["portal_field"]}".'
         )
 
     doc_sections = []

@@ -179,14 +179,7 @@ export function AIProviderPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isSystemAdmin ? (
-            <div className="text-sm text-muted-foreground p-5 text-center border border-dashed border-border rounded-md">
-              A company's own key is managed by that company's broker admin. As
-              system-admin you set the{" "}
-              <span className="font-medium text-foreground">Platform AI key</span>{" "}
-              above, which every company without an override uses.
-            </div>
-          ) : isLoading ? (
+          {isLoading ? (
             <div className="text-sm text-muted-foreground">Loading…</div>
           ) : config ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -242,47 +235,45 @@ export function AIProviderPage() {
               )}
             </div>
           )}
-          {!isSystemAdmin && (
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {config && (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {config && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void runTest()}
+                  disabled={test.isPending}
+                >
+                  {test.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="size-3.5" />
+                  )}
+                  Test stored key
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-error hover:text-error"
+                  onClick={() => setConfirmClear(true)}
+                  disabled={remove.isPending}
+                >
+                  <Trash2 className="size-3.5" /> Clear key
+                </Button>
+              </>
+            )}
+            <Button onClick={() => setOpen(true)}>
+              {config ? (
                 <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void runTest()}
-                    disabled={test.isPending}
-                  >
-                    {test.isPending ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <CheckCircle2 className="size-3.5" />
-                    )}
-                    Test stored key
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-error hover:text-error"
-                    onClick={() => setConfirmClear(true)}
-                    disabled={remove.isPending}
-                  >
-                    <Trash2 className="size-3.5" /> Clear key
-                  </Button>
+                  <Pencil className="size-4" /> Update
+                </>
+              ) : (
+                <>
+                  <KeyRound className="size-4" /> Configure
                 </>
               )}
-              <Button onClick={() => setOpen(true)}>
-                {config ? (
-                  <>
-                    <Pencil className="size-4" /> Update
-                  </>
-                ) : (
-                  <>
-                    <KeyRound className="size-4" /> Configure
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

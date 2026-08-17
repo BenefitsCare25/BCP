@@ -337,6 +337,66 @@ def test_missing_expected_ai_outputs_force_manual_review():
     )
 
 
+def test_labelled_ai_comparison_names_are_reconciled():
+    """Gemini may return human labels despite being prompted for keys."""
+    claim_id, review_id = _mk_claim(marker=b"labelled-ai-output")
+    with SessionLocal() as session:
+        claim = session.get(Claim, claim_id)
+        assert claim is not None
+        claim.invoice_number = "INV-123"
+        claim.diagnosis = "Other: QA smoke test"
+        claim.form_fields = {
+            **claim.form_fields,
+            "invoice_number": claim.invoice_number,
+            "diagnosis": claim.diagnosis,
+        }
+        session.commit()
+    labelled = ClaimReviewAIResult(
+        review={
+            "field_comparisons": [
+                _match("Amount claimed"),
+                _match("Incurred date"),
+                _match("Provider"),
+                _match("invoice_number"),
+                _match("Currency"),
+                _match("diagnosis"),
+            ],
+            "rule_results": [
+                {"rule": rule, "status": "pass", "evidence": "No concern found."}
+                for rule in AI_RULES
+            ],
+            "required_documents_check": [
+                {"document_type_name": "receipt or tax invoice", "found": True}
+            ],
+            "summary": "All fields match.",
+            "confidence": 0.98,
+        },
+        metadata=dict(META),
+        cache_hit=False,
+    )
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(),
+    ), patch("app.services.ai_gateway.review_claim", return_value=labelled), patch(
+        "app.services.ai_gateway.verify_claim_concern"
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_VERIFIED
+    assert review.verdict == "clean"
+    expected = {
+        m["portal_field"]
+        for m in FIELD_MAPS
+        if claim.form_fields.get(m["portal_field"]) not in (None, "")
+    }
+    assert {c["field_name"] for c in review.field_comparisons} == expected
+    assert not any(
+        result.get("error_code") == "ai_output_incomplete"
+        for result in review.rule_results
+    )
+
+
 def test_deterministic_fail_short_circuits_with_zero_ai_calls():
     claim_id, review_id = _mk_claim(incurred=date(2027, 1, 1), marker=b"oob")
     with patch("app.services.ai_gateway.extract_claim_document") as ex, \
