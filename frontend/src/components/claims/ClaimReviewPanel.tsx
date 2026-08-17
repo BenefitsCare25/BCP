@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { useClaimReview, type FieldComparison, type RuleResult } from "@/api/claims";
 import { FieldComparisonTable } from "@/components/claims/FieldComparisonTable";
 import {
@@ -233,10 +233,10 @@ export function ClaimReviewPanel({
     );
   }
   if (review.status === "error" || review.status === "cancelled") {
+    const systemChecks = compactRuleResults(review.rule_results ?? []);
     return (
-      <div className="space-y-3">
-        <div className="flex items-start gap-2 text-sm p-3 border border-border rounded-md bg-warn-soft text-warn">
-          <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+      <div className="space-y-4">
+        <div className="text-sm p-3 border border-border rounded-md bg-card text-foreground">
           <div>
             <div className="font-medium">
               {review.status === "cancelled"
@@ -251,10 +251,10 @@ export function ClaimReviewPanel({
             )}
           </div>
         </div>
-        {(review.rule_results?.length ?? 0) > 0 && (
-          <Section title="System checks (ran before the failure)">
-            <RuleResultsList results={review.rule_results ?? []} />
-          </Section>
+        {systemChecks.length > 0 && (
+          <ReviewDetails label="System checks completed before failure">
+            <RuleResultsList results={systemChecks} />
+          </ReviewDetails>
         )}
       </div>
     );
@@ -262,6 +262,9 @@ export function ClaimReviewPanel({
 
   const comparisons = review.field_comparisons ?? [];
   const ruleResults = compactRuleResults(review.rule_results ?? []);
+  const visibleRuleResults = ruleResults.filter(
+    (result) => result.error_code !== "ai_output_incomplete",
+  );
   const matchingFields = comparisons.filter((c) => c.status === "MATCH").length;
   const fieldIssues = comparisons.length - matchingFields;
   const issues = attentionItems(comparisons, ruleResults);
@@ -273,9 +276,6 @@ export function ClaimReviewPanel({
   return (
     <div className="space-y-4">
       <div>
-        <div className="mb-2">
-          <SectionLabel>AI review</SectionLabel>
-        </div>
         {issues.length > 0 ? (
           <ol className="space-y-2 rounded-md border border-border bg-card p-3">
             {issues.map((item, index) => (
@@ -315,6 +315,15 @@ export function ClaimReviewPanel({
           hideOmittedNotes={hasIncompleteComparison}
         />
       </ReviewDetails>
+
+      {visibleRuleResults.length > 0 && (
+        <Section
+          title="Rule review"
+          hint="Deterministic system checks plus AI rules. Passed checks are retained for audit."
+        >
+          <RuleResultsList results={visibleRuleResults} />
+        </Section>
+      )}
 
       <div className="border-t border-border pt-3 text-2xs text-subtle">
         {review.model && <>Model {review.model} · </>}
