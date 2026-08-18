@@ -144,6 +144,8 @@ jobs:
             --build-arg VITE_ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
             --build-arg VITE_ENTRA_CLIENT_ID="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
             .
+          docker run --rm --entrypoint python "$IMAGE" -c \
+            "from app.services.claims_ai_confidence import load_confidence_profile; load_confidence_profile()"
           docker push "$IMAGE"
 
   # ── Production ─────────────────────────────────────────────────────────────
@@ -412,14 +414,20 @@ jobs:
           az webapp config container set \
             --name ${{ env.PROD_APP }} \
             --resource-group ${{ env.PROD_RG }} \
-            --docker-custom-image-name "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            --container-image-name "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           az webapp config container set \
             --name ${{ env.PROD_WORKER }} \
             --resource-group ${{ env.PROD_RG }} \
-            --docker-custom-image-name "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+            --container-image-name "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
 
       - name: Smoke-test prod
         run: |
+          # App Service keeps the previous container serving while it schedules
+          # a recycle. Wait beyond the observed slowest application import so
+          # this gate cannot pass against the old process or a new process that
+          # is still booting and will fail shortly afterwards.
+          sleep 120
+
           # /health proves the container booted; /readiness additionally proves
           # it can reach Postgres — which now means the private endpoint
           # resolved and the VNet integration is carrying traffic, so this is
@@ -430,3 +438,11 @@ jobs:
             "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
           curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"
+
+          # Require a stable window after the first successful probe. This
+          # catches delayed Gunicorn worker-boot failures that briefly leave the
+          # platform health endpoint green.
+          sleep 30
+          curl -fsS "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+          curl -fsS "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
+          curl -fsS "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"

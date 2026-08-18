@@ -76,6 +76,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY backend/app ./app
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./alembic.ini
+COPY backend/config ./config
 COPY backend/scripts ./scripts
 
 # Built SPA — `app.core.spa` mounts it if present, no-op otherwise.
