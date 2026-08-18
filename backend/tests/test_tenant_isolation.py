@@ -2033,7 +2033,10 @@ def test_claim_review_import_same_firm_source_allowed(client_as_a: TestClient) -
     new_id = imported[0]["id"]
     assert new_id != REVIEW_CONFIG_B  # a copy, not a shared row
     # Clean up so A's list-isolation test stays order-independent.
-    assert client_as_a.delete(f"/api/v1/claim-review-configs/{new_id}").status_code == 204
+    assert client_as_a.delete(
+        f"/api/v1/claim-review-configs/{new_id}",
+        params={"expected_updated_at": imported[0]["updated_at"]},
+    ).status_code == 204
 
 
 def test_dashboard_summary_excludes_other_firm(client_as_a: TestClient) -> None:

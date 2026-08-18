@@ -18,6 +18,7 @@ import {
   type CaseType,
 } from "@/api/claims";
 import { ConflictDetailError } from "@/api/client";
+import { useMe } from "@/api/hooks";
 import { ConversionLine, policyAmount } from "@/components/claims/ConversionLine";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -208,6 +209,8 @@ function QueueTab({
   employeeId?: string;
 }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const { data: me } = useMe();
+  const readOnly = me?.role === "broker_viewer";
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>("");
   const [caseType, setCaseType] = useState<CaseType | "">("");
@@ -247,7 +250,7 @@ function QueueTab({
   const rerun = useRerunReview();
   const refreshFx = useRefreshClaimConversion();
   const setCaseTypeMutation = useSetCaseType();
-  const { data, isLoading } = useBrokerClaims(
+  const { data, isLoading, isError, error, refetch } = useBrokerClaims(
     policyYearId ?? undefined,
     status,
     page * PAGE_SIZE,
@@ -502,16 +505,27 @@ function QueueTab({
                   options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
                 />
               </div>
-              <Button size="sm" onClick={() => setLogFormOpen(true)}>
-                <Plus className="size-4" />
-                New LOG case
-              </Button>
+              {!readOnly && (
+                <Button size="sm" onClick={() => setLogFormOpen(true)}>
+                  <Plus className="size-4" />
+                  New LOG case
+                </Button>
+              )}
             </div>
           </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <SkeletonTable rows={6} columns={7} />
+          ) : isError ? (
+            <div className="flex flex-col items-center gap-3 rounded-md border border-border p-8 text-center">
+              <p className="text-sm text-error">
+                Couldn&apos;t load the claims queue. {formatError(error)}
+              </p>
+              <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                <RefreshCw className="size-4" /> Retry
+              </Button>
+            </div>
           ) : total === 0 ? (
             <div className="text-sm text-muted-foreground p-8 text-center border border-dashed border-border rounded-md">
               {caseType === "log"
@@ -672,6 +686,26 @@ function QueueTab({
           <SheetHeader className={selected ? "sr-only" : "gap-3 pr-10"}>
             <SheetTitle>{selected?.claim_type ?? "Claim details"}</SheetTitle>
           </SheetHeader>
+          {!selected && detail.isLoading && (
+            <div className="px-6 py-8 text-sm text-muted-foreground">
+              Loading claim details…
+            </div>
+          )}
+          {!selected && detail.isError && (
+            <div className="flex flex-col items-start gap-3 px-6 py-8">
+              <p className="text-sm text-error">
+                Couldn&apos;t load this claim. {formatError(detail.error)}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void detail.refetch()}
+              >
+                <RefreshCw className="size-4" /> Retry
+              </Button>
+            </div>
+          )}
           {selected && (
             <>
               {/* Extra right padding keeps the title clear of the overlaid close control. */}
@@ -1325,7 +1359,7 @@ function QueueTab({
         onConfirm={confirmSettlement}
       />
 
-      <LogCaseForm
+      {!readOnly && <LogCaseForm
         open={logFormOpen}
         onOpenChange={setLogFormOpen}
         onCreated={(claimId) => {
@@ -1337,7 +1371,7 @@ function QueueTab({
           setPage(0);
           setSelectedId(claimId);
         }}
-      />
+      />}
 
       <AlertDialog
         open={relabelTo !== null}
@@ -1417,9 +1451,10 @@ function QueueTab({
 
 // The Claims page: the review queue, the member conversations waiting on a
 // reply, and everything that governs both — the per-claim-type AI review rule
-// setup (AI extraction) and the company claim settings (grace period +
-// document vocabulary, moved here from Company settings so the whole claims
-// surface lives in one place).
+// setup and the company claim settings (grace period + document vocabulary,
+// moved here from Company settings so the whole claims surface lives in one
+// place). Keep the legacy `ai-extraction` tab value so old deep links continue
+// to open the review-rule setup.
 const CLAIMS_TABS = ["queue", "messages", "ai-extraction", "settings"] as const;
 type ClaimsTab = (typeof CLAIMS_TABS)[number];
 const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
@@ -1427,12 +1462,18 @@ const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
 
 export function ClaimsQueuePage() {
   const navigate = useNavigate();
+  const { data: me } = useMe();
   const search = useSearch({ strict: false }) as {
     tab?: string;
     claim?: string;
     employee?: string;
   };
-  const tab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
+  const requestedTab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
+  const canConfigure = me?.role === "broker_admin" || me?.role === "system_admin";
+  const tab: ClaimsTab =
+    !canConfigure && ["ai-extraction", "settings"].includes(requestedTab)
+      ? "queue"
+      : requestedTab;
   const awaiting = useAwaitingReplyCount();
 
   return (
@@ -1442,22 +1483,38 @@ export function ClaimsQueuePage() {
         navigate({ to: "/claims/review", search: { tab: v } })
       }
     >
-      <TabsList>
-        <TabsTrigger value="queue">Queue</TabsTrigger>
-        {/* The count is the whole point: with no email in prod, this badge is
-            the ONLY signal a broker gets that a member has written. It has to
-            be visible from the page, not inside the tab. */}
-        <TabsTrigger value="messages">
-          Messages
-          {awaiting > 0 && (
-            <Badge variant="warn" className="ml-2">
-              {awaiting}
-            </Badge>
+      <div className="max-w-full overflow-x-auto">
+        <TabsList className="min-w-max">
+          <TabsTrigger value="queue">Queue</TabsTrigger>
+          {/* The count is the whole point: with no email in prod, this badge is
+              the ONLY signal a broker gets that a member has written. It has to
+              be visible from the page, not inside the tab. */}
+          <TabsTrigger value="messages">
+            Messages
+            {awaiting.count > 0 && (
+              <Badge variant="warn" className="ml-2">
+                {awaiting.count}
+              </Badge>
+            )}
+            {awaiting.isError && (
+              <Badge
+                variant="error"
+                className="ml-2"
+                title="Couldn't check which conversations need a reply"
+                aria-label="Message count unavailable"
+              >
+                !
+              </Badge>
+            )}
+          </TabsTrigger>
+          {canConfigure && (
+            <TabsTrigger value="ai-extraction">Review rules</TabsTrigger>
           )}
-        </TabsTrigger>
-        <TabsTrigger value="ai-extraction">AI extraction</TabsTrigger>
-        <TabsTrigger value="settings">Settings</TabsTrigger>
-      </TabsList>
+          {canConfigure && (
+            <TabsTrigger value="settings">Claim settings</TabsTrigger>
+          )}
+        </TabsList>
+      </div>
 
       <TabsContent value="queue">
         <QueueTab initialClaimId={search.claim} employeeId={search.employee} />
@@ -1467,11 +1524,13 @@ export function ClaimsQueuePage() {
         <ConversationQueue />
       </TabsContent>
 
-      <TabsContent value="ai-extraction">
-        <ReviewRuleSettings />
-      </TabsContent>
+      {canConfigure && (
+        <TabsContent value="ai-extraction">
+          <ReviewRuleSettings />
+        </TabsContent>
+      )}
 
-      <TabsContent value="settings" className="space-y-5">
+      {canConfigure && <TabsContent value="settings" className="space-y-5">
         <Card>
           <CardHeader className="pb-4">
             {/* Both fields are DEADLINES on the current benefit year, which is
@@ -1494,7 +1553,7 @@ export function ClaimsQueuePage() {
           </CardContent>
         </Card>
         <DocTypeSettings />
-      </TabsContent>
+      </TabsContent>}
     </Tabs>
   );
 }

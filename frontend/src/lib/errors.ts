@@ -52,6 +52,13 @@ export class ConflictDetailError extends Error {
   }
 }
 
+export function isStaleConfigurationError(error: unknown): boolean {
+  return (
+    error instanceof ConflictDetailError &&
+    error.detail.code === "stale_configuration"
+  );
+}
+
 /** Build the Error for a non-OK response body, promoting coded 409 conflicts
  * to ConflictDetailError. */
 export function errorFromText(

@@ -2,7 +2,7 @@
 
 These are the IN-CODE DEFAULTS: `services/claim_review_configs.py` overlays
 them with the per-company, per-claim-type rows the broker edits on the Claims
-page (AI extraction tab), and the required-document derivation below stays
+page (Review rules tab), and the required-document derivation below stays
 live whenever a claim type doesn't override it. A field map pairs a
 claim-form field with the document field family it should match, plus the
 comparison mode:

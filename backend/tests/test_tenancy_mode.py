@@ -35,6 +35,7 @@ def prod_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("INSPRO_MAIL_MODE", "smtp")
     monkeypatch.setenv("INSPRO_PORTAL_JWT_SECRET", "x" * 48)
     monkeypatch.setenv("INSPRO_STORAGE_MODE", "azure")
+    monkeypatch.setenv("INSPRO_REDIS_URL", "rediss://cache.example:10000/0")
     clear_settings_cache()
     yield monkeypatch
     clear_settings_cache()

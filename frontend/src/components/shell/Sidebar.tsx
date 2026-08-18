@@ -1,6 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Home } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useMe } from "@/api/hooks";
 import { COMPANY_NAV, type NavGroup, type NavItem } from "./nav";
 
 export function Sidebar({
@@ -12,6 +13,8 @@ export function Sidebar({
 }) {
   const router = useRouterState();
   const path = router.location.pathname;
+  const { data: me } = useMe();
+  const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
 
   return (
     <>
@@ -43,9 +46,12 @@ export function Sidebar({
         <nav className="flex-1 px-2 py-2.5 overflow-y-auto">
           <HomeLink active={path === "/home"} />
 
-          {COMPANY_NAV.map((group) => (
-            <Section key={group.key} group={group} path={path} />
-          ))}
+          {COMPANY_NAV.map((group) => {
+            const items = group.items.filter((item) => !item.adminOnly || canAdmin);
+            return items.length > 0 ? (
+              <Section key={group.key} group={{ ...group, items }} path={path} />
+            ) : null;
+          })}
         </nav>
 
       </aside>

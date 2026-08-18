@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # loads backend/.env before settings / crypto initialise
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
@@ -98,7 +98,15 @@ def create_app() -> FastAPI:
 
     # Interactive docs + the OpenAPI schema are dev-only: in staging/prod they
     # hand an unauthenticated caller the full endpoint/parameter map.
-    docs_enabled = get_settings().env == "dev"
+    settings = get_settings()
+    from app.services.claims_ai_confidence import load_confidence_profile
+
+    load_confidence_profile()
+    if settings.env == "prod":
+        from app.services.ai_cache import get_cache
+
+        get_cache()
+    docs_enabled = settings.env == "dev"
     app = FastAPI(
         title="Inspro Backend",
         description="Inspro Group Benefits Configuration Platform — spike + v0 UI.",
@@ -131,7 +139,7 @@ def create_app() -> FastAPI:
         max_age=600,
     )
     app.add_middleware(SlowAPIMiddleware)
-    app.add_middleware(TenantMiddleware, base_domain=get_settings().base_domain)
+    app.add_middleware(TenantMiddleware, base_domain=settings.base_domain)
     app.add_middleware(RequestIDMiddleware)
 
     api_prefix = "/api/v1"
@@ -240,7 +248,18 @@ def create_app() -> FastAPI:
 
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return {"status": "ready"}
+        redis_state = "not-required"
+        if settings.redis_url:
+            from app.services.ai_cache import get_cache
+
+            cache = get_cache()
+            if not cache.ready():
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Redis is unavailable; shared AI cache and rate limits are degraded.",
+                )
+            redis_state = "ok"
+        return {"status": "ready", "database": "ok", "redis": redis_state}
 
     # LAST: the SPA catch-all would shadow any route registered after it.
     # No-op unless a bundle was baked into the image (single-host deploys).

@@ -2,7 +2,7 @@
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
   "contentVersion": "1.0.0.0",
   "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer, portalJwtSecret, aiKeyEncryptionKey) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
-  "_sizing": "B2 (2 vCPU/3.5GB) + Postgres B2s (2 vCore/4GB) + 64GiB (240 IOPS) + Azure Managed Redis Balanced_B0, sized for ~5 companies / 1000+ employees. Postgres compute scales with a ~2 min restart, so start here and move up on metrics. Keep webConcurrency <= plan vCPUs: it divides the AI concurrency limit and multiplies the DB pool (2 x (3+2) = 10 connections).",
+  "_sizing": "B2 (2 vCPU/3.5GB) + Postgres B2s (2 vCore/4GB) + 64GiB (240 IOPS) + Azure Managed Redis Balanced_B0. The API uses at most 2 x (3+2) = 10 DB connections. The I/O-bound review worker runs 4 concurrent claims, capped at 2 per company, with an 8+4 DB pool. Combined ceiling: 22 connections. Keep one App Service Plan instance; scale the worker design and provider quota before scaling out the shared plan.",
   "parameters": {
     "env": { "value": "prod" },
     "location": { "value": "southeastasia" },
@@ -21,6 +21,10 @@
     "webConcurrency": { "value": 2 },
     "dbPoolSize": { "value": 3 },
     "dbMaxOverflow": { "value": 2 },
+    "reviewWorkerConcurrency": { "value": 4 },
+    "reviewWorkerMaxConcurrentPerClient": { "value": 2 },
+    "reviewWorkerDbPoolSize": { "value": 8 },
+    "reviewWorkerDbMaxOverflow": { "value": 4 },
     "corsOrigins": { "value": "https://inspro-portal.azurewebsites.net" }
   }
 }

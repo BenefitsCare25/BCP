@@ -13,9 +13,9 @@ import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 //
 // Claims configuration is deliberately NOT here any more — the grace period,
 // document vocabulary and the per-claim-type AI review rules all live on the
-// Claims page (/claims/review, Settings + AI extraction tabs) beside the review
-// queue they govern. The leave policy likewise reads as part of the enrollment
-// workflow and lives on /client-relations/enrollment?tab=leave.
+// Claims page (/claims/review, Claim settings + Review rules tabs) beside the
+// review queue they govern. The leave policy likewise reads as part of the
+// enrollment workflow and lives on /client-relations/enrollment?tab=leave.
 //
 // The `?tab=claims` / `?tab=enrollment` forwarding effect that used to sit here
 // was removed with the URL cutover: its only entry point was the old

@@ -7,21 +7,27 @@ has no rows, so deleting everything can never break claims)."""
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import require_claim_configuration, require_client_id
+from app.core.optimistic_lock import assert_collection_not_stale, assert_not_stale
 from app.db.session import get_db
 from app.models import ClaimDocType
-from app.schemas.claims import ClaimDocKeyField, ClaimDocTypeIn, ClaimDocTypeOut
+from app.schemas.claims import (
+    ClaimDocKeyField,
+    ClaimDocTypeIn,
+    ClaimDocTypeOut,
+    ClaimDocTypeUpdateIn,
+    ResetClaimDocTypesIn,
+)
 from app.services.claim_doc_types import (
-    DEFAULT_DOC_TYPES,
     DEFAULT_KEYS,
-    DocTypeDefinition,
     client_doc_type_rows,
     definition_from_row,
     seed_default_doc_types,
@@ -55,26 +61,7 @@ def _out(row: ClaimDocType) -> ClaimDocTypeOut:
         sector=d.sector,
         slot_key=row.slot_key,
         is_default=row.key in DEFAULT_KEYS,
-    )
-
-
-def _default_out(definition: DocTypeDefinition) -> ClaimDocTypeOut:
-    return ClaimDocTypeOut(
-        id=f"default:{definition.key}",
-        key=definition.key,
-        display=definition.display,
-        aliases=list(definition.aliases),
-        key_fields=[
-            ClaimDocKeyField(
-                name=field.name,
-                keywords=list(field.tokens),
-                optional=field.optional,
-            )
-            for field in definition.key_fields
-        ],
-        sector=definition.sector,
-        slot_key=definition.slot_key,
-        is_default=True,
+        updated_at=row.updated_at,
     )
 
 
@@ -135,6 +122,41 @@ def _ensure_seeded(db: Session, client_id: str) -> list[ClaimDocType]:
     return client_doc_type_rows(db, client_id)
 
 
+def _assert_aliases_unambiguous(
+    rows: list[ClaimDocType],
+    *,
+    aliases: list[str],
+    sector: str | None,
+    exclude_id: str | None,
+) -> None:
+    """Reject aliases that make two same-sector definitions order-dependent.
+
+    Government/private invoice definitions may intentionally share aliases;
+    marker fields and the claim's hospital sector disambiguate that pair.
+    Two neutral definitions, or two definitions in the same sector, cannot be
+    distinguished and `classify_document` would silently pick the first row.
+    """
+    wanted = {" ".join(alias.split()).casefold() for alias in aliases}
+    for row in rows:
+        if row.id == exclude_id or row.sector != sector:
+            continue
+        overlap = wanted & {
+            " ".join(str(alias).split()).casefold() for alias in (row.aliases or [])
+        }
+        if overlap:
+            alias = sorted(overlap)[0]
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "ambiguous_doc_type_alias",
+                    "message": (
+                        f'Alias "{alias}" is already used by "{row.display}". '
+                        "Use a distinct alias so document placement is deterministic."
+                    ),
+                },
+            )
+
+
 @router.get("", response_model=list[ClaimDocTypeOut])
 def list_claim_doc_types(
     user: CurrentUser = Depends(get_current_user),
@@ -142,9 +164,10 @@ def list_claim_doc_types(
 ) -> list[ClaimDocTypeOut]:
     client_id = require_client_id(user)
     rows = _ensure_seeded(db, client_id)
-    if rows:
-        return [_out(row) for row in rows]
-    return [_default_out(definition) for definition in DEFAULT_DOC_TYPES]
+    if not rows:
+        rows = seed_default_doc_types(db, client_id)
+        db.commit()
+    return [_out(row) for row in rows]
 
 
 @router.post("", response_model=ClaimDocTypeOut, status_code=status.HTTP_201_CREATED)
@@ -164,6 +187,12 @@ def create_claim_doc_type(
     existing = client_doc_type_rows(db, client_id)
     if not existing:
         existing = seed_default_doc_types(db, client_id)
+    _assert_aliases_unambiguous(
+        existing,
+        aliases=data["aliases"],
+        sector=data["sector"],
+        exclude_id=None,
+    )
     # A true duplicate is the same DISPLAY (case-insensitive), not merely the
     # same slug — "Referral Memo" and "Referral-Memo" are distinct types that
     # happen to slugify alike, so they must both be creatable.
@@ -194,14 +223,25 @@ def create_claim_doc_type(
 @router.put("/{doc_type_id}", response_model=ClaimDocTypeOut)
 def update_claim_doc_type(
     doc_type_id: str,
-    body: ClaimDocTypeIn,
+    body: ClaimDocTypeUpdateIn,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ClaimDocTypeOut:
     client_id = require_client_id(user)
     row = _own_row(db, doc_type_id, client_id)
+    assert_not_stale(
+        expected=body.expected_updated_at,
+        actual=row.updated_at,
+        label="This document type",
+    )
     _validate_slot_key(body.slot_key)
     data = _payload(body)
+    _assert_aliases_unambiguous(
+        client_doc_type_rows(db, client_id),
+        aliases=data["aliases"],
+        sector=data["sector"],
+        exclude_id=row.id,
+    )
     before = {
         "display": row.display,
         "aliases": row.aliases,
@@ -211,6 +251,7 @@ def update_claim_doc_type(
     }
     for field, value in data.items():
         setattr(row, field, value)
+    row.updated_at = datetime.now(UTC)
     write_audit(
         db, user, "claim_doc_type.updated", "claim_doc_type", row.id,
         before=before, after=data,
@@ -222,11 +263,17 @@ def update_claim_doc_type(
 @router.delete("/{doc_type_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_claim_doc_type(
     doc_type_id: str,
+    expected_updated_at: datetime | None = Query(None),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
     client_id = require_client_id(user)
     row = _own_row(db, doc_type_id, client_id)
+    assert_not_stale(
+        expected=expected_updated_at,
+        actual=row.updated_at,
+        label="This document type",
+    )
     write_audit(
         db, user, "claim_doc_type.deleted", "claim_doc_type", row.id,
         before={"key": row.key, "display": row.display},
@@ -237,12 +284,19 @@ def delete_claim_doc_type(
 
 @router.post("/reset", response_model=list[ClaimDocTypeOut])
 def reset_claim_doc_types(
+    body: ResetClaimDocTypesIn,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ClaimDocTypeOut]:
     """Discard the client's customisations and restore the seeded defaults."""
     client_id = require_client_id(user)
-    for row in client_doc_type_rows(db, client_id):
+    existing = client_doc_type_rows(db, client_id)
+    assert_collection_not_stale(
+        rows=list(existing),
+        expected_versions=body.expected_versions,
+        label="Document-type settings",
+    )
+    for row in existing:
         db.delete(row)
     db.flush()
     rows = seed_default_doc_types(db, client_id)

@@ -13,7 +13,9 @@ filter.
 from __future__ import annotations
 
 import os
-from datetime import date
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -247,6 +249,52 @@ def test_tenant_notification_leases_skip_locked(pg_engine) -> None:
         second.rollback()
         first.close()
         second.close()
+
+
+def test_claim_review_leasing_enforces_global_and_company_caps(
+    pg_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent worker instances must share one bounded review capacity."""
+    from app.models import ClaimReviewJob
+    from app.models.claim_review_job import JOB_STATE_QUEUED
+    from app.workers import claim_review as worker
+
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+    monkeypatch.setattr(worker, "SessionLocal", Session)
+    now = datetime.now(UTC)
+    clients = ["capacity-a"] * 4 + ["capacity-b"] * 4 + ["capacity-c"] * 2
+
+    with Session() as session:
+        session.query(ClaimReviewJob).delete()
+        for index, client_id in enumerate(clients):
+            session.add(
+                ClaimReviewJob(
+                    broker_firm_id=FIRM_A,
+                    client_id=client_id,
+                    claim_id=f"capacity-claim-{index}",
+                    review_id=f"capacity-review-{index}",
+                    claim_revision=1,
+                    idempotency_key=f"capacity-key-{index}",
+                    state=JOB_STATE_QUEUED,
+                    available_at=now,
+                )
+            )
+        session.commit()
+
+    def claim(index: int):
+        return worker._claim_next(f"capacity-worker-{index}", (), 2, 4)
+
+    try:
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            leases = [lease for lease in executor.map(claim, range(10)) if lease]
+        counts = Counter(lease.client_id for lease in leases)
+        assert len(leases) == 4
+        assert max(counts.values()) <= 2
+        assert len({lease.job_id for lease in leases}) == 4
+    finally:
+        with Session() as session:
+            session.query(ClaimReviewJob).delete()
+            session.commit()
 
 
 def test_tenant_routing_survives_commit(pg_engine) -> None:

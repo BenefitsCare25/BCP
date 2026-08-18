@@ -1,4 +1,4 @@
-/** AI extraction tab — the per-claim-type review rule setup.
+/** Claim review rules tab — the per-claim-type AI review rule setup.
  *
  * Lists the company's claim types (insured products + flex benefit categories
  * of the current benefit year, from the backend options endpoint). A type with
@@ -15,7 +15,7 @@
  * configured product list.
  */
 import { useMemo, useState } from "react";
-import { Copy, Pencil, RotateCcw } from "lucide-react";
+import { Copy, Pencil, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   useClaimReviewConfigs,
@@ -177,12 +177,17 @@ export function ReviewRuleSettings() {
           ai_rules: (defaults?.ai_rules ?? []).map((r) => ({ ...r })),
           required_documents: [...(defaults?.required_documents ?? [])],
         };
-    setEditing({ configId: config?.id ?? null, draft });
+    setEditing({
+      configId: config?.id ?? null,
+      expectedUpdatedAt: config?.updated_at ?? null,
+      draft,
+    });
   };
 
   const openOrphanEditor = (config: ClaimReviewConfig) => {
     setEditing({
       configId: config.id,
+      expectedUpdatedAt: config.updated_at,
       draft: {
         claim_kind: config.claim_kind,
         claim_key: config.claim_key,
@@ -200,8 +205,9 @@ export function ReviewRuleSettings() {
   const loading = options.isLoading || configs.isLoading;
 
   return (
-    <Card>
-      <CardHeader className="pb-5">
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-5">
         {/* basis-80 + shrink-0 keeps the action on the title's line; without it
             the description absorbs the row and drops the button below. */}
         <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
@@ -225,108 +231,126 @@ export function ReviewRuleSettings() {
             <span className="ml-1.5">Duplicate from another company</span>
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        {loading ? (
-          <div className="px-5 pb-5">
-            <Skeleton className="h-40 w-full" />
-          </div>
-        ) : options.isError ? (
-          <p className="px-5 pb-5 text-sm text-error">
-            {formatError(options.error)}
-          </p>
-        ) : claimTypes.length === 0 && unmatched.length === 0 ? (
-          <div className="px-5 pb-5">
-            {hasCurrentYear ? (
-              <p className="text-sm text-muted-foreground">
-                No claim types yet — they appear once the current benefit year
-                has member-claimable products (or a flex scheme) configured.
+        </CardHeader>
+        <CardContent className="p-0">
+          {loading ? (
+            <div className="px-5 pb-5">
+              <Skeleton className="h-40 w-full" />
+            </div>
+          ) : options.isError || configs.isError ? (
+            <div className="flex flex-col items-start gap-3 px-5 pb-5">
+              <p className="text-sm text-error">
+                Couldn&apos;t load review rules. {formatError(options.error ?? configs.error)}
               </p>
-            ) : (
-              <NoCurrentYearNotice />
-            )}
-          </div>
-        ) : (
-          <>
-            {!hasCurrentYear && (
-              <div className="px-5 pb-5">
-                <NoCurrentYearNotice />
-              </div>
-            )}
-            {insured.length > 0 && (
-              <TypeSection title="Insurance products">
-                {insured.map((t) => {
-                  const cfg = configByType.get(t.key) ?? null;
-                  return (
-                    <TypeRow
-                      key={t.key}
-                      label={t.display_label}
-                      config={cfg}
-                      onEdit={() => openEditor(t, cfg)}
-                      onRevert={() => cfg && setReverting(cfg)}
-                    />
-                  );
-                })}
-              </TypeSection>
-            )}
-            {flex.length > 0 && (
-              <TypeSection title="Flexible benefits">
-                {flex.map((t) => {
-                  const cfg = configByType.get(t.key) ?? null;
-                  return (
-                    <TypeRow
-                      key={t.key}
-                      label={t.display_label}
-                      config={cfg}
-                      onEdit={() => openEditor(t, cfg)}
-                      onRevert={() => cfg && setReverting(cfg)}
-                    />
-                  );
-                })}
-              </TypeSection>
-            )}
-            {unmatched.length > 0 && (
-              <TypeSection
-                title={hasCurrentYear ? "No longer active" : "Configured setups"}
-                note={
-                  hasCurrentYear
-                    ? "These setups reference a claim type not in the current benefit year (product removed or flex category renamed) — reviews use the defaults until the type returns."
-                    : "Claim types are read from the current benefit year. Set one as current and these match back to their claim types."
-                }
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void options.refetch();
+                  void configs.refetch();
+                }}
               >
-                {unmatched.map((cfg) => (
-                  <TypeRow
-                    key={cfg.id}
-                    label={cfg.display_label}
-                    subLabel={summarize(cfg)}
-                    config={cfg}
-                    onEdit={() => openOrphanEditor(cfg)}
-                    onRevert={() => setReverting(cfg)}
-                  />
-                ))}
-              </TypeSection>
-            )}
-          </>
-        )}
-      </CardContent>
+                <RefreshCw className="size-4" /> Retry
+              </Button>
+            </div>
+          ) : claimTypes.length === 0 && unmatched.length === 0 ? (
+            <div className="px-5 pb-5">
+              {hasCurrentYear ? (
+                <p className="text-sm text-muted-foreground">
+                  No claim types yet — they appear once the current benefit year
+                  has member-claimable products (or a flex scheme) configured.
+                </p>
+              ) : (
+                <NoCurrentYearNotice />
+              )}
+            </div>
+          ) : (
+            <>
+              {!hasCurrentYear && (
+                <div className="px-5 pb-5">
+                  <NoCurrentYearNotice />
+                </div>
+              )}
+              {insured.length > 0 && (
+                <TypeSection title="Insurance products">
+                  {insured.map((t) => {
+                    const cfg = configByType.get(t.key) ?? null;
+                    return (
+                      <TypeRow
+                        key={t.key}
+                        label={t.display_label}
+                        config={cfg}
+                        onEdit={() => openEditor(t, cfg)}
+                        onRevert={() => cfg && setReverting(cfg)}
+                      />
+                    );
+                  })}
+                </TypeSection>
+              )}
+              {flex.length > 0 && (
+                <TypeSection title="Flexible benefits">
+                  {flex.map((t) => {
+                    const cfg = configByType.get(t.key) ?? null;
+                    return (
+                      <TypeRow
+                        key={t.key}
+                        label={t.display_label}
+                        config={cfg}
+                        onEdit={() => openEditor(t, cfg)}
+                        onRevert={() => cfg && setReverting(cfg)}
+                      />
+                    );
+                  })}
+                </TypeSection>
+              )}
+              {unmatched.length > 0 && (
+                <TypeSection
+                  title={hasCurrentYear ? "No longer active" : "Configured setups"}
+                  note={
+                    hasCurrentYear
+                      ? "These setups reference a claim type not in the current benefit year (product removed or flex category renamed) — reviews use the defaults until the type returns."
+                      : "Claim types are read from the current benefit year. Set one as current and these match back to their claim types."
+                  }
+                >
+                  {unmatched.map((cfg) => (
+                    <TypeRow
+                      key={cfg.id}
+                      label={cfg.display_label}
+                      subLabel={summarize(cfg)}
+                      config={cfg}
+                      onEdit={() => openOrphanEditor(cfg)}
+                      onRevert={() => setReverting(cfg)}
+                    />
+                  ))}
+                </TypeSection>
+              )}
+            </>
+          )}
+        </CardContent>
 
-      <ReviewConfigEditor target={editing} onClose={() => setEditing(null)} />
-      <ImportRulesDialog open={importOpen} onOpenChange={setImportOpen} />
-      <AlertDialog
-        open={reverting !== null}
-        onOpenChange={(open) => !open && setReverting(null)}
-        title={`Revert "${reverting?.display_label}" to the default rules?`}
-        description="The custom field mappings, business rules and required documents for this claim type are deleted, and its AI reviews use the built-in defaults again."
-        confirmLabel="Revert to defaults"
-        loading={del.isPending}
-        onConfirm={() => {
-          if (!reverting) return;
-          del.mutate(reverting.id, {
-            onSuccess: () => setReverting(null),
-            onError: (e) => toast.error(formatError(e)),
-          });
-        }}
-      />
-    </Card>
+        <ReviewConfigEditor
+          target={editing}
+          portalFields={options.data?.portal_fields ?? []}
+          onClose={() => setEditing(null)}
+        />
+        <ImportRulesDialog open={importOpen} onOpenChange={setImportOpen} />
+        <AlertDialog
+          open={reverting !== null}
+          onOpenChange={(open) => !open && setReverting(null)}
+          title={`Revert "${reverting?.display_label}" to the default rules?`}
+          description="The custom field mappings, business rules and required documents for this claim type are deleted, and its AI reviews use the built-in defaults again."
+          confirmLabel="Revert to defaults"
+          loading={del.isPending}
+          onConfirm={() => {
+            if (!reverting) return;
+            del.mutate({ id: reverting.id, expected_updated_at: reverting.updated_at }, {
+              onSuccess: () => setReverting(null),
+              onError: (e) => toast.error(formatError(e)),
+            });
+          }}
+        />
+      </Card>
+    </div>
   );
 }

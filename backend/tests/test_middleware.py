@@ -89,4 +89,8 @@ def test_oversized_request_id_dropped(client: TestClient) -> None:
 def test_readiness_pings_database(client: TestClient) -> None:
     res = client.get("/readiness")
     assert res.status_code == 200
-    assert res.json() == {"status": "ready"}
+    assert res.json() == {
+        "status": "ready",
+        "database": "ok",
+        "redis": "not-required",
+    }

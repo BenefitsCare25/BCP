@@ -1,7 +1,7 @@
 /** Broker claim-review queue hooks (member claim hooks live in api/portal.ts). */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { isNotFoundError } from "@/lib/errors";
+import { isNotFoundError, isStaleConfigurationError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type { ConversationSubject } from "@/api/portalMessages";
 import type { Utilization } from "@/types";
@@ -951,6 +951,7 @@ export interface ClaimDocType {
   slot_key: string | null;
   /** Seeded from the backend defaults (still editable). */
   is_default: boolean;
+  updated_at: string;
 }
 
 export interface ClaimDocTypeInput {
@@ -982,9 +983,14 @@ export function useCreateClaimDocType() {
 export function useUpdateClaimDocType() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...input }: ClaimDocTypeInput & { id: string }) =>
+    mutationFn: ({ id, ...input }: ClaimDocTypeInput & { id: string; expected_updated_at: string }) =>
       api.put<ClaimDocType>(`/claim-doc-types/${id}`, input),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-doc-types"] });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -992,8 +998,16 @@ export function useUpdateClaimDocType() {
 export function useDeleteClaimDocType() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.delete<void>(`/claim-doc-types/${id}`),
+    mutationFn: ({ id, expected_updated_at }: { id: string; expected_updated_at: string }) =>
+      api.delete<void>(
+        `/claim-doc-types/${id}?expected_updated_at=${encodeURIComponent(expected_updated_at)}`,
+      ),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-doc-types"] });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -1001,8 +1015,14 @@ export function useDeleteClaimDocType() {
 export function useResetClaimDocTypes() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<ClaimDocType[]>("/claim-doc-types/reset", {}),
+    mutationFn: (expected_versions: Record<string, string>) =>
+      api.post<ClaimDocType[]>("/claim-doc-types/reset", { expected_versions }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-doc-types"] });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -1043,6 +1063,7 @@ export interface ClaimReviewConfigInput {
 
 export interface ClaimReviewConfig extends ClaimReviewConfigInput {
   id: string;
+  updated_at: string;
   /** Server-computed identity of the claim type. ALWAYS join configs to claim
    *  types on this — never on a locally derived key. The backend normalizes
    *  with Python's `casefold()`, which has no exact JS equivalent, and a key
@@ -1067,6 +1088,8 @@ export interface ReviewScopeOptions {
     ai_rules: ReviewAIRule[];
     required_documents: string[];
   };
+  /** Backend-owned keys available to field mappings. */
+  portal_fields: string[];
   /** False when no benefit year is flagged current — the vocabulary is read
    *  from that year alone, so an empty list means something different (and
    *  one-click fixable) in that case. */
@@ -1116,10 +1139,15 @@ export function useCreateClaimReviewConfig() {
 export function useUpdateClaimReviewConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...input }: ClaimReviewConfigInput & { id: string }) =>
+    mutationFn: ({ id, ...input }: ClaimReviewConfigInput & { id: string; expected_updated_at: string }) =>
       api.put<ClaimReviewConfig>(`/claim-review-configs/${id}`, input),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-review-configs"] });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -1127,9 +1155,17 @@ export function useUpdateClaimReviewConfig() {
 export function useDeleteClaimReviewConfig() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.delete<void>(`/claim-review-configs/${id}`),
+    mutationFn: ({ id, expected_updated_at }: { id: string; expected_updated_at: string }) =>
+      api.delete<void>(
+        `/claim-review-configs/${id}?expected_updated_at=${encodeURIComponent(expected_updated_at)}`,
+      ),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-review-configs"] });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -1178,13 +1214,22 @@ export function useSourceReviewConfigs(sourceClientId: string | null) {
 export function useImportReviewConfigs() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { source_client_id: string; config_ids: string[] }) =>
+    mutationFn: (input: {
+      source_client_id: string;
+      config_ids: string[];
+      target_versions: Record<string, string>;
+    }) =>
       api.post<{ imported: ClaimReviewConfig[] }>(
         "/claim-review-configs/import",
         input,
       ),
     onSuccess: () =>
       void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-review-configs"] });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }

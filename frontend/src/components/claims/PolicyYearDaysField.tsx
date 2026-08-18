@@ -8,13 +8,15 @@
  * edit buffer that survives a validation error so the typed value isn't lost,
  * blank meaning "clear this setting" rather than zero, and commit-on-blur.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { usePolicyYears, useUpdatePolicyYear } from "@/api/hooks";
 import type { PolicyYear } from "@/types";
 import { useSession } from "@/stores/session";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
 import type { ReactNode } from "react";
@@ -50,10 +52,35 @@ export function PolicyYearDaysField({
   savedMessage: string;
 }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const { data: years = [] } = usePolicyYears();
+  const yearsQuery = usePolicyYears();
+  const years = yearsQuery.data ?? [];
   const update = useUpdatePolicyYear();
   const year = years.find((y) => y.id === policyYearId) ?? null;
   const [draft, setDraft] = useState<string | null>(null);
+
+  // A draft belongs to one benefit year. Without this reset, switching years
+  // could save the previous year's uncommitted value into the new year on blur.
+  useEffect(() => setDraft(null), [year?.id, field]);
+
+  if (yearsQuery.isLoading) {
+    return <p className="text-sm text-muted-foreground">Loading setting…</p>;
+  }
+
+  if (yearsQuery.isError) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-sm text-error">
+        <span>Couldn&apos;t load this benefit-year setting.</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void yearsQuery.refetch()}
+        >
+          <RefreshCw className="size-4" /> Retry
+        </Button>
+      </div>
+    );
+  }
 
   if (!year) {
     return <p className="text-sm text-muted-foreground">{noYearPrompt}</p>;
@@ -62,7 +89,7 @@ export function PolicyYearDaysField({
   const current = year[field] as number | null;
 
   const commit = async () => {
-    if (draft === null) return;
+    if (draft === null || update.isPending) return;
     const trimmed = draft.trim();
     const next = trimmed === "" ? null : Number(trimmed);
     if (next !== null && (!Number.isInteger(next) || next < 0)) {
@@ -97,6 +124,8 @@ export function PolicyYearDaysField({
         min={0}
         placeholder={placeholder}
         className="h-9 w-40"
+        disabled={update.isPending}
+        aria-busy={update.isPending}
         value={draft ?? (current?.toString() ?? "")}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}

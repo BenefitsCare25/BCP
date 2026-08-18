@@ -32,6 +32,7 @@ export type NavItem = {
   to: string;
   title: string;
   icon: LucideIcon;
+  adminOnly?: boolean;
 };
 export type NavGroup = {
   label: string;
@@ -126,10 +127,11 @@ export const COMPANY_NAV: NavGroup[] = [
         icon: Cog,
       },
       {
-        label: "AI Setting",
+        label: "AI Provider",
         to: "/settings/ai",
-        title: "AI Setting",
+        title: "AI Provider",
         icon: Sparkles,
+        adminOnly: true,
       },
     ],
   },

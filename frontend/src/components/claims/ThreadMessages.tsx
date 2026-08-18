@@ -28,7 +28,7 @@
  *   them at a fraction of the ink.
  */
 import { Fragment, useState } from "react";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, RefreshCw, Send } from "lucide-react";
 import type { ClaimMessage } from "@/api/claims";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -139,6 +139,7 @@ export function ThreadMessages({
   messages,
   loading = false,
   error = false,
+  onRetry,
   /** Absent = the caller has decided this thread can't be written in; say why
    *  in `disabledReason` rather than showing a control that 403s or 409s. */
   onSend,
@@ -155,6 +156,7 @@ export function ThreadMessages({
   messages: ClaimMessage[] | undefined;
   loading?: boolean;
   error?: boolean;
+  onRetry?: () => void;
   onSend?: (body: string) => Promise<void>;
   sending?: boolean;
   disabledReason?: string;
@@ -183,9 +185,14 @@ export function ThreadMessages({
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : error ? (
-        <p className="text-sm text-muted-foreground">
-          Couldn&rsquo;t load this conversation.
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm text-error">Couldn&rsquo;t load this conversation.</p>
+          {onRetry && (
+            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+              <RefreshCw className="size-4" /> Retry
+            </Button>
+          )}
+        </div>
       ) : rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">{emptyText}</p>
       ) : (

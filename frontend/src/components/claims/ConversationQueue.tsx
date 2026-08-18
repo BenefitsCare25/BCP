@@ -37,7 +37,7 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ExternalLink, MessageSquare } from "lucide-react";
+import { ExternalLink, MessageSquare, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import {
   useBrokerConversations,
@@ -269,9 +269,21 @@ function EnquiryPane({ enquiryId }: { enquiryId: string }) {
 
   if (!data) {
     return (
-      <p className="text-sm text-muted-foreground">
-        {enquiry.isError ? "Couldn't load this question." : "Loading…"}
-      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className={enquiry.isError ? "text-sm text-error" : "text-sm text-muted-foreground"}>
+          {enquiry.isError ? "Couldn't load this question." : "Loading…"}
+        </p>
+        {enquiry.isError && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void enquiry.refetch()}
+          >
+            <RefreshCw className="size-4" /> Retry
+          </Button>
+        )}
+      </div>
     );
   }
 
@@ -330,6 +342,7 @@ function EnquiryPane({ enquiryId }: { enquiryId: string }) {
         messages={messages.data}
         loading={messages.isLoading}
         error={messages.isError}
+        onRetry={() => void messages.refetch()}
         sending={send.isPending}
         threadSubject={data.subject}
         placeholder="Answer the member…"
@@ -402,7 +415,7 @@ export function ConversationQueue() {
   const [view, setView] = useState<View>("us");
   const [page, setPage] = useState(0);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
-  const { data, isLoading } = useBrokerConversations(
+  const { data, isLoading, isError, error, refetch } = useBrokerConversations(
     policyYearId ?? undefined,
     view,
     page * PAGE_SIZE,
@@ -430,7 +443,7 @@ export function ConversationQueue() {
 
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-4 pb-4">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-4 pb-4">
         <div className="min-w-0">
           <CardTitle>Messages</CardTitle>
           <CardDescription className="max-w-prose">
@@ -462,6 +475,15 @@ export function ConversationQueue() {
           <div className="space-y-2 px-4 pb-4">
             <Skeleton className="h-14 w-full" />
             <Skeleton className="h-14 w-full" />
+          </div>
+        ) : isError ? (
+          <div className="flex flex-col items-center gap-3 px-4 pb-6 text-center">
+            <p className="text-sm text-error">
+              Couldn&apos;t load conversations. {formatError(error)}
+            </p>
+            <Button variant="outline" size="sm" onClick={() => void refetch()}>
+              <RefreshCw className="size-4" /> Retry
+            </Button>
           </div>
         ) : items.length === 0 ? (
           <p className="px-4 pb-4 text-sm text-muted-foreground">
@@ -554,8 +576,8 @@ export function ConversationQueue() {
 /** The tab's own count: how many threads are waiting on us. Its own small
  * query rather than a prop, so the badge is live wherever the Claims page is —
  * and it shares the list's key prefix, so it refreshes when a broker replies. */
-export function useAwaitingReplyCount(): number {
+export function useAwaitingReplyCount(): { count: number; isError: boolean } {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const { data } = useBrokerConversations(policyYearId ?? undefined, "us", 0, 1);
-  return data?.total ?? 0;
+  const query = useBrokerConversations(policyYearId ?? undefined, "us", 0, 1);
+  return { count: query.data?.total ?? 0, isError: query.isError };
 }

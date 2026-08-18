@@ -37,6 +37,7 @@ from app.services.claim_intake import (
     claim_profile_for,
     normalize_invoice_number,
 )
+from app.services.claims_ai_confidence import confidence_threshold
 from app.services.matching_engine import jaccard, tokenize
 from app.services.roster_attributes import (
     NAME_KEYS,
@@ -51,9 +52,6 @@ from app.services.sg_hospitals import hospital_sector
 # frontend DiagnosisPicker + claim_intake.effective_diagnosis).
 _OTHER_PREFIX = "Other: "
 
-# Below this the UI flags a field as a guess (matches the extractor's own
-# differentiated-confidence convention).
-_CONFIDENCE_FLOOR = 0.6
 # Token-similarity a name match must clear.
 _NAME_THRESHOLD = 0.6
 
@@ -715,6 +713,9 @@ def suggest_from_extraction(
     """Turn one extracted document into claim-form suggestions. ``doc_types``
     is the client's configured document-type registry (None → defaults)."""
     fields = _fields(document)
+    confidence_floor = confidence_threshold(
+        "intake", document_type=str(document.get("document_type") or "")
+    )
 
     provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
     amount, amount_conf = _amount(fields)
@@ -742,7 +743,7 @@ def suggest_from_extraction(
         ("invoice_number", invoice_number, invoice_conf),
         ("diagnosis", diagnosis, diag_conf),
     ):
-        if value is not None and conf < _CONFIDENCE_FLOOR:
+        if value is not None and conf < confidence_floor:
             low.append(name)
 
     claimant = _detect_claimant(fields, employee, coverage_opts.dependants)
@@ -762,7 +763,7 @@ def suggest_from_extraction(
     # looking for a control that doesn't exist.
     if (
         doctor is not None
-        and doctor_conf < _CONFIDENCE_FLOOR
+        and doctor_conf < confidence_floor
         and _selection_requires_doctor(selection, coverage_opts)
     ):
         low.append("doctor_name")
@@ -808,7 +809,10 @@ def _billing_identity(
 
 
 def _doc_reading(
-    fields: list[dict[str, Any]], year: PolicyYear
+    fields: list[dict[str, Any]],
+    year: PolicyYear,
+    *,
+    document_type: str | None = None,
 ) -> tuple[IntakeFields, list[str]]:
     """One document's OWN field reading (no cross-document merging) plus the
     field names read below the confidence floor — the basis for prefilling a
@@ -831,6 +835,7 @@ def _doc_reading(
         # the hint could name a field the form won't render.
         doctor_name=_doctor_name(fields)[0],
     )
+    confidence_floor = confidence_threshold("intake", document_type=document_type)
     low = [
         name
         for name, value, conf in (
@@ -840,7 +845,7 @@ def _doc_reading(
             ("invoice_number", invoice_number, invoice_conf),
             ("diagnosis", diagnosis, diag_conf),
         )
-        if value is not None and conf < _CONFIDENCE_FLOOR
+        if value is not None and conf < confidence_floor
     ]
     return out, low
 
@@ -969,7 +974,9 @@ def build_intake_suggestion(
         fields: IntakeFields | None = None
         low: list[str] = []
         if idx is not None and idx > 0:
-            reading, low = _doc_reading(efields, year)
+            reading, low = _doc_reading(
+                efields, year, document_type=str(e.get("document_type") or "")
+            )
             reading.diagnosis = _resolve_diagnosis(
                 reading.diagnosis, suggestion.claim_selection
             )

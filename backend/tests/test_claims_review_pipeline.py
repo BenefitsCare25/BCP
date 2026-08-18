@@ -871,6 +871,20 @@ def test_doc_completeness_ignores_plain_outpatient_receipt():
 # ── Broker-configurable registry: CRUD + custom config drives classification ──
 
 
+def _reset_doc_types(broker: TestClient) -> list[dict]:
+    current = broker.get("/api/v1/claim-doc-types").json()
+    response = broker.post(
+        "/api/v1/claim-doc-types/reset",
+        json={
+            "expected_versions": {
+                row["id"]: row["updated_at"] for row in current
+            }
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
     # First read lazily seeds the in-code defaults for the client.
     rows = broker.get("/api/v1/claim-doc-types").json()
@@ -909,15 +923,27 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
         "key_fields": discharge["key_fields"],
         "sector": discharge["sector"],
         "slot_key": discharge["slot_key"],
+        "expected_updated_at": discharge["updated_at"],
     })
     assert res.status_code == 200
     assert "day surgery note" in res.json()["aliases"]
+    stale = broker.put(f"/api/v1/claim-doc-types/{discharge['id']}", json={
+        "display": discharge["display"],
+        "aliases": discharge["aliases"],
+        "key_fields": discharge["key_fields"],
+        "sector": discharge["sector"],
+        "slot_key": discharge["slot_key"],
+        "expected_updated_at": discharge["updated_at"],
+    })
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "stale_configuration"
 
     # Delete the custom row; reset restores exactly the defaults.
     assert broker.delete(
-        f"/api/v1/claim-doc-types/{created['id']}"
+        f"/api/v1/claim-doc-types/{created['id']}",
+        params={"expected_updated_at": created["updated_at"]},
     ).status_code == 204
-    rows = broker.post("/api/v1/claim-doc-types/reset").json()
+    rows = _reset_doc_types(broker)
     assert {r["key"] for r in rows} == {
         "discharge_summary", "final_tax_invoice", "finalised_tax_invoice"
     }
@@ -940,6 +966,7 @@ def test_custom_config_drives_classification_and_completeness(broker: TestClient
         + [{"name": "Surgeon", "keywords": ["surgeon", "operating doctor"]}],
         "sector": discharge["sector"],
         "slot_key": discharge["slot_key"],
+        "expected_updated_at": discharge["updated_at"],
     })
     try:
         with SessionLocal() as s:
@@ -953,11 +980,11 @@ def test_custom_config_drives_classification_and_completeness(broker: TestClient
         fields.append({"label": "Surgeon", "value": "Dr Lee"})
         assert missing_key_fields(defn, fields) == []
     finally:
-        broker.post("/api/v1/claim-doc-types/reset")
+        _reset_doc_types(broker)
 
 
 def test_doc_type_slug_collision_creates_distinct_types(broker: TestClient):
-    broker.post("/api/v1/claim-doc-types/reset")
+    _reset_doc_types(broker)
     a = broker.post("/api/v1/claim-doc-types", json={
         "display": "Referral Memo", "aliases": [], "key_fields": [],
     })
@@ -974,11 +1001,11 @@ def test_doc_type_slug_collision_creates_distinct_types(broker: TestClient):
         "display": "referral memo", "aliases": [], "key_fields": [],
     })
     assert dup.status_code == 409
-    broker.post("/api/v1/claim-doc-types/reset")
+    _reset_doc_types(broker)
 
 
 def test_doc_type_optional_key_field_round_trips(broker: TestClient):
-    rows = broker.post("/api/v1/claim-doc-types/reset").json()
+    rows = _reset_doc_types(broker)
     discharge = next(r for r in rows if r["key"] == "discharge_summary")
     surgery = next(f for f in discharge["key_fields"] if f["name"] == "Surgery")
     # The seeded Surgery field is optional and survives an edit round-trip.
@@ -989,6 +1016,7 @@ def test_doc_type_optional_key_field_round_trips(broker: TestClient):
         "key_fields": discharge["key_fields"],
         "sector": discharge["sector"],
         "slot_key": discharge["slot_key"],
+        "expected_updated_at": discharge["updated_at"],
     })
     assert res.status_code == 200
     surgery2 = next(f for f in res.json()["key_fields"] if f["name"] == "Surgery")
@@ -1442,7 +1470,8 @@ def test_review_config_crud_over_http(broker: TestClient):
         }
         created = broker.post("/api/v1/claim-review-configs", json=body)
         assert created.status_code == 201
-        config_id = created.json()["id"]
+        created_row = created.json()
+        config_id = created_row["id"]
         # Rules get stable ids assigned on write.
         assert created.json()["ai_rules"][0]["id"]
 
@@ -1455,10 +1484,21 @@ def test_review_config_crud_over_http(broker: TestClient):
 
         updated = broker.put(
             f"/api/v1/claim-review-configs/{config_id}",
-            json={**body, "display_label": "GHS review rules", "enabled": False},
+            json={
+                **body,
+                "display_label": "GHS review rules",
+                "enabled": False,
+                "expected_updated_at": created_row["updated_at"],
+            },
         )
         assert updated.status_code == 200
         assert updated.json()["enabled"] is False
+        stale = broker.put(
+            f"/api/v1/claim-review-configs/{config_id}",
+            json={**body, "expected_updated_at": created_row["updated_at"]},
+        )
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["code"] == "stale_configuration"
 
         preview = broker.post("/api/v1/claim-review-configs/preview", json=body)
         assert preview.status_code == 200
@@ -1475,7 +1515,10 @@ def test_review_config_crud_over_http(broker: TestClient):
         assert self_import.status_code == 422
 
         assert (
-            broker.delete(f"/api/v1/claim-review-configs/{config_id}").status_code
+            broker.delete(
+                f"/api/v1/claim-review-configs/{config_id}",
+                params={"expected_updated_at": updated.json()["updated_at"]},
+            ).status_code
             == 204
         )
         assert broker.get("/api/v1/claim-review-configs").json() == []
@@ -1529,7 +1572,10 @@ def test_corrupt_row_stays_listable_and_deletable(broker: TestClient):
         assert row["ai_rules"][0]["severity"] == "critical"  # fail-safe
         assert len(row["required_documents"]) == 15          # clamped
         assert (
-            broker.delete(f"/api/v1/claim-review-configs/{config_id}").status_code
+            broker.delete(
+                f"/api/v1/claim-review-configs/{config_id}",
+                params={"expected_updated_at": row["updated_at"]},
+            ).status_code
             == 204
         )
     finally:

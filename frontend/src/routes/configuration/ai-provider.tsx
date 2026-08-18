@@ -6,6 +6,7 @@ import {
   KeyRound,
   Loader2,
   Pencil,
+  RefreshCw,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -42,10 +43,13 @@ import { PageGuide } from "@/components/ui/page-guide";
 export function AIProviderPage() {
   const { data: me, isPending: meLoading } = useMe();
   const isSystemAdmin = me?.role === "system_admin";
+  const canAdmin = me?.role === "broker_admin" || isSystemAdmin;
   // Wait for the active identity before loading tenant-scoped AI config, so a
   // hard reload does not fetch before the active client header is available.
-  const { data: config, isLoading } = useAIConfig(!meLoading);
-  const { data: status } = useAIStatus();
+  const configQuery = useAIConfig(!meLoading && canAdmin);
+  const { data: config, isLoading } = configQuery;
+  const statusQuery = useAIStatus();
+  const { data: status } = statusQuery;
   const put = usePutAIConfig();
   const remove = useDeleteAIConfig();
   const test = useTestAIConfig();
@@ -53,7 +57,20 @@ export function AIProviderPage() {
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  const source = status?.source ?? "none";
+  if (!meLoading && !canAdmin) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>AI Provider</CardTitle>
+          <CardDescription>
+            This setting requires broker administrator access.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  const source = statusQuery.isError ? "unknown" : (status?.source ?? "none");
   const SOURCE_BADGES: Record<string, JSX.Element> = {
     byok: (
       <Badge variant="good" className="gap-1">
@@ -73,6 +90,11 @@ export function AIProviderPage() {
     none: (
       <Badge variant="warn" className="gap-1">
         <AlertTriangle className="size-3" /> Not configured
+      </Badge>
+    ),
+    unknown: (
+      <Badge variant="warn" className="gap-1">
+        <AlertTriangle className="size-3" /> Status unavailable
       </Badge>
     ),
   };
@@ -166,7 +188,7 @@ export function AIProviderPage() {
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <CardTitle>This company's AI key</CardTitle>
               <CardDescription>
@@ -181,6 +203,18 @@ export function AIProviderPage() {
         <CardContent className="space-y-4">
           {isLoading ? (
             <div className="text-sm text-muted-foreground">Loading…</div>
+          ) : configQuery.isError ? (
+            <div className="flex flex-col items-start gap-3 text-sm text-error">
+              <span>Couldn&apos;t load the company AI configuration. {formatError(configQuery.error)}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void configQuery.refetch()}
+              >
+                <RefreshCw className="size-4" /> Retry
+              </Button>
+            </div>
           ) : config ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Field label="Provider" value={config.provider} />
@@ -278,10 +312,10 @@ export function AIProviderPage() {
       </Card>
 
       <PageGuide
-        purpose="Configure the Google Vertex (Gemini) AI backend for rule suggestion, roster profiling and claims review. The platform key (system-admin) is the default for every company; a company can override it with its own Vertex service-account JSON."
+        purpose="Configure the Google Vertex (Gemini) AI backend for employee claim autofill, claim review, rule suggestion and roster profiling. The platform key (system-admin) is the default for every company; a company can override it with its own Vertex service-account JSON."
         connections={[
           { label: "→ Roster profiling", description: "AI profiling uses this provider to analyze roster columns" },
-          { label: "→ AI review queue", description: "AI-suggested matching rules are generated via this provider" },
+          { label: "→ Claims review", description: "Autofill and AI review calls use this provider; review criteria are configured on Claims Review → Review rules" },
           { label: "→ Diagnostics", description: "AI spend and usage are tracked in the audit log" },
         ]}
       />
@@ -327,19 +361,11 @@ function Field({
   className?: string;
 }) {
   return (
-    <div
-      className={`rounded-md border border-border bg-card p-3 ${className ?? ""}`}
-    >
+    <div className={`space-y-1 py-1 ${className ?? ""}`}>
       <div className="text-2xs uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div
-        className={
-          muted
-            ? "text-sm text-muted-foreground mt-1 break-words"
-            : "text-sm font-medium mt-1 break-words"
-        }
-      >
+      <div className={muted ? "break-words text-sm text-muted-foreground" : "break-words text-sm font-medium"}>
         {value}
         {hint && (
           <span className="ml-1.5 text-xs text-muted-foreground font-normal">

@@ -58,10 +58,9 @@
   --color-error: #dc2626;
   --color-error-foreground: #ffffff;
   --color-error-soft: #fee2e2;
-  /* Info = neutral "in-progress / informational" status. A calm blue, kept
-     hue-distinct from the brand red so pipeline states (under review, submitted,
-     preview) never read as errors. */
-  --color-info: #2563eb;
+  /* Info = neutral "in-progress / informational" status. This blue clears
+     WCAG AA on --color-info-soft for compact status labels. */
+  --color-info: #1d4ed8;
   --color-info-foreground: #ffffff;
   --color-info-soft: #dbeafe;
 

@@ -1,7 +1,7 @@
 """Broker config: per-claim-type AI review rule setup.
 
 One row per (client, claim type) — see ``services/claim_review_configs.py``.
-Edited on the Claims page "AI extraction" tab. A claim type with no row keeps
+Edited on the Claims page "Review rules" tab. A claim type with no row keeps
 the in-code defaults (no lazy seeding — absence IS the default; the UI shows
 a "Default" badge). Also hosts the cross-company import: a broker duplicates
 another accessible company's setup for matching claim types (e.g. copy an
@@ -9,9 +9,12 @@ Outpatient GP rule setup into a newly onboarded company).
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,13 +22,16 @@ from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import require_claim_configuration, require_client_id
 from app.core.identity import accessible_clients, assert_client_accessible
+from app.core.optimistic_lock import assert_not_stale
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
 from app.models import ClaimReviewConfig, Client, FlexScheme, Product
 from app.models.claim import CLAIM_KIND_FLEX, CLAIM_KIND_INSURED
 from app.schemas.claims import (
+    CLAIM_REVIEW_PORTAL_FIELDS,
     ClaimReviewConfigIn,
     ClaimReviewConfigOut,
+    ClaimReviewConfigUpdateIn,
     ImportReviewConfigsIn,
     ImportReviewConfigsOut,
     ImportSourceCompanyOut,
@@ -76,6 +82,7 @@ def _out(row: ClaimReviewConfig) -> ClaimReviewConfigOut:
             for r in cfg.ai_rules
         ],
         required_documents=list(cfg.required_documents or ()),
+        updated_at=row.updated_at,
     )
 
 
@@ -98,8 +105,11 @@ def _payload(body: ClaimReviewConfigIn) -> dict[str, Any]:
         "enabled": body.enabled,
         "field_maps": [m.model_dump(exclude_none=True) for m in body.field_maps],
         "ai_rules": [
-            {**r.model_dump(exclude_none=True), "id": r.id or f"rule_{i + 1}"}
-            for i, r in enumerate(body.ai_rules)
+            {
+                **r.model_dump(exclude_none=True),
+                "id": r.id or f"rule_{uuid4().hex}",
+            }
+            for r in body.ai_rules
         ],
         "required_documents": [
             d for d in (" ".join(s.split()) for s in body.required_documents) if d
@@ -240,6 +250,7 @@ def review_scope_options(
     return ReviewScopeOptionsOut(
         claim_types=claim_types,
         default_config=_default_config_out(),
+        portal_fields=list(CLAIM_REVIEW_PORTAL_FIELDS),
         has_current_year=year is not None,
     )
 
@@ -266,12 +277,17 @@ def create_review_config(
 @router.put("/{config_id}", response_model=ClaimReviewConfigOut)
 def update_review_config(
     config_id: str,
-    body: ClaimReviewConfigIn,
+    body: ClaimReviewConfigUpdateIn,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ClaimReviewConfigOut:
     client_id = require_client_id(user)
     row = _own_row(db, config_id, client_id)
+    assert_not_stale(
+        expected=body.expected_updated_at,
+        actual=row.updated_at,
+        label="This review-rule setup",
+    )
     _assert_key_free(db, client_id, body, exclude_id=row.id)
     data = _payload(body)
     before = {
@@ -285,6 +301,7 @@ def update_review_config(
     }
     for field, value in data.items():
         setattr(row, field, value)
+    row.updated_at = datetime.now(UTC)
     write_audit(
         db, user, "claim_review_config.updated", "claim_review_config", row.id,
         before=before, after=data,
@@ -296,12 +313,18 @@ def update_review_config(
 @router.delete("/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_review_config(
     config_id: str,
+    expected_updated_at: datetime | None = Query(None),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
     """Deleting a row reverts that claim type to the in-code defaults."""
     client_id = require_client_id(user)
     row = _own_row(db, config_id, client_id)
+    assert_not_stale(
+        expected=expected_updated_at,
+        actual=row.updated_at,
+        label="This review-rule setup",
+    )
     write_audit(
         db, user, "claim_review_config.deleted", "claim_review_config", row.id,
         before={"claim_kind": row.claim_kind, "claim_key": row.claim_key,
@@ -466,22 +489,49 @@ def import_review_configs(
         src = db.get(ClaimReviewConfig, config_id)
         if src is None or src.client_id != source.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Review config not found")
-        data = {
-            "claim_kind": src.claim_kind,
-            "claim_key": src.claim_key,
-            "display_label": src.display_label,
-            "enabled": src.enabled,
-            "field_maps": src.field_maps,
-            "ai_rules": src.ai_rules,
-            "required_documents": src.required_documents,
-        }
+        resolved = config_from_row(src)
+        try:
+            import_body = ClaimReviewConfigIn.model_validate(
+                {
+                    "claim_kind": src.claim_kind,
+                    "claim_key": src.claim_key,
+                    "display_label": src.display_label,
+                    "enabled": src.enabled,
+                    "field_maps": list(resolved.field_maps),
+                    "ai_rules": [
+                        {
+                            "id": rule.id,
+                            "rule": rule.rule,
+                            "category": rule.category,
+                            "severity": rule.severity,
+                        }
+                        for rule in resolved.ai_rules
+                    ],
+                    "required_documents": list(resolved.required_documents or ()),
+                }
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "The source setup contains unsupported or invalid review fields. "
+                "Correct it in the source company before importing.",
+            ) from exc
+        data = _payload(import_body)
         target = find_config_row(db, client_id, src.claim_kind, src.claim_key)
         if target is None:
             target = ClaimReviewConfig(client_id=client_id, **data)
             db.add(target)
         else:
+            assert_not_stale(
+                expected=body.target_versions.get(
+                    type_key(src.claim_kind, src.claim_key)
+                ),
+                actual=target.updated_at,
+                label=f'Rules for "{target.display_label}"',
+            )
             for field, value in data.items():
                 setattr(target, field, value)
+            target.updated_at = datetime.now(UTC)
         db.flush()
         imported.append(target)
     write_audit(

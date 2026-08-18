@@ -1,0 +1,40 @@
+{"id":"intake-tax-001","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.98,"correct":true}
+{"id":"intake-tax-002","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.94,"correct":true}
+{"id":"intake-tax-003","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.88,"correct":true}
+{"id":"intake-tax-004","flow":"intake","task":"document_classification","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.82,"correct":true}
+{"id":"intake-tax-005","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.69,"correct":true}
+{"id":"intake-tax-006","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.65,"correct":false}
+{"id":"intake-tax-007","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.48,"correct":false}
+{"id":"intake-tax-008","flow":"intake","task":"document_classification","model":"gemini-3.5-flash","document_type":"tax invoice","confidence":0.35,"correct":false}
+{"id":"intake-discharge-001","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.99,"correct":true}
+{"id":"intake-discharge-002","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.93,"correct":true}
+{"id":"intake-discharge-003","flow":"intake","task":"document_classification","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.89,"correct":true}
+{"id":"intake-discharge-004","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.81,"correct":true}
+{"id":"intake-discharge-005","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.76,"correct":true}
+{"id":"intake-discharge-006","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.72,"correct":false}
+{"id":"intake-discharge-007","flow":"intake","task":"document_classification","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.54,"correct":false}
+{"id":"intake-discharge-008","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"discharge summary","confidence":0.41,"correct":false}
+{"id":"intake-receipt-001","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.97,"correct":true}
+{"id":"intake-receipt-002","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.9,"correct":true}
+{"id":"intake-receipt-003","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.84,"correct":true}
+{"id":"intake-receipt-004","flow":"intake","task":"document_classification","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.73,"correct":true}
+{"id":"intake-receipt-005","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.62,"correct":true}
+{"id":"intake-receipt-006","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.58,"correct":false}
+{"id":"intake-receipt-007","flow":"intake","task":"field_extraction","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.46,"correct":false}
+{"id":"intake-receipt-008","flow":"intake","task":"document_classification","model":"gemini-3.5-flash","document_type":"receipt","confidence":0.29,"correct":false}
+{"id":"review-001","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.98,"correct":true}
+{"id":"review-002","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.92,"correct":true}
+{"id":"review-003","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.86,"correct":true}
+{"id":"review-004","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.78,"correct":true}
+{"id":"review-005","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.71,"correct":true}
+{"id":"review-006","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.68,"correct":false}
+{"id":"review-007","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.53,"correct":false}
+{"id":"review-008","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"gp","confidence":0.37,"correct":false}
+{"id":"review-009","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.96,"correct":true}
+{"id":"review-010","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.91,"correct":true}
+{"id":"review-011","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.83,"correct":true}
+{"id":"review-012","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.77,"correct":true}
+{"id":"review-013","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.7,"correct":true}
+{"id":"review-014","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.66,"correct":false}
+{"id":"review-015","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.49,"correct":false}
+{"id":"review-016","flow":"review","task":"clean_verdict","model":"gemini-3.5-flash","document_type":"sp","confidence":0.32,"correct":false}

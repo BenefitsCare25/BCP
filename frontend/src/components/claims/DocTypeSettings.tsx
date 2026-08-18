@@ -118,14 +118,14 @@ function ChipRow({
           <span
             key={`${chip}-${i}`}
             title={chipTitle?.(chip, i)}
-            className="inline-flex h-7 items-center gap-0.5 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
+            className="inline-flex h-8 items-center gap-0.5 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
           >
             {chip}
             <button
               type="button"
               disabled={disabled}
               onClick={() => onRemove(i)}
-              className="grid size-5 place-items-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
+              className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
               aria-label={`Remove ${chip}`}
             >
               <X className="size-3" />
@@ -137,7 +137,8 @@ function ChipRow({
             value={draft}
             disabled={disabled}
             placeholder={placeholder}
-            className="h-7 w-44 text-xs"
+            aria-label={placeholder}
+            className="h-8 w-44 text-xs"
             maxLength={128}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -152,7 +153,7 @@ function ChipRow({
             variant="ghost"
             size="sm"
             aria-label={placeholder}
-            className="size-7 shrink-0 p-0"
+            className="size-8 shrink-0 p-0"
             disabled={disabled || !draft.trim()}
             onClick={add}
           >
@@ -183,7 +184,12 @@ function DocTypeRow({
 
   const save = (patch: Partial<ClaimDocTypeInput>) => {
     update.mutate(
-      { id: docType.id, ...toInput(docType), ...patch },
+      {
+        id: docType.id,
+        expected_updated_at: docType.updated_at,
+        ...toInput(docType),
+        ...patch,
+      },
       { onError: (e) => toast.error(formatError(e)) },
     );
   };
@@ -289,7 +295,7 @@ function DocTypeRow({
         confirmLabel="Delete"
         loading={del.isPending}
         onConfirm={() =>
-          del.mutate(docType.id, {
+          del.mutate({ id: docType.id, expected_updated_at: docType.updated_at }, {
             onSuccess: () => setConfirmDelete(false),
             onError: (e) => toast.error(formatError(e)),
           })
@@ -381,9 +387,9 @@ export function DocTypeSettings() {
             {adding ? (
               <div className="flex flex-wrap items-center gap-2 px-5 py-4">
                 <Input
-                  autoFocus
                   value={newName}
                   placeholder="Document type name (e.g. Referral Memo)"
+                  aria-label="Document type name"
                   className="h-8 max-w-xs text-sm"
                   maxLength={128}
                   onChange={(e) => setNewName(e.target.value)}
@@ -443,10 +449,15 @@ export function DocTypeSettings() {
         confirmLabel="Restore defaults"
         loading={reset.isPending}
         onConfirm={() =>
-          reset.mutate(undefined, {
+          reset.mutate(
+            Object.fromEntries(
+              (docTypes.data ?? []).map((docType) => [docType.id, docType.updated_at]),
+            ),
+            {
             onSuccess: () => setConfirmReset(false),
             onError: (e) => toast.error(formatError(e)),
-          })
+            },
+          )
         }
       />
     </Card>

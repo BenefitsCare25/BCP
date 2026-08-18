@@ -81,7 +81,10 @@ function CompanyContext() {
       <Building2 className="size-4 text-primary" />
       {clients.length > 1 ? (
         <Select value={selected ?? undefined} onValueChange={onChange}>
-          <SelectTrigger className="h-7 min-w-[180px] border-0 bg-transparent px-1 font-medium shadow-none focus:ring-0">
+          <SelectTrigger
+            aria-label="Select company"
+            className="h-7 min-w-[180px] border-0 bg-transparent px-1 font-medium shadow-none focus:ring-0"
+          >
             <SelectValue placeholder="Select company" />
           </SelectTrigger>
           <SelectContent>

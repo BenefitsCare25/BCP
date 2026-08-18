@@ -12,9 +12,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.claim_ai_review import REVIEW_VERDICT_CLEAN, REVIEW_VERDICT_FLAGGED
+from app.services.claims_ai_confidence import confidence_threshold
 from app.services.claims_review.field_maps import VISION_FIELDS
-
-CONFIDENCE_THRESHOLD = 0.5
 
 # For evidence-required fields (by default amount, date, provider), "the claim
 # states a value but no document shows it" (MISSING_IN_PDF) is a substantiation
@@ -30,6 +29,8 @@ def compute_verdict(
     confidence: float,
     *,
     evidence_fields: frozenset[str] | None = None,
+    model: str | None = None,
+    claim_type: str | None = None,
 ) -> tuple[str, list[str]]:
     """Returns ``(verdict, reasons)`` — reasons explain a flagged verdict.
 
@@ -59,9 +60,12 @@ def compute_verdict(
     for v in vision_checks:
         if v.get("verdict") == "REFUTED":
             reasons.append(f"Vision check refuted: {v.get('field_name')}")
-    if not reasons and confidence < CONFIDENCE_THRESHOLD:
+    threshold = confidence_threshold(
+        "review", model=model, document_type=claim_type
+    )
+    if not reasons and confidence < threshold:
         reasons.append(
-            f"Review confidence {confidence:.2f} below threshold {CONFIDENCE_THRESHOLD}."
+            f"Review confidence {confidence:.2f} below calibrated threshold {threshold:.2f}."
         )
     verdict = REVIEW_VERDICT_FLAGGED if reasons else REVIEW_VERDICT_CLEAN
     return verdict, reasons

@@ -1,7 +1,7 @@
 """Per-claim-type AI review rule setup — resolution + in-code defaults.
 
 The broker configures the AI claim review PER CLAIM TYPE per company
-(``claim_review_configs`` rows, edited on the Claims page "AI extraction"
+(``claim_review_configs`` rows, edited on the Claims page "Review rules"
 tab): the claim-form ↔ document field maps, the AI-judged business rules
 (each with a severity — only a CRITICAL failure can flag a claim; warning/
 info failures surface to the broker without auto-flagging), and optionally

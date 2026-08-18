@@ -14,12 +14,13 @@ try:
     _cache = _meter.create_counter("claim_review.cache.requests")
     _queue_age = _meter.create_histogram("claim_review.queue_age.seconds")
     _queue_depth = _meter.create_histogram("claim_review.queue.depth")
+    _active_jobs = _meter.create_histogram("claim_review.active")
     _invariants = _meter.create_counter("claim_review.invariant_failures")
     _leases = _meter.create_counter("claim_review.lease_expirations")
 except Exception:  # pragma: no cover - telemetry is optional in local/test
     _jobs = _duration = _stage_duration = _stage_failures = None
     _provider_calls = _provider_duration = _cache = None
-    _queue_age = _queue_depth = _invariants = _leases = None
+    _queue_age = _queue_depth = _active_jobs = _invariants = _leases = None
 
 
 def job(state: str, *, error_code: str | None = None) -> None:
@@ -67,6 +68,11 @@ def queue_snapshot(depth: int, oldest_age_seconds: float) -> None:
         _queue_depth.record(max(0, depth))
     if _queue_age is not None:
         _queue_age.record(max(0.0, oldest_age_seconds))
+
+
+def active_jobs(count: int, capacity: int) -> None:
+    if _active_jobs is not None:
+        _active_jobs.record(max(0, count), {"capacity": capacity})
 
 
 def invariant(name: str, count: int) -> None:

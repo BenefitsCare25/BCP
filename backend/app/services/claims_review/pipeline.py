@@ -41,7 +41,7 @@ from app.models.stored_document import STORAGE_AVAILABLE
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
 from app.services.claim_doc_types import resolve_doc_types
-from app.services.claim_review_configs import resolve_review_config
+from app.services.claim_review_configs import claim_key_for, resolve_review_config
 from app.services.claims import claim_documents
 from app.services.claims_review import (
     comparison,
@@ -361,6 +361,8 @@ def _compare_verify_and_finalize(
         vision_checks,
         ai_review["confidence"],
         evidence_fields=cfg.evidence_fields,
+        model=review.model,
+        claim_type=claim_key_for(claim)[1],
     )
     review.status = REVIEW_STATUS_COMPLETE
     review.verdict = verdict

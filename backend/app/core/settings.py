@@ -66,6 +66,7 @@ class Settings:
     # RETRIES, not attempts: the budget is one call plus this many. Kept small
     # because the whole retry runs inside a member's submit.
     fx_max_retries: int = 2
+    redis_url: str = ""
 
 
 def _flag(name: str, *, default: bool) -> bool:
@@ -223,6 +224,20 @@ def _resolve_storage_mode(env: Env) -> StorageMode:
     return raw  # type: ignore[return-value]
 
 
+def _resolve_redis_url(env: Env) -> str:
+    raw = os.environ.get("INSPRO_REDIS_URL", "").strip()
+    if not raw:
+        if env == "prod":
+            raise RuntimeError(
+                "INSPRO_REDIS_URL must be set in production so rate limits and "
+                "the claims AI cache are shared across workers and instances."
+            )
+        return ""
+    if not raw.startswith(("redis://", "rediss://")):
+        raise RuntimeError("INSPRO_REDIS_URL must use redis:// or rediss://")
+    return raw
+
+
 def _resolve_mail_mode(env: Env) -> MailMode:
     """Mail mode is fail-closed in production.
 
@@ -338,6 +353,7 @@ def get_settings() -> Settings:
             "INSPRO_FX_TIMEOUT_SECONDS", default=3.0, ceiling=30.0
         ),
         fx_max_retries=_bounded_int("INSPRO_FX_MAX_RETRIES", default=2, ceiling=5),
+        redis_url=_resolve_redis_url(env),
     )
 
 

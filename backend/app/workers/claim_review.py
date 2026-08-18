@@ -8,6 +8,7 @@ import signal
 import socket
 import threading
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,7 @@ from anthropic import (
 )
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import aliased
 
 from app.db.session import SessionLocal, engine
 from app.db.tenancy import is_postgres, set_search_path
@@ -52,6 +54,7 @@ from app.services.claims_review.pipeline import (
     ReviewOwnershipLost,
     execute_leased_review,
 )
+from app.workers.review_scheduler import ReviewScheduler, WorkerLimits
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,7 @@ _loop_heartbeat = time.monotonic()
 _notification_heartbeat = time.monotonic()
 _worker_stopping = False
 _last_queue_warning = 0.0
+_CLAIM_CAPACITY_LOCK_ID = 724862559301834887
 
 
 @dataclass(frozen=True)
@@ -148,20 +152,51 @@ def _record_queue_health(db, now: datetime) -> None:
         _last_queue_warning = time.monotonic()
 
 
-def _claim_next(owner: str) -> JobLease | None:
+def _claim_next(
+    owner: str,
+    excluded_client_ids: Collection[str] = (),
+    max_per_client: int = 1,
+    max_total: int = 1,
+) -> JobLease | None:
     now = _now()
     with SessionLocal() as db:
         _record_queue_health(db, now)
+        postgres = is_postgres(db)
+        if postgres:
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": _CLAIM_CAPACITY_LOCK_ID},
+            )
+        running_total = db.scalar(
+            select(func.count(ClaimReviewJob.id)).where(
+                ClaimReviewJob.state == JOB_STATE_RUNNING
+            )
+        )
+        if (running_total or 0) >= max_total:
+            return None
+        running = aliased(ClaimReviewJob)
+        running_for_client = (
+            select(func.count(running.id))
+            .where(
+                running.client_id == ClaimReviewJob.client_id,
+                running.state == JOB_STATE_RUNNING,
+            )
+            .correlate(ClaimReviewJob)
+            .scalar_subquery()
+        )
         stmt = (
             select(ClaimReviewJob)
             .where(
                 ClaimReviewJob.state.in_((JOB_STATE_QUEUED, JOB_STATE_RETRY_WAIT)),
                 ClaimReviewJob.available_at <= now,
+                running_for_client < max_per_client,
             )
             .order_by(ClaimReviewJob.available_at, ClaimReviewJob.created_at)
             .limit(1)
         )
-        if is_postgres(db):
+        if excluded_client_ids:
+            stmt = stmt.where(ClaimReviewJob.client_id.notin_(excluded_client_ids))
+        if postgres:
             stmt = stmt.with_for_update(skip_locked=True)
         job = db.execute(stmt).scalar_one_or_none()
         if job is None:
@@ -476,11 +511,7 @@ def _start_health_server() -> ThreadingHTTPServer:
     return server
 
 
-def process_one_job(owner: str) -> bool:
-    """Lease and process one available job; useful for controlled drains/tests."""
-    lease = _claim_next(owner)
-    if lease is None:
-        return False
+def _process_lease(lease: JobLease, owner: str) -> None:
     job_id = lease.job_id
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
@@ -513,6 +544,14 @@ def process_one_job(owner: str) -> bool:
     finally:
         heartbeat_stop.set()
         heartbeat.join(timeout=2)
+
+
+def process_one_job(owner: str) -> bool:
+    """Lease and process one available job; useful for controlled drains/tests."""
+    lease = _claim_next(owner)
+    if lease is None:
+        return False
+    _process_lease(lease, owner)
     return True
 
 
@@ -523,6 +562,13 @@ def main() -> None:
 
     configure_telemetry()
     owner = f"{socket.gethostname()}:{os.getpid()}"
+    limits = WorkerLimits.from_env()
+    scheduler = ReviewScheduler(
+        owner=owner,
+        limits=limits,
+        claim_next=_claim_next,
+        process_lease=_process_lease,
+    )
     stopping = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_args: stopping.set())
@@ -537,7 +583,14 @@ def main() -> None:
     last_reap = 0.0
     last_invariant_check = 0.0
     last_document_cleanup = 0.0
-    logger.info("Claim-review worker started", extra={"lease_owner": owner})
+    logger.info(
+        "Claim-review worker started",
+        extra={
+            "lease_owner": owner,
+            "concurrency": limits.concurrency,
+            "max_concurrent_per_client": limits.max_concurrent_per_client,
+        },
+    )
     try:
         while not stopping.is_set():
             _loop_heartbeat = time.monotonic()
@@ -550,11 +603,16 @@ def main() -> None:
             if time.monotonic() - last_document_cleanup >= 60:
                 purge_pending_document_deletes()
                 last_document_cleanup = time.monotonic()
-            if not process_one_job(owner):
-                stopping.wait(POLL_SECONDS)
+            started = scheduler.fill()
+            review_metrics.active_jobs(scheduler.active_count, scheduler.capacity)
+            if started == 0:
+                wait_seconds = min(POLL_SECONDS, 0.5) if scheduler.active_count else POLL_SECONDS
+                stopping.wait(wait_seconds)
     finally:
         _worker_stopping = True
         stopping.set()
+        scheduler.shutdown()
+        review_metrics.active_jobs(0, scheduler.capacity)
         notification_thread.join(timeout=5)
         health.shutdown()
         logger.info("Claim-review worker stopped", extra={"lease_owner": owner})

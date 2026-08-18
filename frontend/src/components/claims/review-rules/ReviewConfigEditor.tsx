@@ -1,13 +1,5 @@
-/** Editor for one claim type's AI review rule setup.
- *
- * Opens as a sheet with a local draft: field mappings (claim ↔ document pairs
- * with match mode + vision re-check), AI business rules (severity-graded —
- * only a CRITICAL failure can flag a claim), and the required-documents
- * override (empty keeps the automatic derivation from the claim type).
- * Nothing persists until Save; the prompt preview renders the DRAFT.
- */
 import { useEffect, useState } from "react";
-import { Eye, Loader2, Plus, Trash2, X } from "lucide-react";
+import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCreateClaimReviewConfig,
@@ -20,10 +12,10 @@ import {
   type ReviewSeverity,
 } from "@/api/claims";
 import { Button } from "@/components/ui/button";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { SectionLabel } from "@/components/ui/section-label";
 import {
   Sheet,
   SheetBody,
@@ -34,40 +26,24 @@ import {
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { InfoHint } from "@/components/ui/tooltip";
-import { formatError } from "@/lib/errors";
-
-/** A titled block of the editor. One heading tier, one spacing rhythm. */
-function EditorSection({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-1">
-        <SectionLabel as="h3">{title}</SectionLabel>
-        <InfoHint>{hint}</InfoHint>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-export interface EditorTarget {
-  /** null = creating the claim type's first custom setup. */
-  configId: string | null;
-  draft: ClaimReviewConfigInput;
-}
-
+import { formatError, isStaleConfigurationError } from "@/lib/errors";
+import { ReviewConfigEditorSection as EditorSection } from "./ReviewConfigEditorSection";
+import { ReviewPromptPreview } from "./ReviewPromptPreview";
+import {
+  MAX_AI_RULES,
+  MAX_FIELD_MAPS,
+  MAX_REQUIRED_DOCUMENTS,
+  prepareReviewConfigDraft,
+  type EditorTarget,
+} from "./reviewConfigDraft";
+export type { EditorTarget } from "./reviewConfigDraft";
 export function ReviewConfigEditor({
   target,
+  portalFields,
   onClose,
 }: {
   target: EditorTarget | null;
+  portalFields: string[];
   onClose: () => void;
 }) {
   const create = useCreateClaimReviewConfig();
@@ -76,15 +52,21 @@ export function ReviewConfigEditor({
   const [draft, setDraft] = useState<ClaimReviewConfigInput | null>(null);
   const [promptText, setPromptText] = useState<string | null>(null);
   const [reqDocDraft, setReqDocDraft] = useState("");
-
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   useEffect(() => {
     setDraft(target ? target.draft : null);
     setPromptText(null);
     setReqDocDraft("");
+    setConfirmDiscard(false);
   }, [target]);
-
   if (!target || !draft) return null;
   const saving = create.isPending || update.isPending;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(target.draft);
+  const requestClose = () => {
+    if (saving) return;
+    if (dirty) setConfirmDiscard(true);
+    else onClose();
+  };
 
   const patch = (p: Partial<ClaimReviewConfigInput>) => {
     setDraft({ ...draft, ...p });
@@ -100,26 +82,43 @@ export function ReviewConfigEditor({
     });
 
   const save = () => {
-    const maps = draft.field_maps.filter(
-      (m) => m.portal_field.trim() && m.document_field.trim(),
-    );
-    if (maps.length === 0) {
-      toast.error("Add at least one field mapping.");
+    const prepared = prepareReviewConfigDraft(draft);
+    if (!prepared.ok) {
+      toast.error(prepared.error);
       return;
     }
-    const body: ClaimReviewConfigInput = {
-      ...draft,
-      field_maps: maps,
-      ai_rules: draft.ai_rules.filter((r) => r.rule.trim()),
-      required_documents: draft.required_documents.filter((d) => d.trim()),
+    const done = {
+      onSuccess: onClose,
+      onError: (error: unknown) => {
+        toast.error(formatError(error));
+        if (isStaleConfigurationError(error)) onClose();
+      },
     };
-    const done = { onSuccess: onClose, onError: (e: unknown) => toast.error(formatError(e)) };
-    if (target.configId) update.mutate({ id: target.configId, ...body }, done);
-    else create.mutate(body, done);
+    if (target.configId) {
+      if (!target.expectedUpdatedAt) {
+        toast.error("Reload this setup before saving it.");
+        return;
+      }
+      update.mutate(
+        {
+          id: target.configId,
+          expected_updated_at: target.expectedUpdatedAt,
+          ...prepared.body,
+        },
+        done,
+      );
+    } else {
+      create.mutate(prepared.body, done);
+    }
   };
 
   const showPreview = () => {
-    preview.mutate(draft, {
+    const prepared = prepareReviewConfigDraft(draft);
+    if (!prepared.ok) {
+      toast.error(prepared.error);
+      return;
+    }
+    preview.mutate(prepared.body, {
       onSuccess: (r) => setPromptText(r.prompt),
       onError: (e) => toast.error(formatError(e)),
     });
@@ -128,6 +127,10 @@ export function ReviewConfigEditor({
   const addReqDoc = () => {
     const v = reqDocDraft.trim();
     if (!v) return;
+    if (draft.required_documents.length >= MAX_REQUIRED_DOCUMENTS) {
+      toast.error(`Add at most ${MAX_REQUIRED_DOCUMENTS} required documents.`);
+      return;
+    }
     if (!draft.required_documents.some((d) => d.toLowerCase() === v.toLowerCase())) {
       patch({ required_documents: [...draft.required_documents, v] });
     }
@@ -135,14 +138,13 @@ export function ReviewConfigEditor({
   };
 
   return (
-    <Sheet open onOpenChange={(open) => !open && onClose()}>
+    <>
+    <Sheet open onOpenChange={(open) => !open && requestClose()}>
       <SheetContent className="sm:max-w-2xl">
         <SheetHeader>
           <SheetTitle>{draft.display_label} — review rules</SheetTitle>
         </SheetHeader>
         <SheetBody className="space-y-7">
-          {/* The master switch governs everything below it, so it sits in its
-              own banded row rather than reading as the first item of the list. */}
           <label className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3.5 py-3 text-sm font-medium text-foreground">
             <Switch
               checked={draft.enabled}
@@ -155,7 +157,6 @@ export function ReviewConfigEditor({
             </InfoHint>
           </label>
 
-          {/* Field mappings */}
           <EditorSection
             title="Field mappings"
             hint={
@@ -169,10 +170,6 @@ export function ReviewConfigEditor({
               </>
             }
           >
-            {/* Each row is two fixed lines — the pairing, then its settings —
-                so the controls stay column-aligned down the list. Wrapping
-                them into one flex line left every row ragged and moved the
-                delete control to a different place on each. */}
             <div className="space-y-2">
               {draft.field_maps.map((m, i) => (
                 <div
@@ -180,19 +177,29 @@ export function ReviewConfigEditor({
                   className="space-y-2 rounded-md border border-border bg-muted/30 p-2.5"
                 >
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2">
-                    <Input
+                    <NativeSelect
                       value={m.portal_field}
-                      placeholder="Claim field (e.g. amount_claimed)"
                       className="h-8 bg-card text-xs"
                       aria-label="Claim field"
                       onChange={(e) => patchMap(i, { portal_field: e.target.value })}
-                    />
+                    >
+                      <option value="">Select claim field</option>
+                      {m.portal_field && !portalFields.includes(m.portal_field) && (
+                        <option value={m.portal_field}>{m.portal_field} (unsupported)</option>
+                      )}
+                      {portalFields.map((field) => (
+                        <option key={field} value={field}>
+                          {field.replaceAll("_", " ")}
+                        </option>
+                      ))}
+                    </NativeSelect>
                     <span aria-hidden className="text-sm text-muted-foreground">
                       ↔
                     </span>
                     <Input
                       value={m.document_field}
                       placeholder="Document field (e.g. Total Amount)"
+                      maxLength={128}
                       className="h-8 bg-card text-xs"
                       aria-label="Document field"
                       onChange={(e) => patchMap(i, { document_field: e.target.value })}
@@ -272,6 +279,7 @@ export function ReviewConfigEditor({
               type="button"
               variant="outline"
               size="sm"
+              disabled={draft.field_maps.length >= MAX_FIELD_MAPS}
               onClick={() =>
                 patch({
                   field_maps: [
@@ -292,7 +300,6 @@ export function ReviewConfigEditor({
             </Button>
           </EditorSection>
 
-          {/* AI business rules */}
           <EditorSection
             title="Business rules"
             hint={
@@ -310,11 +317,10 @@ export function ReviewConfigEditor({
                   className="space-y-2 rounded-md border border-border bg-muted/30 p-2.5"
                 >
                   <div className="flex items-start gap-2">
-                    {/* rows=3: at two rows the seeded rules overflowed into an
-                        inner scrollbar, so a rule had to be scrolled to read. */}
                     <textarea
                       value={r.rule}
                       rows={3}
+                      maxLength={2000}
                       aria-label="Rule"
                       placeholder="e.g. The outstanding balance on the final bill must be $0."
                       className="flex-1 resize-y rounded-md border border-input bg-card p-2 text-xs leading-relaxed text-foreground shadow-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
@@ -331,14 +337,13 @@ export function ReviewConfigEditor({
                       <Trash2 className="size-3.5" />
                     </button>
                   </div>
-                  {/* The severity select states its own consequence, so it
-                      carries no companion badge repeating the same word. */}
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-0.5">
                     <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       Category
                       <Input
                         value={r.category}
                         placeholder="general"
+                        maxLength={64}
                         className="h-7 w-36 bg-card text-xs"
                         onChange={(e) => patchRule(i, { category: e.target.value })}
                       />
@@ -362,10 +367,7 @@ export function ReviewConfigEditor({
               ))}
             </div>
             {draft.ai_rules.length === 0 && (
-              // A setup with no rules is legitimate (field comparisons still
-              // run) but it removes the built-in fraud checks for this claim
-              // type — never let that pass unnoticed. `warn` is the token; the
-              // former `warning` classes named no token and rendered unstyled.
+              // Empty rules disable the built-in fraud checks for this claim type.
               <p className="rounded-md border border-warn/40 bg-warn-soft p-2.5 text-xs text-warn">
                 No business rules — this claim type's reviews will only compare
                 fields. The built-in checks (proof of treatment, patient
@@ -377,6 +379,7 @@ export function ReviewConfigEditor({
               type="button"
               variant="outline"
               size="sm"
+              disabled={draft.ai_rules.length >= MAX_AI_RULES}
               onClick={() =>
                 patch({
                   ai_rules: [
@@ -391,7 +394,6 @@ export function ReviewConfigEditor({
             </Button>
           </EditorSection>
 
-          {/* Required documents override */}
           <EditorSection
             title="Additional required documents"
             hint={
@@ -407,13 +409,13 @@ export function ReviewConfigEditor({
               {draft.required_documents.map((d, i) => (
                 <span
                   key={`${d}-${i}`}
-                  className="inline-flex h-7 items-center gap-0.5 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
+                  className="inline-flex h-8 items-center gap-0.5 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
                 >
                   {d}
                   <button
                     type="button"
                     aria-label={`Remove ${d}`}
-                    className="grid size-5 place-items-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-error"
+                    className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-error"
                     onClick={() =>
                       patch({
                         required_documents: draft.required_documents.filter(
@@ -429,7 +431,9 @@ export function ReviewConfigEditor({
               <Input
                 value={reqDocDraft}
                 placeholder="e.g. receipt or tax invoice"
-                className="h-7 w-56 text-xs"
+                maxLength={200}
+                aria-label="Required document name"
+                className="h-8 w-56 text-xs"
                 onChange={(e) => setReqDocDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
@@ -443,8 +447,11 @@ export function ReviewConfigEditor({
                 variant="ghost"
                 size="sm"
                 aria-label="Add required document"
-                className="size-7 shrink-0 p-0"
-                disabled={!reqDocDraft.trim()}
+                className="size-8 shrink-0 p-0"
+                disabled={
+                  !reqDocDraft.trim() ||
+                  draft.required_documents.length >= MAX_REQUIRED_DOCUMENTS
+                }
                 onClick={addReqDoc}
               >
                 <Plus className="size-3.5" />
@@ -457,35 +464,15 @@ export function ReviewConfigEditor({
             </p>
           </EditorSection>
 
-          {/* Prompt preview */}
-          <section className="space-y-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={preview.isPending}
-              onClick={showPreview}
-            >
-              {preview.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Eye className="size-3.5" />
-              )}
-              <span className="ml-1.5">Preview AI prompt</span>
-            </Button>
-            {promptText && (
-              <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted p-3 text-2xs leading-relaxed text-foreground whitespace-pre-wrap">
-                {promptText}
-              </pre>
-            )}
-          </section>
+          <ReviewPromptPreview
+            prompt={promptText}
+            pending={preview.isPending}
+            onPreview={showPreview}
+          />
         </SheetBody>
 
-        {/* Pinned: the setup runs long enough that an inline save sat several
-            screens below the fold, so the only way to commit an edit was to
-            scroll past every rule. */}
         <SheetFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" disabled={saving} onClick={requestClose}>
             Cancel
           </Button>
           <Button type="button" disabled={saving} onClick={save}>
@@ -495,5 +482,15 @@ export function ReviewConfigEditor({
         </SheetFooter>
       </SheetContent>
     </Sheet>
+    <AlertDialog
+      open={confirmDiscard}
+      onOpenChange={setConfirmDiscard}
+      title="Discard unsaved rule changes?"
+      description="Your edits to this claim type have not been saved."
+      confirmLabel="Discard changes"
+      confirmVariant="destructive"
+      onConfirm={onClose}
+    />
+    </>
   );
 }

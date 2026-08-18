@@ -1,0 +1,55 @@
+{
+  "dataset_sha256": "a1c89e0475d500fa8a5d7a6380fecf1eaf8bfaae1a91ab068786c2d570426976",
+  "flows": {
+    "intake": {
+      "by_document_type": {
+        "discharge summary": 0.76,
+        "receipt": 0.62,
+        "tax invoice": 0.69
+      },
+      "by_model": {
+        "gemini-3.5-flash": 0.73
+      },
+      "by_model_document_type": {
+        "gemini-3.5-flash|discharge summary": 0.76,
+        "gemini-3.5-flash|receipt": 0.62,
+        "gemini-3.5-flash|tax invoice": 0.69
+      },
+      "default": 0.73,
+      "metrics": {
+        "accuracy": 0.625,
+        "auto_accept_coverage": 0.5417,
+        "false_accept_rate": 0.0,
+        "samples": 24,
+        "threshold": 0.73
+      }
+    },
+    "review": {
+      "by_document_type": {
+        "gp": 0.71,
+        "sp": 0.7
+      },
+      "by_model": {
+        "gemini-3.5-flash": 0.7
+      },
+      "by_model_document_type": {
+        "gemini-3.5-flash|gp": 0.71,
+        "gemini-3.5-flash|sp": 0.7
+      },
+      "default": 0.7,
+      "metrics": {
+        "accuracy": 0.625,
+        "auto_accept_coverage": 0.625,
+        "false_accept_rate": 0.0,
+        "samples": 16,
+        "threshold": 0.7
+      }
+    }
+  },
+  "generated_at": "2026-08-18T09:07:12.460245+08:00",
+  "policy": {
+    "max_false_accept_rate": 0.05,
+    "min_scope_samples": 5
+  },
+  "schema_version": 1
+}

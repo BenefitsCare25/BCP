@@ -1124,6 +1124,31 @@ class ClaimDocKeyField(BaseModel):
     keywords: list[str] = Field(default_factory=list, max_length=16)
     optional: bool = False
 
+    @field_validator("name")
+    @classmethod
+    def _clean_name(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("name must not be blank")
+        return cleaned
+
+    @field_validator("keywords")
+    @classmethod
+    def _clean_keywords(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = " ".join(value.split())
+            if not cleaned:
+                continue
+            if len(cleaned) > 64:
+                raise ValueError("keywords must be 64 characters or fewer")
+            key = cleaned.casefold()
+            if key not in seen:
+                seen.add(key)
+                out.append(cleaned)
+        return out
+
 
 class ClaimDocTypeIn(BaseModel):
     display: str = Field(min_length=1, max_length=128)
@@ -1131,6 +1156,39 @@ class ClaimDocTypeIn(BaseModel):
     key_fields: list[ClaimDocKeyField] = Field(default_factory=list, max_length=32)
     sector: str | None = Field(default=None, pattern="^(govt|private)$")
     slot_key: str | None = Field(default=None, max_length=64)
+
+    @field_validator("display")
+    @classmethod
+    def _clean_display(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("display must not be blank")
+        return cleaned
+
+    @field_validator("aliases")
+    @classmethod
+    def _validate_aliases(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = " ".join(value.split())
+            if not cleaned:
+                continue
+            if len(cleaned) > 128:
+                raise ValueError("aliases must be 128 characters or fewer")
+            key = cleaned.casefold()
+            if key not in seen:
+                seen.add(key)
+                out.append(cleaned)
+        return out
+
+
+class ClaimDocTypeUpdateIn(ClaimDocTypeIn):
+    expected_updated_at: datetime | None = None
+
+
+class ResetClaimDocTypesIn(BaseModel):
+    expected_versions: dict[str, datetime] = Field(default_factory=dict, max_length=100)
 
 
 class ClaimDocTypeOut(BaseModel):
@@ -1144,6 +1202,7 @@ class ClaimDocTypeOut(BaseModel):
     # True for a row seeded from the in-code defaults (key match) — the UI
     # labels these; they're still fully editable.
     is_default: bool = False
+    updated_at: datetime | None = None
 
 
 class DiagnosisOut(BaseModel):
@@ -1160,7 +1219,7 @@ class ReviewFieldMapModel(BaseModel):
     portal_field: str = Field(min_length=1, max_length=64)
     document_field: str = Field(min_length=1, max_length=128)
     mode: Literal["fuzzy", "exact", "numeric"] = "fuzzy"
-    tolerance: float | None = Field(default=None, ge=0)
+    tolerance: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     # Spend an extra AI vision pass on this field when the text comparison
     # disagrees. Purely a cost/accuracy control.
     verify_with_vision: bool = False
@@ -1168,6 +1227,14 @@ class ReviewFieldMapModel(BaseModel):
     # it. Independent of the vision flag on purpose — turning off a vision
     # re-check must never switch off the unsubstantiated-value guard.
     require_evidence: bool = False
+
+    @field_validator("portal_field", "document_field")
+    @classmethod
+    def _clean_field_name(cls, value: str, info: Any) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return cleaned
 
 
 class ReviewAIRuleModel(BaseModel):
@@ -1178,6 +1245,40 @@ class ReviewAIRuleModel(BaseModel):
     rule: str = Field(min_length=1, max_length=2000)
     category: str = Field(default="general", min_length=1, max_length=64)
     severity: Literal["critical", "warning", "info"] = "critical"
+
+    @field_validator("rule", "category")
+    @classmethod
+    def _clean_rule_text(cls, value: str, info: Any) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return cleaned
+
+
+# Exact keys available in the immutable claim-form snapshot plus the identity
+# context added by the review pipeline. Serving this list to the editor keeps
+# the UI and write-side validation on one backend-owned vocabulary.
+CLAIM_REVIEW_PORTAL_FIELDS = (
+    "amount_claimed",
+    "benefit_key",
+    "claim_kind",
+    "claim_type",
+    "claimant_is_dependant",
+    "claimant_name",
+    "claimant_relationship",
+    "currency",
+    "diagnosis",
+    "doctor_name",
+    "flex_category_name",
+    "incurred_date",
+    "invoice_number",
+    "policyholder_name",
+    "product_code",
+    "provider_name",
+    "referral_not_applicable",
+    "sub_type",
+    "visit_type",
+)
 
 
 class ClaimReviewConfigIn(BaseModel):
@@ -1203,6 +1304,49 @@ class ClaimReviewConfigIn(BaseModel):
             raise ValueError("must not be blank")
         return cleaned
 
+    @field_validator("required_documents")
+    @classmethod
+    def _clean_required_documents(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = " ".join(value.split())
+            if not cleaned:
+                continue
+            if len(cleaned) > 200:
+                raise ValueError("required document names must be 200 characters or fewer")
+            key = cleaned.casefold()
+            if key not in seen:
+                seen.add(key)
+                out.append(cleaned)
+        return out
+
+    @model_validator(mode="after")
+    def _validate_review_fields(self) -> ClaimReviewConfigIn:
+        allowed = set(CLAIM_REVIEW_PORTAL_FIELDS)
+        fields = [mapping.portal_field.strip() for mapping in self.field_maps]
+        unknown = sorted({field for field in fields if field not in allowed})
+        if unknown:
+            raise ValueError(
+                "unknown claim field mapping: " + ", ".join(unknown)
+            )
+        folded = [field.casefold() for field in fields]
+        duplicates = sorted(
+            {field for field in folded if folded.count(field) > 1}
+        )
+        if duplicates:
+            raise ValueError(
+                "each claim field can be mapped only once: " + ", ".join(duplicates)
+            )
+        rule_ids = [rule.id for rule in self.ai_rules if rule.id]
+        if len(rule_ids) != len(set(rule_ids)):
+            raise ValueError("business rule ids must be unique")
+        return self
+
+
+class ClaimReviewConfigUpdateIn(ClaimReviewConfigIn):
+    expected_updated_at: datetime | None = None
+
 
 class ClaimReviewConfigOut(BaseModel):
     """Deliberately NOT a subclass of ``ClaimReviewConfigIn``.
@@ -1225,6 +1369,7 @@ class ClaimReviewConfigOut(BaseModel):
     field_maps: list[ReviewFieldMapModel] = Field(default_factory=list)
     ai_rules: list[ReviewAIRuleModel] = Field(default_factory=list)
     required_documents: list[str] = Field(default_factory=list)
+    updated_at: datetime
 
 
 class ReviewDefaultConfigOut(BaseModel):
@@ -1250,6 +1395,7 @@ class ReviewClaimTypeOut(BaseModel):
 class ReviewScopeOptionsOut(BaseModel):
     claim_types: list[ReviewClaimTypeOut] = Field(default_factory=list)
     default_config: ReviewDefaultConfigOut
+    portal_fields: list[str] = Field(default_factory=list)
     # False when NO benefit year is flagged current. The vocabulary is read from
     # that year alone, so this is the difference between "this company has
     # nothing claimable configured" and "the year holding the products was never
@@ -1290,6 +1436,7 @@ class ImportSourceCompanyOut(BaseModel):
 class ImportReviewConfigsIn(BaseModel):
     source_client_id: str = Field(min_length=1, max_length=36)
     config_ids: list[str] = Field(min_length=1, max_length=50)
+    target_versions: dict[str, datetime] = Field(default_factory=dict, max_length=50)
 
 
 class ImportReviewConfigsOut(BaseModel):

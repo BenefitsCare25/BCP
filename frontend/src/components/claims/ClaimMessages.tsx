@@ -49,6 +49,7 @@ export function ClaimMessages({ claimId }: { claimId: string }) {
       messages={messages.data}
       loading={messages.isLoading}
       error={messages.isError}
+      onRetry={() => void messages.refetch()}
       sending={send.isPending}
       emptyText="No messages yet. Submitting and deciding a claim posts one automatically."
       disabledReason={

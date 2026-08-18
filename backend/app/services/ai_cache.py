@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from typing import Any, Protocol
 
 from cachetools import TTLCache
@@ -34,6 +33,7 @@ def make_key(prompt_version: str, model: str, payload: dict[str, Any]) -> str:
 class AICache(Protocol):
     def get(self, key: str) -> dict[str, Any] | None: ...
     def set(self, key: str, value: dict[str, Any]) -> None: ...
+    def ready(self) -> bool: ...
     @property
     def kind(self) -> str: ...
 
@@ -49,6 +49,9 @@ class InMemoryAICache:
 
     def set(self, key: str, value: dict[str, Any]) -> None:
         self._cache[key] = value
+
+    def ready(self) -> bool:
+        return True
 
     @property
     def kind(self) -> str:
@@ -145,6 +148,17 @@ class RedisAICache:
             self._mark_degraded()
             self._fallback.set(key, value)
 
+    def ready(self) -> bool:
+        try:
+            self._redis.ping()
+        except Exception:
+            self._mark_degraded()
+            return False
+        if self._degraded:
+            self._degraded = False
+            logger.info("Redis readiness probe recovered the shared AI cache.")
+        return True
+
     @property
     def kind(self) -> str:
         return "redis-degraded" if self._degraded else "redis"
@@ -156,7 +170,9 @@ _cache_singleton: AICache | None = None
 def get_cache() -> AICache:
     global _cache_singleton
     if _cache_singleton is None:
-        url = os.environ.get("INSPRO_REDIS_URL", "").strip()
+        from app.core.settings import get_settings
+
+        url = get_settings().redis_url
         _cache_singleton = RedisAICache(url) if url else InMemoryAICache()
         logger.info("AI cache initialised (%s)", _cache_singleton.kind)
     return _cache_singleton

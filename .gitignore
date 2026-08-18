@@ -46,6 +46,8 @@ htmlcov/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
 *.tsbuildinfo
 
 # ── Editor / OS ────────────────────────────────────────────────────────────
@@ -59,6 +61,7 @@ Thumbs.db
 *.zip
 backend.zip
 frontend.zip
+tmp/
 
 # Retained document storage (claim receipts, dependant proofs) — PII
 backend/var/

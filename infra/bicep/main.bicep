@@ -11,7 +11,7 @@
 //                  containerImage=<acr>.azurecr.io/inspro-api:<sha>
 //
 // Resources provisioned (Singapore region):
-// - App Service Plan + Linux Web App (container, with prod 'staging' slot)
+// - App Service Plan + Linux API and claim-review worker apps (containers)
 // - Azure Database for PostgreSQL Flexible Server
 // - Azure Cache for Redis
 // - Key Vault (secrets read by App Service managed identity at runtime)
@@ -110,6 +110,26 @@ param dbPoolSize int = 3
 
 @description('SQLAlchemy overflow connections per worker.')
 param dbMaxOverflow int = 2
+
+@minValue(1)
+@maxValue(16)
+@description('Concurrent durable claim reviews in the dedicated worker process.')
+param reviewWorkerConcurrency int = 1
+
+@minValue(1)
+@maxValue(16)
+@description('Hard concurrent claim-review cap per company. Must not exceed reviewWorkerConcurrency.')
+param reviewWorkerMaxConcurrentPerClient int = 1
+
+@minValue(1)
+@maxValue(64)
+@description('SQLAlchemy pool size for the dedicated claim-review worker process.')
+param reviewWorkerDbPoolSize int = 4
+
+@minValue(0)
+@maxValue(64)
+@description('SQLAlchemy overflow connections for the dedicated claim-review worker process.')
+param reviewWorkerDbMaxOverflow int = 2
 
 @description('Integrate the web app with the VNet so it reaches Postgres over the private endpoint. Setting this to false stops NEW deployments wiring the subnet, but does not tear down existing integration — for a rollback run `az webapp vnet-integration remove` as well, which reverts the app to the public path.')
 param enableVnetIntegration bool = true
@@ -407,10 +427,6 @@ var commonAppSettings = [
   // the SPA sends X-Inspro-Tenant-Slug instead — see app/core/tenancy_host.py.
   { name: 'INSPRO_TENANT_MODE', value: tenantMode }
   { name: 'INSPRO_BASE_DOMAIN', value: baseDomain }
-  // Runtime sizing. WEB_CONCURRENCY also divides the AI concurrency limit and
-  // multiplies the DB pool — change it and the DB tier together.
-  { name: 'INSPRO_DB_POOL_SIZE', value: string(dbPoolSize) }
-  { name: 'INSPRO_DB_MAX_OVERFLOW', value: string(dbMaxOverflow) }
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
@@ -438,6 +454,9 @@ var redisAppSettings = deployRedis ? [
 var webAppSettings = concat(commonAppSettings, redisAppSettings, [
   { name: 'WEBSITES_PORT', value: '8000' }
   { name: 'WEB_CONCURRENCY', value: string(webConcurrency) }
+  // The API pool is per Gunicorn process; change it with WEB_CONCURRENCY.
+  { name: 'INSPRO_DB_POOL_SIZE', value: string(dbPoolSize) }
+  { name: 'INSPRO_DB_MAX_OVERFLOW', value: string(dbMaxOverflow) }
   { name: 'OTEL_SERVICE_NAME', value: '${prefix}-api' }
 ])
 
@@ -490,6 +509,10 @@ var workerAppSettings = concat(commonAppSettings, redisAppSettings, [
   { name: 'WEBSITES_PORT', value: '8081' }
   { name: 'PORT', value: '8081' }
   { name: 'WEB_CONCURRENCY', value: '1' }
+  { name: 'INSPRO_DB_POOL_SIZE', value: string(reviewWorkerDbPoolSize) }
+  { name: 'INSPRO_DB_MAX_OVERFLOW', value: string(reviewWorkerDbMaxOverflow) }
+  { name: 'INSPRO_REVIEW_WORKER_CONCURRENCY', value: string(reviewWorkerConcurrency) }
+  { name: 'INSPRO_REVIEW_MAX_CONCURRENT_PER_CLIENT', value: string(reviewWorkerMaxConcurrentPerClient) }
   { name: 'OTEL_SERVICE_NAME', value: '${prefix}-claim-review-worker' }
 ])
 

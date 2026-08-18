@@ -56,6 +56,10 @@ export function ImportRulesDialog({
     () => new Set((own.data ?? []).map((c) => c.key)),
     [own.data],
   );
+  const ownByKey = useMemo(
+    () => new Map((own.data ?? []).map((config) => [config.key, config])),
+    [own.data],
+  );
 
   const close = (next: boolean) => {
     onOpenChange(next);
@@ -74,8 +78,19 @@ export function ImportRulesDialog({
 
   const runImport = () => {
     if (!sourceId || picked.size === 0) return;
+    const selected = (source.data ?? []).filter((config) => picked.has(config.id));
+    const targetVersions = Object.fromEntries(
+      selected.flatMap((config) => {
+        const current = ownByKey.get(config.key);
+        return current ? [[config.key, current.updated_at]] : [];
+      }),
+    );
     importConfigs.mutate(
-      { source_client_id: sourceId, config_ids: [...picked] },
+      {
+        source_client_id: sourceId,
+        config_ids: [...picked],
+        target_versions: targetVersions,
+      },
       {
         onSuccess: (r) => {
           toast.success(
