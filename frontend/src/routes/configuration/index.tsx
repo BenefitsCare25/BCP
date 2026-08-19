@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearch } from "@tanstack/react-router";
+import { useBlocker, useSearch } from "@tanstack/react-router";
 import {
   useAuditLog,
   useCategoriesGrouped,
   useEmployeeAttributes,
   usePolicyYears,
+  useProductSetups,
+  useSetupProducts,
 } from "@/api/hooks";
+import { useRegistry } from "@/api/registry";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -32,7 +35,12 @@ import { ViewingYearSelect } from "@/components/configuration/ViewingYearSelect"
 import { cn } from "@/lib/cn";
 import { isPastPolicyPeriod } from "@/lib/policy-year";
 import type { Category, InsuranceLine } from "@/types";
-import { INSURANCE_LINES, LINE_LABELS } from "@/lib/insuranceLines";
+import {
+  INSURANCE_LINES,
+  LINE_LABELS,
+  isProductAdded,
+  lineForCode,
+} from "@/lib/insuranceLines";
 
 export function ConfigurationPage() {
   const { data: policyYears = [], isLoading: yearsLoading } = usePolicyYears();
@@ -59,6 +67,11 @@ export function ConfigurationPage() {
   const { data: groups = [], isLoading } = useCategoriesGrouped(
     policyYearId ?? undefined,
   );
+  const { data: setupProducts = [] } = useSetupProducts(
+    policyYearId ?? undefined,
+  );
+  const { data: setups = [] } = useProductSetups(policyYearId ?? undefined);
+  const { data: registry } = useRegistry();
   const { data: schema = [] } = useEmployeeAttributes();
   const { data: audit } = useAuditLog();
   // Initial line tab is deep-linkable via ?tab= (e.g. the Reports Center "Flex
@@ -127,9 +140,36 @@ export function ConfigurationPage() {
     setTab(next);
   };
 
-  // Tab badge = number of products configured under each line (one group per
-  // product_code), not the total category count. Skip the "(unassigned)"
-  // pseudo-group — it holds categories not yet matched to a product.
+  const navigationBlocker = useBlocker({
+    shouldBlockFn: ({ current, next }) =>
+      Boolean(blockingEdit) &&
+      (current.pathname !== next.pathname ||
+        JSON.stringify(current.search) !== JSON.stringify(next.search)),
+    enableBeforeUnload: () => Boolean(blockingEdit),
+    disabled: !blockingEdit,
+    withResolver: true,
+  });
+
+  useEffect(() => {
+    if (navigationBlocker.status === "blocked") {
+      setLinePromptOpen(true);
+    }
+  }, [navigationBlocker.status]);
+
+  const closeSavePrompt = useCallback(() => {
+    if (navigationBlocker.status === "blocked") {
+      navigationBlocker.reset();
+    }
+    setLinePromptOpen(false);
+  }, [navigationBlocker]);
+
+  const draftCodes = useMemo(
+    () => new Set(setups.map((s) => s.product_code)),
+    [setups],
+  );
+
+  // Match LineTab's visible product list so badges do not count stale category
+  // groups from historical product rows or aliases that collapse to one tab.
   const countByLine = useMemo(() => {
     const c: Record<InsuranceLine, number> = {
       medical: 0,
@@ -137,12 +177,17 @@ export function ConfigurationPage() {
       life: 0,
       flex: 0,
     };
-    for (const g of groups) {
-      if (g.product_code === "(unassigned)") continue;
-      c[g.line] += 1;
+    const seen = new Set<string>();
+    for (const product of setupProducts) {
+      const code = product.code.trim().toUpperCase();
+      if (!code || seen.has(code) || !isProductAdded(product, draftCodes)) {
+        continue;
+      }
+      seen.add(code);
+      c[product.line ?? lineForCode(code, registry?.entries)] += 1;
     }
     return c;
-  }, [groups]);
+  }, [draftCodes, registry, setupProducts]);
 
   if (!policyYearId) {
     // While the year list is still loading, show a skeleton rather than the
@@ -304,7 +349,13 @@ export function ConfigurationPage() {
       />
       <AlertDialog
         open={linePromptOpen}
-        onOpenChange={setLinePromptOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setLinePromptOpen(true);
+            return;
+          }
+          closeSavePrompt();
+        }}
         title="Save current setup first"
         description={
           <span>
@@ -318,7 +369,7 @@ export function ConfigurationPage() {
         cancelLabel={null}
         confirmVariant="default"
         tone="info"
-        onConfirm={() => setLinePromptOpen(false)}
+        onConfirm={closeSavePrompt}
       />
     </div>
   );
