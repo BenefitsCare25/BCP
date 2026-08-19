@@ -12,7 +12,10 @@ from app.services.placement_slip_parser import (
     parse_placement_slip,
 )
 
-STM = Path(r"C:\Users\huien\inspro\reference\STMicroelectronics - Placement Slips 2026_workingfile (1).xls")
+STM = Path(
+    r"C:\Users\huien\inspro\reference\STMicroelectronics - Placement Slips "
+    r"2026_workingfile (1).xls"
+)
 
 
 def dump_raw_sheet(name: str, rows, max_rows=80, max_cols=16):
@@ -57,7 +60,10 @@ def main():
         print(f"PRODUCT: sheet={ps.sheet!r} code={ps.product_code!r}")
         print(f"  header: {ps.policy_header}")
         print(f"  categories={len(ps.categories)}  plans={len(ps.plans)}")
-        print(f"\n  CATEGORIES (cat | plan_code | insured | basis | SI | rate | annual | rate_basis):")
+        print(
+            "\n  CATEGORIES "
+            "(cat | plan_code | insured | basis | SI | rate | annual | rate_basis):"
+        )
         for c in ps.categories:
             print(
                 f"    row{c.source_row:>3}: {c.category[:40]!r:<42} "
@@ -67,7 +73,7 @@ def main():
             )
             if c.rate_tiers:
                 print(f"           tiers={c.rate_tiers}")
-        print(f"\n  PLANS (SOB):")
+        print("\n  PLANS (SOB):")
         for pl in ps.plans:
             print(f"    PLAN code={pl.code!r} name={pl.display_name!r} "
                   f"annual_limit={pl.annual_policy_limit!r} items={len(pl.items)}")
@@ -89,9 +95,12 @@ def main():
         if plan_codes and unmatched:
             print(f"  !! categories referencing plan codes with NO SOB plan: {sorted(unmatched)}")
         elif not plan_codes and cat_plan_codes:
-            print(f"  (no SOB plans on this product — categories carry plan codes {sorted(cat_plan_codes)})")
+            print(
+                "  (no SOB plans on this product — "
+                f"categories carry plan codes {sorted(cat_plan_codes)})"
+            )
         elif plan_codes and not unmatched:
-            print(f"  OK: every category plan_code maps to an SOB plan")
+            print("  OK: every category plan_code maps to an SOB plan")
 
 
 if __name__ == "__main__":
