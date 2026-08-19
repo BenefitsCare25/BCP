@@ -19,6 +19,7 @@ interface Props {
   onSelectCategory: (c: Category) => void;
   isEditing: boolean;
   onDone: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 export function ProductConfigurator({
@@ -28,6 +29,7 @@ export function ProductConfigurator({
   onSelectCategory,
   isEditing,
   onDone,
+  onDirtyChange,
 }: Props) {
   const { data: template, isLoading: loadingTpl } = useSetupTemplate(
     policyYearId,
@@ -94,6 +96,7 @@ export function ProductConfigurator({
         group={group}
         onEditRule={onSelectCategory}
         onConfirmed={onDone}
+        onDirtyChange={onDirtyChange}
       />
     </div>
   );

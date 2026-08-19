@@ -7,7 +7,7 @@
  * knowledge belongs only in `product_registry.py`: this is not product-type
  * knowledge. The registry serves `code`, `name` and `line`, and none of them
  * answers a member's question — `line` is one of only three values
- * (medical / life / flex), and `name` is the insurer's own wording
+ * (medical / general / life / flex), and `name` is the insurer's own wording
  * ("Group Clinical General Practitioner"). What follows is member-facing COPY,
  * which is a design artifact and belongs with the surface that speaks it.
  *

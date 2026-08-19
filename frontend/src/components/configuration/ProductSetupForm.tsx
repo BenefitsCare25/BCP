@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CircleCheck, Loader2, Save } from "lucide-react";
+import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -11,7 +11,6 @@ import {
   useFieldSuggestions,
   useMemberCounts,
   usePlans,
-  useSaveSetup,
 } from "@/api/hooks";
 import type {
   BasisOfCoverRow,
@@ -50,6 +49,7 @@ interface Props {
   // Opens the slim rule editor for a category.
   onEditRule: (c: Category) => void;
   onConfirmed?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 // Single-row tab labels per setup section.
@@ -252,6 +252,7 @@ export function ProductSetupForm({
   group,
   onEditRule,
   onConfirmed,
+  onDirtyChange,
 }: Props) {
   const [answers, setAnswers] = useState<SetupAnswers>(() =>
     buildAnswers(template, draft),
@@ -260,7 +261,6 @@ export function ProductSetupForm({
   // Which section tab is open. Local: the form no longer remounts on the first
   // save (parent keys on `code`), so this survives naturally.
   const [activeSection, setActiveSection] = useState<string | null>(null);
-  const save = useSaveSetup(policyYearId);
   const confirm = useConfirmSetup(policyYearId);
   const { data: suggestions } = useFieldSuggestions(policyYearId, template.code);
   const confirmInFlight = useRef(false);
@@ -396,23 +396,12 @@ export function ProductSetupForm({
       arrangements: { ...a.arrangements, [id]: !a.arrangements[id] },
     }));
 
-  // Persist the current answers. `silent` skips the success toast (used by the
-  // auto-save on tab switch). The saved snapshot is captured at call time so a
-  // later dirty-check compares against exactly what was sent.
-  const persist = (opts?: { silent?: boolean }) => {
-    const snapshot = JSON.stringify(answers);
-    save.mutate(
-      { code: template.code, answers, templateVersion: template.version },
-      {
-        onSuccess: () => {
-          savedSnapshot.current = snapshot;
-          if (!opts?.silent) toast.success("Draft saved");
-        },
-        onError: (e) => toast.error(formatError(e)),
-      },
-    );
-  };
-  const onSave = () => persist();
+  const isDirty = JSON.stringify(answers) !== savedSnapshot.current;
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
   const isConfirmed =
     draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
   const confirmLabel = isConfirmed ? "Update setup" : "Confirm setup";
@@ -425,6 +414,7 @@ export function ProductSetupForm({
         onSuccess: (r) => {
           setConfirmOpen(false);
           savedSnapshot.current = JSON.stringify(answers);
+          onDirtyChange?.(false);
           const planMsg = `${r.plans_created + r.plans_updated} plan(s)`;
           const catMsg =
             r.categories_created > 0
@@ -629,20 +619,15 @@ export function ProductSetupForm({
   const activeId =
     activeSection && sections.includes(activeSection) ? activeSection : sections[0];
 
-  // Switching tabs auto-saves the draft so edits are never lost on navigation —
-  // but only when the form is actually dirty and no save is already in flight,
-  // so merely browsing tabs doesn't create a draft or fire redundant saves.
   const switchSection = (next: string) => {
     if (next === activeId) return;
-    const dirty = JSON.stringify(answers) !== savedSnapshot.current;
-    if (dirty && !save.isPending) persist({ silent: true });
     setActiveSection(next);
   };
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Single-row section tabs. Switching tabs auto-saves the draft, and each
-          tab has its own Save draft — so edits are never lost on navigation. */}
+      {/* Single-row section tabs. Section navigation stays inside the current
+          edit session; leaving the product is guarded by the parent. */}
       <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted/40 p-1">
         {sections.map((id) => {
           const count =
@@ -681,14 +666,6 @@ export function ProductSetupForm({
           ) : null}
         </span>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={onSave} disabled={save.isPending}>
-            {save.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Save className="size-4" />
-            )}
-            Save draft
-          </Button>
           <Button
             onClick={() => setConfirmOpen(true)}
             disabled={selectedPlans.length === 0 || confirm.isPending}

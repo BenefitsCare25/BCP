@@ -44,11 +44,11 @@ _SNAPSHOT_CODE_PROFILE = {
 
 _SNAPSHOT_CODE_LINE = {
     "GHS": "medical", "GHS2": "medical", "GMM": "medical", "GMM2": "medical",
-    "SP": "medical", "GCGP": "medical", "GCSP": "medical", "OSI": "medical",
+    "SP": "medical", "GCGP": "medical", "GCSP": "medical", "OSI": "general",
     "GD": "medical", "DENTAL": "medical", "GOSP": "medical", "GOGP": "medical",
     "GP": "medical", "IMP": "medical", "MATERNITY": "medical",
-    "VISION": "medical", "WELLNESS": "medical", "GBT": "medical",
-    "WICA": "medical", "WICI": "medical", "GTL": "life", "GDD": "life",
+    "VISION": "medical", "WELLNESS": "medical", "GBT": "general",
+    "WICA": "general", "WICI": "general", "GTL": "life", "GDD": "life",
     "GCI": "life", "GDI": "life", "GTPD": "life", "GPA": "life",
 }
 
@@ -91,7 +91,7 @@ def test_infer_functions_still_resolve():
     assert infer_profile("wica") == "statutory"
     assert infer_profile("UNKNOWN") == "tiered_medical"
     assert infer_line("GPA") == "life"
-    assert infer_line("gbt") == "medical"
+    assert infer_line("gbt") == "general"
     assert infer_line("UNKNOWN") == "medical"
 
 

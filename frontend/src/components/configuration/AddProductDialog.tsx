@@ -52,6 +52,7 @@ const PARTICIPATION: { value: "standard" | "extended" | "eo_only"; label: string
 
 const DEFAULT_PROFILE: Record<InsuranceLine, string> = {
   medical: "tiered_medical",
+  general: "travel",
   life: "sum_assured",
   flex: "tiered_medical",
 };

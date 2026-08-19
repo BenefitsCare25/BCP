@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 ParticipationModelStr = Literal["standard", "extended", "eo_only"]
-InsuranceLineStr = Literal["medical", "life", "flex"]
+InsuranceLineStr = Literal["medical", "general", "life", "flex"]
 LayoutFamilyStr = Literal["si_based", "plan_tier", "travel", "named_person", "earnings"]
 
 
@@ -162,7 +162,7 @@ class ProductOut(_Base):
     participation_model: str
     has_dependants: bool
     is_outpatient: bool
-    # Broker-facing Medical / Life / Flex grouping (computed from code +
+    # Broker-facing Medical / General / Life / Flex grouping (computed from code +
     # product_metadata override; not a stored column).
     line: InsuranceLineStr = "medical"
     # Structural classification (computed from code + product_metadata
@@ -324,7 +324,7 @@ class ProductTermOut(BaseModel):
     # True when inheriting the policy year's span (no explicit dates stored —
     # the row may still exist for GST alone).
     is_default: bool
-    # Medical / Life / Flex line, so coverage rows scope to their tab.
+    # Medical / General / Life / Flex line, so coverage rows scope to their tab.
     line: InsuranceLineStr = "medical"
     # Tri-state GST opinion: None = inherit (flex-scheme default), True = gross,
     # False = explicit "no GST". Slip amounts are always GST-exclusive.
@@ -439,7 +439,7 @@ class CategoryGrouped(BaseModel):
     product_code: str
     product_display_name: str
     product_id: str | None
-    # Medical / Life / Flex line this product group belongs to (for tab routing).
+    # Medical / General / Life / Flex line this product group belongs to (for tab routing).
     line: InsuranceLineStr = "medical"
     categories: list[CategoryOut]
 

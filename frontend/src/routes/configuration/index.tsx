@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearch } from "@tanstack/react-router";
 import {
   useAuditLog,
@@ -15,6 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { SkeletonTable } from "@/components/ui/skeleton";
 import { BenefitYearPanel } from "@/components/configuration/BenefitYearPanel";
 import { CategoryEditPanel } from "@/components/configuration/CategoryEditPanel";
@@ -69,6 +70,13 @@ export function ConfigurationPage() {
       : "medical",
   );
   const [selected, setSelected] = useState<Category | null>(null);
+  const [blockingEdit, setBlockingEdit] = useState<{
+    line: InsuranceLine;
+    code: string;
+    name: string;
+    actionLabel: string;
+  } | null>(null);
+  const [linePromptOpen, setLinePromptOpen] = useState(false);
   // Switching the viewed year closes any open category editor — the panel edits
   // a category from the previously-viewed year and must not linger over another
   // year (or over a read-only past year, where the page is otherwise disabled).
@@ -82,6 +90,7 @@ export function ConfigurationPage() {
   const groupsByLine = useMemo(() => {
     const by: Record<InsuranceLine, typeof groups> = {
       medical: [],
+      general: [],
       life: [],
       flex: [],
     };
@@ -89,11 +98,45 @@ export function ConfigurationPage() {
     return by;
   }, [groups]);
 
+  const handleBlockingEditChange = useCallback(
+    (
+      editLine: InsuranceLine,
+      edit: { code: string; name: string; actionLabel: string } | null,
+    ) => {
+      setBlockingEdit((prev) => {
+        if (edit) {
+          return {
+            line: editLine,
+            code: edit.code,
+            name: edit.name,
+            actionLabel: edit.actionLabel,
+          };
+        }
+        return prev?.line === editLine ? null : prev;
+      });
+    },
+    [],
+  );
+
+  const switchLine = (next: InsuranceLine) => {
+    if (next === tab) return;
+    if (blockingEdit?.line === tab) {
+      setLinePromptOpen(true);
+      return;
+    }
+    setTab(next);
+  };
+
   // Tab badge = number of products configured under each line (one group per
   // product_code), not the total category count. Skip the "(unassigned)"
   // pseudo-group — it holds categories not yet matched to a product.
   const countByLine = useMemo(() => {
-    const c: Record<InsuranceLine, number> = { medical: 0, life: 0, flex: 0 };
+    const c: Record<InsuranceLine, number> = {
+      medical: 0,
+      general: 0,
+      life: 0,
+      flex: 0,
+    };
     for (const g of groups) {
       if (g.product_code === "(unassigned)") continue;
       c[g.line] += 1;
@@ -167,7 +210,7 @@ export function ConfigurationPage() {
         {isLoading ? (
           <SkeletonTable rows={8} columns={4} />
         ) : (
-          <Tabs value={tab} onValueChange={(v) => setTab(v as InsuranceLine)}>
+          <Tabs value={tab} onValueChange={(v) => switchLine(v as InsuranceLine)}>
             <div className="flex items-center justify-between gap-3">
               <TabsList>
                 {INSURANCE_LINES.map((line) => (
@@ -210,6 +253,7 @@ export function ConfigurationPage() {
                     groups={groupsByLine[line]}
                     onSelectCategory={setSelected}
                     yearSelector={yearSelector}
+                    onBlockingEditChange={handleBlockingEditChange}
                   />
                 )}
               </TabsContent>
@@ -257,6 +301,24 @@ export function ConfigurationPage() {
         category={selected}
         schema={schema}
         onClose={() => setSelected(null)}
+      />
+      <AlertDialog
+        open={linePromptOpen}
+        onOpenChange={setLinePromptOpen}
+        title="Save current setup first"
+        description={
+          <span>
+            <strong>{blockingEdit?.name ?? "This product"}</strong> has unsaved
+            setup changes. Use the{" "}
+            <strong>{blockingEdit?.actionLabel ?? "Confirm setup"}</strong>{" "}
+            button before switching product lines.
+          </span>
+        }
+        confirmLabel="Got it"
+        cancelLabel={null}
+        confirmVariant="default"
+        tone="info"
+        onConfirm={() => setLinePromptOpen(false)}
       />
     </div>
   );

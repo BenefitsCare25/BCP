@@ -43,7 +43,7 @@ class Product(Base, TimestampMixin):
 
     @property
     def line(self) -> InsuranceLine:
-        """Broker-facing Medical / Life / Flex line — a `product_metadata['line']`
+        """Broker-facing Medical / General / Life / Flex line — a `product_metadata['line']`
         override wins, else inferred from the code. Computed, not stored."""
         meta = self.product_metadata if isinstance(self.product_metadata, dict) else {}
         return infer_line(self.code, meta.get("line"))

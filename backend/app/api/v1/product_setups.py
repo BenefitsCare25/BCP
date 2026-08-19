@@ -205,7 +205,7 @@ class SetupProductSummary(BaseModel):
     display_name: str
     has_template_file: bool
     has_slip_data: bool
-    # Medical / Life / Flex line for tab routing.
+    # Medical / General / Life / Flex line for tab routing.
     line: InsuranceLineStr = "medical"
     # True when the client has its own catalog row for this code (i.e. the user
     # added it, or a slip created it) — vs a bare global recognition row. Drives
@@ -391,7 +391,7 @@ def get_product_registry(
             )
             for profile in _PROFILE_LABELS
         ],
-        lines=["medical", "life", "flex"],
+        lines=["medical", "general", "life", "flex"],
         layout_families=[
             "si_based", "plan_tier", "travel", "named_person", "earnings",
         ],

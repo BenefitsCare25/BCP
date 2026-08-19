@@ -10,7 +10,7 @@ interface AlertDialogProps {
   title: string;
   description: React.ReactNode;
   confirmLabel?: string;
-  cancelLabel?: string;
+  cancelLabel?: string | null;
   confirmVariant?: ButtonProps["variant"];
   /** Visual register of the prompt. Defaults to `danger` so existing
    * destructive call sites are unchanged; use `info` for a confirmation that
@@ -84,13 +84,15 @@ export function AlertDialog({
             </div>
           </div>
           <div className="px-6 py-4 border-t border-border bg-muted/40 flex gap-2 justify-end rounded-b-xl">
-            <Button
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={loading}
-            >
-              {cancelLabel}
-            </Button>
+            {cancelLabel && (
+              <Button
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                disabled={loading}
+              >
+                {cancelLabel}
+              </Button>
+            )}
             <Button
               variant={confirmVariant}
               onClick={onConfirm}

@@ -172,7 +172,7 @@ function ClassifyProduct({
   const updateProduct = useUpdateProduct();
 
   const profiles = registry?.profiles ?? [];
-  const lines = registry?.lines ?? ["medical", "life", "flex"];
+  const lines = registry?.lines ?? ["medical", "general", "life", "flex"];
   const saving = createProduct.isPending || updateProduct.isPending;
 
   const save = async () => {

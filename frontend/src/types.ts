@@ -14,9 +14,9 @@ export interface AttributeSchema {
   derivation_rule: Record<string, unknown> | null;
 }
 
-// Broker-facing line of business — drives the Medical / Life / Flex tabs.
+// Broker-facing line of business — drives the Medical / General / Life / Flex tabs.
 // Independent of form_profile (a product's structural shape).
-export type InsuranceLine = "medical" | "life" | "flex";
+export type InsuranceLine = "medical" | "general" | "life" | "flex";
 
 export interface Product {
   id: string;

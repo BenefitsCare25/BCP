@@ -1,4 +1,4 @@
-"""Product *insurance lines* — the broker-facing Medical / Life / Flex grouping.
+"""Product *insurance lines* — the broker-facing Medical / General / Life / Flex grouping.
 
 This is a **separate dimension** from ``form_profiles`` (which decides *form
 structure*). A product's structural profile and its insurance line are
@@ -21,7 +21,7 @@ from typing import Literal, cast
 
 from app.services import product_registry
 
-InsuranceLine = Literal["medical", "life", "flex"]
+InsuranceLine = Literal["medical", "general", "life", "flex"]
 
 # Unknown codes (and the unassigned category group) default to Medical — the
 # most common line. Revisit if life-shaped unknown codes start appearing.
@@ -41,6 +41,13 @@ def infer_line(code: str, override: str | None = None) -> InsuranceLine:
     else inferred from the code, else the default (Medical). An unrecognized
     override is ignored (falls through to inference) rather than mis-bucketing.
     """
-    if override in ("medical", "life", "flex"):
+    inferred = _CODE_LINE.get((code or "").strip().upper(), DEFAULT_LINE)
+    # Existing client product rows for GBT/OSI/WICA may still carry a stale
+    # metadata override from when those products lived under Medical. Known
+    # General Insurance products should follow the registry unless a non-medical
+    # override was deliberately chosen later.
+    if inferred == "general" and override == "medical":
+        return inferred
+    if override in ("medical", "general", "life", "flex"):
         return override  # type: ignore[return-value]
-    return _CODE_LINE.get((code or "").strip().upper(), DEFAULT_LINE)
+    return inferred

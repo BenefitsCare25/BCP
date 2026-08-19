@@ -1,4 +1,4 @@
-"""Insurance-line inference — the Medical / Life / Flex tab dimension.
+"""Insurance-line inference — the Medical / General / Life / Flex tab dimension.
 
 The line is an *independent* axis from the form profile: GPA is configured on
 the Life tab while keeping its accident-shaped form.
@@ -13,6 +13,10 @@ def test_infer_line_by_code() -> None:
     assert infer_line("GHS") == "medical"
     assert infer_line("GMM2") == "medical"
     assert infer_line("DENTAL") == "medical"
+    assert infer_line("GBT") == "general"
+    assert infer_line("OSI") == "general"
+    assert infer_line("WICA") == "general"
+    assert infer_line("WICI") == "general"
     assert infer_line("GTL") == "life"
     assert infer_line("GCI") == "life"
     assert infer_line("GTPD") == "life"
@@ -24,6 +28,7 @@ def test_infer_line_override() -> None:
     # A valid override wins over inference (custom product on a chosen tab).
     assert infer_line("GHS", override="flex") == "flex"
     assert infer_line("GTL", override="medical") == "medical"
+    assert infer_line("GBT", override="medical") == "general"
     # Garbage override is ignored, falling back to inference.
     assert infer_line("GTL", override="nonsense") == "life"
     assert infer_line("GHS", override=None) == "medical"

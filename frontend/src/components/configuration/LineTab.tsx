@@ -32,6 +32,10 @@ interface Props {
   // Benefit-year picker rendered beside the product title (single node — only
   // the active product card mounts, so it appears in one place at a time).
   yearSelector?: ReactNode;
+  onBlockingEditChange?: (
+    line: InsuranceLine,
+    edit: { code: string; name: string; actionLabel: string } | null,
+  ) => void;
 }
 
 export function LineTab({
@@ -40,6 +44,7 @@ export function LineTab({
   groups,
   onSelectCategory,
   yearSelector,
+  onBlockingEditChange,
 }: Props) {
   const [activeCode, setActiveCode] = useState("");
   // Codes created this session — shown optimistically until the refetch confirms
@@ -47,6 +52,8 @@ export function LineTab({
   const [justAdded, setJustAdded] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<SetupProductSummary | null>(null);
   const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [dirtyByCode, setDirtyByCode] = useState<Record<string, boolean>>({});
+  const [unsavedPromptOpen, setUnsavedPromptOpen] = useState(false);
 
   const { data: allSetupProducts = [] } = useSetupProducts(policyYearId);
   const { data: setups = [] } = useProductSetups(policyYearId);
@@ -89,6 +96,38 @@ export function LineTab({
   }, [groups]);
 
   const unassigned = groupByCode.get("(unassigned)");
+  const editingProduct = products.find((p) => p.code === editingCode) ?? null;
+  const hasUnsavedEdit =
+    Boolean(editingCode) && Boolean(editingCode && dirtyByCode[editingCode]);
+  const setupActionLabel = (code: string | null | undefined) =>
+    setups.some(
+      (s) =>
+        s.product_code.toUpperCase() === String(code ?? "").toUpperCase() &&
+        (s.status === "confirmed" || s.materialized_product_id),
+    )
+      ? "Update setup"
+      : "Confirm setup";
+
+  useEffect(() => {
+    onBlockingEditChange?.(
+      line,
+      hasUnsavedEdit && editingProduct
+        ? {
+            code: editingProduct.code,
+            name: editingProduct.display_name,
+            actionLabel: setupActionLabel(editingProduct.code),
+          }
+        : null,
+    );
+    return () => onBlockingEditChange?.(line, null);
+  }, [
+    dirtyByCode,
+    editingProduct,
+    hasUnsavedEdit,
+    line,
+    onBlockingEditChange,
+    setups,
+  ]);
 
   // Keep the active sub-tab valid as the product set changes. Depends on
   // `products` only (not `activeCode`): a freshly-added code set via the dialog
@@ -110,7 +149,38 @@ export function LineTab({
   const handleCreated = (codes: string[]) => {
     if (!codes.length) return;
     setJustAdded((prev) => [...new Set([...prev, ...codes])]);
+    if (hasUnsavedEdit) {
+      setUnsavedPromptOpen(true);
+      return;
+    }
     setActiveCode(codes[0]);
+  };
+
+  const requestProductTab = (code: string) => {
+    if (code === activeCode) return;
+    if (hasUnsavedEdit) {
+      setUnsavedPromptOpen(true);
+      return;
+    }
+    if (editingCode) closeEdit(editingCode);
+    setActiveCode(code);
+  };
+
+  const closeEdit = (code: string) => {
+    setEditingCode(null);
+    setDirtyByCode((prev) => ({ ...prev, [code]: false }));
+  };
+
+  const toggleEdit = (p: SetupProductSummary, isEditing: boolean) => {
+    if (isEditing) {
+      if (dirtyByCode[p.code]) {
+        setUnsavedPromptOpen(true);
+        return;
+      }
+      closeEdit(p.code);
+      return;
+    }
+    setEditingCode(p.code);
   };
 
   const doRemove = async (p: SetupProductSummary) => {
@@ -128,7 +198,7 @@ export function LineTab({
   return (
     <div className="space-y-5">
       {products.length > 0 ? (
-        <Tabs value={activeCode} onValueChange={setActiveCode}>
+        <Tabs value={activeCode} onValueChange={requestProductTab}>
           <div className="flex items-start justify-between gap-3">
             <TabsList className="flex-wrap h-auto">
               {products.map((p) => (
@@ -158,9 +228,7 @@ export function LineTab({
                         <Button
                           variant={isEditing ? "secondary" : "outline"}
                           size="sm"
-                          onClick={() =>
-                            setEditingCode(isEditing ? null : p.code)
-                          }
+                          onClick={() => toggleEdit(p, isEditing)}
                         >
                           {isEditing ? (
                             <X className="size-3.5" />
@@ -188,7 +256,13 @@ export function LineTab({
                       group={groupByCode.get(p.code)}
                       onSelectCategory={onSelectCategory}
                       isEditing={isEditing}
-                      onDone={() => setEditingCode(null)}
+                      onDone={() => closeEdit(p.code)}
+                      onDirtyChange={(dirty) =>
+                        setDirtyByCode((prev) => ({
+                          ...prev,
+                          [p.code]: dirty,
+                        }))
+                      }
                     />
                   </CardContent>
                 </Card>
@@ -242,6 +316,24 @@ export function LineTab({
         onConfirm={async () => {
           if (removeTarget) await doRemove(removeTarget);
         }}
+      />
+      <AlertDialog
+        open={unsavedPromptOpen}
+        onOpenChange={setUnsavedPromptOpen}
+        title="Save current setup first"
+        description={
+          <span>
+            <strong>{editingProduct?.display_name ?? "This product"}</strong>{" "}
+            has unsaved setup changes. Use the{" "}
+            <strong>{setupActionLabel(editingProduct?.code)}</strong>{" "}
+            button before leaving this product.
+          </span>
+        }
+        confirmLabel="Got it"
+        cancelLabel={null}
+        confirmVariant="default"
+        tone="info"
+        onConfirm={() => setUnsavedPromptOpen(false)}
       />
     </div>
   );
