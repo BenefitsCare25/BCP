@@ -11,6 +11,7 @@ per-employee figures, never the group sum-insured / total premium. When this vie
 is later split into an employee-facing statement, gate ``financials`` off there.
 """
 from __future__ import annotations
+
 from datetime import datetime
 from typing import Any
 
@@ -31,6 +32,9 @@ from app.schemas.api import (
     StatementAttribute,
     StatementEmployee,
 )
+from app.services.dependant_coverage import (
+    category_covers_dependants as _shared_category_covers_dependants,
+)
 from app.services.flex_membership import (
     classify_relationship,
     count_dependants,
@@ -38,9 +42,6 @@ from app.services.flex_membership import (
 )
 from app.services.flex_pricing_resolver import summarize_employee
 from app.services.flex_proration import proration_line
-from app.services.dependant_coverage import (
-    category_covers_dependants as _shared_category_covers_dependants,
-)
 from app.services.plan_hydration import basis_amount, hydrate_plans
 from app.services.roster_attributes import (
     DOB_KEYS,

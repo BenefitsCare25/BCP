@@ -20,8 +20,8 @@ Design choices that keep the form's invariants intact:
 """
 from __future__ import annotations
 
-from collections import Counter
 import re
+from collections import Counter
 from typing import Any
 
 from app.services.placement_slip_parser import (

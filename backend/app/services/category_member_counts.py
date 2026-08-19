@@ -27,8 +27,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Category, Dependant, Employee, Product
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
-from app.services.dependant_coverage import category_covers_dependants
 from app.services.coverage_resolver import load_overrides, resolve_plan
+from app.services.dependant_coverage import category_covers_dependants
 from app.services.plan_hydration import resolve_basis_amount
 from app.services.roster_attributes import family_tier_bucket
 
