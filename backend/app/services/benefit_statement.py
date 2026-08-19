@@ -11,8 +11,6 @@ per-employee figures, never the group sum-insured / total premium. When this vie
 is later split into an employee-facing statement, gate ``financials`` off there.
 """
 from __future__ import annotations
-
-import re
 from datetime import datetime
 from typing import Any
 
@@ -40,6 +38,9 @@ from app.services.flex_membership import (
 )
 from app.services.flex_pricing_resolver import summarize_employee
 from app.services.flex_proration import proration_line
+from app.services.dependant_coverage import (
+    category_covers_dependants as _shared_category_covers_dependants,
+)
 from app.services.plan_hydration import basis_amount, hydrate_plans
 from app.services.roster_attributes import (
     DOB_KEYS,
@@ -52,16 +53,6 @@ from app.services.roster_dedup import DEP_NAME_KEYS
 # Attributes surfaced on the statement, in display order. Raw `category` plus the
 # derived attributes the matching rules key on (see services/derivation_engine).
 _KEY_ATTRS: tuple[str, ...] = ("category", "grade", "class", "pass", "family_status")
-
-# Employee-only tier codes. Any tier on a plan's menu OTHER than these signals
-# the product extends beyond the employee (handles non-standard family labels
-# like "Family"/"M+C", not just the canonical ES/EC/EF).
-_EMPLOYEE_ONLY_TIERS = {"EO", "E", "EE", "EMPLOYEE", "EMPLOYEE ONLY"}
-
-# Negated mention of dependants ("no dependant cover", "excluding dependants").
-_NEG_DEPENDANT = re.compile(
-    r"(?:\bno\b|\bnot\b|\bnon[-\s]?|\bwithout\b|\bexcl)[\w\s.,/-]{0,15}depend", re.I
-)
 
 # Tolerant attribute-key lookup shared with the fact-find form.
 #
@@ -93,31 +84,17 @@ def _dep_summary(dep: Dependant) -> DependantSummary:
 def _category_covers_dependants(
     has_dependants: bool,
     plan_assignments: dict[str, Any] | None,
-    display_name: str | None,
-    raw_description: str | None,
+    participation_detail: dict[str, Any] | None = None,
+    display_name: str | None = None,
+    raw_description: str | None = None,
 ) -> bool:
-    """Best-available signal that a product/category extends to dependants.
-
-    There is no per-employee tier election stored anywhere, so this is a
-    product-level determination: the product supports dependants AND either its
-    plan tier menu includes a multi-member tier, or the category text names
-    dependants. Conservative default is False. Refine here if an explicit
-    per-employee tier ever gets captured.
-    """
-    if not has_dependants:
-        return False
-    pa = plan_assignments or {}
-    for tier_field in ("rate_tiers", "tier_counts"):
-        tiers = pa.get(tier_field)
-        if isinstance(tiers, dict) and any(
-            str(k).strip().upper() not in _EMPLOYEE_ONLY_TIERS for k in tiers
-        ):
-            return True
-    text = f"{display_name or ''} {raw_description or ''}".lower()
-    if "depend" not in text:
-        return False
-    # Don't count a negated mention ("no dependant cover") as coverage.
-    return not _NEG_DEPENDANT.search(text)
+    return _shared_category_covers_dependants(
+        has_dependants,
+        plan_assignments,
+        participation_detail,
+        display_name,
+        raw_description,
+    )
 
 
 def _attribute_labels(db: Session, client_id: str) -> dict[str, str]:
@@ -252,7 +229,15 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
     # Per-category dependant-coverage facts (product.has_dependants + plan_assignments + text).
     cat_ids = [mp.category_id for mp in matched_plans if mp.category_id]
     cat_facts: dict[
-        str, tuple[bool, dict[str, Any] | None, str | None, str | None, str | None]
+        str,
+        tuple[
+            bool,
+            dict[str, Any] | None,
+            dict[str, Any] | None,
+            str | None,
+            str | None,
+            str | None,
+        ],
     ] = {}
     if cat_ids:
         rows = db.execute(
@@ -260,6 +245,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
                 Category.id,
                 Product.has_dependants,
                 Category.plan_assignments,
+                Category.participation_detail,
                 Category.display_name,
                 Category.raw_description,
                 Category.rule_human_readable,
@@ -268,8 +254,8 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             .where(Category.id.in_(cat_ids))
         ).all()
         cat_facts = {
-            cid: (bool(has_dep), pa, disp, raw, rule)
-            for cid, has_dep, pa, disp, raw, rule in rows
+            cid: (bool(has_dep), pa, detail, disp, raw, rule)
+            for cid, has_dep, pa, detail, disp, raw, rule in rows
         }
 
     dependants = list(
@@ -288,8 +274,8 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
 
     coverage: list[CoverageLine] = []
     for mp in matched_plans:
-        has_dep, pa, disp, raw, rule = cat_facts.get(
-            mp.category_id or "", (False, None, None, None, None)
+        has_dep, pa, detail, disp, raw, rule = cat_facts.get(
+            mp.category_id or "", (False, None, None, None, None, None)
         )
         # An override with explicit elected dependants is authoritative; otherwise
         # fall back to the product-level heuristic.
@@ -297,7 +283,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             covered_deps = [dep_by_id[i] for i in mp.covered_dependant_ids if i in dep_by_id]
             covers = bool(covered_deps)
         else:
-            covers = _category_covers_dependants(has_dep, pa, disp, raw)
+            covers = _category_covers_dependants(has_dep, pa, detail, disp, raw)
             covered_deps = dep_summaries if covers else []
         # Only surface PER-MEMBER figures. A line that doesn't reduce to a
         # per-member sum assured (tiered medical, salary-multiple basis) would

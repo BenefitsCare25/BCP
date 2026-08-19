@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Category, Dependant, Employee, Product
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
+from app.services.dependant_coverage import category_covers_dependants
 from app.services.coverage_resolver import load_overrides, resolve_plan
 from app.services.plan_hydration import resolve_basis_amount
 from app.services.roster_attributes import family_tier_bucket
@@ -88,19 +89,28 @@ def build_category_member_counts(
     cat_product: dict[str, str | None] = {}
     covers_dependants: dict[str, bool] = {}
     cat_assignments: dict[str, dict[str, Any]] = {}
-    for cid, product_id, assignments, has_deps in db.execute(
+    for cid, product_id, assignments, has_deps, detail, display_name, raw in db.execute(
         select(
             Category.id,
             Category.product_id,
             Category.plan_assignments,
             Product.has_dependants,
+            Category.participation_detail,
+            Category.display_name,
+            Category.raw_description,
         )
         .outerjoin(Product, Category.product_id == Product.id)
         .where(Category.policy_year_id == policy_year_id)
     ).all():
         cat_product[cid] = product_id
-        covers_dependants[cid] = bool(has_deps)
         cat_assignments[cid] = assignments if isinstance(assignments, dict) else {}
+        covers_dependants[cid] = category_covers_dependants(
+            bool(has_deps),
+            cat_assignments[cid],
+            detail if isinstance(detail, dict) else None,
+            display_name,
+            raw,
+        )
 
     overrides = load_overrides(db, policy_year_id, [e.id for e in employees])
 

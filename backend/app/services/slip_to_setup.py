@@ -21,6 +21,7 @@ Design choices that keep the form's invariants intact:
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Any
 
 from app.services.placement_slip_parser import (
@@ -55,6 +56,13 @@ _ELIGIBILITY_FIELD_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("employee_age_limit", ("employee_age_limit",)),
 )
 
+_MEMBER_COVER_ORDER = ("Employee", "Spouse", "Child")
+_SPOUSE_TIER_CODES = {"ES", "EF", "SO", "SC", "FO"}
+_CHILD_TIER_CODES = {"EC", "EF", "CO", "SC", "FO"}
+_SPOUSE_RE = re.compile(r"\bspou(?:se|ses)\b|\bwives\b|\bhusband\b", re.I)
+_CHILD_RE = re.compile(r"\bchild(?:ren)?\b|\bson\b|\bdaughter\b", re.I)
+_DEPENDANT_RE = re.compile(r"\bdependan[td]s?\b", re.I)
+
 
 def _s(value: Any) -> str:
     return "" if value is None else str(value).strip()
@@ -87,7 +95,58 @@ def _eligibility_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, s
         value = _s(getattr(ph, attr, None))
         if value:
             _set_by_exact_id(out, tpl.eligibility_fields, candidate_ids, value)
+    if "member_cover_eligibility" in out:
+        out["member_cover_eligibility"] = _member_cover_eligibility(slip)
     return out
+
+
+def _mark_member_text(selected: set[str], text: str) -> None:
+    has_spouse = bool(_SPOUSE_RE.search(text))
+    has_child = bool(_CHILD_RE.search(text))
+    has_dependant = bool(_DEPENDANT_RE.search(text))
+    if has_spouse:
+        selected.add("Spouse")
+    if has_child:
+        selected.add("Child")
+    if has_dependant and not (has_spouse or has_child):
+        selected.update(("Spouse", "Child"))
+
+
+def _mark_tier_codes(selected: set[str], source: Any) -> None:
+    if not isinstance(source, dict):
+        return
+    for raw in source:
+        code = str(raw or "").strip().upper()
+        if code in _SPOUSE_TIER_CODES:
+            selected.add("Spouse")
+        if code in _CHILD_TIER_CODES:
+            selected.add("Child")
+
+
+def _member_cover_eligibility(slip: ProductSlip) -> str:
+    selected: set[str] = {"Employee"}
+    ph = slip.policy_header
+    _mark_member_text(selected, _s(getattr(ph, "eligibility", None)))
+
+    for cat in slip.categories:
+        text = " ".join(
+            _s(v)
+            for v in (
+                cat.category,
+                cat.participation,
+                cat.plan_code,
+                cat.member_scope,
+            )
+            if _s(v)
+        )
+        _mark_member_text(selected, text)
+        if cat.dependant_rate is not None or cat.member_scope == "dependant":
+            selected.update(("Spouse", "Child"))
+        _mark_tier_codes(selected, cat.rate_tiers)
+        _mark_tier_codes(selected, cat.tier_counts)
+
+    _mark_tier_codes(selected, slip.tier_labels)
+    return ",".join(opt for opt in _MEMBER_COVER_ORDER if opt in selected)
 
 
 def _participation(slip: ProductSlip) -> str:

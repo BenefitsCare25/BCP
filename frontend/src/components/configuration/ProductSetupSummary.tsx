@@ -9,6 +9,7 @@ import type {
   SetupAnswers,
   TemplateField,
 } from "@/types";
+import { selectedMemberCover } from "./setup/memberEligibility";
 
 interface Props {
   template: ProductTemplate;
@@ -125,6 +126,14 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
   const sobCount = answers?.sob?.items.length ?? 0;
   const arrangements = countEnabled(answers);
   const entities = insuredNames(answers?.header?.entities);
+  const memberCover = selectedMemberCover(
+    answers?.eligibility?.member_cover_eligibility,
+  );
+  const eligibilityFields = template.eligibility_fields.filter((field) => {
+    if (field.id === "spouse_age_limit") return memberCover.has("Spouse");
+    if (field.id === "child_age_limit") return memberCover.has("Child");
+    return true;
+  });
 
   return (
     <div className="space-y-5">
@@ -195,7 +204,7 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
       />
       <FieldList
         title="Eligibility"
-        fields={template.eligibility_fields}
+        fields={eligibilityFields}
         values={answers?.eligibility ?? {}}
       />
 

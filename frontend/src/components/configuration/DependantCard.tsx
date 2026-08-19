@@ -14,6 +14,8 @@ import { formatError } from "@/lib/errors";
 import type { Category, PlanAssignment, PlanDetail, RateModel } from "@/types";
 import { toast } from "sonner";
 
+type DependantParticipation = "not_covered" | "compulsory" | "voluntary";
+
 // The Dependant configuration section: one card per employee category, mirroring
 // the "Employee Category & Plan Type" cards but for the dependant's participation
 // + rate. Rendered below the employee section when Spouse/Child is ticked in
@@ -81,8 +83,8 @@ export function DependantCard({
     planCode ||
     "—";
 
-  const [participation, setParticipation] = useState(
-    category.participation_detail?.dependant ?? "",
+  const [participation, setParticipation] = useState<DependantParticipation>(
+    category.participation_detail?.dependant ?? "not_covered",
   );
   const [rate, setRate] = useState(
     assignments.dependant_rate != null ? String(assignments.dependant_rate) : "",
@@ -95,11 +97,15 @@ export function DependantCard({
     );
 
   // Merge-preserve the employee/direction split when writing the dependant scope.
-  const saveParticipation = (v: "compulsory" | "voluntary") => {
+  const saveParticipation = (v: DependantParticipation) => {
     setParticipation(v);
+    const dependant = v === "not_covered" ? null : v;
     savePatch(
       {
-        participation_detail: { ...(category.participation_detail ?? {}), dependant: v },
+        participation_detail: {
+          ...(category.participation_detail ?? {}),
+          dependant,
+        },
       },
       "Dependant participation",
     );
@@ -136,13 +142,14 @@ export function DependantCard({
         <ReadOnlyField label="Plan Type" value={planName} />
         <Field label="Dependant Participation">
           <Select
-            value={participation || ""}
-            onValueChange={(v) => saveParticipation(v as "compulsory" | "voluntary")}
+            value={participation}
+            onValueChange={(v) => saveParticipation(v as DependantParticipation)}
           >
             <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Select…" />
+              <SelectValue placeholder="Select..." />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="not_covered">Not covered</SelectItem>
               <SelectItem value="compulsory">Compulsory</SelectItem>
               <SelectItem value="voluntary">Voluntary</SelectItem>
             </SelectContent>
@@ -158,6 +165,7 @@ export function DependantCard({
               value={rate}
               onChange={(e) => setRate(e.target.value)}
               onBlur={saveRate}
+              disabled={participation === "not_covered"}
               placeholder="e.g. 396.90"
               className="h-8 w-44 text-sm"
             />
@@ -173,7 +181,7 @@ export function DependantCard({
             ? "Voluntary — the member opts in to cover dependants, drawing down flex dollars."
             : participation === "compulsory"
               ? "Compulsory — dependants are automatically covered (no flex drawdown)."
-              : "Set whether dependant cover is automatic (compulsory) or an opt-in flex add (voluntary)."}
+              : "Not covered — dependant rate data is preserved but ignored for this category."}
         </p>
       </div>
     </div>

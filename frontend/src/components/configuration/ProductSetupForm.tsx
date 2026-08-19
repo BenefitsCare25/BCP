@@ -31,8 +31,15 @@ import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
 import { CategoryCards } from "./CategoryCards";
 import { DependantCards } from "./DependantCard";
-import { splitList } from "./setup/SetupPrimitives";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
+import {
+  hasSelectedDependants,
+  inferMemberCoverFromAnswers,
+  inferMemberCoverFromCategories,
+  normalizeMemberCover,
+  prepareEligibilityField,
+  selectedMemberCover,
+} from "./setup/memberEligibility";
 
 interface Props {
   policyYearId: string;
@@ -114,6 +121,20 @@ function ensurePlanSelected(plans: PlanAnswer[]): PlanAnswer[] {
   return plans.map((p, index) => ({ ...p, selected: index === 0 }));
 }
 
+function withNormalizedMemberCover(answers: SetupAnswers): SetupAnswers {
+  const current = answers.eligibility.member_cover_eligibility;
+  return {
+    ...answers,
+    eligibility: {
+      ...answers.eligibility,
+      member_cover_eligibility: normalizeMemberCover(
+        current,
+        String(current ?? "").trim() ? [] : inferMemberCoverFromAnswers(answers),
+      ),
+    },
+  };
+}
+
 function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAnswers {
   // The template is a structural skeleton — no values. Fresh fields start blank;
   // real values arrive via slip pre-fill, broker input, or dynamic suggestions.
@@ -144,7 +165,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
     const sob = a.sob
       ? ensureSob(a.sob, codes)
       : ensureSob(buildSobFromPlans(normalizeLegacyPlans(a.plans)), codes);
-    return {
+    return withNormalizedMemberCover({
       ...a,
       header: a.header ?? fieldDefaults(tpl.header_fields),
       eligibility: a.eligibility ?? fieldDefaults(tpl.eligibility_fields),
@@ -161,7 +182,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
         insured: insuredNames(c.insured),
       })),
       arrangements: a.arrangements ?? arrangementDefaults(),
-    };
+    });
   }
 
   // Fresh template: build the per-plan grid from the skeleton (every plan shares
@@ -202,7 +223,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
     })),
   );
   const codes = fullPlans.map((p) => p.code);
-  return {
+  return withNormalizedMemberCover({
     header: fieldDefaults(tpl.header_fields),
     eligibility: fieldDefaults(tpl.eligibility_fields),
     participation: "",
@@ -212,7 +233,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
     rate_table: {},
     categories: [blankCategory()],
     arrangements: arrangementDefaults(),
-  };
+  });
 }
 
 function useDebounced<T>(value: T, delayMs: number): T {
@@ -309,10 +330,13 @@ export function ProductSetupForm({
     [answers.categories],
   );
   const debouncedCategories = useDebounced(countCategories, 400);
+  const hasDependantsSelected = hasSelectedDependants(
+    answers.eligibility.member_cover_eligibility,
+  );
   const { data: memberCounts } = useMemberCounts(
     policyYearId,
     template.code,
-    template.has_dependants,
+    hasDependantsSelected,
     debouncedCategories,
   );
   const countsByKey = useMemo(() => {
@@ -353,7 +377,14 @@ export function ProductSetupForm({
   // `entities` is the one header value that is a token list, not free text.
   const headerEntities = insuredNames(answers.header.entities);
   const setElig = (id: string, v: string) =>
-    setAnswers((a) => ({ ...a, eligibility: { ...a.eligibility, [id]: v } }));
+    setAnswers((a) => ({
+      ...a,
+      eligibility: {
+        ...a.eligibility,
+        [id]:
+          id === "member_cover_eligibility" ? normalizeMemberCover(v) : v,
+      },
+    }));
   // Single entry point for every Schedule-of-Benefits edit. The section is a
   // controlled component over `answers.sob`; it expresses edits via the pure
   // helpers in lib/sob.ts, so there's no per-field handler fan-out here.
@@ -418,13 +449,34 @@ export function ProductSetupForm({
     Boolean,
   ).length;
 
-  // The product covers dependants when the catalog/slip says so (has_dependants
-  // is authoritative — it unions the catalog flag with slip-parsed dependant
-  // signals) or the eligibility field names Spouse/Child (legacy fallback).
-  const coveredMembers = splitList(answers.eligibility.member_cover_eligibility ?? "");
-  const showDependants =
-    template.has_dependants ||
-    coveredMembers.some((m) => ["Spouse", "Child", "Dependant"].includes(m));
+  // Spouse/Child ticks control the dependant section and age-limit visibility.
+  // Hidden category-level dependant settings are preserved until reselected.
+  useEffect(() => {
+    setAnswers((a) => {
+      const current = a.eligibility.member_cover_eligibility;
+      if (String(current ?? "").trim()) return a;
+      return {
+        ...a,
+        eligibility: {
+          ...a.eligibility,
+          member_cover_eligibility: normalizeMemberCover(
+            current,
+            inferMemberCoverFromCategories(group?.categories ?? []),
+          ),
+        },
+      };
+    });
+  }, [group?.categories]);
+
+  const coveredMembers = selectedMemberCover(
+    answers.eligibility.member_cover_eligibility,
+  );
+  const showDependants = hasDependantsSelected;
+  const visibleEligibilityFields = template.eligibility_fields.filter((f) => {
+    if (f.id === "spouse_age_limit") return coveredMembers.has("Spouse");
+    if (f.id === "child_age_limit") return coveredMembers.has("Child");
+    return true;
+  });
 
   // Each setup section is one tab PANEL (content only — the tab bar supplies the
   // title). The backend orders `template.sections` per product family (medical,
@@ -466,7 +518,7 @@ export function ProductSetupForm({
     ),
     eligibility: (
       <div className="grid grid-cols-3 gap-3">
-        {template.eligibility_fields.map((f) => (
+        {visibleEligibilityFields.map((f) => (
           <div
             key={f.id}
             className={
@@ -478,7 +530,7 @@ export function ProductSetupForm({
             }
           >
             <FieldControl
-              field={f}
+              field={prepareEligibilityField(f)}
               value={answers.eligibility[f.id] ?? ""}
               onChange={(v) => setElig(f.id, v)}
               suggestions={suggestions?.eligibility[f.id] ?? []}
@@ -496,7 +548,7 @@ export function ProductSetupForm({
           policyYearId={policyYearId}
           productCode={template.code}
           productId={group?.product_id ?? null}
-          hasDependants={memberCounts?.has_dependants ?? template.has_dependants}
+          hasDependants={memberCounts?.has_dependants ?? hasDependantsSelected}
           basisModel={template.basis_model}
           rateModel={template.rate_model}
           tiers={template.tiers}

@@ -219,10 +219,14 @@ def _employee_coverage(
     cat_rows = db.execute(
         select(
             Category.id, Category.plan_assignments,
+            Category.participation_detail,
             Category.display_name, Category.raw_description,
         ).where(Category.policy_year_id == py.id)
     ).all()
-    cat_facts = {cid: (pa or {}, disp, raw) for cid, pa, disp, raw in cat_rows}
+    cat_facts = {
+        cid: (pa or {}, detail, disp, raw)
+        for cid, pa, detail, disp, raw in cat_rows
+    }
 
     deps_by_emp: dict[str, list[Dependant]] = {}
     for dep in db.execute(
@@ -254,7 +258,9 @@ def _employee_coverage(
             block = block_by_code.get(mp.product_code)
             if block is None or block.product.id in per_product:
                 continue
-            pa, disp, raw = cat_facts.get(mp.category_id or "", ({}, None, None))
+            pa, detail, disp, raw = cat_facts.get(
+                mp.category_id or "", ({}, None, None, None)
+            )
             # Salary-multiple bases ("36 times basic monthly salary") resolve
             # against the member's roster salary, so lump-sum SI (and the
             # underwriting sync reading it) is per-member, not blank.
@@ -268,9 +274,12 @@ def _employee_coverage(
                 # Dependant-scope option categories (GPA/GTL/GCI Spouse/Child
                 # levels) prove dependant cover even when the catalog's
                 # has_dependants flag says otherwise.
-                covers = bool(block.role_options) or _category_covers_dependants(
-                    bool(block.product.has_dependants), pa, disp, raw
+                explicit = isinstance(detail, dict) and "dependant" in detail
+                covers = _category_covers_dependants(
+                    bool(block.product.has_dependants), pa, detail, disp, raw
                 )
+                if not explicit:
+                    covers = bool(block.role_options) or covers
                 covered = [d.id for d in report_deps] if covers else []
             # Family grouping (EO/ES/EC/EF): any covered dependant lifts it off
             # employee-only. A spouse gives ES, a non-spouse dependant (child or

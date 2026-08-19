@@ -464,9 +464,9 @@ def preview_member_counts(
     has_dependants = bool(payload.has_dependants)
     product_id: str | None = None
     if payload.product_code:
-        # Prefer the persisted product's flag when a catalog row exists — the
-        # client-sent template flag is only a fallback for brand-new products.
-        # The product id also lets the counter reuse stored category rules.
+        # The current setup selection drives the preview. The persisted product
+        # may still reflect an older confirm, while the form can be mid-edit.
+        # Keep the product id so the counter can reuse stored category rules.
         product = db.execute(
             select(Product)
             .where(tenant_or_global(Product.client_id, client_id))
@@ -476,7 +476,6 @@ def preview_member_counts(
             .limit(1)
         ).scalar_one_or_none()
         if product is not None:
-            has_dependants = bool(product.has_dependants)
             product_id = product.id
 
     result = compute_member_counts(
@@ -1141,6 +1140,22 @@ def _selected_plans(answers: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _answers_have_dependants(answers: dict[str, Any]) -> bool:
+    eligibility = answers.get("eligibility")
+    if not isinstance(eligibility, dict):
+        return False
+    raw = eligibility.get("member_cover_eligibility")
+    if isinstance(raw, (list, tuple, set)):
+        selected = {str(v).strip().lower() for v in raw}
+    else:
+        selected = {
+            part.strip().lower()
+            for part in str(raw or "").split(",")
+            if part.strip()
+        }
+    return bool(selected & {"spouse", "child", "dependant", "dependent"})
+
+
 def _map_category_plan_codes(
     answers: dict[str, Any], selected: list[dict[str, Any]]
 ) -> bool:
@@ -1311,6 +1326,7 @@ def _upsert_product(
     # restriction (categories then fall back to their own slip `insured`).
     entities = insured_names(header.get("entities"))
     code = tpl.code.strip().upper()
+    has_dependants = _answers_have_dependants(answers)
     product = db.execute(
         select(Product).where(
             Product.client_id == client_id, func.upper(Product.code) == code
@@ -1322,7 +1338,7 @@ def _upsert_product(
             code=code,
             display_name=tpl.display_name,
             participation_model=tpl.participation_model,
-            has_dependants=tpl.has_dependants,
+            has_dependants=has_dependants,
             is_outpatient=tpl.is_outpatient,
             product_metadata={
                 "line": infer_line(code),
@@ -1339,6 +1355,7 @@ def _upsert_product(
 
     if product.code != code:
         product.code = code
+    product.has_dependants = has_dependants
     # Written on every confirm (not just when non-empty) so CLEARING the field
     # actually lifts the restriction rather than silently keeping the old one.
     meta = dict(product.product_metadata or {})

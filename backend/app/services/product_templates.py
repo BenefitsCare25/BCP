@@ -220,15 +220,12 @@ def standard_eligibility_fields(has_dependants: bool) -> list[TemplateField]:
 
     Centralised here so the same set appears whether the template is hand-authored
     (``ghs.v1.json``), synthesized from a slip, or a blank starter — the
-    ``ProductTemplate`` validator merges this list into every template. Dependant-
-    specific fields (member cover dependant options, child/spouse age limits) are
-    only included when the product actually covers dependants.
+    ``ProductTemplate`` validator merges this list into every template.
+    Dependant options are always present; the UI decides whether spouse/child
+    age-limit fields are visible from the checked member-cover values.
     """
-    member_options = ["Employee"]
-    if has_dependants:
-        # Spouse + Child already cover the dependant population (each with its own
-        # age limit), so there is no separate generic "Dependant" option.
-        member_options += ["Spouse", "Child"]
+    _ = has_dependants
+    member_options = ["Employee", "Spouse", "Child"]
 
     fields = [
         TemplateField(id="eligibility", label="Eligibility", type="textarea"),
@@ -252,11 +249,10 @@ def standard_eligibility_fields(has_dependants: bool) -> list[TemplateField]:
         ),
         TemplateField(id="employee_age_limit", label="Employee Age Limit", type="text"),
     ]
-    if has_dependants:
-        fields += [
-            TemplateField(id="child_age_limit", label="Child Age Limit", type="text"),
-            TemplateField(id="spouse_age_limit", label="Spouse Age Limit", type="text"),
-        ]
+    fields += [
+        TemplateField(id="child_age_limit", label="Child Age Limit", type="text"),
+        TemplateField(id="spouse_age_limit", label="Spouse Age Limit", type="text"),
+    ]
     return fields
 
 
