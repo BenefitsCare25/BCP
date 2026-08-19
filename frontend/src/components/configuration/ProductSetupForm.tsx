@@ -288,18 +288,25 @@ export function ProductSetupForm({
   // tab-switch when the form is actually dirty (avoids materializing a draft for
   // a product the user merely clicked through, and redundant concurrent saves).
   const savedSnapshot = useRef<string>(JSON.stringify(answers));
+  const answersRef = useRef(answers);
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
 
-  // Rebuild the form ONLY when the draft is replaced by a genuinely different
-  // persisted draft (e.g. a slip re-upload mints a new setup id) — never on the
-  // new→first-save transition (same data we just saved), which would clobber
-  // edits made while that save was in flight.
+  // Rebuild when the saved draft changes. A slip re-upload intentionally
+  // replaces unconfirmed setup answers, so the mounted form must follow the
+  // refreshed server snapshot instead of holding stale local values.
   const builtFromId = useRef<string | null>(draft?.id ?? null);
   useEffect(() => {
     const currentId = draft?.id ?? null;
-    if (currentId && builtFromId.current && currentId !== builtFromId.current) {
-      const rebuilt = buildAnswers(template, draft);
+    const rebuilt = buildAnswers(template, draft);
+    const nextSnapshot = JSON.stringify(rebuilt);
+    const formIsDirty = JSON.stringify(answersRef.current) !== savedSnapshot.current;
+    const idChanged = currentId && builtFromId.current && currentId !== builtFromId.current;
+    const serverChanged = currentId && nextSnapshot !== savedSnapshot.current;
+    if (serverChanged || (idChanged && !formIsDirty)) {
       setAnswers(rebuilt);
-      savedSnapshot.current = JSON.stringify(rebuilt);
+      savedSnapshot.current = nextSnapshot;
     }
     builtFromId.current = currentId;
   }, [draft, template]);

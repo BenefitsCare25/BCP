@@ -1106,15 +1106,22 @@ def seed_draft_from_slip(
     answers: dict[str, Any],
     template_version: int,
 ) -> bool:
-    """Create a slip-prefilled draft for a product, if none exists yet.
+    """Create or replace a slip-prefilled draft for a product.
 
-    Create-only by design: an existing setup — draft (possibly broker-edited) or
-    confirmed — is never overwritten, so re-uploading a slip can't silently wipe
-    in-progress edits. Returns True when a draft was created. Shares the
-    find-by-(year, code) lookup with the rest of the setup flow via _find_setup.
+    A re-upload is the latest source for unconfirmed setup drafts, so saved
+    answers are replaced wholesale. Confirmed setups stay protected because they
+    have already been materialized into product configuration.
     """
-    if _find_setup(db, policy_year_id, product_code) is not None:
-        return False
+    setup = _find_setup(db, policy_year_id, product_code)
+    if setup is not None:
+        if setup.status != ProductSetupStatus.draft:
+            return False
+        setup.answers = answers
+        setup.template_version = template_version
+        setup.origin = ProductSetupOrigin.placement_slip
+        setup.origin_ref = slip_id
+        flag_modified(setup, "answers")
+        return True
     db.add(
         ProductSetup(
             policy_year_id=policy_year_id,
