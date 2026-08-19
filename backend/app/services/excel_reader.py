@@ -6,7 +6,7 @@ either format in the wild.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Protocol
@@ -22,9 +22,17 @@ MAX_SCAN_COLS = 256
 
 
 @dataclass(frozen=True)
+class CellNote:
+    text: str
+    author: str | None = None
+
+
+@dataclass(frozen=True)
 class Sheet:
     name: str
     rows: list[list[Cell]]
+    # 0-indexed (row, column) -> Excel note/comment metadata.
+    comments: dict[tuple[int, int], CellNote] = field(default_factory=dict)
 
 
 class Workbook(Protocol):
@@ -68,6 +76,21 @@ def _coerce(value: object) -> Cell:
     return str(value)
 
 
+def _openpyxl_comments(rows: list[list[object]]) -> dict[tuple[int, int], CellNote]:
+    comments: dict[tuple[int, int], CellNote] = {}
+    for row_idx, row in enumerate(rows):
+        for col_idx, cell in enumerate(row):
+            comment = getattr(cell, "comment", None)
+            if comment is None:
+                continue
+            text = str(getattr(comment, "text", "") or "").strip()
+            if not text:
+                continue
+            author = str(getattr(comment, "author", "") or "").strip() or None
+            comments[(row_idx, col_idx)] = CellNote(text=text, author=author)
+    return comments
+
+
 class _XlrdWorkbook:
     def __init__(self, path: Path) -> None:
         import xlrd
@@ -96,7 +119,15 @@ class _XlrdWorkbook:
                 else:
                     row.append(_coerce(val))
             rows.append(row)
-        return Sheet(name=name, rows=rows)
+        comments: dict[tuple[int, int], CellNote] = {}
+        for (rowx, colx), note in ws.cell_note_map.items():
+            if colx >= MAX_SCAN_COLS:
+                continue
+            text = str(getattr(note, "text", "") or "").strip()
+            if text:
+                author = str(getattr(note, "author", "") or "").strip() or None
+                comments[(int(rowx), int(colx))] = CellNote(text=text, author=author)
+        return Sheet(name=name, rows=rows, comments=comments)
 
     def close(self) -> None:
         # xlrd with on_demand=False already released the handle; nothing to do.
@@ -146,20 +177,24 @@ class _OpenpyxlWorkbook:
             # POSITION, so the grid is padded back to rectangular; this is the
             # only path in the module that could return ragged rows, and a
             # positional read of one is wrong rather than loud.
-            raw = [list(r[:MAX_SCAN_COLS]) for r in ws.iter_rows(values_only=True)]
+            raw_cells = [list(r[:MAX_SCAN_COLS]) for r in ws.iter_rows()]
+            raw = [[getattr(cell, "value", None) for cell in row] for row in raw_cells]
             width = max((len(r) for r in raw), default=0)
+            comments = _openpyxl_comments(raw_cells)
             return Sheet(
                 name=name,
                 rows=[
                     [_coerce(v) for v in r] + [None] * (width - len(r))
                     for r in raw
                 ],
+                comments=comments,
             )
         rows: list[list[Cell]] = []
         max_col = min(ws.max_column or MAX_SCAN_COLS, MAX_SCAN_COLS)
-        for row in ws.iter_rows(max_col=max_col, values_only=True):
-            rows.append([_coerce(v) for v in row])
-        return Sheet(name=name, rows=rows)
+        raw_cells = [list(row) for row in ws.iter_rows(max_col=max_col)]
+        for row in raw_cells:
+            rows.append([_coerce(getattr(cell, "value", None)) for cell in row])
+        return Sheet(name=name, rows=rows, comments=_openpyxl_comments(raw_cells))
 
     def close(self) -> None:
         self._wb.close()

@@ -47,6 +47,7 @@ from app.services.slip_parsing.header import (
 from app.services.slip_parsing.models import (
     ExtractedBenefitItem,
     ExtractedCategory,
+    ExtractedEndorsement,
     ExtractedLimit,
     ExtractedPlan,
     ExtractedSubItem,
@@ -113,6 +114,7 @@ __all__ = [
     "ClassificationResolver",
     "ExtractedBenefitItem",
     "ExtractedCategory",
+    "ExtractedEndorsement",
     "ExtractedLimit",
     "ExtractedPlan",
     "ExtractedSubItem",

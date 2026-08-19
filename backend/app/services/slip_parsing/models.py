@@ -152,6 +152,19 @@ class ExtractedPlan:
 
 
 @dataclass(frozen=True)
+class ExtractedEndorsement:
+    source_row: int
+    source_cell: str
+    item_no: str | None
+    year: str
+    label: str
+    name: str
+    content: str
+    comment: str
+    author: str | None = None
+
+
+@dataclass(frozen=True)
 class ProductSlip:
     sheet: str
     product_code: str
@@ -170,6 +183,7 @@ class ProductSlip:
     # "Spouse"} for a Hartree Spouse/Child rate header). Lets the UI show the
     # client's own vocabulary while persistence stays canonical.
     tier_labels: dict[str, str] | None = None
+    endorsements: tuple[ExtractedEndorsement, ...] = ()
     # Registry classification at parse time: which layout family extracted the
     # sheet and whether the product code was recognized. Unknown codes are
     # surfaced downstream as needs_classification.

@@ -1032,6 +1032,18 @@ export interface BasisOfCoverRow {
   basis?: string | null;
 }
 
+export interface EndorsementAnswer {
+  source_cell?: string | null;
+  source_row?: number | null;
+  item_no?: string | null;
+  year: string;
+  label: string;
+  name: string;
+  content: string;
+  comment?: string | null;
+  author?: string | null;
+}
+
 // Live "members matched" preview for the Basis-of-Cover form. One row per
 // requested draft category, keyed by the row's client-side id.
 export interface MemberCountRow {
@@ -1062,6 +1074,7 @@ export interface SetupAnswers {
   sob?: SobSchedule;
   rate_table: Record<string, Record<string, RateCell>>;
   categories: BasisOfCoverRow[];
+  endorsements: EndorsementAnswer[];
   arrangements: Record<string, boolean>;
 }
 

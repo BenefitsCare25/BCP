@@ -17,9 +17,11 @@ from typing import Any
 
 from app.services import product_registry
 from app.services.excel_reader import Sheet, open_workbook
+from app.services.slip_parsing.endorsements import extract_endorsements
 from app.services.slip_parsing.header import _find_column_header_row, _scan_policy_header
 from app.services.slip_parsing.models import (
     ExtractedCategory,
+    ExtractedEndorsement,
     ExtractedPlan,
     PlacementSlip,
     PolicyHeader,
@@ -48,7 +50,16 @@ ProfileResolver = Callable[[str], dict[str, Any] | None]
 ClassificationResolver = Callable[[str], dict[str, Any] | None]
 
 NON_PRODUCT_SHEETS: frozenset[str] = frozenset(
-    {"billing numbers", "comments", "setup", "summary", "renewal overall premium"}
+    {
+        "billing numbers",
+        "comments",
+        "endorsement",
+        "endorsements",
+        "endorsment",
+        "setup",
+        "summary",
+        "renewal overall premium",
+    }
 )
 
 
@@ -61,6 +72,7 @@ class _SheetResult:
     sob_roles: dict[str, Any] | None = None
     voluntary_rates: tuple[dict[str, Any], ...] = ()
     tier_labels: dict[str, str] | None = None
+    endorsements: tuple[ExtractedEndorsement, ...] = ()
 
 
 def _extract_categories_from_sheet(
@@ -93,11 +105,19 @@ def _extract_categories_from_sheet(
     else:
         header_idx = _find_column_header_row(rows, basis_idx)
     if header_idx < 0:
-        return _SheetResult(header_fields.header, ())
+        return _SheetResult(
+            header_fields.header,
+            (),
+            endorsements=extract_endorsements(sheet),
+        )
 
     cols = _identify_columns(rows[header_idx])
     if cols.category < 0:
-        return _SheetResult(header_fields.header, ())
+        return _SheetResult(
+            header_fields.header,
+            (),
+            endorsements=extract_endorsements(sheet),
+        )
     # Expand the count column into its per-tier block when the sheet splits it
     # (and skip that sub-header row during the walk).
     cols = _identify_count_columns(rows, header_idx, cols)
@@ -123,6 +143,7 @@ def _extract_categories_from_sheet(
             categories,
             voluntary_rates=voluntary_rates,
             tier_labels=tier_labels,
+            endorsements=extract_endorsements(sheet),
         )
 
     plan_cols = _detect_plan_columns(rows, sob_idx)
@@ -155,6 +176,7 @@ def _extract_categories_from_sheet(
         sob_roles=roles_to_dict(used_roles) if used_roles else None,
         voluntary_rates=voluntary_rates,
         tier_labels=tier_labels,
+        endorsements=extract_endorsements(sheet),
     )
 
 
@@ -208,6 +230,7 @@ def parse_placement_slip(
                     sob_roles=result.sob_roles,
                     voluntary_rates=result.voluntary_rates,
                     tier_labels=result.tier_labels,
+                    endorsements=result.endorsements,
                     layout_family=entry.layout_family,
                     # A broker classification (stored metadata) counts as known.
                     registry_known=known or bool(metadata),

@@ -16,6 +16,7 @@ import type {
   BasisOfCoverRow,
   Category,
   CategoryGroup,
+  EndorsementAnswer,
   PlanAnswer,
   ProductSetup,
   ProductTemplate,
@@ -31,6 +32,7 @@ import { FieldControl } from "./setup/SetupPrimitives";
 import { CategoryCards } from "./CategoryCards";
 import { DependantCards } from "./DependantCard";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
+import { EndorsementsSection } from "./setup/EndorsementsSection";
 import {
   hasSelectedDependants,
   inferMemberCoverFromAnswers,
@@ -58,6 +60,7 @@ const SECTION_LABELS: Record<string, string> = {
   eligibility: "Eligibility",
   basis_of_cover: "Employee Category & Plan Type",
   schedule_of_benefits: "SOB",
+  endorsements: "Endorsements",
 };
 
 // A legacy draft (pre-`sob`) carries the SOB grid replicated into each plan's
@@ -135,6 +138,20 @@ function withNormalizedMemberCover(answers: SetupAnswers): SetupAnswers {
   };
 }
 
+function normalizeEndorsements(items: EndorsementAnswer[] | undefined): EndorsementAnswer[] {
+  return (items ?? []).map((item) => ({
+    source_cell: item.source_cell ?? null,
+    source_row: item.source_row ?? null,
+    item_no: item.item_no ?? null,
+    year: String(item.year ?? ""),
+    label: String(item.label ?? ""),
+    name: String(item.name ?? ""),
+    content: String(item.content ?? ""),
+    comment: item.comment ?? "",
+    author: item.author ?? null,
+  }));
+}
+
 function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAnswers {
   // The template is a structural skeleton — no values. Fresh fields start blank;
   // real values arrive via slip pre-fill, broker input, or dynamic suggestions.
@@ -181,6 +198,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
         ...c,
         insured: insuredNames(c.insured),
       })),
+      endorsements: normalizeEndorsements(a.endorsements),
       arrangements: a.arrangements ?? arrangementDefaults(),
     });
   }
@@ -232,6 +250,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
     sob: ensureSob(buildSobFromPlans(fullPlans), codes),
     rate_table: {},
     categories: [blankCategory()],
+    endorsements: [],
     arrangements: arrangementDefaults(),
   });
 }
@@ -395,6 +414,8 @@ export function ProductSetupForm({
       ...a,
       arrangements: { ...a.arrangements, [id]: !a.arrangements[id] },
     }));
+  const setEndorsements = (endorsements: EndorsementAnswer[]) =>
+    setAnswers((a) => ({ ...a, endorsements }));
 
   const isDirty = JSON.stringify(answers) !== savedSnapshot.current;
 
@@ -605,14 +626,23 @@ export function ProductSetupForm({
         )}
       </div>
     ),
+    endorsements: (
+      <EndorsementsSection
+        endorsements={answers.endorsements ?? []}
+        onChange={setEndorsements}
+      />
+    ),
   };
 
   // Follow the backend's section order, but only tab through sections the form
   // actually renders — ids like `rate_table` are folded into the category cards
   // and have no panel of their own.
-  const sections = (
+  const templateSections = (
     template.sections?.length ? template.sections : Object.keys(sectionInner)
   ).filter((id) => id in sectionInner);
+  const sections = templateSections.includes("endorsements")
+    ? templateSections
+    : [...templateSections, "endorsements"];
 
   // Active tab, falling back to the first section if the parent's stored value
   // isn't valid for this product's section list.
@@ -631,7 +661,11 @@ export function ProductSetupForm({
       <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted/40 p-1">
         {sections.map((id) => {
           const count =
-            id === "basis_of_cover" ? group?.categories.length ?? 0 : 0;
+            id === "basis_of_cover"
+              ? group?.categories.length ?? 0
+              : id === "endorsements"
+                ? answers.endorsements?.length ?? 0
+                : 0;
           return (
             <button
               key={id}

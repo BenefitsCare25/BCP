@@ -543,6 +543,23 @@ def _category_rows(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, An
     return rows
 
 
+def _endorsements(slip: ProductSlip) -> list[dict[str, Any]]:
+    return [
+        {
+            "source_cell": f"{slip.sheet}!{e.source_cell}",
+            "source_row": e.source_row,
+            "item_no": e.item_no,
+            "year": e.year,
+            "label": e.label,
+            "name": e.name,
+            "content": e.content,
+            "comment": e.comment,
+            "author": e.author,
+        }
+        for e in slip.endorsements
+    ]
+
+
 def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, Any]:
     """Project a parsed ``ProductSlip`` onto the ``SetupAnswers`` form shape."""
     plans = _plan_answers(slip, tpl)
@@ -569,6 +586,7 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
         "sob": sob,
         "rate_table": _rate_table(slip),
         "categories": _category_rows(slip, tpl),
+        "endorsements": _endorsements(slip),
         "arrangements": {
             a.id: a.default_enabled for a in tpl.additional_arrangements
         },
