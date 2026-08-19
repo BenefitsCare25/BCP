@@ -19,7 +19,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.deps import tenant_or_global
-from app.models import Dependant, Employee, EmployeeAttributeSchema, FlexScheme
+from app.models import (
+    Dependant,
+    Employee,
+    EmployeeAttributeSchema,
+    FlexScheme,
+    ProductSetup,
+)
 from app.models.category import Category
 from app.models.product import Product
 from app.schemas.api import (
@@ -34,6 +40,9 @@ from app.schemas.api import (
 )
 from app.services.dependant_coverage import (
     category_covers_dependants as _shared_category_covers_dependants,
+)
+from app.services.dependant_coverage import (
+    has_member_cover_eligibility_answer,
 )
 from app.services.flex_membership import (
     classify_relationship,
@@ -88,6 +97,8 @@ def _category_covers_dependants(
     participation_detail: dict[str, Any] | None = None,
     display_name: str | None = None,
     raw_description: str | None = None,
+    *,
+    legacy_product_default: bool = False,
 ) -> bool:
     return _shared_category_covers_dependants(
         has_dependants,
@@ -95,6 +106,7 @@ def _category_covers_dependants(
         participation_detail,
         display_name,
         raw_description,
+        legacy_product_default=legacy_product_default,
     )
 
 
@@ -238,6 +250,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             str | None,
             str | None,
             str | None,
+            bool,
         ],
     ] = {}
     if cat_ids:
@@ -245,6 +258,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             select(
                 Category.id,
                 Product.has_dependants,
+                Product.code,
                 Category.plan_assignments,
                 Category.participation_detail,
                 Category.display_name,
@@ -254,9 +268,31 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             .outerjoin(Product, Category.product_id == Product.id)
             .where(Category.id.in_(cat_ids))
         ).all()
+        product_codes = {
+            str(code or "").strip().upper()
+            for _cid, _has_dep, code, _pa, _detail, _disp, _raw, _rule in rows
+        }
+        setup_has_member_cover = {
+            str(code or "").strip().upper(): has_member_cover_eligibility_answer(answers)
+            for code, answers in db.execute(
+                select(ProductSetup.product_code, ProductSetup.answers).where(
+                    ProductSetup.policy_year_id == employee.policy_year_id,
+                    ProductSetup.product_code.in_(product_codes),
+                )
+            ).all()
+        }
         cat_facts = {
-            cid: (bool(has_dep), pa, detail, disp, raw, rule)
-            for cid, has_dep, pa, detail, disp, raw, rule in rows
+            cid: (
+                bool(has_dep),
+                pa,
+                detail,
+                disp,
+                raw,
+                rule,
+                bool(has_dep)
+                and not setup_has_member_cover.get(str(code or "").strip().upper(), False),
+            )
+            for cid, has_dep, code, pa, detail, disp, raw, rule in rows
         }
 
     dependants = list(
@@ -275,8 +311,8 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
 
     coverage: list[CoverageLine] = []
     for mp in matched_plans:
-        has_dep, pa, detail, disp, raw, rule = cat_facts.get(
-            mp.category_id or "", (False, None, None, None, None, None)
+        has_dep, pa, detail, disp, raw, rule, legacy_default = cat_facts.get(
+            mp.category_id or "", (False, None, None, None, None, None, False)
         )
         # An override with explicit elected dependants is authoritative; otherwise
         # fall back to the product-level heuristic.
@@ -284,7 +320,14 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             covered_deps = [dep_by_id[i] for i in mp.covered_dependant_ids if i in dep_by_id]
             covers = bool(covered_deps)
         else:
-            covers = _category_covers_dependants(has_dep, pa, detail, disp, raw)
+            covers = _category_covers_dependants(
+                has_dep,
+                pa,
+                detail,
+                disp,
+                raw,
+                legacy_product_default=legacy_default,
+            )
             covered_deps = dep_summaries if covers else []
         # Only surface PER-MEMBER figures. A line that doesn't reduce to a
         # per-member sum assured (tiered medical, salary-multiple basis) would

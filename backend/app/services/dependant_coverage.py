@@ -32,12 +32,15 @@ def category_covers_dependants(
     participation_detail: dict[str, Any] | None = None,
     display_name: str | None = None,
     raw_description: str | None = None,
+    *,
+    legacy_product_default: bool = False,
 ) -> bool:
     """Best-available signal that a category extends cover to dependants.
 
     ``participation_detail.dependant`` is explicit. A present null means the
     broker set this category/plan to "Not covered"; legacy categories without
-    the key still fall back to rates, family tiers, and extracted text.
+    the key still fall back to rates, family tiers, extracted text, and the old
+    product-level dependant flag when no new setup answer exists yet.
     """
     if not has_dependants:
         return False
@@ -53,6 +56,16 @@ def category_covers_dependants(
         return True
 
     text = f"{display_name or ''} {raw_description or ''}".lower()
-    if "depend" not in text:
+    if "depend" in text:
+        return not _NEG_DEPENDANT.search(text)
+    return legacy_product_default
+
+
+def has_member_cover_eligibility_answer(answers: Any) -> bool:
+    if not isinstance(answers, dict):
         return False
-    return not _NEG_DEPENDANT.search(text)
+    eligibility = answers.get("eligibility")
+    return (
+        isinstance(eligibility, dict)
+        and "member_cover_eligibility" in eligibility
+    )

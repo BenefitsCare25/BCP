@@ -25,10 +25,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Category, Dependant, Employee, Product
+from app.models import Category, Dependant, Employee, Product, ProductSetup
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.services.coverage_resolver import load_overrides, resolve_plan
-from app.services.dependant_coverage import category_covers_dependants
+from app.services.dependant_coverage import (
+    category_covers_dependants,
+    has_member_cover_eligibility_answer,
+)
 from app.services.plan_hydration import resolve_basis_amount
 from app.services.roster_attributes import family_tier_bucket
 
@@ -85,16 +88,26 @@ def build_category_member_counts(
         if dep.employee_id:
             deps_by_emp[dep.employee_id].append(dep)
 
-    # product_id per category, plus which products cover dependants at all.
+    setup_has_member_cover = {
+        str(code or "").strip().upper(): has_member_cover_eligibility_answer(answers)
+        for code, answers in db.execute(
+            select(ProductSetup.product_code, ProductSetup.answers).where(
+                ProductSetup.policy_year_id == policy_year_id
+            )
+        ).all()
+    }
+
+    # product_id per category, plus which categories cover dependants.
     cat_product: dict[str, str | None] = {}
     covers_dependants: dict[str, bool] = {}
     cat_assignments: dict[str, dict[str, Any]] = {}
-    for cid, product_id, assignments, has_deps, detail, display_name, raw in db.execute(
+    for row in db.execute(
         select(
             Category.id,
             Category.product_id,
             Category.plan_assignments,
             Product.has_dependants,
+            Product.code,
             Category.participation_detail,
             Category.display_name,
             Category.raw_description,
@@ -102,14 +115,20 @@ def build_category_member_counts(
         .outerjoin(Product, Category.product_id == Product.id)
         .where(Category.policy_year_id == policy_year_id)
     ).all():
+        cid, product_id, assignments, has_deps, code, detail, display_name, raw = row
+        product_code = str(code or "").strip().upper()
         cat_product[cid] = product_id
         cat_assignments[cid] = assignments if isinstance(assignments, dict) else {}
+        legacy_default = bool(has_deps) and not setup_has_member_cover.get(
+            product_code, False
+        )
         covers_dependants[cid] = category_covers_dependants(
             bool(has_deps),
             cat_assignments[cid],
             detail if isinstance(detail, dict) else None,
             display_name,
             raw,
+            legacy_product_default=legacy_default,
         )
 
     overrides = load_overrides(db, policy_year_id, [e.id for e in employees])
