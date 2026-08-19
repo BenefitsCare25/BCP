@@ -42,6 +42,7 @@ interface Props {
   group?: CategoryGroup;
   // Opens the slim rule editor for a category.
   onEditRule: (c: Category) => void;
+  onConfirmed?: () => void;
 }
 
 // Single-row tab labels per setup section.
@@ -229,6 +230,7 @@ export function ProductSetupForm({
   draft,
   group,
   onEditRule,
+  onConfirmed,
 }: Props) {
   const [answers, setAnswers] = useState<SetupAnswers>(() =>
     buildAnswers(template, draft),
@@ -240,6 +242,7 @@ export function ProductSetupForm({
   const save = useSaveSetup(policyYearId);
   const confirm = useConfirmSetup(policyYearId);
   const { data: suggestions } = useFieldSuggestions(policyYearId, template.code);
+  const confirmInFlight = useRef(false);
 
   // Serialized snapshot of what's saved on the server, so we only auto-save on
   // tab-switch when the form is actually dirty (avoids materializing a draft for
@@ -379,14 +382,18 @@ export function ProductSetupForm({
     );
   };
   const onSave = () => persist();
-  const onConfirm = () =>
+  const isConfirmed =
+    draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
+  const confirmLabel = isConfirmed ? "Update setup" : "Confirm setup";
+  const onConfirm = () => {
+    if (confirmInFlight.current) return;
+    confirmInFlight.current = true;
     confirm.mutate(
       { code: template.code, answers, templateVersion: template.version },
       {
         onSuccess: (r) => {
           setConfirmOpen(false);
-          // Categories are managed in the cards, not created by confirm — only
-          // mention them on the rare first-materialization seed (cats > 0).
+          savedSnapshot.current = JSON.stringify(answers);
           const planMsg = `${r.plans_created + r.plans_updated} plan(s)`;
           const catMsg =
             r.categories_created > 0
@@ -396,12 +403,17 @@ export function ProductSetupForm({
             ? `, employees re-matched${r.employees_matched != null ? ` (${r.employees_matched} matched)` : ""}`
             : "";
           toast.success(
-            `${template.code} configured — ${planMsg}${catMsg}${matchMsg}`,
+            `${template.code} configured - ${planMsg}${catMsg}${matchMsg}`,
           );
+          onConfirmed?.();
         },
         onError: (e) => toast.error(formatError(e)),
+        onSettled: () => {
+          confirmInFlight.current = false;
+        },
       },
     );
+  };
   const enabledArrangements = Object.values(answers.arrangements).filter(
     Boolean,
   ).length;
@@ -522,7 +534,7 @@ export function ProductSetupForm({
             }
             rows={2}
             placeholder="What this product covers…"
-            className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+            className="rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           />
         </div>
 
@@ -579,7 +591,7 @@ export function ProductSetupForm({
     <div className="flex flex-col gap-4">
       {/* Single-row section tabs. Switching tabs auto-saves the draft, and each
           tab has its own Save draft — so edits are never lost on navigation. */}
-      <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b border-border">
+      <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted/40 p-1">
         {sections.map((id) => {
           const count =
             id === "basis_of_cover" ? group?.categories.length ?? 0 : 0;
@@ -589,10 +601,10 @@ export function ProductSetupForm({
               type="button"
               onClick={() => switchSection(id)}
               className={cn(
-                "shrink-0 whitespace-nowrap border-b-2 -mb-px px-3 py-2 text-sm font-medium transition-colors",
+                "shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 activeId === id
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-card/70 hover:text-foreground",
               )}
             >
               {SECTION_LABELS[id] ?? id}
@@ -627,9 +639,9 @@ export function ProductSetupForm({
           </Button>
           <Button
             onClick={() => setConfirmOpen(true)}
-            disabled={selectedPlans.length === 0}
+            disabled={selectedPlans.length === 0 || confirm.isPending}
           >
-            Confirm & create
+            {confirmLabel}
           </Button>
         </div>
       </div>
@@ -638,13 +650,15 @@ export function ProductSetupForm({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Confirm ${template.display_name} setup`}
-        confirmLabel="Confirm & create"
+        confirmLabel={confirmLabel}
         confirmVariant="default"
+        tone="info"
         loading={confirm.isPending}
         onConfirm={onConfirm}
         description={
           <span>
-            This creates the <strong>{template.code}</strong> product and{" "}
+            This {isConfirmed ? "updates" : "creates"} the{" "}
+            <strong>{template.code}</strong> product setup and{" "}
             <strong>{selectedPlans.length}</strong> plan
             {selectedPlans.length === 1 ? "" : "s"} with their rates &
             Schedule of Benefits. Eligibility categories are managed in the

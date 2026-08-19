@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -248,19 +248,25 @@ def create_product(
     db: Session = Depends(get_db),
 ) -> ProductOut:
     client_id = _resolve_create_client_id(scope, user)
+    code = payload.code.strip().upper()
+    if not code:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Product code is required.",
+        )
     existing = db.execute(
         select(Product).where(
             Product.client_id.is_(None)
             if client_id is None
             else Product.client_id == client_id,
-            Product.code == payload.code,
+            func.upper(Product.code) == code,
         )
     ).scalar_one_or_none()
     if existing is not None:
         where = "the firm library" if client_id is None else "this company"
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"Product {payload.code!r} already exists in {where}.",
+            f"Product {code!r} already exists in {where}.",
         )
     # Mostly str values; `entities` is a token list (see ProductCreate).
     metadata: dict[str, object] = {}
@@ -276,8 +282,8 @@ def create_product(
         metadata["entities"] = insured_names(payload.entities)
     row = Product(
         client_id=client_id,
-        code=payload.code,
-        display_name=payload.display_name,
+        code=code,
+        display_name=payload.display_name.strip() or code,
         participation_model=payload.participation_model,
         has_dependants=payload.has_dependants,
         is_outpatient=payload.is_outpatient,
@@ -291,7 +297,7 @@ def create_product(
         action="create",
         entity_type="product",
         entity_id=row.id,
-        after=payload.model_dump(),
+        after={**payload.model_dump(), "code": code},
     )
     db.commit()
     db.refresh(row)

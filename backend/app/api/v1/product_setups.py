@@ -260,16 +260,17 @@ def list_setup_products(
     for p in catalog:
         # A code can have both a global (client_id NULL) and a client-specific
         # row; collapse them, OR-ing slip data and preferring the client display.
+        code = p.code.strip().upper()
         has_slip = p.id in pids
         is_client = p.client_id is not None
         meta = p.product_metadata or {}
         entry = product_registry.resolve_entry(p.code, meta)
-        existing = out.get(p.code)
+        existing = out.get(code)
         if existing is None:
-            out[p.code] = SetupProductSummary(
-                code=p.code,
+            out[code] = SetupProductSummary(
+                code=code,
                 display_name=p.display_name,
-                has_template_file=p.code in file_templates,
+                has_template_file=code in file_templates,
                 has_slip_data=has_slip,
                 line=p.line,
                 is_client_product=is_client,
@@ -293,16 +294,17 @@ def list_setup_products(
                 )
                 existing.product_id = p.id
     for code, t in file_templates.items():
-        entry = product_registry.resolve_entry(code)
+        normalized = code.strip().upper()
+        entry = product_registry.resolve_entry(normalized)
         out.setdefault(
-            code,
+            normalized,
             SetupProductSummary(
-                code=code,
+                code=normalized,
                 display_name=t.display_name,
                 has_template_file=True,
                 has_slip_data=False,
-                line=infer_line(code),
-                form_profile=infer_profile(code),
+                line=infer_line(normalized),
+                form_profile=infer_profile(normalized),
                 layout_family=entry.layout_family,
                 has_dependants=bool(t.has_dependants or entry.has_dependants),
             ),
@@ -819,7 +821,10 @@ def confirm_setup(
             status.HTTP_404_NOT_FOUND,
             f"No template or slip data for product {product_code!r}",
         )
-    setup = _upsert_draft(db, policy_year_id, tpl.code, body)
+    # Confirm has materializing side effects (plans, category seeds, matching).
+    # Lock the one setup row so two fast confirms serialize instead of both
+    # observing the first-materialization state.
+    setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
 
     selected = _selected_plans(setup.answers)
     if not selected:
@@ -1050,20 +1055,30 @@ def _resolve_template(
 
 
 def _find_setup(
-    db: Session, policy_year_id: str, product_code: str
+    db: Session,
+    policy_year_id: str,
+    product_code: str,
+    *,
+    lock: bool = False,
 ) -> ProductSetup | None:
-    return db.execute(
-        select(ProductSetup).where(
-            ProductSetup.policy_year_id == policy_year_id,
-            ProductSetup.product_code == product_code.upper(),
-        )
-    ).scalar_one_or_none()
+    stmt = select(ProductSetup).where(
+        ProductSetup.policy_year_id == policy_year_id,
+        ProductSetup.product_code == product_code.upper(),
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    return db.execute(stmt).scalar_one_or_none()
 
 
 def _upsert_draft(
-    db: Session, policy_year_id: str, code: str, body: SetupSaveIn
+    db: Session,
+    policy_year_id: str,
+    code: str,
+    body: SetupSaveIn,
+    *,
+    lock: bool = False,
 ) -> ProductSetup:
-    setup = _find_setup(db, policy_year_id, code)
+    setup = _find_setup(db, policy_year_id, code, lock=lock)
     if setup is None:
         setup = ProductSetup(
             policy_year_id=policy_year_id,
@@ -1295,21 +1310,22 @@ def _upsert_product(
     # category of this product. Stored as tokens; absent/empty means no
     # restriction (categories then fall back to their own slip `insured`).
     entities = insured_names(header.get("entities"))
+    code = tpl.code.strip().upper()
     product = db.execute(
         select(Product).where(
-            Product.client_id == client_id, Product.code == tpl.code
+            Product.client_id == client_id, func.upper(Product.code) == code
         )
     ).scalar_one_or_none()
     if product is None:
         product = Product(
             client_id=client_id,
-            code=tpl.code,
+            code=code,
             display_name=tpl.display_name,
             participation_model=tpl.participation_model,
             has_dependants=tpl.has_dependants,
             is_outpatient=tpl.is_outpatient,
             product_metadata={
-                "line": infer_line(tpl.code),
+                "line": infer_line(code),
                 **({"entities": entities} if entities else {}),
             },
         )
@@ -1317,10 +1333,12 @@ def _upsert_product(
         db.flush()
         write_audit(
             db, user, action="create", entity_type="product", entity_id=product.id,
-            after={"code": tpl.code, "display_name": tpl.display_name, "source": "manual_setup"},
+            after={"code": code, "display_name": tpl.display_name, "source": "manual_setup"},
         )
         return product
 
+    if product.code != code:
+        product.code = code
     # Written on every confirm (not just when non-empty) so CLEARING the field
     # actually lifts the restriction rather than silently keeping the old one.
     meta = dict(product.product_metadata or {})

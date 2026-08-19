@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Trash2, Upload } from "lucide-react";
+import { Pencil, Trash2, Upload, X } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -46,6 +46,7 @@ export function LineTab({
   // them, so a just-added product's tab appears immediately.
   const [justAdded, setJustAdded] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<SetupProductSummary | null>(null);
+  const [editingCode, setEditingCode] = useState<string | null>(null);
 
   const { data: allSetupProducts = [] } = useSetupProducts(policyYearId);
   const { data: setups = [] } = useProductSetups(policyYearId);
@@ -100,6 +101,12 @@ export function LineTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products]);
 
+  useEffect(() => {
+    if (editingCode && !products.some((p) => p.code === editingCode)) {
+      setEditingCode(null);
+    }
+  }, [editingCode, products]);
+
   const handleCreated = (codes: string[]) => {
     if (!codes.length) return;
     setJustAdded((prev) => [...new Set([...prev, ...codes])]);
@@ -136,37 +143,58 @@ export function LineTab({
               onCreated={handleCreated}
             />
           </div>
-          {products.map((p) => (
-            <TabsContent key={p.code} value={p.code}>
-              <Card>
-                <CardHeader>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <CardTitle>{p.display_name}</CardTitle>
-                      {yearSelector}
+          {products.map((p) => {
+            const isEditing = editingCode === p.code;
+            return (
+              <TabsContent key={p.code} value={p.code}>
+                <Card>
+                  <CardHeader>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <CardTitle>{p.display_name}</CardTitle>
+                        {yearSelector}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant={isEditing ? "secondary" : "outline"}
+                          size="sm"
+                          onClick={() =>
+                            setEditingCode(isEditing ? null : p.code)
+                          }
+                        >
+                          {isEditing ? (
+                            <X className="size-3.5" />
+                          ) : (
+                            <Pencil className="size-3.5" />
+                          )}
+                          {isEditing ? "Close edit" : "Edit"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={removeProduct.isPending}
+                          onClick={() => setRemoveTarget(p)}
+                          className="text-error hover:text-error"
+                        >
+                          <Trash2 className="size-3.5" /> Remove
+                        </Button>
+                      </div>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={removeProduct.isPending}
-                      onClick={() => setRemoveTarget(p)}
-                      className="text-error hover:text-error"
-                    >
-                      <Trash2 className="size-3.5" /> Remove
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <ProductConfigurator
-                    policyYearId={policyYearId}
-                    code={p.code}
-                    group={groupByCode.get(p.code)}
-                    onSelectCategory={onSelectCategory}
-                  />
-                </CardContent>
-              </Card>
-            </TabsContent>
-          ))}
+                  </CardHeader>
+                  <CardContent>
+                    <ProductConfigurator
+                      policyYearId={policyYearId}
+                      code={p.code}
+                      group={groupByCode.get(p.code)}
+                      onSelectCategory={onSelectCategory}
+                      isEditing={isEditing}
+                      onDone={() => setEditingCode(null)}
+                    />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            );
+          })}
         </Tabs>
       ) : (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border p-10 text-center">
