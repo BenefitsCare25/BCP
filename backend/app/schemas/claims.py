@@ -930,6 +930,13 @@ class HospitalOut(BaseModel):
 class ClaimTypeOption(BaseModel):
     label: str
     sub_type: str | None = None
+    # Stable machine identity for this selectable claim choice. `sub_type` is
+    # display/business wording and may be renamed; configuration joins on these
+    # two values instead.
+    # Defaults keep older internal callers/source-compatible clients valid;
+    # the coverage endpoint always fills both with the canonical values.
+    scope_code: str = "standard"
+    scope_key: str = ""
     # Whether this entry must name the treating doctor (pre-/post-hospitalisation
     # only). SERVED, never mirrored: the frontend would otherwise have to match
     # on the sub-type LABEL, and a relabel there is silent — the field would
@@ -1156,6 +1163,10 @@ class ClaimDocTypeIn(BaseModel):
     key_fields: list[ClaimDocKeyField] = Field(default_factory=list, max_length=32)
     sector: str | None = Field(default=None, pattern="^(govt|private)$")
     slot_key: str | None = Field(default=None, max_length=64)
+    # Stable claim-scope keys this recognised document may suggest. A document
+    # can legitimately target several scopes; intake auto-selects only after
+    # intersecting them with the member's actual coverage.
+    claim_scope_keys: list[str] = Field(default_factory=list, max_length=64)
 
     @field_validator("display")
     @classmethod
@@ -1199,6 +1210,7 @@ class ClaimDocTypeOut(BaseModel):
     key_fields: list[ClaimDocKeyField] = Field(default_factory=list)
     sector: str | None = None
     slot_key: str | None = None
+    claim_scope_keys: list[str] = Field(default_factory=list)
     # True for a row seeded from the in-code defaults (key match) — the UI
     # labels these; they're still fully editable.
     is_default: bool = False
@@ -1285,6 +1297,9 @@ class ClaimReviewConfigIn(BaseModel):
     claim_kind: Literal["insured", "flex"]
     # Product code (insured) or flex benefit-category name (flex).
     claim_key: str = Field(min_length=1, max_length=128)
+    # "*" is the product/category default. Insured subtype overrides use a
+    # stable ClaimTypeOption.scope_code such as `gp_tcm`.
+    scope_code: str = Field(default="*", min_length=1, max_length=64)
     display_label: str = Field(min_length=1, max_length=128)
     enabled: bool = True
     # The caps bound review-prompt growth.
@@ -1293,7 +1308,7 @@ class ClaimReviewConfigIn(BaseModel):
     # Extra document families required ON TOP of the automatic derivation.
     required_documents: list[str] = Field(default_factory=list, max_length=15)
 
-    @field_validator("claim_key", "display_label")
+    @field_validator("claim_key", "display_label", "scope_code")
     @classmethod
     def _not_blank(cls, v: str) -> str:
         # min_length alone accepts "   ", which the API then normalizes to ""
@@ -1361,6 +1376,7 @@ class ClaimReviewConfigOut(BaseModel):
     id: str
     claim_kind: str
     claim_key: str
+    scope_code: str = "*"
     # Server-computed join key — see `claim_review_configs.type_key`. The UI
     # matches configs to claim types on this, never on a re-derived key.
     key: str
@@ -1381,6 +1397,15 @@ class ReviewDefaultConfigOut(BaseModel):
     required_documents: list[str] = Field(default_factory=list)
 
 
+class ReviewClaimScopeOut(BaseModel):
+    """One selectable child scope beneath an insured product."""
+
+    scope_code: str
+    key: str
+    display_label: str
+    sub_type: str | None = None
+
+
 class ReviewClaimTypeOut(BaseModel):
     """One claim type of the company (the config scope vocabulary)."""
 
@@ -1390,6 +1415,7 @@ class ReviewClaimTypeOut(BaseModel):
     key: str
     display_label: str
     sub_types: list[str] = Field(default_factory=list)
+    scopes: list[ReviewClaimScopeOut] = Field(default_factory=list)
 
 
 class ReviewScopeOptionsOut(BaseModel):

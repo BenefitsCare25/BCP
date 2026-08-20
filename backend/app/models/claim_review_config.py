@@ -32,8 +32,8 @@ class ClaimReviewConfig(Base, TimestampMixin):
     __tablename__ = "claim_review_configs"
     __table_args__ = (
         UniqueConstraint(
-            "client_id", "claim_kind", "claim_key",
-            name="uq_claim_review_config_client_type",
+            "client_id", "claim_kind", "claim_key", "scope_code",
+            name="uq_claim_review_config_client_type_scope",
         ),
     )
 
@@ -47,6 +47,11 @@ class ClaimReviewConfig(Base, TimestampMixin):
     # (matched casefolded — a renamed flex category simply stops matching and
     # that claim type reverts to the defaults).
     claim_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    # "*" is the inherited product/category default; exact insured overrides
+    # use stable claim-intake scope codes (`gp_tcm`, `ghs_pre_post`, ...).
+    scope_code: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="*", server_default="*"
+    )
     # Human label shown in lists and the cross-company import dialog.
     display_label: Mapped[str] = mapped_column(String(128), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

@@ -949,6 +949,8 @@ export interface ClaimDocType {
   key_fields: ClaimDocKeyField[];
   sector: "govt" | "private" | null;
   slot_key: string | null;
+  /** Stable claim scopes this recognised document can suggest at intake. */
+  claim_scope_keys: string[];
   /** Seeded from the backend defaults (still editable). */
   is_default: boolean;
   updated_at: string;
@@ -960,6 +962,7 @@ export interface ClaimDocTypeInput {
   key_fields: ClaimDocKeyField[];
   sector: "govt" | "private" | null;
   slot_key: string | null;
+  claim_scope_keys: string[];
 }
 
 export function useClaimDocTypes() {
@@ -1054,6 +1057,8 @@ export interface ReviewAIRule {
 export interface ClaimReviewConfigInput {
   claim_kind: "insured" | "flex";
   claim_key: string;
+  /** `*` is the product default; a stable subtype code is an exact override. */
+  scope_code: string;
   display_label: string;
   enabled: boolean;
   field_maps: ReviewFieldMap[];
@@ -1079,6 +1084,14 @@ export interface ReviewClaimType {
   key: string;
   display_label: string;
   sub_types: string[];
+  scopes: ReviewClaimScope[];
+}
+
+export interface ReviewClaimScope {
+  scope_code: string;
+  key: string;
+  display_label: string;
+  sub_type: string | null;
 }
 
 export interface ReviewScopeOptions {

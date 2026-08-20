@@ -65,6 +65,31 @@ SUB_TYPE_TCM = "TCM (Traditional Chinese Medicine)"
 SUB_TYPE_PHYSIO = "Physiotherapy"
 GP_SUB_TYPES: tuple[str, ...] = (SUB_TYPE_TCM, SUB_TYPE_PHYSIO)
 
+# Stable review/intake scope codes. Display labels are deliberately kept out of
+# persisted configuration identities: brokers may relabel a claim choice, and
+# old drafts may still carry legacy wording, without orphaning its rules or
+# document-type routing.
+SCOPE_STANDARD = "standard"
+SCOPE_GHS_PRE_POST = "ghs_pre_post"
+SCOPE_GHS_HOSPITALISATION = "ghs_hospitalisation"
+SCOPE_GHS_EMERGENCY = "ghs_emergency_outpatient"
+SCOPE_GHS_DIALYSIS_CANCER = "ghs_dialysis_cancer"
+SCOPE_GP_TCM = "gp_tcm"
+SCOPE_GP_PHYSIOTHERAPY = "gp_physiotherapy"
+
+_SUB_TYPE_SCOPE_CODES: dict[str, str] = {
+    GHS_SUB_TYPES[0]: SCOPE_GHS_PRE_POST,
+    GHS_SUB_TYPES[1]: SCOPE_GHS_HOSPITALISATION,
+    GHS_SUB_TYPES[2]: SCOPE_GHS_EMERGENCY,
+    GHS_SUB_TYPES[3]: SCOPE_GHS_DIALYSIS_CANCER,
+    SUB_TYPE_TCM: SCOPE_GP_TCM,
+    SUB_TYPE_PHYSIO: SCOPE_GP_PHYSIOTHERAPY,
+}
+
+CLAIM_SCOPE_CODES: frozenset[str] = frozenset(
+    {SCOPE_STANDARD, *_SUB_TYPE_SCOPE_CODES.values()}
+)
+
 # Keywords that identify the SOB row funding each GP-rider sub-type.
 _SUB_TYPE_ROW_KEYWORDS: dict[str, tuple[str, ...]] = {
     SUB_TYPE_TCM: ("tcm", "traditional chinese", "chinese physician"),
@@ -251,8 +276,72 @@ _PROFILES: dict[str, ClaimIntakeProfile] = {
 _EMPTY = ClaimIntakeProfile(member_claimable=False)
 
 
+@dataclass(frozen=True)
+class ClaimScopeDefinition:
+    """One selectable claim-form scope with a stable machine identity."""
+
+    code: str
+    label: str
+    sub_type: str | None
+
+
 def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
     return _PROFILES.get((product_code or "").strip().upper(), _EMPTY)
+
+
+def scope_code_for_sub_type(sub_type: str | None) -> str:
+    """Stable scope code for a stored/display sub-type (legacy labels included)."""
+    normalized = normalize_sub_type(sub_type)
+    if not normalized:
+        return SCOPE_STANDARD
+    return _SUB_TYPE_SCOPE_CODES.get(normalized, SCOPE_STANDARD)
+
+
+def claim_scope_key(
+    claim_kind: str | None,
+    claim_key: str | None,
+    scope_code: str = SCOPE_STANDARD,
+) -> str:
+    """Canonical identity shared by portal choices and broker settings."""
+    kind = (claim_kind or "").strip().casefold()
+    key = " ".join(str(claim_key or "").split()).casefold()
+    if kind == "flex":
+        return f"{kind}:{key}"
+    scope = (scope_code or SCOPE_STANDARD).strip().casefold()
+    return f"{kind}:{key}:{scope}"
+
+
+def claim_scope_definitions(
+    product_code: str | None,
+    base_label: str,
+    benefit_schedules: list[dict[str, Any] | None] | None = None,
+) -> tuple[ClaimScopeDefinition, ...]:
+    """Selectable scopes for a product.
+
+    The member form supplies its one plan schedule. The broker configuration
+    surface supplies every schedule for the product in the selected year, so it
+    sees the union of claim choices any covered member can actually receive.
+    Inpatient sub-types are intrinsic to the profile; optional GP riders appear
+    only when at least one supplied schedule funds them.
+    """
+    profile = claim_profile_for(product_code)
+    if not profile.member_claimable:
+        return ()
+    if profile.category == CATEGORY_INPATIENT:
+        return tuple(
+            ClaimScopeDefinition(scope_code_for_sub_type(label), label, label)
+            for label in profile.sub_types
+        )
+
+    scopes = [ClaimScopeDefinition(SCOPE_STANDARD, base_label, None)]
+    if not profile.sub_type_required:
+        schedules = benefit_schedules or []
+        scopes.extend(
+            ClaimScopeDefinition(scope_code_for_sub_type(label), label, label)
+            for label in profile.sub_types
+            if any(benefit_row_for_sub_type(schedule, label) for schedule in schedules)
+        )
+    return tuple(scopes)
 
 
 def is_inpatient_product(product_code: str | None) -> bool:

@@ -48,3 +48,7 @@ class ClaimDocType(Base, TimestampMixin):
     # Required-document upload slot this type fills when unambiguous
     # (claim_intake.DOC_SLOT_LABELS key) — drives autofill slot placement.
     slot_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Stable claim-scope keys this document may identify at intake. JSON is
+    # appropriate here because the scope catalogue is derived from the current
+    # policy-year products rather than represented by a durable FK table.
+    claim_scope_keys: Mapped[list[str] | None] = mapped_column(JSON(), nullable=True)

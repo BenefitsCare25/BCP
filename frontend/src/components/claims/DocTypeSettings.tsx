@@ -22,13 +22,16 @@ import {
   useCreateClaimDocType,
   useDeleteClaimDocType,
   useResetClaimDocTypes,
+  useReviewScopeOptions,
   useUpdateClaimDocType,
   type ClaimDocType,
   type ClaimDocTypeInput,
+  type ReviewClaimType,
 } from "@/api/claims";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -40,6 +43,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { NoCurrentYearNotice } from "@/components/shell/CurrentYearBanner";
 import { formatError } from "@/lib/errors";
 
 const SECTOR_LABELS: Record<string, string> = {
@@ -71,7 +75,125 @@ function toInput(t: ClaimDocType): ClaimDocTypeInput {
     key_fields: t.key_fields,
     sector: t.sector,
     slot_key: t.slot_key,
+    claim_scope_keys: [...t.claim_scope_keys],
   };
+}
+
+function scopePatternMatches(pattern: string, scopeKey: string): boolean {
+  const expected = pattern.toLowerCase().split(":");
+  const actual = scopeKey.toLowerCase().split(":");
+  return (
+    expected.length === actual.length &&
+    expected.every((part, index) => part === "*" || part === actual[index])
+  );
+}
+
+function scopeRows(type: ReviewClaimType) {
+  return type.claim_kind === "insured" && type.scopes.length > 0
+    ? type.scopes.map((scope) => ({ key: scope.key, label: scope.display_label }))
+    : [{ key: type.key, label: type.display_label }];
+}
+
+/** Scope-first routing matrix. Aliases identify WHAT the document is; this
+ * matrix says WHICH claim choice that recognised type may preselect. */
+function ScopeAssignments({
+  claimTypes,
+  docTypes,
+  fetching,
+}: {
+  claimTypes: ReviewClaimType[];
+  docTypes: ClaimDocType[];
+  fetching: boolean;
+}) {
+  const update = useUpdateClaimDocType();
+  const allScopeKeys = claimTypes.flatMap((type) =>
+    scopeRows(type).map((scope) => scope.key),
+  );
+  const busy = update.isPending || fetching;
+
+  const toggle = (docType: ClaimDocType, scopeKey: string, checked: boolean) => {
+    // Expand wildcard defaults to the current concrete catalogue on first edit,
+    // so a broker can remove one product without silently removing its peers.
+    const concrete = new Set<string>();
+    for (const configured of docType.claim_scope_keys) {
+      if (configured.includes("*")) {
+        for (const available of allScopeKeys) {
+          if (scopePatternMatches(configured, available)) concrete.add(available);
+        }
+      } else {
+        concrete.add(configured);
+      }
+    }
+    if (checked) concrete.add(scopeKey);
+    else concrete.delete(scopeKey);
+    update.mutate(
+      {
+        id: docType.id,
+        expected_updated_at: docType.updated_at,
+        ...toInput(docType),
+        claim_scope_keys: [...concrete].sort(),
+      },
+      { onError: (error) => toast.error(formatError(error)) },
+    );
+  };
+
+  return (
+    <section className="border-t border-border">
+      <div className="space-y-1 bg-muted/40 px-5 py-3">
+        <SectionLabel as="h3">Claim type matching</SectionLabel>
+        <p className="max-w-prose text-xs text-subtle">
+          Choose which recognised documents can suggest each claim choice. The
+          member still reviews the selection before submitting.
+        </p>
+      </div>
+      <div className="divide-y divide-border border-t border-border">
+        {claimTypes.map((type) => (
+          <div key={type.key}>
+            <div className="bg-muted/20 px-5 py-2.5 text-sm font-semibold text-foreground">
+              {type.display_label}
+            </div>
+            <div className="divide-y divide-border">
+              {scopeRows(type).map((scope) => (
+                <div
+                  key={scope.key}
+                  className="grid gap-2 px-5 py-3 sm:grid-cols-[minmax(12rem,0.8fr)_minmax(0,2fr)] sm:items-start"
+                >
+                  <p className="text-sm text-foreground">{scope.label}</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-2">
+                    {docTypes.map((docType) => {
+                      const checked = docType.claim_scope_keys.some((pattern) =>
+                        scopePatternMatches(pattern, scope.key),
+                      );
+                      return (
+                        <label
+                          key={docType.id}
+                          className="inline-flex min-h-8 items-center gap-2 text-xs text-foreground"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            disabled={busy}
+                            onCheckedChange={(value) =>
+                              toggle(docType, scope.key, value === true)
+                            }
+                          />
+                          {docType.display}
+                        </label>
+                      );
+                    })}
+                    {docTypes.length === 0 && (
+                      <span className="text-xs text-subtle">
+                        Add a document type below to configure matching.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 /** A chip row with inline add + per-chip remove. */
@@ -307,6 +429,7 @@ function DocTypeRow({
 
 export function DocTypeSettings() {
   const docTypes = useClaimDocTypes();
+  const scopeOptions = useReviewScopeOptions();
   const create = useCreateClaimDocType();
   const reset = useResetClaimDocTypes();
   const [adding, setAdding] = useState(false);
@@ -323,6 +446,7 @@ export function DocTypeSettings() {
         key_fields: [],
         sector: null,
         slot_key: null,
+        claim_scope_keys: [],
       },
       {
         onSuccess: () => {
@@ -344,10 +468,9 @@ export function DocTypeSettings() {
           <div className="min-w-0 flex-1 basis-80 space-y-1">
             <CardTitle>Claim document types</CardTitle>
             <CardDescription className="max-w-prose">
-              How uploaded claim documents are recognised. Aliases match the
-              document's title; key fields drive the completeness check —
-              missing ones appear as warnings in the AI review, and never block
-              the member.
+              How uploads are recognised and which claim choice they can
+              suggest. Configure claim matching first, then maintain the shared
+              document-recognition library below.
             </CardDescription>
           </div>
           <Button
@@ -371,16 +494,35 @@ export function DocTypeSettings() {
           the separation between document types is the rule plus real space,
           not a border drawn around each one. */}
       <CardContent className="p-0">
-        {docTypes.isLoading ? (
+        {docTypes.isLoading || scopeOptions.isLoading ? (
           <div className="px-5 pb-5">
             <Skeleton className="h-40 w-full" />
           </div>
-        ) : docTypes.isError ? (
+        ) : docTypes.isError || scopeOptions.isError ? (
           <p className="px-5 pb-5 text-sm text-error">
-            {formatError(docTypes.error)}
+            {formatError(docTypes.error ?? scopeOptions.error)}
           </p>
         ) : (
-          <div className="divide-y divide-border border-t border-border">
+          <div>
+            {scopeOptions.data?.has_current_year ? (
+              <ScopeAssignments
+                claimTypes={scopeOptions.data.claim_types}
+                docTypes={docTypes.data ?? []}
+                fetching={docTypes.isFetching}
+              />
+            ) : (
+              <div className="border-t border-border px-5 py-4">
+                <NoCurrentYearNotice />
+              </div>
+            )}
+            <div className="space-y-1 border-t border-border bg-muted/40 px-5 py-3">
+              <SectionLabel as="h3">Document recognition library</SectionLabel>
+              <p className="max-w-prose text-xs text-subtle">
+                Aliases identify the document; key fields warn assessors when a
+                recognised document appears incomplete.
+              </p>
+            </div>
+            <div className="divide-y divide-border border-t border-border">
             {(docTypes.data ?? []).map((t) => (
               <DocTypeRow key={t.id} docType={t} fetching={docTypes.isFetching} />
             ))}
@@ -437,6 +579,7 @@ export function DocTypeSettings() {
                 </Button>
               </div>
             )}
+            </div>
           </div>
         )}
       </CardContent>
@@ -445,7 +588,7 @@ export function DocTypeSettings() {
         open={confirmReset}
         onOpenChange={setConfirmReset}
         title="Restore default document types?"
-        description="This discards every customisation (added aliases, key fields, and custom types) and restores the seeded defaults."
+        description="This discards every customisation (claim matching, added aliases, key fields, and custom types) and restores the seeded defaults."
         confirmLabel="Restore defaults"
         loading={reset.isPending}
         onConfirm={() =>

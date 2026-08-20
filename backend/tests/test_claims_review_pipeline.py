@@ -892,17 +892,23 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
         "discharge_summary", "final_tax_invoice", "finalised_tax_invoice"
     }
     assert all(r["is_default"] for r in rows)
+    discharge = next(r for r in rows if r["key"] == "discharge_summary")
+    assert discharge["claim_scope_keys"] == [
+        "insured:*:ghs_hospitalisation"
+    ]
 
     # Create a custom type; a duplicate name 409s.
     res = broker.post("/api/v1/claim-doc-types", json={
         "display": "Referral Memo",
         "aliases": ["memo", "referral memo"],
         "key_fields": [{"name": "Specialist", "keywords": []}],
+        "claim_scope_keys": ["insured:*:ghs_pre_post"],
     })
     assert res.status_code == 201
     created = res.json()
     assert created["key"] == "referral_memo"
     assert created["is_default"] is False
+    assert created["claim_scope_keys"] == ["insured:*:ghs_pre_post"]
     dup = broker.post("/api/v1/claim-doc-types", json={
         "display": "Referral Memo", "aliases": [], "key_fields": [],
     })
@@ -914,9 +920,13 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
         "slot_key": "not_a_slot",
     })
     assert bad.status_code == 422
+    bad_scope = broker.post("/api/v1/claim-doc-types", json={
+        "display": "Bad scope", "aliases": [], "key_fields": [],
+        "claim_scope_keys": ["insured:GHS:renamed_display_label"],
+    })
+    assert bad_scope.status_code == 422
 
     # Update an existing row (add an alias).
-    discharge = next(r for r in rows if r["key"] == "discharge_summary")
     res = broker.put(f"/api/v1/claim-doc-types/{discharge['id']}", json={
         "display": discharge["display"],
         "aliases": discharge["aliases"] + ["day surgery note"],
@@ -927,6 +937,9 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
     })
     assert res.status_code == 200
     assert "day surgery note" in res.json()["aliases"]
+    # Older API clients omit the new field; omission preserves routing instead
+    # of silently clearing it during an unrelated alias edit.
+    assert res.json()["claim_scope_keys"] == discharge["claim_scope_keys"]
     stale = broker.put(f"/api/v1/claim-doc-types/{discharge['id']}", json={
         "display": discharge["display"],
         "aliases": discharge["aliases"],
@@ -1144,6 +1157,48 @@ def test_resolve_review_config_defaults_and_matching():
             s.commit()
         with SessionLocal() as s:
             assert resolve_review_config(s, insured_claim).config_id is None
+    finally:
+        _drop_review_configs()
+
+
+def test_exact_subclaim_review_config_overrides_product_default():
+    """A subtype override wins only for that scope; sibling claim choices keep
+    inheriting the existing product-level setup."""
+    from app.services.claim_intake import (
+        GHS_SUB_TYPES,
+        SCOPE_GHS_HOSPITALISATION,
+    )
+    from app.services.claim_review_configs import resolve_review_config
+
+    hospital_claim = Claim(
+        client_id=DEMO_CLIENT_ID,
+        claim_kind="insured",
+        product_code="GHS",
+        sub_type=GHS_SUB_TYPES[1],
+    )
+    emergency_claim = Claim(
+        client_id=DEMO_CLIENT_ID,
+        claim_kind="insured",
+        product_code="GHS",
+        sub_type=GHS_SUB_TYPES[2],
+    )
+    try:
+        product_id = _mk_review_config(display_label="GHS default")
+        hospital_id = _mk_review_config(
+            scope_code=SCOPE_GHS_HOSPITALISATION,
+            display_label="Hospital stay override",
+        )
+        with SessionLocal() as s:
+            assert resolve_review_config(s, hospital_claim).config_id == hospital_id
+            assert resolve_review_config(s, emergency_claim).config_id == product_id
+            from app.models import ClaimReviewConfig
+
+            s.get(ClaimReviewConfig, hospital_id).enabled = False
+            s.commit()
+        with SessionLocal() as s:
+            # Switching off a child override restores inheritance; it must not
+            # skip the product setup and jump straight to global defaults.
+            assert resolve_review_config(s, hospital_claim).config_id == product_id
     finally:
         _drop_review_configs()
 
@@ -1475,6 +1530,20 @@ def test_review_config_crud_over_http(broker: TestClient):
         # Rules get stable ids assigned on write.
         assert created.json()["ai_rules"][0]["id"]
 
+        # The same product may carry one exact subtype override; an unknown
+        # display-derived code is rejected so renaming labels cannot orphan it.
+        exact = broker.post("/api/v1/claim-review-configs", json={
+            **body,
+            "scope_code": "ghs_hospitalisation",
+            "display_label": "Hospital stay override",
+        })
+        assert exact.status_code == 201
+        invalid_scope = broker.post("/api/v1/claim-review-configs", json={
+            **body,
+            "scope_code": "Hospitalisation/Day Surgery",
+        })
+        assert invalid_scope.status_code == 422
+
         # Same claim type again (case-insensitive key) → 409.
         dup = broker.post(
             "/api/v1/claim-review-configs", json={**body, "claim_key": "ghs"}
@@ -1521,6 +1590,10 @@ def test_review_config_crud_over_http(broker: TestClient):
             ).status_code
             == 204
         )
+        assert broker.delete(
+            f"/api/v1/claim-review-configs/{exact.json()['id']}",
+            params={"expected_updated_at": exact.json()["updated_at"]},
+        ).status_code == 204
         assert broker.get("/api/v1/claim-review-configs").json() == []
     finally:
         _drop_review_configs()
@@ -1644,6 +1717,11 @@ def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
         assert [t for t in options["claim_types"] if t["claim_kind"] == "flex"] == []
         for t in options["claim_types"]:
             assert t["key"] == f"{t['claim_kind']}:{t['claim_key'].casefold()}"
+            if t["claim_kind"] == "insured":
+                assert t["scopes"]
+                assert all(scope["scope_code"] for scope in t["scopes"])
+                assert all(scope["key"].startswith(t["key"] + ":")
+                           for scope in t["scopes"])
 
         with SessionLocal() as s:
             for y in s.query(PolicyYear).filter(PolicyYear.id.in_(demoted_ids)):

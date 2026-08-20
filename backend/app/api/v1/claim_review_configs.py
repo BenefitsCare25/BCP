@@ -25,7 +25,7 @@ from app.core.identity import accessible_clients, assert_client_accessible
 from app.core.optimistic_lock import assert_not_stale
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
-from app.models import ClaimReviewConfig, Client, FlexScheme, Product
+from app.models import ClaimReviewConfig, Client, FlexScheme, Plan, Product
 from app.models.claim import CLAIM_KIND_FLEX, CLAIM_KIND_INSURED
 from app.schemas.claims import (
     CLAIM_REVIEW_PORTAL_FIELDS,
@@ -36,6 +36,7 @@ from app.schemas.claims import (
     ImportReviewConfigsOut,
     ImportSourceCompanyOut,
     ReviewAIRuleModel,
+    ReviewClaimScopeOut,
     ReviewClaimTypeOut,
     ReviewDefaultConfigOut,
     ReviewFieldMapModel,
@@ -44,7 +45,11 @@ from app.schemas.claims import (
     SourceReviewConfigOut,
 )
 from app.services.claim_ai import build_claim_review_prompt
-from app.services.claim_intake import claim_profile_for
+from app.services.claim_intake import (
+    CLAIM_SCOPE_CODES,
+    claim_profile_for,
+    claim_scope_definitions,
+)
 from app.services.claim_review_configs import (
     config_from_row,
     config_rows,
@@ -71,7 +76,8 @@ def _out(row: ClaimReviewConfig) -> ClaimReviewConfigOut:
         id=row.id,
         claim_kind=row.claim_kind,
         claim_key=row.claim_key,
-        key=type_key(row.claim_kind, row.claim_key),
+        scope_code=row.scope_code or "*",
+        key=type_key(row.claim_kind, row.claim_key, row.scope_code or "*"),
         display_label=row.display_label,
         enabled=row.enabled,
         field_maps=[ReviewFieldMapModel(**m) for m in cfg.field_maps],
@@ -98,9 +104,21 @@ def _payload(body: ClaimReviewConfigIn) -> dict[str, Any]:
     # claim_key / display_label are already normalized (and rejected when
     # blank) by ClaimReviewConfigIn's validator, so what validated is exactly
     # what gets stored.
+    scope_code = body.scope_code.casefold()
+    if scope_code != "*" and scope_code not in CLAIM_SCOPE_CODES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f'Unknown claim scope code "{body.scope_code}".',
+        )
+    if body.claim_kind == CLAIM_KIND_FLEX and scope_code != "*":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Flex claim review rules do not support subtype scopes.",
+        )
     return {
         "claim_kind": body.claim_kind,
         "claim_key": body.claim_key,
+        "scope_code": scope_code,
         "display_label": body.display_label,
         "enabled": body.enabled,
         "field_maps": [m.model_dump(exclude_none=True) for m in body.field_maps],
@@ -120,7 +138,9 @@ def _payload(body: ClaimReviewConfigIn) -> dict[str, Any]:
 def _assert_key_free(
     db: Session, client_id: str, body: ClaimReviewConfigIn, exclude_id: str | None
 ) -> None:
-    existing = find_config_row(db, client_id, body.claim_kind, body.claim_key)
+    existing = find_config_row(
+        db, client_id, body.claim_kind, body.claim_key, body.scope_code
+    )
     if existing is not None and existing.id != exclude_id:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -220,6 +240,15 @@ def review_scope_options(
             if pids
             else []
         )
+        plans_by_product: dict[str, list[dict[str, Any] | None]] = {}
+        if pids:
+            for product_id, schedule in db.execute(
+                select(Plan.product_id, Plan.benefit_schedule).where(
+                    Plan.policy_year_id == year.id,
+                    Plan.product_id.in_(pids),
+                )
+            ).all():
+                plans_by_product.setdefault(product_id, []).append(schedule)
         seen: set[str] = set()
         for p in sorted(products, key=lambda p: (p.display_name or p.code or "")):
             code = (p.code or "").strip()
@@ -229,13 +258,26 @@ def review_scope_options(
             profile = claim_profile_for(code)
             if not profile.member_claimable:
                 continue
+            label = profile.claim_type_label or p.display_name or code
+            scopes = claim_scope_definitions(
+                code, label, plans_by_product.get(p.id, [])
+            )
             claim_types.append(
                 ReviewClaimTypeOut(
                     claim_kind=CLAIM_KIND_INSURED,
                     claim_key=code,
                     key=type_key(CLAIM_KIND_INSURED, code),
-                    display_label=profile.claim_type_label or p.display_name or code,
+                    display_label=label,
                     sub_types=list(profile.sub_types),
+                    scopes=[
+                        ReviewClaimScopeOut(
+                            scope_code=scope.code,
+                            key=type_key(CLAIM_KIND_INSURED, code, scope.code),
+                            display_label=scope.label,
+                            sub_type=scope.sub_type,
+                        )
+                        for scope in scopes
+                    ],
                 )
             )
         claim_types.extend(
@@ -293,6 +335,7 @@ def update_review_config(
     before = {
         "claim_kind": row.claim_kind,
         "claim_key": row.claim_key,
+        "scope_code": row.scope_code,
         "display_label": row.display_label,
         "enabled": row.enabled,
         "field_maps": row.field_maps,
@@ -328,6 +371,7 @@ def delete_review_config(
     write_audit(
         db, user, "claim_review_config.deleted", "claim_review_config", row.id,
         before={"claim_kind": row.claim_kind, "claim_key": row.claim_key,
+                "scope_code": row.scope_code,
                 "display_label": row.display_label},
     )
     db.delete(row)
@@ -461,7 +505,7 @@ def source_review_configs(
                 id=row.id,
                 claim_kind=row.claim_kind,
                 claim_key=row.claim_key,
-                key=type_key(row.claim_kind, row.claim_key),
+                key=type_key(row.claim_kind, row.claim_key, row.scope_code or "*"),
                 display_label=row.display_label,
                 enabled=row.enabled,
                 field_map_count=len(cfg.field_maps),
@@ -495,6 +539,7 @@ def import_review_configs(
                 {
                     "claim_kind": src.claim_kind,
                     "claim_key": src.claim_key,
+                    "scope_code": src.scope_code or "*",
                     "display_label": src.display_label,
                     "enabled": src.enabled,
                     "field_maps": list(resolved.field_maps),
@@ -517,14 +562,16 @@ def import_review_configs(
                 "Correct it in the source company before importing.",
             ) from exc
         data = _payload(import_body)
-        target = find_config_row(db, client_id, src.claim_kind, src.claim_key)
+        target = find_config_row(
+            db, client_id, src.claim_kind, src.claim_key, src.scope_code or "*"
+        )
         if target is None:
             target = ClaimReviewConfig(client_id=client_id, **data)
             db.add(target)
         else:
             assert_not_stale(
                 expected=body.target_versions.get(
-                    type_key(src.claim_kind, src.claim_key)
+                    type_key(src.claim_kind, src.claim_key, src.scope_code or "*")
                 ),
                 actual=target.updated_at,
                 label=f'Rules for "{target.display_label}"',
@@ -538,7 +585,9 @@ def import_review_configs(
         db, user, "claim_review_config.imported", "claim_review_config", None,
         after={
             "source_client_id": source.id,
-            "claim_types": [(r.claim_kind, r.claim_key) for r in imported],
+            "claim_types": [
+                (r.claim_kind, r.claim_key, r.scope_code or "*") for r in imported
+            ],
         },
     )
     db.commit()

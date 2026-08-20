@@ -32,7 +32,7 @@ from app.services.claim_doc_types import (
     definition_from_row,
     seed_default_doc_types,
 )
-from app.services.claim_intake import DOC_SLOT_LABELS
+from app.services.claim_intake import CLAIM_SCOPE_CODES, DOC_SLOT_LABELS
 
 router = APIRouter(
     prefix="/claim-doc-types",
@@ -60,6 +60,7 @@ def _out(row: ClaimDocType) -> ClaimDocTypeOut:
         ],
         sector=d.sector,
         slot_key=row.slot_key,
+        claim_scope_keys=list(d.claim_scope_keys),
         is_default=row.key in DEFAULT_KEYS,
         updated_at=row.updated_at,
     )
@@ -99,6 +100,36 @@ def _clean_aliases(aliases: list[str]) -> list[str]:
     return out
 
 
+def _clean_claim_scope_keys(values: list[str]) -> list[str]:
+    """Normalize and structurally validate configured intake targets."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        key = "".join(str(raw).split()).casefold()
+        parts = key.split(":")
+        valid = (
+            len(key) <= 256
+            and len(parts) == 3
+            and parts[0] == "insured"
+            and bool(parts[1])
+            and parts[2] in CLAIM_SCOPE_CODES
+        ) or (
+            len(key) <= 256
+            and len(parts) == 2
+            and parts[0] == "flex"
+            and bool(parts[1])
+        )
+        if not valid:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"'{raw}' is not a recognised claim scope.",
+            )
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def _payload(body: ClaimDocTypeIn) -> dict[str, Any]:
     return {
         "display": body.display.strip(),
@@ -114,6 +145,7 @@ def _payload(body: ClaimDocTypeIn) -> dict[str, Any]:
         ],
         "sector": body.sector,
         "slot_key": body.slot_key,
+        "claim_scope_keys": _clean_claim_scope_keys(body.claim_scope_keys),
     }
 
 
@@ -236,6 +268,10 @@ def update_claim_doc_type(
     )
     _validate_slot_key(body.slot_key)
     data = _payload(body)
+    if "claim_scope_keys" not in body.model_fields_set:
+        # Backward-compatible for older broker clients: omission means leave
+        # routing untouched, while an explicit [] deliberately clears it.
+        data["claim_scope_keys"] = row.claim_scope_keys
     _assert_aliases_unambiguous(
         client_doc_type_rows(db, client_id),
         aliases=data["aliases"],
@@ -248,6 +284,7 @@ def update_claim_doc_type(
         "key_fields": row.key_fields,
         "sector": row.sector,
         "slot_key": row.slot_key,
+        "claim_scope_keys": row.claim_scope_keys,
     }
     for field, value in data.items():
         setattr(row, field, value)

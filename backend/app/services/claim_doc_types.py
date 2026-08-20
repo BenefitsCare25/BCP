@@ -71,6 +71,9 @@ class DocTypeDefinition:
     sector: str | None = None
     # The required-document slot this upload fills, when unambiguous.
     slot_key: str | None = None
+    # Exact keys (`insured:ghs:ghs_hospitalisation`) or product-wildcard
+    # patterns (`insured:*:ghs_hospitalisation`).
+    claim_scope_keys: tuple[str, ...] = ()
 
 
 DISCHARGE_SUMMARY = DocTypeDefinition(
@@ -90,6 +93,7 @@ DISCHARGE_SUMMARY = DocTypeDefinition(
         KeyField("Surgery", ("surgery", "operation", "procedure"), optional=True),
     ),
     slot_key=DOC_DISCHARGE_SUMMARY,
+    claim_scope_keys=("insured:*:ghs_hospitalisation",),
 )
 
 FINAL_TAX_INVOICE = DocTypeDefinition(
@@ -135,6 +139,7 @@ DEFAULT_DOC_TYPES: tuple[DocTypeDefinition, ...] = (
 )
 
 DEFAULT_KEYS: frozenset[str] = frozenset(d.key for d in DEFAULT_DOC_TYPES)
+_DEFAULT_BY_KEY = {d.key: d for d in DEFAULT_DOC_TYPES}
 
 # Field-label tokens that mark an invoice as an INPATIENT bill (vs a plain
 # clinic receipt, which shares the "tax invoice" title).
@@ -175,6 +180,9 @@ def definition_from_row(row: ClaimDocType) -> DocTypeDefinition:
         ) or (_norm(name),)
         key_fields.append(KeyField(name, tokens, optional=bool(kf.get("optional"))))
     sector = row.sector if row.sector in (SECTOR_GOVT, SECTOR_PRIVATE) else None
+    configured_scopes = row.claim_scope_keys
+    if configured_scopes is None and row.key in _DEFAULT_BY_KEY:
+        configured_scopes = list(_DEFAULT_BY_KEY[row.key].claim_scope_keys)
     return DocTypeDefinition(
         key=row.key,
         display=row.display,
@@ -182,6 +190,11 @@ def definition_from_row(row: ClaimDocType) -> DocTypeDefinition:
         key_fields=tuple(key_fields),
         sector=sector,
         slot_key=row.slot_key,
+        claim_scope_keys=tuple(
+            _norm(scope).replace(" ", "")
+            for scope in (configured_scopes or [])
+            if isinstance(scope, str) and scope.strip()
+        ),
     )
 
 
@@ -223,12 +236,32 @@ def seed_default_doc_types(db: Session, client_id: str) -> list[ClaimDocType]:
             ],
             sector=d.sector,
             slot_key=d.slot_key,
+            claim_scope_keys=list(d.claim_scope_keys),
         )
         for d in DEFAULT_DOC_TYPES
     ]
     db.add_all(rows)
     db.flush()
     return rows
+
+
+def scope_pattern_matches(pattern: str, scope_key: str) -> bool:
+    """Whether a configured document target matches one available scope."""
+    wanted = _norm(pattern).replace(" ", "").split(":")
+    actual = _norm(scope_key).replace(" ", "").split(":")
+    return len(wanted) == len(actual) and all(
+        expected == "*" or expected == value
+        for expected, value in zip(wanted, actual, strict=True)
+    )
+
+
+def definition_targets_scope(
+    definition: DocTypeDefinition, scope_key: str
+) -> bool:
+    return any(
+        scope_pattern_matches(pattern, scope_key)
+        for pattern in definition.claim_scope_keys
+    )
 
 
 # ── classification + completeness ─────────────────────────────────────────────

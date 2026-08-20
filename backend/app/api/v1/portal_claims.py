@@ -88,14 +88,15 @@ from app.services.claim_fx import (
 )
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
-    CATEGORY_INPATIENT,
     DOC_SLOT_LABELS,
     HOSPITALISATION_SLOTS_BY_SECTOR,
     SUB_TYPE_HOSPITALISATION,
+    ClaimScopeDefinition,
     anchor_mode_for,
     assert_documents_satisfy_slots,
-    benefit_row_for_sub_type,
     claim_profile_for,
+    claim_scope_definitions,
+    claim_scope_key,
     person_employee_ids,
     referral_letters_for,
     required_doc_slots,
@@ -178,24 +179,24 @@ def _slots(keys: list[str]) -> list[DocSlotOut]:
     return [DocSlotOut(key=k, label=DOC_SLOT_LABELS[k]) for k in keys]
 
 
-def _claim_type_option(
-    line, label: str, sub_type: str | None
-) -> ClaimTypeOption:
+def _claim_type_option(line, scope: ClaimScopeDefinition) -> ClaimTypeOption:
     """One dropdown entry with its required-document slots. The default slots
     assume no/unlisted hospital; the Hospitalisation/Day Surgery entry also
     carries the per-sector sets so the form can switch when the member picks
     a listed hospital."""
     by_sector = (
         {k: _slots(v) for k, v in HOSPITALISATION_SLOTS_BY_SECTOR.items()}
-        if sub_type == SUB_TYPE_HOSPITALISATION
+        if scope.sub_type == SUB_TYPE_HOSPITALISATION
         else None
     )
     return ClaimTypeOption(
-        label=label,
-        sub_type=sub_type,
-        requires_doctor_name=requires_doctor_name(line.product_code, sub_type),
-        anchor_mode=anchor_mode_for(line.product_code, sub_type),
-        doc_slots=_slots(required_doc_slots(line.product_code, sub_type)),
+        label=scope.label,
+        sub_type=scope.sub_type,
+        scope_code=scope.code,
+        scope_key=claim_scope_key("insured", line.product_code, scope.code),
+        requires_doctor_name=requires_doctor_name(line.product_code, scope.sub_type),
+        anchor_mode=anchor_mode_for(line.product_code, scope.sub_type),
+        doc_slots=_slots(required_doc_slots(line.product_code, scope.sub_type)),
         doc_slots_by_sector=by_sector,
     )
 
@@ -243,21 +244,15 @@ def build_coverage_options(
         base_label = (
             profile.claim_type_label or line.product_name or line.product_code
         )
-        # The dropdown entries this product contributes. Inpatient products
-        # expand into their sub-claim types; GP-family adds TCM/Physio riders
-        # only when the member's schedule actually carries a matching row.
-        if profile.category == CATEGORY_INPATIENT:
-            claim_types = [
-                _claim_type_option(line, s, s) for s in profile.sub_types
-            ]
-        else:
-            claim_types = [_claim_type_option(line, base_label, None)]
-            if not profile.sub_type_required:
-                claim_types.extend(
-                    _claim_type_option(line, s, s)
-                    for s in profile.sub_types
-                    if benefit_row_for_sub_type(line.benefit_schedule, s)
-                )
+        # Shared scope catalogue: the broker settings screen calls the same
+        # builder over every plan schedule, while this member view supplies the
+        # one schedule the member actually holds.
+        claim_types = [
+            _claim_type_option(line, scope)
+            for scope in claim_scope_definitions(
+                line.product_code, base_label, [line.benefit_schedule]
+            )
+        ]
         product = products_by_code.get(line.product_code)
         insurer = (
             insurers_by_product.get(product.id) if product is not None else None

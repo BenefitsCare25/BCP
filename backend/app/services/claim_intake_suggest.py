@@ -27,7 +27,11 @@ from app.schemas.claims import (
     IntakeClaimant,
     IntakeFields,
 )
-from app.services.claim_doc_types import DocTypeDefinition, classify_document
+from app.services.claim_doc_types import (
+    DocTypeDefinition,
+    classify_document,
+    definition_targets_scope,
+)
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     GHS_SUB_TYPES,
@@ -35,6 +39,7 @@ from app.services.claim_intake import (
     SUB_TYPE_PHYSIO,
     SUB_TYPE_TCM,
     claim_profile_for,
+    claim_scope_key,
     normalize_invoice_number,
 )
 from app.services.claims_ai_confidence import confidence_threshold
@@ -583,19 +588,56 @@ def _infer_claim_type(
     else:
         insured = list(coverage_opts.insured)
 
-    entries: list[tuple[str, str, str | None]] = []  # (value, setting, sub_type)
+    entries: list[tuple[str, str, str | None, str]] = []
+    # (selection value, inferred setting, sub_type, stable scope key)
     for opt in insured:
         for i, ct in enumerate(opt.claim_types):
             entries.append((
                 f"insured:{opt.product_code}:{i}",
                 _entry_setting(opt, ct.sub_type, ct.label),
                 ct.sub_type,
+                ct.scope_key,
             ))
+    if coverage_opts.flex is not None:
+        entries.extend(
+            (
+                f"flex:{category.name}",
+                "flex",
+                None,
+                claim_scope_key("flex", category.name),
+            )
+            for category in coverage_opts.flex.categories
+        )
 
     labels = " ".join(_label(f) + " " + _val(f) for f in _fields(document))
     text = " ".join(filter(None, [document.get("document_type") or "", provider or "", labels]))
+
+    # Broker-configured routing is authoritative when the recognised document
+    # type maps to one or more scopes the member actually holds. Multiple
+    # matches remain candidates; the form never guesses between two covered
+    # products that intentionally share the same document definition.
+    definition = classify_document(
+        document.get("document_type"),
+        _fields(document),
+        definitions=doc_types,
+        sector_hint=hospital_sector(provider),
+    )
+    if definition is not None and definition.claim_scope_keys:
+        configured = [
+            value
+            for value, _, _, scope_key in entries
+            if definition_targets_scope(definition, scope_key)
+        ]
+        configured = list(dict.fromkeys(configured))
+        if len(configured) == 1:
+            return configured[0], []
+        if configured:
+            return None, configured
+
     targets, specialist_surgical = _target_settings(document, text, provider, doc_types)
-    matched = [(v, setting, st) for v, setting, st in entries if setting in targets]
+    matched = [
+        (v, setting, st) for v, setting, st, _ in entries if setting in targets
+    ]
 
     # Inpatient bills match all four GHS sub-types by setting — narrow to the
     # one the wording points at (A&E → emergency, "day surgery" → hospitalisation…).

@@ -520,6 +520,9 @@ export interface ClaimAnchor {
 export interface ClaimTypeOption {
   label: string;
   sub_type: string | null;
+  /** Stable configuration identity; the label may change without orphaning it. */
+  scope_code: string;
+  scope_key: string;
   /** Pre-/post-hospitalisation consults must name the treating doctor. SERVED
    * by `claim_intake.requires_doctor_name`, never re-derived from the sub-type
    * label here — a relabel there would silently stop the form asking for a

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Claim, ClaimReviewConfig
 from app.models.claim import CLAIM_KIND_FLEX, CLAIM_KIND_INSURED
+from app.services.claim_intake import SCOPE_STANDARD, scope_code_for_sub_type
 from app.services.claims_review.field_maps import AI_RULES, FIELD_MAPS
 
 logger = logging.getLogger(__name__)
@@ -139,7 +140,11 @@ def _norm_key(value: str | None) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
-def type_key(claim_kind: str | None, claim_key: str | None) -> str:
+def type_key(
+    claim_kind: str | None,
+    claim_key: str | None,
+    scope_code: str = "*",
+) -> str:
     """The claim type's identity, as the frontend must join on it.
 
     Served on BOTH sides of the join (``ReviewClaimTypeOut.key`` and
@@ -149,7 +154,9 @@ def type_key(claim_kind: str | None, claim_key: str | None) -> str:
     drifts is silent: the configured claim type renders as "Default" while its
     rules are live, and "Customize" then 409s ``duplicate_claim_type``.
     """
-    return f"{claim_kind or ''}:{_norm_key(claim_key)}"
+    base = f"{claim_kind or ''}:{_norm_key(claim_key)}"
+    scope = _norm_key(scope_code) or "*"
+    return base if scope == "*" else f"{base}:{scope}"
 
 
 # The severity tag `rendered_rules` prefixes onto each rule for the prompt.
@@ -263,22 +270,39 @@ def claim_key_for(claim: Claim) -> tuple[str, str]:
     return CLAIM_KIND_INSURED, claim.product_code or ""
 
 
+def claim_scope_for(claim: Claim) -> tuple[str, str, str]:
+    """The exact configurable scope for a claim."""
+    kind, key = claim_key_for(claim)
+    if kind == CLAIM_KIND_FLEX:
+        return kind, key, SCOPE_STANDARD
+    return kind, key, scope_code_for_sub_type(claim.sub_type)
+
+
 def config_rows(db: Session, client_id: str) -> list[ClaimReviewConfig]:
     return list(
         db.execute(
             select(ClaimReviewConfig)
             .where(ClaimReviewConfig.client_id == client_id)
-            .order_by(ClaimReviewConfig.claim_kind, ClaimReviewConfig.display_label)
+            .order_by(
+                ClaimReviewConfig.claim_kind,
+                ClaimReviewConfig.display_label,
+                ClaimReviewConfig.scope_code,
+            )
         ).scalars()
     )
 
 
 def find_config_row(
-    db: Session, client_id: str, claim_kind: str, claim_key: str
+    db: Session,
+    client_id: str,
+    claim_kind: str,
+    claim_key: str,
+    scope_code: str = "*",
 ) -> ClaimReviewConfig | None:
     """Exact (kind, key) match, key compared normalized/casefolded — flex
     category names come from free-text scheme config."""
     wanted = _norm_key(claim_key)
+    wanted_scope = _norm_key(scope_code) or "*"
     if not wanted:
         return None
     rows = db.execute(
@@ -287,17 +311,30 @@ def find_config_row(
             ClaimReviewConfig.claim_kind == claim_kind,
         )
     ).scalars()
-    return next((r for r in rows if _norm_key(r.claim_key) == wanted), None)
+    return next(
+        (
+            r
+            for r in rows
+            if _norm_key(r.claim_key) == wanted
+            and _norm_key(r.scope_code or "*") == wanted_scope
+        ),
+        None,
+    )
 
 
 def resolve_review_config(db: Session, claim: Claim) -> ReviewConfig:
     """The configuration this claim's review runs with. Zero-config (no row,
     or the row is disabled) always resolves to the in-code defaults."""
-    kind, key = claim_key_for(claim)
-    row = find_config_row(db, claim.client_id, kind, key)
-    if row is None or not row.enabled:
-        return default_review_config()
-    return config_from_row(row)
+    kind, key, scope = claim_scope_for(claim)
+    # Exact subclaim override first, then the existing product/category row as
+    # the inherited default. This preserves every pre-migration setup.
+    row = find_config_row(db, claim.client_id, kind, key, scope)
+    if row is not None and row.enabled:
+        return config_from_row(row)
+    parent = find_config_row(db, claim.client_id, kind, key, "*")
+    if parent is not None and parent.enabled:
+        return config_from_row(parent)
+    return default_review_config()
 
 
 def rendered_rules(config: ReviewConfig) -> list[str]:

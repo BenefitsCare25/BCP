@@ -375,6 +375,15 @@ def test_coverage_options(anon: TestClient):
     # Inpatient products expand into their sub-claim types.
     assert ghs["category"] == "inpatient"
     assert [t["sub_type"] for t in ghs["claim_types"]] == ghs["sub_types"]
+    assert [t["scope_code"] for t in ghs["claim_types"]] == [
+        "ghs_pre_post",
+        "ghs_hospitalisation",
+        "ghs_emergency_outpatient",
+        "ghs_dialysis_cancer",
+    ]
+    assert ghs["claim_types"][1]["scope_key"] == (
+        "insured:ghs:ghs_hospitalisation"
+    )
     # GP-family is outpatient: plain GP always, TCM only because the plan's
     # schedule has a TCM row, no Physiotherapy (no matching row).
     gp = body["insured"][1]
@@ -385,6 +394,9 @@ def test_coverage_options(anon: TestClient):
         "TCM (Traditional Chinese Medicine)",
     ]
     assert gp["claim_types"][0]["sub_type"] is None
+    assert [t["scope_code"] for t in gp["claim_types"]] == [
+        "standard", "gp_tcm"
+    ]
     # Document slots: GP is the generic invoice/receipt; the hospitalisation
     # entry defaults to the private set and carries both sector sets for the
     # hospital picker; other inpatient sub-types stay generic.

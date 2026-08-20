@@ -17,7 +17,13 @@ from app.schemas.claims import (
     FlexClaimOptions,
     InsuredClaimOption,
 )
-from app.services.claim_intake import GHS_SUB_TYPES, requires_doctor_name
+from app.services.claim_intake import (
+    GHS_SUB_TYPES,
+    SCOPE_STANDARD,
+    claim_scope_key,
+    requires_doctor_name,
+    scope_code_for_sub_type,
+)
 from app.services.claim_intake_suggest import suggest_from_extraction
 
 YEAR = PolicyYear(
@@ -39,7 +45,11 @@ def _gp_option() -> InsuredClaimOption:
         product_code="GP",
         product_name="Group Outpatient GP",
         category="outpatient",
-        claim_types=[ClaimTypeOption(label="GP (General Practitioner)")],
+        claim_types=[ClaimTypeOption(
+            label="GP (General Practitioner)",
+            scope_code=SCOPE_STANDARD,
+            scope_key=claim_scope_key("insured", "GP", SCOPE_STANDARD),
+        )],
     )
 
 
@@ -48,7 +58,11 @@ def _dental_option() -> InsuredClaimOption:
         product_code="GD",
         product_name="Group Dental",
         category="outpatient",
-        claim_types=[ClaimTypeOption(label="Dental")],
+        claim_types=[ClaimTypeOption(
+            label="Dental",
+            scope_code=SCOPE_STANDARD,
+            scope_key=claim_scope_key("insured", "GD", SCOPE_STANDARD),
+        )],
     )
 
 
@@ -63,6 +77,10 @@ def _ghs_option() -> InsuredClaimOption:
             ClaimTypeOption(
                 label=s,
                 sub_type=s,
+                scope_code=scope_code_for_sub_type(s),
+                scope_key=claim_scope_key(
+                    "insured", "GHS", scope_code_for_sub_type(s)
+                ),
                 requires_doctor_name=requires_doctor_name("GHS", s),
             )
             for s in GHS_SUB_TYPES
@@ -76,7 +94,11 @@ def _sp_option() -> InsuredClaimOption:
         product_name="Group Outpatient Specialist",
         category="outpatient",
         requires_referral=True,
-        claim_types=[ClaimTypeOption(label="SP (Specialist)")],
+        claim_types=[ClaimTypeOption(
+            label="SP (Specialist)",
+            scope_code=SCOPE_STANDARD,
+            scope_key=claim_scope_key("insured", "SP", SCOPE_STANDARD),
+        )],
     )
 
 
@@ -814,6 +836,74 @@ def test_custom_sector_neutral_type_does_not_shadow_invoice():
     ]
     defn = classify_document("tax invoice", fields, definitions=defs)
     assert defn is not None and defn.key == "finalised_tax_invoice"
+
+
+def test_configured_document_scope_selects_the_matching_claim_choice():
+    """Document identity routing is checked before wording heuristics, but only
+    against claim choices the member actually holds."""
+    from app.services.claim_doc_types import DocTypeDefinition
+
+    dental_receipt = DocTypeDefinition(
+        key="dental_receipt",
+        display="Dental Receipt",
+        aliases=("receipt",),
+        key_fields=(),
+        claim_scope_keys=("insured:gd:standard",),
+    )
+    out = suggest_from_extraction(
+        _receipt_document(),
+        _coverage([_gp_option(), _dental_option()]),
+        _employee(),
+        YEAR,
+        doc_types=(dental_receipt,),
+    )
+    assert out.claim_selection == "insured:GD:0"
+    assert out.claim_candidates == []
+
+
+def test_configured_document_scope_never_guesses_between_two_matches():
+    from app.services.claim_doc_types import DocTypeDefinition
+
+    shared_receipt = DocTypeDefinition(
+        key="shared_receipt",
+        display="Shared Receipt",
+        aliases=("receipt",),
+        key_fields=(),
+        claim_scope_keys=("insured:gp:standard", "insured:gd:standard"),
+    )
+    out = suggest_from_extraction(
+        _receipt_document(),
+        _coverage([_gp_option(), _dental_option()]),
+        _employee(),
+        YEAR,
+        doc_types=(shared_receipt,),
+    )
+    assert out.claim_selection is None
+    assert out.claim_candidates == ["insured:GP:0", "insured:GD:0"]
+
+
+def test_configured_document_scope_can_select_a_flex_category():
+    from app.services.claim_doc_types import DocTypeDefinition
+
+    optical_receipt = DocTypeDefinition(
+        key="optical_receipt",
+        display="Optical Receipt",
+        aliases=("receipt",),
+        key_fields=(),
+        claim_scope_keys=("flex:optical",),
+    )
+    flex = FlexClaimOptions(
+        categories=[FlexClaimCategoryOption(name="Optical")]
+    )
+    out = suggest_from_extraction(
+        _receipt_document(),
+        _coverage([], flex=flex),
+        _employee(),
+        YEAR,
+        doc_types=(optical_receipt,),
+    )
+    assert out.claim_selection == "flex:Optical"
+    assert out.claim_candidates == []
 
 
 # ── Surgical specialist invoice → pre-/post-hospitalisation ──────────────────

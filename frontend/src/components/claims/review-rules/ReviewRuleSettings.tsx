@@ -23,6 +23,7 @@ import {
   useReviewScopeOptions,
   type ClaimReviewConfig,
   type ClaimReviewConfigInput,
+  type ReviewClaimScope,
   type ReviewClaimType,
 } from "@/api/claims";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -57,23 +58,32 @@ function TypeRow({
   label,
   subLabel,
   config,
+  inheritedConfig = null,
+  nested = false,
   onEdit,
   onRevert,
 }: {
   label: string;
   subLabel?: string;
   config: ClaimReviewConfig | null;
+  inheritedConfig?: ClaimReviewConfig | null;
+  nested?: boolean;
   onEdit: () => void;
   onRevert: () => void;
 }) {
+  const effective = config?.enabled ? config : inheritedConfig;
   return (
     // A row on the section's divided rail, not its own card: a stack of
     // bordered cards inside a Card double-frames every claim type.
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 transition-colors hover:bg-muted/40">
+    <div
+      className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 transition-colors hover:bg-muted/40 ${nested ? "pl-9" : ""}`}
+    >
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
         <p className="text-xs text-muted-foreground">
-          {config ? summarize(config) : (subLabel ?? "Built-in review rules")}
+          {effective
+            ? summarize(effective)
+            : (subLabel ?? "Built-in review rules")}
         </p>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -88,6 +98,8 @@ function TypeRow({
           <Badge variant={config.enabled ? "info" : "outline"}>
             {config.enabled ? "Custom" : "Custom (off)"}
           </Badge>
+        ) : inheritedConfig ? (
+          <Badge variant="outline">Inherited</Badge>
         ) : (
           <Badge variant="outline">Default</Badge>
         )}
@@ -147,7 +159,9 @@ export function ReviewRuleSettings() {
   }, [configs.data]);
 
   const claimTypes = options.data?.claim_types ?? [];
-  const knownKeys = new Set(claimTypes.map((t) => t.key));
+  const knownKeys = new Set(
+    claimTypes.flatMap((t) => [t.key, ...t.scopes.map((scope) => scope.key)]),
+  );
   // Customized setups with no matching claim type. Normally that means the
   // type is gone (product removed, flex category renamed) — inert, but they
   // must stay visible to edit or delete. With NO current year there is no
@@ -156,21 +170,28 @@ export function ReviewRuleSettings() {
   const hasCurrentYear = options.data?.has_current_year ?? true;
   const unmatched = (configs.data ?? []).filter((c) => !knownKeys.has(c.key));
 
-  const openEditor = (t: ReviewClaimType, config: ClaimReviewConfig | null) => {
+  const openEditor = (
+    t: RuleTarget,
+    config: ClaimReviewConfig | null,
+    inheritedConfig: ClaimReviewConfig | null = null,
+  ) => {
     const defaults = options.data?.default_config;
-    const draft: ClaimReviewConfigInput = config
+    const source = config ?? inheritedConfig;
+    const draft: ClaimReviewConfigInput = source
       ? {
-          claim_kind: config.claim_kind,
-          claim_key: config.claim_key,
-          display_label: config.display_label,
-          enabled: config.enabled,
-          field_maps: config.field_maps.map((m) => ({ ...m })),
-          ai_rules: config.ai_rules.map((r) => ({ ...r })),
-          required_documents: [...config.required_documents],
+          claim_kind: t.claim_kind,
+          claim_key: t.claim_key,
+          scope_code: t.scope_code,
+          display_label: config?.display_label ?? t.display_label,
+          enabled: config?.enabled ?? true,
+          field_maps: source.field_maps.map((m) => ({ ...m })),
+          ai_rules: source.ai_rules.map((r) => ({ ...r })),
+          required_documents: [...source.required_documents],
         }
       : {
           claim_kind: t.claim_kind,
           claim_key: t.claim_key,
+          scope_code: t.scope_code,
           display_label: t.display_label,
           enabled: true,
           field_maps: (defaults?.field_maps ?? []).map((m) => ({ ...m })),
@@ -191,6 +212,7 @@ export function ReviewRuleSettings() {
       draft: {
         claim_kind: config.claim_kind,
         claim_key: config.claim_key,
+        scope_code: config.scope_code,
         display_label: config.display_label,
         enabled: config.enabled,
         field_maps: config.field_maps.map((m) => ({ ...m })),
@@ -216,8 +238,8 @@ export function ReviewRuleSettings() {
             <CardDescription className="max-w-prose">
               What the AI checks when it reviews a submitted claim — field
               comparisons, business rules and required documents, configurable
-              per claim type. Types without a custom setup use the built-in
-              defaults.
+              per claim choice. Product defaults are inherited unless a child
+              claim choice has its own override.
             </CardDescription>
           </div>
           <Button
@@ -273,17 +295,53 @@ export function ReviewRuleSettings() {
                 </div>
               )}
               {insured.length > 0 && (
-                <TypeSection title="Insurance products">
+                <TypeSection
+                  title="Insurance products"
+                  note="Set a product default once, then override only the claim choices that need different checks."
+                >
                   {insured.map((t) => {
                     const cfg = configByType.get(t.key) ?? null;
+                    const enabledParent = cfg?.enabled ? cfg : null;
+                    const showChildren =
+                      t.scopes.length > 1 ||
+                      t.scopes.some((scope) => scope.scope_code !== "standard");
                     return (
-                      <TypeRow
-                        key={t.key}
-                        label={t.display_label}
-                        config={cfg}
-                        onEdit={() => openEditor(t, cfg)}
-                        onRevert={() => cfg && setReverting(cfg)}
-                      />
+                      <div key={t.key} className="divide-y divide-border">
+                        <TypeRow
+                          label={showChildren ? `${t.display_label} default` : t.display_label}
+                          subLabel={
+                            showChildren
+                              ? "Inherited by every claim choice below"
+                              : undefined
+                          }
+                          config={cfg}
+                          onEdit={() =>
+                            openEditor({ ...t, scope_code: "*" }, cfg)
+                          }
+                          onRevert={() => cfg && setReverting(cfg)}
+                        />
+                        {showChildren &&
+                          t.scopes.map((scope) => {
+                            const child = configByType.get(scope.key) ?? null;
+                            return (
+                              <TypeRow
+                                key={scope.key}
+                                label={scope.display_label}
+                                config={child}
+                                inheritedConfig={enabledParent}
+                                nested
+                                onEdit={() =>
+                                  openEditor(
+                                    scopeTarget(t, scope),
+                                    child,
+                                    enabledParent,
+                                  )
+                                }
+                                onRevert={() => child && setReverting(child)}
+                              />
+                            );
+                          })}
+                      </div>
                     );
                   })}
                 </TypeSection>
@@ -297,7 +355,7 @@ export function ReviewRuleSettings() {
                         key={t.key}
                         label={t.display_label}
                         config={cfg}
-                        onEdit={() => openEditor(t, cfg)}
+                        onEdit={() => openEditor({ ...t, scope_code: "*" }, cfg)}
                         onRevert={() => cfg && setReverting(cfg)}
                       />
                     );
@@ -339,7 +397,7 @@ export function ReviewRuleSettings() {
           open={reverting !== null}
           onOpenChange={(open) => !open && setReverting(null)}
           title={`Revert "${reverting?.display_label}" to the default rules?`}
-          description="The custom field mappings, business rules and required documents for this claim type are deleted, and its AI reviews use the built-in defaults again."
+          description="The custom field mappings, business rules and required documents are deleted. Reviews then inherit the product setup when one exists, or use the built-in defaults."
           confirmLabel="Revert to defaults"
           loading={del.isPending}
           onConfirm={() => {
@@ -353,4 +411,18 @@ export function ReviewRuleSettings() {
       </Card>
     </div>
   );
+}
+
+type RuleTarget = Pick<
+  ReviewClaimType,
+  "claim_kind" | "claim_key" | "display_label"
+> & { scope_code: string };
+
+function scopeTarget(type: ReviewClaimType, scope: ReviewClaimScope): RuleTarget {
+  return {
+    claim_kind: type.claim_kind,
+    claim_key: type.claim_key,
+    scope_code: scope.scope_code,
+    display_label: scope.display_label,
+  };
 }

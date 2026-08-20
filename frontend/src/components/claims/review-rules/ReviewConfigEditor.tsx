@@ -152,8 +152,9 @@ export function ReviewConfigEditor({
             />
             Use this setup
             <InfoHint>
-              Switched off, this claim type's reviews fall back to the built-in
-              default rules without losing your configuration.
+              Switched off, this claim choice inherits its product setup when
+              available, then falls back to the built-in rules. Your saved
+              configuration is retained.
             </InfoHint>
           </label>
 
