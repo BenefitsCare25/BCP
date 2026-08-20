@@ -72,6 +72,8 @@ GP_SUB_TYPES: tuple[str, ...] = (SUB_TYPE_TCM, SUB_TYPE_PHYSIO)
 SCOPE_STANDARD = "standard"
 SCOPE_GHS_PRE_POST = "ghs_pre_post"
 SCOPE_GHS_HOSPITALISATION = "ghs_hospitalisation"
+SCOPE_GHS_HOSPITALISATION_GOVT = "ghs_hospitalisation_govt"
+SCOPE_GHS_HOSPITALISATION_PRIVATE = "ghs_hospitalisation_private"
 SCOPE_GHS_EMERGENCY = "ghs_emergency_outpatient"
 SCOPE_GHS_DIALYSIS_CANCER = "ghs_dialysis_cancer"
 SCOPE_GP_TCM = "gp_tcm"
@@ -87,7 +89,12 @@ _SUB_TYPE_SCOPE_CODES: dict[str, str] = {
 }
 
 CLAIM_SCOPE_CODES: frozenset[str] = frozenset(
-    {SCOPE_STANDARD, *_SUB_TYPE_SCOPE_CODES.values()}
+    {
+        SCOPE_STANDARD,
+        *_SUB_TYPE_SCOPE_CODES.values(),
+        SCOPE_GHS_HOSPITALISATION_GOVT,
+        SCOPE_GHS_HOSPITALISATION_PRIVATE,
+    }
 )
 
 # Keywords that identify the SOB row funding each GP-rider sub-type.
@@ -418,6 +425,29 @@ def requires_doctor_name(
     never have to match on.
     """
     return is_pre_post_consult(product_code, sub_type, claim_kind=claim_kind)
+
+
+def supports_stay_dates(
+    product_code: str | None,
+    sub_type: str | None,
+    *,
+    claim_kind: str = CLAIM_KIND_INSURED,
+) -> bool:
+    """Whether this claim may record an optional hospital-stay date range.
+
+    Served to both member forms rather than re-derived from the display label
+    or from document-slot configuration. The latter happens to identify this
+    subtype today, but required documents are broker-editable while the clinical
+    meaning of an admission/discharge pair is not. The visit date remains the
+    required treatment date because day-surgery documents may state only that.
+    """
+    if claim_kind != CLAIM_KIND_INSURED:
+        return False
+    profile = claim_profile_for(product_code)
+    return (
+        profile.category == CATEGORY_INPATIENT
+        and normalize_sub_type(sub_type) == SUB_TYPE_HOSPITALISATION
+    )
 
 
 def anchor_mode_for(

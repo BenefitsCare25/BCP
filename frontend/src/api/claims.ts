@@ -1092,6 +1092,8 @@ export interface ReviewClaimScope {
   key: string;
   display_label: string;
   sub_type: string | null;
+  /** Immediate inherited scope, before the product default. */
+  parent_scope_code: string | null;
 }
 
 export interface ReviewScopeOptions {

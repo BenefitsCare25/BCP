@@ -556,6 +556,26 @@ def test_amending_away_from_a_rider_moves_the_benefit_key(anon: TestClient):
     assert res.json()["benefit_key"] is None
 
 
+def test_amending_away_from_a_hospital_stay_clears_optional_stay_dates(
+    anon: TestClient,
+):
+    claim = _draft(
+        anon,
+        sub_type="Hospitalisation/Day Surgery/Other Inpatient Treatment",
+        admission_date="2027-06-14",
+        discharge_date="2027-06-16",
+    )
+    res = _amend(
+        anon,
+        claim["id"],
+        sub_type="Emergency Accidental Outpatient Treatment",
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["supports_stay_dates"] is False
+    assert res.json()["admission_date"] is None
+    assert res.json()["discharge_date"] is None
+
+
 # ── Documents ────────────────────────────────────────────────────────────────
 
 

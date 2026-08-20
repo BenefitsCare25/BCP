@@ -58,6 +58,10 @@ class ClaimCreateIn(BaseModel):
     # Specialist claims: "first" | "follow_up" (drives the referral rule).
     visit_type: str | None = Field(default=None, max_length=16)
     incurred_date: date
+    # Hospitalisation/Day Surgery/Other Inpatient Treatment only. Both are
+    # optional because day-surgery evidence may state only the visit date.
+    admission_date: date | None = None
+    discharge_date: date | None = None
     provider_name: str = Field(min_length=2, max_length=255)
     invoice_number: str = Field(min_length=1, max_length=128)
     # Required for pre-/post-hospitalisation consults only (validated against
@@ -139,6 +143,8 @@ class _ClaimAmendBase(BaseModel):
     sub_type: str | None = Field(default=None, max_length=64)
     visit_type: str | None = Field(default=None, max_length=16)
     incurred_date: date | None = None
+    admission_date: date | None = None
+    discharge_date: date | None = None
     provider_name: str | None = Field(default=None, min_length=2, max_length=255)
     invoice_number: str | None = Field(default=None, min_length=1, max_length=128)
     doctor_name: str | None = Field(default=None, max_length=255)
@@ -305,6 +311,11 @@ class ClaimOut(_Base):
     sub_type: str | None = None
     visit_type: str | None = None
     incurred_date: date
+    # Member-stated stay dates for the hospitalisation/day-surgery subtype.
+    # These columns previously appeared only on the broker projection even
+    # though they are part of the member's submission after smart intake.
+    admission_date: date | None = None
+    discharge_date: date | None = None
     provider_name: str | None = None
     invoice_number: str | None = None
     doctor_name: str | None = None
@@ -390,6 +401,9 @@ class ClaimOut(_Base):
     # whether `doctor_name` is already set gets a legacy claim exactly wrong: it
     # hides the control on the one claim that needs it.
     requires_doctor_name: bool = False
+    # Whether the member create/edit forms may collect optional admission and
+    # discharge dates. Served rather than inferred from the mutable subtype label.
+    supports_stay_dates: bool = False
     # The optimistic-concurrency token (see `Claim.revision`). Member-visible
     # because the member's own amendment sends it back — two devices on one
     # claim is the ordinary case, not an exotic one.
@@ -480,8 +494,6 @@ class BrokerClaimOut(ClaimOut):
     # its label from the same resolver. `hospital_type` above is the assessor's
     # OVERRIDE: null there means "use this", not "nobody has looked".
     hospital_type_derived: str | None = None
-    admission_date: date | None = None
-    discharge_date: date | None = None
     taxable: bool | None = None
     cpf_claimable: bool | None = None
     # BROKER-ONLY, and the reason this lives here rather than on `ClaimOut`:
@@ -942,6 +954,9 @@ class ClaimTypeOption(BaseModel):
     # on the sub-type LABEL, and a relabel there is silent — the field would
     # simply stop being asked for while the server kept requiring it.
     requires_doctor_name: bool = False
+    # Hospitalisation/Day Surgery/Other Inpatient Treatment only. Served so
+    # the form never matches on display wording or document-slot configuration.
+    supports_stay_dates: bool = False
     # Which earlier visit this claim type may be anchored to — "admission"
     # (pre-/post-hospitalisation), "sp_course" (a specialist follow-up), or null
     # for the types that continue nothing. SERVED for the same reason as the
@@ -1051,6 +1066,8 @@ class IntakeClaimant(BaseModel):
 class IntakeFields(BaseModel):
     provider_name: str | None = None
     incurred_date: str | None = None  # ISO date
+    admission_date: str | None = None  # ISO date
+    discharge_date: str | None = None  # ISO date
     invoice_number: str | None = None
     amount: float | None = None
     currency: str | None = None
@@ -1271,6 +1288,7 @@ class ReviewAIRuleModel(BaseModel):
 # context added by the review pipeline. Serving this list to the editor keeps
 # the UI and write-side validation on one backend-owned vocabulary.
 CLAIM_REVIEW_PORTAL_FIELDS = (
+    "admission_date",
     "amount_claimed",
     "benefit_key",
     "claim_kind",
@@ -1280,6 +1298,7 @@ CLAIM_REVIEW_PORTAL_FIELDS = (
     "claimant_relationship",
     "currency",
     "diagnosis",
+    "discharge_date",
     "doctor_name",
     "flex_category_name",
     "incurred_date",
@@ -1404,6 +1423,9 @@ class ReviewClaimScopeOut(BaseModel):
     key: str
     display_label: str
     sub_type: str | None = None
+    # A second-level review override (currently hospital sector) inherits this
+    # scope before falling back to the product default.
+    parent_scope_code: str | None = None
 
 
 class ReviewClaimTypeOut(BaseModel):

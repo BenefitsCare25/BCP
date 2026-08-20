@@ -33,6 +33,43 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
           )}
         </Field>
 
+        {form.supportsStayDates && (
+          <>
+            <Field
+              label="Admission date (optional)"
+              error={form.fieldErrors.admission_date}
+            >
+              {(p) => (
+                <input
+                  {...p}
+                  type="date"
+                  className={leafControl}
+                  min={form.claimableFrom}
+                  max={form.maxIncurred}
+                  value={form.admissionDate}
+                  onChange={(e) => form.setAdmissionDate(e.target.value)}
+                />
+              )}
+            </Field>
+            <Field
+              label="Discharge date (optional)"
+              error={form.fieldErrors.discharge_date}
+            >
+              {(p) => (
+                <input
+                  {...p}
+                  type="date"
+                  className={leafControl}
+                  min={form.admissionDate || undefined}
+                  max={form.maxDischarge}
+                  value={form.dischargeDate}
+                  onChange={(e) => form.setDischargeDate(e.target.value)}
+                />
+              )}
+            </Field>
+          </>
+        )}
+
         <Field
           label={form.isHospitalisation ? "Hospital" : "Provider / clinic"}
           required

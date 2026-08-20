@@ -25,9 +25,21 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Claim, ClaimReviewConfig
-from app.models.claim import CLAIM_KIND_FLEX, CLAIM_KIND_INSURED
-from app.services.claim_intake import SCOPE_STANDARD, scope_code_for_sub_type
+from app.models.claim import (
+    CLAIM_KIND_FLEX,
+    CLAIM_KIND_INSURED,
+    HOSPITAL_TYPE_GOVERNMENT,
+)
+from app.services.claim_intake import (
+    SCOPE_GHS_HOSPITALISATION,
+    SCOPE_GHS_HOSPITALISATION_GOVT,
+    SCOPE_GHS_HOSPITALISATION_PRIVATE,
+    SCOPE_STANDARD,
+    claim_scope_definitions,
+    scope_code_for_sub_type,
+)
 from app.services.claims_review.field_maps import AI_RULES, FIELD_MAPS
+from app.services.sg_hospitals import resolve_hospital_type
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +117,50 @@ class ReviewConfig:
             for m in self.field_maps
             if m.get("require_evidence")
         )
+
+
+@dataclass(frozen=True)
+class ReviewScopeDefinition:
+    """One broker-configurable review scope and its inheritance parent."""
+
+    code: str
+    label: str
+    sub_type: str | None
+    parent_scope_code: str | None = None
+
+
+def review_scope_definitions(
+    product_code: str | None,
+    base_label: str,
+    benefit_schedules: list[dict[str, Any] | None] | None = None,
+) -> tuple[ReviewScopeDefinition, ...]:
+    """Review-only expansion of the member claim choices.
+
+    Document routing and the member form continue to own one Hospitalisation
+    claim type. Review rules add sector children beneath that stable scope so
+    existing ``ghs_hospitalisation`` rows remain the inherited default.
+    """
+    out: list[ReviewScopeDefinition] = []
+    for scope in claim_scope_definitions(product_code, base_label, benefit_schedules):
+        out.append(ReviewScopeDefinition(scope.code, scope.label, scope.sub_type))
+        if scope.code == SCOPE_GHS_HOSPITALISATION:
+            out.extend(
+                (
+                    ReviewScopeDefinition(
+                        SCOPE_GHS_HOSPITALISATION_GOVT,
+                        "Government hospital",
+                        scope.sub_type,
+                        SCOPE_GHS_HOSPITALISATION,
+                    ),
+                    ReviewScopeDefinition(
+                        SCOPE_GHS_HOSPITALISATION_PRIVATE,
+                        "Private hospital",
+                        scope.sub_type,
+                        SCOPE_GHS_HOSPITALISATION,
+                    ),
+                )
+            )
+    return tuple(out)
 
 
 DEFAULT_AI_RULES: tuple[AIRule, ...] = tuple(
@@ -275,7 +331,17 @@ def claim_scope_for(claim: Claim) -> tuple[str, str, str]:
     kind, key = claim_key_for(claim)
     if kind == CLAIM_KIND_FLEX:
         return kind, key, SCOPE_STANDARD
-    return kind, key, scope_code_for_sub_type(claim.sub_type)
+    scope = scope_code_for_sub_type(claim.sub_type)
+    if scope == SCOPE_GHS_HOSPITALISATION:
+        hospital_type = resolve_hospital_type(
+            claim.hospital_type, claim.provider_name
+        )
+        scope = (
+            SCOPE_GHS_HOSPITALISATION_GOVT
+            if hospital_type == HOSPITAL_TYPE_GOVERNMENT
+            else SCOPE_GHS_HOSPITALISATION_PRIVATE
+        )
+    return kind, key, scope
 
 
 def config_rows(db: Session, client_id: str) -> list[ClaimReviewConfig]:
@@ -331,6 +397,18 @@ def resolve_review_config(db: Session, claim: Claim) -> ReviewConfig:
     row = find_config_row(db, claim.client_id, kind, key, scope)
     if row is not None and row.enabled:
         return config_from_row(row)
+    # Sector-specific hospital rules inherit the existing hospitalisation
+    # scope before the product default. This is also the zero-downtime path for
+    # every setup created before Government/Private scopes existed.
+    if scope in {
+        SCOPE_GHS_HOSPITALISATION_GOVT,
+        SCOPE_GHS_HOSPITALISATION_PRIVATE,
+    }:
+        hospital_parent = find_config_row(
+            db, claim.client_id, kind, key, SCOPE_GHS_HOSPITALISATION
+        )
+        if hospital_parent is not None and hospital_parent.enabled:
+            return config_from_row(hospital_parent)
     parent = find_config_row(db, claim.client_id, kind, key, "*")
     if parent is not None and parent.enabled:
         return config_from_row(parent)

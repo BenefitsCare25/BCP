@@ -1132,7 +1132,11 @@ def test_resolve_review_config_defaults_and_matching():
             cfg = resolve_review_config(s, insured_claim)
             assert cfg.config_id is None
             assert cfg.vision_fields == {
-                "amount_claimed", "incurred_date", "provider_name"
+                "amount_claimed",
+                "incurred_date",
+                "admission_date",
+                "discharge_date",
+                "provider_name",
             }
             assert all(r.severity == "critical" for r in cfg.ai_rules)
 
@@ -1201,6 +1205,105 @@ def test_exact_subclaim_review_config_overrides_product_default():
             assert resolve_review_config(s, hospital_claim).config_id == product_id
     finally:
         _drop_review_configs()
+
+
+def test_hospital_sector_review_config_inherits_hospitalisation_then_product():
+    """Government and private stays can diverge without orphaning the existing
+    hospitalisation setup. Unlisted hospitals use the stricter private branch,
+    while an assessor's stored sector override remains authoritative."""
+    from app.models.claim import HOSPITAL_TYPE_GOVERNMENT
+    from app.services.claim_intake import (
+        GHS_SUB_TYPES,
+        SCOPE_GHS_HOSPITALISATION,
+        SCOPE_GHS_HOSPITALISATION_GOVT,
+        SCOPE_GHS_HOSPITALISATION_PRIVATE,
+    )
+    from app.services.claim_review_configs import resolve_review_config
+
+    def stay(provider: str, *, hospital_type: str | None = None) -> Claim:
+        return Claim(
+            client_id=DEMO_CLIENT_ID,
+            claim_kind="insured",
+            product_code="GHS",
+            sub_type=GHS_SUB_TYPES[1],
+            provider_name=provider,
+            hospital_type=hospital_type,
+        )
+
+    try:
+        product_id = _mk_review_config(display_label="GHS default")
+        hospital_id = _mk_review_config(
+            scope_code=SCOPE_GHS_HOSPITALISATION,
+            display_label="All hospital stays",
+        )
+        govt_id = _mk_review_config(
+            scope_code=SCOPE_GHS_HOSPITALISATION_GOVT,
+            display_label="Government stays",
+        )
+        private_id = _mk_review_config(
+            scope_code=SCOPE_GHS_HOSPITALISATION_PRIVATE,
+            display_label="Private stays",
+        )
+        with SessionLocal() as s:
+            assert resolve_review_config(
+                s, stay("Singapore General Hospital")
+            ).config_id == govt_id
+            assert resolve_review_config(
+                s, stay("Raffles Hospital")
+            ).config_id == private_id
+            assert resolve_review_config(
+                s, stay("Overseas Hospital")
+            ).config_id == private_id
+            assert resolve_review_config(
+                s,
+                stay(
+                    "Raffles Hospital",
+                    hospital_type=HOSPITAL_TYPE_GOVERNMENT,
+                ),
+            ).config_id == govt_id
+
+            from app.models import ClaimReviewConfig
+
+            s.get(ClaimReviewConfig, govt_id).enabled = False
+            s.commit()
+        with SessionLocal() as s:
+            # A disabled sector override first falls back to the existing
+            # hospitalisation setup, not directly to the product default.
+            assert resolve_review_config(
+                s, stay("Singapore General Hospital")
+            ).config_id == hospital_id
+            from app.models import ClaimReviewConfig
+
+            s.get(ClaimReviewConfig, hospital_id).enabled = False
+            s.commit()
+        with SessionLocal() as s:
+            assert resolve_review_config(
+                s, stay("Singapore General Hospital")
+            ).config_id == product_id
+    finally:
+        _drop_review_configs()
+
+
+def test_hospital_review_scope_options_form_a_three_level_tree():
+    from app.services.claim_review_configs import review_scope_definitions
+
+    scopes = review_scope_definitions("GHS", "Group Hospital & Surgical")
+    hospital_scope = next(
+        scope for scope in scopes if scope.code == "ghs_hospitalisation"
+    )
+    sectors = {
+        scope.code: scope
+        for scope in scopes
+        if scope.parent_scope_code == hospital_scope.code
+    }
+    assert set(sectors) == {
+        "ghs_hospitalisation_govt",
+        "ghs_hospitalisation_private",
+    }
+    assert {scope.label for scope in sectors.values()} == {
+        "Government hospital",
+        "Private hospital",
+    }
 
 
 def test_warning_severity_rule_fail_does_not_flag():
@@ -1513,7 +1616,6 @@ def test_review_config_crud_over_http(broker: TestClient):
             "amount_claimed", "incurred_date", "provider_name"
         }
         assert len(defaults["ai_rules"]) == 6
-
         body = {
             "claim_kind": "insured",
             "claim_key": "GHS",
@@ -1538,6 +1640,12 @@ def test_review_config_crud_over_http(broker: TestClient):
             "display_label": "Hospital stay override",
         })
         assert exact.status_code == 201
+        govt = broker.post("/api/v1/claim-review-configs", json={
+            **body,
+            "scope_code": "ghs_hospitalisation_govt",
+            "display_label": "Government hospital override",
+        })
+        assert govt.status_code == 201
         invalid_scope = broker.post("/api/v1/claim-review-configs", json={
             **body,
             "scope_code": "Hospitalisation/Day Surgery",
@@ -1593,6 +1701,10 @@ def test_review_config_crud_over_http(broker: TestClient):
         assert broker.delete(
             f"/api/v1/claim-review-configs/{exact.json()['id']}",
             params={"expected_updated_at": exact.json()["updated_at"]},
+        ).status_code == 204
+        assert broker.delete(
+            f"/api/v1/claim-review-configs/{govt.json()['id']}",
+            params={"expected_updated_at": govt.json()["updated_at"]},
         ).status_code == 204
         assert broker.get("/api/v1/claim-review-configs").json() == []
     finally:

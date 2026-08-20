@@ -71,7 +71,7 @@ RECOMMEND_PROMPT_VERSION = "schema_recommend/v1"
 # part of the cache key — bumping it prevents stale v1-shaped cached payloads.
 SLIP_EXTRACT_PROMPT_VERSION = "slip_extract/v2"
 FLEX_EXTRACT_PROMPT_VERSION = "flex_extract/v1"
-CLAIM_EXTRACT_PROMPT_VERSION = "claim_extract/v1"
+CLAIM_EXTRACT_PROMPT_VERSION = "claim_extract/v2"
 # v2: severity-tagged business rules ([CRITICAL]/[WARNING]/[INFO]) + the
 # verbatim-echo instruction in the system prompt. The cache key hashes only
 # the USER prompt, so a system-prompt semantics change must bump this.

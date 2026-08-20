@@ -275,17 +275,48 @@ def _date_field(
     ceiling = min(business_today(), year.end_date)
     in_window = [p for p in parsed if year.start_date <= p[1] <= ceiling]
     pool = in_window or parsed
-    # On an inpatient bill the ADMISSION date is the incurred date — it beats
-    # the invoice-issue date (printed at/after discharge).
+    # Prefer an explicit visit/treatment date. Admission is the fallback on an
+    # inpatient bill that states no visit date; both beat the invoice date.
+    def treatment_priority(field: dict[str, Any]) -> int:
+        label = _label(field)
+        if "visit" in label or "treatment" in label:
+            return 3
+        if "admission" in label or "admitted" in label:
+            return 2
+        if "service" in label or "invoice" in label or "bill" in label:
+            return 1
+        return 0
+
     best = max(
         pool,
-        key=lambda p: (
-            any(k in _label(p[0]) for k in ("admission", "visit", "treatment")),
-            any(k in _label(p[0]) for k in ("invoice", "service")),
-            _conf(p[0]),
-        ),
+        key=lambda p: (treatment_priority(p[0]), _conf(p[0])),
     )
     return best[1].isoformat(), _conf(best[0])
+
+
+def _stay_date_field(
+    fields: list[dict[str, Any]], keywords: tuple[str, ...]
+) -> tuple[str | None, float, bool]:
+    """Read one explicitly-labelled bound of an inpatient stay.
+
+    Returns ``(value, confidence, conflict)``. Distinct readable values across
+    an invoice/discharge-summary set are never silently collapsed: the form
+    leaves that bound blank and asks the member to check it.
+    """
+    parsed = [
+        (field, parsed_date)
+        for field in fields
+        if any(keyword in _label(field) for keyword in keywords)
+        and (parsed_date := _parse_date(_val(field))) is not None
+    ]
+    if not parsed:
+        return None, 0.0, False
+    distinct = {parsed_date for _, parsed_date in parsed}
+    confidence = max(_conf(field) for field, _ in parsed)
+    if len(distinct) > 1:
+        return None, confidence, True
+    best = max(parsed, key=lambda item: _conf(item[0]))
+    return best[1].isoformat(), _conf(best[0]), False
 
 
 def _keyworded(
@@ -762,6 +793,17 @@ def suggest_from_extraction(
     provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
     amount, amount_conf = _amount(fields)
     incurred_date, date_conf = _date_field(fields, year)
+    admission_date, admission_conf, admission_conflict = _stay_date_field(
+        fields, ("admission", "admitted")
+    )
+    discharge_date, discharge_conf, discharge_conflict = _stay_date_field(
+        fields, ("discharge", "discharged")
+    )
+    if admission_conflict and not any(
+        any(keyword in _label(field) for keyword in ("visit", "treatment"))
+        for field in fields
+    ):
+        incurred_date, date_conf = None, 0.0
     invoice_number, invoice_conf = _invoice_number(fields)
     diagnosis, diag_conf = _keyworded(fields, ("diagnosis", "condition"))
     doctor, doctor_conf = _doctor_name(fields)
@@ -770,6 +812,8 @@ def suggest_from_extraction(
     out_fields = IntakeFields(
         provider_name=provider,
         incurred_date=incurred_date,
+        admission_date=admission_date,
+        discharge_date=discharge_date,
         invoice_number=invoice_number,
         amount=amount,
         currency=currency,
@@ -782,11 +826,17 @@ def suggest_from_extraction(
         ("provider_name", provider, provider_conf),
         ("amount", amount, amount_conf),
         ("incurred_date", incurred_date, date_conf),
+        ("admission_date", admission_date, admission_conf),
+        ("discharge_date", discharge_date, discharge_conf),
         ("invoice_number", invoice_number, invoice_conf),
         ("diagnosis", diagnosis, diag_conf),
     ):
         if value is not None and conf < confidence_floor:
             low.append(name)
+    if admission_conflict and "admission_date" not in low:
+        low.append("admission_date")
+    if discharge_conflict and "discharge_date" not in low:
+        low.append("discharge_date")
 
     claimant = _detect_claimant(fields, employee, coverage_opts.dependants)
     selection, candidates = _infer_claim_type(
@@ -863,11 +913,24 @@ def _doc_reading(
     provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
     amount, amount_conf = _amount(fields)
     incurred_date, date_conf = _date_field(fields, year)
+    admission_date, admission_conf, admission_conflict = _stay_date_field(
+        fields, ("admission", "admitted")
+    )
+    discharge_date, discharge_conf, discharge_conflict = _stay_date_field(
+        fields, ("discharge", "discharged")
+    )
+    if admission_conflict and not any(
+        any(keyword in _label(field) for keyword in ("visit", "treatment"))
+        for field in fields
+    ):
+        incurred_date, date_conf = None, 0.0
     invoice_number, invoice_conf = _invoice_number(fields)
     diagnosis, diag_conf = _keyworded(fields, ("diagnosis", "condition"))
     out = IntakeFields(
         provider_name=provider,
         incurred_date=incurred_date,
+        admission_date=admission_date,
+        discharge_date=discharge_date,
         invoice_number=invoice_number,
         amount=amount,
         currency=_currency(fields),
@@ -884,11 +947,17 @@ def _doc_reading(
             ("provider_name", provider, provider_conf),
             ("amount", amount, amount_conf),
             ("incurred_date", incurred_date, date_conf),
+            ("admission_date", admission_date, admission_conf),
+            ("discharge_date", discharge_date, discharge_conf),
             ("invoice_number", invoice_number, invoice_conf),
             ("diagnosis", diagnosis, diag_conf),
         )
         if value is not None and conf < confidence_floor
     ]
+    if admission_conflict:
+        low.append("admission_date")
+    if discharge_conflict:
+        low.append("discharge_date")
     return out, low
 
 

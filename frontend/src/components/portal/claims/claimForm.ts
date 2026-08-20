@@ -40,6 +40,8 @@ export const LOW_CONF_LABELS: Record<string, string> = {
   provider_name: "provider",
   amount: "amount",
   incurred_date: "date",
+  admission_date: "admission date",
+  discharge_date: "discharge date",
   invoice_number: "invoice number",
   diagnosis: "diagnosis",
   doctor_name: "doctor's name",

@@ -38,6 +38,8 @@ const MAX_REMARKS = 500;
  * submit — a number input bound to a number fights the user mid-typing. */
 interface Draft {
   incurred_date: string;
+  admission_date: string;
+  discharge_date: string;
   provider_name: string;
   invoice_number: string;
   doctor_name: string;
@@ -55,6 +57,8 @@ interface Draft {
 function draftFrom(claim: PortalClaim): Draft {
   return {
     incurred_date: claim.incurred_date,
+    admission_date: claim.admission_date ?? "",
+    discharge_date: claim.discharge_date ?? "",
     provider_name: (claim.provider_name ?? "").trim(),
     invoice_number: (claim.invoice_number ?? "").trim(),
     doctor_name: (claim.doctor_name ?? "").trim(),
@@ -69,10 +73,21 @@ function draftFrom(claim: PortalClaim): Draft {
  * as touched — which shows up in the member's own thread notice as "you changed
  * the amount, the invoice number, the diagnosis…" for a one-field correction,
  * and writes an audit row implying the same. */
-function changedFields(before: Draft, now: Draft): ClaimAmendInput {
+function changedFields(
+  before: Draft,
+  now: Draft,
+  supportsStayDates: boolean,
+): ClaimAmendInput {
   const patch: ClaimAmendInput = {};
-  if (now.incurred_date !== before.incurred_date)
+  if (now.incurred_date !== before.incurred_date) {
     patch.incurred_date = now.incurred_date;
+  }
+  if (supportsStayDates) {
+    if (now.admission_date !== before.admission_date)
+      patch.admission_date = now.admission_date || null;
+    if (now.discharge_date !== before.discharge_date)
+      patch.discharge_date = now.discharge_date || null;
+  }
   if (now.provider_name.trim() !== before.provider_name)
     patch.provider_name = now.provider_name.trim();
   if (now.invoice_number.trim() !== before.invoice_number)
@@ -120,16 +135,21 @@ export function ClaimEditSheet({
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
-  const patch = changedFields(original, draft);
+  const patch = changedFields(original, draft, claim.supports_stay_dates);
   const dirty = Object.keys(patch).length > 0;
   const amountValid = Number(draft.amount_claimed) > 0;
+  const stayDatesValid =
+    !claim.supports_stay_dates ||
+    !draft.admission_date ||
+    !draft.discharge_date ||
+    draft.discharge_date >= draft.admission_date;
 
   return (
     <form
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!dirty || !amountValid) return;
+        if (!dirty || !amountValid || !stayDatesValid) return;
         onSave({ ...patch, expected_revision: expectedRevision });
       }}
     >
@@ -147,6 +167,43 @@ export function ClaimEditSheet({
             />
           )}
         </Field>
+
+        {claim.supports_stay_dates && (
+          <>
+            <Field label="Admission date (optional)">
+              {(p) => (
+                <input
+                  {...p}
+                  type="date"
+                  className={leafControl}
+                  value={draft.admission_date}
+                  onChange={(e) => set("admission_date", e.target.value)}
+                />
+              )}
+            </Field>
+            <Field
+              label="Discharge date (optional)"
+              error={
+                draft.admission_date &&
+                draft.discharge_date &&
+                draft.discharge_date < draft.admission_date
+                  ? "The discharge date can't be before the admission date."
+                  : undefined
+              }
+            >
+              {(p) => (
+                <input
+                  {...p}
+                  type="date"
+                  className={leafControl}
+                  min={draft.admission_date || undefined}
+                  value={draft.discharge_date}
+                  onChange={(e) => set("discharge_date", e.target.value)}
+                />
+              )}
+            </Field>
+          </>
+        )}
 
         <Field label="Clinic or hospital" required>
           {(p) => (
@@ -249,7 +306,7 @@ export function ClaimEditSheet({
           type="submit"
           tone="primary"
           block="phone"
-          disabled={saving || !dirty || !amountValid}
+          disabled={saving || !dirty || !amountValid || !stayDatesValid}
         >
           {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}
           Save changes

@@ -101,6 +101,7 @@ from app.services.claim_intake import (
     referral_letters_for,
     required_doc_slots,
     requires_doctor_name,
+    supports_stay_dates,
 )
 from app.services.claim_intake_suggest import build_intake_suggestion
 from app.services.claim_messages import post_system_message
@@ -195,6 +196,7 @@ def _claim_type_option(line, scope: ClaimScopeDefinition) -> ClaimTypeOption:
         scope_code=scope.code,
         scope_key=claim_scope_key("insured", line.product_code, scope.code),
         requires_doctor_name=requires_doctor_name(line.product_code, scope.sub_type),
+        supports_stay_dates=supports_stay_dates(line.product_code, scope.sub_type),
         anchor_mode=anchor_mode_for(line.product_code, scope.sub_type),
         doc_slots=_slots(required_doc_slots(line.product_code, scope.sub_type)),
         doc_slots_by_sector=by_sector,

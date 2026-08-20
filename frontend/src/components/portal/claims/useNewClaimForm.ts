@@ -82,6 +82,8 @@ export function useNewClaimForm() {
   const [dependantId, setDependantId] = useState("");
   const [selection, setSelection] = useState("");
   const [incurredDate, setIncurredDate] = useState("");
+  const [admissionDate, setAdmissionDateState] = useState("");
+  const [dischargeDate, setDischargeDate] = useState("");
   const [provider, setProvider] = useState("");
   // Hospitalisation claims: hospital picked from the registry ("" = not yet,
   // OTHER_HOSPITAL = unlisted → free-text provider input).
@@ -210,6 +212,7 @@ export function useNewClaimForm() {
   // label here: the label is broker-facing wording and a relabel would
   // silently stop this field being asked for while submit still requires it.
   const requiresDoctorName = selectedClaimType?.requires_doctor_name ?? false;
+  const supportsStayDates = selectedClaimType?.supports_stay_dates ?? false;
 
   // Hospitalisation/Day Surgery: the provider is a hospital picked from the
   // registry, and its sector (govt/private) decides the document slots. An
@@ -218,7 +221,7 @@ export function useNewClaimForm() {
   // text still gets that hospital's sector (and the form/backend can't
   // disagree about which documents are required). Unlisted → the private set.
   const hospitals = options.data?.hospitals ?? [];
-  const isHospitalisation = !!selectedClaimType?.doc_slots_by_sector;
+  const isHospitalisation = supportsStayDates;
   const effectiveProvider =
     isHospitalisation && hospital && hospital !== OTHER_HOSPITAL
       ? hospital
@@ -489,6 +492,8 @@ export function useNewClaimForm() {
   const resetTypeFields = () => {
     setDiagnosis("");
     setDoctorName("");
+    setAdmissionDateState("");
+    setDischargeDate("");
     setVisitType("");
     setHospital("");
     setSlotFiles({});
@@ -550,6 +555,8 @@ export function useNewClaimForm() {
     const f = s.fields;
     if (f.provider_name) setProvider(f.provider_name);
     if (f.incurred_date) setIncurredDate(f.incurred_date);
+    if (f.admission_date) setAdmissionDateState(f.admission_date);
+    if (f.discharge_date) setDischargeDate(f.discharge_date);
     if (f.invoice_number) setInvoiceNumber(f.invoice_number);
     if (f.amount != null) setAmount(String(f.amount));
     if (f.currency && insuredPick) setCurrency(f.currency);
@@ -616,6 +623,8 @@ export function useNewClaimForm() {
     clearedFiles.current = new Set();
     const f = next.fields;
     setIncurredDate(f?.incurred_date ?? "");
+    setAdmissionDateState(f?.admission_date ?? "");
+    setDischargeDate(f?.discharge_date ?? "");
     setProvider(f?.provider_name ?? "");
     setInvoiceNumber(f?.invoice_number ?? "");
     setAmount(f?.amount != null ? String(f.amount) : "");
@@ -681,6 +690,9 @@ export function useNewClaimForm() {
       referralFile,
       referralExistingId,
       incurredDate,
+      supportsStayDates,
+      admissionDate,
+      dischargeDate,
       claimableFrom,
       claimableTo,
       today,
@@ -771,6 +783,8 @@ export function useNewClaimForm() {
         sub_type: effectiveKind === "insured" ? subType : null,
         visit_type: needsReferral && visitType ? visitType : null,
         incurred_date: incurredDate,
+        admission_date: supportsStayDates ? admissionDate || null : null,
+        discharge_date: supportsStayDates ? dischargeDate || null : null,
         provider_name: effectiveProvider.trim(),
         invoice_number: invoiceNumber.trim(),
         doctor_name: requiresDoctorName ? doctorName.trim() : null,
@@ -915,6 +929,7 @@ export function useNewClaimForm() {
     isHospitalisation,
     needsReferral,
     requiresDoctorName,
+    supportsStayDates,
     // episode
     anchorMode,
     anchorOptions,
@@ -940,6 +955,11 @@ export function useNewClaimForm() {
     // fields
     incurredDate,
     setIncurredDate,
+    admissionDate,
+    setAdmissionDate: setAdmissionDateState,
+    dischargeDate,
+    setDischargeDate,
+    maxDischarge: maxIncurred,
     provider,
     setProvider,
     hospital,

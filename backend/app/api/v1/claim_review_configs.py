@@ -48,13 +48,13 @@ from app.services.claim_ai import build_claim_review_prompt
 from app.services.claim_intake import (
     CLAIM_SCOPE_CODES,
     claim_profile_for,
-    claim_scope_definitions,
 )
 from app.services.claim_review_configs import (
     config_from_row,
     config_rows,
     default_review_config,
     find_config_row,
+    review_scope_definitions,
     type_key,
 )
 from app.services.product_terms import product_ids_in_year
@@ -259,7 +259,7 @@ def review_scope_options(
             if not profile.member_claimable:
                 continue
             label = profile.claim_type_label or p.display_name or code
-            scopes = claim_scope_definitions(
+            scopes = review_scope_definitions(
                 code, label, plans_by_product.get(p.id, [])
             )
             claim_types.append(
@@ -275,6 +275,7 @@ def review_scope_options(
                             key=type_key(CLAIM_KIND_INSURED, code, scope.code),
                             display_label=scope.label,
                             sub_type=scope.sub_type,
+                            parent_scope_code=scope.parent_scope_code,
                         )
                         for scope in scopes
                     ],

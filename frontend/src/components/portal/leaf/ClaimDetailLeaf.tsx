@@ -397,6 +397,20 @@ export function ClaimDetailLeaf({
           <MountRow term="Date of treatment">
             {formatDay(claim.incurred_date)}
           </MountRow>
+          {claim.supports_stay_dates && (
+            <>
+              {claim.admission_date && (
+                <MountRow term="Admission date">
+                  {formatDay(claim.admission_date)}
+                </MountRow>
+              )}
+              {claim.discharge_date && (
+                <MountRow term="Discharge date">
+                  {formatDay(claim.discharge_date)}
+                </MountRow>
+              )}
+            </>
+          )}
           {claim.dependant_name && (
             <MountRow term="Who it's for">{claim.dependant_name}</MountRow>
           )}

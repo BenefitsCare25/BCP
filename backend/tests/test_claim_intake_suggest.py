@@ -450,8 +450,27 @@ def test_govt_finalised_invoice_full_mapping():
     assert out.fields.invoice_number == "2027123456"
     # Admission date beats the invoice-issue date as the incurred date.
     assert out.fields.incurred_date == "2027-03-10"
+    assert out.fields.admission_date == "2027-03-10"
+    assert out.fields.discharge_date == "2027-03-14"
     # Hospitalisation/Day Surgery sub-type (admission wording).
     assert out.claim_selection == "insured:GHS:1"
+
+
+def test_conflicting_stay_dates_are_not_silently_autofilled():
+    doc = _govt_finalised_invoice()
+    doc["fields"].extend([
+        {"id": "9", "label": "Admission Date", "value": "11 MAR 2027",
+         "field_type": "date", "confidence": 0.99},
+        {"id": "10", "label": "Discharge Date", "value": "15 MAR 2027",
+         "field_type": "date", "confidence": 0.99},
+    ])
+    out = suggest_from_extraction(
+        doc, _coverage([_ghs_option()]), _employee(), YEAR
+    )
+    assert out.fields.admission_date is None
+    assert out.fields.discharge_date is None
+    assert out.fields.incurred_date is None
+    assert {"admission_date", "discharge_date"} <= set(out.low_confidence)
 
 
 def test_private_final_tax_invoice_detected_by_case_number():

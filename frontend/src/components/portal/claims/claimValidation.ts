@@ -22,6 +22,9 @@ export interface ClaimValues {
   referralFile: File | null;
   referralExistingId: string;
   incurredDate: string;
+  supportsStayDates: boolean;
+  admissionDate: string;
+  dischargeDate: string;
   /** The served claimable window for the selected claim kind — NOT the policy
    *  year: a flex scheme can start mid-year and a leaver's cover ends on their
    *  last day. */
@@ -92,19 +95,32 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
     }
   }
 
-  if (!v.incurredDate) {
-    errs.incurred_date = "Enter the visit date.";
+  const claimDate = v.incurredDate;
+  const claimDateField = "incurred_date";
+  if (!claimDate) {
+    errs[claimDateField] = "Enter the visit date.";
   } else if (
     // Both bounds or neither: an empty pair means the server served no window
     // for this kind (`claim_block`), and range-checking against "" produced
     // "Pick a date between — and —" for every date the member tried.
     v.claimableFrom &&
     v.claimableTo &&
-    (v.incurredDate < v.claimableFrom || v.incurredDate > v.claimableTo)
+    (claimDate < v.claimableFrom || claimDate > v.claimableTo)
   ) {
-    errs.incurred_date = `Pick a date between ${formatDay(v.claimableFrom)} and ${formatDay(v.claimableTo)} — that's the period your benefits cover.`;
-  } else if (v.incurredDate > v.today) {
-    errs.incurred_date = "The incurred date can't be in the future.";
+    errs[claimDateField] = `Pick a date between ${formatDay(v.claimableFrom)} and ${formatDay(v.claimableTo)} — that's the period your benefits cover.`;
+  } else if (claimDate > v.today) {
+    errs[claimDateField] = "The visit date can't be in the future.";
+  }
+
+  if (v.supportsStayDates) {
+    if (v.admissionDate > v.today) {
+      errs.admission_date = "The admission date can't be in the future.";
+    }
+    if (v.admissionDate && v.dischargeDate && v.dischargeDate < v.admissionDate) {
+      errs.discharge_date = "The discharge date can't be before the admission date.";
+    } else if (v.dischargeDate > v.today) {
+      errs.discharge_date = "The discharge date can't be in the future.";
+    }
   }
 
   if (v.isHospitalisation) {

@@ -77,7 +77,8 @@ from a hospital is a "tax invoice".
 
 Field rules:
 - label: descriptive human-readable name (e.g. "Total Amount", "Visit Date", \
-"Clinic Name", "Patient Name").
+"Admission Date", "Discharge Date", "Clinic Name", "Patient Name"). Keep \
+admission and discharge as two distinct fields when both are printed.
 - field_type: one of text, date, number, email, phone, address, name, \
 currency, other.
 - id: field_1, field_2, ... in reading order.

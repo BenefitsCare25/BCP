@@ -383,6 +383,8 @@ export interface PortalClaim {
   related_claim: ClaimAnchor | null;
   referral_not_applicable: boolean;
   incurred_date: string;
+  admission_date: string | null;
+  discharge_date: string | null;
   provider_name: string | null;
   invoice_number: string | null;
   doctor_name: string | null;
@@ -446,6 +448,9 @@ export interface PortalClaim {
    * from whether `doctor_name` is already set: a legacy pre/post claim has
    * none, which is precisely the claim that needs the field. */
   requires_doctor_name: boolean;
+  /** Whether this exact claim choice may carry optional admission and discharge
+   * dates. Served; never label-matched. */
+  supports_stay_dates: boolean;
   /** Optimistic-concurrency token. Sent back on every amendment so two devices
    * on one claim cannot silently clobber each other. */
   revision: number;
@@ -467,6 +472,8 @@ export interface ClaimCreateInput {
   sub_type?: string | null;
   visit_type?: string | null;
   incurred_date: string;
+  admission_date?: string | null;
+  discharge_date?: string | null;
   provider_name: string;
   invoice_number: string;
   doctor_name?: string | null;
@@ -528,6 +535,8 @@ export interface ClaimTypeOption {
    * label here — a relabel there would silently stop the form asking for a
    * field the server still requires. */
   requires_doctor_name: boolean;
+  /** Hospitalisation/Day Surgery/Other Inpatient Treatment only. */
+  supports_stay_dates: boolean;
   /** Which earlier visit this claim type may be anchored to, or null when it
    * continues nothing. SERVED for the same reason as the flag above.
    *
@@ -640,6 +649,8 @@ export function useCoverageOptions() {
 export interface IntakeSuggestFields {
   provider_name: string | null;
   incurred_date: string | null;
+  admission_date: string | null;
+  discharge_date: string | null;
   invoice_number: string | null;
   amount: number | null;
   currency: string | null;
@@ -927,6 +938,8 @@ export function useDeleteReferralLetter() {
 export interface ClaimAmendInput {
   claim_type?: string;
   incurred_date?: string;
+  admission_date?: string | null;
+  discharge_date?: string | null;
   provider_name?: string;
   invoice_number?: string;
   doctor_name?: string | null;

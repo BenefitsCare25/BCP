@@ -34,6 +34,20 @@ FIELD_MAPS: list[dict[str, Any]] = [
         "verify_with_vision": True,
     },
     {
+        # Present only in the form snapshot for the hospital-stay subtype, so
+        # the shared default remains inert for every outpatient/pre-post claim.
+        "portal_field": "admission_date",
+        "document_field": "Admission Date",
+        "mode": "fuzzy",
+        "verify_with_vision": True,
+    },
+    {
+        "portal_field": "discharge_date",
+        "document_field": "Discharge Date",
+        "mode": "fuzzy",
+        "verify_with_vision": True,
+    },
+    {
         "portal_field": "provider_name",
         "document_field": "Clinic / Hospital / Provider Name",
         "mode": "fuzzy",

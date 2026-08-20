@@ -403,6 +403,7 @@ def test_coverage_options(anon: TestClient):
     assert [s["key"] for s in gp["claim_types"][0]["doc_slots"]] == ["invoice_receipt"]
     hosp = ghs["claim_types"][1]
     assert hosp["sub_type"] == "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+    assert hosp["supports_stay_dates"] is True
     assert [s["key"] for s in hosp["doc_slots"]] == [
         "summary_tax_invoice",
         "itemised_tax_invoice",
@@ -412,6 +413,7 @@ def test_coverage_options(anon: TestClient):
         "finalised_tax_invoice"
     ]
     emergency = ghs["claim_types"][2]
+    assert emergency["supports_stay_dates"] is False
     assert [s["key"] for s in emergency["doc_slots"]] == ["invoice_receipt"]
     assert emergency["doc_slots_by_sector"] is None
     # Hospital registry rides along for the picker.
@@ -562,6 +564,52 @@ def test_legacy_sub_type_normalized(anon: TestClient):
     # onto the current wording.
     claim = _draft(anon, sub_type="Hospitalisation or Day Surgery")
     assert claim["sub_type"] == "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+
+
+def test_hospitalisation_stay_dates_are_optional_consistent_and_served(
+    anon: TestClient,
+):
+    sub_type = "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+
+    visit_only = _draft_res(
+        anon, sub_type=sub_type, admission_date=None, discharge_date=None
+    )
+    assert visit_only.status_code == 201
+    assert visit_only.json()["incurred_date"] == "2027-06-15"
+    assert visit_only.json()["admission_date"] is None
+    assert visit_only.json()["discharge_date"] is None
+
+    reversed_range = _draft_res(
+        anon,
+        sub_type=sub_type,
+        admission_date="2027-06-15",
+        discharge_date="2027-06-14",
+    )
+    assert reversed_range.status_code == 422
+    assert "cannot be before" in reversed_range.text.lower()
+
+    independent_visit = _draft_res(
+        anon,
+        sub_type=sub_type,
+        incurred_date="2027-06-14",
+        admission_date="2027-06-15",
+        discharge_date="2027-06-17",
+    )
+    assert independent_visit.status_code == 201
+    assert independent_visit.json()["incurred_date"] == "2027-06-14"
+    assert independent_visit.json()["admission_date"] == "2027-06-15"
+
+    # A day-surgery stay can admit and discharge on the same day.
+    claim = _draft(
+        anon,
+        sub_type=sub_type,
+        admission_date="2027-06-15",
+        discharge_date="2027-06-15",
+    )
+    assert claim["incurred_date"] == "2027-06-15"
+    assert claim["admission_date"] == "2027-06-15"
+    assert claim["discharge_date"] == "2027-06-15"
+    assert claim["supports_stay_dates"] is True
 
 
 def test_remarks_over_500_chars_422(anon: TestClient):

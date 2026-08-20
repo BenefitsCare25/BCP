@@ -81,6 +81,7 @@ from app.services.claim_intake import (
     required_doc_slots,
     requires_doctor_name,
     resolve_sp_referral,
+    supports_stay_dates,
 )
 from app.services.claim_settlement import mint_reference_no
 from app.services.flex_membership import flex_effective_window
@@ -428,6 +429,9 @@ def populate_claim_out(
     # the amendment kept requiring it, and every save 422'd with nothing the
     # member could do about it.
     out.requires_doctor_name = requires_doctor_name(claim.product_code, claim.sub_type)
+    out.supports_stay_dates = supports_stay_dates(
+        claim.product_code, claim.sub_type, claim_kind=claim.claim_kind
+    )
     # Currency state, SERVED for the same reason `member_editable` is: the
     # client cannot get it right from the columns. `amount_converted` is NULL
     # both when a claim needs no conversion and when its conversion failed, and
@@ -568,11 +572,24 @@ def form_snapshot(claim: Claim, *, referral_not_applicable: bool) -> dict[str, A
     has.
     """
     doctor = (claim.doctor_name or "").strip() or None
+    stay_dates_supported = supports_stay_dates(
+        claim.product_code, claim.sub_type, claim_kind=claim.claim_kind
+    )
     return {
         "claim_type": claim.claim_type,
         "sub_type": claim.sub_type,
         "visit_type": claim.visit_type,
         "incurred_date": claim.incurred_date.isoformat(),
+        **(
+            {"admission_date": claim.admission_date.isoformat()}
+            if stay_dates_supported and claim.admission_date
+            else {}
+        ),
+        **(
+            {"discharge_date": claim.discharge_date.isoformat()}
+            if stay_dates_supported and claim.discharge_date
+            else {}
+        ),
         "provider_name": claim.provider_name,
         "invoice_number": claim.invoice_number,
         # Only when stated — an empty key on every GP receipt would give the
@@ -619,6 +636,16 @@ def create_claim(
 
     # Canonical sub-type label (folds pre-rename values from stale clients).
     sub_type = normalize_sub_type(body.sub_type)
+    stay_dates_supported = supports_stay_dates(
+        body.product_code, sub_type, claim_kind=body.claim_kind
+    )
+    assert_stay_dates_valid(
+        claim_kind=body.claim_kind,
+        product_code=body.product_code,
+        sub_type=sub_type,
+        admission_date=body.admission_date,
+        discharge_date=body.discharge_date,
+    )
 
     # The earlier visit this claim continues, validated and normalized to the
     # root of its episode (`services/claim_episodes.py`). Resolved BEFORE the
@@ -682,6 +709,8 @@ def create_claim(
         sub_type=sub_type,
         visit_type=body.visit_type,
         incurred_date=body.incurred_date,
+        admission_date=body.admission_date if stay_dates_supported else None,
+        discharge_date=body.discharge_date if stay_dates_supported else None,
         provider_name=body.provider_name,
         invoice_number=body.invoice_number,
         doctor_name=doctor_name,
@@ -1318,6 +1347,13 @@ def validate_claim_facts(
                 claim.doctor_name,
                 claim_kind=claim.claim_kind,
             )
+        assert_stay_dates_valid(
+            claim_kind=claim.claim_kind,
+            product_code=claim.product_code,
+            sub_type=claim.sub_type,
+            admission_date=claim.admission_date,
+            discharge_date=claim.discharge_date,
+        )
     # **Re-asking "is this member covered for this?" is ADMITTING the claim, and
     # an amendment that does not touch what the claim draws on is not
     # re-admitting it.**
@@ -1532,6 +1568,8 @@ MEMBER_AMENDABLE_FIELDS = frozenset(
         "sub_type",
         "visit_type",
         "incurred_date",
+        "admission_date",
+        "discharge_date",
         "provider_name",
         "invoice_number",
         "doctor_name",
@@ -1691,6 +1729,8 @@ def apply_claim_amendment(
     previous_sub_type = claim.sub_type
     previous_key = claim.benefit_key
     previous_converted = claim.amount_converted
+    previous_admission = claim.admission_date
+    previous_discharge = claim.discharge_date
     previous_flag = bool((claim.form_fields or {}).get(_REFERRAL_FLAG))
 
     for name in columns:
@@ -1700,6 +1740,14 @@ def apply_claim_amendment(
     if claim.currency:
         claim.currency = claim.currency.upper()
     claim.doctor_name = (claim.doctor_name or "").strip() or None
+    if not supports_stay_dates(
+        claim.product_code, claim.sub_type, claim_kind=claim.claim_kind
+    ):
+        # A broker can repoint a claim to another subtype. Stay dates belong to
+        # the hospital-stay scope only and must not silently reappear if the
+        # claim is changed back later.
+        claim.admission_date = None
+        claim.discharge_date = None
 
     flag = body.referral_not_applicable if _REFERRAL_FLAG in patch else previous_flag
     # In place BEFORE validation: `assert_intake_valid` reads the "not
@@ -1762,6 +1810,13 @@ def apply_claim_amendment(
     claim.amended_by = actor
 
     after: dict[str, Any] = {c: getattr(claim, c) for c in columns}
+    for field, previous in (
+        ("admission_date", previous_admission),
+        ("discharge_date", previous_discharge),
+    ):
+        current = getattr(claim, field)
+        if current != previous and field not in before:
+            before[field], after[field] = previous, current
     if _REFERRAL_FLAG in patch:
         before[_REFERRAL_FLAG], after[_REFERRAL_FLAG] = previous_flag, bool(flag)
     # `benefit_key` can move as a SIDE EFFECT of the rider clear without ever
@@ -1789,6 +1844,8 @@ _AMENDMENT_LABELS: dict[str, str] = {
     "amount_claimed": "the amount claimed",
     "currency": "the currency",
     "incurred_date": "the date of treatment",
+    "admission_date": "the admission date",
+    "discharge_date": "the discharge date",
     "provider_name": "the clinic or hospital",
     "invoice_number": "the invoice number",
     "doctor_name": "the doctor's name",
@@ -1846,6 +1903,28 @@ def audit_cells(source: dict[str, Any]) -> dict[str, Any]:
         else:
             values[key] = value.isoformat() if hasattr(value, "isoformat") else value
     return values
+
+
+def assert_stay_dates_valid(
+    *,
+    claim_kind: str,
+    product_code: str | None,
+    sub_type: str | None,
+    admission_date: date | None,
+    discharge_date: date | None,
+) -> None:
+    """Validate the optional hospital-stay range when both bounds are stated."""
+    if not supports_stay_dates(product_code, sub_type, claim_kind=claim_kind):
+        return
+    if (
+        admission_date is not None
+        and discharge_date is not None
+        and discharge_date < admission_date
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "The discharge date cannot be before the admission date.",
+        )
 
 
 def stamp_document_amendment(

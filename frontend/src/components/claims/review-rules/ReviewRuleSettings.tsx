@@ -59,7 +59,7 @@ function TypeRow({
   subLabel,
   config,
   inheritedConfig = null,
-  nested = false,
+  nestingLevel = 0,
   onEdit,
   onRevert,
 }: {
@@ -67,16 +67,18 @@ function TypeRow({
   subLabel?: string;
   config: ClaimReviewConfig | null;
   inheritedConfig?: ClaimReviewConfig | null;
-  nested?: boolean;
+  nestingLevel?: 0 | 1 | 2;
   onEdit: () => void;
   onRevert: () => void;
 }) {
   const effective = config?.enabled ? config : inheritedConfig;
+  const indentation =
+    nestingLevel === 2 ? "pl-14 bg-muted/10" : nestingLevel === 1 ? "pl-9" : "";
   return (
     // A row on the section's divided rail, not its own card: a stack of
     // bordered cards inside a Card double-frames every claim type.
     <div
-      className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 transition-colors hover:bg-muted/40 ${nested ? "pl-9" : ""}`}
+      className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 transition-colors hover:bg-muted/40 ${indentation}`}
     >
       <div className="min-w-0">
         <p className="text-sm font-medium text-foreground">{label}</p>
@@ -323,18 +325,30 @@ export function ReviewRuleSettings() {
                         {showChildren &&
                           t.scopes.map((scope) => {
                             const child = configByType.get(scope.key) ?? null;
+                            const parentScope = scope.parent_scope_code
+                              ? t.scopes.find(
+                                  (candidate) =>
+                                    candidate.scope_code === scope.parent_scope_code,
+                                )
+                              : null;
+                            const parentConfig = parentScope
+                              ? configByType.get(parentScope.key) ?? null
+                              : null;
+                            const inheritedConfig = parentConfig?.enabled
+                              ? parentConfig
+                              : enabledParent;
                             return (
                               <TypeRow
                                 key={scope.key}
                                 label={scope.display_label}
                                 config={child}
-                                inheritedConfig={enabledParent}
-                                nested
+                                inheritedConfig={inheritedConfig}
+                                nestingLevel={scope.parent_scope_code ? 2 : 1}
                                 onEdit={() =>
                                   openEditor(
                                     scopeTarget(t, scope),
                                     child,
-                                    enabledParent,
+                                    inheritedConfig,
                                   )
                                 }
                                 onRevert={() => child && setReverting(child)}
