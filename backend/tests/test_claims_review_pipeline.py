@@ -894,7 +894,8 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
     assert all(r["is_default"] for r in rows)
     discharge = next(r for r in rows if r["key"] == "discharge_summary")
     assert discharge["claim_scope_keys"] == [
-        "insured:*:ghs_hospitalisation"
+        "insured:*:ghs_hospitalisation_govt",
+        "insured:*:ghs_hospitalisation_private",
     ]
 
     # Create a custom type; a duplicate name 409s.
@@ -908,7 +909,10 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
     created = res.json()
     assert created["key"] == "referral_memo"
     assert created["is_default"] is False
-    assert created["claim_scope_keys"] == ["insured:*:ghs_pre_post"]
+    assert created["claim_scope_keys"] == [
+        "insured:*:ghs_pre_post_govt",
+        "insured:*:ghs_pre_post_private",
+    ]
     dup = broker.post("/api/v1/claim-doc-types", json={
         "display": "Referral Memo", "aliases": [], "key_fields": [],
     })
@@ -960,6 +964,53 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
     assert {r["key"] for r in rows} == {
         "discharge_summary", "final_tax_invoice", "finalised_tax_invoice"
     }
+
+
+def test_document_scope_assignments_duplicate_atomically(broker: TestClient):
+    rows = _reset_doc_types(broker)
+    target = "insured:ghs:ghs_emergency_outpatient_govt"
+    assignments = [
+        {
+            "id": row["id"],
+            "expected_updated_at": row["updated_at"],
+            "claim_scope_keys": [target] if row["key"] == "discharge_summary" else [],
+        }
+        for row in rows
+    ]
+    response = broker.post(
+        "/api/v1/claim-doc-types/scope-assignments",
+        json={"assignments": assignments},
+    )
+    assert response.status_code == 200
+    by_key = {row["key"]: row for row in response.json()}
+    assert by_key["discharge_summary"]["claim_scope_keys"] == [target]
+    assert by_key["final_tax_invoice"]["claim_scope_keys"] == []
+
+    # Any stale row rejects the entire batch; the first row must not be partly
+    # saved before the conflict is discovered.
+    current_versions = {row["id"]: row["updated_at"] for row in response.json()}
+    stale_assignments = [
+        {
+            **assignment,
+            "expected_updated_at": (
+                current_versions[assignment["id"]]
+                if index == 0
+                else assignment["expected_updated_at"]
+            ),
+            "claim_scope_keys": [] if index == 0 else assignment["claim_scope_keys"],
+        }
+        for index, assignment in enumerate(assignments)
+    ]
+    stale = broker.post(
+        "/api/v1/claim-doc-types/scope-assignments",
+        json={"assignments": stale_assignments},
+    )
+    assert stale.status_code == 409
+    current = broker.get("/api/v1/claim-doc-types").json()
+    assert next(
+        row for row in current if row["key"] == "discharge_summary"
+    )["claim_scope_keys"] == [target]
+    _reset_doc_types(broker)
 
 
 def test_custom_config_drives_classification_and_completeness(broker: TestClient):
@@ -1284,26 +1335,91 @@ def test_hospital_sector_review_config_inherits_hospitalisation_then_product():
         _drop_review_configs()
 
 
-def test_hospital_review_scope_options_form_a_three_level_tree():
+def test_every_ghs_subclaim_resolves_to_a_sector_specific_review_leaf():
+    from app.services.claim_intake import (
+        GHS_SUB_TYPES,
+        generic_scope_code,
+        scope_code_for_sub_type,
+    )
+    from app.services.claim_review_configs import claim_scope_for
+
+    for sub_type in GHS_SUB_TYPES:
+        govt = Claim(
+            client_id=DEMO_CLIENT_ID,
+            claim_kind="insured",
+            product_code="GHS",
+            sub_type=sub_type,
+            provider_name="Singapore General Hospital",
+        )
+        private = Claim(
+            client_id=DEMO_CLIENT_ID,
+            claim_kind="insured",
+            product_code="GHS",
+            sub_type=sub_type,
+            provider_name="Raffles Hospital",
+        )
+        govt_scope = claim_scope_for(govt)[2]
+        private_scope = claim_scope_for(private)[2]
+
+        assert govt_scope.endswith("_govt")
+        assert private_scope.endswith("_private")
+        assert generic_scope_code(govt_scope) == scope_code_for_sub_type(sub_type)
+        assert generic_scope_code(private_scope) == scope_code_for_sub_type(sub_type)
+
+
+def test_every_ghs_sector_leaf_inherits_its_legacy_subclaim_setup():
+    from app.services.claim_intake import GHS_SUB_TYPES, scope_code_for_sub_type
+    from app.services.claim_review_configs import resolve_review_config
+
+    try:
+        config_ids = {
+            sub_type: _mk_review_config(
+                scope_code=scope_code_for_sub_type(sub_type),
+                display_label=f"Legacy {sub_type}",
+            )
+            for sub_type in GHS_SUB_TYPES
+        }
+        with SessionLocal() as session:
+            for provider in ("Singapore General Hospital", "Raffles Hospital"):
+                for sub_type in GHS_SUB_TYPES:
+                    claim = Claim(
+                        client_id=DEMO_CLIENT_ID,
+                        claim_kind="insured",
+                        product_code="GHS",
+                        sub_type=sub_type,
+                        provider_name=provider,
+                    )
+                    assert (
+                        resolve_review_config(session, claim).config_id
+                        == config_ids[sub_type]
+                    )
+    finally:
+        _drop_review_configs()
+
+
+def test_ghs_review_scopes_are_grouped_into_eight_configurable_leaves():
+    from app.services.claim_intake import GHS_SUB_TYPES
     from app.services.claim_review_configs import review_scope_definitions
 
     scopes = review_scope_definitions("GHS", "Group Hospital & Surgical")
-    hospital_scope = next(
-        scope for scope in scopes if scope.code == "ghs_hospitalisation"
-    )
-    sectors = {
-        scope.code: scope
-        for scope in scopes
-        if scope.parent_scope_code == hospital_scope.code
+    compatibility = [scope for scope in scopes if not scope.configurable]
+    leaves = [scope for scope in scopes if scope.configurable]
+
+    assert {scope.code for scope in compatibility} == {
+        "ghs_pre_post",
+        "ghs_hospitalisation",
+        "ghs_emergency_outpatient",
+        "ghs_dialysis_cancer",
     }
-    assert set(sectors) == {
-        "ghs_hospitalisation_govt",
-        "ghs_hospitalisation_private",
-    }
-    assert {scope.label for scope in sectors.values()} == {
-        "Government hospital",
-        "Private hospital",
-    }
+    assert len(leaves) == 8
+    assert [scope.group_label for scope in leaves[:4]] == [
+        "Government hospital"
+    ] * 4
+    assert [scope.group_label for scope in leaves[4:]] == [
+        "Private hospital"
+    ] * 4
+    assert {scope.label for scope in leaves[:4]} == set(GHS_SUB_TYPES)
+    assert all(scope.parent_scope_code for scope in leaves)
 
 
 def test_warning_severity_rule_fail_does_not_flag():

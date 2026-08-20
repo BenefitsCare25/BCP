@@ -14,7 +14,7 @@
  * keyword sets (e.g. Surgery also matches "operation"/"procedure").
  */
 import { useState } from "react";
-import { Loader2, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { Copy, Loader2, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   DOC_TYPE_LABELS,
@@ -23,9 +23,11 @@ import {
   useDeleteClaimDocType,
   useResetClaimDocTypes,
   useReviewScopeOptions,
+  useUpdateClaimDocScopeAssignments,
   useUpdateClaimDocType,
   type ClaimDocType,
   type ClaimDocTypeInput,
+  type ReviewClaimScope,
   type ReviewClaimType,
 } from "@/api/claims";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -42,6 +44,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { SectionLabel } from "@/components/ui/section-label";
+import {
+  Sheet,
+  SheetBody,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NoCurrentYearNotice } from "@/components/shell/CurrentYearBanner";
 import { formatError } from "@/lib/errors";
@@ -88,10 +99,43 @@ function scopePatternMatches(pattern: string, scopeKey: string): boolean {
   );
 }
 
-function scopeRows(type: ReviewClaimType) {
+interface ScopeRow {
+  key: string;
+  label: string;
+  productLabel: string;
+  groupCode: string | null;
+  groupLabel: string | null;
+  fallbackKey: string | null;
+}
+
+function scopeRows(type: ReviewClaimType): ScopeRow[] {
   return type.claim_kind === "insured" && type.scopes.length > 0
-    ? type.scopes.map((scope) => ({ key: scope.key, label: scope.display_label }))
-    : [{ key: type.key, label: type.display_label }];
+    ? type.scopes
+        .filter((scope) => scope.configurable)
+        .map((scope: ReviewClaimScope) => ({
+          key: scope.key,
+          label: scope.display_label,
+          productLabel: type.display_label,
+          groupCode: scope.group_code,
+          groupLabel: scope.group_label,
+          fallbackKey: scope.parent_key,
+        }))
+    : [
+        {
+          key: type.key,
+          label: type.display_label,
+          productLabel: type.display_label,
+          groupCode: null,
+          groupLabel: null,
+          fallbackKey: null,
+        },
+      ];
+}
+
+function scopePath(scope: ScopeRow): string {
+  return [scope.productLabel, scope.groupLabel, scope.label]
+    .filter((part, index, all) => Boolean(part) && all.indexOf(part) === index)
+    .join(" — ");
 }
 
 /** Scope-first routing matrix. Aliases identify WHAT the document is; this
@@ -106,26 +150,45 @@ function ScopeAssignments({
   fetching: boolean;
 }) {
   const update = useUpdateClaimDocType();
-  const allScopeKeys = claimTypes.flatMap((type) =>
-    scopeRows(type).map((scope) => scope.key),
-  );
-  const busy = update.isPending || fetching;
+  const duplicate = useUpdateClaimDocScopeAssignments();
+  const [copyTarget, setCopyTarget] = useState<ScopeRow | null>(null);
+  const [copySourceKey, setCopySourceKey] = useState("");
+  const allScopes = claimTypes.flatMap(scopeRows);
+  const busy = update.isPending || duplicate.isPending || fetching;
 
-  const toggle = (docType: ClaimDocType, scopeKey: string, checked: boolean) => {
-    // Expand wildcard defaults to the current concrete catalogue on first edit,
-    // so a broker can remove one product without silently removing its peers.
+  const scopeAssigned = (docType: ClaimDocType, scope: ScopeRow) =>
+    docType.claim_scope_keys.some(
+      (pattern) =>
+        scopePatternMatches(pattern, scope.key) ||
+        (scope.fallbackKey !== null &&
+          scopePatternMatches(pattern, scope.fallbackKey)),
+    );
+
+  const materialize = (docType: ClaimDocType) => {
+    // Expand wildcard and legacy pre-sector defaults to the current concrete
+    // catalogue on first edit. This lets one leaf diverge without a wildcard
+    // or hidden compatibility parent silently switching it back on.
     const concrete = new Set<string>();
     for (const configured of docType.claim_scope_keys) {
-      if (configured.includes("*")) {
-        for (const available of allScopeKeys) {
-          if (scopePatternMatches(configured, available)) concrete.add(available);
-        }
+      const matches = allScopes.filter(
+        (available) =>
+          scopePatternMatches(configured, available.key) ||
+          (available.fallbackKey !== null &&
+            scopePatternMatches(configured, available.fallbackKey)),
+      );
+      if (matches.length > 0) {
+        for (const match of matches) concrete.add(match.key);
       } else {
         concrete.add(configured);
       }
     }
-    if (checked) concrete.add(scopeKey);
-    else concrete.delete(scopeKey);
+    return concrete;
+  };
+
+  const toggle = (docType: ClaimDocType, scope: ScopeRow, checked: boolean) => {
+    const concrete = materialize(docType);
+    if (checked) concrete.add(scope.key);
+    else concrete.delete(scope.key);
     update.mutate(
       {
         id: docType.id,
@@ -134,6 +197,32 @@ function ScopeAssignments({
         claim_scope_keys: [...concrete].sort(),
       },
       { onError: (error) => toast.error(formatError(error)) },
+    );
+  };
+
+  const duplicateSetup = () => {
+    if (!copyTarget || !copySourceKey) return;
+    const source = allScopes.find((scope) => scope.key === copySourceKey);
+    if (!source) return;
+    duplicate.mutate(
+      docTypes.map((docType) => {
+        const concrete = materialize(docType);
+        if (scopeAssigned(docType, source)) concrete.add(copyTarget.key);
+        else concrete.delete(copyTarget.key);
+        return {
+          id: docType.id,
+          expected_updated_at: docType.updated_at,
+          claim_scope_keys: [...concrete].sort(),
+        };
+      }),
+      {
+        onSuccess: () => {
+          toast.success(`Copied document setup from ${scopePath(source)}`);
+          setCopyTarget(null);
+          setCopySourceKey("");
+        },
+        onError: (error) => toast.error(formatError(error)),
+      },
     );
   };
 
@@ -153,45 +242,159 @@ function ScopeAssignments({
               {type.display_label}
             </div>
             <div className="divide-y divide-border">
-              {scopeRows(type).map((scope) => (
-                <div
-                  key={scope.key}
-                  className="grid gap-2 px-5 py-3 sm:grid-cols-[minmax(12rem,0.8fr)_minmax(0,2fr)] sm:items-start"
-                >
-                  <p className="text-sm text-foreground">{scope.label}</p>
-                  <div className="flex flex-wrap gap-x-4 gap-y-2">
-                    {docTypes.map((docType) => {
-                      const checked = docType.claim_scope_keys.some((pattern) =>
-                        scopePatternMatches(pattern, scope.key),
+              {(() => {
+                const rows = scopeRows(type);
+                const renderRow = (scope: ScopeRow) => (
+                  <div
+                    key={scope.key}
+                    className="grid gap-2 px-5 py-3 sm:grid-cols-[minmax(12rem,0.8fr)_minmax(0,2fr)] sm:items-start"
+                  >
+                    <p
+                      className={
+                        scope.groupCode
+                          ? "pl-5 text-sm text-foreground"
+                          : "text-sm text-foreground"
+                      }
+                    >
+                      {scope.label}
+                    </p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="flex flex-wrap gap-x-4 gap-y-2">
+                        {docTypes.map((docType) => (
+                          <label
+                            key={docType.id}
+                            className="inline-flex min-h-8 items-center gap-2 text-xs text-foreground"
+                          >
+                            <Checkbox
+                              checked={scopeAssigned(docType, scope)}
+                              disabled={busy}
+                              onCheckedChange={(value) =>
+                                toggle(docType, scope, value === true)
+                              }
+                            />
+                            {docType.display}
+                          </label>
+                        ))}
+                        {docTypes.length === 0 && (
+                          <span className="text-xs text-subtle">
+                            Add a document type below to configure matching.
+                          </span>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy || docTypes.length === 0}
+                        onClick={() => setCopyTarget(scope)}
+                      >
+                        <Copy className="size-3.5" />
+                        <span className="ml-1">Duplicate setup</span>
+                      </Button>
+                    </div>
+                  </div>
+                );
+                const ungrouped = rows.filter((scope) => !scope.groupCode);
+                const groupCodes = Array.from(
+                  new Set(
+                    rows
+                      .map((scope) => scope.groupCode)
+                      .filter((code): code is string => Boolean(code)),
+                  ),
+                );
+                return (
+                  <>
+                    {ungrouped.map(renderRow)}
+                    {groupCodes.map((groupCode) => {
+                      const grouped = rows.filter(
+                        (scope) => scope.groupCode === groupCode,
                       );
                       return (
-                        <label
-                          key={docType.id}
-                          className="inline-flex min-h-8 items-center gap-2 text-xs text-foreground"
-                        >
-                          <Checkbox
-                            checked={checked}
-                            disabled={busy}
-                            onCheckedChange={(value) =>
-                              toggle(docType, scope.key, value === true)
-                            }
-                          />
-                          {docType.display}
-                        </label>
+                        <div key={groupCode}>
+                          <div className="bg-muted/10 px-5 py-2.5">
+                            <SectionLabel as="h4">
+                              {grouped[0]?.groupLabel ?? groupCode}
+                            </SectionLabel>
+                          </div>
+                          <div className="divide-y divide-border border-t border-border">
+                            {grouped.map(renderRow)}
+                          </div>
+                        </div>
                       );
                     })}
-                    {docTypes.length === 0 && (
-                      <span className="text-xs text-subtle">
-                        Add a document type below to configure matching.
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                  </>
+                );
+              })()}
             </div>
           </div>
         ))}
       </div>
+      <Sheet
+        open={copyTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !duplicate.isPending) {
+            setCopyTarget(null);
+            setCopySourceKey("");
+          }
+        }}
+      >
+        <SheetContent className="sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>Duplicate document setup</SheetTitle>
+            <SheetDescription>
+              Copy recognised-document selections from another claim type. The
+              document recognition library itself is unchanged.
+            </SheetDescription>
+          </SheetHeader>
+          <SheetBody className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Copy into{" "}
+              <strong className="text-foreground">
+                {copyTarget ? scopePath(copyTarget) : "this claim type"}
+              </strong>
+              .
+            </p>
+            <Field label="Copy setup from">
+              <NativeSelect
+                value={copySourceKey}
+                disabled={duplicate.isPending}
+                onChange={(event) => setCopySourceKey(event.target.value)}
+              >
+                <option value="">Select another claim type</option>
+                {allScopes
+                  .filter((scope) => scope.key !== copyTarget?.key)
+                  .map((scope) => (
+                    <option key={scope.key} value={scope.key}>
+                      {scopePath(scope)}
+                    </option>
+                  ))}
+              </NativeSelect>
+            </Field>
+          </SheetBody>
+          <SheetFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={duplicate.isPending}
+              onClick={() => {
+                setCopyTarget(null);
+                setCopySourceKey("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              loading={duplicate.isPending}
+              disabled={!copySourceKey || duplicate.isPending}
+              onClick={duplicateSetup}
+            >
+              <Copy className="size-3.5" />
+              Duplicate setup
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </section>
   );
 }

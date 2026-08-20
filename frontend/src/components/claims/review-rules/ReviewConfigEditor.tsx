@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Plus, Trash2, X } from "lucide-react";
+import { Copy, Loader2, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCreateClaimReviewConfig,
@@ -37,13 +37,23 @@ import {
   type EditorTarget,
 } from "./reviewConfigDraft";
 export type { EditorTarget } from "./reviewConfigDraft";
+export interface ReviewDuplicateSource {
+  key: string;
+  label: string;
+  setup: Pick<
+    ClaimReviewConfigInput,
+    "field_maps" | "ai_rules" | "required_documents"
+  >;
+}
 export function ReviewConfigEditor({
   target,
   portalFields,
+  duplicateSources,
   onClose,
 }: {
   target: EditorTarget | null;
   portalFields: string[];
+  duplicateSources: ReviewDuplicateSource[];
   onClose: () => void;
 }) {
   const create = useCreateClaimReviewConfig();
@@ -52,11 +62,13 @@ export function ReviewConfigEditor({
   const [draft, setDraft] = useState<ClaimReviewConfigInput | null>(null);
   const [promptText, setPromptText] = useState<string | null>(null);
   const [reqDocDraft, setReqDocDraft] = useState("");
+  const [duplicateSourceKey, setDuplicateSourceKey] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   useEffect(() => {
     setDraft(target ? target.draft : null);
     setPromptText(null);
     setReqDocDraft("");
+    setDuplicateSourceKey("");
     setConfirmDiscard(false);
   }, [target]);
   if (!target || !draft) return null;
@@ -157,6 +169,56 @@ export function ReviewConfigEditor({
               configuration is retained.
             </InfoHint>
           </label>
+
+          <div className="space-y-2 rounded-md border border-border px-3.5 py-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                Duplicate another claim type&apos;s setup
+              </p>
+              <p className="text-xs text-subtle">
+                Copies its effective mappings, rules and additional documents
+                into this editor. Nothing changes until you save.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <NativeSelect
+                value={duplicateSourceKey}
+                className="min-w-64 flex-1"
+                aria-label="Claim type setup to duplicate"
+                onChange={(event) => setDuplicateSourceKey(event.target.value)}
+              >
+                <option value="">Select another claim type</option>
+                {duplicateSources.map((source) => (
+                  <option key={source.key} value={source.key}>
+                    {source.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!duplicateSourceKey}
+                onClick={() => {
+                  const source = duplicateSources.find(
+                    (candidate) => candidate.key === duplicateSourceKey,
+                  );
+                  if (!source) return;
+                  patch({
+                    enabled: true,
+                    field_maps: source.setup.field_maps.map((mapping) => ({
+                      ...mapping,
+                    })),
+                    ai_rules: source.setup.ai_rules.map((rule) => ({ ...rule })),
+                    required_documents: [...source.setup.required_documents],
+                  });
+                  toast.success(`Copied setup from ${source.label}`);
+                }}
+              >
+                <Copy className="size-3.5" />
+                <span className="ml-1.5">Duplicate setup</span>
+              </Button>
+            </div>
+          </div>
 
           <EditorSection
             title="Field mappings"

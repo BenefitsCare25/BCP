@@ -41,7 +41,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { NoCurrentYearNotice } from "@/components/shell/CurrentYearBanner";
 import { formatError } from "@/lib/errors";
 import { ImportRulesDialog } from "./ImportRulesDialog";
-import { ReviewConfigEditor, type EditorTarget } from "./ReviewConfigEditor";
+import {
+  ReviewConfigEditor,
+  type EditorTarget,
+  type ReviewDuplicateSource,
+} from "./ReviewConfigEditor";
 
 function summarize(cfg: ClaimReviewConfig): string {
   const parts = [
@@ -144,6 +148,18 @@ function TypeSection({
   );
 }
 
+function configurableScopes(type: ReviewClaimType): ReviewClaimScope[] {
+  return type.scopes.filter((scope) => scope.configurable);
+}
+
+function showsChildScopes(type: ReviewClaimType): boolean {
+  const scopes = configurableScopes(type);
+  return (
+    scopes.length > 1 ||
+    scopes.some((scope) => scope.scope_code !== "standard")
+  );
+}
+
 export function ReviewRuleSettings() {
   const options = useReviewScopeOptions();
   const configs = useClaimReviewConfigs();
@@ -161,6 +177,51 @@ export function ReviewRuleSettings() {
   }, [configs.data]);
 
   const claimTypes = options.data?.claim_types ?? [];
+  const duplicateSources = useMemo<ReviewDuplicateSource[]>(() => {
+    const defaults = options.data?.default_config;
+    if (!defaults) return [];
+    const builtIn = {
+      field_maps: defaults.field_maps,
+      ai_rules: defaults.ai_rules,
+      required_documents: defaults.required_documents,
+    };
+    const setupFrom = (config: ClaimReviewConfig | null) =>
+      config?.enabled
+        ? {
+            field_maps: config.field_maps,
+            ai_rules: config.ai_rules,
+            required_documents: config.required_documents,
+          }
+        : null;
+    const out: ReviewDuplicateSource[] = [];
+    for (const type of claimTypes) {
+      const productConfig = configByType.get(type.key) ?? null;
+      const productSetup = setupFrom(productConfig) ?? builtIn;
+      out.push({
+        key: type.key,
+        label: showsChildScopes(type)
+          ? `${type.display_label} — product default`
+          : type.display_label,
+        setup: productSetup,
+      });
+      if (!showsChildScopes(type)) continue;
+      for (const scope of configurableScopes(type)) {
+        const exact = configByType.get(scope.key) ?? null;
+        const inherited = scope.parent_key
+          ? configByType.get(scope.parent_key) ?? null
+          : null;
+        out.push({
+          key: scope.key,
+          label: [type.display_label, scope.group_label, scope.display_label]
+            .filter(Boolean)
+            .join(" — "),
+          setup:
+            setupFrom(exact) ?? setupFrom(inherited) ?? productSetup,
+        });
+      }
+    }
+    return out;
+  }, [claimTypes, configByType, options.data?.default_config]);
   const knownKeys = new Set(
     claimTypes.flatMap((t) => [t.key, ...t.scopes.map((scope) => scope.key)]),
   );
@@ -201,6 +262,7 @@ export function ReviewRuleSettings() {
           required_documents: [...(defaults?.required_documents ?? [])],
         };
     setEditing({
+      key: t.key,
       configId: config?.id ?? null,
       expectedUpdatedAt: config?.updated_at ?? null,
       draft,
@@ -209,6 +271,7 @@ export function ReviewRuleSettings() {
 
   const openOrphanEditor = (config: ClaimReviewConfig) => {
     setEditing({
+      key: config.key,
       configId: config.id,
       expectedUpdatedAt: config.updated_at,
       draft: {
@@ -304,9 +367,44 @@ export function ReviewRuleSettings() {
                   {insured.map((t) => {
                     const cfg = configByType.get(t.key) ?? null;
                     const enabledParent = cfg?.enabled ? cfg : null;
-                    const showChildren =
-                      t.scopes.length > 1 ||
-                      t.scopes.some((scope) => scope.scope_code !== "standard");
+                    const showChildren = showsChildScopes(t);
+                    const scopes = configurableScopes(t);
+                    const ungrouped = scopes.filter(
+                      (scope) => !scope.group_code,
+                    );
+                    const groupCodes = Array.from(
+                      new Set(
+                        scopes
+                          .map((scope) => scope.group_code)
+                          .filter((code): code is string => Boolean(code)),
+                      ),
+                    );
+                    const renderScope = (scope: ReviewClaimScope) => {
+                      const child = configByType.get(scope.key) ?? null;
+                      const parentConfig = scope.parent_key
+                        ? configByType.get(scope.parent_key) ?? null
+                        : null;
+                      const inheritedConfig = parentConfig?.enabled
+                        ? parentConfig
+                        : enabledParent;
+                      return (
+                        <TypeRow
+                          key={scope.key}
+                          label={scope.display_label}
+                          config={child}
+                          inheritedConfig={inheritedConfig}
+                          nestingLevel={scope.group_code ? 2 : 1}
+                          onEdit={() =>
+                            openEditor(
+                              scopeTarget(t, scope),
+                              child,
+                              inheritedConfig,
+                            )
+                          }
+                          onRevert={() => child && setReverting(child)}
+                        />
+                      );
+                    };
                     return (
                       <div key={t.key} className="divide-y divide-border">
                         <TypeRow
@@ -322,37 +420,23 @@ export function ReviewRuleSettings() {
                           }
                           onRevert={() => cfg && setReverting(cfg)}
                         />
+                        {showChildren && ungrouped.map(renderScope)}
                         {showChildren &&
-                          t.scopes.map((scope) => {
-                            const child = configByType.get(scope.key) ?? null;
-                            const parentScope = scope.parent_scope_code
-                              ? t.scopes.find(
-                                  (candidate) =>
-                                    candidate.scope_code === scope.parent_scope_code,
-                                )
-                              : null;
-                            const parentConfig = parentScope
-                              ? configByType.get(parentScope.key) ?? null
-                              : null;
-                            const inheritedConfig = parentConfig?.enabled
-                              ? parentConfig
-                              : enabledParent;
+                          groupCodes.map((groupCode) => {
+                            const grouped = scopes.filter(
+                              (scope) => scope.group_code === groupCode,
+                            );
                             return (
-                              <TypeRow
-                                key={scope.key}
-                                label={scope.display_label}
-                                config={child}
-                                inheritedConfig={inheritedConfig}
-                                nestingLevel={scope.parent_scope_code ? 2 : 1}
-                                onEdit={() =>
-                                  openEditor(
-                                    scopeTarget(t, scope),
-                                    child,
-                                    inheritedConfig,
-                                  )
-                                }
-                                onRevert={() => child && setReverting(child)}
-                              />
+                              <div key={groupCode}>
+                                <div className="bg-muted/20 px-9 py-2.5">
+                                  <SectionLabel as="h4">
+                                    {grouped[0]?.group_label ?? groupCode}
+                                  </SectionLabel>
+                                </div>
+                                <div className="divide-y divide-border border-t border-border">
+                                  {grouped.map(renderScope)}
+                                </div>
+                              </div>
                             );
                           })}
                       </div>
@@ -404,6 +488,9 @@ export function ReviewRuleSettings() {
         <ReviewConfigEditor
           target={editing}
           portalFields={options.data?.portal_fields ?? []}
+          duplicateSources={duplicateSources.filter(
+            (source) => source.key !== editing?.key,
+          )}
           onClose={() => setEditing(null)}
         />
         <ImportRulesDialog open={importOpen} onOpenChange={setImportOpen} />
@@ -429,13 +516,14 @@ export function ReviewRuleSettings() {
 
 type RuleTarget = Pick<
   ReviewClaimType,
-  "claim_kind" | "claim_key" | "display_label"
+  "claim_kind" | "claim_key" | "key" | "display_label"
 > & { scope_code: string };
 
 function scopeTarget(type: ReviewClaimType, scope: ReviewClaimScope): RuleTarget {
   return {
     claim_kind: type.claim_kind,
     claim_key: type.claim_key,
+    key: scope.key,
     scope_code: scope.scope_code,
     display_label: scope.display_label,
   };

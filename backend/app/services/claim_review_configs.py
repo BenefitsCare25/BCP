@@ -31,15 +31,16 @@ from app.models.claim import (
     HOSPITAL_TYPE_GOVERNMENT,
 )
 from app.services.claim_intake import (
-    SCOPE_GHS_HOSPITALISATION,
-    SCOPE_GHS_HOSPITALISATION_GOVT,
-    SCOPE_GHS_HOSPITALISATION_PRIVATE,
+    GHS_GENERIC_SCOPE_CODES,
+    GHS_SECTOR_SCOPE_CODES,
     SCOPE_STANDARD,
     claim_scope_definitions,
+    generic_scope_code,
     scope_code_for_sub_type,
+    sector_scope_code,
 )
 from app.services.claims_review.field_maps import AI_RULES, FIELD_MAPS
-from app.services.sg_hospitals import resolve_hospital_type
+from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE, resolve_hospital_type
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,9 @@ class ReviewScopeDefinition:
     label: str
     sub_type: str | None
     parent_scope_code: str | None = None
+    group_code: str | None = None
+    group_label: str | None = None
+    configurable: bool = True
 
 
 def review_scope_definitions(
@@ -134,32 +138,48 @@ def review_scope_definitions(
     base_label: str,
     benefit_schedules: list[dict[str, Any] | None] | None = None,
 ) -> tuple[ReviewScopeDefinition, ...]:
-    """Review-only expansion of the member claim choices.
+    """Review/document-setting expansion of member claim choices.
 
-    Document routing and the member form continue to own one Hospitalisation
-    claim type. Review rules add sector children beneath that stable scope so
-    existing ``ghs_hospitalisation`` rows remain the inherited default.
+    GHS is presented as two visual sector groups, each containing all four
+    configurable subclaim leaves. The pre-sector generic scopes remain in the
+    payload as non-configurable compatibility parents so existing rows keep
+    applying until a broker saves a leaf override.
     """
-    out: list[ReviewScopeDefinition] = []
-    for scope in claim_scope_definitions(product_code, base_label, benefit_schedules):
-        out.append(ReviewScopeDefinition(scope.code, scope.label, scope.sub_type))
-        if scope.code == SCOPE_GHS_HOSPITALISATION:
-            out.extend(
-                (
-                    ReviewScopeDefinition(
-                        SCOPE_GHS_HOSPITALISATION_GOVT,
-                        "Government hospital",
-                        scope.sub_type,
-                        SCOPE_GHS_HOSPITALISATION,
-                    ),
-                    ReviewScopeDefinition(
-                        SCOPE_GHS_HOSPITALISATION_PRIVATE,
-                        "Private hospital",
-                        scope.sub_type,
-                        SCOPE_GHS_HOSPITALISATION,
-                    ),
-                )
+    base_scopes = claim_scope_definitions(
+        product_code, base_label, benefit_schedules
+    )
+    if not base_scopes or not all(
+        scope.code in GHS_GENERIC_SCOPE_CODES for scope in base_scopes
+    ):
+        return tuple(
+            ReviewScopeDefinition(scope.code, scope.label, scope.sub_type)
+            for scope in base_scopes
+        )
+
+    out = [
+        ReviewScopeDefinition(
+            scope.code,
+            scope.label,
+            scope.sub_type,
+            configurable=False,
+        )
+        for scope in base_scopes
+    ]
+    for sector, group_label in (
+        (SECTOR_GOVT, "Government hospital"),
+        (SECTOR_PRIVATE, "Private hospital"),
+    ):
+        out.extend(
+            ReviewScopeDefinition(
+                sector_scope_code(scope.code, sector),
+                scope.label,
+                scope.sub_type,
+                parent_scope_code=scope.code,
+                group_code=sector,
+                group_label=group_label,
             )
+            for scope in base_scopes
+        )
     return tuple(out)
 
 
@@ -332,14 +352,15 @@ def claim_scope_for(claim: Claim) -> tuple[str, str, str]:
     if kind == CLAIM_KIND_FLEX:
         return kind, key, SCOPE_STANDARD
     scope = scope_code_for_sub_type(claim.sub_type)
-    if scope == SCOPE_GHS_HOSPITALISATION:
+    if scope in GHS_GENERIC_SCOPE_CODES:
         hospital_type = resolve_hospital_type(
             claim.hospital_type, claim.provider_name
         )
-        scope = (
-            SCOPE_GHS_HOSPITALISATION_GOVT
+        scope = sector_scope_code(
+            scope,
+            SECTOR_GOVT
             if hospital_type == HOSPITAL_TYPE_GOVERNMENT
-            else SCOPE_GHS_HOSPITALISATION_PRIVATE
+            else SECTOR_PRIVATE,
         )
     return kind, key, scope
 
@@ -397,18 +418,16 @@ def resolve_review_config(db: Session, claim: Claim) -> ReviewConfig:
     row = find_config_row(db, claim.client_id, kind, key, scope)
     if row is not None and row.enabled:
         return config_from_row(row)
-    # Sector-specific hospital rules inherit the existing hospitalisation
-    # scope before the product default. This is also the zero-downtime path for
-    # every setup created before Government/Private scopes existed.
-    if scope in {
-        SCOPE_GHS_HOSPITALISATION_GOVT,
-        SCOPE_GHS_HOSPITALISATION_PRIVATE,
-    }:
-        hospital_parent = find_config_row(
-            db, claim.client_id, kind, key, SCOPE_GHS_HOSPITALISATION
+    # Every sector-specific GHS leaf inherits its pre-sector subtype scope
+    # before the product default. This is the zero-downtime path for setups
+    # created before all four subclaims were split by hospital sector.
+    if scope in GHS_SECTOR_SCOPE_CODES:
+        fallback_scope = generic_scope_code(scope)
+        scope_parent = find_config_row(
+            db, claim.client_id, kind, key, fallback_scope or "*"
         )
-        if hospital_parent is not None and hospital_parent.enabled:
-            return config_from_row(hospital_parent)
+        if scope_parent is not None and scope_parent.enabled:
+            return config_from_row(scope_parent)
     parent = find_config_row(db, claim.client_id, kind, key, "*")
     if parent is not None and parent.enabled:
         return config_from_row(parent)

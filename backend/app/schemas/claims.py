@@ -1219,6 +1219,18 @@ class ResetClaimDocTypesIn(BaseModel):
     expected_versions: dict[str, datetime] = Field(default_factory=dict, max_length=100)
 
 
+class ClaimDocScopeAssignmentIn(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    expected_updated_at: datetime | None = None
+    claim_scope_keys: list[str] = Field(default_factory=list, max_length=64)
+
+
+class UpdateClaimDocScopeAssignmentsIn(BaseModel):
+    assignments: list[ClaimDocScopeAssignmentIn] = Field(
+        default_factory=list, min_length=1, max_length=100
+    )
+
+
 class ClaimDocTypeOut(BaseModel):
     id: str
     key: str
@@ -1426,6 +1438,13 @@ class ReviewClaimScopeOut(BaseModel):
     # A second-level review override (currently hospital sector) inherits this
     # scope before falling back to the product default.
     parent_scope_code: str | None = None
+    # Server-computed identity of the compatibility parent. The frontend must
+    # not recreate Python casefold-based keys.
+    parent_key: str | None = None
+    # Presentation-only grouping. Groups never have a stored configuration.
+    group_code: str | None = None
+    group_label: str | None = None
+    configurable: bool = True
 
 
 class ReviewClaimTypeOut(BaseModel):

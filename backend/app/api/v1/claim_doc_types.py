@@ -25,6 +25,7 @@ from app.schemas.claims import (
     ClaimDocTypeOut,
     ClaimDocTypeUpdateIn,
     ResetClaimDocTypesIn,
+    UpdateClaimDocScopeAssignmentsIn,
 )
 from app.services.claim_doc_types import (
     DEFAULT_KEYS,
@@ -250,6 +251,55 @@ def create_claim_doc_type(
     write_audit(db, user, "claim_doc_type.created", "claim_doc_type", row.id, after=data)
     db.commit()
     return _out(row)
+
+
+@router.post("/scope-assignments", response_model=list[ClaimDocTypeOut])
+def update_claim_doc_scope_assignments(
+    body: UpdateClaimDocScopeAssignmentsIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ClaimDocTypeOut]:
+    """Atomically replace document mappings for a claim-scope duplication.
+
+    One mapping spans several document-type rows. Saving them in one
+    transaction prevents a partially duplicated claim setup when a stale row
+    or validation error is encountered halfway through.
+    """
+    client_id = require_client_id(user)
+    if len({assignment.id for assignment in body.assignments}) != len(
+        body.assignments
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Each document type may appear only once.",
+        )
+
+    rows = [
+        _own_row(db, assignment.id, client_id)
+        for assignment in body.assignments
+    ]
+    now = datetime.now(UTC)
+    for row, assignment in zip(rows, body.assignments, strict=True):
+        assert_not_stale(
+            expected=assignment.expected_updated_at,
+            actual=row.updated_at,
+            label=f'"{row.display}" document mapping',
+        )
+        scopes = _clean_claim_scope_keys(assignment.claim_scope_keys)
+        before = {"claim_scope_keys": row.claim_scope_keys}
+        row.claim_scope_keys = scopes
+        row.updated_at = now
+        write_audit(
+            db,
+            user,
+            "claim_doc_type.scope_assignments_updated",
+            "claim_doc_type",
+            row.id,
+            before=before,
+            after={"claim_scope_keys": scopes},
+        )
+    db.commit()
+    return [_out(row) for row in rows]
 
 
 @router.put("/{doc_type_id}", response_model=ClaimDocTypeOut)

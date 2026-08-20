@@ -1,6 +1,7 @@
 import type { ClaimReviewConfigInput } from "@/api/claims";
 
 export interface EditorTarget {
+  key: string;
   configId: string | null;
   expectedUpdatedAt: string | null;
   draft: ClaimReviewConfigInput;

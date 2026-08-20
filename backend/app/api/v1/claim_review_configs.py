@@ -276,6 +276,18 @@ def review_scope_options(
                             display_label=scope.label,
                             sub_type=scope.sub_type,
                             parent_scope_code=scope.parent_scope_code,
+                            parent_key=(
+                                type_key(
+                                    CLAIM_KIND_INSURED,
+                                    code,
+                                    scope.parent_scope_code,
+                                )
+                                if scope.parent_scope_code
+                                else None
+                            ),
+                            group_code=scope.group_code,
+                            group_label=scope.group_label,
+                            configurable=scope.configurable,
                         )
                         for scope in scopes
                     ],

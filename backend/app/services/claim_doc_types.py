@@ -36,7 +36,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import ClaimDocType
-from app.services.claim_intake import DOC_DISCHARGE_SUMMARY, DOC_FINALISED_TAX_INVOICE
+from app.services.claim_intake import (
+    DOC_DISCHARGE_SUMMARY,
+    DOC_FINALISED_TAX_INVOICE,
+    sector_scope_codes,
+)
 from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE
 
 # Private-hospital final bill — detection-only (the private upload slots stay
@@ -93,7 +97,10 @@ DISCHARGE_SUMMARY = DocTypeDefinition(
         KeyField("Surgery", ("surgery", "operation", "procedure"), optional=True),
     ),
     slot_key=DOC_DISCHARGE_SUMMARY,
-    claim_scope_keys=("insured:*:ghs_hospitalisation",),
+    claim_scope_keys=(
+        "insured:*:ghs_hospitalisation_govt",
+        "insured:*:ghs_hospitalisation_private",
+    ),
 )
 
 FINAL_TAX_INVOICE = DocTypeDefinition(
@@ -157,6 +164,34 @@ def _norm(s: str) -> str:
     return " ".join(str(s).lower().split())
 
 
+def expand_legacy_ghs_scope_patterns(values: Sequence[str]) -> tuple[str, ...]:
+    """Materialize pre-sector GHS document mappings onto both sector leaves.
+
+    Existing tenant rows may still contain ``insured:*:ghs_pre_post``-style
+    keys. Returning the expanded shape makes the new eight-leaf matrix accurate
+    immediately and persists it naturally on the next edit, without a database
+    migration or a period where document routing stops matching.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        key = _norm(raw).replace(" ", "")
+        parts = key.split(":")
+        expanded = (
+            tuple(
+                f"{parts[0]}:{parts[1]}:{scope}"
+                for scope in sector_scope_codes(parts[2])
+            )
+            if len(parts) == 3 and parts[0] == "insured"
+            else ()
+        )
+        for candidate in expanded or (key,):
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
+    return tuple(out)
+
+
 # ── DB-backed resolution ──────────────────────────────────────────────────────
 
 
@@ -190,10 +225,12 @@ def definition_from_row(row: ClaimDocType) -> DocTypeDefinition:
         key_fields=tuple(key_fields),
         sector=sector,
         slot_key=row.slot_key,
-        claim_scope_keys=tuple(
-            _norm(scope).replace(" ", "")
-            for scope in (configured_scopes or [])
-            if isinstance(scope, str) and scope.strip()
+        claim_scope_keys=expand_legacy_ghs_scope_patterns(
+            tuple(
+                scope
+                for scope in (configured_scopes or [])
+                if isinstance(scope, str) and scope.strip()
+            )
         ),
     )
 

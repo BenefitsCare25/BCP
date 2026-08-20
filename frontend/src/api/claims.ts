@@ -998,6 +998,27 @@ export function useUpdateClaimDocType() {
   });
 }
 
+export function useUpdateClaimDocScopeAssignments() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (assignments: Array<{
+      id: string;
+      expected_updated_at: string;
+      claim_scope_keys: string[];
+    }>) =>
+      api.post<ClaimDocType[]>("/claim-doc-types/scope-assignments", {
+        assignments,
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["claim-doc-types"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-doc-types"] });
+      }
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
 export function useDeleteClaimDocType() {
   const qc = useQueryClient();
   return useMutation({
@@ -1094,6 +1115,12 @@ export interface ReviewClaimScope {
   sub_type: string | null;
   /** Immediate inherited scope, before the product default. */
   parent_scope_code: string | null;
+  /** Server-computed identity of the inherited compatibility scope. */
+  parent_key: string | null;
+  /** Presentation-only hierarchy; grouping rows are never configurable. */
+  group_code: string | null;
+  group_label: string | null;
+  configurable: boolean;
 }
 
 export interface ReviewScopeOptions {

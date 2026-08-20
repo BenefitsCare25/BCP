@@ -34,6 +34,7 @@ from app.services.claim_doc_types import (
 )
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
+    GHS_GENERIC_SCOPE_CODES,
     GHS_SUB_TYPES,
     SUB_TYPE_HOSPITALISATION,
     SUB_TYPE_PHYSIO,
@@ -41,6 +42,8 @@ from app.services.claim_intake import (
     claim_profile_for,
     claim_scope_key,
     normalize_invoice_number,
+    scope_code_for_sub_type,
+    sector_scope_code,
 )
 from app.services.claims_ai_confidence import confidence_threshold
 from app.services.matching_engine import jaccard, tokenize
@@ -51,7 +54,7 @@ from app.services.roster_attributes import (
     nric_from_attrs,
 )
 from app.services.sg_diagnoses import search_diagnoses
-from app.services.sg_hospitals import hospital_sector
+from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE, hospital_sector
 
 # The claim form stores an unlisted diagnosis behind this prefix (mirrors the
 # frontend DiagnosisPicker + claim_intake.effective_diagnosis).
@@ -602,6 +605,28 @@ def _inpatient_subtype_from_text(
     return None
 
 
+def _routing_scope_keys(
+    scope_key: str, sub_type: str | None, sector: str | None
+) -> tuple[str, ...]:
+    """Concrete document-routing keys for one member-visible claim choice.
+
+    The member form keeps one generic GHS choice per subclaim. Claim Settings
+    splits that choice into Government/Private leaves, so document inference
+    tests the known sector leaf (or both leaves when the evidence has no sector)
+    and finally the legacy generic key for backward compatibility.
+    """
+    generic = scope_code_for_sub_type(sub_type)
+    if generic not in GHS_GENERIC_SCOPE_CODES:
+        return (scope_key,)
+    sectors = (sector,) if sector is not None else (SECTOR_GOVT, SECTOR_PRIVATE)
+    prefix = scope_key.rsplit(":", 1)[0]
+    leaves = tuple(
+        f"{prefix}:{sector_scope_code(generic, candidate)}"
+        for candidate in sectors
+    )
+    return (*leaves, scope_key)
+
+
 def _infer_claim_type(
     document: dict[str, Any],
     coverage_opts: CoverageOptionsOut,
@@ -654,10 +679,16 @@ def _infer_claim_type(
         sector_hint=hospital_sector(provider),
     )
     if definition is not None and definition.claim_scope_keys:
+        inferred_sector = definition.sector or hospital_sector(provider)
         configured = [
             value
-            for value, _, _, scope_key in entries
-            if definition_targets_scope(definition, scope_key)
+            for value, _, sub_type, scope_key in entries
+            if any(
+                definition_targets_scope(definition, candidate)
+                for candidate in _routing_scope_keys(
+                    scope_key, sub_type, inferred_sector
+                )
+            )
         ]
         configured = list(dict.fromkeys(configured))
         if len(configured) == 1:

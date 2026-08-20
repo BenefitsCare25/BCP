@@ -880,6 +880,43 @@ def test_configured_document_scope_selects_the_matching_claim_choice():
     assert out.claim_candidates == []
 
 
+@pytest.mark.parametrize("sub_index", range(4))
+@pytest.mark.parametrize(
+    ("sector", "provider"),
+    [
+        ("govt", "Singapore General Hospital"),
+        ("private", "Raffles Hospital"),
+    ],
+)
+def test_configured_document_scope_routes_every_ghs_sector_leaf(
+    sub_index: int, sector: str, provider: str
+):
+    from app.services.claim_doc_types import DocTypeDefinition
+    from app.services.claim_intake import sector_scope_code
+
+    generic = scope_code_for_sub_type(GHS_SUB_TYPES[sub_index])
+    configured = DocTypeDefinition(
+        key="configured_receipt",
+        display="Configured Receipt",
+        aliases=("receipt",),
+        key_fields=(),
+        claim_scope_keys=(
+            claim_scope_key(
+                "insured", "GHS", sector_scope_code(generic, sector)
+            ),
+        ),
+    )
+    out = suggest_from_extraction(
+        _receipt_document(provider=provider),
+        _coverage([_ghs_option()]),
+        _employee(),
+        YEAR,
+        doc_types=(configured,),
+    )
+    assert out.claim_selection == f"insured:GHS:{sub_index}"
+    assert out.claim_candidates == []
+
+
 def test_configured_document_scope_never_guesses_between_two_matches():
     from app.services.claim_doc_types import DocTypeDefinition
 

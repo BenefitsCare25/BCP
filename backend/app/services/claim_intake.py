@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from app.models import Claim, Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
 from app.models.stored_document import DOC_ENTITY_REFERRAL, STORAGE_AVAILABLE
-from app.services.sg_hospitals import SECTOR_GOVT, hospital_sector
+from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE, hospital_sector
 
 # Currencies a member may incur a bill in — single source of truth, exposed
 # to the frontend via /portal/coverage-options.
@@ -71,11 +71,17 @@ GP_SUB_TYPES: tuple[str, ...] = (SUB_TYPE_TCM, SUB_TYPE_PHYSIO)
 # document-type routing.
 SCOPE_STANDARD = "standard"
 SCOPE_GHS_PRE_POST = "ghs_pre_post"
+SCOPE_GHS_PRE_POST_GOVT = "ghs_pre_post_govt"
+SCOPE_GHS_PRE_POST_PRIVATE = "ghs_pre_post_private"
 SCOPE_GHS_HOSPITALISATION = "ghs_hospitalisation"
 SCOPE_GHS_HOSPITALISATION_GOVT = "ghs_hospitalisation_govt"
 SCOPE_GHS_HOSPITALISATION_PRIVATE = "ghs_hospitalisation_private"
 SCOPE_GHS_EMERGENCY = "ghs_emergency_outpatient"
+SCOPE_GHS_EMERGENCY_GOVT = "ghs_emergency_outpatient_govt"
+SCOPE_GHS_EMERGENCY_PRIVATE = "ghs_emergency_outpatient_private"
 SCOPE_GHS_DIALYSIS_CANCER = "ghs_dialysis_cancer"
+SCOPE_GHS_DIALYSIS_CANCER_GOVT = "ghs_dialysis_cancer_govt"
+SCOPE_GHS_DIALYSIS_CANCER_PRIVATE = "ghs_dialysis_cancer_private"
 SCOPE_GP_TCM = "gp_tcm"
 SCOPE_GP_PHYSIOTHERAPY = "gp_physiotherapy"
 
@@ -88,12 +94,32 @@ _SUB_TYPE_SCOPE_CODES: dict[str, str] = {
     SUB_TYPE_PHYSIO: SCOPE_GP_PHYSIOTHERAPY,
 }
 
+_GHS_SECTOR_SCOPE_CODES: dict[tuple[str, str], str] = {
+    (SCOPE_GHS_PRE_POST, SECTOR_GOVT): SCOPE_GHS_PRE_POST_GOVT,
+    (SCOPE_GHS_PRE_POST, SECTOR_PRIVATE): SCOPE_GHS_PRE_POST_PRIVATE,
+    (SCOPE_GHS_HOSPITALISATION, SECTOR_GOVT): SCOPE_GHS_HOSPITALISATION_GOVT,
+    (SCOPE_GHS_HOSPITALISATION, SECTOR_PRIVATE): SCOPE_GHS_HOSPITALISATION_PRIVATE,
+    (SCOPE_GHS_EMERGENCY, SECTOR_GOVT): SCOPE_GHS_EMERGENCY_GOVT,
+    (SCOPE_GHS_EMERGENCY, SECTOR_PRIVATE): SCOPE_GHS_EMERGENCY_PRIVATE,
+    (SCOPE_GHS_DIALYSIS_CANCER, SECTOR_GOVT): SCOPE_GHS_DIALYSIS_CANCER_GOVT,
+    (SCOPE_GHS_DIALYSIS_CANCER, SECTOR_PRIVATE): SCOPE_GHS_DIALYSIS_CANCER_PRIVATE,
+}
+_GHS_GENERIC_SCOPE_BY_SECTOR_SCOPE: dict[str, str] = {
+    sector_scope: generic_scope
+    for (generic_scope, _sector), sector_scope in _GHS_SECTOR_SCOPE_CODES.items()
+}
+GHS_GENERIC_SCOPE_CODES: frozenset[str] = frozenset(
+    generic for generic, _sector in _GHS_SECTOR_SCOPE_CODES
+)
+GHS_SECTOR_SCOPE_CODES: frozenset[str] = frozenset(
+    _GHS_GENERIC_SCOPE_BY_SECTOR_SCOPE
+)
+
 CLAIM_SCOPE_CODES: frozenset[str] = frozenset(
     {
         SCOPE_STANDARD,
         *_SUB_TYPE_SCOPE_CODES.values(),
-        SCOPE_GHS_HOSPITALISATION_GOVT,
-        SCOPE_GHS_HOSPITALISATION_PRIVATE,
+        *GHS_SECTOR_SCOPE_CODES,
     }
 )
 
@@ -302,6 +328,27 @@ def scope_code_for_sub_type(sub_type: str | None) -> str:
     if not normalized:
         return SCOPE_STANDARD
     return _SUB_TYPE_SCOPE_CODES.get(normalized, SCOPE_STANDARD)
+
+
+def sector_scope_code(scope_code: str, sector: str) -> str:
+    """The Government/Private leaf for a generic GHS subclaim scope.
+
+    Non-GHS scopes pass through unchanged so callers can apply this at the
+    claim/document boundary without duplicating product-profile checks.
+    """
+    return _GHS_SECTOR_SCOPE_CODES.get((scope_code, sector), scope_code)
+
+
+def generic_scope_code(scope_code: str) -> str | None:
+    """The invisible compatibility parent of a sector-specific GHS leaf."""
+    return _GHS_GENERIC_SCOPE_BY_SECTOR_SCOPE.get(scope_code)
+
+
+def sector_scope_codes(scope_code: str) -> tuple[str, ...]:
+    """Government then Private leaf codes for one generic GHS subclaim."""
+    govt = _GHS_SECTOR_SCOPE_CODES.get((scope_code, SECTOR_GOVT))
+    private = _GHS_SECTOR_SCOPE_CODES.get((scope_code, SECTOR_PRIVATE))
+    return (govt, private) if govt and private else ()
 
 
 def claim_scope_key(
