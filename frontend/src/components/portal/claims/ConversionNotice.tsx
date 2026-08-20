@@ -60,8 +60,9 @@ export function ConversionNotice({
       <div className="space-y-2 rounded-control bg-bar/70 px-3 py-2.5">
         <p className="flex items-start gap-2 text-row text-strike-pending">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          We couldn&apos;t check the exchange rate just now. Your claim needs a{" "}
-          {policyCurrency} amount before it can be sent.
+          We couldn&apos;t show the {policyCurrency} amount just now. You can still
+          submit the claim; if a rate is available when it is saved, we&apos;ll ask
+          you to confirm the converted amount.
         </p>
         {onRetry && (
           <button

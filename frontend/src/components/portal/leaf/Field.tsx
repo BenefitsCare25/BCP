@@ -55,7 +55,10 @@ export function Field({
     undefined;
 
   return (
-    <div className={cn("space-y-1.5", className)}>
+    <div
+      className={cn("space-y-1.5", className)}
+      data-field-error={error ? "true" : undefined}
+    >
       <label htmlFor={id} className="leaf-label block">
         {label}
         {required && <RequiredMark />}
@@ -107,7 +110,12 @@ export function FieldGroup({
 }) {
   const id = useId();
   return (
-    <div className={cn("space-y-1.5", className)} role="group" aria-labelledby={id}>
+    <div
+      className={cn("space-y-1.5", className)}
+      role="group"
+      aria-labelledby={id}
+      data-field-error={error ? "true" : undefined}
+    >
       <span id={id} className="leaf-label block">
         {label}
       </span>

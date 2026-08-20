@@ -594,12 +594,18 @@ def _run_cached_ai_call(
         raise
     except AINotConfiguredError:
         raise
-    except AIParseError:
+    except AIParseError as exc:
         _record_provider_metric(cfg, operation, provider_started, "parse_failure")
         # Our parser bug — don't trip the breaker; re-raise so the caller 502s.
         logger.error(
             "AI response parse failure (does not trip breaker)",
-            extra={"error_code": "AIParseError", "operation": operation},
+            extra={
+                "error_code": "AIParseError",
+                "operation": operation,
+                # AIParseError messages are application-authored shape reasons,
+                # never provider payloads or claim content.
+                "parse_reason": str(exc),
+            },
         )
         raise
     except (AuthenticationError, PermissionDeniedError):

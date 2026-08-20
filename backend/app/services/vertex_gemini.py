@@ -158,6 +158,17 @@ def _role(anthropic_role: str) -> str:
     return "model" if anthropic_role == "assistant" else "user"
 
 
+def _thinking_config(types_mod: Any, model: str, level: str) -> Any | None:
+    """Use the generation control supported by the configured model family."""
+    normalized = model.strip().lower()
+    if normalized.startswith("gemini-2.5"):
+        budgets = {"MINIMAL": 0, "LOW": 1024, "MEDIUM": 8192, "HIGH": 24576}
+        return types_mod.ThinkingConfig(thinking_budget=budgets.get(level.upper(), 1024))
+    if normalized.startswith("gemini-3"):
+        return types_mod.ThinkingConfig(thinking_level=level.upper())
+    return None
+
+
 # ── Error translation ─────────────────────────────────────────────────────────
 
 
@@ -208,6 +219,7 @@ class _Messages:
         system: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: dict[str, Any] | None = None,
+        thinking_level: str | None = None,
         **_ignored: Any,
     ) -> _Response:
         types_mod = self.types_mod
@@ -223,6 +235,14 @@ class _Messages:
             "max_output_tokens": max_tokens,
             "temperature": 0,
         }
+        if thinking_level:
+            # Gemini 3.5 defaults to dynamic thinking. That budget is charged
+            # against max_output_tokens, so a long structured claim review can
+            # otherwise finish its reasoning with no room left to emit the
+            # forced function arguments. Keep reasoning enabled, but bounded.
+            thinking = _thinking_config(types_mod, model, thinking_level)
+            if thinking is not None:
+                config_kwargs["thinking_config"] = thinking
         if system:
             config_kwargs["system_instruction"] = system
 

@@ -765,7 +765,10 @@ export function useFxQuote(
         amount: String(amount),
         on,
       });
-      return portalApi.get<FxQuote>(`/portal/fx-quote?${params.toString()}`);
+      return portalApi.getWithTimeout<FxQuote>(
+        `/portal/fx-quote?${params.toString()}`,
+        12_000,
+      );
     },
     enabled,
     meta: { localErrorHandling: true },

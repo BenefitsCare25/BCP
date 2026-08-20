@@ -125,8 +125,12 @@ def _still_ours(db: Session, claim: Claim) -> bool:
     read — and is seen — or waits and applies on top. SQLite's dialect renders
     no `FOR UPDATE` clause at all, so the test suite is unaffected.
     """
+    expected_revision = claim.revision
     db.refresh(claim, with_for_update=True)
-    return claim.status == CLAIM_STATUS_AI_REVIEW_PENDING
+    return (
+        claim.status == CLAIM_STATUS_AI_REVIEW_PENDING
+        and claim.revision == expected_revision
+    )
 
 
 def _finalize_claim_status(db: Session, claim: Claim, verdict: str) -> None:
@@ -224,17 +228,29 @@ def execute_leased_review(job_id: str, lease_owner: str) -> None:
     """Execute one job and raise failures to the worker's retry classifier."""
     with SessionLocal() as db:
         job = db.get(ClaimReviewJob, job_id)
-        if job is None:
+        if (
+            job is None
+            or job.state != "running"
+            or job.lease_owner != lease_owner
+        ):
             raise ReviewOwnershipLost(f"Job {job_id} no longer exists")
         set_search_path(db, job.broker_firm_id)
         review = db.get(ClaimAIReview, job.review_id)
-        claim = db.get(Claim, job.claim_id)
+        claim = db.get(Claim, job.claim_id, with_for_update=True)
         if review is None or claim is None:
             raise ReviewOwnershipLost("Claim or review no longer exists")
+        if review.superseded or claim.revision != job.claim_revision:
+            raise ReviewOwnershipLost("Review no longer owns the claim revision")
         if review.status == REVIEW_STATUS_COMPLETE:
-            if review.superseded or claim.revision != job.claim_revision:
-                raise ReviewOwnershipLost("Completed review no longer owns the claim revision")
             return
+        if claim.status == CLAIM_STATUS_SUBMITTED:
+            # Amendment jobs wait through a quiet period while the claim remains
+            # truthfully submitted. Leasing is the point at which the worker
+            # owns it and the broker should see "AI review pending".
+            claim.status = CLAIM_STATUS_AI_REVIEW_PENDING
+            db.commit()
+        elif claim.status != CLAIM_STATUS_AI_REVIEW_PENDING:
+            raise ReviewOwnershipLost("Claim is no longer awaiting AI review")
         _run_stages(
             db,
             claim,

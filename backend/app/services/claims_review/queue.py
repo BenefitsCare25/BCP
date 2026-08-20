@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai_config import load_ai_config
 from app.models import Claim, ClaimAIReview, ClaimReviewJob, ClientAIConfig, PlatformAISetting
-from app.models.claim import CLAIM_STATUS_AI_REVIEW_PENDING, CLAIM_STATUS_SUBMITTED
+from app.models.claim import (
+    CASE_TYPE_CLAIM,
+    CLAIM_STATUS_AI_REVIEW_PENDING,
+    CLAIM_STATUS_SUBMITTED,
+)
 from app.models.claim_ai_review import (
     REVIEW_STATUS_CANCELLED,
     REVIEW_STATUS_ERROR,
@@ -78,6 +82,8 @@ def enqueue_claim_review(
     broker_firm_id: str,
     *,
     supersede: bool,
+    available_at: datetime | None = None,
+    mark_pending: bool = True,
 ) -> EnqueueResult:
     """Create the review and public job in the caller's single transaction."""
     locked = db.get(Claim, claim.id, with_for_update=True)
@@ -120,7 +126,8 @@ def enqueue_claim_review(
         claim.status = CLAIM_STATUS_SUBMITTED
         return EnqueueResult(review=review, job=None)
 
-    claim.status = CLAIM_STATUS_AI_REVIEW_PENDING
+    if mark_pending:
+        claim.status = CLAIM_STATUS_AI_REVIEW_PENDING
     job = ClaimReviewJob(
         broker_firm_id=broker_firm_id,
         client_id=claim.client_id,
@@ -130,11 +137,50 @@ def enqueue_claim_review(
         idempotency_key=f"claim-review:{claim.id}:{claim.revision}:{review.id}",
         state=JOB_STATE_QUEUED,
         stage="queued",
-        available_at=datetime.now(UTC),
+        available_at=available_at or datetime.now(UTC),
     )
     db.add(job)
     db.flush()
     return EnqueueResult(review=review, job=job)
+
+
+def enqueue_amended_claim_review(
+    db: Session,
+    claim: Claim,
+    broker_firm_id: str | None,
+) -> EnqueueResult | None:
+    """Queue one quiet-period review for the claim's latest revision.
+
+    Each later amendment cancels the active delayed job before replacing it,
+    so a receipt replacement (add new, then remove old) produces one provider
+    call for the final document set rather than one call per click.
+    """
+    if (
+        not broker_firm_id
+        or claim.case_type != CASE_TYPE_CLAIM
+        or claim.status != CLAIM_STATUS_SUBMITTED
+    ):
+        return None
+    # Persist cancellation of the previous active row before inserting its
+    # replacement. Both dialects enforce one active job per claim with a
+    # partial unique index, so relying on unit-of-work ordering can make a valid
+    # replacement race its own cancelled predecessor.
+    db.flush()
+    try:
+        seconds = int(os.environ.get("INSPRO_REVIEW_AMENDMENT_DEBOUNCE_SECONDS", "30"))
+    except ValueError:
+        seconds = 30
+    delay = timedelta(seconds=max(5, min(seconds, 300)))
+    return enqueue_claim_review(
+        db,
+        claim,
+        broker_firm_id,
+        supersede=True,
+        available_at=datetime.now(UTC) + delay,
+        # During the quiet period the worker does not own the claim yet. It
+        # transitions to pending when the delayed job is actually leased.
+        mark_pending=False,
+    )
 
 
 def cancel_active_review_job(db: Session, claim_id: str, reason: str) -> int:

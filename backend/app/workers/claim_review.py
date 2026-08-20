@@ -267,7 +267,7 @@ def _retryable(exc: BaseException) -> bool:
         return False
     if isinstance(
         exc,
-        (AINotConfiguredError, AIParseError, ReviewDeadlineExceeded, ReviewOwnershipLost),
+        (AINotConfiguredError, ReviewDeadlineExceeded, ReviewOwnershipLost),
     ):
         return False
     if isinstance(exc, APIStatusError):
@@ -279,6 +279,7 @@ def _retryable(exc: BaseException) -> bool:
             APIConnectionError,
             APITimeoutError,
             AICapacityError,
+            AIParseError,
             CircuitOpenError,
             OperationalError,
             TimeoutError,
@@ -561,6 +562,13 @@ def main() -> None:
     from app.core.telemetry import configure_telemetry
 
     configure_telemetry()
+    from app.services.claims_review.recovery import (
+        recover_unreviewed_amendments,
+        retry_failed_parse_reviews,
+    )
+
+    recovered_parse_reviews = retry_failed_parse_reviews()
+    recovered_amendments = recover_unreviewed_amendments()
     owner = f"{socket.gethostname()}:{os.getpid()}"
     limits = WorkerLimits.from_env()
     scheduler = ReviewScheduler(
@@ -589,6 +597,8 @@ def main() -> None:
             "lease_owner": owner,
             "concurrency": limits.concurrency,
             "max_concurrent_per_client": limits.max_concurrent_per_client,
+            "recovered_parse_reviews": recovered_parse_reviews,
+            "recovered_amendments": recovered_amendments,
         },
     )
     try:

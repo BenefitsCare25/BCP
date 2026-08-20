@@ -145,6 +145,7 @@ from app.services.claims import (
 from app.services.claims_register import build_claims_register_workbook
 from app.services.claims_review.queue import (
     cancel_active_review_job,
+    enqueue_amended_claim_review,
     enqueue_claim_review,
 )
 from app.services.fx import POLICY_CURRENCY, reset_breaker
@@ -1010,6 +1011,7 @@ def amend_claim(
         actor=AMENDED_BY_BROKER,
     )
     supersede_review_for_amendment(db, claim)
+    enqueue_amended_claim_review(db, claim, user.broker_firm_id)
     write_audit(
         db, user, "claim.amended", "claim", claim.id,
         before=audit_cells(before),
@@ -1141,6 +1143,7 @@ async def upload_claim_document(
         doc_type=doc_type,
     )
     stamp_document_amendment(db, claim, actor=AMENDED_BY_BROKER)
+    enqueue_amended_claim_review(db, claim, user.broker_firm_id)
     write_audit(
         db, user, "claim.document_added", "claim", claim.id,
         after={

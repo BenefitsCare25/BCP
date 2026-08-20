@@ -1886,11 +1886,9 @@ def supersede_review_for_amendment(db: Session, claim: Claim) -> bool:
     claim that no longer exists. Leaving it standing is the plausible-but-wrong
     figure this codebase guards against everywhere else.
 
-    Deliberately NOT an automatic re-run: a member can amend repeatedly, so
-    auto-rerun would turn an edit loop into an AI-spend loop. The claim lands
-    where the pipeline's own fault path lands it — plain `submitted`, manual
-    review — and the broker's existing Re-run review button is there for when
-    they want one.
+    The authenticated endpoint schedules a quiet-period re-run after this
+    invalidation. Scheduling stays outside this tenant-agnostic service because
+    the durable job also needs the endpoint's broker-firm identity.
 
     A DRAFT has no review and no thread; nothing to do.
     """

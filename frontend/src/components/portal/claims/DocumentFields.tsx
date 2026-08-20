@@ -47,10 +47,16 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
     <>
       {docSlots.length > 0 && (
         <FieldGroup label="Required documents (required)" className="space-y-2">
-          {docSlots.map((slot) => (
-            <div key={slot.key} className="space-y-1">
-              <div className="flex items-center gap-3">
-                <label className={ATTACH_CHIP}>
+          {docSlots.map((slot) => {
+            const error = form.fieldErrors[`slot_${slot.key}`];
+            return (
+              <div
+                key={slot.key}
+                className="space-y-1"
+                data-field-error={error ? "true" : undefined}
+              >
+                <div className="flex items-center gap-3">
+                  <label className={ATTACH_CHIP}>
                   <Paperclip className="size-4 shrink-0" aria-hidden />
                   <span className="truncate">
                     {slotFiles[slot.key]?.name ??
@@ -60,6 +66,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                     type="file"
                     accept={ACCEPT}
                     className="sr-only"
+                    aria-invalid={Boolean(error)}
                     onChange={(e) => {
                       const f = e.target.files?.[0] ?? null;
                       e.target.value = "";
@@ -71,21 +78,22 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                       form.setSlotFile(slot.key, f);
                     }}
                   />
-                </label>
-                {slotFiles[slot.key] && (
-                  <RemoveButton
-                    label={`Remove the ${slot.label.toLowerCase()}`}
-                    onClick={() => form.removeSlotFile(slot.key)}
-                  />
+                  </label>
+                  {slotFiles[slot.key] && (
+                    <RemoveButton
+                      label={`Remove the ${slot.label.toLowerCase()}`}
+                      onClick={() => form.removeSlotFile(slot.key)}
+                    />
+                  )}
+                </div>
+                {error && (
+                  <p role="alert" className="text-row font-medium text-strike-rejected">
+                    {error}
+                  </p>
                 )}
               </div>
-              {form.fieldErrors[`slot_${slot.key}`] && (
-                <p role="alert" className="text-row font-medium text-strike-rejected">
-                  {form.fieldErrors[`slot_${slot.key}`]}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </FieldGroup>
       )}
 

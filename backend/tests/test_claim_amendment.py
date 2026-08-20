@@ -413,11 +413,10 @@ def test_a_needs_info_claim_stays_editable_and_stays_needs_info(
 # ── The interlocks ───────────────────────────────────────────────────────────
 
 
-def test_an_amendment_supersedes_the_ai_verdict(anon: TestClient):
+def test_an_amendment_supersedes_and_requeues_the_ai_verdict(anon: TestClient):
     """A verdict is a statement about a specific set of claimed values. Once
     they change it describes a claim that no longer exists, so it is superseded
-    and the claim falls back to plain `submitted` for manual review — never
-    auto-rerun, which would make an edit loop an AI-spend loop.
+    and a delayed replacement is queued for the current revision.
     """
     claim = _submitted(anon, b" verdict")
     _mark_review_complete(claim["id"])
@@ -428,7 +427,12 @@ def test_an_amendment_supersedes_the_ai_verdict(anon: TestClient):
 
     with SessionLocal() as s:
         reviews = s.query(ClaimAIReview).filter_by(claim_id=claim["id"]).all()
-        assert reviews and all(r.superseded for r in reviews)
+        assert len(reviews) == 2
+        assert sum(r.superseded for r in reviews) == 1
+        current = next(r for r in reviews if not r.superseded)
+        job = s.query(ClaimReviewJob).filter_by(review_id=current.id).one()
+        assert job.state == "queued"
+        assert job.claim_revision == claim["revision"] + 1
 
 
 def test_a_verdict_cannot_land_on_a_claim_amended_under_it(anon: TestClient):
@@ -616,10 +620,12 @@ def test_a_document_change_stamps_the_claim(anon: TestClient):
     assert after["revision"] == claim["revision"] + 1
     assert after["status"] == "submitted"
     with SessionLocal() as s:
-        assert all(
-            r.superseded
-            for r in s.query(ClaimAIReview).filter_by(claim_id=claim["id"]).all()
-        )
+        reviews = s.query(ClaimAIReview).filter_by(claim_id=claim["id"]).all()
+        assert sum(r.superseded for r in reviews) == 1
+        current = next(r for r in reviews if not r.superseded)
+        job = s.query(ClaimReviewJob).filter_by(review_id=current.id).one()
+        assert job.state == "queued"
+        assert job.claim_revision == after["revision"]
 
 
 def test_a_referral_letter_cannot_be_deleted_through_a_claim(anon: TestClient):

@@ -168,6 +168,8 @@ async function request<T>(
 
 export const portalApi = {
   get: <T>(path: string) => request<T>(path),
+  getWithTimeout: <T>(path: string, milliseconds: number) =>
+    request<T>(path, { signal: AbortSignal.timeout(milliseconds) }),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) =>

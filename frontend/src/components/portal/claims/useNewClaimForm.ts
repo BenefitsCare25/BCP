@@ -174,8 +174,12 @@ export function useNewClaimForm() {
   // tracking the timer: the figure displayed and the figure submitted are then
   // always about the number the member actually typed.
   const fxMatchesInput =
-    fxQuote.isSuccess && fxQuote.data.amount === amountUsable;
-  const fxUnresolved = fxForeign && amountUsable !== null && !fxMatchesInput;
+    fxQuote.isSuccess &&
+    fxQuote.data.amount === amountUsable &&
+    fxQuote.data.currency === effectiveCurrency &&
+    fxQuote.data.as_of_date === incurredDate;
+  const fxReady = fxForeign && amountUsable !== null && Boolean(incurredDate);
+  const fxUnresolved = fxReady && !fxMatchesInput;
   // Unresolved because the answer is still COMING, as opposed to having failed.
   // `isFetching` cannot carry this on its own: during the debounce the query key
   // still holds the previous amount, so nothing is in flight and the old quote
@@ -186,10 +190,11 @@ export function useNewClaimForm() {
   const fxAwaiting = fxUnresolved && !fxQuote.isError;
   // A quote for THIS amount is on screen, so submitting the claim accepts it.
   // There is no separate tick — see `ConversionNotice`.
-  const fxShown = fxForeign && !fxUnavailable && !fxUnresolved;
-  // Foreign, and we still cannot say what it converts to. Blocks submit with a
-  // retry rather than letting them send into a 409 they cannot satisfy.
-  const fxBlocked = fxUnresolved;
+  const fxShown = fxForeign && fxMatchesInput && !fxUnavailable;
+  // Wait only while an eligible request is genuinely pending. A transport
+  // failure is fail-open: create/submit tries server-side and can route to the
+  // saved claim for confirmation if that succeeds.
+  const fxBlocked = fxUnresolved && !fxQuote.isError;
   // Same gate as `fxShown`: the acknowledged figure and the quoted figure must
   // be the same one, and neither may be the previous amount's answer.
   const fxQuoteForInput = fxMatchesInput ? (fxQuote.data ?? null) : null;
@@ -730,7 +735,7 @@ export function useNewClaimForm() {
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
       setError("Fix the highlighted fields before submitting.");
-      return;
+      return false;
     }
     if (!effectiveKind) return; // guarded by validate; satisfies the type
     setError(null);
@@ -803,12 +808,22 @@ export function useNewClaimForm() {
         // THE RECEIPT: the claim's own page, which states what was sent, lists
         // every document and carries the status from here on. It replaces a
         // three-second toast that left nothing behind.
-        void navigate({
-          to: "/portal/$company/claims/$claimId",
-          params: { company, claimId: claim.id },
-          search: { submitted: true },
-        });
+        toast.success("Claim submitted");
+        try {
+          await navigate({
+            to: "/portal/$company/claims/$claimId",
+            params: { company, claimId: claim.id },
+            search: { submitted: true },
+          });
+        } catch {
+          // The claim is already committed. A client-side router failure must
+          // never leave the member on a form that appears safe to submit again.
+          window.location.assign(
+            `/portal/${encodeURIComponent(company)}/claims/${encodeURIComponent(claim.id)}?submitted=true`,
+          );
+        }
       }
+      return true;
     } catch (err) {
       // **A conversion the member has not confirmed is RECOVERABLE, so the
       // draft must survive it.** The rollback below deletes the claim and with

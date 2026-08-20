@@ -211,9 +211,8 @@ VALID_TRANSITIONS: dict[str, frozenset[str]] = {
             # change it describes a claim that no longer exists. The claim
             # falls back to plain `submitted` (manual review) and the review
             # row is superseded, which is the same landing the pipeline's own
-            # fault path uses. Deliberately NOT an automatic re-run: a member
-            # can amend repeatedly, so auto-rerun would make an edit loop an
-            # AI-spend loop. See `docs/CLAIM_AMENDMENT_PLAN.md`.
+            # fault path uses. The endpoint queues a revision-bound review
+            # after a quiet period, collapsing repeated edits into one call.
             CLAIM_STATUS_SUBMITTED,
         }
     ),

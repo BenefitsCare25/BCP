@@ -124,7 +124,10 @@ from app.services.claims import (
     submit_claim,
     supersede_review_for_amendment,
 )
-from app.services.claims_review.queue import enqueue_claim_review
+from app.services.claims_review.queue import (
+    enqueue_amended_claim_review,
+    enqueue_claim_review,
+)
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 from app.services.enrollment_products import resolve_products_by_codes
 from app.services.fx import POLICY_CURRENCY
@@ -880,6 +883,7 @@ async def upload_my_claim_document(
     # who read the claim before it landed must not decide as if they had seen
     # it. No-op on a draft.
     stamp_document_amendment(db, claim)
+    enqueue_amended_claim_review(db, claim, member.broker_firm_id)
     write_member_audit(
         db, member, "claim.document_added", "claim", claim.id,
         after={
@@ -928,6 +932,7 @@ def amend_my_claim(
         actor=AMENDED_BY_MEMBER,
     )
     supersede_review_for_amendment(db, claim)
+    enqueue_amended_claim_review(db, claim, member.broker_firm_id)
     # Their own record of what they did, and what tells the broker the claim
     # they are holding has moved. A DRAFT has no thread — nothing has been sent.
     if claim.status != CLAIM_STATUS_DRAFT:
@@ -1012,6 +1017,7 @@ def delete_my_claim_document(
     # Evidence IS what a verdict is about, so removing a document invalidates
     # one exactly as changing a figure does.
     stamp_document_amendment(db, claim)
+    enqueue_amended_claim_review(db, claim, member.broker_firm_id)
     write_member_audit(
         db, member, "claim.document_removed", "claim", claim.id,
         before={"file_name": doc.file_name, "sha256": doc.sha256,

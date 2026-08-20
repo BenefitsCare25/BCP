@@ -25,7 +25,7 @@ from app.services.ai_extractor import AIParseError, _build_ai_client
 
 _EXTRACT_MAX_TOKENS = 8192
 _EXTRACT_TIMEOUT_SECONDS = 120.0
-_REVIEW_MAX_TOKENS = 4096
+_REVIEW_MAX_TOKENS = 8192
 _REVIEW_TIMEOUT_SECONDS = 90.0
 _VERIFY_MAX_TOKENS = 1024
 _VERIFY_TIMEOUT_SECONDS = 60.0
@@ -392,6 +392,10 @@ def review_claim_via_ai(
         system=CLAIM_REVIEW_SYSTEM_PROMPT,
         tools=[CLAIM_REVIEW_TOOL_SCHEMA],
         tool_choice={"type": "tool", "name": "emit_claim_review"},
+        # Gemini 3.5's dynamic thinking consumes the same output budget as the
+        # function arguments. LOW preserves reasoning while guaranteeing room
+        # for the review's three potentially long arrays.
+        thinking_level="LOW",
         messages=[{"role": "user", "content": prompt}],
     )
     if response.stop_reason == "max_tokens":

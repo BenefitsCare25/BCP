@@ -29,6 +29,24 @@ import { errorStatus, formatError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
 
+function focusFirstInvalidField(form: HTMLFormElement) {
+  requestAnimationFrame(() => {
+    const group = form.querySelector<HTMLElement>('[data-field-error="true"]');
+    if (!group) return;
+    const control = group.querySelector<HTMLElement>(
+      'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    group.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "center",
+    });
+    control?.focus({ preventScroll: true });
+  });
+}
+
 export function PortalNewClaimPage() {
   const navigate = useNavigate();
   const company = useCompany();
@@ -89,9 +107,11 @@ export function PortalNewClaimPage() {
       <Mount>
         <form
           className="space-y-4"
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            void form.submit();
+            const formElement = e.currentTarget;
+            const valid = await form.submit();
+            if (valid === false) focusFirstInvalidField(formElement);
           }}
           // **Enter in a text field must not submit this form.** HTML implicit
           // submission fires the submit button from any single-line input, and

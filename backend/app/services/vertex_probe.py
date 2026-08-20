@@ -30,20 +30,13 @@ from app.core.ai_config import (
 
 logger = logging.getLogger(__name__)
 
-_TEST_PROMPT = "Call emit_probe with ok=true."
+_TEST_PROMPT = (
+    "Call emit_claim_review with empty arrays, summary='probe', and confidence=1."
+)
 # Vertex's first call builds google-auth credentials + a fresh HTTP client, so
 # it needs headroom beyond a bare HTTP call.
 VERTEX_TEST_TIMEOUT_SECONDS = 20.0
-_TEST_MAX_TOKENS = 64
-_PROBE_TOOL = {
-    "name": "emit_probe",
-    "description": "Return the structured connectivity probe.",
-    "input_schema": {
-        "type": "object",
-        "properties": {"ok": {"type": "boolean"}},
-        "required": ["ok"],
-    },
-}
+_TEST_MAX_TOKENS = 256
 
 
 def project_id_from_service_account(service_account_json: str) -> str | None:
@@ -98,21 +91,38 @@ def probe_vertex(
     started = time.perf_counter()
     error: str | None = None
     try:
+        # Validate the production claim-review contract, not a toy boolean.
+        # A provider can support a one-field function while rejecting or
+        # truncating the nested arrays the worker actually requires.
+        from app.services.claim_ai import CLAIM_REVIEW_TOOL_SCHEMA
+
         client = build_gemini_client(cfg, timeout=VERTEX_TEST_TIMEOUT_SECONDS)
         response = client.messages.create(
             model=resolved_model,
             max_tokens=_TEST_MAX_TOKENS,
             messages=[{"role": "user", "content": _TEST_PROMPT}],
-            tools=[_PROBE_TOOL],
-            tool_choice={"type": "tool", "name": "emit_probe"},
+            tools=[CLAIM_REVIEW_TOOL_SCHEMA],
+            tool_choice={"type": "tool", "name": "emit_claim_review"},
+            thinking_level="MINIMAL",
         )
         block = next(
             (part for part in response.content if getattr(part, "type", None) == "tool_use"),
             None,
         )
-        if block is None or getattr(block, "name", None) != "emit_probe":
+        payload = getattr(block, "input", {}) if block is not None else {}
+        if response.stop_reason == "max_tokens":
+            error = "Vertex structured-output probe was truncated."
+        elif block is None or getattr(block, "name", None) != "emit_claim_review":
             error = "Vertex responded but did not support the required structured output."
-        elif getattr(block, "input", {}).get("ok") is not True:
+        elif not (
+            isinstance(payload, dict)
+            and isinstance(payload.get("field_comparisons"), list)
+            and isinstance(payload.get("rule_results"), list)
+            and isinstance(payload.get("required_documents_check"), list)
+            and isinstance(payload.get("summary"), str)
+            and isinstance(payload.get("confidence"), int | float)
+            and not isinstance(payload.get("confidence"), bool)
+        ):
             error = "Vertex structured-output probe returned an invalid payload."
     except (AuthenticationError, PermissionDeniedError) as exc:
         error = f"Google credentials rejected: {exc.__class__.__name__}"

@@ -40,10 +40,9 @@ export interface ClaimValues {
    *  False when the claim is already in the policy currency AND when no rate
    *  could be fetched — there is nothing to accept in either case, and a
    *  currency API outage must never stop someone filing a claim. */
-  /** Foreign, and we cannot yet say what it converts to — the quote is still in
-   *  flight or the request failed. Distinct from "there is no rate": that is a
-   *  settled answer that waives the confirmation, this is no answer at all, and
-   *  sending on it walks into a 409 for a control that was never rendered. */
+  /** Foreign, with an eligible quote request still in flight. A request failure
+   *  is fail-open: create/submit computes again server-side and, if it succeeds,
+   *  routes the member to the saved claim to confirm the resulting figure. */
   fxBlocked: boolean;
   docSlots: DocSlot[];
   slotFiles: Record<string, File | null>;
