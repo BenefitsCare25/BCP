@@ -33,10 +33,13 @@ from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     Claim,
+    ClaimDocumentSetup,
     Dependant,
     Employee,
     MemberAccount,
+    Plan,
     PolicyYear,
+    Product,
 )
 from app.models.claim import MEMBER_EDITABLE_STATUSES  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
@@ -165,6 +168,23 @@ def _setup_db(tmp_path_factory):
             )
         )
         session.flush()
+        ghs = session.query(Product).filter(Product.code == "GHS").first()
+        assert ghs is not None
+        session.add(
+            Plan(
+                product_id=ghs.id,
+                policy_year_id=PY,
+                code="P1",
+                display_name="Plan 1",
+                benefit_schedule={
+                    "items": [
+                        {"number": "1", "name": "Room & Board", "value": "S$650/day"},
+                        {"number": "2", "name": "Outpatient GP", "value": "As charged"},
+                    ]
+                },
+                status="confirmed",
+            )
+        )
         for emp_id, staff, name, acc in (
             (EMP_A, "CL-1", "Alice", ACC_A),
             (EMP_C, "CL-2", "Carol", ACC_C),
@@ -415,7 +435,12 @@ def test_coverage_options(anon: TestClient):
     emergency = ghs["claim_types"][2]
     assert emergency["supports_stay_dates"] is False
     assert [s["key"] for s in emergency["doc_slots"]] == ["invoice_receipt"]
-    assert emergency["doc_slots_by_sector"] is None
+    assert [s["key"] for s in emergency["doc_slots_by_sector"]["govt"]] == [
+        "invoice_receipt"
+    ]
+    assert [s["key"] for s in emergency["doc_slots_by_sector"]["private"]] == [
+        "invoice_receipt"
+    ]
     # Hospital registry rides along for the picker.
     sectors = {h["sector"] for h in body["hospitals"]}
     assert sectors == {"govt", "private"}
@@ -424,9 +449,176 @@ def test_coverage_options(anon: TestClient):
     assert [s["key"] for s in body["flex"]["doc_slots"]] == ["invoice_receipt"]
     assert "SGD" in body["currencies"]
     assert body["flex"]["categories"] == [
-        {"name": "Dental", "sub_limit": 500.0, "note": None}
-    ]  # non-claimable Gym excluded
+        {
+            "name": "Dental",
+            "sub_limit": 500.0,
+            "note": None,
+            "doc_slots": [
+                {
+                    "key": "invoice_receipt",
+                    "label": "Invoice or receipt",
+                    "instructions": "Attach the invoice or receipt.",
+                }
+            ],
+        }
+    ]  # non-claimable Gym excluded; each category owns its documents
     assert body["dependants"][0]["id"] == DEP_A
+
+
+def test_claim_type_document_setup_is_enforced_and_duplicates_independently(
+    anon: TestClient, broker: TestClient
+):
+    response = broker.get("/api/v1/claim-document-setups")
+    assert response.status_code == 200, response.text
+    setups = response.json()
+    matching_sources = [
+        row
+        for row in setups
+        if row["claim_key"].upper() == "GHS"
+        and row["scope_code"] == "ghs_emergency_outpatient_private"
+    ]
+    assert matching_sources, [
+        (row["claim_key"], row["scope_code"], row["display_label"])
+        for row in setups
+    ]
+    source = matching_sources[0]
+    target = next(row for row in setups if row["scope_key"] != source["scope_key"])
+
+    document = {
+        "id": "medical-evidence-source",
+        "key": "medical_evidence",
+        "display": "Medical evidence",
+        "instructions": "Attach the clinic's final medical evidence.",
+        "aliases": ["clinic evidence", "medical proof"],
+        "key_fields": [
+            {
+                "name": "Patient name",
+                "keywords": ["patient", "name"],
+                "optional": False,
+            }
+        ],
+    }
+
+    def payload(row: dict, documents: list[dict], expected=None) -> dict:
+        return {
+            "claim_kind": row["claim_kind"],
+            "claim_key": row["claim_key"],
+            "scope_code": row["scope_code"],
+            "display_label": row["display_label"],
+            "documents": documents,
+            "expected_updated_at": expected,
+        }
+
+    created_ids: list[str] = []
+    try:
+        unavailable = broker.put(
+            "/api/v1/claim-document-setups",
+            json={
+                "claim_kind": "insured",
+                "claim_key": "NOT-A-COMPANY-PRODUCT",
+                "scope_code": "standard",
+                "display_label": "Unavailable type",
+                "documents": [document],
+            },
+        )
+        assert unavailable.status_code == 422, unavailable.text
+        assert unavailable.json()["detail"]["code"] == "claim_type_not_available"
+        with SessionLocal() as session:
+            assert not session.query(ClaimDocumentSetup).filter(
+                ClaimDocumentSetup.claim_key == "NOT-A-COMPANY-PRODUCT"
+            ).count()
+
+        saved_response = broker.put(
+            "/api/v1/claim-document-setups", json=payload(source, [document])
+        )
+        assert saved_response.status_code == 200, saved_response.text
+        saved = saved_response.json()
+        created_ids.append(saved["id"])
+        assert saved["is_default"] is False
+
+        collision = broker.put(
+            "/api/v1/claim-document-setups",
+            json=payload(
+                saved,
+                [
+                    document,
+                    {
+                        **document,
+                        "id": "ambiguous-second-document",
+                        "key": "other_evidence",
+                        "display": "Other evidence",
+                        "aliases": ["medical proof"],
+                    },
+                ],
+                saved["updated_at"],
+            ),
+        )
+        assert collision.status_code == 409
+        assert collision.json()["detail"]["code"] == "ambiguous_claim_document_alias"
+
+        coverage = anon.get(
+            "/api/v1/portal/coverage-options", headers=_auth(ACC_A)
+        )
+        assert coverage.status_code == 200, coverage.text
+        emergency = next(
+            option
+            for product in coverage.json()["insured"]
+            if product["product_code"] == "GHS"
+            for option in product["claim_types"]
+            if "emergency accidental" in option["label"].lower()
+        )
+        private_documents = emergency["doc_slots_by_sector"]["private"]
+        assert [slot["key"] for slot in private_documents] == ["medical_evidence"]
+        assert emergency["doc_slots"] == private_documents
+
+        claim = _draft(anon)
+        missing = _submit(anon, claim["id"])
+        assert missing.status_code == 422
+        assert "medical evidence" in missing.text.lower()
+        attached = _upload(
+            anon,
+            claim["id"],
+            PDF + b" scoped-medical-evidence",
+            doc_type="medical_evidence",
+        )
+        assert attached.status_code == 200, attached.text
+        assert _submit(anon, claim["id"]).status_code == 200
+
+        duplicated_response = broker.post(
+            "/api/v1/claim-document-setups/duplicate",
+            json={
+                "source_scope_key": saved["scope_key"],
+                "target": payload(target, []),
+            },
+        )
+        assert duplicated_response.status_code == 200, duplicated_response.text
+        duplicated = duplicated_response.json()
+        created_ids.append(duplicated["id"])
+        assert duplicated["documents"][0]["id"] != saved["documents"][0]["id"]
+
+        target_document = {
+            **duplicated["documents"][0],
+            "display": "Target-only evidence",
+        }
+        updated_response = broker.put(
+            "/api/v1/claim-document-setups",
+            json=payload(
+                duplicated, [target_document], duplicated["updated_at"]
+            ),
+        )
+        assert updated_response.status_code == 200, updated_response.text
+        refreshed = broker.get("/api/v1/claim-document-setups").json()
+        refreshed_source = next(
+            row for row in refreshed if row["scope_key"] == saved["scope_key"]
+        )
+        assert refreshed_source["documents"][0]["display"] == "Medical evidence"
+    finally:
+        with SessionLocal() as session:
+            for setup_id in created_ids:
+                row = session.get(ClaimDocumentSetup, setup_id)
+                if row is not None:
+                    session.delete(row)
+            session.commit()
 
 
 def test_flex_claim_flow(anon: TestClient):

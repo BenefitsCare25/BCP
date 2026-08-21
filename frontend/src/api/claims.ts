@@ -998,6 +998,86 @@ export function useUpdateClaimDocType() {
   });
 }
 
+/** One required upload owned by exactly one claim type. Recognition settings
+ * are copied, never shared, when a setup is duplicated. */
+export interface ClaimSetupDocument {
+  id: string;
+  key: string;
+  display: string;
+  instructions: string | null;
+  aliases: string[];
+  key_fields: ClaimDocKeyField[];
+}
+
+export interface ClaimDocumentSetup {
+  id: string | null;
+  claim_kind: "insured" | "flex";
+  claim_key: string;
+  scope_code: string;
+  scope_key: string;
+  product_label: string;
+  display_label: string;
+  group_code: string | null;
+  group_label: string | null;
+  documents: ClaimSetupDocument[];
+  is_default: boolean;
+  updated_at: string | null;
+}
+
+export interface ClaimDocumentSetupInput {
+  claim_kind: "insured" | "flex";
+  claim_key: string;
+  scope_code: string;
+  display_label: string;
+  documents: ClaimSetupDocument[];
+  expected_updated_at?: string | null;
+}
+
+export function useClaimDocumentSetups() {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-document-setups", cid],
+    queryFn: () => api.get<ClaimDocumentSetup[]>("/claim-document-setups"),
+  });
+}
+
+export function useSaveClaimDocumentSetup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ClaimDocumentSetupInput) =>
+      api.put<ClaimDocumentSetup>("/claim-document-setups", input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["claim-document-setups"] });
+      void qc.invalidateQueries({ queryKey: ["portal", "coverage-options"] });
+    },
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-document-setups"] });
+      }
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDuplicateClaimDocumentSetup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      source_scope_key: string;
+      target: ClaimDocumentSetupInput;
+    }) =>
+      api.post<ClaimDocumentSetup>("/claim-document-setups/duplicate", input),
+    onSuccess: () =>
+      void qc.invalidateQueries({ queryKey: ["claim-document-setups"] }),
+    onError: (error) => {
+      if (isStaleConfigurationError(error)) {
+        void qc.invalidateQueries({ queryKey: ["claim-document-setups"] });
+      }
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
 export function useUpdateClaimDocScopeAssignments() {
   const qc = useQueryClient();
   return useMutation({
@@ -1142,9 +1222,12 @@ export interface SourceReviewConfig {
   id: string;
   claim_kind: string;
   claim_key: string;
+  scope_code: string;
   /** See `ClaimReviewConfig.key`. */
   key: string;
+  product_label: string;
   display_label: string;
+  group_label: string | null;
   enabled: boolean;
   field_map_count: number;
   rule_count: number;

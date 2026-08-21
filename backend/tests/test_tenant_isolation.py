@@ -104,6 +104,26 @@ def _setup_db():
     # Add a second client (B) with its own policy year + category + employee
     # so every endpoint has a B-owned resource to attempt to access from A.
     with SessionLocal() as session:
+        ghs_product = session.query(Product).filter(Product.code == "GHS").first()
+        assert ghs_product is not None
+        py_a = (
+            session.query(PolicyYear)
+            .filter(PolicyYear.client_id == DEMO_CLIENT_ID)
+            .first()
+        )
+        assert py_a is not None
+        py_a.status = PolicyYearStatus.active
+        session.add(
+            Plan(
+                id=PLAN_A_REVIEW,
+                product_id=ghs_product.id,
+                policy_year_id=py_a.id,
+                code="A-GHS",
+                display_name="Client A GHS plan",
+                status="confirmed",
+            )
+        )
+
         client_b = Client(
             id=CLIENT_B_ID,
             name="Client B (test)",
@@ -118,7 +138,7 @@ def _setup_db():
             year=2026,
             start_date=date(2026, 1, 1),
             end_date=date(2026, 12, 31),
-            status=PolicyYearStatus.draft,
+            status=PolicyYearStatus.active,
         )
         session.add(py_b)
         session.flush()
@@ -161,7 +181,7 @@ def _setup_db():
         session.add(dep_b)
 
         # A plan owned by client B (for cross-tenant plan access checks).
-        product_id = session.query(Product.id).first()[0]
+        product_id = ghs_product.id
         plan_b = Plan(
             id=PLAN_B,
             product_id=product_id,
@@ -271,8 +291,8 @@ def _setup_db():
                 id=REVIEW_CONFIG_B,
                 client_id=CLIENT_B_ID,
                 claim_kind="insured",
-                claim_key="GP",
-                display_label="Client B GP rules",
+                claim_key="GHS",
+                display_label="Client B GHS rules",
                 field_maps=[
                     {
                         "portal_field": "amount_claimed",
@@ -292,6 +312,47 @@ def _setup_db():
                 ],
             )
         )
+        for config_id, scope_code, label in (
+            (
+                REVIEW_CONFIG_B_GOVT,
+                "ghs_hospitalisation_govt",
+                "Client B hospitalisation rules",
+            ),
+            (
+                REVIEW_CONFIG_B_PRIVATE,
+                "ghs_hospitalisation_private",
+                "Client B hospitalisation rules",
+            ),
+            (
+                REVIEW_CONFIG_B_UNAVAILABLE,
+                "*",
+                "Client B unavailable product rules",
+            ),
+        ):
+            session.add(
+                ClaimReviewConfig(
+                    id=config_id,
+                    client_id=CLIENT_B_ID,
+                    claim_kind="insured",
+                    claim_key=(
+                        "BPROD"
+                        if config_id == REVIEW_CONFIG_B_UNAVAILABLE
+                        else "GHS"
+                    ),
+                    scope_code=scope_code,
+                    display_label=label,
+                    field_maps=[
+                        {
+                            "portal_field": "amount_claimed",
+                            "document_field": "Total Amount",
+                            "mode": "numeric",
+                            "tolerance": 0.01,
+                            "verify_with_vision": True,
+                        }
+                    ],
+                    ai_rules=[],
+                )
+            )
 
         # A product + employee-attribute owned by client B (schemas CRUD
         # isolation — load_editable_global 404s on another tenant's row).
@@ -354,6 +415,7 @@ CAT_B = "00000000-0000-0000-0000-0000000000b3"
 EMP_B = "00000000-0000-0000-0000-0000000000b4"
 DEP_B = "00000000-0000-0000-0000-0000000000b5"
 PLAN_B = "00000000-0000-0000-0000-0000000000b6"
+PLAN_A_REVIEW = "00000000-0000-0000-0000-0000000000a6"
 # Any product id — the cross-tenant guard rejects at the policy year before the
 # product is ever looked up, so this need not exist.
 PRODUCT_B = "00000000-0000-0000-0000-0000000000b7"
@@ -369,6 +431,9 @@ CARD_ASSIGNMENT_B = "00000000-0000-0000-0000-0000000000bc"
 PRODUCT_B_OWNED = "00000000-0000-0000-0000-0000000000bf"
 ATTR_B = "00000000-0000-0000-0000-0000000000c1"
 REVIEW_CONFIG_B = "00000000-0000-0000-0000-0000000000c2"
+REVIEW_CONFIG_B_GOVT = "00000000-0000-0000-0000-0000000000c4"
+REVIEW_CONFIG_B_PRIVATE = "00000000-0000-0000-0000-0000000000c5"
+REVIEW_CONFIG_B_UNAVAILABLE = "00000000-0000-0000-0000-0000000000c6"
 BULK_B = "00000000-0000-0000-0000-0000000000c3"
 
 
@@ -1985,6 +2050,8 @@ def test_claim_review_sources_exclude_active_and_other_firms(
     ids = {c["id"] for c in body}
     assert DEMO_CLIENT_ID not in ids
     assert CLIENT_B_ID in ids  # same firm → importable
+    client_b = next(company for company in body if company["id"] == CLIENT_B_ID)
+    assert client_b["configured_count"] == 3  # unavailable BPROD row is excluded
 
 
 def test_claim_review_import_source_other_firm_404(client_as_a: TestClient) -> None:
@@ -2019,10 +2086,23 @@ def test_claim_review_import_source_other_firm_404(client_as_a: TestClient) -> N
 
 
 def test_claim_review_import_same_firm_source_allowed(client_as_a: TestClient) -> None:
-    """Same-firm import is the FEATURE: client A duplicates client B's GP
-    setup onto its own GP claim type (a copy — B's row is untouched)."""
+    """Only shared current claim types are listed, with hospital scope context."""
     listed = client_as_a.get(f"/api/v1/claim-review-configs/from/{CLIENT_B_ID}").json()
-    assert [r["id"] for r in listed] == [REVIEW_CONFIG_B]
+    assert {r["id"] for r in listed} == {
+        REVIEW_CONFIG_B,
+        REVIEW_CONFIG_B_GOVT,
+        REVIEW_CONFIG_B_PRIVATE,
+    }
+    assert REVIEW_CONFIG_B_UNAVAILABLE not in {r["id"] for r in listed}
+    hospital_scopes = {
+        row["scope_code"]: row["group_label"]
+        for row in listed
+        if row["scope_code"].startswith("ghs_hospitalisation_")
+    }
+    assert hospital_scopes == {
+        "ghs_hospitalisation_govt": "Government hospital",
+        "ghs_hospitalisation_private": "Private hospital",
+    }
     res = client_as_a.post(
         "/api/v1/claim-review-configs/import",
         json={"source_client_id": CLIENT_B_ID, "config_ids": [REVIEW_CONFIG_B]},
@@ -2037,6 +2117,21 @@ def test_claim_review_import_same_firm_source_allowed(client_as_a: TestClient) -
         f"/api/v1/claim-review-configs/{new_id}",
         params={"expected_updated_at": imported[0]["updated_at"]},
     ).status_code == 204
+
+
+def test_claim_review_import_rejects_product_missing_from_either_company(
+    client_as_a: TestClient,
+) -> None:
+    """The list filter is repeated at write time so crafted IDs cannot bypass it."""
+    res = client_as_a.post(
+        "/api/v1/claim-review-configs/import",
+        json={
+            "source_client_id": CLIENT_B_ID,
+            "config_ids": [REVIEW_CONFIG_B_UNAVAILABLE],
+        },
+    )
+    assert res.status_code == 422
+    assert res.json()["detail"]["code"] == "claim_type_not_available"
 
 
 def test_dashboard_summary_excludes_other_firm(client_as_a: TestClient) -> None:

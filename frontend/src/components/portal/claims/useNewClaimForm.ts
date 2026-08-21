@@ -214,25 +214,29 @@ export function useNewClaimForm() {
   const requiresDoctorName = selectedClaimType?.requires_doctor_name ?? false;
   const supportsStayDates = selectedClaimType?.supports_stay_dates ?? false;
 
-  // Hospitalisation/Day Surgery: the provider is a hospital picked from the
-  // registry, and its sector (govt/private) decides the document slots. An
+  // GHS choices can own independent government/private document sets. The
+  // hospital picker or typed provider decides which scoped set is shown. An
   // "Other" hospital is classified by the typed name — mirroring the backend
   // `hospital_sector`, so a member who types a listed hospital into the free
   // text still gets that hospital's sector (and the form/backend can't
   // disagree about which documents are required). Unlisted → the private set.
   const hospitals = options.data?.hospitals ?? [];
   const isHospitalisation = supportsStayDates;
+  const hasSectorDocuments = Boolean(selectedClaimType?.doc_slots_by_sector);
   const effectiveProvider =
     isHospitalisation && hospital && hospital !== OTHER_HOSPITAL
       ? hospital
       : provider;
-  const hospitalSector = isHospitalisation
+  const hospitalSector = hasSectorDocuments
     ? sectorForHospital(hospitals, effectiveProvider)
     : null;
+  const selectedFlexCategory = flex?.categories.find(
+    (category) => category.name === flexCategory,
+  );
   const docSlots =
     effectiveKind === "flex"
-      ? (flex?.doc_slots ?? [])
-      : isHospitalisation && hospitalSector
+      ? (selectedFlexCategory?.doc_slots ?? flex?.doc_slots ?? [])
+      : hasSectorDocuments && hospitalSector
         ? (selectedClaimType?.doc_slots_by_sector?.[hospitalSector] ??
           selectedClaimType?.doc_slots ??
           [])

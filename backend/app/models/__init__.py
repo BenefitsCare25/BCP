@@ -14,6 +14,7 @@ from app.models.claim import Claim
 from app.models.claim_ai_review import ClaimAIReview
 from app.models.claim_command import ClaimCommand
 from app.models.claim_doc_type import ClaimDocType
+from app.models.claim_document_setup import ClaimDocumentSetup
 from app.models.claim_message import ClaimMessage
 from app.models.claim_notification import ClaimNotification
 from app.models.claim_review_config import ClaimReviewConfig
@@ -66,6 +67,7 @@ __all__ = [
     "ClaimAIReview",
     "ClaimCommand",
     "ClaimDocType",
+    "ClaimDocumentSetup",
     "ClaimMessage",
     "ClaimNotification",
     "ClaimReviewConfig",

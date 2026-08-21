@@ -94,6 +94,7 @@ from app.schemas.claims import (
     MessagesReadOut,
     StoredDocumentOut,
 )
+from app.services.claim_document_setups import setup_for_claim
 from app.services.claim_fx import (
     FX_STATE_CONVERTED,
     FX_STATE_UNAVAILABLE,
@@ -103,7 +104,7 @@ from app.services.claim_fx import (
     policy_amount,
     set_manual_conversion,
 )
-from app.services.claim_intake import DOC_SLOT_LABELS, is_inpatient_product
+from app.services.claim_intake import is_inpatient_product
 from app.services.claim_messages import (
     broker_message_out,
     mark_broker_read,
@@ -1127,7 +1128,8 @@ async def upload_claim_document(
     requirement check trusts these values.
     """
     claim = lock_claim_for_mutation(db, claim)
-    if doc_type is not None and doc_type not in DOC_SLOT_LABELS:
+    valid_slots = {document.key for document in setup_for_claim(db, claim).documents}
+    if doc_type is not None and doc_type not in valid_slots:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"'{doc_type}' is not a recognised document type.",

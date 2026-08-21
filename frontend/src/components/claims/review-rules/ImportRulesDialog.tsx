@@ -1,8 +1,10 @@
 /** Duplicate claim-type rule setups from another company.
  *
  * Two steps in one dialog: pick a source company, then tick which of its
- * configured claim types to copy. Each import lands on the MATCHING claim type
- * here — creating it, or overwriting an existing custom setup (marked).
+ * compatible configured claim types to copy. The backend intersects the
+ * current claim-type catalogues of both companies, and each import lands on
+ * that matching destination — creating it, or overwriting an existing custom
+ * setup (marked).
  *
  * The company list comes from the BACKEND (`/claim-review-configs/sources`),
  * not from `me.accessible_clients`: for a system_admin that list spans every
@@ -120,7 +122,8 @@ export function ImportRulesDialog({
           {sourceId === null ? (
             <>
               <p className="text-sm text-muted-foreground">
-                Pick the company whose claim review setup you want to copy from.
+                Pick a source company. Only rule setups for claim types
+                currently available in both companies can be duplicated.
               </p>
               {companiesQuery.isLoading ? (
                 <Skeleton className="h-24 w-full" />
@@ -145,8 +148,8 @@ export function ImportRulesDialog({
                       <span className="font-medium">{c.name}</span>
                       <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                         {c.configured_count === 0
-                          ? "nothing configured"
-                          : `${c.configured_count} claim type${c.configured_count === 1 ? "" : "s"}`}
+                          ? "no compatible setups"
+                          : `${c.configured_count} compatible setup${c.configured_count === 1 ? "" : "s"}`}
                       </span>
                     </button>
                   ))}
@@ -171,13 +174,15 @@ export function ImportRulesDialog({
                 <p className="text-sm text-error">{formatError(source.error)}</p>
               ) : (source.data ?? []).length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  {sourceName} has no customized claim types to copy.
+                  {sourceName} has no customized rule setups for claim types
+                  currently available in both companies.
                 </p>
               ) : (
                 <>
                   <p className="text-sm text-muted-foreground">
                     Select the claim types to copy from {sourceName}. Each one
-                    lands on the matching claim type of this company.
+                    lands on the matching claim type of this company. Hospital
+                    setups are separated by government and private scope.
                   </p>
                   {/* The label and its summary stack: side by side they ran
                       together as one sentence at small widths. */}
@@ -198,6 +203,14 @@ export function ImportRulesDialog({
                               {cfg.display_label}
                             </span>
                             <span className="block text-xs text-muted-foreground">
+                              {cfg.group_label && (
+                                <>
+                                  <span className="font-medium text-foreground">
+                                    {cfg.group_label}
+                                  </span>
+                                  <span aria-hidden> · </span>
+                                </>
+                              )}
                               {cfg.field_map_count} mappings · {cfg.rule_count} rules
                               {cfg.required_document_count > 0 &&
                                 ` · ${cfg.required_document_count} required docs`}

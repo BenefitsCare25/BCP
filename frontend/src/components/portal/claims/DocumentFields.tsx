@@ -8,7 +8,7 @@
  * Autofill files that were not placed into a slot are listed under Additional
  * documents and are removable: nothing rides along invisibly. */
 import { useRef } from "react";
-import { Paperclip, X } from "lucide-react";
+import { CheckCircle2, Circle, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { FieldGroup } from "@/components/portal/leaf/Field";
 import { Action } from "@/components/portal/leaf/Action";
@@ -42,44 +42,75 @@ function RemoveButton({
 export function DocumentFields({ form }: { form: NewClaimForm }) {
   const extraInput = useRef<HTMLInputElement>(null);
   const { docSlots, slotFiles, files, unplacedAutofill } = form;
+  const attachedCount = docSlots.filter((slot) => slotFiles[slot.key]).length;
 
   return (
     <>
       {docSlots.length > 0 && (
-        <FieldGroup label="Required documents (required)" className="space-y-2">
+        <FieldGroup
+          label="Documents for this claim"
+          hint="Attach every document below before sending your claim."
+          className="space-y-3"
+        >
+          <div
+            className="flex items-center justify-between gap-3 text-row"
+            aria-live="polite"
+          >
+            <span className="font-medium text-record">
+              {attachedCount === docSlots.length ? "All documents attached" : "Required uploads"}
+            </span>
+            <span className="tabular-nums text-label">
+              {attachedCount} of {docSlots.length} attached
+            </span>
+          </div>
+          <div className="divide-y divide-hairline overflow-hidden rounded-control border border-leaf-input bg-bar/55">
           {docSlots.map((slot) => {
             const error = form.fieldErrors[`slot_${slot.key}`];
+            const file = slotFiles[slot.key];
             return (
               <div
                 key={slot.key}
-                className="space-y-1"
+                className="space-y-2 px-3 py-3"
                 data-field-error={error ? "true" : undefined}
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-start gap-2.5">
+                  {file ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-strike-approved" aria-hidden />
+                  ) : (
+                    <Circle className="mt-0.5 size-4 shrink-0 text-label" aria-hidden />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-row font-semibold text-record">{slot.label}</p>
+                    {slot.instructions && (
+                      <p className="mt-0.5 text-row text-label">{slot.instructions}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 pl-7">
                   <label className={ATTACH_CHIP}>
-                  <Paperclip className="size-4 shrink-0" aria-hidden />
-                  <span className="truncate">
-                    {slotFiles[slot.key]?.name ??
-                      `${slot.label} (PDF or photo)`}
-                  </span>
-                  <input
-                    type="file"
-                    accept={ACCEPT}
-                    className="sr-only"
-                    aria-invalid={Boolean(error)}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0] ?? null;
-                      e.target.value = "";
-                      if (!f) return;
-                      if (f.size > MAX_BYTES) {
-                        toast.error(`${f.name} exceeds 15 MB`);
-                        return;
-                      }
-                      form.setSlotFile(slot.key, f);
-                    }}
-                  />
+                    <Paperclip className="size-4 shrink-0" aria-hidden />
+                    <span className="truncate">
+                      {file?.name ?? "Attach PDF or photo"}
+                    </span>
+                    <input
+                      type="file"
+                      accept={ACCEPT}
+                      className="sr-only"
+                      aria-label={`${file ? "Replace" : "Attach"} ${slot.label}`}
+                      aria-invalid={Boolean(error)}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] ?? null;
+                        e.target.value = "";
+                        if (!f) return;
+                        if (f.size > MAX_BYTES) {
+                          toast.error(`${f.name} exceeds 15 MB`);
+                          return;
+                        }
+                        form.setSlotFile(slot.key, f);
+                      }}
+                    />
                   </label>
-                  {slotFiles[slot.key] && (
+                  {file && (
                     <RemoveButton
                       label={`Remove the ${slot.label.toLowerCase()}`}
                       onClick={() => form.removeSlotFile(slot.key)}
@@ -94,6 +125,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
               </div>
             );
           })}
+          </div>
         </FieldGroup>
       )}
 

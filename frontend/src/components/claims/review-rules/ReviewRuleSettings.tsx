@@ -301,10 +301,10 @@ export function ReviewRuleSettings() {
           <div className="min-w-0 flex-1 basis-80 space-y-1">
             <CardTitle>AI review rules by claim type</CardTitle>
             <CardDescription className="max-w-prose">
-              What the AI checks when it reviews a submitted claim — field
-              comparisons, business rules and required documents, configurable
-              per claim choice. Product defaults are inherited unless a child
-              claim choice has its own override.
+              What the AI checks after submission — field comparisons and
+              business rules, configurable per claim choice. Required uploads
+              are managed separately under Claim settings and are checked
+              automatically from the claim&apos;s saved document setup.
             </CardDescription>
           </div>
           <Button

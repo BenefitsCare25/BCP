@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, Loader2, Plus, Trash2, X } from "lucide-react";
+import { Copy, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCreateClaimReviewConfig,
@@ -32,7 +32,6 @@ import { ReviewPromptPreview } from "./ReviewPromptPreview";
 import {
   MAX_AI_RULES,
   MAX_FIELD_MAPS,
-  MAX_REQUIRED_DOCUMENTS,
   prepareReviewConfigDraft,
   type EditorTarget,
 } from "./reviewConfigDraft";
@@ -61,13 +60,11 @@ export function ReviewConfigEditor({
   const preview = usePreviewReviewPrompt();
   const [draft, setDraft] = useState<ClaimReviewConfigInput | null>(null);
   const [promptText, setPromptText] = useState<string | null>(null);
-  const [reqDocDraft, setReqDocDraft] = useState("");
   const [duplicateSourceKey, setDuplicateSourceKey] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   useEffect(() => {
     setDraft(target ? target.draft : null);
     setPromptText(null);
-    setReqDocDraft("");
     setDuplicateSourceKey("");
     setConfirmDiscard(false);
   }, [target]);
@@ -134,19 +131,6 @@ export function ReviewConfigEditor({
       onSuccess: (r) => setPromptText(r.prompt),
       onError: (e) => toast.error(formatError(e)),
     });
-  };
-
-  const addReqDoc = () => {
-    const v = reqDocDraft.trim();
-    if (!v) return;
-    if (draft.required_documents.length >= MAX_REQUIRED_DOCUMENTS) {
-      toast.error(`Add at most ${MAX_REQUIRED_DOCUMENTS} required documents.`);
-      return;
-    }
-    if (!draft.required_documents.some((d) => d.toLowerCase() === v.toLowerCase())) {
-      patch({ required_documents: [...draft.required_documents, v] });
-    }
-    setReqDocDraft("");
   };
 
   return (
@@ -458,73 +442,15 @@ export function ReviewConfigEditor({
           </EditorSection>
 
           <EditorSection
-            title="Additional required documents"
-            hint={
-              <>
-                Extra document families to require for this claim type. The
-                automatic list always applies on top — it varies by sub-type,
-                hospital sector and referral rules, which a per-claim-type list
-                cannot express, so these ADD to it rather than replace it.
-              </>
-            }
+            title="Submission documents"
+            hint="Required uploads and recognition rules are configured independently for each claim choice under Claim settings. The AI review checks that same snapshotted list."
           >
-            <div className="flex flex-wrap items-center gap-1.5">
-              {draft.required_documents.map((d, i) => (
-                <span
-                  key={`${d}-${i}`}
-                  className="inline-flex h-8 items-center gap-0.5 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
-                >
-                  {d}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${d}`}
-                    className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-error"
-                    onClick={() =>
-                      patch({
-                        required_documents: draft.required_documents.filter(
-                          (_, j) => j !== i,
-                        ),
-                      })
-                    }
-                  >
-                    <X className="size-3" />
-                  </button>
-                </span>
-              ))}
-              <Input
-                value={reqDocDraft}
-                placeholder="e.g. receipt or tax invoice"
-                maxLength={200}
-                aria-label="Required document name"
-                className="h-8 w-56 text-xs"
-                onChange={(e) => setReqDocDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    addReqDoc();
-                  }
-                }}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label="Add required document"
-                className="size-8 shrink-0 p-0"
-                disabled={
-                  !reqDocDraft.trim() ||
-                  draft.required_documents.length >= MAX_REQUIRED_DOCUMENTS
-                }
-                onClick={addReqDoc}
-              >
-                <Plus className="size-3.5" />
-              </Button>
-            </div>
-            <p className="text-xs text-subtle">
-              {draft.required_documents.length === 0
-                ? "None — the automatic list for this claim type applies."
-                : "Required in addition to the automatic list for this claim type."}
-            </p>
+            <a
+              href="/claims/review?tab=settings"
+              className="inline-flex min-h-8 items-center text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Manage submission documents in Claim settings
+            </a>
           </EditorSection>
 
           <ReviewPromptPreview

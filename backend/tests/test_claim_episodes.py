@@ -258,17 +258,10 @@ def _submitted(anon: TestClient, *, account: str = ACC_A, **overrides) -> dict:
     res = _draft(anon, account=account, **overrides)
     assert res.status_code == 201, res.text
     claim = res.json()
-    # Every inpatient slot, so the helper works for a government hospital (one
-    # finalised invoice) and a private one (summary + itemised + discharge)
-    # alike — the hospital name varies per test and the sector decides the set.
-    for slot in (
-        "finalised_tax_invoice",
-        "summary_tax_invoice",
-        "itemised_tax_invoice",
-        "discharge_summary",
-        "invoice_receipt",
-        "sp_invoice",
-    ):
+    # The claim snapshots its exact private document library at creation. Use
+    # the served slots so the helper follows both hospital-sector variants and
+    # any company customization without tagging unrelated evidence as a slot.
+    for slot in (item["key"] for item in claim["required_doc_slots"]):
         up = anon.post(
             f"/api/v1/portal/claims/{claim['id']}/documents",
             files={

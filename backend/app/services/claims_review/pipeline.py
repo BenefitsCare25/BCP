@@ -40,7 +40,7 @@ from app.models.claim_ai_review import (
 from app.models.stored_document import STORAGE_AVAILABLE
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
-from app.services.claim_doc_types import resolve_doc_types
+from app.services.claim_document_setups import definitions_for_claim
 from app.services.claim_review_configs import claim_key_for, resolve_review_config
 from app.services.claims import claim_documents
 from app.services.claims_review import (
@@ -446,7 +446,7 @@ def _extract_stage(
     )
     review_metrics.stage_duration("extraction", time.monotonic() - stage_started)
     doc_warnings += doc_completeness.doc_completeness_results(
-        claim, extractions, resolve_doc_types(db, claim.client_id)
+        claim, extractions, definitions_for_claim(db, claim)
     )
     return docs, extractions, doc_warnings, list(calls)
 

@@ -9,6 +9,7 @@ Outpatient GP rule setup into a newly onboarded company).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -214,10 +215,8 @@ def _flex_category_names(db: Session, policy_year_id: str) -> list[str]:
     return sorted(names, key=str.casefold)
 
 
-@router.get("/options", response_model=ReviewScopeOptionsOut)
-def review_scope_options(
-    user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
+def _review_scope_options_for_client(
+    client_id: str, db: Session
 ) -> ReviewScopeOptionsOut:
     """The company's claim types (the config vocabulary) + the default setup.
 
@@ -226,7 +225,6 @@ def review_scope_options(
     no year flagged current there is no vocabulary at all — reported as
     ``has_current_year=False`` rather than an indistinguishable empty list.
     """
-    client_id = require_client_id(user)
     claim_types: list[ReviewClaimTypeOut] = []
     year = active_policy_year(db, client_id)
     if year is not None:
@@ -308,6 +306,14 @@ def review_scope_options(
         portal_fields=list(CLAIM_REVIEW_PORTAL_FIELDS),
         has_current_year=year is not None,
     )
+
+
+@router.get("/options", response_model=ReviewScopeOptionsOut)
+def review_scope_options(
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ReviewScopeOptionsOut:
+    return _review_scope_options_for_client(require_client_id(user), db)
 
 
 @router.post("", response_model=ClaimReviewConfigOut, status_code=status.HTTP_201_CREATED)
@@ -467,6 +473,78 @@ def _accessible_source(
     return source
 
 
+@dataclass(frozen=True)
+class _ImportTarget:
+    claim_kind: str
+    claim_key: str
+    scope_code: str
+    key: str
+    product_label: str
+    display_label: str
+    group_label: str | None = None
+
+
+def _import_catalog(client_id: str, db: Session) -> dict[str, _ImportTarget]:
+    """Current, member-claimable rule destinations for one company."""
+    options = _review_scope_options_for_client(client_id, db)
+    out: dict[str, _ImportTarget] = {}
+    for claim_type in options.claim_types:
+        scopes = [scope for scope in claim_type.scopes if scope.configurable]
+        shows_children = len(scopes) > 1 or any(
+            scope.scope_code != "standard" for scope in scopes
+        )
+        out[claim_type.key] = _ImportTarget(
+            claim_kind=claim_type.claim_kind,
+            claim_key=claim_type.claim_key,
+            scope_code="*",
+            key=claim_type.key,
+            product_label=(
+                "Flexible benefits"
+                if claim_type.claim_kind == CLAIM_KIND_FLEX
+                else claim_type.display_label
+            ),
+            display_label=(
+                f"{claim_type.display_label} default"
+                if shows_children
+                else claim_type.display_label
+            ),
+        )
+        for scope in scopes:
+            out[scope.key] = _ImportTarget(
+                claim_kind=claim_type.claim_kind,
+                claim_key=claim_type.claim_key,
+                scope_code=scope.scope_code,
+                key=scope.key,
+                product_label=claim_type.display_label,
+                display_label=scope.display_label,
+                group_label=scope.group_label,
+            )
+    return out
+
+
+def _compatible_source_configs(
+    db: Session,
+    source_client_id: str,
+    target_catalog: dict[str, _ImportTarget],
+) -> list[tuple[ClaimReviewConfig, _ImportTarget]]:
+    """Configured rows available in BOTH source and destination companies."""
+    source_catalog = _import_catalog(source_client_id, db)
+    compatible: list[tuple[ClaimReviewConfig, _ImportTarget]] = []
+    for row in config_rows(db, source_client_id):
+        key = type_key(row.claim_kind, row.claim_key, row.scope_code or "*")
+        destination = target_catalog.get(key)
+        if destination is not None and key in source_catalog:
+            compatible.append((row, destination))
+    compatible.sort(
+        key=lambda pair: (
+            pair[1].product_label.casefold(),
+            (pair[1].group_label or "").casefold(),
+            pair[1].display_label.casefold(),
+        )
+    )
+    return compatible
+
+
 @router.get("/sources", response_model=list[ImportSourceCompanyOut])
 def import_source_companies(
     user: CurrentUser = Depends(get_current_user),
@@ -483,6 +561,7 @@ def import_source_companies(
     active = db.get(Client, active_id)
     if active is None:
         return []
+    target_catalog = _import_catalog(active_id, db)
     out: list[ImportSourceCompanyOut] = []
     for client in accessible_clients(
         role=user.role,
@@ -496,7 +575,9 @@ def import_source_companies(
             ImportSourceCompanyOut(
                 id=client.id,
                 name=client.name,
-                configured_count=len(config_rows(db, client.id)),
+                configured_count=len(
+                    _compatible_source_configs(db, client.id, target_catalog)
+                ),
             )
         )
     return out
@@ -508,18 +589,24 @@ def source_review_configs(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[SourceReviewConfigOut]:
-    """Another company's configured claim types, offered for import."""
+    """Another company's compatible current claim types, offered for import."""
     source = _accessible_source(db, user, source_client_id)
     out: list[SourceReviewConfigOut] = []
-    for row in config_rows(db, source.id):
+    target_catalog = _import_catalog(require_client_id(user), db)
+    for row, destination in _compatible_source_configs(
+        db, source.id, target_catalog
+    ):
         cfg = config_from_row(row)
         out.append(
             SourceReviewConfigOut(
                 id=row.id,
-                claim_kind=row.claim_kind,
-                claim_key=row.claim_key,
-                key=type_key(row.claim_kind, row.claim_key, row.scope_code or "*"),
-                display_label=row.display_label,
+                claim_kind=destination.claim_kind,
+                claim_key=destination.claim_key,
+                scope_code=destination.scope_code,
+                key=destination.key,
+                product_label=destination.product_label,
+                display_label=destination.display_label,
+                group_label=destination.group_label,
                 enabled=row.enabled,
                 field_map_count=len(cfg.field_maps),
                 rule_count=len(cfg.ai_rules),
@@ -541,19 +628,37 @@ def import_review_configs(
     customized (the UI warns before overwriting)."""
     client_id = require_client_id(user)
     source = _accessible_source(db, user, body.source_client_id)
+    target_catalog = _import_catalog(client_id, db)
+    source_catalog = _import_catalog(source.id, db)
     imported: list[ClaimReviewConfig] = []
     for config_id in dict.fromkeys(body.config_ids):
         src = db.get(ClaimReviewConfig, config_id)
         if src is None or src.client_id != source.id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Review config not found")
+        source_key = type_key(
+            src.claim_kind, src.claim_key, src.scope_code or "*"
+        )
+        destination = target_catalog.get(source_key)
+        if destination is None or source_key not in source_catalog:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "claim_type_not_available",
+                    "message": (
+                        f'"{src.display_label}" is not a current claim type in '
+                        "both companies and cannot be imported. Refresh the "
+                        "duplicate list and choose an available setup."
+                    ),
+                },
+            )
         resolved = config_from_row(src)
         try:
             import_body = ClaimReviewConfigIn.model_validate(
                 {
-                    "claim_kind": src.claim_kind,
-                    "claim_key": src.claim_key,
-                    "scope_code": src.scope_code or "*",
-                    "display_label": src.display_label,
+                    "claim_kind": destination.claim_kind,
+                    "claim_key": destination.claim_key,
+                    "scope_code": destination.scope_code,
+                    "display_label": destination.display_label,
                     "enabled": src.enabled,
                     "field_maps": list(resolved.field_maps),
                     "ai_rules": [
@@ -576,7 +681,11 @@ def import_review_configs(
             ) from exc
         data = _payload(import_body)
         target = find_config_row(
-            db, client_id, src.claim_kind, src.claim_key, src.scope_code or "*"
+            db,
+            client_id,
+            destination.claim_kind,
+            destination.claim_key,
+            destination.scope_code,
         )
         if target is None:
             target = ClaimReviewConfig(client_id=client_id, **data)
@@ -584,7 +693,7 @@ def import_review_configs(
         else:
             assert_not_stale(
                 expected=body.target_versions.get(
-                    type_key(src.claim_kind, src.claim_key, src.scope_code or "*")
+                    destination.key
                 ),
                 actual=target.updated_at,
                 label=f'Rules for "{target.display_label}"',

@@ -24,6 +24,7 @@ class _Base(BaseModel):
 class DocSlotOut(BaseModel):
     key: str
     label: str
+    instructions: str | None = None
 
 
 class StoredDocumentOut(_Base):
@@ -1002,6 +1003,7 @@ class FlexClaimCategoryOption(BaseModel):
     name: str
     sub_limit: float | None = None
     note: str | None = None
+    doc_slots: list[DocSlotOut] = Field(default_factory=list)
 
 
 class FlexClaimOptions(BaseModel):
@@ -1009,7 +1011,7 @@ class FlexClaimOptions(BaseModel):
     wallet_amount: float | None = None
     flex_balance: float | None = None
     categories: list[FlexClaimCategoryOption] = Field(default_factory=list)
-    # Required-document slots for flex claims (the generic invoice/receipt).
+    # Legacy fallback; new clients read the selected category's private slots.
     doc_slots: list[DocSlotOut] = Field(default_factory=list)
     # The flex scheme's effective window, clamped to the member's own cover.
     # Genuinely different from the policy year (a scheme can start mid-year), so
@@ -1419,6 +1421,103 @@ class ClaimReviewConfigOut(BaseModel):
     updated_at: datetime
 
 
+# ── Claim-type-scoped submission documents ──────────────────────────────────
+
+
+class ClaimSetupDocument(BaseModel):
+    """One required upload slot and its private recognition vocabulary."""
+
+    id: str = Field(min_length=1, max_length=36)
+    key: str = Field(min_length=1, max_length=32, pattern=r"^[a-z0-9_]+$")
+    display: str = Field(min_length=1, max_length=128)
+    instructions: str | None = Field(default=None, max_length=240)
+    aliases: list[str] = Field(default_factory=list, max_length=32)
+    key_fields: list[ClaimDocKeyField] = Field(default_factory=list, max_length=32)
+
+    @field_validator("display")
+    @classmethod
+    def _clean_display(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("document name must not be blank")
+        return cleaned
+
+    @field_validator("instructions")
+    @classmethod
+    def _clean_instructions(cls, value: str | None) -> str | None:
+        cleaned = " ".join((value or "").split())
+        return cleaned or None
+
+    @field_validator("aliases")
+    @classmethod
+    def _clean_aliases(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = " ".join(value.split())
+            if not cleaned:
+                continue
+            if len(cleaned) > 128:
+                raise ValueError("aliases must be 128 characters or fewer")
+            folded = cleaned.casefold()
+            if folded not in seen:
+                seen.add(folded)
+                out.append(cleaned)
+        return out
+
+
+class ClaimDocumentSetupIn(BaseModel):
+    claim_kind: Literal["insured", "flex"]
+    claim_key: str = Field(min_length=1, max_length=128)
+    scope_code: str = Field(min_length=1, max_length=64)
+    display_label: str = Field(min_length=1, max_length=128)
+    documents: list[ClaimSetupDocument] = Field(default_factory=list, max_length=15)
+    expected_updated_at: datetime | None = None
+
+    @field_validator("claim_key", "display_label")
+    @classmethod
+    def _clean_text(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("must not be blank")
+        return cleaned
+
+    @field_validator("scope_code")
+    @classmethod
+    def _clean_scope(cls, value: str) -> str:
+        return value.strip().casefold()
+
+    @model_validator(mode="after")
+    def _unique_documents(self) -> ClaimDocumentSetupIn:
+        ids = [document.id for document in self.documents]
+        keys = [document.key for document in self.documents]
+        if len(ids) != len(set(ids)):
+            raise ValueError("document ids must be unique within a claim type")
+        if len(keys) != len(set(keys)):
+            raise ValueError("document keys must be unique within a claim type")
+        return self
+
+
+class ClaimDocumentSetupOut(BaseModel):
+    id: str | None = None
+    claim_kind: Literal["insured", "flex"]
+    claim_key: str
+    scope_code: str
+    scope_key: str
+    product_label: str
+    display_label: str
+    group_code: str | None = None
+    group_label: str | None = None
+    documents: list[ClaimSetupDocument] = Field(default_factory=list)
+    is_default: bool = True
+    updated_at: datetime | None = None
+
+
+class DuplicateClaimDocumentSetupIn(BaseModel):
+    source_scope_key: str = Field(min_length=1, max_length=256)
+    target: ClaimDocumentSetupIn
+
+
 class ReviewDefaultConfigOut(BaseModel):
     """The in-code default setup — prefills the editor when a claim type is
     first customized."""
@@ -1481,11 +1580,14 @@ class SourceReviewConfigOut(BaseModel):
     id: str
     claim_kind: str
     claim_key: str
+    scope_code: str
     # Server-computed join key — see `claim_review_configs.type_key`. Lets the
     # import dialog mark "already customized here" against the active company's
     # configs without re-deriving the key.
     key: str
+    product_label: str
     display_label: str
+    group_label: str | None = None
     enabled: bool
     field_map_count: int
     rule_count: int

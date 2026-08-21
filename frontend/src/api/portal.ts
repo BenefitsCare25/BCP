@@ -500,6 +500,7 @@ export interface ClaimCreateInput {
 export interface DocSlot {
   key: string;
   label: string;
+  instructions?: string | null;
 }
 
 /** Which earlier visit a claim continues — see `services/claim_episodes.py`. */
@@ -589,7 +590,12 @@ export interface CoverageOptions {
     currency: string | null;
     wallet_amount: number | null;
     flex_balance: number | null;
-    categories: { name: string; sub_limit: number | null; note: string | null }[];
+    categories: {
+      name: string;
+      sub_limit: number | null;
+      note: string | null;
+      doc_slots: DocSlot[];
+    }[];
     doc_slots: DocSlot[];
     /** The flex scheme's own effective window, member-clamped. Genuinely
      *  different from the policy year — a scheme can start mid-year. */

@@ -17,14 +17,15 @@ from sqlalchemy.orm import Session
 
 from app.models import Claim, Dependant, Employee
 from app.services import ai_gateway
-from app.services.claim_intake import claim_profile_for, required_doc_slots
+from app.services.claim_document_setups import setup_for_claim
+from app.services.claim_intake import claim_profile_for
 from app.services.claim_review_configs import (
     ReviewConfig,
     attribute_rule_results,
     rendered_rules,
     resolve_review_config,
 )
-from app.services.claims_review.field_maps import required_documents_for
+from app.services.claims_review.field_maps import SLOT_DOC_FAMILIES
 from app.services.roster_attributes import NAME_KEYS, REL_KEYS, first_value
 
 
@@ -271,22 +272,16 @@ def compare_claim(
     # list ADDS to them — the config is per claim type, so letting it replace
     # the derivation would apply one setting's document set to every sub-type
     # and could drop a guaranteed referral check.
-    required_docs = required_documents_for(
-        claim.claim_type,
-        claim.sub_type,
-        requires_referral=claim_profile_for(claim.product_code).requires_referral,
-        slot_keys=required_doc_slots(
-            claim.product_code,
-            claim.sub_type,
-            claim.provider_name,
-            claim_kind=claim.claim_kind,
-        ),
-    )
-    seen = {d.strip().lower() for d in required_docs}
-    for extra in cfg.required_documents or ():
-        if extra.strip().lower() not in seen:
-            seen.add(extra.strip().lower())
-            required_docs.append(extra)
+    # Keep the established semantic family names for built-in upload slots so
+    # the AI can reconcile historical responses (for example, "receipt or tax
+    # invoice"). A newly-created document key has no legacy family and uses
+    # its broker-defined display name verbatim.
+    required_docs = [
+        SLOT_DOC_FAMILIES.get(document.key, document.display)
+        for document in setup_for_claim(db, claim).documents
+    ]
+    if claim_profile_for(claim.product_code).requires_referral:
+        required_docs.append("referral letter or memo")
     result = ai_gateway.review_claim(
         db,
         client_id=claim.client_id,

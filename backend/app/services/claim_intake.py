@@ -570,7 +570,9 @@ def required_doc_slots(
 
 
 def assert_documents_satisfy_slots(
-    slot_keys: list[str], documents: list[StoredDocument]
+    slot_keys: list[str],
+    documents: list[StoredDocument],
+    labels: dict[str, str] | None = None,
 ) -> None:
     """Submit-time check that every required slot is filled. The generic
     invoice/receipt slot accepts any attached document (legacy drafts and
@@ -584,10 +586,13 @@ def assert_documents_satisfy_slots(
         elif key not in tagged:
             missing.append(key)
     if missing:
-        labels = ", ".join(DOC_SLOT_LABELS[k] for k in missing)
+        names = labels or DOC_SLOT_LABELS
+        missing_labels = ", ".join(
+            names.get(key, key.replace("_", " ")) for key in missing
+        )
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            f"Missing required documents: {labels}.",
+            f"Missing required documents: {missing_labels}.",
         )
 
 

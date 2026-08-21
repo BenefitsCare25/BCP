@@ -61,6 +61,11 @@ from app.models.stored_document import (
 )
 from app.schemas.api import BenefitStatementOut
 from app.schemas.claims import ClaimCreateIn, ClaimOut, DocSlotOut, StoredDocumentOut
+from app.services.claim_document_setups import (
+    current_setup_for_claim,
+    dump_documents,
+    setup_for_claim,
+)
 from app.services.claim_episodes import anchor_out, resolve_anchor
 from app.services.claim_fx import (
     FX_INPUT_FIELDS,
@@ -69,7 +74,6 @@ from app.services.claim_fx import (
     fx_state,
 )
 from app.services.claim_intake import (
-    DOC_SLOT_LABELS,
     GP_SUB_TYPES,
     assert_doctor_name_valid,
     assert_documents_satisfy_slots,
@@ -78,7 +82,6 @@ from app.services.claim_intake import (
     claim_profile_for,
     normalize_invoice_number,
     normalize_sub_type,
-    required_doc_slots,
     requires_doctor_name,
     resolve_sp_referral,
     supports_stay_dates,
@@ -402,13 +405,12 @@ def populate_claim_out(
     # a needs_info/draft edit surface can render tagged uploads that match what
     # submit enforces). Same helper the coverage-options form uses.
     out.required_doc_slots = [
-        DocSlotOut(key=k, label=DOC_SLOT_LABELS[k])
-        for k in required_doc_slots(
-            claim.product_code,
-            claim.sub_type,
-            claim.provider_name,
-            claim_kind=claim.claim_kind,
+        DocSlotOut(
+            key=document.key,
+            label=document.display,
+            instructions=document.instructions,
         )
+        for document in setup_for_claim(db, claim).documents
     ]
     if claim.dependant_id:
         out.dependant_name = (
@@ -721,6 +723,9 @@ def create_claim(
         referral_document_id=referral_document_id,
         related_claim_id=related_claim_id,
         submitted_by_member_id=submitted_by_member_id,
+    )
+    claim.required_documents_snapshot = dump_documents(
+        setup_for_claim(db, claim).documents
     )
     claim.form_fields = form_snapshot(
         claim, referral_not_applicable=body.referral_not_applicable
@@ -1386,20 +1391,13 @@ def validate_claim_facts(
         # Every required document slot must be filled (tagged uploads); the
         # generic invoice/receipt slot accepts any attached document.
         documents = claim_documents(db, claim)
-        if not documents:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "Attach at least one receipt before submitting.",
+        required = setup_for_claim(db, claim).documents
+        if required:
+            assert_documents_satisfy_slots(
+                [document.key for document in required],
+                documents,
+                labels={document.key: document.display for document in required},
             )
-        assert_documents_satisfy_slots(
-            required_doc_slots(
-                claim.product_code,
-                claim.sub_type,
-                claim.provider_name,
-                claim_kind=claim.claim_kind,
-            ),
-            documents,
-        )
     if from_member_form:
         # **A LOG case is the ESCAPE HATCH from this rule, so it cannot be
         # subject to it.** One invoice is one claim on the member's surface,
@@ -1612,6 +1610,16 @@ COVERAGE_FIELDS = frozenset(
 # Touch neither and the amendment cannot have broken a window that was already
 # satisfied, so re-asserting it can only refuse a correction for a reason the
 # correction did not create. See `validate_claim_facts`'s `recheck_period`.
+DOCUMENT_SETUP_FIELDS = frozenset(
+    {
+        "claim_kind",
+        "product_code",
+        "flex_category_name",
+        "sub_type",
+        "provider_name",
+    }
+)
+
 PERIOD_FIELDS = frozenset({"incurred_date", "claim_kind"})
 
 # States in which correcting a claim is rewriting settled history rather than
@@ -1754,6 +1762,14 @@ def apply_claim_amendment(
     # applicable" declaration out of `form_fields`, so validating against the
     # OLD flag would refuse a member who has just ticked it.
     claim.form_fields = {**(claim.form_fields or {}), _REFERRAL_FLAG: bool(flag)}
+
+    # Configuration changes do not move existing claims unexpectedly, but an
+    # amendment that actually repoints the claim must adopt the newly selected
+    # type's setup before document validation runs.
+    if columns & DOCUMENT_SETUP_FIELDS:
+        claim.required_documents_snapshot = dump_documents(
+            current_setup_for_claim(db, claim).documents
+        )
 
     validate_claim_facts(
         db,

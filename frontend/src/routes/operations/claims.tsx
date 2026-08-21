@@ -69,7 +69,7 @@ import {
 } from "@/components/claims/ClaimSettlementFacts";
 import { LogCaseForm } from "@/components/claims/LogCaseForm";
 import { NativeSelect } from "@/components/ui/native-select";
-import { DocTypeSettings } from "@/components/claims/DocTypeSettings";
+import { ClaimDocumentSettings } from "@/components/claims/ClaimDocumentSettings";
 import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
 import { InfoHint } from "@/components/ui/tooltip";
 import { PageGuide } from "@/components/ui/page-guide";
@@ -1552,7 +1552,7 @@ export function ClaimsQueuePage() {
             <LeaverAccessField />
           </CardContent>
         </Card>
-        <DocTypeSettings />
+        <ClaimDocumentSettings />
       </TabsContent>}
     </Tabs>
   );

@@ -446,6 +446,12 @@ class Claim(Base, TimestampMixin):
     # FK would buy is enforced in `claim_episodes.assert_anchor_valid`, which
     # has to run anyway: eligibility is far narrower than "a claims row exists".
     related_claim_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Required upload slots resolved when the draft is created. A later broker
+    # configuration change must not move the goalposts for an in-flight claim.
+    # Legacy rows keep NULL and resolve through the current/default setup.
+    required_documents_snapshot: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON(), nullable=True
+    )
     incurred_date: Mapped[date] = mapped_column(Date, nullable=False)
     provider_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # The treating doctor. Required only on pre-/post-hospitalisation consults

@@ -78,7 +78,11 @@ from app.services import ai_gateway
 from app.services.ai_breaker import CircuitOpenError
 from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError
-from app.services.claim_doc_types import resolve_doc_types
+from app.services.claim_document_setups import (
+    configured_definitions,
+    resolve_setup,
+    setup_for_claim,
+)
 from app.services.claim_episodes import anchor_out, eligible_anchors
 from app.services.claim_fx import (
     FX_STATE_CONVERTED,
@@ -88,9 +92,7 @@ from app.services.claim_fx import (
 )
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
-    DOC_SLOT_LABELS,
     HOSPITALISATION_SLOTS_BY_SECTOR,
-    SUB_TYPE_HOSPITALISATION,
     ClaimScopeDefinition,
     anchor_mode_for,
     assert_documents_satisfy_slots,
@@ -99,8 +101,9 @@ from app.services.claim_intake import (
     claim_scope_key,
     person_employee_ids,
     referral_letters_for,
-    required_doc_slots,
     requires_doctor_name,
+    sector_scope_code,
+    sector_scope_codes,
     supports_stay_dates,
 )
 from app.services.claim_intake_suggest import build_intake_suggestion
@@ -176,19 +179,54 @@ def coverage_options(
     return build_coverage_options(db, statement, employee, year)
 
 
-def _slots(keys: list[str]) -> list[DocSlotOut]:
-    return [DocSlotOut(key=k, label=DOC_SLOT_LABELS[k]) for k in keys]
+def _slots(documents) -> list[DocSlotOut]:
+    return [
+        DocSlotOut(
+            key=document.key,
+            label=document.display,
+            instructions=document.instructions,
+        )
+        for document in documents
+    ]
 
 
-def _claim_type_option(line, scope: ClaimScopeDefinition) -> ClaimTypeOption:
-    """One dropdown entry with its required-document slots. The default slots
-    assume no/unlisted hospital; the Hospitalisation/Day Surgery entry also
-    carries the per-sector sets so the form can switch when the member picks
-    a listed hospital."""
-    by_sector = (
-        {k: _slots(v) for k, v in HOSPITALISATION_SLOTS_BY_SECTOR.items()}
-        if scope.sub_type == SUB_TYPE_HOSPITALISATION
-        else None
+def _claim_type_option(
+    db: Session, client_id: str, line, scope: ClaimScopeDefinition
+) -> ClaimTypeOption:
+    """One dropdown entry with its required-document slots.
+
+    Every GHS subclaim has an independently configurable government/private
+    leaf. Unlisted providers resolve to private at submit, so that leaf is the
+    default while the form switches to government for a known provider.
+    """
+    by_sector = None
+    if sector_scope_codes(scope.code):
+        by_sector = {
+            sector: _slots(
+                resolve_setup(
+                    db,
+                    client_id,
+                    claim_kind="insured",
+                    claim_key=line.product_code,
+                    scope_code=sector_scope_code(scope.code, sector),
+                    sub_type=scope.sub_type,
+                ).documents
+            )
+            for sector in HOSPITALISATION_SLOTS_BY_SECTOR
+        }
+    documents = (
+        by_sector["private"]
+        if by_sector is not None
+        else _slots(
+            resolve_setup(
+                db,
+                client_id,
+                claim_kind="insured",
+                claim_key=line.product_code,
+                scope_code=scope.code,
+                sub_type=scope.sub_type,
+            ).documents
+        )
     )
     return ClaimTypeOption(
         label=scope.label,
@@ -198,7 +236,7 @@ def _claim_type_option(line, scope: ClaimScopeDefinition) -> ClaimTypeOption:
         requires_doctor_name=requires_doctor_name(line.product_code, scope.sub_type),
         supports_stay_dates=supports_stay_dates(line.product_code, scope.sub_type),
         anchor_mode=anchor_mode_for(line.product_code, scope.sub_type),
-        doc_slots=_slots(required_doc_slots(line.product_code, scope.sub_type)),
+        doc_slots=documents,
         doc_slots_by_sector=by_sector,
     )
 
@@ -250,7 +288,7 @@ def build_coverage_options(
         # builder over every plan schedule, while this member view supplies the
         # one schedule the member actually holds.
         claim_types = [
-            _claim_type_option(line, scope)
+            _claim_type_option(db, employee.client_id, line, scope)
             for scope in claim_scope_definitions(
                 line.product_code, base_label, [line.benefit_schedule]
             )
@@ -289,20 +327,32 @@ def build_coverage_options(
             # would only restate it.
             claim_block = claim_block or flex_window.empty_note
         else:
+            flex_categories = [
+                FlexClaimCategoryOption(
+                    name=c.name,
+                    sub_limit=c.sub_limit,
+                    note=c.note,
+                    doc_slots=_slots(
+                        resolve_setup(
+                            db,
+                            employee.client_id,
+                            claim_kind="flex",
+                            claim_key=c.name,
+                            scope_code="standard",
+                        ).documents
+                    ),
+                )
+                for c in statement.flex.benefit_categories
+                if c.claimable
+            ]
             flex = FlexClaimOptions(
                 currency=statement.flex.currency,
                 wallet_amount=statement.flex.wallet_amount,
                 flex_balance=statement.flex.flex_balance,
-                categories=[
-                    FlexClaimCategoryOption(
-                        name=c.name, sub_limit=c.sub_limit, note=c.note
-                    )
-                    for c in statement.flex.benefit_categories
-                    if c.claimable
-                ],
-                doc_slots=_slots(
-                    required_doc_slots(None, None, claim_kind=CLAIM_KIND_FLEX)
-                ),
+                categories=flex_categories,
+                # Kept for older clients. New clients read the selected
+                # category's independent list above.
+                doc_slots=(flex_categories[0].doc_slots if flex_categories else []),
                 # The flex scheme's own effective window, member-clamped. Served
                 # separately because it genuinely differs — CDL's scheme starts
                 # 15 Jul against a January year — and the form used the
@@ -500,7 +550,7 @@ async def extract_claim_intake(
         coverage_opts,
         employee,
         year,
-        doc_types=resolve_doc_types(db, employee.client_id),
+        doc_types=configured_definitions(db, employee.client_id),
     )
 
 
@@ -860,7 +910,8 @@ async def upload_my_claim_document(
     assert_member_may_amend(claim)
     # The slot tag must be a known slot key — the submit-time requirement
     # check trusts these values.
-    if doc_type is not None and doc_type not in DOC_SLOT_LABELS:
+    valid_slots = {document.key for document in setup_for_claim(db, claim).documents}
+    if doc_type is not None and doc_type not in valid_slots:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             f"'{doc_type}' is not a recognised document type.",
@@ -987,14 +1038,11 @@ def delete_my_claim_document(
     if claim.status != CLAIM_STATUS_DRAFT:
         remaining = [d for d in claim_documents(db, claim) if d.id != doc.id]
         try:
+            required = setup_for_claim(db, claim).documents
             assert_documents_satisfy_slots(
-                required_doc_slots(
-                    claim.product_code,
-                    claim.sub_type,
-                    claim.provider_name,
-                    claim_kind=claim.claim_kind,
-                ),
+                [document.key for document in required],
                 remaining,
+                labels={document.key: document.display for document in required},
             )
         except HTTPException as exc:
             raise HTTPException(
