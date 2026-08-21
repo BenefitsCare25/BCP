@@ -5,6 +5,7 @@ from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
+from sqlalchemy.orm import Session
 
 from app.models import Category, Plan, PolicyYear, Product, ProductTerm
 from app.services.matching_engine import insured_names
@@ -33,6 +34,7 @@ from app.services.slip_export.styles import (
     MONEY,
     TITLE,
     border_row,
+    finalize_sheet,
     set_widths,
     style_row,
 )
@@ -139,7 +141,13 @@ def _write_product_sheet(
     if plans:
         cover = shared_cover(plans)
         write_plan_details(ws, plans, cover)
-        write_sob(ws, plans, cover)
+        write_sob(
+            ws,
+            plans,
+            cover,
+            answers=answers,
+            quotation=ctx.blank_rates,
+        )
 
 
 def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]) -> None:
@@ -166,9 +174,7 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]
     # shared envelope), not the bare policy-year span — products can renew
     # off-cycle via ProductTerm coverage overrides.
     overview.append(["Period of Insurance", fmt_window(*db_envelope)])
-    overview.append([
-        "Note", "All premium amounts are GST-exclusive, as extracted/configured.",
-    ])
+    overview.append(["Note", "GST treatment is shown on each product sheet."])
     for r in range(2, 6):
         overview.cell(row=r, column=1).font = HEADER
     overview.append([])
@@ -216,12 +222,14 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]
         overview.cell(row=row, column=8).number_format = MONEY
 
 
-def build(db, py: PolicyYear, mode: Mode) -> Workbook:
+def build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
     ctx = load_context(db, py, mode)
     envelope = envelope_for(db, py)
 
     wb = Workbook()
     _write_overview(wb, ctx, envelope)
+    overview = wb["Overview"]
+    doc_name = "Quotation Slip" if ctx.blank_rates else "Placement Slip"
 
     taken: set[str] = {"overview"}
     for product in ctx.products:
@@ -234,11 +242,23 @@ def build(db, py: PolicyYear, mode: Mode) -> Workbook:
             ctx.plans_by_product.get(product.id, []),
             ctx.terms.get(product.id),
         )
+        finalize_sheet(
+            ws,
+                doc_name=doc_name,
+        )
 
     unassigned = ctx.cats_by_product.get(None, [])
     if unassigned:
         ws = wb.create_sheet(_sheet_title("Unassigned", taken))
         _write_product_sheet(ws, ctx, None, unassigned, [], None)
+        finalize_sheet(
+            ws,
+                doc_name=doc_name,
+        )
+
+    overview.freeze_panes = "A8"
+    overview.auto_filter.ref = f"A7:H{overview.max_row}"
+    finalize_sheet(overview, doc_name=doc_name)
 
     return wb
 

@@ -466,17 +466,122 @@ def test_quotation_rate_table_skips_unpriceable_rows(client: TestClient) -> None
 def test_sob_fold_and_plan_details(client: TestClient) -> None:
     wb = _download(client)
     ghs = _cells(wb["GHS"])
-    sob_i = _row_index(ghs, "SCHEDULE OF BENEFITS / INSURER / PLAN")
+    sob_i = _row_index(ghs, "SCHEDULE OF BENEFITS / PLAN")
     # Two plans with differing values stay two columns.
-    assert ghs[sob_i + 1][:4] == ["No.", "Benefit", "Plan 1", "Plan 2"]
-    assert ghs[sob_i + 2][:4] == [
-        "1", "Daily Room & Board", "S$650 per day", "S$450 per day",
+    assert ghs[sob_i + 1][:5] == [
+        "No.", "Benefit", "Details / Qualifiers", "Plan 1", "Plan 2",
     ]
-    assert ghs[sob_i + 3][1] == "    · Maximum no. of days: 120 days"
+    assert ghs[sob_i + 2][:5] == [
+        "1", "Daily Room & Board", None, "S$650 per day", "S$450 per day",
+    ]
+    assert ghs[sob_i + 3][1:3] == [
+        "    • Maximum no. of days", "120 days",
+    ]
 
     gtl = _cells(wb["GTL"])
     details_i = _row_index(gtl, "Plan Details")
     assert gtl[details_i + 2][:3] == ["1", "24x basic monthly salary", "S$500,000"]
+
+
+def test_sob_uses_platform_labels_and_renders_every_qualifier() -> None:
+    """The export keeps the full materialized Plan schedules, but uses the
+    Product Setup column mapping for insurer-facing headings. Non-limit
+    properties (especially outpatient copays) must not disappear."""
+    from openpyxl import Workbook
+
+    from app.services.slip_export.sob import write_sob
+
+    def schedule(value: str, private: str, copay: str) -> dict:
+        return {
+            "items": [
+                {
+                    "number": "A",
+                    "name": "Consultation",
+                    "value": value,
+                    "note": "Includes medication",
+                    "limits": [],
+                    "sub_items": [
+                        {
+                            "key": "(a)",
+                            "name": "Panel clinic",
+                            "value": "As charged",
+                            "limits": [],
+                            "properties": {},
+                        }
+                    ],
+                    "properties": {
+                        "per_visit_private": private,
+                        "co_payment_private": copay,
+                    },
+                },
+                {
+                    "number": "B",
+                    "name": "Curated extra row",
+                    "value": "YES",
+                    "limits": [],
+                    "sub_items": [],
+                    "properties": {},
+                },
+            ]
+        }
+
+    plans = [
+        Plan(
+            code="U01",
+            display_name="Plan U01",
+            benefit_schedule=schedule("YES", "120", "As charged"),
+        ),
+        Plan(code="1", display_name="Plan 1", benefit_schedule=schedule("YES", "100", "20%")),
+    ]
+    # Deliberately contains only one draft item: the renderer must use this for
+    # labels/mapping only, never replace the fuller Plan schedules with it.
+    answers = {
+        "sob": {
+            "columns": [
+                {"id": "a", "label": "PLAN 1", "plan_codes": ["1"]},
+                {"id": "b", "label": "PLAN U01", "plan_codes": ["U01"]},
+            ],
+            "items": [{"number": "A", "name": "Consultation"}],
+        }
+    }
+    ws = Workbook().active
+    write_sob(ws, plans, None, answers=answers, quotation=True)
+    rows = _cells(ws)
+    sob_i = _row_index(
+        rows, "SCHEDULE OF BENEFITS / DEFINITIONS / INSURER RESPONSE"
+    )
+    assert rows[sob_i + 1][:6] == [
+        "No.", "Benefit", "Details / Qualifiers", "PLAN 1", "PLAN U01",
+        "Insurer Response",
+    ]
+    assert any(row[1] == "Curated extra row" for row in rows)
+    per_visit = next(row for row in rows if row[1] == "    • Per visit — Private Hospital")
+    assert per_visit[3:5] == ["100", "120"]
+    copay = next(row for row in rows if row[1] == "    • Co-payment — Private Hospital")
+    assert copay[3:5] == ["20%", "As charged"]
+    nested = next(row for row in rows if row[1] == "    Panel clinic")
+    assert nested[:5] == [
+        "(a)", "    Panel clinic", "", "As charged", "As charged",
+    ]
+
+    # A compact one-plan sheet must not orphan the SOB header at a page foot.
+    compact_ws = Workbook().active
+    compact_ws.cell(row=25, column=1, value="Setup content")
+    write_sob(compact_ws, [plans[0]], None, quotation=True)
+    assert len(compact_ws.row_breaks.brk) == 1
+
+
+def test_export_has_print_ready_sheet_formatting(client: TestClient) -> None:
+    wb = _download(client, kind="quotation")
+    for ws in wb.worksheets:
+        assert ws.page_setup.orientation == "landscape"
+        assert ws.page_setup.fitToWidth == 1
+        assert ws.page_setup.fitToHeight == 0
+        assert ws.print_area
+        assert ws.sheet_view.showGridLines is False
+        assert any(str(merged).startswith("A1:") for merged in ws.merged_cells.ranges)
+    assert wb["Overview"].freeze_panes == "A8"
+    assert len(wb["GHS"].row_breaks.brk) == 0
 
 
 def test_voluntary_rates_block(client: TestClient) -> None:

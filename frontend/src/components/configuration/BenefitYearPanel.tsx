@@ -26,6 +26,7 @@ import {
   isPastPolicyPeriod,
   isWithinPolicyPeriod,
 } from "@/lib/policy-year";
+import { notify } from "@/stores/notifications";
 import type { PolicyYear } from "@/types";
 
 /** `2026-01-01` + `2026-12-31` → `202601-202612` (insurer-style benefit-year id). */
@@ -88,7 +89,7 @@ function DownloadButton({
         try {
           await onDownload();
         } catch (e) {
-          toast.error(formatError(e));
+          notify({ message: formatError(e), tone: "error" });
         } finally {
           setBusy(false);
         }
@@ -220,16 +221,6 @@ export function BenefitYearPanel({
       `/policy-years/${py.id}/fact-find-form`,
     );
     triggerDownload(await res.blob(), `fact-find-${py.year}.docx`);
-    const notes = decodeURIComponent(
-      res.headers.get("X-FactFind-Notes") ?? "",
-    ).trim();
-    if (notes) {
-      toast.warning("Fact-find downloaded — some fields need manual entry", {
-        description: notes.split(" | ").join("\n"),
-      });
-    } else {
-      toast.success("Fact-find form downloaded");
-    }
   };
 
   const downloadQuotation = (py: PolicyYear) => async () => {

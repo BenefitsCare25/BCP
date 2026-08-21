@@ -408,9 +408,9 @@ def download_fact_find_form(
     headers = {
         "Content-Disposition": f'attachment; filename="{filename}"',
         # Completeness report (what was partial/skipped), URL-encoded for ASCII
-        # header safety; the frontend surfaces it after download. Exposed to the
-        # browser via CORSMiddleware's expose_headers (app/main.py), not here —
-        # a per-response Access-Control-Expose-Headers would be overwritten.
+        # header safety. It remains available to API consumers and is also
+        # preserved in the export audit record above; it is not a download
+        # failure and therefore is not surfaced as an application error.
         "X-FactFind-Notes": quote(" | ".join(notes)),
     }
     return Response(content=docx_bytes, media_type=_DOCX_MIME, headers=headers)

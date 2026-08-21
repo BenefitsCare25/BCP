@@ -7,15 +7,16 @@ apart visually.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-TITLE = Font(bold=True, size=13)
-SECTION = Font(bold=True, size=11)
-HEADER = Font(bold=True)
+TITLE = Font(bold=True, size=14, color="FFFFFF")
+SECTION = Font(bold=True, size=11, color="FFFFFF")
+HEADER = Font(bold=True, color="6F0B1B")
 NOTE = Font(italic=True, size=9)
 WRAP = Alignment(wrap_text=True, vertical="top")
 CENTER = Alignment(horizontal="center", vertical="center")
@@ -25,6 +26,9 @@ COUNT = "#,##0"
 
 _THIN = Side(style="thin")
 BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+TITLE_FILL = PatternFill("solid", fgColor="9F1239")
+SECTION_FILL = PatternFill("solid", fgColor="C8102E")
+HEADER_FILL = PatternFill("solid", fgColor="FCE7EC")
 
 
 def set_widths(ws: Worksheet, widths: dict[int, int]) -> None:
@@ -35,7 +39,7 @@ def set_widths(ws: Worksheet, widths: dict[int, int]) -> None:
 def style_row(
     ws: Worksheet, font: Font | None = None, wrap_cols: tuple[int, ...] = ()
 ) -> int:
-    row = ws.max_row
+    row = int(ws.max_row)
     if font is not None:
         for cell in ws[row]:
             cell.font = font
@@ -59,6 +63,7 @@ def label_value_rows(ws: Worksheet, rows: list[tuple[str, str] | None]) -> None:
     for entry in rows:
         if entry is None:
             ws.append([])
+            ws.row_dimensions[ws.max_row].height = 6
             continue
         label, value = entry
         ws.append([label, "", value])
@@ -77,3 +82,96 @@ def numeric_or_text(v: Any) -> Any:
         return float(s)
     except ValueError:
         return v
+
+
+def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
+    """Apply consistent workbook-level print and visual formatting."""
+    last_col = max(ws.max_column, 3)
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.page_margins.left = 0.25
+    ws.page_margins.right = 0.25
+    ws.page_margins.top = 0.45
+    ws.page_margins.bottom = 0.45
+    ws.page_margins.header = 0.2
+    ws.page_margins.footer = 0.2
+    ws.print_area = f"A1:{get_column_letter(last_col)}{ws.max_row}"
+    ws.print_title_rows = "1:1"
+    ws.oddFooter.center.text = "Page &P"
+    ws.oddFooter.right.text = doc_name
+    ws.sheet_properties.tabColor = "C8102E"
+
+    section_labels = {
+        "Basis of Cover :",
+        "Plan Details",
+        "SCHEDULE OF BENEFITS / PLAN",
+        "SCHEDULE OF BENEFITS / DEFINITIONS / INSURER RESPONSE",
+    }
+    for row in range(1, ws.max_row + 1):
+        populated = [cell for cell in ws[row] if cell.value not in (None, "")]
+        if not populated:
+            continue
+        max_text = max(len(str(cell.value)) for cell in populated)
+        if max_text > 80:
+            ws.row_dimensions[row].height = min(90, 15 * math.ceil(max_text / 80))
+        for cell in populated:
+            if isinstance(cell.value, str) and len(cell.value) > 32:
+                cell.alignment = Alignment(
+                    horizontal=cell.alignment.horizontal,
+                    vertical="top",
+                    wrap_text=True,
+                )
+
+        if row == 1:
+            if last_col > 1:
+                ws.merge_cells(
+                    start_row=1, start_column=1, end_row=1, end_column=last_col
+                )
+            cell = ws.cell(row=1, column=1)
+            cell.font = TITLE
+            cell.fill = TITLE_FILL
+            cell.alignment = Alignment(vertical="center")
+            ws.row_dimensions[1].height = 26
+            continue
+
+        first = ws.cell(row=row, column=1)
+        if len(populated) == 1 and first.value in section_labels:
+            if last_col > 1:
+                ws.merge_cells(
+                    start_row=row,
+                    start_column=1,
+                    end_row=row,
+                    end_column=last_col,
+                )
+            first.font = SECTION
+            first.fill = SECTION_FILL
+            first.alignment = Alignment(vertical="center")
+            ws.row_dimensions[row].height = 22
+            continue
+
+        # Header/term label rows use A and C. Merge the intentionally blank A:B
+        # span so long reference labels do not consume the value column.
+        if (
+            len(populated) == 2
+            and ws.cell(row=row, column=1).font.bold
+            and ws.cell(row=row, column=2).value in (None, "")
+            and ws.cell(row=row, column=3).value not in (None, "")
+        ):
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+
+        if len(populated) >= 2 and all(cell.font.bold for cell in populated):
+            first_col = min(cell.column for cell in populated)
+            row_last_col = max(cell.column for cell in populated)
+            for col in range(first_col, row_last_col + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.fill = HEADER_FILL
+                cell.alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True
+                )
+            ws.row_dimensions[row].height = max(
+                ws.row_dimensions[row].height or 15, 20
+            )

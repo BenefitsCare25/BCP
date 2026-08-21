@@ -22,6 +22,7 @@ having to trust the document blindly.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -40,6 +41,15 @@ Mode = Literal["placement", "quotation"]
 SOURCE_ROSTER = "roster"
 SOURCE_SLIP = "slip"
 SOURCE_NONE = "none"
+
+
+def _natural_code_key(value: str) -> tuple[tuple[int, int | str], ...]:
+    """Sort plan codes for people: 1, 2, 10, D01, not 1, 10, 2, D01."""
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for part in re.split(r"(\d+)", str(value or ""))
+        if part
+    )
 
 
 @dataclass(frozen=True)
@@ -187,10 +197,11 @@ def load_context(db: Session, py: PolicyYear, mode: Mode) -> SlipContext:
             .order_by(Category.priority)
         ).scalars()
     )
-    plans = list(
+    plans = sorted(
         db.execute(
             select(Plan).where(Plan.policy_year_id == py.id).order_by(Plan.code)
-        ).scalars()
+        ).scalars(),
+        key=lambda plan: _natural_code_key(plan.code),
     )
     terms = {
         t.product_id: t
