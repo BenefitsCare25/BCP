@@ -152,6 +152,7 @@ export function ThreadMessages({
   /** Distinguishes the composer's label/field ids when two threads could be in
    *  one document. */
   idSuffix = "thread",
+  stickyComposer = false,
 }: {
   messages: ClaimMessage[] | undefined;
   loading?: boolean;
@@ -164,6 +165,7 @@ export function ThreadMessages({
   placeholder?: string;
   threadSubject?: string;
   idSuffix?: string;
+  stickyComposer?: boolean;
 }) {
   const [body, setBody] = useState("");
   const rows = messages ?? [];
@@ -181,7 +183,7 @@ export function ThreadMessages({
   };
 
   return (
-    <div className="space-y-3">
+    <div className={cn("flex flex-col gap-3", stickyComposer && "flex-1")}>
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : error ? (
@@ -213,7 +215,11 @@ export function ThreadMessages({
 
       {onSend ? (
         <form
-          className="space-y-2 border-t border-border pt-3"
+          className={cn(
+            "space-y-2 border-t border-border pt-3",
+            stickyComposer &&
+              "thread-composer-dock sticky bottom-0 z-10 -mx-1 mt-auto bg-card px-1 pb-1",
+          )}
           onSubmit={(e) => {
             e.preventDefault();
             void submit();

@@ -1,3 +1,17 @@
+/**
+ * REDESIGN CONTRACT
+ * THESIS: This is a triage desk, not a message card; the queue keeps priority
+ * and the active claim visible together without making every reply a round trip.
+ * OWN-WORLD: Restrained warm neutrals, compact rows, clear state labels, and one
+ * red action language inherited from the broker app.
+ * STORY: Find the oldest or urgent member, understand the claim at a glance,
+ * reply, then continue through the queue without losing place.
+ * FIRST VIEWPORT: Search and workload controls sit over a dense index; the
+ * selected conversation and anchored composer occupy the larger reading pane.
+ * FORM: Focused split workbench, directly shaped for this existing surface; no
+ * concept seed. On small screens it becomes an inbox-to-thread drill-in.
+ */
+
 /** The broker's message queue — who is waiting on a reply, and the reply.
  *
  * It exists because there was no way to ask the first question. `GET /claims`
@@ -37,7 +51,16 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ExternalLink, MessageSquare, RefreshCw } from "lucide-react";
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  MessageSquare,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   useBrokerConversations,
@@ -52,21 +75,20 @@ import { useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ClaimMessages } from "@/components/claims/ClaimMessages";
 import { ThreadMessages } from "@/components/claims/ThreadMessages";
 import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import { fmtDay, fmtMoney, parseServerDate } from "@/lib/format";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 const PAGE_SIZE = 25;
+
+function conversationKey(conversation: BrokerConversation): string {
+  return `${conversation.subject.kind}:${conversation.subject.id}`;
+}
 
 /** How long the member has been waiting, in the units a person would say it
  * in. Deliberately coarse: "3 days" is actionable, "3 days 4 hours" is not.
@@ -150,6 +172,7 @@ function ConversationRow({
   // an age is the age of our own reply, so it is labelled as what it is rather
   // than dropped, which left the All view with no time on it at all.
   const waiting = last.author_type === "member";
+  const name = employee?.employee_name ?? "Unknown employee";
   return (
     <li>
       <button
@@ -157,47 +180,75 @@ function ConversationRow({
         onClick={() => onOpen(conversation)}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "focus-ring block w-full px-4 py-3 text-left transition-colors",
-          selected ? "bg-muted" : "hover:bg-muted/50",
+          "focus-ring block min-h-24 w-full px-4 py-3.5 text-left transition-colors",
+          selected
+            ? "bg-accent/70 ring-1 ring-inset ring-border-strong"
+            : "hover:bg-muted/60",
         )}
       >
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="font-medium text-foreground">
-            {employee?.employee_name ?? "Unknown employee"}
-          </span>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {employee?.staff_id}
-          </span>
-          <span className="ml-auto flex shrink-0 items-center gap-2">
-            {/* Before the age, because it changes what the age MEANS: two
-                minutes on a guarantee-letter request is not two minutes on a
-                coverage question. */}
-            {isUrgent(conversation) && <Badge variant="error">Urgent</Badge>}
-            <span
-              className={cn(
-                "text-xs tabular-nums",
-                waiting ? "font-medium text-warn" : "text-muted-foreground",
-              )}
-            >
-              {waiting ? "waiting " : "replied "}
-              {ageOf(last.created_at)}
-            </span>
-            {conversation.unread > 0 && (
-              <Badge variant="warn">{conversation.unread} new</Badge>
+        <div className="flex items-start gap-3">
+          <div
+            className={cn(
+              "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+              selected
+                ? "bg-card text-accent-foreground"
+                : "bg-muted text-muted-foreground",
             )}
-          </span>
+            aria-hidden
+          >
+            {name
+              .split(/\s+/)
+              .filter(Boolean)
+              .slice(0, 2)
+              .map((part) => part[0])
+              .join("")
+              .toUpperCase() || "?"}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold text-foreground">{name}</p>
+                <p className="text-xs tabular-nums text-muted-foreground">
+                  {employee?.staff_id || "No staff ID"}
+                </p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p
+                  className={cn(
+                    "text-xs font-medium tabular-nums",
+                    waiting ? "text-warn" : "text-muted-foreground",
+                  )}
+                >
+                  {ageOf(last.created_at)}
+                </p>
+                <p className="text-2xs text-muted-foreground">
+                  {waiting ? "waiting" : "since reply"}
+                </p>
+              </div>
+            </div>
+            <div className="mt-2 flex min-w-0 items-center gap-2">
+              <Badge variant="outline" className="shrink-0">
+                {conversation.subject.kind === "claim" ? "Claim" : "Question"}
+              </Badge>
+              {isUrgent(conversation) && <Badge variant="error">Urgent</Badge>}
+              <p className="truncate text-sm font-medium text-foreground">
+                {subjectLine(conversation)}
+              </p>
+            </div>
+
+            <div className="mt-1.5 flex items-center gap-2">
+              <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                <span className="text-foreground">{last.mine ? "Us" : name}:</span>{" "}
+                {last.body}
+              </p>
+              {conversation.unread > 0 && (
+                <Badge variant="warn" className="shrink-0">
+                  {conversation.unread} new
+                </Badge>
+              )}
+            </div>
+          </div>
         </div>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          {subjectLine(conversation)}
-        </p>
-        {/* The member's own words. `mine` is server-filled per surface, so it
-            reads "them" here and "You" on the member's own list. */}
-        <p className="mt-1 truncate text-sm text-foreground">
-          <span className="text-muted-foreground">
-            {last.mine ? "Us" : (employee?.employee_name ?? "Member")}:{" "}
-          </span>
-          {last.body}
-        </p>
       </button>
     </li>
   );
@@ -211,6 +262,7 @@ function PaneHead({
   detail,
   badges,
   action,
+  onBack,
 }: {
   who: string;
   staffId?: string;
@@ -218,23 +270,38 @@ function PaneHead({
   detail?: string;
   badges?: React.ReactNode;
   action?: React.ReactNode;
+  onBack?: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-3">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-foreground">
+    <div className="sticky top-0 z-20 -mx-5 flex flex-wrap items-start justify-between gap-3 border-b border-border bg-card px-5 pb-4 pt-1">
+      <div className="flex min-w-0 flex-1 items-start gap-2">
+        {onBack && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="-ml-2 shrink-0 lg:hidden"
+            onClick={onBack}
+            aria-label="Back to message inbox"
+          >
+            <ArrowLeft className="size-4" />
+          </Button>
+        )}
+        <div className="min-w-0">
+        <h3 className="text-base font-semibold text-foreground">
           {who}
           {staffId && (
             <span className="ml-2 text-xs tabular-nums text-muted-foreground">
               {staffId}
             </span>
           )}
-        </p>
-        <p className="mt-0.5 truncate text-sm text-muted-foreground">{title}</p>
+        </h3>
+        <p className="mt-1 line-clamp-2 text-sm font-medium text-foreground">{title}</p>
         {detail && (
           <p className="mt-0.5 text-xs text-muted-foreground">{detail}</p>
         )}
         {badges && <div className="mt-2 flex flex-wrap gap-2">{badges}</div>}
+        </div>
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </div>
@@ -245,7 +312,13 @@ function PaneHead({
  *
  * It was a Sheet over the queue; the pane is the same content without the
  * overlay, so a broker answering three questions never loses the list. */
-function EnquiryPane({ enquiryId }: { enquiryId: string }) {
+function EnquiryPane({
+  enquiryId,
+  onBack,
+}: {
+  enquiryId: string;
+  onBack: () => void;
+}) {
   const enquiry = useBrokerEnquiry(enquiryId);
   const messages = useBrokerEnquiryMessages(enquiryId);
   const send = useSendBrokerEnquiryMessage();
@@ -288,8 +361,9 @@ function EnquiryPane({ enquiryId }: { enquiryId: string }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex min-h-full flex-col gap-3">
       <PaneHead
+        onBack={onBack}
         who={data.employee?.employee_name ?? "Unknown employee"}
         staffId={data.employee?.staff_id}
         title={data.subject}
@@ -366,6 +440,7 @@ function EnquiryPane({ enquiryId }: { enquiryId: string }) {
                 }
               }
         }
+        stickyComposer
       />
     </div>
   );
@@ -375,14 +450,17 @@ function EnquiryPane({ enquiryId }: { enquiryId: string }) {
 function ClaimPane({
   conversation,
   onOpenClaim,
+  onBack,
 }: {
   conversation: BrokerConversation;
   onOpenClaim: (claimId: string) => void;
+  onBack: () => void;
 }) {
   const employee = conversation.employee;
   return (
-    <div className="space-y-3">
+    <div className="flex min-h-full flex-col gap-3">
       <PaneHead
+        onBack={onBack}
         who={employee?.employee_name ?? "Unknown employee"}
         staffId={employee?.staff_id}
         title={subjectLine(conversation)}
@@ -393,11 +471,11 @@ function ClaimPane({
             onClick={() => onOpenClaim(conversation.subject.id)}
           >
             <ExternalLink className="size-4" />
-            Open in the queue
+            Open claim
           </Button>
         }
       />
-      <ClaimMessages claimId={conversation.subject.id} />
+      <ClaimMessages claimId={conversation.subject.id} stickyComposer />
     </div>
   );
 }
@@ -415,23 +493,47 @@ export function ConversationQueue() {
   const [view, setView] = useState<View>("us");
   const [page, setPage] = useState(0);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 300);
   const { data, isLoading, isError, error, refetch } = useBrokerConversations(
     policyYearId ?? undefined,
     view,
     page * PAGE_SIZE,
     PAGE_SIZE,
+    debouncedSearch,
   );
+
+  // A reply can remove the open thread from Needs reply, including the only
+  // row on the last page. Advance to the next piece of work when one exists;
+  // otherwise return mobile users to the inbox and clamp the page. Without
+  // this, `pickedKey` kept the inbox hidden behind an empty detail pane.
+  useEffect(() => {
+    if (isLoading || !data) return;
+    const lastPage = Math.max(Math.ceil(data.total / PAGE_SIZE) - 1, 0);
+    if (page > lastPage) {
+      setPage(lastPage);
+      setPickedKey(null);
+      return;
+    }
+    if (
+      pickedKey &&
+      !data.items.some((conversation) => conversationKey(conversation) === pickedKey)
+    ) {
+      setPickedKey(data.items[0] ? conversationKey(data.items[0]) : null);
+    }
+  }, [data, isLoading, page, pickedKey]);
 
   if (!policyYearId) return null;
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const pages = Math.ceil(total / PAGE_SIZE);
-  const keyOf = (c: BrokerConversation) => `${c.subject.kind}:${c.subject.id}`;
   // The pane shows the picked thread, or the top of the queue — which for
   // "Needs reply" is the person who has waited longest, i.e. the one the tab
   // was opened to answer.
-  const selected = items.find((c) => keyOf(c) === pickedKey) ?? items[0];
+  const selected =
+    items.find((conversation) => conversationKey(conversation) === pickedKey) ??
+    items[0];
 
   // Adjudication still lives in the Queue tab's claim sheet. Same deep link the
   // employee-level LOG card uses.
@@ -442,134 +544,267 @@ export function ConversationQueue() {
     });
 
   return (
-    <Card>
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-4 pb-4">
-        <div className="min-w-0">
-          <CardTitle>Messages</CardTitle>
-          <CardDescription className="max-w-prose">
-            {view === "us"
-              ? "Threads where the member wrote last, longest wait first."
-              : "Every thread in this benefit year, most recent first."}
-          </CardDescription>
-        </div>
-        <div className="flex shrink-0 gap-1">
-          {VIEWS.map((v) => (
-            <Button
-              key={v.key}
-              type="button"
-              size="sm"
-              variant={view === v.key ? "secondary" : "ghost"}
-              onClick={() => {
-                setView(v.key);
-                setPage(0);
-                setPickedKey(null);
-              }}
+    <section
+      aria-labelledby="message-inbox-heading"
+      className="overflow-hidden rounded-xl border border-border bg-card lg:h-[calc(100dvh-12rem)] lg:min-h-[36rem] lg:max-h-[52rem]"
+    >
+      <div className="grid h-full min-w-0 lg:grid-cols-[25rem_minmax(0,1fr)]">
+        <aside
+          className={cn(
+            "min-w-0 flex-col bg-card lg:flex lg:border-r lg:border-border",
+            pickedKey ? "hidden" : "flex",
+          )}
+          aria-label="Conversation inbox"
+        >
+          <header className="border-b border-border px-4 pb-4 pt-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 id="message-inbox-heading" className="text-base font-semibold">
+                  Messages
+                </h2>
+                <p className="mt-0.5 text-sm text-muted-foreground" aria-live="polite">
+                  {isLoading
+                    ? "Loading conversations…"
+                    : view === "us"
+                      ? `${total} ${total === 1 ? "member" : "members"} waiting for a reply`
+                      : `${total} ${total === 1 ? "conversation" : "conversations"} this benefit year`}
+                </p>
+              </div>
+              {view === "us" && total > 0 && (
+                <Badge variant="warn" className="shrink-0">
+                  {total} open
+                </Badge>
+              )}
+            </div>
+
+            <div className="relative mt-4">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                type="search"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(0);
+                  setPickedKey(null);
+                }}
+                className="pl-9 pr-9 [&::-webkit-search-cancel-button]:appearance-none"
+                aria-label="Search conversations"
+                placeholder="Search member, staff ID, claim or message"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    setPage(0);
+                    setPickedKey(null);
+                  }}
+                  className="focus-ring absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="Clear search field"
+                >
+                  <X className="size-4" />
+                </button>
+              )}
+            </div>
+
+            <div
+              className="mt-3 grid grid-cols-2 rounded-lg bg-muted p-1"
+              aria-label="Conversation view"
             >
-              {v.label}
-            </Button>
-          ))}
-        </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        {isLoading ? (
-          <div className="space-y-2 px-4 pb-4">
-            <Skeleton className="h-14 w-full" />
-            <Skeleton className="h-14 w-full" />
-          </div>
-        ) : isError ? (
-          <div className="flex flex-col items-center gap-3 px-4 pb-6 text-center">
-            <p className="text-sm text-error">
-              Couldn&apos;t load conversations. {formatError(error)}
-            </p>
-            <Button variant="outline" size="sm" onClick={() => void refetch()}>
-              <RefreshCw className="size-4" /> Retry
-            </Button>
-          </div>
-        ) : items.length === 0 ? (
-          <p className="px-4 pb-4 text-sm text-muted-foreground">
-            {view === "us" ? (
-              <span className="flex items-center gap-2">
-                <MessageSquare className="size-4" aria-hidden />
-                Nobody is waiting on a reply.
-              </span>
+              {VIEWS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setView(item.key);
+                    setPage(0);
+                    setPickedKey(null);
+                  }}
+                  aria-pressed={view === item.key}
+                  className={cn(
+                    "focus-ring min-h-8 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    view === item.key
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {isLoading ? (
+              <div
+                className="space-y-2 p-3"
+                role="status"
+                aria-label="Loading conversations"
+              >
+                <Skeleton className="h-28 w-full" />
+                <Skeleton className="h-28 w-full" />
+                <Skeleton className="h-28 w-full" />
+              </div>
+            ) : isError ? (
+              <div className="flex h-full min-h-72 flex-col items-center justify-center gap-3 px-6 text-center">
+                <p className="text-sm font-medium text-error">
+                  Couldn&apos;t load conversations
+                </p>
+                <p className="text-sm text-muted-foreground">{formatError(error)}</p>
+                <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                  <RefreshCw className="size-4" /> Retry
+                </Button>
+              </div>
+            ) : items.length === 0 ? (
+              <div className="flex h-full min-h-72 flex-col items-center justify-center px-6 text-center">
+                <span className="mb-3 flex size-10 items-center justify-center rounded-full bg-muted">
+                  {debouncedSearch ? (
+                    <Search className="size-5 text-muted-foreground" aria-hidden />
+                  ) : (
+                    <MessageSquare className="size-5 text-muted-foreground" aria-hidden />
+                  )}
+                </span>
+                <p className="font-medium text-foreground">
+                  {debouncedSearch
+                    ? "No matching conversations"
+                    : view === "us"
+                      ? "Your reply queue is clear"
+                      : "No conversations yet"}
+                </p>
+                <p className="mt-1 max-w-64 text-sm text-muted-foreground">
+                  {debouncedSearch
+                    ? "Try a member name, staff ID, claim type, or words from the latest message."
+                    : view === "us"
+                      ? "New member replies will appear here, with the longest wait first."
+                      : "Member claim messages and questions will appear here."}
+                </p>
+                {debouncedSearch && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-4"
+                    onClick={() => setSearch("")}
+                  >
+                    Clear search
+                  </Button>
+                )}
+              </div>
             ) : (
-              "No member has a conversation in this benefit year yet."
-            )}
-          </p>
-        ) : (
-          // Below `lg` the pane stacks under the list rather than becoming a
-          // second component — one code path, and the broker app is desktop
-          // anyway. `min-w-0` on the pane column: a grid item defaults to
-          // `min-width:auto`, so a long unbroken word in a member's message
-          // would widen the track instead of wrapping inside it.
-          <div className="grid border-t border-border lg:grid-cols-[22rem_minmax(0,1fr)]">
-            <div className="min-w-0 lg:max-h-[36rem] lg:overflow-y-auto lg:border-r lg:border-border">
-              <ul className="divide-y divide-border">
-                {items.map((c) => (
+              <ul className="divide-y divide-border" aria-label="Conversations">
+                {items.map((conversation) => (
                   <ConversationRow
-                    key={keyOf(c)}
-                    conversation={c}
-                    onOpen={(picked) => setPickedKey(keyOf(picked))}
-                    selected={selected ? keyOf(selected) === keyOf(c) : false}
+                    key={conversationKey(conversation)}
+                    conversation={conversation}
+                    onOpen={(picked) => setPickedKey(conversationKey(picked))}
+                    selected={
+                      selected
+                        ? conversationKey(selected) === conversationKey(conversation)
+                        : false
+                    }
                   />
                 ))}
               </ul>
-              {pages > 1 && (
-                <div className="flex items-center justify-between gap-4 border-t border-border px-4 py-3">
-                  <span className="text-xs text-muted-foreground">
-                    {total} conversation{total === 1 ? "" : "s"}
-                  </span>
-                  <span className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={page === 0}
-                      onClick={() => {
-                        setPage((p) => p - 1);
-                        setPickedKey(null);
-                      }}
-                    >
-                      Previous
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={page >= pages - 1}
-                      onClick={() => {
-                        setPage((p) => p + 1);
-                        setPickedKey(null);
-                      }}
-                    >
-                      Next
-                    </Button>
-                  </span>
-                </div>
-              )}
-            </div>
-            <div className="min-w-0 border-t border-border p-4 lg:border-t-0">
-              {selected ? (
-                selected.subject.kind === "enquiry" ? (
-                  <EnquiryPane
-                    key={selected.subject.id}
-                    enquiryId={selected.subject.id}
-                  />
-                ) : (
-                  <ClaimPane
-                    key={selected.subject.id}
-                    conversation={selected}
-                    onOpenClaim={openClaim}
-                  />
-                )
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Pick a conversation to read and answer it here.
-                </p>
-              )}
-            </div>
+            )}
           </div>
-        )}
-      </CardContent>
-    </Card>
+
+          {!isLoading && !isError && total > 0 && (
+            <footer className="flex min-h-14 items-center justify-between gap-3 border-t border-border px-4 py-2">
+              <p className="text-xs tabular-nums text-muted-foreground">
+                {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}
+              </p>
+              <div className="flex items-center gap-1">
+                <span className="mr-1 text-xs tabular-nums text-muted-foreground">
+                  Page {page + 1} of {Math.max(pages, 1)}
+                </span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  disabled={page === 0}
+                  onClick={() => {
+                    setPage((current) => current - 1);
+                    setPickedKey(null);
+                  }}
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  disabled={page >= pages - 1}
+                  onClick={() => {
+                    setPage((current) => current + 1);
+                    setPickedKey(null);
+                  }}
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            </footer>
+          )}
+        </aside>
+
+        <section
+          className={cn(
+            "min-h-[32rem] min-w-0 flex-col bg-card lg:flex lg:min-h-0",
+            pickedKey ? "flex" : "hidden",
+          )}
+          aria-label="Selected conversation"
+        >
+          {isLoading ? (
+            <div className="space-y-4 p-5">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : selected ? (
+            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+              {selected.subject.kind === "enquiry" ? (
+                <EnquiryPane
+                  key={selected.subject.id}
+                  enquiryId={selected.subject.id}
+                  onBack={() => setPickedKey(null)}
+                />
+              ) : (
+                <ClaimPane
+                  key={selected.subject.id}
+                  conversation={selected}
+                  onOpenClaim={openClaim}
+                  onBack={() => setPickedKey(null)}
+                />
+              )}
+            </div>
+          ) : (
+            <div className="flex h-full min-h-72 flex-col items-center justify-center px-8 text-center">
+              <span className="mb-3 flex size-10 items-center justify-center rounded-full bg-muted">
+                <MessageSquare className="size-5 text-muted-foreground" aria-hidden />
+              </span>
+              <p className="font-medium text-foreground">Choose a conversation</p>
+              <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                Read the member&apos;s message, reply, and open the linked claim without
+                losing your place in the inbox.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-4 lg:hidden"
+                onClick={() => setPickedKey(null)}
+              >
+                <ArrowLeft className="size-4" /> Back to inbox
+              </Button>
+            </div>
+          )}
+        </section>
+      </div>
+    </section>
   );
 }
 

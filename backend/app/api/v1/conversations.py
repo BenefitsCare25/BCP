@@ -34,6 +34,7 @@ def list_conversations(
     policy_year_id: str,
     awaiting: str = Query(default="us", pattern="^(us|any)$"),
     employee_id: str | None = Query(default=None),
+    q: str | None = Query(default=None, min_length=1, max_length=120),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     user: CurrentUser = Depends(get_current_user),
@@ -66,6 +67,7 @@ def list_conversations(
         policy_year_id,
         awaiting_member=awaiting == "us",
         employee_id=employee_id,
+        search=q,
         offset=offset,
         limit=limit,
     )

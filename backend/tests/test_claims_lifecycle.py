@@ -2031,6 +2031,20 @@ def test_the_broker_queue_is_who_is_waiting_on_us(
     assert stamps(q.json()) == sorted(stamps(q.json()))
     assert stamps(everything) == sorted(stamps(everything), reverse=True)
 
+    # Lookup is server-side, so it still searches the whole benefit year when
+    # the inbox grows past one page. The latest message is searchable because
+    # it is often the only phrase an assessor remembers.
+    found = broker.get(
+        f"/api/v1/conversations?policy_year_id={PY}&awaiting=any&q=Any%20news"
+    )
+    assert found.status_code == 200, found.text
+    assert [c["subject"]["id"] for c in found.json()["items"]] == [waiting]
+
+    missing = broker.get(
+        f"/api/v1/conversations?policy_year_id={PY}&awaiting=any&q=no-such-thread"
+    ).json()
+    assert missing["total"] == 0 and missing["items"] == []
+
 
 def test_the_broker_queues_unread_total_is_the_whole_view(
     anon: TestClient, broker: TestClient

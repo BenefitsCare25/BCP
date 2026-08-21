@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models import Claim, ClaimMessage, Employee, MemberEnquiry, User
@@ -699,6 +699,7 @@ def broker_conversations(
     employee_id: str | None,
     offset: int,
     limit: int,
+    search: str | None = None,
 ) -> tuple[int, int, list[tuple[ConversationRow, Employee]]]:
     """(total, unread_total, [(row, employee)]) — threads in a benefit year.
 
@@ -730,6 +731,19 @@ def broker_conversations(
     conditions = list(scope)
     if awaiting_member:
         conditions.append(last.author_type == AUTHOR_MEMBER)
+    query = (search or "").strip().lower()
+    if query:
+        conditions.append(
+            or_(
+                func.lower(Employee.employee_name).contains(query, autoescape=True),
+                func.lower(Employee.staff_id).contains(query, autoescape=True),
+                func.lower(last.body).contains(query, autoescape=True),
+                func.lower(Claim.claim_type).contains(query, autoescape=True),
+                func.lower(Claim.sub_type).contains(query, autoescape=True),
+                func.lower(Claim.product_code).contains(query, autoescape=True),
+                func.lower(Claim.flex_category_name).contains(query, autoescape=True),
+            )
+        )
     joins = (
         select(Claim, Employee, last, agg.c.total, agg.c.unread)
         .join(Employee, Claim.employee_id == Employee.id)
@@ -750,6 +764,16 @@ def broker_conversations(
     q_conditions = list(q_scope)
     if awaiting_member:
         q_conditions.append(q_last.author_type == AUTHOR_MEMBER)
+    if query:
+        q_conditions.append(
+            or_(
+                func.lower(Employee.employee_name).contains(query, autoescape=True),
+                func.lower(Employee.staff_id).contains(query, autoescape=True),
+                func.lower(q_last.body).contains(query, autoescape=True),
+                func.lower(MemberEnquiry.subject).contains(query, autoescape=True),
+                func.lower(MemberEnquiry.topic).contains(query, autoescape=True),
+            )
+        )
     q_joins = (
         select(MemberEnquiry, Employee, q_last, q_agg.c.total, q_agg.c.unread)
         .join(Employee, MemberEnquiry.employee_id == Employee.id)
@@ -773,6 +797,7 @@ def broker_conversations(
     q_total, q_unread = db.execute(
         select(func.count(), func.coalesce(func.sum(q_agg.c.unread), 0))
         .select_from(MemberEnquiry)
+        .join(Employee, MemberEnquiry.employee_id == Employee.id)
         .join(q_agg, q_agg.c.thread_id == MemberEnquiry.id)
         .join(q_latest, q_latest.c.cid == MemberEnquiry.id)
         .join(q_last, q_last.id == q_latest.c.mid)

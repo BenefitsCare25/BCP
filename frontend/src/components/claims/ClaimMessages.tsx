@@ -18,7 +18,13 @@ import { useMe } from "@/api/hooks";
 import { ThreadMessages } from "@/components/claims/ThreadMessages";
 import { formatError } from "@/lib/errors";
 
-export function ClaimMessages({ claimId }: { claimId: string }) {
+export function ClaimMessages({
+  claimId,
+  stickyComposer = false,
+}: {
+  claimId: string;
+  stickyComposer?: boolean;
+}) {
   const messages = useClaimMessages(claimId);
   const send = useSendClaimMessage();
   const markRead = useMarkClaimMessagesRead();
@@ -51,6 +57,7 @@ export function ClaimMessages({ claimId }: { claimId: string }) {
       error={messages.isError}
       onRetry={() => void messages.refetch()}
       sending={send.isPending}
+      stickyComposer={stickyComposer}
       emptyText="No messages yet. Submitting and deciding a claim posts one automatically."
       disabledReason={
         readOnly

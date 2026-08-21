@@ -327,10 +327,20 @@ export function useBrokerConversations(
   awaiting: "us" | "any",
   offset: number,
   limit: number,
+  search = "",
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
-    queryKey: ["claims", cid, policyYearId, "conversations", awaiting, offset, limit],
+    queryKey: [
+      "claims",
+      cid,
+      policyYearId,
+      "conversations",
+      awaiting,
+      offset,
+      limit,
+      search,
+    ],
     queryFn: () => {
       const params = new URLSearchParams({
         policy_year_id: policyYearId!,
@@ -338,6 +348,7 @@ export function useBrokerConversations(
         offset: String(offset),
         limit: String(limit),
       });
+      if (search.trim()) params.set("q", search.trim());
       return api.get<BrokerConversationList>(
         `/conversations?${params.toString()}`,
       );
