@@ -256,6 +256,11 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
             row_last_col = max(cell.column for cell in populated)
             for col in range(first_col, row_last_col + 1):
                 cell = ws.cell(row=row, column=col)
+                # Pale table-header rows always use the dark header font. Some
+                # multi-band Rate rows originate as section cells (white font)
+                # before finalisation; retaining that font on HEADER_FILL makes
+                # labels such as EO/ES/EC/EF effectively disappear.
+                cell.font = HEADER
                 cell.fill = HEADER_FILL
                 cell.alignment = Alignment(
                     horizontal="center", vertical="center", wrap_text=True

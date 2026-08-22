@@ -629,6 +629,18 @@ def test_export_has_print_ready_sheet_formatting(client: TestClient) -> None:
         assert ws.print_area
         assert ws.sheet_view.showGridLines is False
         assert any(str(merged).startswith("A1:") for merged in ws.merged_cells.ranges)
+        for row in ws.iter_rows():
+            for cell in row:
+                fill = str(cell.fill.fgColor.rgb or "")[-6:].upper()
+                font_colour = (
+                    str(cell.font.color.rgb or "")[-6:].upper()
+                    if cell.font.color is not None
+                    else ""
+                )
+                if cell.value not in (None, "") and fill == "FCE7EC":
+                    assert font_colour != "FFFFFF", (
+                        f"white text on pale header fill at {ws.title}!{cell.coordinate}"
+                    )
     assert wb["Overview"].freeze_panes == "A8"
     assert len(wb["GHS"].row_breaks.brk) == 0
     # Product sheets reserve A for compact SOB indexing. Long header values use
@@ -712,6 +724,55 @@ def test_export_has_print_ready_sheet_formatting(client: TestClient) -> None:
                 assert cell.alignment.horizontal == "center"
                 assert cell.alignment.vertical == "center"
 
+
+def test_basis_prints_dynamic_participation_on_every_category_row() -> None:
+    from openpyxl import Workbook
+
+    from app.services.slip_export.basis import write_basis_of_cover
+    from app.services.slip_export.context import SOURCE_SLIP, CategoryFigures
+
+    class Context:
+        def figures_for(self, _category: Category) -> CategoryFigures:
+            return CategoryFigures(members=1, source=SOURCE_SLIP)
+
+        def stale_categories(self, categories: list[Category]) -> int:
+            return len(categories)
+
+    categories = [
+        Category(
+            display_name="Executives",
+            participation_detail={"raw": "Compulsory"},
+            plan_assignments={"insured": "Example Pte Ltd", "plan_code": "1"},
+        ),
+        Category(
+            display_name="Managers",
+            participation_detail={"raw": "Compulsory"},
+            plan_assignments={"insured": "Example Pte Ltd", "plan_code": "2"},
+        ),
+        Category(
+            display_name="Overseas staff",
+            participation_detail={"raw": "Voluntary"},
+            plan_assignments={
+                "insured": "Example Pte Ltd",
+                "plan_code": "3",
+                "location_scope": "Thailand",
+            },
+        ),
+    ]
+    ws = Workbook().active
+    write_basis_of_cover(ws, categories, Context(), "")  # type: ignore[arg-type]
+
+    data_rows = [
+        row
+        for row in range(1, ws.max_row + 1)
+        if ws.cell(row, 5).value in {"1", "2", "3"}
+    ]
+    assert [ws.cell(row, 4).value for row in data_rows] == [
+        "Compulsory",
+        "Compulsory",
+        "Voluntary - Thailand",
+    ]
+    assert sum(cell.value == "Participation" for cell in ws["D"]) == 1
 
 def test_voluntary_rates_block(client: TestClient) -> None:
     gtl = _cells(_download(client)["GTL"])

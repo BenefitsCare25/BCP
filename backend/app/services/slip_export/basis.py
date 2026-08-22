@@ -235,16 +235,18 @@ def write_basis_of_cover(
                 ws.cell(row=sub_row, column=5 + i).alignment = CENTER
         border_row(ws, 2, last_col)
 
-    prev_key: tuple[str, str] | None = None
+    prev_insured: str | None = None
     prev_name = ""
     for c in categories:
         pa = plan_assignments(c)
         insured = insured_text(pa) or insured_default
         participation = participation_text(c)
-        key = (insured, participation)
-        new_block = key != prev_key
+        # A table block is an insured-entity block. Participation belongs to
+        # each category row and can vary independently, so it must neither
+        # split the table nor be suppressed as a carried-down duplicate.
+        new_block = insured != prev_insured
         if new_block:
-            if prev_key is not None:
+            if prev_insured is not None:
                 spacer_row(ws)
             _header()
             prev_name = ""
@@ -256,7 +258,7 @@ def write_basis_of_cover(
             "",
             insured if new_block else "",
             name,
-            participation if new_block else "",
+            participation,
             *values,
         ])
         row = style_row(ws, wrap_cols=(2, 3, 4))
@@ -267,7 +269,7 @@ def write_basis_of_cover(
             ws.cell(row=row, column=5 + i).alignment = CENTER_WRAP
             if col.numeric and isinstance(value, (int, float)):
                 ws.cell(row=row, column=5 + i).number_format = COUNT
-        prev_key = key
+        prev_insured = insured
         prev_name = c.display_name
     ws.append(["", _disclaimer(categories, ctx)])
     style_row(ws, font=NOTE)
