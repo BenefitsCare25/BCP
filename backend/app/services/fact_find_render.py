@@ -182,6 +182,8 @@ def render_docx(ctx: FactFindContext) -> bytes:
             table = Table(child, doc)
             _fill_table(ctx, section, last_para, table)
 
+    _normalise_pagination(doc)
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -262,18 +264,84 @@ def _fill_company(ctx: FactFindContext, table: Table) -> None:
                 _set(cells[3], ctx.total_employees)
 
 
+def _matrix_row_text(product) -> str:
+    return f"{product.title} ({product.code})\n-  for employees\n-  for dependants"
+
+
+def _apply_matrix_modes(employee_row, dependant_row, product) -> None:
+    employee_cells = _physical_cells(employee_row)
+    dependant_cells = _physical_cells(dependant_row)
+    _set(employee_cells[0], _matrix_row_text(product))
+    for cells in (employee_cells, dependant_cells):
+        if len(cells) > 1:
+            _set(cells[1], "")
+        if len(cells) > 2:
+            _set(cells[2], "")
+    for cells, mode in (
+        (employee_cells, product.employee_participation),
+        (dependant_cells, product.dependant_participation),
+    ):
+        if mode:
+            _mark(cells[2 if mode.startswith("vol") else 1])
+
+
+def _split_clinical_matrix_rows(ctx: FactFindContext, table: Table) -> None:
+    """Give GCGP and GCSP independent employee/dependant row pairs.
+
+    Their detailed benefits intentionally share one legacy form section, but
+    the products and plan participation are configured independently.  The
+    template's combined matrix line therefore cannot represent the source data.
+    """
+    products = [
+        ctx.matrix_products[code]
+        for code in ("GCGP", "GCSP")
+        if code in ctx.matrix_products
+    ]
+    if not products:
+        return
+    rows = table.rows
+    start = next(
+        (
+            index
+            for index, row in enumerate(rows[:-1])
+            if "(GCGP & GCSP)" in _ctext(row.cells[0])
+        ),
+        None,
+    )
+    if start is None:
+        return
+    _apply_matrix_modes(rows[start], rows[start + 1], products[0])
+    insert_after = rows[start + 1]._tr
+    for product in products[1:]:
+        employee_xml = copy.deepcopy(rows[start]._tr)
+        dependant_xml = copy.deepcopy(rows[start + 1]._tr)
+        insert_after.addnext(employee_xml)
+        employee_xml.addnext(dependant_xml)
+        insert_after = dependant_xml
+        refreshed = table.rows
+        _apply_matrix_modes(refreshed[start + 2], refreshed[start + 3], product)
+        start += 2
+
+
 def _fill_matrix(ctx: FactFindContext, table: Table) -> None:
     """Mark Compulsory/Voluntary for each configured product line.
 
     Each product occupies two physical rows: the first (carrying the 'Group …'
     label) is the employees row, the row immediately after is dependants.
     """
+    _split_clinical_matrix_rows(ctx, table)
     rows = table.rows
     i = 0
     while i < len(rows):
         label = _ctext(rows[i].cells[0])
         m = re.search(r"\(([A-Z][A-Z &]*)\)", label)
-        code = section_for_code(_canon_matrix_code(m.group(1))) if m else None
+        raw_code = _canon_matrix_code(m.group(1)) if m else ""
+        product = ctx.matrix_products.get(raw_code)
+        if product and i + 1 < len(rows):
+            _apply_matrix_modes(rows[i], rows[i + 1], product)
+            i += 2
+            continue
+        code = section_for_code(raw_code) if raw_code else None
         if code and code in ctx.sections:
             sec = ctx.sections[code]
             employee_cells = _physical_cells(rows[i])
@@ -332,6 +400,76 @@ def _canon_matrix_code(raw: str) -> str:
     """Normalise a matrix label code like 'GCGP & GCSP' to a single code."""
     raw = raw.strip().upper()
     return raw.split("&")[0].strip()
+
+
+_FORM_TITLE = "EMPLOYEE INSURANCE FACT-FIND FORM"
+_LEGACY_PAGE_MARKER_RE = re.compile(r"^INSPRO\s*(?:/|[-\u2013\u2014])", re.I)
+
+
+def _remove_paragraph(paragraph: Paragraph) -> None:
+    parent = paragraph._p.getparent()
+    if parent is not None:
+        parent.remove(paragraph._p)
+
+
+def _is_disposable_blank(paragraph: Paragraph) -> bool:
+    if paragraph.text.strip():
+        return False
+    protected = ("drawing", "pict", "object", "fldChar", "instrText", "tab", "br")
+    return not any(paragraph._p.xpath(f".//w:{name}") for name in protected)
+
+
+def _normalise_pagination(doc) -> None:
+    """Replace the template's fixed three-page layout with content-aware flow.
+
+    Populated tables grow beyond the legacy form's fixed slots.  Hard internal
+    breaks plus dozens of blank positioning paragraphs then create near-empty
+    overflow pages and let the following product start midway down a page.
+    Section headers are kept with the fields that follow, while all contents
+    paginate naturally according to their rendered height.
+    """
+    for paragraph in list(doc.paragraphs):
+        for page_break in paragraph._p.xpath('.//w:br[@w:type="page"]'):
+            page_break.getparent().remove(page_break)
+        p_pr = paragraph._p.pPr
+        if p_pr is not None:
+            page_break_before = p_pr.find(qn("w:pageBreakBefore"))
+            if page_break_before is not None:
+                p_pr.remove(page_break_before)
+        text = " ".join(paragraph.text.split())
+        if _LEGACY_PAGE_MARKER_RE.match(text):
+            _remove_paragraph(paragraph)
+
+    blank_run = 0
+    for child in list(doc.element.body.iterchildren()):
+        if child.tag.rsplit("}", 1)[-1] != "p":
+            blank_run = 0
+            continue
+        paragraph = Paragraph(child, doc)
+        if not _is_disposable_blank(paragraph):
+            blank_run = 0
+            continue
+        blank_run += 1
+        if blank_run > 1:
+            doc.element.body.remove(child)
+
+    # Do not orphan a repeated form title or DECLARATION heading at the bottom
+    # of a page.  Keep its introductory paragraph block with the first table;
+    # Word will move the block only when the remaining page space is too small.
+    keep_header = False
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "tbl":
+            keep_header = False
+            continue
+        if tag != "p":
+            continue
+        paragraph = Paragraph(child, doc)
+        text = " ".join(paragraph.text.split())
+        if text in {_FORM_TITLE, "DECLARATION"}:
+            keep_header = True
+        if keep_header and text:
+            paragraph.paragraph_format.keep_with_next = True
 
 
 # ── Per-product pages ────────────────────────────────────────────────────────

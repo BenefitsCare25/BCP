@@ -257,6 +257,10 @@ class FactFindContext:
     sections: dict[str, SectionContext]
     other_products: list[OtherProductContext]
     completeness: list[str]
+    # Exact configured products used by the General Information matrix.  This
+    # remains product-shaped even where multiple products share one detail page
+    # (notably GCGP + GCSP), so their participation rows are never collapsed.
+    matrix_products: dict[str, OtherProductContext] = field(default_factory=dict)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -993,36 +997,45 @@ def _common_setup_value(data: _FormData, block: str, key: str) -> str:
     return max(order, key=lambda value: counts[value])
 
 
-def _other_product_contexts(data: _FormData) -> list[OtherProductContext]:
-    out: list[OtherProductContext] = []
-    for product in sorted(data.products.values(), key=lambda value: value.code):
-        if section_for_code(product.code) is not None:
+def _product_matrix_context(data: _FormData, product: Product) -> OtherProductContext:
+    employee_mode: str | None = None
+    dependant_mode: str | None = None
+    for cat in data.categories.values():
+        if cat.product_id != product.id:
             continue
-        employee_mode: str | None = None
-        dependant_mode: str | None = None
-        for cat in data.categories.values():
-            if cat.product_id != product.id:
-                continue
-            detail = _category_detail(cat)
-            if _member_scope(cat) == "dependant":
-                dependant_mode = _merge_mode(
-                    dependant_mode,
-                    detail.get("dependant") or detail.get("employee") or cat.participation_model,
-                )
-            elif _is_baseline_category(cat):
-                employee_mode = _merge_mode(
-                    employee_mode, detail.get("employee") or cat.participation_model
-                )
-                dependant_mode = _merge_mode(dependant_mode, detail.get("dependant"))
-        out.append(
-            OtherProductContext(
-                code=product.code,
-                title=product.display_name,
-                employee_participation=employee_mode,
-                dependant_participation=dependant_mode,
+        detail = _category_detail(cat)
+        if _member_scope(cat) == "dependant":
+            dependant_mode = _merge_mode(
+                dependant_mode,
+                detail.get("dependant") or detail.get("employee") or cat.participation_model,
             )
-        )
-    return out
+        elif _is_baseline_category(cat):
+            employee_mode = _merge_mode(
+                employee_mode, detail.get("employee") or cat.participation_model
+            )
+            dependant_mode = _merge_mode(dependant_mode, detail.get("dependant"))
+    return OtherProductContext(
+        code=product.code,
+        title=product.display_name,
+        employee_participation=employee_mode,
+        dependant_participation=dependant_mode,
+    )
+
+
+def _matrix_product_contexts(data: _FormData) -> dict[str, OtherProductContext]:
+    return {
+        product.code.strip().upper(): _product_matrix_context(data, product)
+        for product in sorted(data.products.values(), key=lambda value: value.code)
+        if section_for_code(product.code) is not None
+    }
+
+
+def _other_product_contexts(data: _FormData) -> list[OtherProductContext]:
+    return [
+        _product_matrix_context(data, product)
+        for product in sorted(data.products.values(), key=lambda value: value.code)
+        if section_for_code(product.code) is None
+    ]
 
 
 def _claim_amount(claim: Any) -> float:
@@ -1241,6 +1254,7 @@ def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
         sections=sections,
         other_products=other_products,
         completeness=completeness,
+        matrix_products=_matrix_product_contexts(data),
     )
 
 

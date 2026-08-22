@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from docx import Document
+from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
 
 from app.services.fact_find_form import AGE_BANDS, BasisRow, BenefitLine, SectionContext
@@ -12,7 +15,9 @@ from app.services.fact_find_render import (
     _fill_basis,
     _fill_family,
     _fill_highest_sum,
+    _fill_matrix,
     _fill_presently_insured,
+    _normalise_pagination,
     _physical_cells,
 )
 
@@ -21,6 +26,69 @@ def _merge_header(table) -> None:
     """Merge the first two header cells into one (the template's merged
     'Category of Employees / Designation' spanning the numbered + wide columns)."""
     table.rows[0].cells[0].merge(table.rows[0].cells[1])
+
+
+def test_clinical_products_have_independent_matrix_rows() -> None:
+    doc = Document("app/templates/fact_find_form.docx")
+    table = next(
+        table
+        for table in doc.tables
+        if _ctext(table.rows[0].cells[0]).startswith("Insurance Coverage")
+    )
+    def product(code, title, employee, dependant):
+        return SimpleNamespace(
+            code=code,
+            title=title,
+            employee_participation=employee,
+            dependant_participation=dependant,
+        )
+
+    ctx = SimpleNamespace(
+        sections={},
+        other_products=[],
+        matrix_products={
+            "GCGP": product(
+                "GCGP",
+                "Group Clinical General Practitioner",
+                "compulsory",
+                "voluntary",
+            ),
+            "GCSP": product("GCSP", "Group Clinical Specialist", "voluntary", "compulsory"),
+        },
+    )
+
+    _fill_matrix(ctx, table)
+
+    labels = [_ctext(row.cells[0]) for row in table.rows]
+    assert not any("GCGP & GCSP" in label for label in labels)
+    gp = next(index for index, label in enumerate(labels) if "(GCGP)" in label)
+    sp = next(index for index, label in enumerate(labels) if "(GCSP)" in label)
+    assert [_ctext(cell) for cell in _physical_cells(table.rows[gp])[1:]] == ["X", ""]
+    assert [_ctext(cell) for cell in _physical_cells(table.rows[gp + 1])[1:]] == ["", "X"]
+    assert [_ctext(cell) for cell in _physical_cells(table.rows[sp])[1:]] == ["", "X"]
+    assert [_ctext(cell) for cell in _physical_cells(table.rows[sp + 1])[1:]] == ["X", ""]
+
+
+def test_pagination_normalisation_removes_fixed_breaks_and_spacer_runs() -> None:
+    doc = Document()
+    doc.add_paragraph("EMPLOYEE INSURANCE FACT-FIND FORM")
+    break_para = doc.add_paragraph()
+    break_para.add_run().add_break(WD_BREAK.PAGE)
+    doc.add_paragraph()
+    doc.add_paragraph()
+    doc.add_paragraph("INSPRO / GTL - 01/03")
+    second_title = doc.add_paragraph("EMPLOYEE INSURANCE FACT-FIND FORM")
+    declaration = doc.add_paragraph("DECLARATION")
+
+    _normalise_pagination(doc)
+
+    assert not doc.element.xpath('.//w:br[@w:type="page"]')
+    assert not any(paragraph.text.startswith("INSPRO / ") for paragraph in doc.paragraphs)
+    assert not second_title.paragraph_format.page_break_before
+    assert not declaration.paragraph_format.page_break_before
+    assert second_title.paragraph_format.keep_with_next
+    assert declaration.paragraph_format.keep_with_next
+    assert len([paragraph for paragraph in doc.paragraphs if not paragraph.text.strip()]) <= 1
 
 
 def test_designation_lands_in_wide_column_not_numbered_cell() -> None:
