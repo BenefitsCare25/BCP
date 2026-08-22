@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Pencil,
   Plus,
+  SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -90,7 +91,6 @@ export function EmployeeCategoryPlanTab(props: Props) {
         countsError={data.countsError}
         hasDependants={props.hasDependants}
         issueCount={issueCount}
-        assignmentIssueCount={countAssignmentIssues(data.groups)}
         issuesOnly={issuesOnly}
         onToggleIssues={() => setIssuesOnly((value) => !value)}
         onAdd={addCategory}
@@ -196,7 +196,6 @@ function CategorySummary({
   countsError,
   hasDependants,
   issueCount,
-  assignmentIssueCount,
   issuesOnly,
   onToggleIssues,
   onAdd,
@@ -209,51 +208,21 @@ function CategorySummary({
   countsError: boolean;
   hasDependants: boolean;
   issueCount: number;
-  assignmentIssueCount: number;
   issuesOnly: boolean;
   onToggleIssues: () => void;
   onAdd: () => void;
   canAdd: boolean;
   adding: boolean;
 }) {
-  const assignments = groups.reduce((total, group) => total + group.categories.length, 0);
   const validated = groups.length - issueCount;
   const employees = Object.values(counts).reduce((total, row) => total + row.employees, 0);
   const dependants = Object.values(counts).reduce((total, row) => total + row.dependants, 0);
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
       <div className="flex min-w-max items-center gap-2 px-3 py-2">
-        <SummaryItem value={groups.length} label="employee categories" />
-        <SummaryItem value={assignments} label="plan assignments" />
-        <SummaryItem
-          value={validated}
-          label={validated === 1 ? "rule validated" : "rules validated"}
-          tone="good"
-        />
-        {issueCount > 0 ? (
-          <button
-            type="button"
-            onClick={onToggleIssues}
-            aria-pressed={issuesOnly}
-            title={issuesOnly ? "Show all employee categories" : "Show only rules needing attention"}
-            className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            <SummaryItem
-              value={issueCount}
-              label={issueCount === 1 ? "rule needs attention" : "rules need attention"}
-              tone="warn"
-            />
-          </button>
-        ) : (
-          <SummaryItem value={0} label="rules need attention" tone="muted" />
-        )}
-        {assignmentIssueCount > 0 && (
-          <SummaryItem
-            value={assignmentIssueCount}
-            label="plan assignment issues"
-            tone="warn"
-          />
-        )}
+        <Badge variant={issueCount === 0 ? "good" : "warn"}>
+          {validated}/{groups.length} Employee Category Validated
+        </Badge>
         {countsError ? (
           <Badge variant="error">Eligibility count unavailable</Badge>
         ) : employeesTotal === null ? (
@@ -262,11 +231,30 @@ function CategorySummary({
           <Badge variant="outline">No employee listing</Badge>
         ) : (
           <>
-            <SummaryItem value={employees} label="eligible employees" />
-            {hasDependants && <SummaryItem value={dependants} label="eligible dependants" />}
+            <SummaryItem value={employees} label="Eligible Employees" />
+            {hasDependants && <SummaryItem value={dependants} label="Eligible Dependants" />}
           </>
         )}
         <div className="ml-auto flex items-center gap-2 pl-3">
+          {issueCount > 0 && (
+            <Button
+              size="icon-sm"
+              variant={issuesOnly ? "secondary" : "outline"}
+              onClick={onToggleIssues}
+              aria-label={
+                issuesOnly
+                  ? "Show all employee categories"
+                  : "Show employee categories needing attention"
+              }
+              title={
+                issuesOnly
+                  ? "Show all employee categories"
+                  : "Show employee categories needing attention"
+              }
+            >
+              <SlidersHorizontal className="size-3.5" />
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={onAdd} disabled={!canAdd || adding}>
             <Plus className="size-3.5" /> Add employee category
           </Button>
@@ -422,17 +410,6 @@ function assignmentWarning(
     (item) => assignmentCode(item).trim().toLocaleLowerCase() === code,
   );
   return samePlan.length > 1 ? "Duplicate assignment" : null;
-}
-
-function countAssignmentIssues(groups: EmployeeCategoryGroup[]): number {
-  return groups.reduce(
-    (total, group) =>
-      total +
-      group.categories.filter(
-        (category) => assignmentWarning(category, group) !== null,
-      ).length,
-    0,
-  );
 }
 
 function planFor(category: Category, plans: PlanDetail[]): PlanDetail | undefined {
