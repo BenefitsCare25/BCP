@@ -10,6 +10,10 @@ import type {
   TemplateField,
 } from "@/types";
 import { selectedMemberCover } from "./setup/memberEligibility";
+import {
+  groupEmployeeCategories,
+  type EmployeeCategoryGroup,
+} from "./employeeCategoryGroups";
 
 interface Props {
   template: ProductTemplate;
@@ -34,6 +38,22 @@ function countEnabled(answers: SetupAnswers | null): number {
 
 function selectedPlans(answers: SetupAnswers | null) {
   return (answers?.plans ?? []).filter((plan) => plan.selected);
+}
+
+function categoryStatus(group: EmployeeCategoryGroup) {
+  if (group.ruleStatus === "validated") {
+    return { label: "Rule validated", variant: "good" as const };
+  }
+  if (group.ruleStatus === "proposed") {
+    return {
+      label: "Proposed — awaiting employee listing",
+      variant: "outline" as const,
+    };
+  }
+  if (group.ruleStatus === "unmapped") {
+    return { label: "Rule not set", variant: "error" as const };
+  }
+  return { label: "Rule needs attention", variant: "warn" as const };
 }
 
 function termRows(term: ProductTerm | null): { label: string; value: string }[] {
@@ -122,7 +142,8 @@ function DetailStrip({
 export function ProductSetupSummary({ template, draft, group, term }: Props) {
   const answers = draft?.answers ?? null;
   const plans = selectedPlans(answers);
-  const categoryCount = group?.categories.length ?? 0;
+  const categoryGroups = groupEmployeeCategories(group?.categories ?? []);
+  const categoryCount = categoryGroups.length;
   const sobCount = answers?.sob?.items.length ?? 0;
   const arrangements = countEnabled(answers);
   const entities = insuredNames(answers?.header?.entities);
@@ -142,8 +163,8 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
           {draft?.status === "confirmed" ? "Confirmed" : "Draft"}
         </Badge>
         <span className="text-sm text-muted-foreground">
-          {plans.length} plan{plans.length === 1 ? "" : "s"} / {categoryCount}{" "}
-          categor{categoryCount === 1 ? "y" : "ies"} / {sobCount} benefit row
+          {plans.length} plan{plans.length === 1 ? "" : "s"} · {categoryCount}{" "}
+          employee categor{categoryCount === 1 ? "y" : "ies"} · {sobCount} benefit row
           {sobCount === 1 ? "" : "s"}
         </span>
       </div>
@@ -219,22 +240,25 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
         <h4 className="text-sm font-semibold text-foreground">
           Employee Category & Plan Type
         </h4>
-        {group?.categories.length ? (
+        {categoryGroups.length ? (
           <div className="divide-y divide-border rounded-lg border border-border">
-            {group.categories.slice(0, 5).map((category) => (
-              <div
-                key={category.id}
-                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
-              >
-                <span className="min-w-0 break-words text-sm text-foreground">
-                  {category.display_name}
-                </span>
-                <Badge variant="outline">{category.status}</Badge>
-              </div>
-            ))}
-            {group.categories.length > 5 && (
+            {categoryGroups.slice(0, 5).map((categoryGroup) => {
+              const status = categoryStatus(categoryGroup);
+              return (
+                <div
+                  key={categoryGroup.key}
+                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                >
+                  <span className="min-w-0 break-words text-sm text-foreground">
+                    {categoryGroup.name}
+                  </span>
+                  <Badge variant={status.variant}>{status.label}</Badge>
+                </div>
+              );
+            })}
+            {categoryGroups.length > 5 && (
               <div className="px-3 py-2 text-xs text-muted-foreground">
-                {group.categories.length - 5} more categories
+                {categoryGroups.length - 5} more employee categories
               </div>
             )}
           </div>

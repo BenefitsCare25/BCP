@@ -103,6 +103,26 @@ _WORK_LOCATION_ATTRS = (
     "office_location",
     "country",
 )
+_NATIONALITY_ATTRS = (
+    "nationality",
+    "nationality_code",
+    "citizenship",
+    "country_of_citizenship",
+)
+_COST_CENTRE_ATTRS = (
+    "cost_centre",
+    "cost_center",
+    "cost_centre_code",
+    "cost_center_code",
+)
+_NATIONALITY_RE = re.compile(
+    r"\b(?:nationality|citizenship|nationals?|citizens?)\b",
+    re.IGNORECASE,
+)
+_COST_CENTRE_RE = re.compile(
+    r"\bcost\s*cent(?:re|er)(?:\s+code)?\b",
+    re.IGNORECASE,
+)
 _LEAF_OPS = frozenset({"=", "==", "!=", ">=", "<=", ">", "<", "between", "in", "not_in"})
 _MAX_RULE_DEPTH = 12
 _MAX_RULE_NODES = 100
@@ -644,6 +664,24 @@ def _location_proposal(
     )
 
 
+def _semantic_field_mapping(
+    text: str,
+    catalog: AttributeValueCatalog,
+) -> tuple[str | None, str | None, list[Any]]:
+    for label, pattern, attributes in (
+        ("nationality", _NATIONALITY_RE, _NATIONALITY_ATTRS),
+        ("cost centre", _COST_CENTRE_RE, _COST_CENTRE_ATTRS),
+    ):
+        if pattern.search(text):
+            attribute_id, values = _best_value_mapping(
+                text,
+                catalog,
+                allowed=attributes,
+            )
+            return label, attribute_id, values
+    return None, None, []
+
+
 def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> RuleProposal:
     """Propose a rule using the company's own non-PII roster vocabulary.
 
@@ -741,6 +779,20 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
         parts.append(_rule_for_values(explicit_attr, explicit_values))
         readings.append(f"{explicit_attr} is one of {', '.join(map(str, explicit_values))}")
         referenced.append(explicit_attr)
+
+    semantic_label, semantic_attr, semantic_values = _semantic_field_mapping(
+        without_exclusion,
+        catalog,
+    )
+    if semantic_label:
+        if semantic_attr and semantic_values:
+            parts.append(_rule_for_values(semantic_attr, semantic_values))
+            readings.append(
+                f"{semantic_attr} is one of {', '.join(map(str, semantic_values))}"
+            )
+            referenced.append(semantic_attr)
+        else:
+            unresolved.append(f"{semantic_label} values")
 
     pass_codes = _pass_codes(without_exclusion)
     pass_attr = next(
@@ -842,6 +894,16 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     ):
         return location_proposal
 
+    if semantic_label:
+        return RuleProposal(
+            rule=None,
+            human_readable=f"{semantic_label.title()} needs mapping",
+            confidence=0.2,
+            source="unmapped",
+            validation_state="needs_review",
+            unresolved_clauses=list(dict.fromkeys(unresolved)),
+        )
+
     attr, included = _best_value_mapping(without_exclusion, catalog)
     if attr and included:
         rule = _rule_for_values(attr, included)
@@ -870,7 +932,7 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
 
     return RuleProposal(
         rule=None,
-        human_readable="Unmapped — company roster field/value mapping required",
+        human_readable="Unmapped — company employee-listing field/value mapping required",
         confidence=0.2,
         source="unmapped",
         validation_state="unmapped",

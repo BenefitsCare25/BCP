@@ -718,7 +718,7 @@ export function ProductSetupForm({
                 <>
                   <span
                     aria-hidden="true"
-                    className="ml-2 inline-block size-2.5 shrink-0 rounded-full bg-error align-middle ring-2 ring-error-soft"
+                    className="ml-2 inline-block size-1.5 shrink-0 rounded-full bg-error align-middle ring-1 ring-error-soft"
                     title="Employee categories need attention"
                   />
                   <span className="sr-only">Employee categories need attention</span>

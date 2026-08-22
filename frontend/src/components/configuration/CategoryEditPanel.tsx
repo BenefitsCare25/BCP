@@ -49,6 +49,107 @@ function isCoversAllRule(rule: RuleNode): boolean {
   return Array.isArray(branches) && branches.length === 0;
 }
 
+function employeeListingMessage(message: string): string {
+  return message.replace(/\broster\b/gi, "employee listing");
+}
+
+function validationStrings(
+  validation: Record<string, unknown>,
+  key: string,
+): string[] {
+  const value = validation[key];
+  return Array.isArray(value)
+    ? value.map(String).map(employeeListingMessage)
+    : [];
+}
+
+function AISuggestionSummary({
+  category,
+  schema,
+  edited,
+}: {
+  category: Category;
+  schema: AttributeSchema[];
+  edited: boolean;
+}) {
+  const validation = category.rule_validation ?? {};
+  const required = validationStrings(validation, "required_attributes");
+  const labels = new Map(
+    schema.map((attribute) => [attribute.attribute_id, attribute.display_name]),
+  );
+  const fields = required.map((attribute) => labels.get(attribute) ?? attribute);
+  const matched =
+    typeof validation.matched_count === "number"
+      ? validation.matched_count
+      : null;
+  const expected =
+    typeof validation.expected_count === "number"
+      ? validation.expected_count
+      : null;
+  const checks = [
+    ...validationStrings(validation, "errors"),
+    ...validationStrings(validation, "warnings"),
+  ].filter(
+    (message) =>
+      !message.toLowerCase().startsWith("no active employee listing"),
+  );
+
+  return (
+    <section className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium text-foreground">
+          <Sparkles className="size-4 text-warn" /> AI suggested setup
+        </div>
+        <Badge variant={edited ? "warn" : "outline"}>
+          {edited ? "Edited after suggestion" : "Saved for review"}
+        </Badge>
+      </div>
+      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <dt className="text-xs font-medium text-muted-foreground">Rule</dt>
+          <dd className="mt-1 text-foreground">
+            {category.rule_human_readable || "See the conditions below"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs font-medium text-muted-foreground">
+            Employee fields used
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {fields.length ? fields.join(", ") : "No employee field selected"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs font-medium text-muted-foreground">
+            Employee listing check
+          </dt>
+          <dd className="mt-1 text-foreground">
+            {matched === null
+              ? "Pending — no employee listing"
+              : `${matched} employee${matched === 1 ? "" : "s"} matched${
+                  expected === null ? "" : ` · ${expected} stated on the slip`
+                }`}
+          </dd>
+        </div>
+      </dl>
+      {checks.length > 0 && (
+        <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-2.5 text-xs">
+          <p className="font-medium text-foreground">Needs review</p>
+          <ul className="mt-1 space-y-1 text-warn">
+            {checks.map((message) => (
+              <li key={message}>• {message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        This suggestion is saved for review but is not confirmed. Edit the
+        conditions below or confirm the mapping when it is correct.
+      </p>
+    </section>
+  );
+}
+
 export function CategoryEditPanel({ category, schema, onClose }: Props) {
   return (
     <Sheet open={!!category} onOpenChange={(o) => !o && onClose()}>
@@ -85,12 +186,8 @@ function EditForm({
   const { data: aiStatus } = useAIStatus();
   const [showDelete, setShowDelete] = useState(false);
   const validation = current.rule_validation ?? {};
-  const validationErrors = Array.isArray(validation.errors)
-    ? validation.errors.map(String)
-    : [];
-  const validationWarnings = Array.isArray(validation.warnings)
-    ? validation.warnings.map(String)
-    : [];
+  const validationErrors = validationStrings(validation, "errors");
+  const validationWarnings = validationStrings(validation, "warnings");
   const matchedCount =
     typeof validation.matched_count === "number" ? validation.matched_count : null;
   const expectedCount =
@@ -216,7 +313,13 @@ function EditForm({
           </div>
         </div>
 
-        {current.rule_human_readable && (
+        {current.source === "ai_extracted" ? (
+          <AISuggestionSummary
+            category={current}
+            schema={schema}
+            edited={ruleChanged}
+          />
+        ) : current.rule_human_readable ? (
           <div className="flex flex-col gap-1.5">
             <Label>Rule interpretation</Label>
             <div className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-sm">
@@ -233,11 +336,12 @@ function EditForm({
               )}
             </div>
           </div>
-        )}
+        ) : null}
 
         <Separator />
 
-        {(validationErrors.length > 0 || validationWarnings.length > 0) && (
+        {current.source !== "ai_extracted" &&
+          (validationErrors.length > 0 || validationWarnings.length > 0) && (
           <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs">
             <p className="font-medium text-foreground">Mapping checks</p>
             <ul className="mt-1 space-y-1 text-warn">

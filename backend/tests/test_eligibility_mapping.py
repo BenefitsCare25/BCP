@@ -330,6 +330,32 @@ def test_location_only_category_never_uses_nationality() -> None:
     assert unresolved.unresolved_clauses == ["based in Thailand"]
 
 
+def test_explicit_nationality_uses_only_nationality_field() -> None:
+    proposal = propose_category_rule(
+        "Thailand nationals",
+        _catalog(
+            nationality=["Singapore", "Thailand"],
+            country_of_work=["Singapore", "Thailand"],
+        ),
+    )
+
+    assert proposal.rule == {"=": ["nationality", "Thailand"]}
+    assert proposal.referenced_attributes == ["nationality"]
+
+
+def test_explicit_cost_centre_uses_only_cost_centre_field() -> None:
+    proposal = propose_category_rule(
+        "Employees in Cost Centre TH01",
+        _catalog(
+            cost_centre=["SG01", "TH01"],
+            country_of_work=["SG01", "TH01"],
+        ),
+    )
+
+    assert proposal.rule == {"=": ["cost_centre", "TH01"]}
+    assert proposal.referenced_attributes == ["cost_centre"]
+
+
 def test_matching_rule_validation_rejects_unknown_or_empty_attributes() -> None:
     catalog = _catalog(designation=["Manager", "Executive"])
     unknown = validate_matching_rule({"=": ["job_band", "M1"]}, catalog)

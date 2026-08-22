@@ -91,6 +91,15 @@ Rules:
   work-location attribute (for example country_of_work or location_description),
   never nationality. Use nationality only when the authoritative wording says
   nationality, citizenship, national, or citizen.
+- Use cost-centre attributes only when the wording explicitly names a cost
+  centre/center or one of its provided values. Never assume a cost centre is a
+  work location without a configured work-location derivation.
+- Dependant/spouse/child coverage wording is plan-assignment context, not an
+  employee matching condition. Do not add it to unresolved_clauses.
+- Preserve OR and exception scope. An exception in one branch must never be
+  applied to an unrelated branch. If a branch cannot be expressed safely,
+  return the safe branch as a partial rule and list the complete omitted branch
+  in unresolved_clauses.
 - Use all-employees only when the authoritative wording explicitly says so.
 - Return a useful partial rule only if every omitted clause is listed in
   unresolved_clauses. Otherwise return rule=null and explain why.
