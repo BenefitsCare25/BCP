@@ -57,6 +57,7 @@ from app.services.benefit_statement import build_benefit_statement
 from app.services.coverage_resolver import find_orphan_overrides, load_overrides
 from app.services.coverage_summary import build_coverage_items
 from app.services.derivation_engine import derive
+from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
 from app.services.member_query import looks_like_nric
@@ -543,6 +544,25 @@ async def upload_employees(
     # must not roll back the upload — the audit row above already records
     # the persisted rows. Matching can always be re-run from the UI button.
     try:
+        mapping_summary = auto_map_policy_year(
+            db,
+            policy_year_id=policy_year_id,
+            client_id=client_id,
+        )
+        write_audit(
+            db,
+            user,
+            action="propose_eligibility_mappings",
+            entity_type="policy_year",
+            entity_id=policy_year_id,
+            after={
+                "trigger": "employee_upload",
+                "validated": mapping_summary.validated,
+                "needs_review": mapping_summary.needs_review,
+                "unmapped": mapping_summary.unmapped,
+                "reused": mapping_summary.reused,
+            },
+        )
         summary = match_policy_year(db, policy_year_id, user)
         write_audit(
             db,

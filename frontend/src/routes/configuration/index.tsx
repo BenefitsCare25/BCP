@@ -22,6 +22,7 @@ import { AlertDialog } from "@/components/ui/alert-dialog";
 import { SkeletonTable } from "@/components/ui/skeleton";
 import { BenefitYearPanel } from "@/components/configuration/BenefitYearPanel";
 import { CategoryEditPanel } from "@/components/configuration/CategoryEditPanel";
+import { EligibilityMappingWorkbench } from "@/components/configuration/EligibilityMappingWorkbench";
 import { LineTab } from "@/components/configuration/LineTab";
 import { FlexPanel } from "@/components/configuration/flex/FlexPanel";
 import { FlexUploadCard } from "@/components/configuration/flex/FlexUploadCard";
@@ -110,6 +111,17 @@ export function ConfigurationPage() {
     for (const g of groups) by[g.line].push(g);
     return by;
   }, [groups]);
+
+  const categoriesById = useMemo(
+    () =>
+      new Map(
+        groups.flatMap((group) => group.categories).map((category) => [
+          category.id,
+          category,
+        ]),
+      ),
+    [groups],
+  );
 
   const handleBlockingEditChange = useCallback(
     (
@@ -281,6 +293,13 @@ export function ConfigurationPage() {
               <>
                 <SlipUploadPanel slip={slip} />
                 <SlipPeriodBanner policyYearId={policyYearId} />
+                <EligibilityMappingWorkbench
+                  policyYearId={policyYearId}
+                  readOnly={readOnly}
+                  onReview={(categoryId) =>
+                    setSelected(categoriesById.get(categoryId) ?? null)
+                  }
+                />
               </>
             )}
 

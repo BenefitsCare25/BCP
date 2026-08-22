@@ -150,6 +150,72 @@ def test_second_identical_call_hits_cache_no_provider_call() -> None:
         db.close()
 
 
+def test_rule_cache_changes_with_company_context() -> None:
+    """Roster vocabulary and sibling-plan context are part of the prompt.
+
+    A cached recommendation for one roster shape must not survive a job-grade
+    change or be reused for a different product's sibling categories.
+    """
+
+    db = SessionLocal()
+    try:
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as provider:
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Managers",
+                schema=_schema(),
+                context={"employee_attributes": [{"attribute_id": "grade", "values": [1]}]},
+            )
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Managers",
+                schema=_schema(),
+                context={"employee_attributes": [{"attribute_id": "grade", "values": [2]}]},
+            )
+
+        assert provider.call_count == 2
+    finally:
+        db.close()
+
+
+def test_rule_cache_changes_with_schema_values() -> None:
+    db = SessionLocal()
+    try:
+        first = _schema()
+        second = _schema()
+        first[0].enum_values = ["M1"]
+        second[0].enum_values = ["M2"]
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as provider:
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Managers in a unique cache-value test",
+                schema=first,
+            )
+            generate_rule_for_category(
+                db,
+                client_id=DEMO_CLIENT_ID,
+                policy_year_id=None,
+                description="Managers in a unique cache-value test",
+                schema=second,
+            )
+
+        assert provider.call_count == 2
+    finally:
+        db.close()
+
+
 def test_budget_exceeded_blocks_call() -> None:
     db = SessionLocal()
     try:

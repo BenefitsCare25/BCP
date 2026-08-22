@@ -146,6 +146,11 @@ class ApplyConfigResult(BaseModel):
     categories_relinked: int = 0
     rematched: bool = False
     employees_matched: int | None = None
+    rules_validated: int = 0
+    rules_proposed: int = 0
+    rules_need_review: int = 0
+    rules_unmapped: int = 0
+    rules_reused: int = 0
 
 
 class ProductOut(_Base):
@@ -393,6 +398,9 @@ class CategoryOut(_Base):
     raw_description: str
     matching_rule: dict[str, Any] | None
     rule_human_readable: str | None
+    mapping_profile_id: str | None = None
+    rule_status: str | None = None
+    rule_validation: dict[str, Any] | None = None
     participation_model: ParticipationStr | None
     # {employee, dependant, direction} — the employee/dependant participation
     # split parsed from the slip. Edited separately in the employee + dependant
@@ -442,6 +450,63 @@ class CategoryGrouped(BaseModel):
     # Medical / General / Life / Flex line this product group belongs to (for tab routing).
     line: InsuranceLineStr = "medical"
     categories: list[CategoryOut]
+
+
+class EligibilityMappingItemOut(BaseModel):
+    category_id: str
+    product_code: str | None = None
+    display_name: str
+    plan_code: str | None = None
+    category_status: str
+    rule_status: str
+    source: str
+    matching_rule: dict[str, Any] | None = None
+    rule_human_readable: str | None = None
+    confidence: float | None = None
+    matched_count: int | None = None
+    expected_count: int | None = None
+    unresolved_clauses: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    reused: bool = False
+
+
+class MissingCategoryPlanOut(BaseModel):
+    plan_id: str
+    product_id: str
+    product_code: str
+    product_display_name: str
+    plan_code: str
+    plan_display_name: str
+    source_hint: str | None = None
+
+
+class AICategoryCreate(BaseModel):
+    """Create a missing plan category from broker-supplied eligibility wording.
+
+    The wording is required because a benefit plan name or schedule does not
+    reliably state who is eligible; AI compiles evidence, it does not decide
+    coverage policy.
+    """
+
+    plan_id: str = Field(min_length=1, max_length=36)
+    eligibility_description: str = Field(min_length=3, max_length=2048)
+    display_name: str | None = Field(default=None, max_length=512)
+    participation_model: ParticipationStr | None = None
+
+
+class EligibilityMappingSummaryOut(BaseModel):
+    policy_year_id: str
+    employee_count: int
+    total: int
+    validated: int
+    proposed: int
+    needs_review: int
+    unmapped: int
+    reused: int
+    categories: list[EligibilityMappingItemOut] = Field(default_factory=list)
+    missing_categories: int = 0
+    missing_category_plans: list[MissingCategoryPlanOut] = Field(default_factory=list)
 
 
 class ProductDiagnostic(BaseModel):
@@ -496,6 +561,14 @@ class ParseResult(BaseModel):
     # replaces category rows, which orphans prior matches otherwise).
     rematched: bool = False
     employees_matched: int | None = None
+    # Company-aware matching-rule compiler outcome. Kept separate from the
+    # parser's legacy regex confidence so partial keyword parses are never
+    # presented as ready for employee matching.
+    rules_validated: int = 0
+    rules_proposed: int = 0
+    rules_need_review: int = 0
+    rules_unmapped: int = 0
+    rules_reused: int = 0
 
 
 class SlipTemplateProfileSave(BaseModel):

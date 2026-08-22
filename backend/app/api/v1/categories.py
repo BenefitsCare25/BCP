@@ -24,7 +24,6 @@ from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import (
     Category,
-    EmployeeAttributeSchema,
     Plan,
     PolicyYear,
     Product,
@@ -33,16 +32,21 @@ from app.models import (
 from app.models.category import CategoryStatus, SourceKind
 from app.models.product_setup import ProductSetupStatus
 from app.schemas.api import (
-    AttributeSchemaOut,
     CategoryCreate,
     CategoryGrouped,
     CategoryOut,
     CategoryPatch,
 )
 from app.services.ai_breaker import CircuitOpenError
-from app.services.ai_extractor import AINotConfiguredError
+from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError, generate_rule_for_category
 from app.services.category_factory import build_manual_category
+from app.services.eligibility_mapping import (
+    assess_category_rule,
+    build_ai_eligibility_inputs,
+    confirm_category_mapping,
+    validate_ai_matching_rule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +65,9 @@ def _to_dict(c: Category) -> dict[str, Any]:
         "display_name": c.display_name,
         "matching_rule": c.matching_rule,
         "rule_human_readable": c.rule_human_readable,
+        "mapping_profile_id": c.mapping_profile_id,
+        "rule_status": c.rule_status,
+        "rule_validation": c.rule_validation,
         "participation_model": c.participation_model,
         "participation_detail": c.participation_detail,
         "plan_assignments": c.plan_assignments,
@@ -207,6 +214,23 @@ def patch_category(
     c.source = SourceKind.manual.value
     c.human_modified = True
     c.modified_by = user.user_id
+    if "matching_rule" in updates:
+        # A broker-edited rule must pass the same company-schema validation as
+        # generated rules before it can be confirmed/reused. Detach it from the
+        # previous reusable profile so an unconfirmed edit never mutates memory.
+        c.mapping_profile_id = None
+        c.rule_status = (
+            "unmapped" if c.matching_rule is None else "needs_review"
+        )
+        c.rule_validation = {
+            "state": c.rule_status,
+            "source": "manual",
+            "errors": [],
+            "warnings": ["Manual rule must be validated and confirmed"],
+            "unresolved_clauses": [],
+            "reused": False,
+        }
+        c.status = CategoryStatus.needs_review.value
     after = _to_dict(c)
     write_audit(
         db,
@@ -230,7 +254,15 @@ def confirm_category(
 ) -> Category:
     _assert_category_year_editable(db, c)
     before = _to_dict(c)
-    c.status = CategoryStatus.confirmed.value
+    try:
+        confirm_category_mapping(
+            db, category=c, client_id=require_client_id(user)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Category cannot be confirmed: {exc}",
+        ) from exc
     c.modified_by = user.user_id
     write_audit(
         db,
@@ -261,6 +293,7 @@ def bulk_confirm(
             select(Category).where(
                 Category.policy_year_id == policy_year_id,
                 Category.status == CategoryStatus.needs_review.value,
+                Category.matching_rule.is_not(None),
                 Category.confidence.is_not(None),
                 Category.confidence >= min_confidence,
             )
@@ -269,9 +302,16 @@ def bulk_confirm(
         .all()
     )
     confirmed = 0
+    skipped = 0
     for c in rows:
         before = _to_dict(c)
-        c.status = CategoryStatus.confirmed.value
+        try:
+            confirm_category_mapping(
+                db, category=c, client_id=require_client_id(user)
+            )
+        except ValueError:
+            skipped += 1
+            continue
         c.modified_by = user.user_id
         write_audit(
             db,
@@ -284,7 +324,11 @@ def bulk_confirm(
         )
         confirmed += 1
     db.commit()
-    return {"confirmed": confirmed, "threshold": min_confidence}
+    return {
+        "confirmed": confirmed,
+        "skipped_invalid_rules": skipped,
+        "threshold": min_confidence,
+    }
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -422,16 +466,9 @@ def ai_suggest_rule(
     """
     _assert_category_year_editable(db, c)
     client_id = require_client_id(user)
-    attrs = list(
-        db.execute(
-            select(EmployeeAttributeSchema).where(
-                tenant_or_global(EmployeeAttributeSchema.client_id, client_id)
-            )
-        )
-        .scalars()
-        .all()
+    schema, context, catalog = build_ai_eligibility_inputs(
+        db, category=c, client_id=client_id
     )
-    schema = [AttributeSchemaOut.model_validate(a) for a in attrs]
 
     try:
         result = generate_rule_for_category(
@@ -440,6 +477,7 @@ def ai_suggest_rule(
             policy_year_id=c.policy_year_id,
             description=c.raw_description,
             schema=schema,
+            context=context,
         )
     except AINotConfiguredError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
@@ -447,22 +485,66 @@ def ai_suggest_rule(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except AIBudgetExceededError as exc:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(exc)) from exc
+    except AIParseError as exc:
+        logger.warning("Malformed AI rule response for category %s: %s", c.id, exc)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "AI returned an invalid structured response; no category changes were saved",
+        ) from exc
     except Exception as exc:
-        # Log full detail server-side but return a generic message — provider
-        # errors can echo credentials.
-        logger.exception("AI provider error for category %s", c.id)
+        # Provider messages can echo credentials or prompt data, so record only
+        # the exception class and the correlation-scoped category id.
+        logger.error(
+            "AI provider error for category %s (%s)", c.id, type(exc).__name__
+        )
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             "AI provider error — see server logs",
         ) from exc
 
     envelope = result.envelope
+    unresolved = [
+        str(value)
+        for value in result.metadata.get("unresolved_clauses", [])
+        if isinstance(value, (str, int, float))
+    ][:20]
+    validation = validate_ai_matching_rule(c.raw_description, envelope.rule, catalog)
+    if envelope.rule is None:
+        reason = str(result.metadata.get("reasoning") or "").strip()
+        detail = "AI could not map this wording to the company's employee fields"
+        if unresolved:
+            detail += f". Unresolved: {', '.join(unresolved)}"
+        elif reason:
+            detail += f". {reason[:300]}"
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail)
+    if not validation.valid:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "AI suggestion was rejected before saving: " + "; ".join(validation.errors),
+        )
+
     before = _to_dict(c)
     c.matching_rule = envelope.rule
-    c.rule_human_readable = envelope.human_readable
+    c.rule_human_readable = envelope.human_readable[:1024]
     c.confidence = envelope.confidence
     c.source = SourceKind.ai_extracted.value
     c.status = CategoryStatus.needs_review.value
+    c.human_modified = False
+    c.mapping_profile_id = None
+    assessment = assess_category_rule(
+        db,
+        category=c,
+        client_id=client_id,
+        unresolved_clauses=unresolved,
+        source="ai_extracted",
+    )
+    c.rule_status = assessment.rule_status
+    c.rule_validation = {
+        **assessment.validation,
+        "ai_reasoning": str(result.metadata.get("reasoning") or "")[:1024],
+        "ai_prompt_version": result.metadata.get("prompt_version"),
+        "ai_cache_hit": result.cache_hit,
+    }
     c.modified_by = user.user_id
     write_audit(
         db,

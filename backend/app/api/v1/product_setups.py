@@ -62,6 +62,7 @@ from app.services.dynamic_template import (
     merge_file_overlay,
     synthesize_template,
 )
+from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.entity_vocab import entity_vocabulary
 from app.services.form_profiles import basis_model_for, infer_profile, rate_model_for
 from app.services.insurance_lines import infer_line
@@ -913,6 +914,30 @@ def confirm_setup(
                    "categories_created": cats_created, "categories_removed": cats_removed},
         )
 
+        # Product confirmation materializes plan/category facts. Matching rules
+        # are a separate company-aware concern: compile proposals from the
+        # current tenant schema/roster before any automatic re-match, without
+        # auto-confirming the inferred eligibility mapping.
+        mapping_summary = auto_map_policy_year(
+            db,
+            policy_year_id=policy_year_id,
+            client_id=client_id,
+        )
+        write_audit(
+            db,
+            user,
+            action="propose_eligibility_mappings",
+            entity_type="policy_year",
+            entity_id=policy_year_id,
+            after={
+                "trigger": "confirm_setup",
+                "validated": mapping_summary.validated,
+                "needs_review": mapping_summary.needs_review,
+                "unmapped": mapping_summary.unmapped,
+                "reused": mapping_summary.reused,
+            },
+        )
+
         # Keep setup materialization and matching in one transaction. A matching
         # failure must not leave a confirmed setup persisted behind an error.
         rematched = False
@@ -1684,8 +1709,12 @@ def _materialize_categories(
             priority=base_priority + offset,
             display_name=name,
             source_ref=_SETUP_REF,
-            status=CategoryStatus.confirmed.value,
+            # Product confirmation confirms the benefit setup, not an inferred
+            # employee-matching rule. The company-aware mapper runs below and a
+            # broker confirms the resulting eligibility mapping separately.
+            status=CategoryStatus.needs_review.value,
             modified_by=user.user_id,
+            human_modified=False,
             participation_model=pspec.employee
             or normalize_participation(raw_participation),
             participation_detail=pspec.to_dict(),

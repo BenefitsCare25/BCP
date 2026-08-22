@@ -72,6 +72,7 @@ from app.schemas.adc import (
     AdcWarning,
 )
 from app.services.derivation_engine import derive
+from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
 from app.services.roster_attributes import (
@@ -1040,12 +1041,33 @@ def apply_listing(
     rematched = 0
     flex_errors: list[str] = []
     try:
+        mapping = auto_map_policy_year(
+            db,
+            policy_year_id=policy_year_id,
+            client_id=client_id,
+        )
+        write_audit(
+            db,
+            user,
+            action="auto_map_eligibility",
+            entity_type="policy_year",
+            entity_id=policy_year_id,
+            after={
+                "trigger": "adc_apply",
+                "validated": mapping.validated,
+                "needs_review": mapping.needs_review,
+                "unmapped": mapping.unmapped,
+                "reused": mapping.reused,
+            },
+        )
         summary = match_policy_year(db, policy_year_id, user)
         rematched = summary.employees_matched
         db.commit()
     except Exception:
         db.rollback()
-        flex_errors.append("Re-matching failed; click 'Re-run matching' to retry.")
+        flex_errors.append(
+            "Eligibility mapping or re-matching failed; rebuild matching to retry."
+        )
     assign_flex_safe(
         db, user, policy_year_id, client_id, trigger="auto_on_adc", errors=flex_errors
     )

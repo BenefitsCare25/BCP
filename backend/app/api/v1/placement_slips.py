@@ -60,6 +60,7 @@ from app.schemas.api import (
 from app.services import product_registry
 from app.services.ai_slip_extractor import maybe_ai_augment
 from app.services.dynamic_template import merge_file_overlay, synthesize_template
+from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.matching_engine import match_policy_year
 from app.services.period_parser import parse_period_of_insurance
 from app.services.placement_slip_parser import (
@@ -554,12 +555,29 @@ async def parse_upload(
         db, policy_year_id, slip_row.id, parsed, products_cache
     )
 
+    # Compile every extracted category against this company's actual employee
+    # schema/roster vocabulary (or a confirmed prior-year mapping). This replaces
+    # partial/global keyword rules with useful proposals before the automatic
+    # matching run below; proposals remain reviewable and are never auto-confirmed.
+    mapping_summary = auto_map_policy_year(
+        db,
+        policy_year_id=policy_year_id,
+        client_id=client_id,
+    )
+
     slip_row.parse_status = ParseStatus.parsed
     slip_row.parse_log = {
         "rule_coverage": {
             "total": total,
             "high_confidence": high_conf,
             "needs_review": total - high_conf,
+        },
+        "eligibility_mappings": {
+            "validated": mapping_summary.validated,
+            "proposed": mapping_summary.proposed,
+            "needs_review": mapping_summary.needs_review,
+            "unmapped": mapping_summary.unmapped,
+            "reused": mapping_summary.reused,
         },
         "replaced_categories": replaced_categories,
         "replaced_plans": replaced_plans,
@@ -630,6 +648,11 @@ async def parse_upload(
         products=[ProductDiagnostic(**asdict(d)) for d in diagnostics],
         rematched=rematched,
         employees_matched=employees_matched,
+        rules_validated=mapping_summary.validated,
+        rules_proposed=mapping_summary.proposed,
+        rules_need_review=mapping_summary.needs_review,
+        rules_unmapped=mapping_summary.unmapped,
+        rules_reused=mapping_summary.reused,
     )
 
 

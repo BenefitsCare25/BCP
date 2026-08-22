@@ -63,7 +63,9 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-PROMPT_VERSION = "rule_generation/v1"
+# v2 includes non-PII company vocabulary and product/sibling context, and
+# invalidates company-blind v1 cache entries.
+PROMPT_VERSION = "rule_generation/v2"
 DERIVATION_PROMPT_VERSION = "roster_derivation/v1"
 RECOMMEND_PROMPT_VERSION = "schema_recommend/v1"
 # v2: categories carry financial fields (rates / SI / tiers / earnings) so an
@@ -646,6 +648,7 @@ def generate_rule_for_category(
     policy_year_id: str | None,
     description: str,
     schema: list[AttributeSchemaOut],
+    context: dict[str, Any] | None = None,
     operation: str = "ai_suggest_rule",
 ) -> AICallResult:
     """Cached + breakered + budget-gated rule generation."""
@@ -662,7 +665,18 @@ def generate_rule_for_category(
         cfg.model,
         {
             "description": description.strip(),
-            "schema": sorted(s.attribute_id for s in schema),
+            "schema": [
+                {
+                    "attribute_id": item.attribute_id,
+                    "display_name": item.display_name,
+                    "data_type": item.data_type,
+                    "enum_values": list(item.enum_values or []),
+                    "description": item.description,
+                    "derived_from": item.derived_from,
+                }
+                for item in sorted(schema, key=lambda value: value.attribute_id)
+            ],
+            "context": context or {},
         },
     )
 
@@ -674,7 +688,10 @@ def generate_rule_for_category(
         )
 
     def _invoke() -> tuple[dict[str, Any], dict[str, Any], AICallResult]:
-        envelope, metadata = generate_rule_via_ai(description, schema, cfg)
+        envelope, metadata = generate_rule_via_ai(
+            description, schema, cfg, context=context
+        )
+        metadata = {**metadata, "prompt_version": PROMPT_VERSION}
         payload = {"envelope": envelope.model_dump(), "metadata": metadata}
         result = AICallResult(
             envelope=envelope, metadata={**metadata, "cache_hit": False}, cache_hit=False

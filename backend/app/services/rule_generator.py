@@ -435,6 +435,13 @@ def _detect_grade(d: str) -> tuple[Rule | None, str]:
 
 
 def _detect_pass(d: str) -> tuple[Rule | None, str]:
+    # Insurers write this union in either order. Detect the two concepts
+    # symmetrically before the legacy separator-specific patterns so
+    # "S-Pass or Work Permit" cannot silently collapse to S-Pass only.
+    if _RX_WP.search(d) and _RX_SPASS.search(d):
+        if _RX_NON_WP_LOOSE.search(d):
+            return {"not_in": ["pass", ["WP", "SP"]]}, "pass ∉ [WP, SP]"
+        return {"in": ["pass", ["WP", "SP"]]}, "pass ∈ [WP, SP]"
     if _RX_WP_AND_SP.search(d):
         if _RX_NON_WP_LOOSE.search(d):
             return {"not_in": ["pass", ["WP", "SP"]]}, "pass ∉ [WP, SP]"

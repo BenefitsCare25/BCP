@@ -446,8 +446,13 @@ export function useSlipUpload(policyYearId: string) {
           setClassifiedCodes([]); // this upload used the latest classifications
           const parts = [
             `${r.total_categories} categories extracted`,
-            `${r.high_confidence} high confidence`,
+            `${r.rules_validated ?? 0} roster validated`,
           ];
+          if ((r.rules_need_review ?? 0) + (r.rules_unmapped ?? 0) > 0) {
+            parts.push(
+              `${(r.rules_need_review ?? 0) + (r.rules_unmapped ?? 0)} mappings need review`,
+            );
+          }
           if (r.replaced_categories > 0) {
             parts.push(`${r.replaced_categories} prior rows replaced`);
           }
@@ -681,11 +686,30 @@ export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
             <div className="text-foreground">
               <span className="font-medium">{result.total_categories}</span>{" "}
               categories extracted ·{" "}
-              <span className="font-medium">{result.high_confidence}</span> high
-              confidence ·{" "}
-              <span className="font-medium">{result.needs_review}</span> need
-              review
+              <span className="font-medium">
+                {result.rules_validated ?? 0}
+              </span>{" "}
+              roster validated ·{" "}
+              <span className="font-medium">
+                {(result.rules_need_review ?? 0) +
+                  (result.rules_unmapped ?? 0)}
+              </span>{" "}
+              mappings need review
             </div>
+            {(result.rules_proposed ?? 0) > 0 && (
+              <div className="text-muted-foreground">
+                {result.rules_proposed} rule proposal
+                {result.rules_proposed === 1 ? "" : "s"} created without a
+                roster; upload employees to validate actual matches.
+              </div>
+            )}
+            {(result.rules_reused ?? 0) > 0 && (
+              <div className="text-muted-foreground">
+                Reused {result.rules_reused} company-confirmed mapping
+                {result.rules_reused === 1 ? "" : "s"} from an earlier policy
+                year.
+              </div>
+            )}
             {result.replaced_categories > 0 && (
               <div className="text-muted-foreground">
                 Replaced {result.replaced_categories} unreviewed row

@@ -61,6 +61,11 @@ def test_spass_only():
     assert not evaluate(env.rule, {"pass": "WP"})
 
 
+def test_spass_or_work_permit_keeps_both_populations() -> None:
+    env = description_to_rule("Foreign workers on S-pass or Work permit")
+    assert env.rule == {"in": ["pass", ["WP", "SP"]]}
+
+
 def test_grade_or_class_union_semantics():
     """§8.3: 'Grade X to Y and Bargainable Staff' → UNION (OR), not AND."""
     env = description_to_rule("Hay Job Grade 08 to 15 and Bargainable Staff")

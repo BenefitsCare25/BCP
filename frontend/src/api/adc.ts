@@ -54,6 +54,8 @@ export function useListingApply() {
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["dependants"] });
       qc.invalidateQueries({ queryKey: ["match-results"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
+      qc.invalidateQueries({ queryKey: ["categories"] });
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });

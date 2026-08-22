@@ -41,6 +41,17 @@ class Category(Base, TimestampMixin):
     raw_description: Mapped[str] = mapped_column(String(2048), nullable=False)
     matching_rule: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
     rule_human_readable: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Company-aware matching workflow. ``matching_rule`` remains the compiled
+    # snapshot consumed by the hot-path matcher; the profile is reusable across
+    # products/policy years and the validation envelope explains why this copy
+    # is proposed/validated/unmapped.
+    mapping_profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("eligibility_mapping_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    rule_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    rule_validation: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
     participation_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Structured reading of the slip Participation cell: employee/dependant modes
     # plus the allowed voluntary change direction (upgrade/downgrade/both). Shape:

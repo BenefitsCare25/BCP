@@ -140,6 +140,11 @@ export interface ApplyConfigResult {
   categories_relinked: number;
   rematched: boolean;
   employees_matched: number | null;
+  rules_validated: number;
+  rules_proposed: number;
+  rules_need_review: number;
+  rules_unmapped: number;
+  rules_reused: number;
 }
 
 export interface PolicyYear {
@@ -201,6 +206,11 @@ export type SourceKind =
   | "ai_extracted"
   | "csv_import";
 export type CategoryStatus = "draft" | "needs_review" | "confirmed";
+export type EligibilityRuleStatus =
+  | "validated"
+  | "proposed"
+  | "needs_review"
+  | "unmapped";
 
 export interface ParticipationDetail {
   employee?: "compulsory" | "voluntary" | null;
@@ -218,6 +228,9 @@ export interface Category {
   raw_description: string;
   matching_rule: RuleNode;
   rule_human_readable: string | null;
+  mapping_profile_id: string | null;
+  rule_status: EligibilityRuleStatus | null;
+  rule_validation: Record<string, unknown> | null;
   participation_model: "compulsory" | "voluntary" | null;
   // Employee/dependant participation split parsed from the slip. The employee
   // card edits `.employee` (mirrored into participation_model); the dependant
@@ -301,6 +314,54 @@ export interface ParseResult {
   /** True when a re-upload auto-rematched employees (absent on older backends). */
   rematched?: boolean;
   employees_matched?: number | null;
+  rules_validated?: number;
+  rules_proposed?: number;
+  rules_need_review?: number;
+  rules_unmapped?: number;
+  rules_reused?: number;
+}
+
+export interface EligibilityMappingItem {
+  category_id: string;
+  product_code: string | null;
+  display_name: string;
+  plan_code: string | null;
+  category_status: CategoryStatus;
+  rule_status: EligibilityRuleStatus;
+  source: string;
+  matching_rule: RuleNode;
+  rule_human_readable: string | null;
+  confidence: number | null;
+  matched_count: number | null;
+  expected_count: number | null;
+  unresolved_clauses: string[];
+  errors: string[];
+  warnings: string[];
+  reused: boolean;
+}
+
+export interface MissingCategoryPlan {
+  plan_id: string;
+  product_id: string;
+  product_code: string;
+  product_display_name: string;
+  plan_code: string;
+  plan_display_name: string;
+  source_hint: string | null;
+}
+
+export interface EligibilityMappingSummary {
+  policy_year_id: string;
+  employee_count: number;
+  total: number;
+  validated: number;
+  proposed: number;
+  needs_review: number;
+  unmapped: number;
+  reused: number;
+  categories: EligibilityMappingItem[];
+  missing_categories: number;
+  missing_category_plans: MissingCategoryPlan[];
 }
 
 export interface PlacementSlipSummary {

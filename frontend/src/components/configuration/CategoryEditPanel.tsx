@@ -77,49 +77,80 @@ function EditForm({
 }) {
   const [displayName, setDisplayName] = useState(category.display_name);
   const [rule, setRule] = useState<RuleNode>(category.matching_rule);
+  const [current, setCurrent] = useState(category);
   const patch = usePatchCategory();
   const confirm = useConfirmCategory();
   const aiSuggest = useAISuggest();
   const deleteCategory = useDeleteCategory();
   const { data: aiStatus } = useAIStatus();
   const [showDelete, setShowDelete] = useState(false);
+  const validation = current.rule_validation ?? {};
+  const validationErrors = Array.isArray(validation.errors)
+    ? validation.errors.map(String)
+    : [];
+  const validationWarnings = Array.isArray(validation.warnings)
+    ? validation.warnings.map(String)
+    : [];
 
   const coversAll = isCoversAllRule(rule);
-  const wasCoversAll = isCoversAllRule(category.matching_rule);
   const toggleCoversAll = (on: boolean) => setRule(on ? { and: [] } : null);
 
+  const ruleChanged = JSON.stringify(rule) !== JSON.stringify(current.matching_rule);
+  const nameChanged = displayName.trim() !== current.display_name;
+  const pendingPatch = () => ({
+    ...(nameChanged ? { display_name: displayName.trim() } : {}),
+    ...(ruleChanged
+      ? {
+          matching_rule: rule,
+          // Never retain an AI reading after the broker changes its rule.
+          rule_human_readable: coversAll ? "All employees" : null,
+        }
+      : {}),
+  });
+
   const save = async () => {
-    await patch.mutateAsync({
-      id: category.id,
-      patch: {
-        display_name: displayName,
-        matching_rule: rule,
-        // Keep the generator's reading honest: label covers-all explicitly, and
-        // clear a stale "All employees" label once a real rule replaces it.
-        // Untouched otherwise so AI/manual readings survive unrelated edits.
-        ...(coversAll
-          ? { rule_human_readable: "All employees" }
-          : wasCoversAll
-            ? { rule_human_readable: null }
-            : {}),
-      },
-    });
-    toast.success("Category updated");
+    if (nameChanged || ruleChanged) {
+      await patch.mutateAsync({
+        id: category.id,
+        patch: pendingPatch(),
+      });
+      toast.success("Category updated");
+    }
     onClose();
   };
 
   const onConfirm = async () => {
-    await confirm.mutateAsync(category.id);
-    toast.success("Category confirmed");
-    onClose();
+    try {
+      // Confirm the rule visible in this panel, not a stale server snapshot.
+      // This also makes manual edits pass the backend's company validator first.
+      if (nameChanged || ruleChanged) {
+        await patch.mutateAsync({
+          id: category.id,
+          patch: pendingPatch(),
+        });
+      }
+      await confirm.mutateAsync(category.id);
+      toast.success("Category confirmed and saved for this company");
+      onClose();
+    } catch (reason) {
+      toast.error(formatError(reason));
+    }
   };
 
   const onAISuggest = async () => {
     try {
       const updated = await aiSuggest.mutateAsync(category.id);
       setRule(updated.matching_rule);
+      setCurrent(updated);
+      const matched = updated.rule_validation?.matched_count;
       toast.success(
-        `AI suggested a rule (${Math.round((updated.confidence ?? 0) * 100)}% confidence)`,
+        `AI suggested and checked a rule (${Math.round((updated.confidence ?? 0) * 100)}% confidence)`,
+        {
+          description:
+            typeof matched === "number"
+              ? `${matched} active roster match${matched === 1 ? "" : "es"}; broker confirmation is still required.`
+              : "Saved for broker review; confirmation is still required.",
+        },
       );
     } catch (e) {
       toast.error(formatError(e));
@@ -130,9 +161,22 @@ function EditForm({
     <>
       <SheetHeader>
         <div className="flex items-center gap-2">
-          {sourcePill(category.source)}
-          {statusPill(category.status)}
-          {confidencePill(category.confidence)}
+          {sourcePill(current.source)}
+          {statusPill(current.status)}
+          {confidencePill(current.confidence)}
+          {current.rule_status && (
+            <Badge
+              variant={
+                current.rule_status === "validated"
+                  ? "good"
+                  : current.rule_status === "unmapped"
+                    ? "error"
+                    : "warn"
+              }
+            >
+              {current.rule_status.replaceAll("_", " ")}
+            </Badge>
+          )}
         </div>
         <SheetTitle>{category.display_name}</SheetTitle>
         {category.source_ref && (
@@ -157,16 +201,27 @@ function EditForm({
           </div>
         </div>
 
-        {category.rule_human_readable && (
+        {current.rule_human_readable && (
           <div className="flex flex-col gap-1.5">
             <Label>Generator's reading</Label>
             <div className="text-sm rounded-md border border-border bg-muted/40 p-3 font-mono">
-              {category.rule_human_readable}
+              {current.rule_human_readable}
             </div>
           </div>
         )}
 
         <Separator />
+
+        {(validationErrors.length > 0 || validationWarnings.length > 0) && (
+          <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs">
+            <p className="font-medium text-foreground">Mapping checks</p>
+            <ul className="mt-1 space-y-1 text-warn">
+              {[...validationErrors, ...validationWarnings].map((message) => (
+                <li key={message}>• {message}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
@@ -178,7 +233,7 @@ function EditForm({
               disabled={!aiStatus?.configured || aiSuggest.isPending || coversAll}
               title={
                 aiStatus?.configured
-                  ? "Ask Claude to generate a rule from the raw description"
+                  ? "Ask Gemini to map this wording against the company's non-PII roster values and sibling plans"
                   : "AI not configured — set up an AI provider in settings"
               }
             >
@@ -225,7 +280,7 @@ function EditForm({
           </pre>
         </div>
 
-        {category.human_modified && (
+        {current.human_modified && (
           <div className="flex items-center gap-1">
             <Badge variant="outline">Human-modified</Badge>
             <InfoHint>Source flipped from AI to manual on last edit.</InfoHint>
@@ -243,11 +298,11 @@ function EditForm({
         <SheetClose asChild>
           <Button variant="outline">Cancel</Button>
         </SheetClose>
-        {category.status !== "confirmed" && (
+        {current.status !== "confirmed" && (
           <Button
             variant="secondary"
             onClick={onConfirm}
-            disabled={confirm.isPending}
+            disabled={confirm.isPending || patch.isPending || rule === null}
           >
             {confirm.isPending && <Loader2 className="size-4 animate-spin" />}
             Confirm as-is

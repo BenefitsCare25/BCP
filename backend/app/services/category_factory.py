@@ -24,6 +24,7 @@ def build_manual_category(
     source_ref: str,
     status: str,
     modified_by: str | None,
+    human_modified: bool = True,
     participation_model: str | None = None,
     participation_detail: dict[str, Any] | None = None,
     plan_assignments: dict[str, Any] | None = None,
@@ -48,6 +49,6 @@ def build_manual_category(
         source_ref=source_ref,
         confidence=envelope.confidence,
         status=status,
-        human_modified=True,
+        human_modified=human_modified,
         modified_by=modified_by,
     )

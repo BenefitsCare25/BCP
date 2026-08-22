@@ -26,6 +26,7 @@ import type {
   AutoMatchResult,
   Dependant,
   Employee,
+  EligibilityMappingSummary,
   FieldSuggestions,
   FlexAssignResult,
   FlexScheme,
@@ -165,6 +166,65 @@ export function useCategoriesGrouped(policyYearId: string | undefined) {
   });
 }
 
+export function useEligibilityMappings(policyYearId: string | undefined) {
+  const cid = useActiveClientId();
+  return useQuery({
+    queryKey: ["eligibility-mappings", policyYearId, cid],
+    queryFn: () =>
+      api.get<EligibilityMappingSummary>(
+        `/policy-years/${policyYearId}/eligibility-mappings`,
+      ),
+    enabled: Boolean(policyYearId),
+  });
+}
+
+export function useProposeEligibilityMappings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (policyYearId: string) =>
+      api.post<EligibilityMappingSummary>(
+        `/policy-years/${policyYearId}/eligibility-mappings/propose`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
+      qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["employees"] });
+      qc.invalidateQueries({ queryKey: ["match-results"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
+export function useAICreateMissingCategory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      policyYearId,
+      planId,
+      eligibilityDescription,
+    }: {
+      policyYearId: string;
+      planId: string;
+      eligibilityDescription: string;
+    }) =>
+      api.post<Category>(
+        `/policy-years/${policyYearId}/eligibility-mappings/ai-create-category`,
+        {
+          plan_id: planId,
+          eligibility_description: eligibilityDescription,
+          display_name: eligibilityDescription,
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
+      qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["plans"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
 /** `includeLeft` is part of the KEY, not just the URL — the two rosters are
  *  different responses and a shared key served the cached active-only list
  *  under the toggle that had just asked for leavers. */
@@ -281,6 +341,7 @@ export function usePatchCategory(
     mutationFn: ({ id, patch }) => api.patch<Category>(`/categories/${id}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       // Premium rates live in plan_assignments and are shown under each matched
       // employee — refresh those views so edits propagate live.
       qc.invalidateQueries({ queryKey: ["employees"] });
@@ -337,6 +398,7 @@ export function useCreateCategory() {
     }) => api.post<Category>("/categories", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -364,6 +426,7 @@ export function useConfirmCategory() {
       api.post<Category>(`/categories/${id}/confirm`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -550,6 +613,7 @@ export function useAISuggest() {
       api.post<Category>(`/categories/${id}/ai-suggest`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -561,6 +625,7 @@ export function useDeleteCategory() {
     mutationFn: (id: string) => api.delete<void>(`/categories/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -652,6 +717,7 @@ export function useUploadSlip() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["product-setups"] });
       qc.invalidateQueries({ queryKey: ["setup-products"] });
       qc.invalidateQueries({ queryKey: ["plans"] });
@@ -799,6 +865,7 @@ export function useApplyConfig() {
       qc.invalidateQueries({ queryKey: ["schemas", "employee-attributes"] });
       qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["match-results"] });
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });

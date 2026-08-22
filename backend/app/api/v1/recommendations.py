@@ -65,6 +65,7 @@ from app.services.ai_gateway import (
     recommend_schema_for_slip,
 )
 from app.services.derivation_engine import apply_rule, resolve_attribute_schemas
+from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.insurance_lines import infer_line
 from app.services.matching_engine import match_policy_year
 from app.services.roster_profiler import profile_roster
@@ -710,6 +711,26 @@ def apply_config(
             "Another request modified this client's schema concurrently — please retry.",
         ) from None
 
+    mapping = auto_map_policy_year(
+        db,
+        policy_year_id=policy_year_id,
+        client_id=client_id,
+    )
+    write_audit(
+        db,
+        user,
+        action="auto_map_eligibility",
+        entity_type="policy_year",
+        entity_id=policy_year_id,
+        after={
+            "trigger": "apply_config",
+            "validated": mapping.validated,
+            "needs_review": mapping.needs_review,
+            "unmapped": mapping.unmapped,
+            "reused": mapping.reused,
+        },
+    )
+
     rematched = False
     employees_matched: int | None = None
     if payload.rerun_matching:
@@ -720,9 +741,9 @@ def apply_config(
             after={"employees_matched": summary.employees_matched,
                    "trigger": "apply_config"},
         )
-        db.commit()
         rematched = True
         employees_matched = summary.employees_matched
+    db.commit()
 
     return ApplyConfigResult(
         attributes_created=attributes_created,
@@ -731,4 +752,9 @@ def apply_config(
         categories_relinked=categories_relinked,
         rematched=rematched,
         employees_matched=employees_matched,
+        rules_validated=mapping.validated,
+        rules_proposed=mapping.proposed,
+        rules_need_review=mapping.needs_review,
+        rules_unmapped=mapping.unmapped,
+        rules_reused=mapping.reused,
     )
