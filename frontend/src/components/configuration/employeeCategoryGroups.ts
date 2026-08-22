@@ -61,6 +61,8 @@ export function groupEmployeeCategories(
     .sort((a, b) => a.representative.priority - b.representative.priority);
 }
 
-export function uniqueEmployeeCategoryCount(categories: Category[]): number {
-  return groupEmployeeCategories(categories).length;
+export function employeeCategoryIssueCount(categories: Category[]): number {
+  return groupEmployeeCategories(categories).filter(
+    (group) => group.ruleStatus !== "validated",
+  ).length;
 }

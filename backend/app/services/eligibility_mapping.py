@@ -1460,7 +1460,9 @@ def _rule_messages(
     warnings = list(validation.warnings)
     blockers: list[str] = []
     if not catalog.roster_present and matching_rule is not None:
-        warnings.append("No active roster is available to validate matched employees")
+        warnings.append(
+            "No active employee listing is available to validate matched employees"
+        )
     if overlap_count:
         message = (
             f"{overlap_count} employees also match an equally specific "

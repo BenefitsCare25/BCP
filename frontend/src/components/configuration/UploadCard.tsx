@@ -463,7 +463,7 @@ export function useSlipUpload(policyYearId: string) {
           setClassifiedCodes([]); // this upload used the latest classifications
           const parts = [
             `${r.total_categories} categories extracted`,
-            `${r.rules_validated ?? 0} roster validated`,
+            `${r.rules_validated ?? 0} employee categories validated`,
           ];
           if ((r.rules_need_review ?? 0) + (r.rules_unmapped ?? 0) > 0) {
             parts.push(
@@ -710,7 +710,7 @@ export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
               <span className="font-medium">
                 {result.rules_validated ?? 0}
               </span>{" "}
-              roster validated ·{" "}
+              employee categories validated ·{" "}
               <span className="font-medium">
                 {(result.rules_need_review ?? 0) +
                   (result.rules_unmapped ?? 0)}
@@ -721,7 +721,7 @@ export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
               <div className="text-muted-foreground">
                 {result.rules_proposed} rule proposal
                 {result.rules_proposed === 1 ? "" : "s"} created without a
-                roster; upload employees to validate actual matches.
+                employee listing; upload employees to validate actual matches.
               </div>
             )}
             {(result.rules_reused ?? 0) > 0 && (

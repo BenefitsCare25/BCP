@@ -30,7 +30,7 @@ import { InsuredPicker } from "./InsuredPicker";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
 import { EmployeeCategoryPlanTab } from "./EmployeeCategoryPlanTab";
-import { uniqueEmployeeCategoryCount } from "./employeeCategoryGroups";
+import { employeeCategoryIssueCount } from "./employeeCategoryGroups";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
 import {
@@ -638,6 +638,7 @@ export function ProductSetupForm({
   // isn't valid for this product's section list.
   const activeId =
     activeSection && sections.includes(activeSection) ? activeSection : sections[0];
+  const categoryIssues = employeeCategoryIssueCount(group?.categories ?? []);
 
   const switchSection = (next: string) => {
     if (next === activeId) return;
@@ -650,12 +651,9 @@ export function ProductSetupForm({
           edit session; leaving the product is guarded by the parent. */}
       <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted/40 p-1">
         {sections.map((id) => {
-          const count =
-            id === "basis_of_cover"
-              ? uniqueEmployeeCategoryCount(group?.categories ?? [])
-              : id === "endorsements"
-                ? answers.endorsements?.length ?? 0
-                : 0;
+          const count = id === "endorsements" ? answers.endorsements?.length ?? 0 : 0;
+          const categoryNeedsAttention =
+            id === "basis_of_cover" && categoryIssues > 0;
           return (
             <button
               key={id}
@@ -669,12 +667,19 @@ export function ProductSetupForm({
               )}
             >
               {SECTION_LABELS[id] ?? id}
+              {categoryNeedsAttention && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="ml-2 inline-block size-2 rounded-full bg-destructive align-middle"
+                    title="Employee categories need attention"
+                  />
+                  <span className="sr-only">Employee categories need attention</span>
+                </>
+              )}
               {count > 0 && (
                 <span className="ml-1.5 text-xs text-muted-foreground">
                   · {count}
-                  {id === "basis_of_cover"
-                    ? ` employee categor${count === 1 ? "y" : "ies"}`
-                    : ""}
                 </span>
               )}
             </button>
