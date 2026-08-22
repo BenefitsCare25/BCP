@@ -29,8 +29,8 @@ import { insuredNames } from "@/lib/insured";
 import { InsuredPicker } from "./InsuredPicker";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
-import { CategoryCards } from "./CategoryCards";
-import { DependantCards } from "./DependantCard";
+import { EmployeeCategoryPlanTab } from "./EmployeeCategoryPlanTab";
+import { uniqueEmployeeCategoryCount } from "./employeeCategoryGroups";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
 import {
@@ -489,7 +489,6 @@ export function ProductSetupForm({
   const coveredMembers = selectedMemberCover(
     answers.eligibility.member_cover_eligibility,
   );
-  const showDependants = hasDependantsSelected;
   const visibleEligibilityFields = template.eligibility_fields.filter((f) => {
     if (f.id === "spouse_age_limit") return coveredMembers.has("Spouse");
     if (f.id === "child_age_limit") return coveredMembers.has("Child");
@@ -527,7 +526,7 @@ export function ProductSetupForm({
           <InsuredPicker
             policyYearId={policyYearId}
             label="Entities covered · used for matching"
-            hint="Which legal entities this product covers, picked from the roster so the spelling always matches. Only employees whose roster Entity is one of these will match this product's categories. Leave empty to cover every entity. The Insured field above stays as the slip's wording — it is never used for matching."
+            hint="Which legal entities this product covers, picked from the employee listing so the spelling always matches. Only employees whose Entity value is one of these will match this product's employee categories. Leave empty to cover every entity. The Insured field above stays as the slip's wording — it is never used for matching."
             value={headerEntities}
             onChange={(next) => setHeader("entities", next)}
           />
@@ -557,36 +556,20 @@ export function ProductSetupForm({
         ))}
       </div>
     ),
-    // Employee Category & Plan Type = the editable category cards (bound to the
-    // persisted categories; edits autosave). Dependant cards follow when the
-    // product covers dependants.
+    // One row per unique employee category, with its plan assignments nested
+    // below. Employee and dependant settings are edited together.
     basis_of_cover: (
-      <div className="flex flex-col gap-5">
-        <CategoryCards
-          policyYearId={policyYearId}
-          productCode={template.code}
-          productId={group?.product_id ?? null}
-          hasDependants={memberCounts?.has_dependants ?? hasDependantsSelected}
-          basisModel={template.basis_model}
-          rateModel={template.rate_model}
-          tiers={template.tiers}
-          categories={group?.categories ?? []}
-          onEditRule={onEditRule}
-        />
-        {showDependants && (
-          <div className="flex flex-col gap-2 border-t border-border pt-4">
-            <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Dependant Category &amp; Plan Type · dependant participation &amp; rate
-            </Label>
-            <DependantCards
-              policyYearId={policyYearId}
-              productId={group?.product_id ?? null}
-              rateModel={template.rate_model}
-              categories={group?.categories ?? []}
-            />
-          </div>
-        )}
-      </div>
+      <EmployeeCategoryPlanTab
+        policyYearId={policyYearId}
+        productCode={template.code}
+        productId={group?.product_id ?? null}
+        hasDependants={memberCounts?.has_dependants ?? hasDependantsSelected}
+        basisModel={template.basis_model}
+        rateModel={template.rate_model}
+        tiers={template.tiers}
+        categories={group?.categories ?? []}
+        onEditRule={onEditRule}
+      />
     ),
     // Schedule of Benefits = what's covered: cover description + cover-term
     // fields + the benefit-line table + additional arrangements.
@@ -669,7 +652,7 @@ export function ProductSetupForm({
         {sections.map((id) => {
           const count =
             id === "basis_of_cover"
-              ? group?.categories.length ?? 0
+              ? uniqueEmployeeCategoryCount(group?.categories ?? [])
               : id === "endorsements"
                 ? answers.endorsements?.length ?? 0
                 : 0;
@@ -689,6 +672,9 @@ export function ProductSetupForm({
               {count > 0 && (
                 <span className="ml-1.5 text-xs text-muted-foreground">
                   · {count}
+                  {id === "basis_of_cover"
+                    ? ` employee categor${count === 1 ? "y" : "ies"}`
+                    : ""}
                 </span>
               )}
             </button>

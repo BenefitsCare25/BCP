@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { usePatchCategory } from "@/api/hooks";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -9,80 +10,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { usePatchCategory, usePlans } from "@/api/hooks";
 import { formatError } from "@/lib/errors";
-import type { Category, PlanAssignment, PlanDetail, RateModel } from "@/types";
+import type { Category, PlanAssignment, RateModel } from "@/types";
 import { toast } from "sonner";
 
 type DependantParticipation = "not_covered" | "compulsory" | "voluntary";
 
-// The Dependant configuration section: one card per employee category, mirroring
-// the "Employee Category & Plan Type" cards but for the dependant's participation
-// + rate. Rendered below the employee section when Spouse/Child is ticked in
-// Member Cover Eligibility.
-export function DependantCards({
-  policyYearId,
-  productId,
-  rateModel,
-  categories,
-}: {
-  policyYearId: string;
-  productId: string | null;
-  rateModel: RateModel;
-  categories: Category[];
-}) {
-  const { data: plans } = usePlans(policyYearId, productId ?? undefined);
-  const planOptions = useMemo(() => plans?.items ?? [], [plans]);
-
-  if (categories.length === 0) {
-    return (
-      <p className="text-xs text-muted-foreground">
-        Add an employee category first — dependant cover mirrors it.
-      </p>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted-foreground">
-        Each card mirrors an employee category. Set whether dependant cover is
-        compulsory (auto-included) or voluntary (an opt-in flex add), and the
-        per-dependant rate. Dependants ride the employee's plan.
-      </p>
-      {categories.map((c) => (
-        <DependantCard
-          key={`${c.id}:${c.updated_at}`}
-          category={c}
-          planOptions={planOptions}
-          rateModel={rateModel}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Dependant configuration for one employee category. Dependants ride the
-// employee's plan (read-only mirror); only their participation and per-dependant
-// rate are editable here. Everything writes back onto the SAME Category row
-// (participation_detail.dependant + plan_assignments.dependant_rate), so coverage
-// and flex pricing read it off the employee category as they already do.
-export function DependantCard({
+export function DependantAssignmentFields({
   category,
-  planOptions,
   rateModel,
 }: {
   category: Category;
-  planOptions: PlanDetail[];
   rateModel: RateModel;
 }) {
   const patch = usePatchCategory();
   const assignments = (category.plan_assignments ?? {}) as PlanAssignment;
-  const planCode = assignments.plan_code != null ? String(assignments.plan_code) : "";
-  const planName =
-    planOptions.find((p) => String(p.code) === planCode)?.display_name ||
-    planCode ||
-    "—";
-
   const [participation, setParticipation] = useState<DependantParticipation>(
     category.participation_detail?.dependant ?? "not_covered",
   );
@@ -90,100 +32,86 @@ export function DependantCard({
     assignments.dependant_rate != null ? String(assignments.dependant_rate) : "",
   );
 
-  const savePatch = (p: Partial<Category>, label: string) =>
+  const saveParticipation = (value: DependantParticipation) => {
+    setParticipation(value);
     patch.mutate(
-      { id: category.id, patch: p },
-      { onError: (e) => toast.error(`${label}: ${formatError(e)}`) },
-    );
-
-  // Merge-preserve the employee/direction split when writing the dependant scope.
-  const saveParticipation = (v: DependantParticipation) => {
-    setParticipation(v);
-    const dependant = v === "not_covered" ? null : v;
-    savePatch(
       {
-        participation_detail: {
-          ...(category.participation_detail ?? {}),
-          dependant,
+        id: category.id,
+        patch: {
+          participation_detail: {
+            ...(category.participation_detail ?? {}),
+            dependant: value === "not_covered" ? null : value,
+          },
         },
       },
-      "Dependant participation",
+      {
+        onError: (error) =>
+          toast.error(`Dependant participation: ${formatError(error)}`),
+      },
     );
   };
 
   const saveRate = () => {
-    const cur = assignments.dependant_rate ?? null;
     const trimmed = rate.trim();
-    const n = Number(trimmed);
-    if (trimmed === "" || !Number.isFinite(n)) {
-      setRate(cur != null ? String(cur) : "");
+    const next = Number(trimmed);
+    if (trimmed === "" || !Number.isFinite(next)) {
+      setRate(
+        assignments.dependant_rate != null
+          ? String(assignments.dependant_rate)
+          : "",
+      );
       return;
     }
-    if (n === cur) return;
-    savePatch(
+    if (next === assignments.dependant_rate) return;
+    patch.mutate(
       {
-        plan_assignments: {
-          ...assignments,
-          dependant_rate: n,
-        } as Category["plan_assignments"],
+        id: category.id,
+        patch: {
+          plan_assignments: { ...assignments, dependant_rate: next },
+        },
       },
-      "Premium rate per dependant",
+      {
+        onError: (error) =>
+          toast.error(`Premium rate per dependant: ${formatError(error)}`),
+      },
     );
   };
 
-  // Tiered medical encodes dependants in the EO/ES/EC/EF tiers on the employee
-  // card, so there's no separate dependant rate to enter here.
-  const showRate = rateModel !== "tiered";
-
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="grid grid-cols-[1.6fr_1fr_1fr] items-end gap-3">
-        <ReadOnlyField label="Employee Category" value={category.display_name} />
-        <ReadOnlyField label="Plan Type" value={planName} />
-        <Field label="Dependant Participation">
-          <Select
-            value={participation}
-            onValueChange={(v) => saveParticipation(v as DependantParticipation)}
-          >
-            <SelectTrigger className="h-8 text-sm">
-              <SelectValue placeholder="Select..." />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="not_covered">Not covered</SelectItem>
-              <SelectItem value="compulsory">Compulsory</SelectItem>
-              <SelectItem value="voluntary">Voluntary</SelectItem>
-            </SelectContent>
-          </Select>
+    <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
+      <Field label="Dependant Participation">
+        <Select
+          value={participation}
+          onValueChange={(value) =>
+            saveParticipation(value as DependantParticipation)
+          }
+        >
+          <SelectTrigger className="h-8 w-44 text-sm">
+            <SelectValue placeholder="Select" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="not_covered">Not covered</SelectItem>
+            <SelectItem value="compulsory">Compulsory</SelectItem>
+            <SelectItem value="voluntary">Voluntary</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+      {rateModel !== "tiered" ? (
+        <Field label="Premium Rate Per Dependant">
+          <Input
+            type="number"
+            value={rate}
+            onChange={(event) => setRate(event.target.value)}
+            onBlur={saveRate}
+            disabled={participation === "not_covered"}
+            className="h-8 w-44 text-sm"
+          />
         </Field>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
-        {showRate ? (
-          <Field label="Premium Rate Per Dependant">
-            <Input
-              type="number"
-              value={rate}
-              onChange={(e) => setRate(e.target.value)}
-              onBlur={saveRate}
-              disabled={participation === "not_covered"}
-              placeholder="e.g. 396.90"
-              className="h-8 w-44 text-sm"
-            />
-          </Field>
-        ) : (
-          <p className="text-2xs text-muted-foreground">
-            Dependant premiums are set in the EO/ES/EC/EF tier rates on the
-            employee card.
-          </p>
-        )}
-        <p className="w-full text-2xs text-muted-foreground">
-          {participation === "voluntary"
-            ? "Voluntary — the member opts in to cover dependants, drawing down flex dollars."
-            : participation === "compulsory"
-              ? "Compulsory — dependants are automatically covered (no flex drawdown)."
-              : "Not covered — dependant rate data is preserved but ignored for this category."}
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Dependant premiums use the EO, ES, EC and EF tier rates above.
         </p>
-      </div>
+      )}
     </div>
   );
 }
@@ -196,15 +124,5 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       </Label>
       {children}
     </div>
-  );
-}
-
-function ReadOnlyField({ label, value }: { label: string; value: string }) {
-  return (
-    <Field label={label}>
-      <div className="flex h-8 items-center truncate text-sm text-muted-foreground">
-        {value}
-      </div>
-    </Field>
   );
 }

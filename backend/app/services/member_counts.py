@@ -77,6 +77,31 @@ class _EmpView:
     derived_attribute_values: dict[str, Any]
 
 
+def _draft_identity(draft: DraftCategory) -> tuple[str, tuple[str, ...]]:
+    """Identify one employee category independently of its plan assignment."""
+    description = _normalize((draft.description or "").strip())
+    entities = tuple(sorted({_normalize(name) for name in insured_names(draft.insured)}))
+    return description, entities
+
+
+def _collapse_drafts(
+    drafts: list[DraftCategory],
+) -> tuple[list[DraftCategory], dict[str, str]]:
+    """Collapse repeated plan rows onto one employee-category representative."""
+    representatives: list[DraftCategory] = []
+    representative_by_key: dict[str, str] = {}
+    representative_by_identity: dict[tuple[str, tuple[str, ...]], str] = {}
+    for draft in drafts:
+        identity = _draft_identity(draft)
+        representative = representative_by_identity.get(identity)
+        if representative is None:
+            representative = draft.key
+            representative_by_identity[identity] = representative
+            representatives.append(draft)
+        representative_by_key[draft.key] = representative
+    return representatives, representative_by_key
+
+
 def _transient_categories(
     drafts: list[DraftCategory],
     persisted: dict[str, Category],
@@ -214,8 +239,13 @@ def compute_member_counts(
         ).all():
             deps_per_employee[emp_id] = count
 
+    # A placement slip commonly repeats one employee category for every plan
+    # type. Those rows are plan assignments, not competing matching rules. Match
+    # one representative per unique category and mirror its count back to every
+    # assignment so later plan rows do not incorrectly show zero employees.
+    representatives, representative_by_key = _collapse_drafts(valid)
     persisted = _persisted_by_name(db, policy_year_id, product_id)
-    cats = _transient_categories(valid, persisted)
+    cats = _transient_categories(representatives, persisted)
     cats_by_priority = sorted(cats, key=lambda c: (_status_rank(c.status), c.priority))
     exact_lookup = _build_exact_lookup(cats_by_priority)
     category_tokens = {
@@ -265,8 +295,8 @@ def compute_member_counts(
     counts = [
         CategoryCount(
             key=d.key,
-            employees=emp_counts.get(d.key, 0),
-            dependants=dep_counts.get(d.key, 0),
+            employees=emp_counts.get(representative_by_key.get(d.key, d.key), 0),
+            dependants=dep_counts.get(representative_by_key.get(d.key, d.key), 0),
         )
         for d in drafts
     ]

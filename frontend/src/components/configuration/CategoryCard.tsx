@@ -32,6 +32,7 @@ import type {
   VoluntaryRateBand,
 } from "@/types";
 import { toast } from "sonner";
+import { DependantAssignmentFields } from "./DependantCard";
 
 export type MemberCount = { employees: number; dependants: number };
 
@@ -109,6 +110,7 @@ export function CategoryCard({
   countsError = false,
   insuredEntities = [],
   onEditRule,
+  assignmentOnly = false,
 }: {
   category: Category;
   planOptions: PlanDetail[];
@@ -125,6 +127,7 @@ export function CategoryCard({
   // Empty = covers every entity.
   insuredEntities?: string[];
   onEditRule: () => void;
+  assignmentOnly?: boolean;
 }) {
   const patch = usePatchCategory();
   const confirmCat = useConfirmCategory();
@@ -518,7 +521,22 @@ export function CategoryCard({
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
+      {assignmentOnly && (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-muted-foreground">
+            Plan assignment settings
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-error hover:text-error"
+            onClick={() => setShowDelete(true)}
+          >
+            <X className="size-3.5" /> Remove assignment
+          </Button>
+        </div>
+      )}
+      {!assignmentOnly && <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {sourcePill(category.source)}
           {statusPill(category.status)}
@@ -582,23 +600,27 @@ export function CategoryCard({
             <X className="size-4" />
           </Button>
         </div>
-      </div>
+      </div>}
 
       <div
         className={`grid gap-3 items-end ${
           basisModel === "sum_assured"
-            ? "grid-cols-[1.6fr_1fr_1fr_1.4fr]"
-            : "grid-cols-[2fr_1fr_1fr]"
+            ? assignmentOnly
+              ? "grid-cols-[1fr_1fr_1.4fr]"
+              : "grid-cols-[1.6fr_1fr_1fr_1.4fr]"
+            : assignmentOnly
+              ? "grid-cols-[1fr_1fr]"
+              : "grid-cols-[2fr_1fr_1fr]"
         }`}
       >
-        <Field label="Employee Category">
+        {!assignmentOnly && <Field label="Employee Category">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
             onBlur={saveName}
             className="h-8 text-sm"
           />
-        </Field>
+        </Field>}
         <Field label="Plan Type">
           {renamingPlan ? (
             <div className="flex items-center gap-1">
@@ -652,7 +674,7 @@ export function CategoryCard({
                   ))}
                 </SelectContent>
               </Select>
-              {currentPlan && (
+              {currentPlan && !assignmentOnly && (
                 <Button
                   size="icon"
                   variant="ghost"
@@ -666,7 +688,7 @@ export function CategoryCard({
               )}
             </div>
           )}
-          {currentPlan && (
+          {currentPlan && !assignmentOnly && (
             <Input
               value={reportLabel}
               onChange={(e) => setReportLabel(e.target.value)}
@@ -859,13 +881,17 @@ export function CategoryCard({
         />
       )}
 
-      {category.rule_human_readable && (
+      {hasDependants && (
+        <DependantAssignmentFields category={category} rateModel={rateModel} />
+      )}
+
+      {!assignmentOnly && category.rule_human_readable && (
         <div className="mt-3 font-mono text-xs text-muted-foreground">
           {category.rule_human_readable}
         </div>
       )}
 
-      <div className="mt-2 text-2xs text-muted-foreground">
+      {!assignmentOnly && <div className="mt-2 text-2xs text-muted-foreground">
         {count ? (
           <>
             <span className="font-medium text-foreground">{count.employees}</span>{" "}
@@ -879,29 +905,32 @@ export function CategoryCard({
                 dependant{count.dependants === 1 ? "" : "s"}
               </>
             )}{" "}
-            <span className="text-subtle">matched from roster</span>
+            <span className="text-subtle">
+              eligible for this employee category
+            </span>
           </>
         ) : countsError ? (
           "Count unavailable"
         ) : (
-          "Calculating from roster…"
+          "Calculating employee and dependant eligibility…"
         )}
-      </div>
+      </div>}
 
       <AlertDialog
         open={showDelete}
         onOpenChange={setShowDelete}
-        title="Delete this category?"
+        title={assignmentOnly ? "Remove this plan assignment?" : "Delete this employee category?"}
         description={
           <>
-            Permanently removes <strong>{category.display_name}</strong>. The
-            deletion is logged in the audit trail. This cannot be undone.
+            Permanently removes this {assignmentOnly ? "plan assignment for" : "employee category"}{" "}
+            <strong>{category.display_name}</strong>. The deletion is logged in
+            the audit trail. This cannot be undone.
           </>
         }
         loading={deleteCat.isPending}
         onConfirm={async () => {
           await deleteCat.mutateAsync(category.id);
-          toast.success("Category deleted");
+          toast.success(assignmentOnly ? "Plan assignment removed" : "Employee category deleted");
           setShowDelete(false);
         }}
       />
