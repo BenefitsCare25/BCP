@@ -150,6 +150,7 @@ class ApplyConfigResult(BaseModel):
     rules_proposed: int = 0
     rules_need_review: int = 0
     rules_unmapped: int = 0
+    rules_not_applicable: int = 0
     rules_reused: int = 0
 
 
@@ -503,6 +504,7 @@ class EligibilityMappingSummaryOut(BaseModel):
     proposed: int
     needs_review: int
     unmapped: int
+    not_applicable: int = 0
     reused: int
     categories: list[EligibilityMappingItemOut] = Field(default_factory=list)
     missing_categories: int = 0
@@ -568,6 +570,7 @@ class ParseResult(BaseModel):
     rules_proposed: int = 0
     rules_need_review: int = 0
     rules_unmapped: int = 0
+    rules_not_applicable: int = 0
     rules_reused: int = 0
 
 

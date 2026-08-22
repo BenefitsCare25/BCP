@@ -577,6 +577,7 @@ async def parse_upload(
             "proposed": mapping_summary.proposed,
             "needs_review": mapping_summary.needs_review,
             "unmapped": mapping_summary.unmapped,
+            "not_applicable": mapping_summary.not_applicable,
             "reused": mapping_summary.reused,
         },
         "replaced_categories": replaced_categories,
@@ -652,6 +653,7 @@ async def parse_upload(
         rules_proposed=mapping_summary.proposed,
         rules_need_review=mapping_summary.needs_review,
         rules_unmapped=mapping_summary.unmapped,
+        rules_not_applicable=mapping_summary.not_applicable,
         rules_reused=mapping_summary.reused,
     )
 

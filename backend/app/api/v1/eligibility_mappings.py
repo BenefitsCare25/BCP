@@ -84,6 +84,7 @@ def propose_eligibility_mappings(
             "proposed": summary.proposed,
             "needs_review": summary.needs_review,
             "unmapped": summary.unmapped,
+            "not_applicable": summary.not_applicable,
             "reused": summary.reused,
             "employees_matched": (
                 match_summary.employees_matched if match_summary is not None else None

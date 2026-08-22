@@ -144,6 +144,7 @@ export interface ApplyConfigResult {
   rules_proposed: number;
   rules_need_review: number;
   rules_unmapped: number;
+  rules_not_applicable: number;
   rules_reused: number;
 }
 
@@ -318,6 +319,7 @@ export interface ParseResult {
   rules_proposed?: number;
   rules_need_review?: number;
   rules_unmapped?: number;
+  rules_not_applicable?: number;
   rules_reused?: number;
 }
 
@@ -358,6 +360,7 @@ export interface EligibilityMappingSummary {
   proposed: number;
   needs_review: number;
   unmapped: number;
+  not_applicable: number;
   reused: number;
   categories: EligibilityMappingItem[];
   missing_categories: number;

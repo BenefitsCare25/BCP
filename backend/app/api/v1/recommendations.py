@@ -756,5 +756,6 @@ def apply_config(
         rules_proposed=mapping.proposed,
         rules_need_review=mapping.needs_review,
         rules_unmapped=mapping.unmapped,
+        rules_not_applicable=mapping.not_applicable,
         rules_reused=mapping.reused,
     )

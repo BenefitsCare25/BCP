@@ -91,6 +91,10 @@ function EditForm({
   const validationWarnings = Array.isArray(validation.warnings)
     ? validation.warnings.map(String)
     : [];
+  const matchedCount =
+    typeof validation.matched_count === "number" ? validation.matched_count : null;
+  const expectedCount =
+    typeof validation.expected_count === "number" ? validation.expected_count : null;
 
   const coversAll = isCoversAllRule(rule);
   const toggleCoversAll = (on: boolean) => setRule(on ? { and: [] } : null);
@@ -109,14 +113,18 @@ function EditForm({
   });
 
   const save = async () => {
-    if (nameChanged || ruleChanged) {
-      await patch.mutateAsync({
-        id: category.id,
-        patch: pendingPatch(),
-      });
-      toast.success("Category updated");
+    try {
+      if (nameChanged || ruleChanged) {
+        await patch.mutateAsync({
+          id: category.id,
+          patch: pendingPatch(),
+        });
+        toast.success("Category updated");
+      }
+      onClose();
+    } catch (reason) {
+      toast.error(formatError(reason));
     }
-    onClose();
   };
 
   const onConfirm = async () => {
@@ -203,9 +211,19 @@ function EditForm({
 
         {current.rule_human_readable && (
           <div className="flex flex-col gap-1.5">
-            <Label>Generator's reading</Label>
-            <div className="text-sm rounded-md border border-border bg-muted/40 p-3 font-mono">
-              {current.rule_human_readable}
+            <Label>Rule interpretation</Label>
+            <div className="space-y-1 rounded-md border border-border bg-muted/40 p-3 text-sm">
+              <p className="break-words">{current.rule_human_readable}</p>
+              {(matchedCount !== null || expectedCount !== null) && (
+                <p className="text-xs text-muted-foreground">
+                  {matchedCount !== null
+                    ? `${matchedCount} active roster match${matchedCount === 1 ? "" : "es"}`
+                    : "Roster match not available"}
+                  {expectedCount !== null
+                    ? ` · ${expectedCount} employee${expectedCount === 1 ? "" : "s"} stated on the slip`
+                    : ""}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -225,7 +243,13 @@ function EditForm({
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <Label>Matching rule (JSONLogic)</Label>
+            <div className="flex items-center gap-1">
+              <Label>Employee matching rule</Label>
+              <InfoHint>
+                AI and automatic proposals may only use non-PII employee fields
+                and values that exist for this company. Review before confirming.
+              </InfoHint>
+            </div>
             <Button
               size="sm"
               variant="outline"
@@ -242,7 +266,11 @@ function EditForm({
               ) : (
                 <Sparkles className="size-3.5" />
               )}
-              {aiStatus?.configured ? "Suggest via AI" : "AI not configured"}
+              {aiSuggest.isPending
+                ? "Checking company roster…"
+                : aiStatus?.configured
+                  ? "Suggest rule with AI"
+                  : "AI not configured"}
             </Button>
           </div>
 
@@ -273,12 +301,14 @@ function EditForm({
           )}
         </div>
 
-        <div className="rounded-md border border-border bg-muted/40 p-3">
-          <Label>Live JSON</Label>
-          <pre className="text-2xs font-mono whitespace-pre-wrap mt-2 text-muted-foreground">
+        <details className="rounded-md border border-border bg-muted/40">
+          <summary className="cursor-pointer select-none px-3 py-2.5 text-xs font-medium">
+            Technical rule JSON
+          </summary>
+          <pre className="overflow-x-auto border-t border-border px-3 py-2.5 text-2xs font-mono whitespace-pre-wrap text-muted-foreground">
             {JSON.stringify(rule, null, 2)}
           </pre>
-        </div>
+        </details>
 
         {current.human_modified && (
           <div className="flex items-center gap-1">
@@ -305,10 +335,13 @@ function EditForm({
             disabled={confirm.isPending || patch.isPending || rule === null}
           >
             {confirm.isPending && <Loader2 className="size-4 animate-spin" />}
-            Confirm as-is
+            Confirm mapping
           </Button>
         )}
-        <Button onClick={save} disabled={patch.isPending}>
+        <Button
+          onClick={save}
+          disabled={patch.isPending || (!nameChanged && !ruleChanged)}
+        >
           {patch.isPending ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
@@ -331,10 +364,14 @@ function EditForm({
         }
         loading={deleteCategory.isPending}
         onConfirm={async () => {
-          await deleteCategory.mutateAsync(category.id);
-          toast.success("Category deleted");
-          setShowDelete(false);
-          onClose();
+          try {
+            await deleteCategory.mutateAsync(category.id);
+            toast.success("Category deleted");
+            setShowDelete(false);
+            onClose();
+          } catch (reason) {
+            toast.error(formatError(reason));
+          }
         }}
       />
     </>

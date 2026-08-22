@@ -248,6 +248,185 @@ def test_foreign_worker_rule_keeps_spass_and_work_permit_in_either_order() -> No
     assert proposal.unresolved_clauses == []
 
 
+def test_cdl_job_category_ranges_use_exact_company_codes() -> None:
+    catalog = _catalog(
+        job_category=[
+            "99",
+            "A1",
+            "A2",
+            "A3",
+            "A4",
+            "A5",
+            "A6",
+            "A7",
+            "A8",
+            "A9",
+            "AA",
+            "AB",
+            "AC",
+            "AD",
+            "AE",
+            "AF",
+            "AG",
+        ],
+        role=["GCEO", "GCOO", "EVP", "SVP"],
+    )
+
+    chief = propose_category_rule("GCEO and GCOO (Job category: 99)", catalog)
+    senior = propose_category_rule("SM to SVP (Job category: A1 to A6, AA to AF)", catalog)
+
+    assert chief.rule == {"=": ["job_category", "99"]}
+    assert senior.rule == {
+        "in": [
+            "job_category",
+            [
+                "A1",
+                "A2",
+                "A3",
+                "A4",
+                "A5",
+                "A6",
+                "AA",
+                "AB",
+                "AC",
+                "AD",
+                "AE",
+                "AF",
+            ],
+        ]
+    }
+    assert senior.unresolved_clauses == []
+
+
+def test_job_category_clause_uses_company_field_that_contains_the_codes() -> None:
+    proposal = propose_category_rule(
+        "SM to SVP (Job category: A1 to A3, AA to AC)",
+        _catalog(
+            category=["SM to SVP", "EVP and Above"],
+            job_grade=["A1", "A2", "A3", "AA", "AB", "AC", "A7"],
+        ),
+    )
+
+    assert proposal.rule == {"in": ["job_grade", ["A1", "A2", "A3", "AA", "AB", "AC"]]}
+    assert proposal.unresolved_clauses == []
+
+
+def test_exact_company_category_is_preferred_over_prose_interpretation() -> None:
+    proposal = propose_category_rule(
+        "All Employees based in Thailand (except for Director)",
+        _catalog(
+            category=["All Employees based in Thailand (except for Director)"],
+            designation=["Director", "Manager"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "=": ["category", "All Employees based in Thailand (except for Director)"]
+    }
+    assert proposal.validation_state == "proposed"
+    assert proposal.unresolved_clauses == []
+
+
+def test_multiple_company_category_labels_can_form_one_slip_cohort() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job category: J1 to J3, JA to JC)",
+        _catalog(
+            category=[
+                "Officer",
+                "All Employees based in Thailand (except for Director)",
+            ],
+            job_grade=["J1", "J2", "J3", "JA", "JB", "JC"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "in": [
+            "category",
+            ["Officer", "All Employees based in Thailand (except for Director)"],
+        ]
+    }
+    assert proposal.validation_state == "proposed"
+
+
+def test_grade_band_and_bargainable_staff_are_combined_as_or_cohorts() -> None:
+    proposal = propose_category_rule(
+        "Hay Job Grade 08 to 10 and Bargainable Staff",
+        _catalog(
+            job_grade=["08", "09", "9", "10", "11"],
+            category=["Bargainable", "Bargainable FW", "11 Single"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "or": [
+            {"in": ["job_grade", ["08", "09", "10"]]},
+            {"in": ["category", ["Bargainable", "Bargainable FW"]]},
+        ]
+    }
+    assert proposal.unresolved_clauses == []
+
+
+def test_stm_grade_range_and_work_pass_are_both_required() -> None:
+    proposal = propose_category_rule(
+        "Foreign Workers holding Work Permit or S-Pass with Hay Job Grade 08 "
+        "to 10 (Employees) / Hay Job Grade 11 to 17 (Employees and their "
+        "Eligible Dependents)",
+        _catalog(
+            job_grade=[str(value).zfill(2) for value in range(8, 20)],
+            pass_type=["EP", "SP", "WP"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "and": [
+            {"in": ["job_grade", [str(value).zfill(2) for value in range(8, 18)]]},
+            {"in": ["pass_type", ["SP", "WP"]]},
+        ]
+    }
+    assert proposal.unresolved_clauses == []
+
+
+def test_exclusion_can_use_a_different_company_attribute() -> None:
+    proposal = propose_category_rule(
+        "All Employees based in Thailand (except for Director)",
+        _catalog(location=["Singapore", "Thailand"], role=["Director", "Manager"]),
+    )
+
+    assert proposal.rule == {
+        "and": [
+            {"=": ["location", "Thailand"]},
+            {"not_in": ["role", ["Director"]]},
+        ]
+    }
+    assert proposal.unresolved_clauses == []
+
+
+def test_cdl_officer_or_thailand_cohort_preserves_or_semantics() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC"],
+            location=["Singapore", "Thailand"],
+            role=["Director", "Officer"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"=": ["location", "Thailand"]},
+                    {"not_in": ["role", ["Director"]]},
+                ]
+            },
+        ]
+    }
+    assert proposal.unresolved_clauses == []
+
+
 def test_manual_category_does_not_absorb_non_manual_value() -> None:
     catalog = _catalog(
         employment_type=["MANUAL", "NON-MANUAL", "DRIVER"],
@@ -281,25 +460,17 @@ def test_matching_rule_validation_rejects_hallucinated_company_values() -> None:
 
     catalog = _catalog(designation=["Manager", "Executive"])
 
-    result = validate_matching_rule(
-        {"in": ["designation", ["Manager", "Chief Wizard"]]}, catalog
-    )
+    result = validate_matching_rule({"in": ["designation", ["Manager", "Chief Wizard"]]}, catalog)
 
     assert result.valid is False
-    assert result.errors == [
-        "Unknown company value for designation: Chief Wizard"
-    ]
+    assert result.errors == ["Unknown company value for designation: Chief Wizard"]
 
 
 def test_ai_rule_cannot_silently_expand_specific_wording_to_everyone() -> None:
     catalog = _catalog(designation=["Manager", "Executive"])
 
-    specific = validate_ai_matching_rule(
-        "Managers only", {"and": []}, catalog
-    )
-    explicit = validate_ai_matching_rule(
-        "All employees", {"and": []}, catalog
-    )
+    specific = validate_ai_matching_rule("Managers only", {"and": []}, catalog)
+    explicit = validate_ai_matching_rule("All employees", {"and": []}, catalog)
 
     assert specific.valid is False
     assert "only when the eligibility wording says so" in specific.errors[0]
@@ -311,9 +482,7 @@ def test_matching_rule_validation_bounds_nesting_depth() -> None:
     for _ in range(20):
         rule = {"not": rule}
 
-    result = validate_matching_rule(
-        rule, _catalog(designation=["Manager", "Executive"])
-    )
+    result = validate_matching_rule(rule, _catalog(designation=["Manager", "Executive"]))
 
     assert result.valid is False
     assert any("levels" in error for error in result.errors)
@@ -384,6 +553,31 @@ def test_policy_year_mapping_persists_validated_rule_and_profile() -> None:
         assert profile.status == "confirmed"
         assert category.status == CategoryStatus.confirmed.value
         db.commit()
+
+
+def test_dependant_only_rows_are_not_reported_as_unmapped_employee_categories() -> None:
+    with SessionLocal() as db:
+        product = db.execute(select(Product).where(Product.code == "GPA")).scalar_one()
+        dependant = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=990,
+            display_name="Spouse",
+            raw_description="Spouse",
+            matching_rule=None,
+            status=CategoryStatus.needs_review.value,
+            source="system_generated",
+            plan_assignments={"plan_code": "SO", "member_scope": "dependant"},
+        )
+        db.add(dependant)
+        db.flush()
+
+        summary = auto_map_policy_year(db, policy_year_id=PY_2026, client_id=CLIENT_ID)
+
+        assert summary.not_applicable >= 1
+        assert all(item.category_id != dependant.id for item in summary.categories)
+        assert dependant.matching_rule is None
+        db.rollback()
 
 
 def test_confirmed_company_mapping_is_reused_without_a_new_roster() -> None:
@@ -682,8 +876,7 @@ def test_ai_suggest_receives_company_context_and_persists_validation(
     assert payload["rule_validation"]["ai_prompt_version"] == "rule_generation/v2"
     assert captured["employee_attributes"]
     assert any(
-        item["attribute_id"] == "employment_type"
-        and "MANUAL" in item["observed_values"]
+        item["attribute_id"] == "employment_type" and "MANUAL" in item["observed_values"]
         for item in captured["employee_attributes"]
     )
 
@@ -707,10 +900,7 @@ def test_missing_plan_is_detected_and_ai_category_creation_is_guided(
 
     summary = client.get(f"/api/v1/policy-years/{PY_2027}/eligibility-mappings")
     assert summary.status_code == 200
-    assert any(
-        item["plan_id"] == plan_id
-        for item in summary.json()["missing_category_plans"]
-    )
+    assert any(item["plan_id"] == plan_id for item in summary.json()["missing_category_plans"])
 
     with patch(
         "app.api.v1.eligibility_mappings.generate_rule_for_category",

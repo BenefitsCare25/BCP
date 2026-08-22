@@ -54,6 +54,22 @@ _DEPENDANT_TAIL_RE = re.compile(
 )
 _OPTION_TAIL_RE = re.compile(r"\s*\(option\s+\d+\)\s*$", re.IGNORECASE)
 _EXCLUSION_RE = re.compile(r"\b(?:excluding|except(?:\s+for)?)\s+([^)]*)(?:\)|$)", re.IGNORECASE)
+_JOB_CATEGORY_RE = re.compile(
+    r"\bjob\s+categor(?:y|ies)\s*:\s*([^)]*)",
+    re.IGNORECASE,
+)
+_HAY_GRADE_RE = re.compile(
+    r"\bhay\s+job\s+grade\s+(.+?)(?=(?:\(|/|\bhay\s+job\s+grade\b|$))",
+    re.IGNORECASE,
+)
+_GRADE_RE = re.compile(
+    r"\bgrade\s+([a-z0-9]+(?:\s+(?:to|and|&)\s+[a-z0-9]+)?)",
+    re.IGNORECASE,
+)
+_BASED_IN_RE = re.compile(
+    r"\bbased\s+in\s+([^()]+?)(?=\s*(?:\(\s*)?(?:excluding|except)\b|\s*\(|$)",
+    re.IGNORECASE,
+)
 _ALL_EMPLOYEES_RE = re.compile(r"^all\s+(?:employees?|staff|members?)$", re.IGNORECASE)
 _ALL_OTHER_RE = re.compile(r"^all\s+other\s+(?:employees?|staff|members?)\b", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -176,6 +192,7 @@ class MappingSummary:
     proposed: int
     needs_review: int
     unmapped: int
+    not_applicable: int
     reused: int
     categories: list[MappingItem]
     missing_categories: int
@@ -284,6 +301,222 @@ def _best_value_mapping(
     return attribute_id, matched
 
 
+def _exact_value_mapping(text: str, catalog: AttributeValueCatalog) -> tuple[str | None, list[Any]]:
+    """Return a company value only when the normalized phrases are identical."""
+
+    needle = _tokens(text)
+    if not needle:
+        return None, []
+    candidates: list[tuple[tuple[int, str], str, Any]] = []
+    for attribute_id, values in catalog.values.items():
+        if catalog.data_types.get(attribute_id) not in {None, "string", "enum"}:
+            continue
+        for value in values:
+            if _tokens(value) == needle:
+                candidates.append((_attribute_rank(attribute_id), attribute_id, value))
+    if not candidates:
+        return None, []
+    _, attribute_id, value = min(candidates)
+    return attribute_id, [value]
+
+
+def _multi_named_cohort_mapping(
+    text: str, catalog: AttributeValueCatalog
+) -> tuple[str | None, list[Any]]:
+    """Resolve a description that explicitly joins multiple company cohorts."""
+
+    candidates: list[tuple[int, str, list[Any]]] = []
+    for order, attribute_id in enumerate(
+        (
+            "employee_category",
+            "category",
+            "employment_type",
+            "employee_type",
+            "person_class",
+        )
+    ):
+        values = catalog.values.get(attribute_id, [])
+        matched = _matched_values(text, values)
+        if len(matched) >= 2:
+            candidates.append((order, attribute_id, matched))
+    if not candidates:
+        return None, []
+    _, attribute_id, values = min(candidates)
+    return attribute_id, values
+
+
+def _catalog_attribute(catalog: AttributeValueCatalog, candidates: tuple[str, ...]) -> str | None:
+    """Resolve a slip field label to a populated company attribute."""
+
+    return next(
+        (
+            attribute_id
+            for attribute_id in candidates
+            if attribute_id in catalog.attribute_ids and catalog.values.get(attribute_id)
+        ),
+        None,
+    )
+
+
+def _alpha_rank(value: str) -> int:
+    rank = 0
+    for char in value.upper():
+        if not "A" <= char <= "Z":
+            return -1
+        rank = rank * 26 + ord(char) - ord("A") + 1
+    return rank
+
+
+def _ordered_code(value: Any) -> tuple[str, int] | None:
+    """Natural ordering for real-world grade codes (08, A7, AA, AF)."""
+
+    text = str(value).strip().upper()
+    if match := re.fullmatch(r"([A-Z]*)(\d+)", text):
+        return f"num:{match.group(1)}", int(match.group(2))
+    if re.fullmatch(r"[A-Z]+", text):
+        return "alpha", _alpha_rank(text)
+    return None
+
+
+def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
+    """Expand only against values that this company actually configures/uses.
+
+    This avoids manufacturing grade codes while still understanding the compact
+    range grammar used by CDL/STM slips (``08 to 17``, ``A1 to A9``, ``AA to
+    AG`` and ``18 and above``).
+    """
+
+    selected_keys: set[str] = {
+        str(value).strip().casefold() for value in _matched_values(clause, values)
+    }
+    range_spans: list[tuple[int, int]] = []
+    for match in re.finditer(
+        r"\b([a-z]*\d+|[a-z]+)\s*(?:to|-)\s*([a-z]*\d+|[a-z]+)\b",
+        clause,
+        re.IGNORECASE,
+    ):
+        start_text, end_text = match.group(1), match.group(2)
+        start = _ordered_code(start_text)
+        end = _ordered_code(end_text)
+        if start is None or end is None or start[0] != end[0]:
+            continue
+        lo, hi = sorted((start[1], end[1]))
+        numeric_width = (
+            max(len(start_text), len(end_text))
+            if start_text.isdigit()
+            and end_text.isdigit()
+            and (start_text.startswith("0") or end_text.startswith("0"))
+            else None
+        )
+        for value in values:
+            ordered = _ordered_code(value)
+            if (
+                ordered is not None
+                and ordered[0] == start[0]
+                and lo <= ordered[1] <= hi
+                and (numeric_width is None or len(str(value).strip()) == numeric_width)
+            ):
+                selected_keys.add(str(value).strip().casefold())
+        range_spans.append(match.span())
+
+    for match in re.finditer(
+        r"\b([a-z]*\d+|[a-z]+)\s+(?:and\s+)?above\b",
+        clause,
+        re.IGNORECASE,
+    ):
+        start = _ordered_code(match.group(1))
+        if start is None:
+            continue
+        for value in values:
+            ordered = _ordered_code(value)
+            if ordered is not None and ordered[0] == start[0] and ordered[1] >= start[1]:
+                selected_keys.add(str(value).strip().casefold())
+        range_spans.append(match.span())
+
+    return [value for value in values if str(value).strip().casefold() in selected_keys]
+
+
+def _explicit_grade_mapping(
+    text: str, catalog: AttributeValueCatalog
+) -> tuple[str | None, list[Any], list[str]]:
+    """Read explicit job-category/grade clauses before vague title wording."""
+
+    job_category_clauses = [match.group(1) for match in _JOB_CATEGORY_RE.finditer(text)]
+    hay_clauses = [match.group(1) for match in _HAY_GRADE_RE.finditer(text)]
+    grade_clauses = (
+        hay_clauses if hay_clauses else [match.group(1) for match in _GRADE_RE.finditer(text)]
+    )
+    clauses = job_category_clauses or grade_clauses
+    if not clauses:
+        return None, [], []
+
+    # Placement slips and employee templates do not always use the same label:
+    # CDL calls the codes "Job category" while its roster stores them in
+    # ``job_grade``. Select the company field whose actual values resolve the
+    # most clauses instead of hard-coding a single canonical column.
+    candidate_ids = (
+        (
+            "job_category",
+            "job_grade",
+            "grade",
+            "hay_job_grade",
+            "class",
+            "employee_category",
+            "category",
+        )
+        if job_category_clauses
+        else (
+            "job_grade",
+            "grade",
+            "hay_job_grade",
+            "class",
+            "job_category",
+            "employee_category",
+            "category",
+        )
+    )
+    candidates: list[tuple[int, int, str, list[Any], list[str]]] = []
+    for order, attribute_id in enumerate(candidate_ids):
+        values = catalog.values.get(attribute_id, [])
+        if not values:
+            continue
+        selected: list[Any] = []
+        unresolved: list[str] = []
+        for clause in clauses:
+            resolved = _values_from_grade_clause(clause, values)
+            if not resolved:
+                unresolved.append(clause.strip())
+            for value in resolved:
+                if value not in selected:
+                    selected.append(value)
+        if selected:
+            candidates.append(
+                (-len(clauses) + len(unresolved), order, attribute_id, selected, unresolved)
+            )
+    if not candidates:
+        return None, [], [clause.strip() for clause in clauses]
+    _, _, attribute_id, selected, unresolved = min(candidates)
+    return attribute_id, selected, unresolved
+
+
+def _bargainable_mapping(
+    catalog: AttributeValueCatalog,
+) -> tuple[str | None, list[Any]]:
+    """Resolve STM's named bargainable cohort from company-owned values."""
+
+    candidates: list[tuple[tuple[int, str], str, list[Any]]] = []
+    for attribute_id, values in catalog.values.items():
+        if catalog.data_types.get(attribute_id) not in {None, "string", "enum"}:
+            continue
+        matched = [value for value in values if "bargainable" in str(value).casefold()]
+        if matched:
+            candidates.append((_attribute_rank(attribute_id), attribute_id, matched))
+    if not candidates:
+        return None, []
+    _, attribute_id, values = min(candidates)
+    return attribute_id, values
+
+
 def _unresolved_list_clauses(text: str, included: list[Any]) -> list[str]:
     """Keep slash/semicolon cohorts that did not map to a company value.
 
@@ -367,6 +600,31 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             validation_state="proposed",
         )
 
+    # A roster-owned category label is stronger evidence than interpreting its
+    # prose. This covers company-specific labels such as CDL's Thailand cohort
+    # without assuming that every company has a generic location/role schema.
+    exact_attr, exact_values = _exact_value_mapping(text, catalog)
+    if exact_attr and exact_values:
+        return RuleProposal(
+            rule=_rule_for_values(exact_attr, exact_values),
+            human_readable=f"{exact_attr} is {exact_values[0]}",
+            confidence=0.98,
+            source="roster_values",
+            validation_state="proposed",
+            referenced_attributes=[exact_attr],
+        )
+
+    named_attr, named_values = _multi_named_cohort_mapping(text, catalog)
+    if named_attr and named_values:
+        return RuleProposal(
+            rule=_rule_for_values(named_attr, named_values),
+            human_readable=(f"{named_attr} is one of {', '.join(map(str, named_values))}"),
+            confidence=0.98,
+            source="roster_values",
+            validation_state="proposed",
+            referenced_attributes=[named_attr],
+        )
+
     exclusion_text = ""
     if exclusion := _EXCLUSION_RE.search(text):
         exclusion_text = exclusion.group(1).strip()
@@ -405,28 +663,103 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             relative_remainder=True,
         )
 
+    # Explicit insurer field clauses are more authoritative than prose titles.
+    # CDL writes the exact job-category codes in parentheses; STM uses ordered
+    # Hay Job Grade ranges. Compile those first, and combine them with pass-type
+    # requirements instead of returning early and silently dropping the grade.
+    explicit_attr, explicit_values, unresolved = _explicit_grade_mapping(without_exclusion, catalog)
+    parts: list[Rule] = []
+    readings: list[str] = []
+    referenced: list[str] = []
+    if explicit_attr and explicit_values:
+        parts.append(_rule_for_values(explicit_attr, explicit_values))
+        readings.append(f"{explicit_attr} is one of {', '.join(map(str, explicit_values))}")
+        referenced.append(explicit_attr)
+
     pass_codes = _pass_codes(without_exclusion)
+    pass_attr = next(
+        (
+            attr
+            for attr in _PASS_ATTRS
+            if attr in catalog.attribute_ids and catalog.values.get(attr)
+        ),
+        None,
+    )
+    pass_values = (
+        _actual_pass_values(pass_codes, catalog.values[pass_attr])
+        if pass_codes and pass_attr
+        else []
+    )
     if pass_codes:
-        pass_attr = next(
-            (
-                attr
-                for attr in _PASS_ATTRS
-                if attr in catalog.attribute_ids and catalog.values.get(attr)
-            ),
-            None,
+        if pass_attr and len(pass_values) == len(pass_codes):
+            parts.append(_rule_for_values(pass_attr, pass_values))
+            readings.append(f"{pass_attr} is one of {', '.join(map(str, pass_values))}")
+            referenced.append(pass_attr)
+        else:
+            unresolved.append("work-pass types")
+
+    # One recurring CDL cohort is a genuine OR: Officers by job category, plus
+    # every Thailand employee except Directors. Keeping it as an AND would drop
+    # both the Singapore officers and the non-officer Thailand employees.
+    if parts and re.search(r"\band\s+all\s+employees?\s+based\s+in\b", text, re.I):
+        location_match = _BASED_IN_RE.search(text)
+        location_attr, location_values = (
+            _best_value_mapping(location_match.group(1), catalog) if location_match else (None, [])
         )
-        if pass_attr:
-            pass_values = _actual_pass_values(pass_codes, catalog.values[pass_attr])
-            if len(pass_values) == len(pass_codes):
-                rule = _rule_for_values(pass_attr, pass_values)
-                return RuleProposal(
-                    rule=rule,
-                    human_readable=(f"{pass_attr} is one of {', '.join(map(str, pass_values))}"),
-                    confidence=0.95,
-                    source="roster_values",
-                    validation_state="proposed",
-                    referenced_attributes=[pass_attr],
+        exclusion_attr, exclusion_values = (
+            _best_value_mapping(exclusion_text, catalog) if exclusion_text else (None, [])
+        )
+        if location_attr and location_values and exclusion_attr and exclusion_values:
+            location_parts = [
+                _rule_for_values(location_attr, location_values),
+                _rule_for_values(exclusion_attr, exclusion_values, negate=True),
+            ]
+            primary = parts[0] if len(parts) == 1 else {"and": parts}
+            rule = {"or": [primary, {"and": location_parts}]}
+            return RuleProposal(
+                rule=rule,
+                human_readable=(
+                    f"{' and '.join(readings)}, or {location_attr} is one of "
+                    f"{', '.join(map(str, location_values))} except "
+                    f"{', '.join(map(str, exclusion_values))}"
+                ),
+                confidence=0.9 if not unresolved else 0.7,
+                source="roster_values",
+                validation_state="proposed" if not unresolved else "needs_review",
+                unresolved_clauses=unresolved,
+                referenced_attributes=list(
+                    dict.fromkeys([*referenced, location_attr, exclusion_attr])
+                ),
+            )
+        unresolved.append("Thailand employee exception")
+
+    if parts:
+        rule = parts[0] if len(parts) == 1 else {"and": parts}
+        bargainable = bool(re.search(r"\band\s+bargainable\s+(?:staff|employees?)\b", text, re.I))
+        if bargainable:
+            bargainable_attr, bargainable_values = _bargainable_mapping(catalog)
+            if bargainable_attr and bargainable_values:
+                rule = {
+                    "or": [
+                        rule,
+                        _rule_for_values(bargainable_attr, bargainable_values),
+                    ]
+                }
+                readings.append(
+                    f"{bargainable_attr} is one of {', '.join(map(str, bargainable_values))}"
                 )
+                referenced.append(bargainable_attr)
+            else:
+                unresolved.append("Bargainable Staff")
+        return RuleProposal(
+            rule=rule,
+            human_readable=(" or " if bargainable else " and ").join(readings),
+            confidence=0.95 if not unresolved else 0.7,
+            source="roster_values",
+            validation_state="proposed" if not unresolved else "needs_review",
+            unresolved_clauses=list(dict.fromkeys(unresolved)),
+            referenced_attributes=list(dict.fromkeys(referenced)),
+        )
 
     attr, included = _best_value_mapping(without_exclusion, catalog)
     if attr and included:
@@ -434,20 +767,24 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
         unresolved = _unresolved_list_clauses(without_exclusion, included)
         if re.search(r"(?:\band\b|&)\s+above\b", without_exclusion, re.IGNORECASE):
             unresolved.append("above")
+        readable = f"{attr} is one of {', '.join(map(str, included))}"
+        referenced = [attr]
         if exclusion_text:
             ex_attr, excluded = _best_value_mapping(exclusion_text, catalog)
-            if ex_attr == attr and excluded:
-                rule = {"and": [rule, _rule_for_values(attr, excluded, negate=True)]}
+            if ex_attr and excluded:
+                rule = {"and": [rule, _rule_for_values(ex_attr, excluded, negate=True)]}
+                readable += f" except {ex_attr} {', '.join(map(str, excluded))}"
+                referenced.append(ex_attr)
             else:
                 unresolved.append(exclusion_text)
         return RuleProposal(
             rule=rule,
-            human_readable=f"{attr} is one of {', '.join(map(str, included))}",
+            human_readable=readable,
             confidence=0.7 if unresolved else 0.9,
             source="roster_values",
             validation_state="needs_review" if unresolved else "proposed",
             unresolved_clauses=unresolved,
-            referenced_attributes=[attr],
+            referenced_attributes=list(dict.fromkeys(referenced)),
         )
 
     return RuleProposal(
@@ -506,13 +843,9 @@ def validate_matching_rule(rule: Rule | None, catalog: AttributeValueCatalog) ->
         for candidate in candidates:
             if not known_value(attribute_id, candidate):
                 errors.append(f"Unknown company value for {attribute_id}: {candidate}")
-            elif (
-                catalog.roster_present
-                and not any(
-                    str(value).strip().casefold()
-                    == str(candidate).strip().casefold()
-                    for value in catalog.values.get(attribute_id, [])
-                )
+            elif catalog.roster_present and not any(
+                str(value).strip().casefold() == str(candidate).strip().casefold()
+                for value in catalog.values.get(attribute_id, [])
             ):
                 warnings.append(
                     f"Configured value {candidate} has no active employees in {attribute_id}"
@@ -558,9 +891,7 @@ def validate_matching_rule(rule: Rule | None, catalog: AttributeValueCatalog) ->
         ):
             errors.append(f"Operator {op} requires an employee attribute and value")
             return
-        if op in {"in", "not_in"} and (
-            not isinstance(args[1], list) or not args[1]
-        ):
+        if op in {"in", "not_in"} and (not isinstance(args[1], list) or not args[1]):
             errors.append(f"Operator {op} requires a non-empty list of values")
             return
         if op in {"in", "not_in"} and len(args[1]) > _MAX_SET_VALUES:
@@ -597,12 +928,8 @@ def validate_ai_matching_rule(
     validation = validate_matching_rule(rule, catalog)
     errors = list(validation.errors)
     text = _intent_text(description)
-    if rule == {"and": []} and not (
-        _ALL_EMPLOYEES_RE.match(text) or _ALL_OTHER_RE.match(text)
-    ):
-        errors.append(
-            "AI may use an all-employees rule only when the eligibility wording says so"
-        )
+    if rule == {"and": []} and not (_ALL_EMPLOYEES_RE.match(text) or _ALL_OTHER_RE.match(text)):
+        errors.append("AI may use an all-employees rule only when the eligibility wording says so")
     return RuleValidation(
         valid=not errors,
         errors=list(dict.fromkeys(errors)),
@@ -762,8 +1089,9 @@ def build_ai_eligibility_inputs(
     if category.id:
         sibling_stmt = sibling_stmt.where(Category.id != category.id)
     siblings = list(
-        db.execute(sibling_stmt.order_by(Category.priority).limit(_AI_CONTEXT_MAX_SIBLINGS))
-        .scalars()
+        db.execute(
+            sibling_stmt.order_by(Category.priority).limit(_AI_CONTEXT_MAX_SIBLINGS)
+        ).scalars()
     )
 
     employee_attributes: list[dict[str, Any]] = []
@@ -808,7 +1136,7 @@ def build_ai_eligibility_inputs(
             else ({"code": plan_code} if plan_code else None)
         ),
         "target": {
-                "display_name": category.display_name[:512],
+            "display_name": category.display_name[:512],
             "plan_code": plan_code or None,
             "expected_count": pa.get("num_employees"),
         },
@@ -816,14 +1144,9 @@ def build_ai_eligibility_inputs(
             {
                 "display_name": sibling.display_name[:256],
                 "raw_description": sibling.raw_description[:512],
-                "plan_code": str(
-                    (sibling.plan_assignments or {}).get("plan_code") or ""
-                )
-                or None,
+                "plan_code": str((sibling.plan_assignments or {}).get("plan_code") or "") or None,
                 "current_reading": (
-                    sibling.rule_human_readable[:512]
-                    if sibling.rule_human_readable
-                    else None
+                    sibling.rule_human_readable[:512] if sibling.rule_human_readable else None
                 ),
             }
             for sibling in siblings
@@ -839,22 +1162,16 @@ def build_ai_eligibility_inputs(
     return schema_out, context, catalog
 
 
-def missing_category_plans(
-    db: Session, *, policy_year_id: str
-) -> list[MissingCategoryPlan]:
+def missing_category_plans(db: Session, *, policy_year_id: str) -> list[MissingCategoryPlan]:
     """Return materialized plans that no employee category assigns."""
 
     categories = list(
-        db.execute(
-            select(Category).where(Category.policy_year_id == policy_year_id)
-        ).scalars()
+        db.execute(select(Category).where(Category.policy_year_id == policy_year_id)).scalars()
     )
     assigned = {
         (
             category.product_id,
-            str((category.plan_assignments or {}).get("plan_code") or "")
-            .strip()
-            .casefold(),
+            str((category.plan_assignments or {}).get("plan_code") or "").strip().casefold(),
         )
         for category in categories
         if category.product_id and isinstance(category.plan_assignments, dict)
@@ -866,9 +1183,7 @@ def missing_category_plans(
             .order_by(Plan.product_id, Plan.code)
         ).scalars()
     )
-    client_id = db.scalar(
-        select(PolicyYear.client_id).where(PolicyYear.id == policy_year_id)
-    )
+    client_id = db.scalar(select(PolicyYear.client_id).where(PolicyYear.id == policy_year_id))
     products = {
         product.id: product
         for product in db.execute(
@@ -914,6 +1229,13 @@ def _profile_proposal(profile: EligibilityMappingProfile) -> RuleProposal:
         referenced_attributes=list(profile.required_attributes or []),
         relative_remainder=bool(validation.get("relative_remainder")),
     )
+
+
+def _is_employee_mapping_category(category: Category) -> bool:
+    """Dependant-only price/option rows do not assign an employee cohort."""
+
+    assignments = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
+    return str(assignments.get("member_scope") or "employee").casefold() != "dependant"
 
 
 def _previous_confirmed_rules(
@@ -1093,9 +1415,7 @@ def assess_category_rule(
     conflicts with an equally-specific sibling.
     """
 
-    catalog, employees, views = build_attribute_catalog(
-        db, category.policy_year_id, client_id
-    )
+    catalog, employees, views = build_attribute_catalog(db, category.policy_year_id, client_id)
     validation = validate_matching_rule(category.matching_rule, catalog)
     categories = list(
         db.execute(
@@ -1174,13 +1494,17 @@ def auto_map_policy_year(
     """
 
     catalog, employees, views = build_attribute_catalog(db, policy_year_id, client_id)
-    categories = list(
+    all_categories = list(
         db.execute(
             select(Category)
             .where(Category.policy_year_id == policy_year_id)
             .order_by(Category.product_id, Category.priority)
         ).scalars()
     )
+    categories = [
+        category for category in all_categories if _is_employee_mapping_category(category)
+    ]
+    not_applicable = len(all_categories) - len(categories)
     profiles = {
         profile.category_signature: profile
         for profile in db.execute(
@@ -1323,6 +1647,7 @@ def auto_map_policy_year(
         proposed=sum(item.rule_status == "proposed" for item in items),
         needs_review=sum(item.rule_status == "needs_review" for item in items),
         unmapped=sum(item.rule_status == "unmapped" for item in items),
+        not_applicable=not_applicable,
         reused=sum(item.reused for item in items),
         categories=items,
         missing_categories=len(missing),
@@ -1375,13 +1700,17 @@ def confirm_category_mapping(
 def stored_mapping_summary(db: Session, *, policy_year_id: str) -> MappingSummary:
     """Read the last persisted mapping/validation state without side effects."""
 
-    categories = list(
+    all_categories = list(
         db.execute(
             select(Category)
             .where(Category.policy_year_id == policy_year_id)
             .order_by(Category.product_id, Category.priority)
         ).scalars()
     )
+    categories = [
+        category for category in all_categories if _is_employee_mapping_category(category)
+    ]
+    not_applicable = len(all_categories) - len(categories)
     products = {
         product.id: product
         for product in db.execute(
@@ -1436,6 +1765,7 @@ def stored_mapping_summary(db: Session, *, policy_year_id: str) -> MappingSummar
         proposed=sum(item.rule_status == "proposed" for item in items),
         needs_review=sum(item.rule_status == "needs_review" for item in items),
         unmapped=sum(item.rule_status == "unmapped" for item in items),
+        not_applicable=not_applicable,
         reused=sum(item.reused for item in items),
         categories=items,
         missing_categories=len(missing),

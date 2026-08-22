@@ -453,6 +453,9 @@ export function useSlipUpload(policyYearId: string) {
               `${(r.rules_need_review ?? 0) + (r.rules_unmapped ?? 0)} mappings need review`,
             );
           }
+          if ((r.rules_not_applicable ?? 0) > 0) {
+            parts.push(`${r.rules_not_applicable} dependant-only rows excluded`);
+          }
           if (r.replaced_categories > 0) {
             parts.push(`${r.replaced_categories} prior rows replaced`);
           }
@@ -708,6 +711,13 @@ export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
                 Reused {result.rules_reused} company-confirmed mapping
                 {result.rules_reused === 1 ? "" : "s"} from an earlier policy
                 year.
+              </div>
+            )}
+            {(result.rules_not_applicable ?? 0) > 0 && (
+              <div className="text-muted-foreground">
+                {result.rules_not_applicable} dependant-only pricing row
+                {result.rules_not_applicable === 1 ? " was" : "s were"} kept out
+                of employee matching.
               </div>
             )}
             {result.replaced_categories > 0 && (

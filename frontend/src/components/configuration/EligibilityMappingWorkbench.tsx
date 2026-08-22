@@ -83,6 +83,7 @@ export function EligibilityMappingWorkbench({
   const createMissing = useAICreateMissingCategory();
   const { data: aiStatus } = useAIStatus();
   const [eligibilityText, setEligibilityText] = useState<Record<string, string>>({});
+  const [issuesOnly, setIssuesOnly] = useState(true);
 
   if (isLoading) return null;
   if (error) {
@@ -97,8 +98,18 @@ export function EligibilityMappingWorkbench({
   }
   if (!data || (data.total === 0 && data.missing_categories === 0)) return null;
 
+  const issueCount = data.categories.filter(
+    (item) => item.rule_status === "needs_review" || item.rule_status === "unmapped",
+  ).length;
+  const effectiveIssuesOnly = issuesOnly && issueCount > 0;
+  const visibleCategories = effectiveIssuesOnly
+    ? data.categories.filter(
+        (item) =>
+          item.rule_status === "needs_review" || item.rule_status === "unmapped",
+      )
+    : data.categories;
   const byProduct = new Map<string, EligibilityMappingItem[]>();
-  for (const item of data.categories) {
+  for (const item of visibleCategories) {
     const code = item.product_code ?? "Unassigned";
     byProduct.set(code, [...(byProduct.get(code) ?? []), item]);
   }
@@ -157,7 +168,7 @@ export function EligibilityMappingWorkbench({
           ) : (
             <RefreshCw className="size-3.5" />
           )}
-          Rebuild from roster
+          {propose.isPending ? "Rebuilding proposals…" : "Rebuild proposals"}
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -166,6 +177,11 @@ export function EligibilityMappingWorkbench({
           <Badge variant="info">{data.proposed} proposed</Badge>
           <Badge variant="warn">{data.needs_review} need review</Badge>
           <Badge variant="error">{data.unmapped} unmapped</Badge>
+          {data.not_applicable > 0 && (
+            <Badge variant="outline">
+              {data.not_applicable} dependant-only excluded
+            </Badge>
+          )}
           {data.missing_categories > 0 && (
             <Badge variant="error">
               {data.missing_categories} plan{data.missing_categories === 1 ? "" : "s"} missing categories
@@ -178,6 +194,23 @@ export function EligibilityMappingWorkbench({
             {data.employee_count} active employee
             {data.employee_count === 1 ? "" : "s"}
           </span>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/40 px-3 py-2 text-xs">
+          <span className="text-muted-foreground">
+            {effectiveIssuesOnly
+              ? `Showing ${issueCount} categor${issueCount === 1 ? "y" : "ies"} with mapping problems`
+              : `Showing all ${data.total} employee categor${data.total === 1 ? "y" : "ies"}`}
+          </span>
+          {issueCount > 0 && issueCount < data.total && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setIssuesOnly((current) => !current)}
+            >
+              {effectiveIssuesOnly ? `Show all ${data.total}` : `Show ${issueCount} issues only`}
+            </Button>
+          )}
         </div>
 
         {data.missing_category_plans.length > 0 && (
@@ -259,25 +292,29 @@ export function EligibilityMappingWorkbench({
         )}
 
         <div className="space-y-2">
-          {[...byProduct.entries()].map(([productCode, items]) => {
-            const attention = items.some(
-              (item) =>
-                item.rule_status === "needs_review" ||
-                item.rule_status === "unmapped",
-            );
-            return (
-              <details
-                key={productCode}
-                className="rounded-lg border border-border bg-background"
-                open={attention || byProduct.size === 1}
-              >
-                <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium">
-                  {productCode}
-                  <span className="ml-2 text-xs font-normal text-muted-foreground">
-                    {items.length} categor{items.length === 1 ? "y" : "ies"}
-                  </span>
-                </summary>
-                <div className="divide-y divide-border border-t border-border">
+          {[...byProduct.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([productCode, items]) => {
+              const productIssueCount = items.filter(
+                (item) =>
+                  item.rule_status === "needs_review" ||
+                  item.rule_status === "unmapped",
+              ).length;
+              return (
+                <details
+                  key={productCode}
+                  className="rounded-lg border border-border bg-background"
+                >
+                  <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-medium">
+                    {productCode}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      {items.length} categor{items.length === 1 ? "y" : "ies"}
+                      {productIssueCount > 0
+                        ? ` · ${productIssueCount} need attention`
+                        : ""}
+                    </span>
+                  </summary>
+                  <div className="divide-y divide-border border-t border-border">
                   {items.map((item) => {
                     const count = countLabel(item);
                     const messages = [...item.errors, ...item.warnings];
@@ -322,7 +359,12 @@ export function EligibilityMappingWorkbench({
                         </div>
                         <Button
                           size="sm"
-                          variant={attention ? "outline" : "ghost"}
+                          variant={
+                            item.rule_status === "needs_review" ||
+                            item.rule_status === "unmapped"
+                              ? "outline"
+                              : "ghost"
+                          }
                           onClick={() => onReview(item.category_id)}
                         >
                           Review rule
@@ -330,10 +372,10 @@ export function EligibilityMappingWorkbench({
                       </div>
                     );
                   })}
-                </div>
-              </details>
-            );
-          })}
+                  </div>
+                </details>
+              );
+            })}
         </div>
       </CardContent>
     </Card>
