@@ -4,7 +4,6 @@ import {
   ChevronRight,
   Pencil,
   Plus,
-  SlidersHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -226,8 +225,28 @@ function CategorySummary({
       <div className="flex min-w-max items-center gap-2 px-3 py-2">
         <SummaryItem value={groups.length} label="employee categories" />
         <SummaryItem value={assignments} label="plan assignments" />
-        <SummaryItem value={validated} label="rules validated" tone="good" />
-        <SummaryItem value={issueCount} label="rules need attention" tone={issueCount ? "warn" : "muted"} />
+        <SummaryItem
+          value={validated}
+          label={validated === 1 ? "rule validated" : "rules validated"}
+          tone="good"
+        />
+        {issueCount > 0 ? (
+          <button
+            type="button"
+            onClick={onToggleIssues}
+            aria-pressed={issuesOnly}
+            title={issuesOnly ? "Show all employee categories" : "Show only rules needing attention"}
+            className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
+            <SummaryItem
+              value={issueCount}
+              label={issueCount === 1 ? "rule needs attention" : "rules need attention"}
+              tone="warn"
+            />
+          </button>
+        ) : (
+          <SummaryItem value={0} label="rules need attention" tone="muted" />
+        )}
         {assignmentIssueCount > 0 && (
           <SummaryItem
             value={assignmentIssueCount}
@@ -248,12 +267,6 @@ function CategorySummary({
           </>
         )}
         <div className="ml-auto flex items-center gap-2 pl-3">
-          {issueCount > 0 && (
-            <Button size="sm" variant="outline" onClick={onToggleIssues}>
-              <SlidersHorizontal className="size-3.5" />
-              {issuesOnly ? "Show all" : `Show ${issueCount} issues`}
-            </Button>
-          )}
           <Button size="sm" variant="outline" onClick={onAdd} disabled={!canAdd || adding}>
             <Plus className="size-3.5" /> Add employee category
           </Button>

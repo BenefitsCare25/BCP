@@ -203,7 +203,8 @@ def compute_member_counts(
         total = (
             db.execute(
                 select(func.count(Employee.id)).where(
-                    Employee.policy_year_id == policy_year_id
+                    Employee.policy_year_id == policy_year_id,
+                    Employee.status == "active",
                 )
             ).scalar()
             or 0
@@ -226,7 +227,10 @@ def compute_member_counts(
     )
     employees = list(
         db.execute(
-            select(Employee).where(Employee.policy_year_id == policy_year_id)
+            select(Employee).where(
+                Employee.policy_year_id == policy_year_id,
+                Employee.status == "active",
+            )
         ).scalars()
     )
     deps_per_employee: dict[str, int] = defaultdict(int)
@@ -234,6 +238,7 @@ def compute_member_counts(
         for emp_id, count in db.execute(
             select(Dependant.employee_id, func.count(Dependant.id))
             .where(Dependant.policy_year_id == policy_year_id)
+            .where(Dependant.status == "active")
             .where(Dependant.employee_id.is_not(None))
             .group_by(Dependant.employee_id)
         ).all():
