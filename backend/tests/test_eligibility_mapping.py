@@ -277,7 +277,9 @@ def test_matching_rule_validation_rejects_unknown_or_empty_attributes() -> None:
     assert unknown.valid is False
     assert unknown.errors == ["Unknown employee attribute: job_band"]
     assert empty.valid is False
-    assert empty.errors == ["Employee attribute pass has no populated roster values"]
+    assert empty.errors == [
+        "Employee attribute pass has no values in the employee listing"
+    ]
     assert valid.valid is True
     assert valid.errors == []
 
@@ -690,11 +692,80 @@ def test_ai_context_excludes_pii_and_contains_company_vocabulary() -> None:
         serialized = json.dumps(context)
         assert "employment_type" in serialized
         assert "MANUAL" in serialized
+        employment_schema = next(
+            schema for schema in schemas if schema.attribute_id == "employment_type"
+        )
+        assert employment_schema.enum_values == ["MANUAL"]
+        employment_context = next(
+            item
+            for item in context["employee_attributes"]
+            if item["attribute_id"] == "employment_type"
+        )
+        assert employment_context["configured_values"] == []
         assert all(schema.attribute_id != "secret_note" for schema in schemas)
         assert "secret_note" not in serialized
         assert "DO-NOT-SEND-SECRET" not in serialized
         assert "DO-NOT-SEND-STAFF-ID" not in serialized
         assert "Do Not Send Employee Name" not in serialized
+        db.rollback()
+
+
+def test_ai_context_excludes_empty_configured_field_when_listing_exists() -> None:
+    with SessionLocal() as db:
+        product = db.execute(select(Product).where(Product.code == "WICA")).scalar_one()
+        category = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=503,
+            display_name="All Others",
+            raw_description="All Others",
+            matching_rule=None,
+            status=CategoryStatus.needs_review.value,
+            source="system_generated",
+            plan_assignments={"plan_code": "EMPTY-FIELD"},
+        )
+        db.add(category)
+        db.flush()
+
+        schemas, context, _ = build_ai_eligibility_inputs(
+            db, category=category, client_id=CLIENT_ID
+        )
+
+        schema_ids = {schema.attribute_id for schema in schemas}
+        context_ids = {
+            item["attribute_id"] for item in context["employee_attributes"]
+        }
+        assert "occupation" not in schema_ids
+        assert "occupation" not in context_ids
+        assert context["employee_listing_available"] is True
+        assert context["deterministic_candidate"]["rule"] is None
+        db.rollback()
+
+
+def test_ai_context_keeps_configured_field_without_employee_listing() -> None:
+    with SessionLocal() as db:
+        product = db.execute(select(Product).where(Product.code == "WICA")).scalar_one()
+        category = Category(
+            policy_year_id=PY_2027,
+            product_id=product.id,
+            priority=504,
+            display_name="Manual Employees",
+            raw_description="Manual Employees",
+            matching_rule=None,
+            status=CategoryStatus.needs_review.value,
+            source="system_generated",
+            plan_assignments={"plan_code": "NO-LISTING"},
+        )
+        db.add(category)
+        db.flush()
+
+        schemas, context, _ = build_ai_eligibility_inputs(
+            db, category=category, client_id=CLIENT_ID
+        )
+
+        assert "employment_type" in {schema.attribute_id for schema in schemas}
+        assert context["employee_listing_available"] is False
+        assert context["employee_count"] == 0
         db.rollback()
 
 
@@ -727,7 +798,7 @@ def test_ai_suggest_rejects_invalid_rule_without_overwriting_category(
         response = client.post(f"/api/v1/categories/{category_id}/ai-suggest")
 
     assert response.status_code == 422
-    assert "rejected before saving" in response.json()["detail"]
+    assert "No safe suggestion available" in response.json()["detail"]
     with SessionLocal() as db:
         stored = db.get(Category, category_id)
         assert stored is not None

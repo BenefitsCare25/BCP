@@ -511,16 +511,16 @@ def ai_suggest_rule(
     validation = validate_ai_matching_rule(c.raw_description, envelope.rule, catalog)
     if envelope.rule is None:
         reason = str(result.metadata.get("reasoning") or "").strip()
-        detail = "AI could not map this wording to the company's employee fields"
+        detail = "No safe suggestion available"
         if unresolved:
-            detail += f". Unresolved: {', '.join(unresolved)}"
+            detail += f": {', '.join(unresolved)}"
         elif reason:
-            detail += f". {reason[:300]}"
+            detail += f": {reason[:300]}"
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail)
     if not validation.valid:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "AI suggestion was rejected before saving: " + "; ".join(validation.errors),
+            "No safe suggestion available: " + "; ".join(validation.errors),
         )
 
     before = _to_dict(c)

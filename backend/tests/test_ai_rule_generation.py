@@ -123,6 +123,41 @@ def test_structured_ai_rule_is_converted_to_jsonlogic() -> None:
     assert envelope.rule == {"in": ["designation", ["Manager", "Executive"]]}
 
 
+def test_structured_ai_rule_rejects_unavailable_attribute() -> None:
+    payload = {
+        "rule": {
+            "match_all_employees": False,
+            "combine_groups": "all",
+            "groups": [
+                {
+                    "combine_conditions": "all",
+                    "conditions": [
+                        {
+                            "attribute": "occupation",
+                            "operator": "=",
+                            "value": "ALL_OTHERS",
+                            "values": [],
+                            "lower": None,
+                            "upper": None,
+                        }
+                    ],
+                }
+            ],
+        },
+        "human_readable": "All other occupations",
+        "confidence": 0.8,
+        "reasoning": "Uses an unavailable field.",
+        "unresolved_clauses": [],
+    }
+    fake_client = SimpleNamespace(
+        messages=SimpleNamespace(create=Mock(return_value=_response(payload)))
+    )
+
+    with patch("app.services.ai_extractor._build_ai_client", return_value=fake_client):
+        with pytest.raises(AIParseError, match="unavailable employee attribute"):
+            generate_rule_via_ai("All Others", _schema(), _config())
+
+
 @pytest.mark.parametrize(
     "payload",
     [

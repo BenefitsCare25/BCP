@@ -156,12 +156,19 @@ function EditForm({
         {
           description:
             typeof matched === "number"
-              ? `${matched} active roster match${matched === 1 ? "" : "es"}; broker confirmation is still required.`
+              ? `${matched} active employee match${matched === 1 ? "" : "es"}; broker confirmation is still required.`
               : "Saved for broker review; confirmation is still required.",
         },
       );
     } catch (e) {
-      toast.error(formatError(e));
+      const message = formatError(e);
+      if (message.startsWith("No safe suggestion available")) {
+        toast.info("No safe suggestion available", {
+          description: message.replace(/^No safe suggestion available:\s*/, ""),
+        });
+      } else {
+        toast.error(message);
+      }
     }
   };
 
@@ -217,8 +224,8 @@ function EditForm({
               {(matchedCount !== null || expectedCount !== null) && (
                 <p className="text-xs text-muted-foreground">
                   {matchedCount !== null
-                    ? `${matchedCount} active roster match${matchedCount === 1 ? "" : "es"}`
-                    : "Roster match not available"}
+                    ? `${matchedCount} active employee match${matchedCount === 1 ? "" : "es"}`
+                    : "Employee match not available"}
                   {expectedCount !== null
                     ? ` · ${expectedCount} employee${expectedCount === 1 ? "" : "s"} stated on the slip`
                     : ""}
@@ -257,7 +264,7 @@ function EditForm({
               disabled={!aiStatus?.configured || aiSuggest.isPending || coversAll}
               title={
                 aiStatus?.configured
-                  ? "Ask Gemini to map this wording against the company's non-PII roster values and sibling plans"
+                  ? "Ask Gemini to map this wording against the company's non-PII employee values and sibling plans"
                   : "AI not configured — set up an AI provider in settings"
               }
             >
@@ -267,7 +274,7 @@ function EditForm({
                 <Sparkles className="size-3.5" />
               )}
               {aiSuggest.isPending
-                ? "Checking company roster…"
+                ? "Checking employee listing…"
                 : aiStatus?.configured
                   ? "Suggest rule with AI"
                   : "AI not configured"}

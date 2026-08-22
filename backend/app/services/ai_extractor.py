@@ -81,6 +81,10 @@ the server converts to JSONLogic after validation:
 Rules:
 - Use only provided attributes and company values. Never invent a job title,
   grade, enum value, hierarchy, or eligibility condition.
+- When an employee listing is available, every rule field must have populated
+  employee values. A configured-but-empty field is unavailable.
+- Without an employee listing, configured fields may support an unvalidated
+  proposal, but the reasoning must state that employee validation is pending.
 - The authoritative category wording controls. Sibling categories are context,
   not authority for the target.
 - Use all-employees only when the authoritative wording explicitly says so.
@@ -272,9 +276,11 @@ def _condition_to_jsonlogic(condition: Any, data_types: dict[str, str]) -> dict[
     operator = condition.get("operator")
     if not isinstance(attribute, str) or not attribute.strip():
         raise ValueError("AI rule condition requires an employee attribute")
+    if attribute not in data_types:
+        raise ValueError(f"AI used an unavailable employee attribute: {attribute}")
     if operator not in _AI_LEAF_OPERATORS:
         raise ValueError(f"Unsupported AI rule operator: {operator}")
-    data_type = data_types.get(attribute, "string")
+    data_type = data_types[attribute]
     if operator in {"in", "not_in"}:
         values = condition.get("values")
         if not isinstance(values, list) or not values or not all(isinstance(v, str) for v in values):

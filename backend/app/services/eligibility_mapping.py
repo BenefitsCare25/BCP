@@ -907,7 +907,9 @@ def validate_matching_rule(rule: Rule | None, catalog: AttributeValueCatalog) ->
             errors.append(f"Unknown employee attribute: {attribute_id}")
             return
         if catalog.roster_present and catalog.populated.get(attribute_id, 0) == 0:
-            errors.append(f"Employee attribute {attribute_id} has no populated roster values")
+            errors.append(
+                f"Employee attribute {attribute_id} has no values in the employee listing"
+            )
             return
         validate_literals(attribute_id, op, args)
 
@@ -1025,6 +1027,25 @@ def _prompt_scalar(value: Any) -> str | int | float | bool | None:
     return str(value)[:128]
 
 
+def _usable_ai_schemas(
+    schemas: list[EmployeeAttributeSchema], catalog: AttributeValueCatalog
+) -> list[EmployeeAttributeSchema]:
+    """Keep AI attributes aligned with the available employee listing."""
+
+    if catalog.roster_present:
+        return [
+            schema
+            for schema in schemas
+            if catalog.populated.get(schema.attribute_id, 0) > 0
+        ][:64]
+    return [
+        schema
+        for schema in schemas
+        if catalog.values.get(schema.attribute_id)
+        or catalog.configured_values.get(schema.attribute_id)
+    ][:64]
+
+
 def build_ai_eligibility_inputs(
     db: Session,
     *,
@@ -1052,18 +1073,17 @@ def build_ai_eligibility_inputs(
         (schema for schema in resolved if not schema.is_pii),
         key=lambda value: value.attribute_id,
     )
-    usable_schemas = [
-        schema
-        for schema in safe_schemas
-        if catalog.values.get(schema.attribute_id)
-        or catalog.configured_values.get(schema.attribute_id)
-    ][:64]
-    schema_out = [
-        AttributeSchemaOut.model_validate(schema).model_copy(
-            update={"enum_values": list(schema.enum_values or [])[:100] or None}
+    usable_schemas = _usable_ai_schemas(safe_schemas, catalog)
+    schema_out = []
+    for schema in usable_schemas:
+        enum_values = list(schema.enum_values or [])[:100]
+        if catalog.roster_present and schema.data_type.casefold() == "enum":
+            enum_values = list(catalog.values.get(schema.attribute_id, []))[:100]
+        schema_out.append(
+            AttributeSchemaOut.model_validate(schema).model_copy(
+                update={"enum_values": enum_values or None}
+            )
         )
-        for schema in usable_schemas
-    ]
 
     product = (
         db.execute(
@@ -1118,12 +1138,20 @@ def build_ai_eligibility_inputs(
                 "observed_values_withheld": not include_values,
                 "configured_values": [
                     _prompt_scalar(value)
-                    for value in catalog.configured_values.get(attribute_id, [])[:100]
+                    for value in (
+                        []
+                        if catalog.roster_present
+                        else catalog.configured_values.get(attribute_id, [])[:100]
+                    )
                 ],
             }
         )
 
     deterministic = propose_category_rule(category.raw_description, catalog)
+    deterministic_validation = validate_ai_matching_rule(
+        category.raw_description, deterministic.rule, catalog
+    )
+    deterministic_rule = deterministic.rule if deterministic_validation.valid else None
     context: dict[str, Any] = {
         "product": (
             {"code": product.code, "display_name": product.display_name}
@@ -1157,11 +1185,19 @@ def build_ai_eligibility_inputs(
         ],
         "employee_attributes": employee_attributes,
         "deterministic_candidate": {
-            "rule": deterministic.rule,
+            "rule": deterministic_rule,
             "human_readable": deterministic.human_readable,
-            "unresolved_clauses": deterministic.unresolved_clauses,
+            "unresolved_clauses": list(
+                dict.fromkeys(
+                    [
+                        *deterministic.unresolved_clauses,
+                        *deterministic_validation.errors,
+                    ]
+                )
+            ),
         },
-        "roster_employee_count": catalog.employee_count,
+        "employee_listing_available": catalog.roster_present,
+        "employee_count": catalog.employee_count,
     }
     return schema_out, context, catalog
 

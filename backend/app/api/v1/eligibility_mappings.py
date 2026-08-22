@@ -222,14 +222,13 @@ def ai_create_missing_category(
     if envelope.rule is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "AI could not map the eligibility wording to this company's employee fields"
-            + (f". Unresolved: {', '.join(unresolved)}" if unresolved else ""),
+            "No safe suggestion available"
+            + (f": {', '.join(unresolved)}" if unresolved else ""),
         )
     if not validation.valid:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "AI suggestion was rejected before creation: "
-            + "; ".join(validation.errors),
+            "No safe suggestion available: " + "; ".join(validation.errors),
         )
 
     category.matching_rule = envelope.rule
