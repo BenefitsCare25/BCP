@@ -19,7 +19,7 @@ interface Props {
   onSelectCategory: (c: Category) => void;
   isEditing: boolean;
   onDone: () => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean, sections: string[]) => void;
 }
 
 export function ProductConfigurator({

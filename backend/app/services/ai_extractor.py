@@ -87,6 +87,10 @@ Rules:
   proposal, but the reasoning must state that employee validation is pending.
 - The authoritative category wording controls. Sibling categories are context,
   not authority for the target.
+- `based in`, `working in`, and office-location wording must use a populated
+  work-location attribute (for example country_of_work or location_description),
+  never nationality. Use nationality only when the authoritative wording says
+  nationality, citizenship, national, or citizen.
 - Use all-employees only when the authoritative wording explicitly says so.
 - Return a useful partial rule only if every omitted clause is listed in
   unresolved_clauses. Otherwise return rule=null and explain why.

@@ -1,11 +1,13 @@
 """Plans CRUD — Schedule of Benefits per product plan."""
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -15,10 +17,12 @@ from app.core.deps import (
     assert_policy_year_for_user,
     load_plan,
     require_broker_admin,
+    require_client_id,
+    tenant_or_global,
 )
 from app.core.pagination import MAX_LIMIT
 from app.db.session import get_db
-from app.models import Plan, PolicyYear
+from app.models import Plan, PolicyYear, ProductSetup
 from app.models.category import Category
 from app.models.product import Product
 from app.schemas.api import PlanFinancials
@@ -54,6 +58,13 @@ class PlanOut(BaseModel):
 class PlanList(BaseModel):
     total: int
     items: list[PlanOut]
+
+
+class PlanCreate(BaseModel):
+    product_id: str = Field(min_length=1, max_length=36)
+    policy_year_id: str = Field(min_length=1, max_length=36)
+    display_name: str = Field(min_length=1, max_length=255)
+    report_label: str | None = Field(default=None, max_length=255)
 
 
 class BenefitLimitIn(BaseModel):
@@ -162,6 +173,61 @@ def _has_rate_data(fin: PlanFinancials) -> bool:
     )
 
 
+def _next_plan_code(plans: list[Plan]) -> str:
+    used = {plan.code.strip().casefold() for plan in plans}
+    numeric = [int(code) for code in used if code.isdigit()]
+    candidate = max(numeric, default=0) + 1
+    while str(candidate).casefold() in used:
+        candidate += 1
+    return str(candidate)
+
+
+def _append_plan_to_setup(setup: ProductSetup, plan: Plan) -> None:
+    answers = deepcopy(setup.answers or {})
+    plans = answers.get("plans")
+    if not isinstance(plans, list):
+        plans = []
+        answers["plans"] = plans
+    if not any(
+        isinstance(item, dict) and str(item.get("code") or "") == plan.code
+        for item in plans
+    ):
+        plans.append(
+            {
+                "code": plan.code,
+                "label": plan.display_name,
+                "selected": True,
+            }
+        )
+
+    sob = answers.get("sob")
+    if isinstance(sob, dict):
+        columns = sob.get("columns")
+        if not isinstance(columns, list):
+            columns = []
+            sob["columns"] = columns
+        if len(columns) == 1 and isinstance(columns[0], dict):
+            plan_codes = columns[0].get("plan_codes")
+            if not isinstance(plan_codes, list):
+                plan_codes = []
+                columns[0]["plan_codes"] = plan_codes
+            if plan.code not in {str(value) for value in plan_codes}:
+                plan_codes.append(plan.code)
+        elif not any(
+            isinstance(column, dict)
+            and plan.code in {str(value) for value in column.get("plan_codes", [])}
+            for column in columns
+        ):
+            columns.append(
+                {
+                    "id": f"plan-{plan.id}",
+                    "label": plan.display_name,
+                    "plan_codes": [plan.code],
+                }
+            )
+    setup.answers = answers
+
+
 @router.get("", response_model=PlanList)
 def list_plans(
     policy_year_id: str,
@@ -192,6 +258,91 @@ def list_plans(
         total=total,
         items=[_plan_out(p, fin.get((p.product_id, p.code))) for p in plans],
     )
+
+
+@router.post("", response_model=PlanOut, status_code=status.HTTP_201_CREATED)
+def create_plan(
+    body: PlanCreate,
+    user: CurrentUser = Depends(require_broker_admin),
+    db: Session = Depends(get_db),
+) -> PlanOut:
+    py = assert_policy_year_for_user(body.policy_year_id, user, db)
+    assert_policy_year_editable(py)
+    client_id = require_client_id(user)
+    product = db.execute(
+        select(Product).where(
+            Product.id == body.product_id,
+            tenant_or_global(Product.client_id, client_id),
+        )
+    ).scalar_one_or_none()
+    if product is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
+
+    setup = db.execute(
+        select(ProductSetup)
+        .where(
+            ProductSetup.policy_year_id == py.id,
+            ProductSetup.product_code == product.code.upper(),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if setup is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Save the product setup before adding a plan type",
+        )
+
+    display_name = body.display_name.strip()
+    if not display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Plan name is required")
+    report_label = (body.report_label or "").strip() or None
+    existing = list(
+        db.execute(
+            select(Plan)
+            .where(
+                Plan.policy_year_id == py.id,
+                Plan.product_id == product.id,
+            )
+            .with_for_update()
+        ).scalars()
+    )
+    plan = Plan(
+        product_id=product.id,
+        policy_year_id=py.id,
+        code=_next_plan_code(existing),
+        display_name=display_name,
+        report_label=report_label,
+        source="manual",
+        status="needs_review",
+        human_modified=True,
+        modified_by=user.user_id,
+    )
+    try:
+        db.add(plan)
+        db.flush()
+        _append_plan_to_setup(setup, plan)
+        write_audit(
+            db,
+            user,
+            action="create",
+            entity_type="plan",
+            entity_id=plan.id,
+            after={
+                "policy_year_id": py.id,
+                "product_id": product.id,
+                "code": plan.code,
+                "display_name": plan.display_name,
+            },
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Another plan was added concurrently; please retry",
+        ) from None
+    db.refresh(plan)
+    return _plan_out(plan)
 
 
 @router.get("/{plan_id}", response_model=PlanOut)

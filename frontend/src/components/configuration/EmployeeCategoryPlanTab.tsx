@@ -97,7 +97,11 @@ export function EmployeeCategoryPlanTab(props: Props) {
         canAdd={Boolean(props.productId)}
         adding={createCategory.isPending}
       />
-      <PlanTypeSettings plans={data.planOptions} />
+      <PlanTypeSettings
+        plans={data.planOptions}
+        policyYearId={props.policyYearId}
+        productId={props.productId}
+      />
       {visibleGroups.length === 0 ? (
         <EmptyCategories issuesOnly={issuesOnly} />
       ) : (

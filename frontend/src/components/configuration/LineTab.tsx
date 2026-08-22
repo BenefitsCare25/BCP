@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pencil, Trash2, Upload, X } from "lucide-react";
 import {
   Card,
@@ -34,9 +34,19 @@ interface Props {
   yearSelector?: ReactNode;
   onBlockingEditChange?: (
     line: InsuranceLine,
-    edit: { code: string; name: string; actionLabel: string } | null,
+    edit: {
+      code: string;
+      name: string;
+      sections: string[];
+      discard: () => void;
+    } | null,
   ) => void;
 }
+
+type PendingProductAction =
+  | { kind: "switch"; code: string }
+  | { kind: "close" }
+  | null;
 
 export function LineTab({
   policyYearId,
@@ -52,8 +62,9 @@ export function LineTab({
   const [justAdded, setJustAdded] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<SetupProductSummary | null>(null);
   const [editingCode, setEditingCode] = useState<string | null>(null);
-  const [dirtyByCode, setDirtyByCode] = useState<Record<string, boolean>>({});
+  const [dirtyByCode, setDirtyByCode] = useState<Record<string, string[]>>({});
   const [unsavedPromptOpen, setUnsavedPromptOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingProductAction>(null);
 
   const { data: allSetupProducts = [] } = useSetupProducts(policyYearId);
   const { data: setups = [] } = useProductSetups(policyYearId);
@@ -97,17 +108,12 @@ export function LineTab({
 
   const unassigned = groupByCode.get("(unassigned)");
   const editingProduct = products.find((p) => p.code === editingCode) ?? null;
-  const hasUnsavedEdit =
-    Boolean(editingCode) && Boolean(editingCode && dirtyByCode[editingCode]);
-  const setupActionLabel = (code: string | null | undefined) =>
-    setups.some(
-      (s) =>
-        s.product_code.toUpperCase() === String(code ?? "").toUpperCase() &&
-        (s.status === "confirmed" || s.materialized_product_id),
-    )
-      ? "Update setup"
-      : "Confirm setup";
-
+  const dirtySections = editingCode ? dirtyByCode[editingCode] ?? [] : [];
+  const hasUnsavedEdit = Boolean(editingCode) && dirtySections.length > 0;
+  const closeEdit = useCallback((code: string) => {
+    setEditingCode(null);
+    setDirtyByCode((prev) => ({ ...prev, [code]: [] }));
+  }, []);
   useEffect(() => {
     onBlockingEditChange?.(
       line,
@@ -115,7 +121,8 @@ export function LineTab({
         ? {
             code: editingProduct.code,
             name: editingProduct.display_name,
-            actionLabel: setupActionLabel(editingProduct.code),
+            sections: dirtySections,
+            discard: () => closeEdit(editingProduct.code),
           }
         : null,
     );
@@ -124,9 +131,10 @@ export function LineTab({
     dirtyByCode,
     editingProduct,
     hasUnsavedEdit,
+    dirtySections,
     line,
+    closeEdit,
     onBlockingEditChange,
-    setups,
   ]);
 
   // Keep the active sub-tab valid as the product set changes. Depends on
@@ -150,6 +158,7 @@ export function LineTab({
     if (!codes.length) return;
     setJustAdded((prev) => [...new Set([...prev, ...codes])]);
     if (hasUnsavedEdit) {
+      setPendingAction({ kind: "switch", code: codes[0] });
       setUnsavedPromptOpen(true);
       return;
     }
@@ -159,6 +168,7 @@ export function LineTab({
   const requestProductTab = (code: string) => {
     if (code === activeCode) return;
     if (hasUnsavedEdit) {
+      setPendingAction({ kind: "switch", code });
       setUnsavedPromptOpen(true);
       return;
     }
@@ -166,14 +176,10 @@ export function LineTab({
     setActiveCode(code);
   };
 
-  const closeEdit = (code: string) => {
-    setEditingCode(null);
-    setDirtyByCode((prev) => ({ ...prev, [code]: false }));
-  };
-
   const toggleEdit = (p: SetupProductSummary, isEditing: boolean) => {
     if (isEditing) {
-      if (dirtyByCode[p.code]) {
+      if ((dirtyByCode[p.code] ?? []).length > 0) {
+        setPendingAction({ kind: "close" });
         setUnsavedPromptOpen(true);
         return;
       }
@@ -181,6 +187,13 @@ export function LineTab({
       return;
     }
     setEditingCode(p.code);
+  };
+
+  const discardAndContinue = () => {
+    if (editingCode) closeEdit(editingCode);
+    if (pendingAction?.kind === "switch") setActiveCode(pendingAction.code);
+    setPendingAction(null);
+    setUnsavedPromptOpen(false);
   };
 
   const doRemove = async (p: SetupProductSummary) => {
@@ -257,10 +270,10 @@ export function LineTab({
                       onSelectCategory={onSelectCategory}
                       isEditing={isEditing}
                       onDone={() => closeEdit(p.code)}
-                      onDirtyChange={(dirty) =>
+                      onDirtyChange={(dirty, sections) =>
                         setDirtyByCode((prev) => ({
                           ...prev,
-                          [p.code]: dirty,
+                          [p.code]: dirty ? sections : [],
                         }))
                       }
                     />
@@ -319,21 +332,31 @@ export function LineTab({
       />
       <AlertDialog
         open={unsavedPromptOpen}
-        onOpenChange={setUnsavedPromptOpen}
-        title="Save current setup first"
+        onOpenChange={(open) => {
+          setUnsavedPromptOpen(open);
+          if (!open) setPendingAction(null);
+        }}
+        title="Discard unsaved setup changes?"
         description={
-          <span>
+          <div className="space-y-2">
             <strong>{editingProduct?.display_name ?? "This product"}</strong>{" "}
-            has unsaved setup changes. Use the{" "}
-            <strong>{setupActionLabel(editingProduct?.code)}</strong>{" "}
-            button before leaving this product.
-          </span>
+            has unsaved changes in:
+            <ul className="list-disc space-y-1 pl-5">
+              {dirtySections.map((section) => (
+                <li key={section}>{section}</li>
+              ))}
+            </ul>
+            <p>
+              Discarding restores the last saved setup and lets you leave this
+              product.
+            </p>
+          </div>
         }
-        confirmLabel="Got it"
-        cancelLabel={null}
-        confirmVariant="default"
-        tone="info"
-        onConfirm={() => setUnsavedPromptOpen(false)}
+        confirmLabel="Discard changes & leave"
+        cancelLabel="Continue editing"
+        confirmVariant="destructive"
+        tone="danger"
+        onConfirm={discardAndContinue}
       />
     </div>
   );

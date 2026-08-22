@@ -94,6 +94,15 @@ _ATTR_PRIORITY = (
     "job_function",
 )
 _PASS_ATTRS = ("pass", "pass_type", "employment_pass", "work_pass")
+_WORK_LOCATION_ATTRS = (
+    "country_of_work",
+    "work_country",
+    "work_location",
+    "location",
+    "location_description",
+    "office_location",
+    "country",
+)
 _LEAF_OPS = frozenset({"=", "==", "!=", ">=", "<=", ">", "<", "between", "in", "not_in"})
 _MAX_RULE_DEPTH = 12
 _MAX_RULE_NODES = 100
@@ -582,6 +591,59 @@ def _actual_pass_values(codes: list[str], values: list[Any]) -> list[Any]:
     return out
 
 
+def _location_proposal(
+    text: str,
+    without_exclusion: str,
+    exclusion_text: str,
+    catalog: AttributeValueCatalog,
+) -> RuleProposal | None:
+    location_match = _BASED_IN_RE.search(text)
+    if not location_match:
+        return None
+    location_attr, location_values = _best_value_mapping(
+        location_match.group(1), catalog, allowed=_WORK_LOCATION_ATTRS
+    )
+    base_text = _BASED_IN_RE.sub("", without_exclusion).strip(" ()-")
+    base_attr, base_values = _best_value_mapping(base_text, catalog)
+    rules: list[Rule] = []
+    readings: list[str] = []
+    referenced: list[str] = []
+    unresolved: list[str] = []
+
+    for attribute_id, values in (
+        (base_attr, base_values),
+        (location_attr, location_values),
+    ):
+        if attribute_id and values:
+            rules.append(_rule_for_values(attribute_id, values))
+            readings.append(
+                f"{attribute_id} is one of {', '.join(map(str, values))}"
+            )
+            referenced.append(attribute_id)
+    if not location_attr or not location_values:
+        unresolved.append(location_match.group(0).strip())
+
+    if exclusion_text:
+        ex_attr, excluded = _best_value_mapping(exclusion_text, catalog)
+        if ex_attr and excluded:
+            rules.append(_rule_for_values(ex_attr, excluded, negate=True))
+            readings.append(f"except {ex_attr} {', '.join(map(str, excluded))}")
+            referenced.append(ex_attr)
+        else:
+            unresolved.append(exclusion_text)
+
+    rule = rules[0] if len(rules) == 1 else {"and": rules} if rules else None
+    return RuleProposal(
+        rule=rule,
+        human_readable=" and ".join(readings) if readings else "Work location needs mapping",
+        confidence=0.9 if rule and not unresolved else 0.5,
+        source="roster_values" if rule else "unmapped",
+        validation_state="proposed" if rule and not unresolved else "needs_review",
+        unresolved_clauses=list(dict.fromkeys(unresolved)),
+        referenced_attributes=list(dict.fromkeys(referenced)),
+    )
+
+
 def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> RuleProposal:
     """Propose a rule using the company's own non-PII roster vocabulary.
 
@@ -708,7 +770,13 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     if parts and re.search(r"\band\s+all\s+employees?\s+based\s+in\b", text, re.I):
         location_match = _BASED_IN_RE.search(text)
         location_attr, location_values = (
-            _best_value_mapping(location_match.group(1), catalog) if location_match else (None, [])
+            _best_value_mapping(
+                location_match.group(1),
+                catalog,
+                allowed=_WORK_LOCATION_ATTRS,
+            )
+            if location_match
+            else (None, [])
         )
         exclusion_attr, exclusion_values = (
             _best_value_mapping(exclusion_text, catalog) if exclusion_text else (None, [])
@@ -735,7 +803,11 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
                     dict.fromkeys([*referenced, location_attr, exclusion_attr])
                 ),
             )
-        unresolved.append("Thailand employee exception")
+        unresolved.append(
+            location_match.group(0).strip()
+            if location_match
+            else "employee work-location exception"
+        )
 
     if parts:
         rule = parts[0] if len(parts) == 1 else {"and": parts}
@@ -764,6 +836,11 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             unresolved_clauses=list(dict.fromkeys(unresolved)),
             referenced_attributes=list(dict.fromkeys(referenced)),
         )
+
+    if location_proposal := _location_proposal(
+        text, without_exclusion, exclusion_text, catalog
+    ):
+        return location_proposal
 
     attr, included = _best_value_mapping(without_exclusion, catalog)
     if attr and included:

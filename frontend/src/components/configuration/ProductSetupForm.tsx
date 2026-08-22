@@ -51,7 +51,7 @@ interface Props {
   // Opens the slim rule editor for a category.
   onEditRule: (c: Category) => void;
   onConfirmed?: () => void;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDirtyChange?: (dirty: boolean, sections: string[]) => void;
 }
 
 // Single-row tab labels per setup section.
@@ -62,6 +62,37 @@ const SECTION_LABELS: Record<string, string> = {
   schedule_of_benefits: "SOB",
   endorsements: "Endorsements",
 };
+
+function setupDirtySections(current: SetupAnswers, savedJson: string): string[] {
+  let saved: SetupAnswers;
+  try {
+    saved = JSON.parse(savedJson) as SetupAnswers;
+  } catch {
+    return ["Setup details"];
+  }
+  const changed = (left: unknown, right: unknown) =>
+    JSON.stringify(left) !== JSON.stringify(right);
+  const sections: string[] = [];
+  if (changed(current.header, saved.header)) sections.push("Header & Policy");
+  if (changed(current.eligibility, saved.eligibility)) sections.push("Eligibility");
+  if (
+    changed(current.categories, saved.categories) ||
+    changed(current.plans, saved.plans)
+  ) {
+    sections.push("Employee Category & Plan Type");
+  }
+  if (
+    changed(current.sob, saved.sob) ||
+    changed(current.cover_description, saved.cover_description) ||
+    changed(current.arrangements, saved.arrangements)
+  ) {
+    sections.push("SOB");
+  }
+  if (changed(current.endorsements, saved.endorsements)) {
+    sections.push("Endorsements");
+  }
+  return sections.length ? sections : ["Setup details"];
+}
 
 // A legacy draft (pre-`sob`) carries the SOB grid replicated into each plan's
 // `benefit_items`. Normalize it enough that buildSobFromPlans can de-dupe it
@@ -330,17 +361,23 @@ export function ProductSetupForm({
     for (const p of live) {
       if (p.display_name) nameByCode[String(p.code)] = p.display_name;
     }
-    setAnswers((a) => {
+    const syncNames = (value: SetupAnswers) => {
       let changed = false;
-      const plans = a.plans.map((p) => {
-        const name = nameByCode[String(p.code)];
-        if (name && name !== p.label) {
-          changed = true;
-          return { ...p, label: name };
-        }
-        return p;
+      const plans = value.plans.map((plan) => {
+        const name = nameByCode[String(plan.code)];
+        if (!name || name === plan.label) return plan;
+        changed = true;
+        return { ...plan, label: name };
       });
-      return changed ? { ...a, plans } : a;
+      return changed ? { ...value, plans } : value;
+    };
+    setAnswers((current) => {
+      const next = syncNames(current);
+      if (next === current) return current;
+      savedSnapshot.current = JSON.stringify(
+        syncNames(JSON.parse(savedSnapshot.current) as SetupAnswers),
+      );
+      return next;
     });
   }, [livePlans]);
 
@@ -384,17 +421,23 @@ export function ProductSetupForm({
   // premium preview and confirm-time materialization use the live count.
   useEffect(() => {
     if (!memberCounts || tieredBasis) return;
-    setAnswers((a) => {
+    const syncCounts = (value: SetupAnswers) => {
       let changed = false;
-      const categories = a.categories.map((c) => {
-        const mc = countsByKey[c.id];
-        if (mc && c.num_employees !== mc.employees) {
-          changed = true;
-          return { ...c, num_employees: mc.employees };
-        }
-        return c;
+      const categories = value.categories.map((category) => {
+        const count = countsByKey[category.id];
+        if (!count || category.num_employees === count.employees) return category;
+        changed = true;
+        return { ...category, num_employees: count.employees };
       });
-      return changed ? { ...a, categories } : a;
+      return changed ? { ...value, categories } : value;
+    };
+    setAnswers((current) => {
+      const next = syncCounts(current);
+      if (next === current) return current;
+      savedSnapshot.current = JSON.stringify(
+        syncCounts(JSON.parse(savedSnapshot.current) as SetupAnswers),
+      );
+      return next;
     });
   }, [memberCounts, countsByKey, tieredBasis]);
 
@@ -425,10 +468,14 @@ export function ProductSetupForm({
     setAnswers((a) => ({ ...a, endorsements }));
 
   const isDirty = JSON.stringify(answers) !== savedSnapshot.current;
+  const dirtySections = useMemo(
+    () => setupDirtySections(answers, savedSnapshot.current),
+    [answers],
+  );
 
   useEffect(() => {
-    onDirtyChange?.(isDirty);
-  }, [isDirty, onDirtyChange]);
+    onDirtyChange?.(isDirty, dirtySections);
+  }, [dirtySections, isDirty, onDirtyChange]);
 
   const isConfirmed =
     draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
@@ -442,7 +489,7 @@ export function ProductSetupForm({
         onSuccess: (r) => {
           setConfirmOpen(false);
           savedSnapshot.current = JSON.stringify(answers);
-          onDirtyChange?.(false);
+          onDirtyChange?.(false, []);
           const planMsg = `${r.plans_created + r.plans_updated} plan(s)`;
           const catMsg =
             r.categories_created > 0
@@ -671,7 +718,7 @@ export function ProductSetupForm({
                 <>
                   <span
                     aria-hidden="true"
-                    className="ml-2 inline-block size-2 rounded-full bg-destructive align-middle"
+                    className="ml-2 inline-block size-2.5 shrink-0 rounded-full bg-error align-middle ring-2 ring-error-soft"
                     title="Employee categories need attention"
                   />
                   <span className="sr-only">Employee categories need attention</span>

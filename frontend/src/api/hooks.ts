@@ -419,6 +419,25 @@ export function useUpdatePlan() {
   });
 }
 
+export function useCreatePlan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      product_id: string;
+      policy_year_id: string;
+      display_name: string;
+      report_label?: string | null;
+    }) => api.post<PlanDetail>("/plans", body),
+    onSuccess: (_plan, body) => {
+      qc.invalidateQueries({
+        queryKey: ["plans", body.policy_year_id, body.product_id],
+      });
+      qc.invalidateQueries({ queryKey: ["product-setups", body.policy_year_id] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
 export function useConfirmCategory() {
   const qc = useQueryClient();
   return useMutation({

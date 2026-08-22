@@ -87,9 +87,11 @@ export function ConfigurationPage() {
     line: InsuranceLine;
     code: string;
     name: string;
-    actionLabel: string;
+    sections: string[];
+    discard: () => void;
   } | null>(null);
   const [linePromptOpen, setLinePromptOpen] = useState(false);
+  const [pendingLine, setPendingLine] = useState<InsuranceLine | null>(null);
   // Switching the viewed year closes any open category editor — the panel edits
   // a category from the previously-viewed year and must not linger over another
   // year (or over a read-only past year, where the page is otherwise disabled).
@@ -114,7 +116,12 @@ export function ConfigurationPage() {
   const handleBlockingEditChange = useCallback(
     (
       editLine: InsuranceLine,
-      edit: { code: string; name: string; actionLabel: string } | null,
+      edit: {
+        code: string;
+        name: string;
+        sections: string[];
+        discard: () => void;
+      } | null,
     ) => {
       setBlockingEdit((prev) => {
         if (edit) {
@@ -122,7 +129,8 @@ export function ConfigurationPage() {
             line: editLine,
             code: edit.code,
             name: edit.name,
-            actionLabel: edit.actionLabel,
+            sections: edit.sections,
+            discard: edit.discard,
           };
         }
         return prev?.line === editLine ? null : prev;
@@ -134,6 +142,7 @@ export function ConfigurationPage() {
   const switchLine = (next: InsuranceLine) => {
     if (next === tab) return;
     if (blockingEdit?.line === tab) {
+      setPendingLine(next);
       setLinePromptOpen(true);
       return;
     }
@@ -160,8 +169,21 @@ export function ConfigurationPage() {
     if (navigationBlocker.status === "blocked") {
       navigationBlocker.reset();
     }
+    setPendingLine(null);
     setLinePromptOpen(false);
   }, [navigationBlocker]);
+
+  const discardAndLeave = useCallback(() => {
+    blockingEdit?.discard();
+    if (navigationBlocker.status === "blocked") {
+      navigationBlocker.proceed();
+    } else if (pendingLine) {
+      setTab(pendingLine);
+    }
+    setBlockingEdit(null);
+    setPendingLine(null);
+    setLinePromptOpen(false);
+  }, [blockingEdit, navigationBlocker, pendingLine, setTab]);
 
   const draftCodes = useMemo(
     () => new Set(setups.map((s) => s.product_code)),
@@ -356,20 +378,26 @@ export function ConfigurationPage() {
           }
           closeSavePrompt();
         }}
-        title="Save current setup first"
+        title="Discard unsaved setup changes?"
         description={
-          <span>
-            <strong>{blockingEdit?.name ?? "This product"}</strong> has unsaved
-            setup changes. Use the{" "}
-            <strong>{blockingEdit?.actionLabel ?? "Confirm setup"}</strong>{" "}
-            button before switching product lines.
-          </span>
+          <div className="space-y-2">
+            <p>
+              <strong>{blockingEdit?.name ?? "This product"}</strong> has
+              unsaved changes in:
+            </p>
+            <ul className="list-disc space-y-1 pl-5">
+              {(blockingEdit?.sections ?? []).map((section) => (
+                <li key={section}>{section}</li>
+              ))}
+            </ul>
+            <p>Discarding restores the last saved setup and lets you leave.</p>
+          </div>
         }
-        confirmLabel="Got it"
-        cancelLabel={null}
-        confirmVariant="default"
-        tone="info"
-        onConfirm={closeSavePrompt}
+        confirmLabel="Discard changes & leave"
+        cancelLabel="Continue editing"
+        confirmVariant="destructive"
+        tone="danger"
+        onConfirm={discardAndLeave}
       />
     </div>
   );

@@ -268,6 +268,68 @@ def test_currency_marker_does_not_map_to_single_character_roster_value() -> None
     assert proposal.unresolved_clauses
 
 
+def test_based_in_country_uses_work_location_not_nationality() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC", "D1"],
+            country_of_work=["Singapore", "Thailand"],
+            nationality=["Singapore", "Thailand"],
+            executive_role=["DIRECTOR", "EMPLOYEE"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"=": ["country_of_work", "Thailand"]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
+    }
+    assert proposal.unresolved_clauses == []
+
+
+def test_based_in_country_does_not_fall_back_to_nationality() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC", "D1"],
+            nationality=["Singapore", "Thailand"],
+            executive_role=["DIRECTOR", "EMPLOYEE"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]
+    }
+    assert "based in Thailand" in proposal.unresolved_clauses
+
+
+def test_location_only_category_never_uses_nationality() -> None:
+    mapped = propose_category_rule(
+        "All Employees based in Thailand",
+        _catalog(
+            country_of_work=["Singapore", "Thailand"],
+            nationality=["Singapore", "Thailand"],
+        ),
+    )
+    unresolved = propose_category_rule(
+        "All Employees based in Thailand",
+        _catalog(nationality=["Singapore", "Thailand"]),
+    )
+
+    assert mapped.rule == {"=": ["country_of_work", "Thailand"]}
+    assert mapped.unresolved_clauses == []
+    assert unresolved.rule is None
+    assert unresolved.unresolved_clauses == ["based in Thailand"]
+
+
 def test_matching_rule_validation_rejects_unknown_or_empty_attributes() -> None:
     catalog = _catalog(designation=["Manager", "Executive"])
     unknown = validate_matching_rule({"=": ["job_band", "M1"]}, catalog)
