@@ -5,7 +5,7 @@ import {
   RefreshCw,
   Sparkles,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useAICreateMissingCategory,
   useAIStatus,
@@ -84,6 +84,11 @@ export function EligibilityMappingWorkbench({
   const { data: aiStatus } = useAIStatus();
   const [eligibilityText, setEligibilityText] = useState<Record<string, string>>({});
   const [issuesOnly, setIssuesOnly] = useState(true);
+
+  useEffect(() => {
+    setEligibilityText({});
+    setIssuesOnly(true);
+  }, [policyYearId]);
 
   if (isLoading) return null;
   if (error) {
@@ -172,6 +177,23 @@ export function EligibilityMappingWorkbench({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        {data.employee_count === 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-sm">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+            <div className="space-y-1">
+              <p className="font-medium text-foreground">
+                No active employee roster is available
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Proposals can still use slip wording and confirmed company
+                mappings, but roster validation and employee match counts remain
+                unavailable until an employee listing is uploaded for this
+                benefit year.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <Badge variant="good">{data.validated} roster validated</Badge>
           <Badge variant="info">{data.proposed} proposed</Badge>

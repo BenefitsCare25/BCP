@@ -236,6 +236,7 @@ def generate_rule_via_ai(
     response = client.messages.create(
         model=cfg.model,
         max_tokens=1024,
+        thinking_level="MINIMAL",
         system=COMPANY_RULE_SYSTEM_PROMPT,
         tools=[TOOL_SCHEMA],
         tool_choice={"type": "tool", "name": "emit_rule"},

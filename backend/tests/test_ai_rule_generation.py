@@ -126,3 +126,22 @@ def test_truncated_ai_tool_payload_is_rejected() -> None:
     ):
         with pytest.raises(AIParseError, match="truncated"):
             generate_rule_via_ai("Managers", _schema(), _config())
+
+
+def test_single_rule_generation_bounds_gemini_thinking() -> None:
+    payload = {
+        "rule": {"=": ["designation", "Manager"]},
+        "human_readable": "Managers",
+        "confidence": 0.8,
+        "reasoning": "The company roster contains the exact designation.",
+        "unresolved_clauses": [],
+    }
+    create = Mock(return_value=_response(payload))
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+
+    with patch(
+        "app.services.ai_extractor._build_ai_client", return_value=fake_client
+    ):
+        generate_rule_via_ai("Managers", _schema(), _config())
+
+    assert create.call_args.kwargs["thinking_level"] == "MINIMAL"

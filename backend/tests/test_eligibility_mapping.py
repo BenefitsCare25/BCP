@@ -258,6 +258,16 @@ def test_manual_category_does_not_absorb_non_manual_value() -> None:
     assert non_manual.rule == {"=": ["employment_type", "NON-MANUAL"]}
 
 
+def test_currency_marker_does_not_map_to_single_character_roster_value() -> None:
+    proposal = propose_category_rule(
+        "Non-Manual Employees earning above S$1,600 per month",
+        _catalog(family_status=["S", "M"]),
+    )
+
+    assert proposal.rule is None
+    assert proposal.unresolved_clauses
+
+
 def test_matching_rule_validation_rejects_unknown_or_empty_attributes() -> None:
     catalog = _catalog(designation=["Manager", "Executive"])
     unknown = validate_matching_rule({"=": ["job_band", "M1"]}, catalog)
@@ -384,6 +394,88 @@ def test_policy_year_mapping_persists_validated_rule_and_profile() -> None:
         assert profile.status == "confirmed"
         assert category.status == CategoryStatus.confirmed.value
         db.commit()
+
+
+def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
+    with SessionLocal() as db:
+        product = Product(
+            id="00000000-0000-0000-0000-00000000e1c1",
+            client_id=CLIENT_ID,
+            code="COHORT-QA",
+            display_name="Cohort QA",
+        )
+        db.add(product)
+        db.flush()
+        first = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=201,
+            display_name="MANUAL EMPLOYEES",
+            raw_description="MANUAL EMPLOYEES",
+            matching_rule=None,
+            status=CategoryStatus.needs_review.value,
+            source="system_generated",
+            plan_assignments={"plan_code": "A", "num_employees": 1},
+        )
+        second = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=202,
+            display_name="MANUAL EMPLOYEES",
+            raw_description="MANUAL EMPLOYEES",
+            matching_rule=None,
+            status=CategoryStatus.needs_review.value,
+            source="system_generated",
+            plan_assignments={"plan_code": "B", "num_employees": 1},
+        )
+        db.add_all([first, second])
+        db.flush()
+
+        summary = auto_map_policy_year(db, policy_year_id=PY_2026, client_id=CLIENT_ID)
+        items = {
+            item.category_id: item
+            for item in summary.categories
+            if item.category_id in {first.id, second.id}
+        }
+
+        assert items[first.id].rule_status == "validated"
+        assert items[second.id].rule_status == "validated"
+        assert items[first.id].matched_count == 1
+        assert items[second.id].matched_count == 1
+        assert all("equally specific" not in " ".join(item.warnings) for item in items.values())
+
+
+def test_slip_headcount_drift_is_advisory_not_a_rule_failure() -> None:
+    with SessionLocal() as db:
+        product = Product(
+            id="00000000-0000-0000-0000-00000000e1c2",
+            client_id=CLIENT_ID,
+            code="DRIFT-QA",
+            display_name="Drift QA",
+        )
+        db.add(product)
+        db.flush()
+        category = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=203,
+            display_name="MANUAL EMPLOYEES",
+            raw_description="MANUAL EMPLOYEES",
+            matching_rule=None,
+            status=CategoryStatus.needs_review.value,
+            source="system_generated",
+            plan_assignments={"plan_code": "1", "num_employees": 999},
+        )
+        db.add(category)
+        db.flush()
+
+        summary = auto_map_policy_year(db, policy_year_id=PY_2026, client_id=CLIENT_ID)
+        item = next(row for row in summary.categories if row.category_id == category.id)
+
+        assert item.rule_status == "validated"
+        assert item.matched_count == 1
+        assert item.expected_count == 999
+        assert "placement slip states 999" in " ".join(item.warnings)
 
 
 def test_confirmed_company_mapping_is_reused_without_a_new_roster() -> None:

@@ -60,8 +60,8 @@ from app.schemas.api import (
 from app.services import product_registry
 from app.services.ai_slip_extractor import maybe_ai_augment
 from app.services.dynamic_template import merge_file_overlay, synthesize_template
-from app.services.eligibility_mapping import auto_map_policy_year
-from app.services.matching_engine import match_policy_year
+from app.services.eligibility_mapping import auto_map_policy_year, category_signature
+from app.services.matching_engine import insured_names, match_policy_year, normalize_entity
 from app.services.period_parser import parse_period_of_insurance
 from app.services.placement_slip_parser import (
     ProductSlip,
@@ -80,6 +80,23 @@ from app.services.slip_to_setup import build_setup_answers
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/placement-slips", tags=["placement-slips"])
+
+
+def _category_reconcile_key(
+    product_id: str | None,
+    plan_code: object,
+    description: str,
+    insured: object,
+) -> tuple[str | None, str, str, tuple[str, ...]]:
+    entities = tuple(
+        sorted(name for raw in insured_names(insured) if (name := normalize_entity(raw)))
+    )
+    return (
+        product_id,
+        str(plan_code or "").strip().casefold(),
+        category_signature(description),
+        entities,
+    )
 
 
 def _find_product(
@@ -326,6 +343,35 @@ async def parse_upload(
     confirmed_product_ids = {
         products_cache[c].id for c in confirmed_codes if c in products_cache
     }
+    preserved_by_key: dict[
+        tuple[str | None, str, str, tuple[str, ...]], Category
+    ] = {}
+    existing_categories = list(
+        db.execute(
+            select(Category).where(Category.policy_year_id == policy_year_id)
+        ).scalars()
+    )
+    for existing_category in existing_categories:
+        if (
+            existing_category.source == SourceKind.system_generated.value
+            and existing_category.status == CategoryStatus.needs_review.value
+        ):
+            continue
+        source_ref = str(existing_category.source_ref or "")
+        if not source_ref.startswith("placement_slip://"):
+            continue
+        assignments = (
+            existing_category.plan_assignments
+            if isinstance(existing_category.plan_assignments, dict)
+            else {}
+        )
+        key = _category_reconcile_key(
+            existing_category.product_id,
+            assignments.get("plan_code"),
+            existing_category.raw_description,
+            assignments.get("insured"),
+        )
+        preserved_by_key.setdefault(key, existing_category)
     clear_stmt = delete(Category).where(
         Category.policy_year_id == policy_year_id,
         Category.source == SourceKind.system_generated.value,
@@ -385,6 +431,32 @@ async def parse_upload(
             is_voluntary = pspec.employee == "voluntary" or (
                 pspec.employee is None and pspec.dependant == "voluntary"
             )
+            assignments = build_plan_assignments(
+                cat,
+                product_slip.voluntary_rates,
+                is_voluntary,
+                tier_labels=product_slip.tier_labels,
+            )
+            source_ref = (
+                f"placement_slip://{slip_row.id}/{product_slip.sheet}/row_{cat.source_row}"
+            )
+            reconcile_key = _category_reconcile_key(
+                product.id if product else None,
+                cat.plan_code,
+                cat.category,
+                cat.insured,
+            )
+            if preserved := preserved_by_key.pop(reconcile_key, None):
+                if not preserved.human_modified:
+                    preserved.display_name = cat.category[:512]
+                preserved.raw_description = cat.category
+                preserved.participation_model = (
+                    pspec.employee or normalize_participation(cat.participation)
+                )
+                preserved.participation_detail = pspec.to_dict()
+                preserved.plan_assignments = assignments
+                preserved.source_ref = source_ref
+                continue
             row = Category(
                 policy_year_id=policy_year_id,
                 product_id=product.id if product else None,
@@ -395,14 +467,9 @@ async def parse_upload(
                 rule_human_readable=envelope.human_readable,
                 participation_model=pspec.employee or normalize_participation(cat.participation),
                 participation_detail=pspec.to_dict(),
-                plan_assignments=_build_plan_assignments(
-                    cat,
-                    product_slip.voluntary_rates,
-                    is_voluntary,
-                    tier_labels=product_slip.tier_labels,
-                ),
+                plan_assignments=assignments,
                 source=SourceKind.system_generated.value,
-                source_ref=f"placement_slip://{slip_row.id}/{product_slip.sheet}/row_{cat.source_row}",
+                source_ref=source_ref,
                 confidence=envelope.confidence,
                 status=CategoryStatus.needs_review.value,
             )

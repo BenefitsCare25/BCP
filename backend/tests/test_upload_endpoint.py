@@ -158,6 +158,39 @@ def test_reupload_replaces_not_duplicates(client: TestClient) -> None:
     assert _count() == before
 
 
+def test_reupload_reconciles_a_confirmed_slip_category(client: TestClient) -> None:
+    """Reviewed slip rows are refreshed in place instead of being duplicated."""
+
+    py_id = client.get("/api/v1/policy-years").json()[0]["id"]
+    categories = client.get(
+        "/api/v1/categories", params={"policy_year_id": py_id}
+    ).json()
+    candidate = next(
+        row
+        for row in categories
+        if row["source"] == "system_generated" and row["matching_rule"] is not None
+    )
+    confirmed = client.post(f"/api/v1/categories/{candidate['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+
+    before = len(categories)
+    with FIXTURE.open("rb") as file:
+        response = client.post(
+            "/api/v1/placement-slips/parse",
+            files={"file": (FIXTURE.name, file, "application/vnd.ms-excel")},
+            data={"policy_year_id": py_id},
+        )
+    assert response.status_code == 200, response.text
+
+    after = client.get(
+        "/api/v1/categories", params={"policy_year_id": py_id}
+    ).json()
+    assert len(after) == before
+    refreshed = next(row for row in after if row["id"] == candidate["id"])
+    assert refreshed["status"] == "confirmed"
+    assert refreshed["source_ref"] != candidate["source_ref"]
+
+
 def test_category_patch_flips_to_manual(client: TestClient) -> None:
     py_id = client.get("/api/v1/policy-years").json()[0]["id"]
     cats = client.get(

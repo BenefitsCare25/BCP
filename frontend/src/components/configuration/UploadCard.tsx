@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Upload,
   CheckCircle2,
@@ -380,6 +380,7 @@ function ColumnMappingFixer({ product }: { product: ProductDiagnostic }) {
  *  the tab row; the results render below the tabs). */
 export function useSlipUpload(policyYearId: string) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const activePolicyYearId = useRef(policyYearId);
   const [filename, setFilename] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [result, setResult] = useState<ParseResult | null>(null);
@@ -399,6 +400,20 @@ export function useSlipUpload(policyYearId: string) {
   const setPolicyYear = useSession((s) => s.setPolicyYear);
   const { data: registry } = useRegistry();
   const { data: clientProducts = [] } = useProducts();
+
+  activePolicyYearId.current = policyYearId;
+
+  useEffect(() => {
+    setFilename(null);
+    setValidationError(null);
+    setResult(null);
+    setPendingFile(null);
+    setDuplicateOf(null);
+    setPeriodMismatch(null);
+    setMismatchFile(null);
+    setClassifiedCodes([]);
+    if (fileInput.current) fileInput.current.value = "";
+  }, [policyYearId]);
 
   // Also derive the reminder from data: diagnostics flagged a product as
   // needing classification, and the catalog now HAS one (classified from any
@@ -431,17 +446,19 @@ export function useSlipUpload(policyYearId: string) {
     file: File,
     opts?: { acknowledge?: boolean; targetYearId?: string },
   ) => {
+    const uploadPolicyYearId = opts?.targetYearId ?? policyYearId;
     setValidationError(null);
     setResult(null);
     setFilename(file.name);
     upload.mutate(
       {
         file,
-        policyYearId: opts?.targetYearId ?? policyYearId,
+        policyYearId: uploadPolicyYearId,
         acknowledgePeriodMismatch: opts?.acknowledge ?? false,
       },
       {
         onSuccess: (r) => {
+          if (activePolicyYearId.current !== uploadPolicyYearId) return;
           setResult(r);
           setClassifiedCodes([]); // this upload used the latest classifications
           const parts = [
@@ -473,6 +490,7 @@ export function useSlipUpload(policyYearId: string) {
           });
         },
         onError: (e) => {
+          if (activePolicyYearId.current !== uploadPolicyYearId) return;
           if (e instanceof PeriodMismatchError) {
             // Nothing was written — prompt the user to switch years or proceed.
             setPeriodMismatch(e.detail);

@@ -244,7 +244,9 @@ def _sequence_spans(haystack: list[str], needle: list[str]) -> list[tuple[int, i
     ]
 
 
-def _matched_values(text: str, values: list[Any]) -> list[Any]:
+def _matched_values(
+    text: str, values: list[Any], *, allow_single_character: bool = True
+) -> list[Any]:
     """Return roster values explicitly named in ``text``.
 
     Longest non-overlapping phrase matching handles both sides of the MCIL
@@ -257,6 +259,8 @@ def _matched_values(text: str, values: list[Any]) -> list[Any]:
     for order, raw in enumerate(values):
         needle = _tokens(raw)
         if not needle or needle in (["employee"], ["staff"], ["member"], ["other"]):
+            continue
+        if not allow_single_character and len(needle) == 1 and len(needle[0]) == 1:
             continue
         for lo, hi in _sequence_spans(haystack, needle):
             candidates.append((-(hi - lo), lo, order, raw))
@@ -292,7 +296,7 @@ def _best_value_mapping(
             continue
         if catalog.data_types.get(attribute_id) not in {None, "string", "enum"}:
             continue
-        matched = _matched_values(text, values)
+        matched = _matched_values(text, values, allow_single_character=False)
         if matched:
             candidates.append((-len(matched), _attribute_rank(attribute_id), attribute_id, matched))
     if not candidates:
@@ -336,7 +340,7 @@ def _multi_named_cohort_mapping(
         )
     ):
         values = catalog.values.get(attribute_id, [])
-        matched = _matched_values(text, values)
+        matched = _matched_values(text, values, allow_single_character=False)
         if len(matched) >= 2:
             candidates.append((order, attribute_id, matched))
     if not candidates:
@@ -1335,11 +1339,12 @@ def _assignment_counts(
     employees: list[Employee],
     views: list[dict[str, Any]],
 ) -> tuple[dict[str, int], dict[str, int]]:
-    """Assign each employee with the live matcher's rule precedence per product.
+    """Count matched eligibility cohorts with the live matcher's precedence.
 
-    This intentionally evaluates rules only. Exact/fuzzy name matching can make
-    runtime matching more forgiving, but it must not make a broken rule look
-    validated in the configuration workbench.
+    Alternative plan/tier rows can legitimately share one cohort rule. Collapse
+    those siblings by company-scoped category signature before diagnosing an
+    ambiguity, and give each sibling the cohort count shown in the workbench.
+    Exact/fuzzy matching remains excluded so it cannot validate a broken rule.
     """
 
     by_product: dict[str | None, list[Category]] = defaultdict(list)
@@ -1368,6 +1373,9 @@ def _assignment_counts(
         )
         return status_rank, -rule_specificity(category.matching_rule)
 
+    def cohort_identity(category: Category) -> tuple[str, frozenset[str]]:
+        return category_signature(category.raw_description), gates[category.id]
+
     for product_id, product_categories in by_product.items():
         product = products.get(product_id) if product_id else None
         product_gate = product_entities(product, aliases)
@@ -1386,17 +1394,69 @@ def _assignment_counts(
             ]
             if not matches:
                 continue
-            # Mirror matching_engine.match_one exactly: a broker-confirmed rule
-            # wins first, then specificity, then priority. The workbench count
-            # must describe the assignment the live matcher will actually save.
+            # Mirror matching_engine.match_one through status + specificity.
+            # Priority chooses the baseline tier only after equal-rank rows are
+            # collapsed into their employee-cohort meaning.
             best_rank = min(rank(category) for category in matches)
             best = [category for category in matches if rank(category) == best_rank]
-            if len(best) > 1:
+            best_cohorts = {cohort_identity(category) for category in best}
+            if len(best_cohorts) > 1:
                 for category in best:
                     overlaps[category.id] += 1
-            winner = min(best, key=lambda category: category.priority)
-            counts[winner.id] += 1
+            for category in matches:
+                if cohort_identity(category) in best_cohorts:
+                    counts[category.id] += 1
     return counts, overlaps
+
+
+def _rule_messages(
+    *,
+    catalog: AttributeValueCatalog,
+    matching_rule: Rule | None,
+    validation: RuleValidation,
+    matched: int | None,
+    expected: int | None,
+    overlap_count: int,
+    unresolved: list[str],
+) -> tuple[list[str], list[str]]:
+    """Return display warnings and the subset that blocks auto-validation."""
+
+    warnings = list(validation.warnings)
+    blockers: list[str] = []
+    if not catalog.roster_present and matching_rule is not None:
+        warnings.append("No active roster is available to validate matched employees")
+    if overlap_count:
+        message = (
+            f"{overlap_count} employees also match an equally specific "
+            "employee cohort"
+        )
+        warnings.append(message)
+        blockers.append(message)
+    if expected is not None and matched is not None and expected != matched:
+        warnings.append(f"Matched {matched} employees; placement slip states {expected}")
+    if matched == 0 and expected and matching_rule is not None:
+        message = "Rule matches no active employees although the slip states a headcount"
+        warnings.append(message)
+        blockers.append(message)
+    for clause in unresolved:
+        message = f"Unresolved clause: {clause}"
+        warnings.append(message)
+        blockers.append(message)
+    return list(dict.fromkeys(warnings)), list(dict.fromkeys(blockers))
+
+
+def _rule_status(
+    *,
+    matching_rule: Rule | None,
+    validation: RuleValidation,
+    blockers: list[str],
+    roster_present: bool,
+) -> str:
+    if matching_rule is None:
+        return "unmapped"
+    if validation.errors or blockers:
+        return "needs_review"
+    return "validated" if roster_present else "proposed"
 
 
 def assess_category_rule(
@@ -1438,29 +1498,22 @@ def assess_category_rule(
     expected_raw = pa.get("num_employees")
     expected = int(expected_raw) if isinstance(expected_raw, (int, float)) else None
     matched = counts.get(category.id, 0) if catalog.roster_present else None
-    warnings = list(validation.warnings)
     unresolved = [str(value)[:512] for value in (unresolved_clauses or [])][:20]
-    if not catalog.roster_present and category.matching_rule is not None:
-        warnings.append("No active roster is available to validate matched employees")
-    if overlaps.get(category.id):
-        warnings.append(
-            f"{overlaps[category.id]} employees also match an equally specific sibling rule"
-        )
-    if expected is not None and matched is not None and expected != matched:
-        warnings.append(f"Matched {matched} employees; placement slip states {expected}")
-    if matched == 0 and catalog.roster_present and category.matching_rule is not None:
-        warnings.append("Rule matches no active employees")
-    warnings.extend(f"Unresolved clause: {clause}" for clause in unresolved)
-    warnings = list(dict.fromkeys(warnings))
-
-    if category.matching_rule is None:
-        rule_status = "unmapped"
-    elif validation.errors or warnings:
-        rule_status = "needs_review"
-    elif catalog.roster_present:
-        rule_status = "validated"
-    else:
-        rule_status = "proposed"
+    warnings, blockers = _rule_messages(
+        catalog=catalog,
+        matching_rule=category.matching_rule,
+        validation=validation,
+        matched=matched,
+        expected=expected,
+        overlap_count=overlaps.get(category.id, 0),
+        unresolved=unresolved,
+    )
+    rule_status = _rule_status(
+        matching_rule=category.matching_rule,
+        validation=validation,
+        blockers=blockers,
+        roster_present=catalog.roster_present,
+    )
     payload = {
         "state": rule_status,
         "source": source,
@@ -1571,25 +1624,21 @@ def auto_map_policy_year(
         expected = int(expected_raw) if isinstance(expected_raw, (int, float)) else None
         matched = counts.get(category.id, 0) if catalog.roster_present else None
         errors = list(validation.errors)
-        warnings: list[str] = []
-        if not catalog.roster_present and proposal.rule is not None:
-            warnings.append("No active roster is available to validate matched employees")
-        if overlaps.get(category.id):
-            warnings.append(
-                f"{overlaps[category.id]} employees also match an equally specific sibling rule"
-            )
-        if expected is not None and matched is not None and expected != matched:
-            warnings.append(f"Matched {matched} employees; placement slip states {expected}")
-        warnings.extend(f"Unresolved clause: {clause}" for clause in proposal.unresolved_clauses)
-
-        if proposal.rule is None:
-            rule_status = "unmapped"
-        elif errors or warnings:
-            rule_status = "needs_review"
-        elif catalog.roster_present:
-            rule_status = "validated"
-        else:
-            rule_status = "proposed"
+        warnings, blockers = _rule_messages(
+            catalog=catalog,
+            matching_rule=proposal.rule,
+            validation=validation,
+            matched=matched,
+            expected=expected,
+            overlap_count=overlaps.get(category.id, 0),
+            unresolved=proposal.unresolved_clauses,
+        )
+        rule_status = _rule_status(
+            matching_rule=proposal.rule,
+            validation=validation,
+            blockers=blockers,
+            roster_present=catalog.roster_present,
+        )
         category.rule_status = rule_status
         payload = {
             "state": rule_status,
