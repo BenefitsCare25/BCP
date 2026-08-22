@@ -76,9 +76,51 @@ def test_prompt_delimits_untrusted_slip_text_as_data() -> None:
 def test_rule_prompt_requires_one_operator_per_node() -> None:
     rule_schema = TOOL_SCHEMA["input_schema"]["properties"]["rule"]
 
-    assert "exactly one key" in COMPANY_RULE_SYSTEM_PROMPT
-    assert "exactly one operator key" in rule_schema["description"]
-    assert "Invalid:" in COMPANY_RULE_SYSTEM_PROMPT
+    assert "NOT JSONLogic" in COMPANY_RULE_SYSTEM_PROMPT
+    assert rule_schema["additionalProperties"] is False
+    condition = rule_schema["properties"]["groups"]["items"]["properties"][
+        "conditions"
+    ]["items"]
+    assert condition["additionalProperties"] is False
+    assert condition["properties"]["operator"]["enum"] == [
+        "=", "!=", ">=", "<=", ">", "<", "between", "in", "not_in"
+    ]
+
+
+def test_structured_ai_rule_is_converted_to_jsonlogic() -> None:
+    payload = {
+        "rule": {
+            "match_all_employees": False,
+            "combine_groups": "any",
+            "groups": [
+                {
+                    "combine_conditions": "all",
+                    "conditions": [
+                        {
+                            "attribute": "designation",
+                            "operator": "in",
+                            "value": None,
+                            "values": ["Manager", "Executive"],
+                            "lower": None,
+                            "upper": None,
+                        }
+                    ],
+                }
+            ],
+        },
+        "human_readable": "Managers and executives",
+        "confidence": 0.8,
+        "reasoning": "Uses configured company values.",
+        "unresolved_clauses": [],
+    }
+    fake_client = SimpleNamespace(
+        messages=SimpleNamespace(create=Mock(return_value=_response(payload)))
+    )
+
+    with patch("app.services.ai_extractor._build_ai_client", return_value=fake_client):
+        envelope, _ = generate_rule_via_ai("Managers", _schema(), _config())
+
+    assert envelope.rule == {"in": ["designation", ["Manager", "Executive"]]}
 
 
 @pytest.mark.parametrize(

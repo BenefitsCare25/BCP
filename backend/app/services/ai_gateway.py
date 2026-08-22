@@ -63,10 +63,10 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# v3 makes the one-operator-per-node JSONLogic contract explicit. The version
-# bump invalidates v2 cache entries whose structurally invalid rules were
-# correctly rejected by the company validator after generation.
-PROMPT_VERSION = "rule_generation/v3"
+# v4 replaces model-authored JSONLogic with a constrained condition/group
+# format that the server converts to JSONLogic. This invalidates cached v3
+# responses that the structural validator correctly rejected.
+PROMPT_VERSION = "rule_generation/v4"
 DERIVATION_PROMPT_VERSION = "roster_derivation/v1"
 RECOMMEND_PROMPT_VERSION = "schema_recommend/v1"
 # v2: categories carry financial fields (rates / SI / tiers / earnings) so an
