@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   AlertTriangle,
-  Calendar,
   CalendarCheck,
   Coins,
   FileSpreadsheet,
@@ -18,13 +17,6 @@ import type { LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -43,7 +35,6 @@ import {
 import { useReportReadiness, useReportWorkbooks } from "@/api/reports";
 import { useMe, usePolicyYears } from "@/api/hooks";
 import { useSession } from "@/stores/session";
-import { formatPolicyRange, isPastPolicyPeriod } from "@/lib/policy-year";
 import type { PolicyYear } from "@/types";
 
 // Reports Center — every downloadable/reviewable report, grouped by the team
@@ -617,16 +608,6 @@ function ItReports({ year }: { year: PolicyYear | null }) {
   );
 }
 
-/** Status chip for the selected benefit year, so the broker always knows which
- *  version of the year they're exporting. */
-function YearStatusBadge({ year }: { year: PolicyYear }) {
-  if (year.status === "active") return <Badge variant="good">Current</Badge>;
-  if (year.status === "draft") return <Badge variant="warn">Draft</Badge>;
-  if (isPastPolicyPeriod(year.coverage_end))
-    return <Badge variant="outline">Past year</Badge>;
-  return <Badge variant="outline">Archived</Badge>;
-}
-
 export function ReportsPage() {
   const sessionYearId = useSession((s) => s.currentPolicyYearId);
   const { data: years = [] } = usePolicyYears();
@@ -634,25 +615,7 @@ export function ReportsPage() {
   const search = useSearch({ strict: false }) as { tab?: string };
   const tab: TeamKey = isTeam(search.tab) ? search.tab : "pa";
 
-  // The Reports Center is year-scoped independently of the rest of the app: the
-  // broker can pull a past or draft year's documents here without changing the
-  // current benefit year everywhere else. Default to the session's current year,
-  // then let this local selection drive every year-owned report.
-  const [selectedYearId, setSelectedYearId] = useState<string | null>(null);
-  useEffect(() => {
-    if (years.length === 0) {
-      if (selectedYearId !== null) setSelectedYearId(null);
-      return;
-    }
-    if (selectedYearId && years.some((y) => y.id === selectedYearId)) return;
-    const fallback =
-      (sessionYearId && years.find((y) => y.id === sessionYearId)) ||
-      years.find((y) => y.status === "active") ||
-      years[0];
-    setSelectedYearId(fallback.id);
-  }, [years, selectedYearId, sessionYearId]);
-
-  const selectedYear = years.find((y) => y.id === selectedYearId) ?? null;
+  const selectedYear = years.find((y) => y.id === sessionYearId) ?? null;
 
   // NRIC held here (not in the tab) so the choice survives a tab switch, which
   // unmounts the inactive tab's content.
@@ -660,38 +623,6 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-        <Calendar className="size-4 text-muted-foreground" />
-        <span className="text-sm font-medium text-foreground">
-          Benefit year
-        </span>
-        <Select
-          value={selectedYearId ?? ""}
-          onValueChange={setSelectedYearId}
-          disabled={years.length === 0}
-        >
-          <SelectTrigger className="w-[300px]" aria-label="Benefit year">
-            <SelectValue
-              placeholder={
-                years.length ? "Select a benefit year" : "No benefit years"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {years.map((y) => (
-              <SelectItem key={y.id} value={y.id}>
-                {formatPolicyRange(y.coverage_start, y.coverage_end)}
-                {y.status === "active" ? " · current" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {selectedYear && <YearStatusBadge year={selectedYear} />}
-        <span className="ml-auto text-xs text-muted-foreground">
-          Reports regenerate live from this year&apos;s configuration.
-        </span>
-      </div>
-
       <Tabs
         value={tab}
         onValueChange={(value) =>

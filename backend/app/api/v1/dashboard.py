@@ -20,12 +20,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser, get_current_user
+from app.core.clock import today as business_today
+from app.core.deps import assert_policy_year_for_user
 from app.core.identity import accessible_clients
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
@@ -106,6 +108,7 @@ def _grouped_count(
 
 @router.get("/summary", response_model=DashboardSummary)
 def get_summary(
+    policy_year_id: str | None = Query(default=None),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DashboardSummary:
@@ -117,20 +120,31 @@ def get_summary(
     )
     client_ids = [c.id for c in clients]
 
-    # Current (active) benefit year per company. If more than one is active,
-    # take the most recent by start_date — the one Home should headline.
+    # Today's configured period per company. The legacy active flag is a
+    # fallback for gaps, matching portal resolution. Company Dashboard may
+    # explicitly request the globally selected historical year.
     current_year_by_client: dict[str, PolicyYear] = {}
     if client_ids:
-        rows = db.execute(
+        rows = list(db.execute(
             select(PolicyYear)
-            .where(
-                PolicyYear.client_id.in_(client_ids),
-                PolicyYear.status == PolicyYearStatus.active,
-            )
+            .where(PolicyYear.client_id.in_(client_ids))
             .order_by(PolicyYear.client_id, PolicyYear.start_date.desc())
-        ).scalars()
+        ).scalars())
+        today = business_today()
         for py in rows:
-            current_year_by_client.setdefault(py.client_id, py)
+            if py.status == PolicyYearStatus.active and py.start_date > today:
+                current_year_by_client.setdefault(py.client_id, py)
+        for py in rows:
+            if py.start_date <= today <= py.end_date:
+                current_year_by_client.setdefault(py.client_id, py)
+        for py in rows:
+            if py.status == PolicyYearStatus.active:
+                current_year_by_client.setdefault(py.client_id, py)
+
+    if policy_year_id is not None:
+        selected_year = assert_policy_year_for_user(policy_year_id, user, db)
+        if selected_year.client_id in client_ids:
+            current_year_by_client[selected_year.client_id] = selected_year
 
     year_ids = [py.id for py in current_year_by_client.values()]
 

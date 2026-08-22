@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
+from app.core.portal_auth import active_policy_year
 from app.core.storage import (
     DOCUMENT_SUFFIXES,
     MAX_DOCUMENT_BYTES,
@@ -1483,10 +1484,14 @@ def submit_claim(
     assert_transition(claim, CLAIM_STATUS_SUBMITTED)
 
     year = db.get(PolicyYear, claim.policy_year_id)
-    if year is None or year.status != PolicyYearStatus.active:
+    current_year = active_policy_year(db, claim.client_id)
+    if year is None or (
+        year.status != PolicyYearStatus.active
+        and (current_year is None or year.id != current_year.id)
+    ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "Claims can only be submitted against the active policy year.",
+            "Claims can only be submitted against the benefit year for today's date.",
         )
     # Asserted HERE rather than inside the shared chain, and the order is not
     # incidental: the grace deadline below is anchored to this window's

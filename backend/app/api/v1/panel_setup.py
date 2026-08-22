@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import require_client_id
+from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
 from app.models import (
     PanelCard,
@@ -27,7 +28,6 @@ from app.models import (
 )
 from app.models.panel_card import CARD_SERVICE_LABELS
 from app.models.panel_clinic import clinic_type_label
-from app.models.policy_year import PolicyYearStatus
 from app.schemas.panel import (
     PanelSetupHistoryOut,
     SetupHistoryCard,
@@ -54,6 +54,7 @@ def panel_setup_history(
     if not years:
         return PanelSetupHistoryOut()
     year_ids = [y.id for y in years]
+    current_year = active_policy_year(db, client_id)
 
     # Listings enabled per year, with their clinic counts.
     listings_by_year: dict[str, list[SetupHistoryListing]] = {}
@@ -123,7 +124,7 @@ def panel_setup_history(
                 status=year.status.value,
                 start_date=year.start_date.isoformat(),
                 end_date=year.end_date.isoformat(),
-                is_current=year.status == PolicyYearStatus.active,
+                is_current=current_year is not None and year.id == current_year.id,
                 listings=listings_by_year.get(year.id, []),
                 cards=cards_by_year.get(year.id, []),
             )

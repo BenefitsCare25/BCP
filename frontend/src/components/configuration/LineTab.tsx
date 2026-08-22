@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Trash2, Upload, X } from "lucide-react";
 import {
   Card,
@@ -29,9 +29,6 @@ interface Props {
   // Category groups already scoped to this line.
   groups: CategoryGroup[];
   onSelectCategory: (c: Category) => void;
-  // Benefit-year picker rendered beside the product title (single node — only
-  // the active product card mounts, so it appears in one place at a time).
-  yearSelector?: ReactNode;
   onBlockingEditChange?: (
     line: InsuranceLine,
     edit: {
@@ -53,7 +50,6 @@ export function LineTab({
   line,
   groups,
   onSelectCategory,
-  yearSelector,
   onBlockingEditChange,
 }: Props) {
   const [activeCode, setActiveCode] = useState("");
@@ -233,10 +229,7 @@ export function LineTab({
                 <Card>
                   <CardHeader>
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <CardTitle>{p.display_name}</CardTitle>
-                        {yearSelector}
-                      </div>
+                      <CardTitle>{p.display_name}</CardTitle>
                       <div className="flex items-center gap-2">
                         <Button
                           variant={isEditing ? "secondary" : "outline"}
@@ -285,7 +278,6 @@ export function LineTab({
         </Tabs>
       ) : (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border p-10 text-center">
-          {yearSelector}
           <Upload className="size-6 text-muted-foreground" />
           <div className="text-sm text-muted-foreground">
             No {LINE_LABELS[line]} products yet — upload a placement slip above,

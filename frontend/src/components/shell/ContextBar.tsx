@@ -1,6 +1,7 @@
+import { useEffect } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronLeft, Globe } from "lucide-react";
+import { Building2, CalendarRange, ChevronLeft, Globe } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -8,7 +9,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useMe } from "@/api/hooks";
+import { useMe, usePolicyYears } from "@/api/hooks";
+import {
+  defaultPolicyYear,
+  formatPolicyRange,
+  policyYearForToday,
+} from "@/lib/policy-year";
 import { useSession } from "@/stores/session";
 import { isCompanyPath } from "./nav";
 
@@ -42,8 +48,11 @@ function FirmBanner() {
 
 function CompanyContext() {
   const { data: me } = useMe();
+  const { data: years = [], isSuccess: yearsLoaded } = usePolicyYears();
   const activeClientId = useSession((s) => s.activeClientId);
   const setActiveClient = useSession((s) => s.setActiveClient);
+  const selectedYearId = useSession((s) => s.currentPolicyYearId);
+  const setPolicyYear = useSession((s) => s.setPolicyYear);
   const qc = useQueryClient();
 
   const clients = me?.accessible_clients ?? [];
@@ -68,8 +77,23 @@ function CompanyContext() {
   const activeName =
     clients.find((c) => c.id === selected)?.name ?? "Select company";
 
+  // Preserve an explicit historical selection while it belongs to this
+  // company. On first entry, company switch, or deletion, select the period
+  // containing today; no manual "current" action is required.
+  useEffect(() => {
+    if (!yearsLoaded) return;
+    if (years.length === 0) {
+      if (selectedYearId !== null) setPolicyYear(null);
+      return;
+    }
+    if (years.some((year) => year.id === selectedYearId)) return;
+    setPolicyYear(defaultPolicyYear(years)?.id ?? null);
+  }, [yearsLoaded, years, selectedYearId, setPolicyYear]);
+
+  const todayYearId = policyYearForToday(years)?.id;
+
   return (
-    <div className="h-10 shrink-0 border-b border-border bg-card px-6 flex items-center gap-3 text-sm">
+    <div className="min-h-10 shrink-0 border-b border-border bg-card px-4 py-1.5 sm:px-6 flex flex-wrap items-center gap-3 text-sm">
       <Link
         to="/home"
         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -98,6 +122,34 @@ function CompanyContext() {
       ) : (
         <span className="font-medium text-foreground">{activeName}</span>
       )}
+      <div className="ml-auto flex min-w-0 items-center gap-2">
+        <CalendarRange className="size-4 shrink-0 text-muted-foreground" />
+        {years.length > 0 ? (
+          <Select
+            value={selectedYearId ?? undefined}
+            onValueChange={setPolicyYear}
+          >
+            <SelectTrigger
+              aria-label="Select benefit year"
+              className="h-8 w-[17rem] max-w-[65vw] whitespace-nowrap"
+            >
+              <SelectValue placeholder="Select benefit year" />
+            </SelectTrigger>
+            <SelectContent>
+              {years.map((year) => (
+                <SelectItem key={year.id} value={year.id}>
+                  {formatPolicyRange(year.coverage_start, year.coverage_end)}
+                  {todayYearId === year.id ? " · Today" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <span className="text-xs text-muted-foreground">
+            No benefit years
+          </span>
+        )}
+      </div>
     </div>
   );
 }

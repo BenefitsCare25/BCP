@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -94,10 +94,6 @@ function CheckRow({
 
 interface Props {
   policyYearId: string;
-  // Benefit-year picker, rendered beside the coverage download. It must survive
-  // every fallback branch below — you have to be able to switch back to a year
-  // whose roster loads even when this one's doesn't.
-  yearSelector?: ReactNode;
 }
 
 /**
@@ -107,7 +103,7 @@ interface Props {
  * the distribution up top, the pass/fail checks below, each exception opening a
  * slide-over of exactly who and downloadable as an .xlsx.
  */
-export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
+export function FlexOverviewCard({ policyYearId }: Props) {
   const membership = useFlexMembership(policyYearId);
   const coverage = useFlexCoverage(policyYearId);
   const [active, setActive] = useState<CoverageBucket | null>(null);
@@ -126,14 +122,9 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
   };
 
   // Right-aligned picker row, used by the branches that render no card header.
-  const selectorRow = yearSelector ? (
-    <div className="flex justify-end">{yearSelector}</div>
-  ) : null;
-
   if (membership.isError || coverage.isError) {
     return (
       <div className="space-y-3">
-        {selectorRow}
         <Card>
           <CardContent className="flex items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
             <span>Couldn't load the Flex overview.</span>
@@ -154,12 +145,11 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
   }
 
   const m = membership.data;
-  if (membership.isLoading || !m) return selectorRow;
+  if (membership.isLoading || !m) return null;
 
   if (m.employees_total === 0) {
     return (
       <div className="space-y-3">
-        {selectorRow}
         <Card>
           <CardContent className="p-4 text-sm text-muted-foreground">
             Upload the employee &amp; dependant rosters under{" "}
@@ -218,7 +208,6 @@ export function FlexOverviewCard({ policyYearId, yearSelector }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {yearSelector}
             <Button
               variant="outline"
               size="sm"

@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
+from app.core.clock import today as business_today
 from app.core.deps import (
     _deny_cross_tenant,
     assert_policy_year_for_user,
@@ -388,23 +389,42 @@ def list_panel_clinics(
 
 
 def _target_years_by_client(db: Session, client_ids: list[str]) -> dict[str, PolicyYear]:
-    """Each company's enable target: its active policy year, else the latest
-    non-archived one. Companies with no usable year are absent."""
+    """Each company's enable target: today's period, then legacy active, then
+    the latest non-archived year. Companies with no usable year are absent."""
     years = db.scalars(
         select(PolicyYear)
-        .where(
-            PolicyYear.client_id.in_(client_ids),
-            PolicyYear.status != PolicyYearStatus.archived,
-        )
+        .where(PolicyYear.client_id.in_(client_ids))
         .order_by(PolicyYear.start_date)
     ).all()
+    today = business_today()
     target: dict[str, PolicyYear] = {}
     for year in years:  # ordered by start ASC
         current = target.get(year.client_id)
-        year_active = year.status == PolicyYearStatus.active
-        current_active = current is not None and current.status == PolicyYearStatus.active
-        # Active beats non-active; within the same class the later start wins.
-        if current is None or year_active or not current_active:
+        year_rank = (
+            3
+            if year.status == PolicyYearStatus.active and year.start_date > today
+            else 2
+            if year.start_date <= today <= year.end_date
+            else 1
+            if year.status == PolicyYearStatus.active
+            else 0
+            if year.status != PolicyYearStatus.archived
+            else -1
+        )
+        current_rank = (
+            -1
+            if current is None
+            else 3
+            if current.status == PolicyYearStatus.active and current.start_date > today
+            else 2
+            if current.start_date <= today <= current.end_date
+            else 1
+            if current.status == PolicyYearStatus.active
+            else 0
+            if current.status != PolicyYearStatus.archived
+            else -1
+        )
+        if year_rank >= 0 and year_rank >= current_rank:
             target[year.client_id] = year
     return target
 

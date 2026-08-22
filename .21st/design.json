@@ -34,7 +34,14 @@
     "must": [],
     "avoid": []
   },
-  "decisions": [],
+  "decisions": [
+    {
+      "id": "company-benefit-year-context",
+      "decision": "Place the benefit-year selector in the company context row and use it as the single scope across company pages.",
+      "reason": "Historical products, plans, members, claims, and panel setup must remain visibly tied to the same selected benefit year during navigation.",
+      "date": "2026-08-23"
+    }
+  ],
   "evidence": [
     {
       "fact": "project.instructions",

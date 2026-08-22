@@ -31,9 +31,9 @@ import {
   SlipUploadPanel,
   useSlipUpload,
 } from "@/components/configuration/UploadCard";
-import { ViewingYearSelect } from "@/components/configuration/ViewingYearSelect";
 import { cn } from "@/lib/cn";
-import { isPastPolicyPeriod } from "@/lib/policy-year";
+import { defaultPolicyYear, isPastPolicyPeriod } from "@/lib/policy-year";
+import { useSession } from "@/stores/session";
 import type { Category, InsuranceLine } from "@/types";
 import {
   INSURANCE_LINES,
@@ -44,21 +44,15 @@ import {
 
 export function ConfigurationPage() {
   const { data: policyYears = [], isLoading: yearsLoading } = usePolicyYears();
-  const activeYearId =
-    policyYears.find((y) => y.status === "active")?.id ??
-    policyYears[0]?.id ??
-    null;
-  // Which benefit year the page views. Local to Configuration (the global
-  // top-bar picker is gone; every other page follows the current year). Defaults
-  // to the current year; a stale selection falls back to it. Past (ended) years
-  // are read-only; the current + future years stay editable. The read-only /
-  // set-current gates key off the coverage envelope (what the picker displays),
-  // not the nominal span, so "is today in the period" matches the shown dates.
-  const [viewingId, setViewingId] = useState<string | null>(null);
+  const selectedYearId = useSession((s) => s.currentPolicyYearId);
+  const setPolicyYear = useSession((s) => s.setPolicyYear);
+  // The shell owns one benefit-year context for every company page. Derive the
+  // same default synchronously on a cold load so this page never flashes an
+  // empty state before ContextBar has persisted it.
   const policyYearId =
-    viewingId && policyYears.some((y) => y.id === viewingId)
-      ? viewingId
-      : activeYearId;
+    selectedYearId && policyYears.some((y) => y.id === selectedYearId)
+      ? selectedYearId
+      : defaultPolicyYear(policyYears)?.id ?? null;
   const viewedYear = policyYears.find((y) => y.id === policyYearId) ?? null;
   const readOnly = viewedYear
     ? isPastPolicyPeriod(viewedYear.coverage_end)
@@ -234,36 +228,14 @@ export function ConfigurationPage() {
         <BenefitYearPanel
           years={policyYears}
           viewingId={policyYearId}
-          onViewYear={setViewingId}
+          onViewYear={setPolicyYear}
         />
       </div>
     );
   }
 
-  // The benefit-year picker now sits beside the product title (passed down to
-  // LineTab / FlexPanel). Only the active tab mounts, so this single node
-  // renders in exactly one place at a time.
-  const yearSelector = (
-    <ViewingYearSelect
-      value={policyYearId}
-      years={policyYears}
-      onChange={setViewingId}
-    />
-  );
-
   return (
     <div className="space-y-5">
-      {/* Benefit-year management applies to the insured configuration; Flex is a
-          separate module, so it doesn't carry the benefit-years section. Year
-          management stays interactive even while viewing a read-only year. */}
-      {tab !== "flex" && (
-        <BenefitYearPanel
-          years={policyYears}
-          viewingId={policyYearId}
-          onViewYear={setViewingId}
-        />
-      )}
-
       {/* Config editing is disabled when viewing a past year. pointer-events is
           inherited, so re-enabling it on the tab navigation (Radix tablists +
           the product-form section tabs) keeps browsing available read-only. */}
@@ -311,7 +283,6 @@ export function ConfigurationPage() {
                 {line === "flex" ? (
                   <FlexPanel
                     policyYearId={policyYearId}
-                    yearSelector={yearSelector}
                   />
                 ) : (
                   <LineTab
@@ -319,7 +290,6 @@ export function ConfigurationPage() {
                     line={line}
                     groups={groupsByLine[line]}
                     onSelectCategory={setSelected}
-                    yearSelector={yearSelector}
                     onBlockingEditChange={handleBlockingEditChange}
                   />
                 )}
@@ -328,6 +298,15 @@ export function ConfigurationPage() {
           </Tabs>
         )}
       </div>
+
+      {/* Renewal management follows the product setup it versions and stays
+          immediately above the audit trail. It remains interactive while a
+          historical product setup is being viewed read-only. */}
+      <BenefitYearPanel
+        years={policyYears}
+        viewingId={policyYearId}
+        onViewYear={setPolicyYear}
+      />
 
       {audit && audit.items.length > 0 && (
         <Card>

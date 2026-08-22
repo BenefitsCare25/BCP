@@ -285,11 +285,18 @@ def get_current_member(
 
 
 def active_policy_year(db: Session, client_id: str):
-    """The client's current active policy year (latest start when several)."""
+    """The benefit year covering today's business date.
+
+    The legacy ``active`` flag remains a fallback for a gap and for an already
+    forward-started onboarding period, preserving existing companies while
+    normal operation no longer requires a broker to promote each renewal.
+    """
+    from app.core.clock import today as business_today
     from app.models import PolicyYear
     from app.models.policy_year import PolicyYearStatus
 
-    return (
+    today = business_today()
+    legacy_active = (
         db.query(PolicyYear)
         .filter(
             PolicyYear.client_id == client_id,
@@ -298,6 +305,26 @@ def active_policy_year(db: Session, client_id: str):
         .order_by(PolicyYear.start_date.desc())
         .first()
     )
+    # Preserve a deliberately forward-started legacy year. The broker UI no
+    # longer creates this state, but existing onboarding flows may already have
+    # promoted the next period before it starts.
+    if legacy_active is not None and legacy_active.start_date > today:
+        return legacy_active
+
+    current = (
+        db.query(PolicyYear)
+        .filter(
+            PolicyYear.client_id == client_id,
+            PolicyYear.start_date <= today,
+            PolicyYear.end_date >= today,
+        )
+        .order_by(PolicyYear.start_date.desc())
+        .first()
+    )
+    if current is not None:
+        return current
+
+    return legacy_active
 
 
 def resolve_member_employee(

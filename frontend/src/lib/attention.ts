@@ -45,8 +45,8 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
     return [
       {
         key: "year",
-        message: "No current benefit year — set one in Company & Benefits",
-        short: "no current benefit year",
+        message: "No benefit year covers today — review Company & Benefits",
+        short: "no benefit year covers today",
         tone: "error",
         to: "/client-relations/company-benefits",
       },

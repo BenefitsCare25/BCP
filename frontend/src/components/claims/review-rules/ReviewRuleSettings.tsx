@@ -466,7 +466,7 @@ export function ReviewRuleSettings() {
                   note={
                     hasCurrentYear
                       ? "These setups reference a claim type not in the current benefit year (product removed or flex category renamed) — reviews use the defaults until the type returns."
-                      : "Claim types are read from the current benefit year. Set one as current and these match back to their claim types."
+                      : "Claim types are read from the benefit year covering today. Review its dates and these match back to their claim types."
                   }
                 >
                   {unmatched.map((cfg) => (

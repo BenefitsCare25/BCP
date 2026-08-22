@@ -1,8 +1,6 @@
-import { useEffect } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Menu } from "lucide-react";
-import { useMe, usePolicyYears } from "@/api/hooks";
-import { useSession } from "@/stores/session";
+import { useMe } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { AccountMenu } from "./AccountMenu";
 import { NotificationBell } from "./NotificationBell";
@@ -15,9 +13,6 @@ export function TopBar({
   title: string;
   onMenuClick?: () => void;
 }) {
-  const { data: years = [], isSuccess } = usePolicyYears();
-  const currentId = useSession((s) => s.currentPolicyYearId);
-  const setPolicyYear = useSession((s) => s.setPolicyYear);
   const { data: me } = useMe();
   const path = useRouterState({ select: (s) => s.location.pathname });
 
@@ -25,20 +20,6 @@ export function TopBar({
   // which is company-scoped). Access & Companies stays broker-admin gated.
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
   const firmItems = FIRM_NAV.items.filter((i) => i.to !== "/firm/access" || canAdmin);
-
-  // The per-page year picker was removed: the session policy year always tracks
-  // the CURRENT (active) benefit year, and every page follows it. The
-  // Configuration page owns read-only viewing of other years locally. Gated on
-  // isSuccess so a still-loading list never clears a valid selection mid-fetch.
-  useEffect(() => {
-    if (!isSuccess) return;
-    if (years.length === 0) {
-      if (currentId !== null) setPolicyYear(null);
-      return;
-    }
-    const active = years.find((y) => y.status === "active") ?? years[0];
-    if (active && currentId !== active.id) setPolicyYear(active.id);
-  }, [isSuccess, years, currentId, setPolicyYear]);
 
   return (
     <header className="h-14 border-b border-border bg-card px-4 sm:px-6 flex items-center justify-between gap-2 shrink-0">

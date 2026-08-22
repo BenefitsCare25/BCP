@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.portal_auth import active_policy_year
 from app.models import Claim, Dependant, Employee, PolicyYear
 from app.models.claim import (
     CASE_TYPE_CLAIM,
@@ -40,7 +41,6 @@ from app.models.claim import (
     ORIGIN_BROKER,
     RELABELLABLE_STATUSES,
 )
-from app.models.policy_year import PolicyYearStatus
 from app.schemas.claims import LogCaseCreateIn
 from app.services.claim_fx import apply_conversion
 from app.services.claim_intake import ALLOWED_CURRENCIES, normalize_sub_type
@@ -143,10 +143,11 @@ def create_log_case(
 
     Does NOT commit; the caller owns the transaction and the audit entry.
     """
-    if year.status != PolicyYearStatus.active:
+    current_year = active_policy_year(db, year.client_id)
+    if current_year is None or year.id != current_year.id:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "LOG cases can only be recorded against the current benefit year.",
+            "LOG cases can only be recorded against the benefit year for today's date.",
         )
 
     sub_type = normalize_sub_type(body.sub_type)

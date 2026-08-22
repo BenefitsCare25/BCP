@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 interface SessionState {
+  // The benefit year currently being viewed across company-scoped pages.
   currentPolicyYearId: string | null;
   // The client the persisted policy year belongs to. Stamped whenever the year
   // is set so a rehydrated year can be validated against the active client (a
@@ -30,8 +31,8 @@ export const useSession = create<SessionState>()(
           policyYearClientId: id === null ? null : s.activeClientId,
         })),
       activeClientId: null,
-      // Switching client invalidates the selected policy year — it belongs to
-      // the previous client. TopBar repopulates it from the new client's years.
+      // Switching client invalidates the selected benefit year — it belongs to
+      // the previous client. ContextBar repopulates it from the new client.
       setActiveClient: (id) =>
         set({ activeClientId: id, currentPolicyYearId: null, policyYearClientId: null }),
     }),

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import load_policy_year, require_client_id
+from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear
 from app.models.policy_year import PolicyYearStatus
@@ -214,14 +215,16 @@ def delete_policy_year(
 ) -> Response:
     """Delete a benefit year and its configuration (cascade).
 
-    The current year (``active``) can't be deleted — set another year current
-    first, so the member portal never loses its year out from under it.
+    The date-derived current year can't be deleted, so the member portal never
+    loses today's coverage out from under it.
     """
-    if py.status == PolicyYearStatus.active:
+    current = active_policy_year(db, py.client_id)
+    if py.status == PolicyYearStatus.active or (
+        current is not None and current.id == py.id
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "This is the current benefit year. Set another year as current "
-            "before deleting it.",
+            "This is the current benefit year for today's date and cannot be deleted.",
         )
     write_audit(
         db,

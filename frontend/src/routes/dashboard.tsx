@@ -20,7 +20,8 @@ import { companyAttention, daysUntil, parseServerDate } from "@/lib/attention";
 import { useSession } from "@/stores/session";
 
 export function CompanyDashboardPage() {
-  const { data, isLoading, isFetching } = useDashboardSummary();
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const { data, isLoading, isFetching } = useDashboardSummary(policyYearId);
   const { data: me } = useMe();
   const activeClientId = useSession((s) => s.activeClientId);
   const selectedId = activeClientId ?? me?.active_client_id ?? null;
@@ -61,8 +62,8 @@ export function CompanyDashboardPage() {
         <h1 className="text-xl font-semibold text-foreground">{company.name}</h1>
         <p className="text-sm text-muted-foreground">
           {company.current_year
-            ? `${company.current_year.year} benefit year · current`
-            : "No current benefit year set"}
+            ? `${company.current_year.year} benefit year · selected`
+            : "No benefit year selected"}
         </p>
       </div>
 

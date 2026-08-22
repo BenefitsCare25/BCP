@@ -130,10 +130,15 @@ export interface DashboardSummary {
  * accessible clients (same firm boundary as everything else), so it's NOT keyed
  * by the active client — it aggregates across companies regardless of selection.
  */
-export function useDashboardSummary() {
+export function useDashboardSummary(policyYearId?: string | null) {
   return useQuery({
-    queryKey: ["dashboard-summary"],
-    queryFn: () => api.get<DashboardSummary>("/dashboard/summary"),
+    queryKey: ["dashboard-summary", policyYearId ?? null],
+    queryFn: () =>
+      api.get<DashboardSummary>(
+        `/dashboard/summary${
+          policyYearId ? `?policy_year_id=${encodeURIComponent(policyYearId)}` : ""
+        }`,
+      ),
     staleTime: 30_000,
   });
 }
@@ -766,21 +771,6 @@ export function useSaveTemplateProfile() {
 // edit to a person already on file. `POST /employees/upload` and
 // `/dependants/upload` still exist server-side as the low-level insert
 // primitive their dedup regression suites exercise — no UI calls them.
-
-export function useSetCurrentPolicyYear() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (policyYearId: string) =>
-      api.post<PolicyYear>(`/policy-years/${policyYearId}/set-current`, {}),
-    // Which year is current changes what a LOT of unrelated queries return —
-    // the claim-type vocabulary, the dashboard roll-up, panel assignments,
-    // portal previews. Listing them would guarantee one gets missed and shows
-    // stale-empty, so invalidate broadly: this is a rare, deliberate action.
-    // (Safe here unlike a tenant switch — the active client is unchanged, so no
-    // in-flight query can be refetched against the wrong tenant.)
-    onSuccess: () => qc.invalidateQueries(),
-  });
-}
 
 export interface AttributePayload {
   attribute_id: string;

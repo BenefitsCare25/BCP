@@ -793,7 +793,7 @@ export function ClaimDocumentSettings() {
           <div className="px-5 pb-6 text-sm text-muted-foreground">
             {query
               ? "No claim types or documents match your search."
-              : "No claim types are available. Configure a current benefit year with member-claimable products first."}
+              : "No claim types are available. Configure the benefit year covering today with member-claimable products first."}
           </div>
         ) : (
           <div className="border-t border-border">

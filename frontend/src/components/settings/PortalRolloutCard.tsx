@@ -100,7 +100,7 @@ export function PortalRolloutCard() {
         <CardHeader>
           <CardTitle className="text-sm">Employee portal access</CardTitle>
           <CardDescription>
-            Set a current benefit year to invite employees to the portal.
+            Add a benefit year covering today to invite employees to the portal.
           </CardDescription>
         </CardHeader>
       </Card>

@@ -1,3 +1,5 @@
+import type { PolicyYear } from "@/types";
+
 const MONTHS_SHORT = [
   "Jan",
   "Feb",
@@ -74,6 +76,36 @@ export function isPastPolicyPeriod(endIso: string): boolean {
 export function isWithinPolicyPeriod(startIso: string, endIso: string): boolean {
   const t = todayIso();
   return startIso <= t && t <= endIso;
+}
+
+/**
+ * Default benefit-year context for a company.
+ *
+ * The period containing today wins automatically. A legacy active flag is only
+ * a fallback for companies whose configured periods have a gap; the newest
+ * period is the final fallback so a company with years is always navigable.
+ */
+export function defaultPolicyYear(years: PolicyYear[]): PolicyYear | null {
+  if (years.length === 0) return null;
+  const byNewestStart = [...years].sort((a, b) =>
+    b.start_date.localeCompare(a.start_date),
+  );
+  return (
+    policyYearForToday(byNewestStart) ??
+    byNewestStart.find((year) => year.status === "active") ??
+    byNewestStart[0]
+  );
+}
+
+/** Benefit year whose effective coverage envelope contains today. */
+export function policyYearForToday(years: PolicyYear[]): PolicyYear | null {
+  return (
+    [...years]
+      .sort((a, b) => b.start_date.localeCompare(a.start_date))
+      .find((year) =>
+        isWithinPolicyPeriod(year.start_date, year.end_date),
+      ) ?? null
+  );
 }
 
 const MONTH_LOOKUP = new Map<string, number>();
