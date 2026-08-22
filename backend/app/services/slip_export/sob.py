@@ -145,6 +145,19 @@ def _property_label(key: str) -> str:
     return words[:1].upper() + words[1:]
 
 
+def _display_number(value: Any) -> str:
+    """Render parser group keys the way the source workbook displays them.
+
+    Outpatient group headings are stored as negative integers because the
+    legacy workbook uses an accounting number format to display ``-1`` as
+    ``( 1 )``.  An xlsx export does not inherit that cell format, so writing the
+    raw key exposed ``-1``, ``-2`` ... as broken SOB indexing.
+    """
+    text = str(value or "").strip()
+    match = re.fullmatch(r"-(\d+)", text)
+    return f"( {match.group(1)} )" if match else text
+
+
 def _display_properties(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
@@ -195,6 +208,11 @@ def write_sob(
     if len(with_items) == 1 and 20 <= ws.max_row <= 40:
         ws.row_breaks.append(Break(id=ws.max_row))
 
+    response = ["Insurer Response"] if quotation else []
+    sob_last_col = 2 + len(columns) + len(response)
+    first_value_col = 3
+    last_value_col = 2 + len(columns)
+
     ws.append([])
     # The stored sentence usually carries its own "Cover:" prefix — strip it,
     # the label cell already says it.
@@ -202,6 +220,13 @@ def write_sob(
     ws.append(["Cover :", cover_text])
     style_row(ws, font=HEADER, wrap_cols=(2,))
     ws.cell(row=ws.max_row, column=2).font = Font(bold=False)
+    if sob_last_col > 2:
+        ws.merge_cells(
+            start_row=ws.max_row,
+            start_column=2,
+            end_row=ws.max_row,
+            end_column=max(sob_last_col, ws.max_column),
+        )
     title = (
         "SCHEDULE OF BENEFITS / DEFINITIONS / INSURER RESPONSE"
         if quotation
@@ -209,34 +234,48 @@ def write_sob(
     )
     ws.append([title])
     style_row(ws, font=SECTION)
-    response = ["Insurer Response"] if quotation else []
     ws.append(
-        ["No.", "Benefit", "Details / Qualifiers"]
+        ["No.", "Benefit / Definition"]
         + [_sob_col_label(col) for col in columns]
         + response
     )
     style_row(ws, font=HEADER)
-    sob_last_col = 3 + len(columns) + len(response)
     ws.row_dimensions[ws.max_row].height = 28
     for column in range(1, sob_last_col + 1):
         ws.cell(row=ws.max_row, column=column).alignment = Alignment(
             horizontal="center", vertical="center", wrap_text=True
         )
     border_row(ws, 1, sob_last_col)
-    value_cols = range(4, 4 + len(columns))
+    value_cols = range(first_value_col, last_value_col + 1)
+
+    def _shared_value_row(label: str, value: Any, indent: str) -> None:
+        """Reference-style qualifier: label once, value across the plan span."""
+        ws.append(["", f"{indent}• {label}", value])
+        row = ws.max_row
+        ws.cell(row=row, column=2).alignment = WRAP
+        ws.cell(row=row, column=first_value_col).alignment = WRAP
+        border_row(ws, 1, sob_last_col)
+        if last_value_col > first_value_col:
+            ws.merge_cells(
+                start_row=row,
+                start_column=first_value_col,
+                end_row=row,
+                end_column=last_value_col,
+            )
 
     def _value_row(number: str, name: str, entry: dict[str, Any]) -> None:
         values = [
             _sob_value(entry, col.get("id"), i == 0)
             for i, col in enumerate(columns)
         ]
+        note = str(entry.get("note") or "").strip()
+        benefit = f"{name}\n{note}" if note else name
         ws.append(
-            [number, name, str(entry.get("note") or ""), *values]
+            [_display_number(number), benefit, *values]
             + ([""] if quotation else [])
         )
         row = ws.max_row
         ws.cell(row=row, column=2).alignment = WRAP
-        ws.cell(row=row, column=3).alignment = WRAP
         for col in value_cols:
             ws.cell(row=row, column=col).alignment = WRAP
         border_row(ws, 1, sob_last_col)
@@ -248,22 +287,12 @@ def write_sob(
             label = str(lim.get("label") or "").strip()
             value = str(lim.get("value") or "").strip()
             if label or value:
-                ws.append(
-                    ["", f"{indent}• {label}", value]
-                    + [""] * (len(columns) + len(response))
-                )
-                ws.cell(row=ws.max_row, column=2).alignment = WRAP
-                ws.cell(row=ws.max_row, column=3).alignment = WRAP
-                border_row(ws, 1, sob_last_col)
+                _shared_value_row(label, value, indent)
 
     def _property_rows(entry: dict[str, Any], indent: str) -> None:
         shared = _display_properties(entry.get("properties"))
         for key, value in shared.items():
-            ws.append(
-                ["", f"{indent}• {_property_label(key)}", value]
-                + [""] * (len(columns) + len(response))
-            )
-            border_row(ws, 1, sob_last_col)
+            _shared_value_row(_property_label(key), value, indent)
 
         per_column = entry.get("column_properties")
         if not isinstance(per_column, dict):
@@ -279,7 +308,7 @@ def write_sob(
                 for col in columns
             ]
             ws.append(
-                ["", f"{indent}• {_property_label(key)}", "", *values]
+                ["", f"{indent}• {_property_label(key)}", *values]
                 + ([""] if quotation else [])
             )
             row = ws.max_row
@@ -295,7 +324,7 @@ def write_sob(
         _limit_rows(it.get("limits"), "    ")
         for sub in it.get("sub_items") or []:
             _value_row(
-                str(sub.get("number") or sub.get("key") or ""),
+                _display_number(sub.get("number") or sub.get("key") or ""),
                 f"    {sub.get('name') or ''!s}",
                 sub,
             )

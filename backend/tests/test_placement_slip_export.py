@@ -468,15 +468,19 @@ def test_sob_fold_and_plan_details(client: TestClient) -> None:
     ghs = _cells(wb["GHS"])
     sob_i = _row_index(ghs, "SCHEDULE OF BENEFITS / PLAN")
     # Two plans with differing values stay two columns.
-    assert ghs[sob_i + 1][:5] == [
-        "No.", "Benefit", "Details / Qualifiers", "Plan 1", "Plan 2",
+    assert ghs[sob_i + 1][:4] == [
+        "No.", "Benefit / Definition", "Plan 1", "Plan 2",
     ]
-    assert ghs[sob_i + 2][:5] == [
-        "1", "Daily Room & Board", None, "S$650 per day", "S$450 per day",
+    assert ghs[sob_i + 2][:4] == [
+        "1", "Daily Room & Board", "S$650 per day", "S$450 per day",
     ]
     assert ghs[sob_i + 3][1:3] == [
         "    • Maximum no. of days", "120 days",
     ]
+    qualifier_row = sob_i + 4  # openpyxl row number; ``ghs`` is zero-based
+    assert f"C{qualifier_row}:D{qualifier_row}" in {
+        str(rng) for rng in wb["GHS"].merged_cells.ranges
+    }
 
     gtl = _cells(wb["GTL"])
     details_i = _row_index(gtl, "Plan Details")
@@ -490,6 +494,10 @@ def test_sob_uses_platform_labels_and_renders_every_qualifier() -> None:
     from openpyxl import Workbook
 
     from app.services.slip_export.sob import write_sob
+    from app.services.slip_export.styles import (
+        finalize_sheet,
+        set_compact_product_widths,
+    )
 
     def schedule(value: str, private: str, copay: str) -> dict:
         return {
@@ -550,19 +558,60 @@ def test_sob_uses_platform_labels_and_renders_every_qualifier() -> None:
     sob_i = _row_index(
         rows, "SCHEDULE OF BENEFITS / DEFINITIONS / INSURER RESPONSE"
     )
-    assert rows[sob_i + 1][:6] == [
-        "No.", "Benefit", "Details / Qualifiers", "PLAN 1", "PLAN U01",
+    assert rows[sob_i + 1][:5] == [
+        "No.", "Benefit / Definition", "PLAN 1", "PLAN U01",
         "Insurer Response",
     ]
     assert any(row[1] == "Curated extra row" for row in rows)
     per_visit = next(row for row in rows if row[1] == "    • Per visit — Private Hospital")
-    assert per_visit[3:5] == ["100", "120"]
+    assert per_visit[2:4] == ["100", "120"]
     copay = next(row for row in rows if row[1] == "    • Co-payment — Private Hospital")
-    assert copay[3:5] == ["20%", "As charged"]
+    assert copay[2:4] == ["20%", "As charged"]
     nested = next(row for row in rows if row[1] == "    Panel clinic")
-    assert nested[:5] == [
-        "(a)", "    Panel clinic", "", "As charged", "As charged",
+    assert nested[:4] == [
+        "(a)", "    Panel clinic", "As charged", "As charged",
     ]
+
+    # The source workbook stores outpatient group indices as negative values
+    # with an accounting format that displays parentheses. The export must
+    # reproduce the visible index, never expose the raw negative sentinel.
+    group_plan = Plan(
+        code="1",
+        display_name="Plan 1",
+        benefit_schedule={
+            "items": [
+                {
+                    "number": "-1", "name": "Panel", "value": "YES",
+                    "limits": [], "sub_items": [], "properties": {},
+                }
+            ]
+        },
+    )
+    group_ws = Workbook().active
+    write_sob(group_ws, [group_plan], None, quotation=True)
+    assert next(row[0] for row in _cells(group_ws) if row[1] == "Panel") == "( 1 )"
+
+    long_plan = Plan(
+        code="1",
+        display_name="Plan 1",
+        benefit_schedule={
+            "items": [
+                {
+                    "number": "1", "name": "Long definition",
+                    "value": "word " * 180,
+                    "limits": [], "sub_items": [], "properties": {},
+                }
+            ]
+        },
+    )
+    long_ws = Workbook().active
+    write_sob(long_ws, [long_plan], None, quotation=True)
+    set_compact_product_widths(long_ws)
+    finalize_sheet(long_ws, "Quotation Slip")
+    long_row = next(
+        row[0].row for row in long_ws.iter_rows() if row[1].value == "Long definition"
+    )
+    assert long_ws.row_dimensions[long_row].height > 90
 
     # A compact one-plan sheet must not orphan the SOB header at a page foot.
     compact_ws = Workbook().active
@@ -582,6 +631,14 @@ def test_export_has_print_ready_sheet_formatting(client: TestClient) -> None:
         assert any(str(merged).startswith("A1:") for merged in ws.merged_cells.ranges)
     assert wb["Overview"].freeze_panes == "A8"
     assert len(wb["GHS"].row_breaks.brk) == 0
+    # Product sheets reserve A for compact SOB indexing. Long header values use
+    # merged cells instead of making every row inherit an oversized A/C column.
+    assert wb["GHS"].column_dimensions["A"].width <= 9
+    assert wb["GHS"].column_dimensions["B"].width <= 30
+    assert any(
+        rng.min_col == 3 and rng.max_col > 3
+        for rng in wb["GHS"].merged_cells.ranges
+    )
 
 
 def test_voluntary_rates_block(client: TestClient) -> None:

@@ -36,6 +36,33 @@ def set_widths(ws: Worksheet, widths: dict[int, int]) -> None:
         ws.column_dimensions[get_column_letter(col)].width = w
 
 
+def set_compact_product_widths(ws: Worksheet) -> None:
+    """Size product sheets like the reference slips, based on table width.
+
+    Column A is principally the SOB index and remains narrow. Header labels
+    span A:B and their values span C:last-column during finalisation, so neither
+    needs an oversized standalone column. Narrower sheets can spend more width
+    on long benefit definitions; wide medical grids keep each plan compact.
+    """
+    last_col = max(ws.max_column, 3)
+    if last_col <= 6:
+        leading = {1: 9, 2: 32, 3: 44, 4: 20}
+        trailing = 18
+    elif last_col <= 8:
+        leading = {1: 9, 2: 30, 3: 32, 4: 22}
+        trailing = 17
+    else:
+        leading = {1: 8, 2: 28, 3: 24, 4: 20}
+        trailing = 15
+    set_widths(
+        ws,
+        {
+            col: leading.get(col, trailing)
+            for col in range(1, last_col + 1)
+        },
+    )
+
+
 def style_row(
     ws: Worksheet, font: Font | None = None, wrap_cols: tuple[int, ...] = ()
 ) -> int:
@@ -84,6 +111,34 @@ def numeric_or_text(v: Any) -> Any:
         return v
 
 
+def _cell_width(ws: Worksheet, row: int, col: int) -> float:
+    """Effective width of a cell, including a merge that starts at it."""
+    end_col = col
+    for merged in ws.merged_cells.ranges:
+        if merged.min_row == row == merged.max_row and merged.min_col == col:
+            end_col = merged.max_col
+            break
+    return sum(
+        float(ws.column_dimensions[get_column_letter(c)].width or 13)
+        for c in range(col, end_col + 1)
+    )
+
+
+def _content_height(ws: Worksheet, row: int, populated: list[Any]) -> float:
+    """Approximate Excel's wrapped auto-height without clipping definitions."""
+    lines = 1
+    for cell in populated:
+        if not isinstance(cell.value, str):
+            continue
+        width = max(_cell_width(ws, row, cell.column), 1)
+        cell_lines = sum(
+            max(1, math.ceil(len(part) / max(width * 1.05, 1)))
+            for part in cell.value.splitlines() or [""]
+        )
+        lines = max(lines, cell_lines)
+    return min(300, max(15, lines * 15))
+
+
 def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
     """Apply consistent workbook-level print and visual formatting."""
     last_col = max(ws.max_column, 3)
@@ -115,9 +170,6 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
         populated = [cell for cell in ws[row] if cell.value not in (None, "")]
         if not populated:
             continue
-        max_text = max(len(str(cell.value)) for cell in populated)
-        if max_text > 80:
-            ws.row_dimensions[row].height = min(90, 15 * math.ceil(max_text / 80))
         for cell in populated:
             if isinstance(cell.value, str) and len(cell.value) > 32:
                 cell.alignment = Alignment(
@@ -162,6 +214,13 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
             and ws.cell(row=row, column=3).value not in (None, "")
         ):
             ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+            if last_col > 3:
+                ws.merge_cells(
+                    start_row=row,
+                    start_column=3,
+                    end_row=row,
+                    end_column=last_col,
+                )
 
         if len(populated) >= 2 and all(cell.font.bold for cell in populated):
             first_col = min(cell.column for cell in populated)
@@ -175,3 +234,6 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
             ws.row_dimensions[row].height = max(
                 ws.row_dimensions[row].height or 15, 20
             )
+
+        if ws.row_dimensions[row].height is None:
+            ws.row_dimensions[row].height = _content_height(ws, row, populated)

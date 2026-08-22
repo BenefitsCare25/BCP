@@ -35,6 +35,7 @@ from app.services.slip_export.styles import (
     TITLE,
     border_row,
     finalize_sheet,
+    set_compact_product_widths,
     set_widths,
     style_row,
 )
@@ -105,9 +106,6 @@ def _write_product_sheet(
     plans: list[Plan],
     term: ProductTerm | None,
 ) -> None:
-    set_widths(ws, {
-        1: 34, 2: 36, 3: 46, 4: 26, 5: 12, 6: 14, 7: 22, 8: 16, 9: 16, 10: 16,
-    })
     py = ctx.policy_year
     ws.append([product.display_name if product else "Unassigned categories"])
     style_row(ws, font=TITLE)
@@ -148,6 +146,7 @@ def _write_product_sheet(
             answers=answers,
             quotation=ctx.blank_rates,
         )
+    set_compact_product_widths(ws)
 
 
 def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]) -> None:
