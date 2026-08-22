@@ -123,6 +123,42 @@ def test_structured_ai_rule_is_converted_to_jsonlogic() -> None:
     assert envelope.rule == {"in": ["designation", ["Manager", "Executive"]]}
 
 
+def test_dependant_coverage_is_not_an_unresolved_employee_rule() -> None:
+    payload = {
+        "rule": {
+            "match_all_employees": False,
+            "combine_groups": "all",
+            "groups": [
+                {
+                    "combine_conditions": "all",
+                    "conditions": [
+                        {
+                            "attribute": "designation",
+                            "operator": "=",
+                            "value": "Manager",
+                            "values": [],
+                            "lower": None,
+                            "upper": None,
+                        }
+                    ],
+                }
+            ],
+        },
+        "human_readable": "Managers",
+        "confidence": 0.8,
+        "reasoning": "Uses the configured designation.",
+        "unresolved_clauses": ["eligible Dependants"],
+    }
+    fake_client = SimpleNamespace(
+        messages=SimpleNamespace(create=Mock(return_value=_response(payload)))
+    )
+
+    with patch("app.services.ai_extractor._build_ai_client", return_value=fake_client):
+        _, metadata = generate_rule_via_ai("Managers and eligible Dependants", _schema(), _config())
+
+    assert metadata["unresolved_clauses"] == []
+
+
 def test_structured_ai_rule_rejects_unavailable_attribute() -> None:
     payload = {
         "rule": {

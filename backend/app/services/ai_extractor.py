@@ -8,6 +8,7 @@ consumers don't branch.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from anthropic.types import ToolUseBlock
@@ -31,6 +32,34 @@ _DERIVATION_TIMEOUT_SECONDS = 60.0
 _AI_SAMPLES_PER_COLUMN = 20
 _AI_SAMPLES_HIGH_CARDINALITY = 6
 _HIGH_CARDINALITY_THRESHOLD = 60
+
+_DEPENDANT_CLAUSE_TERMS = frozenset(
+    {
+        "and",
+        "child",
+        "children",
+        "coverage",
+        "covered",
+        "dependant",
+        "dependants",
+        "dependent",
+        "dependents",
+        "eligible",
+        "or",
+        "spouse",
+        "spouses",
+        "their",
+    }
+)
+_DEPENDANT_TERMS = frozenset(
+    {"child", "children", "dependant", "dependants", "dependent", "dependents", "spouse", "spouses"}
+)
+
+
+def _is_plan_assignment_clause(value: str) -> bool:
+    """Return true when an unresolved phrase only describes dependant cover."""
+    tokens = set(re.findall(r"[a-z]+", value.lower()))
+    return bool(tokens & _DEPENDANT_TERMS) and tokens <= _DEPENDANT_CLAUSE_TERMS
 
 SYSTEM_PROMPT = """You are an expert at converting insurance category eligibility \
 descriptions into structured JSONLogic predicates.
@@ -451,7 +480,9 @@ def generate_rule_via_ai(
         "output_tokens": getattr(response.usage, "output_tokens", None),
         "reasoning": reasoning[:1024],
         "unresolved_clauses": [
-            value[:512] for value in unresolved
+            value[:512]
+            for value in unresolved
+            if not _is_plan_assignment_clause(value)
         ][:20],
     }
     return envelope, metadata
