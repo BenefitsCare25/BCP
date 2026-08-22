@@ -1918,13 +1918,12 @@ def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
 ):
     """The claim-type vocabulary is read from the CURRENT benefit year alone.
 
-    With no year flagged current the list is empty for a reason that has
-    nothing to do with claim rules (the member portal is dark too), so the
-    response says which case it is instead of leaving them indistinguishable.
-    Also pins the two shapes the endpoint must tolerate: a `key` on every entry
-    (the UI's join key — never re-derived client-side) and a `FlexScheme.scheme`
-    that isn't an object (it is unvalidated JSON; raising there would take the
-    whole AI-extraction tab down).
+    Current follows the policy dates. Archiving a legacy forward-started year
+    therefore falls back to the year covering today instead of making the
+    vocabulary disappear. Also pins the two shapes the endpoint must tolerate:
+    a `key` on every entry (the UI's join key — never re-derived client-side)
+    and a `FlexScheme.scheme` that isn't an object (it is unvalidated JSON;
+    raising there would take the whole AI-extraction tab down).
     """
     from app.models import FlexScheme
 
@@ -1957,7 +1956,7 @@ def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
             s.commit()
 
         options = broker.get("/api/v1/claim-review-configs/options").json()
-        assert options["has_current_year"] is False
+        assert options["has_current_year"] is True
         assert options["claim_types"] == []
         # The defaults still come back — the editor prefills from them.
         assert options["default_config"]["field_maps"]
