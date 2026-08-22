@@ -74,6 +74,15 @@ Allowed JSONLogic shapes:
 - {"and": [c1, c2]}, {"or": [c1, c2]}, {"not": c}
 - {"and": []} means all employees.
 
+Every object inside `rule` MUST contain exactly one key, and that key MUST be
+one of the operators above. Put multiple conditions inside an `and` or `or`
+array; never place two operators in the same object and never copy the outer
+tool fields (`rule`, `human_readable`, `confidence`, `reasoning`, or
+`unresolved_clauses`) into a rule node.
+
+Valid: {"and": [{"=": ["entity", "CDL"]}, {"in": ["grade", ["A1", "A2"]]}]}
+Invalid: {"=": ["entity", "CDL"], "in": ["grade", ["A1", "A2"]]}
+
 Rules:
 - Use only provided attributes and company values. Never invent a job title,
   grade, enum value, hierarchy, or eligibility condition.
@@ -94,7 +103,11 @@ TOOL_SCHEMA = {
         "type": "object",
         "properties": {
             "rule": {
-                "description": "JSONLogic predicate, or null if no rule can be derived.",
+                "description": (
+                    "JSONLogic predicate, or null if no rule can be derived. "
+                    "Every object in the predicate tree must contain exactly one "
+                    "operator key; combine conditions through and/or arrays."
+                ),
                 "type": ["object", "null"],
             },
             "human_readable": {

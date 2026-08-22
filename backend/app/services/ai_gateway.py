@@ -63,9 +63,10 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# v2 includes non-PII company vocabulary and product/sibling context, and
-# invalidates company-blind v1 cache entries.
-PROMPT_VERSION = "rule_generation/v2"
+# v3 makes the one-operator-per-node JSONLogic contract explicit. The version
+# bump invalidates v2 cache entries whose structurally invalid rules were
+# correctly rejected by the company validator after generation.
+PROMPT_VERSION = "rule_generation/v3"
 DERIVATION_PROMPT_VERSION = "roster_derivation/v1"
 RECOMMEND_PROMPT_VERSION = "schema_recommend/v1"
 # v2: categories carry financial fields (rates / SI / tiers / earnings) so an
