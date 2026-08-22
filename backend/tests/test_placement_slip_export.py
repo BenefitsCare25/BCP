@@ -640,6 +640,78 @@ def test_export_has_print_ready_sheet_formatting(client: TestClient) -> None:
         for rng in wb["GHS"].merged_cells.ranges
     )
 
+    # Empty quotation fields still keep the reference label span.  A true
+    # spacer row follows them; its 6-point height must never be applied to the
+    # preceding label row (the former cause of clipped Policy No./age rows).
+    for ws in [sheet for sheet in wb.worksheets if sheet.title != "Overview"]:
+        merges = list(ws.merged_cells.ranges)
+        for index, left in enumerate(merges):
+            for right in merges[index + 1:]:
+                overlaps = not (
+                    left.max_row < right.min_row
+                    or right.max_row < left.min_row
+                    or left.max_col < right.min_col
+                    or right.max_col < left.min_col
+                )
+                assert not overlaps, f"overlapping merges in {ws.title}: {left}, {right}"
+
+        policy_cell = next(
+            cell for cell in ws["A"] if cell.value == "Policy No. :"
+        )
+        policy_row = policy_cell.row
+        assert ws.row_dimensions[policy_row].height >= 18
+        assert ws.row_dimensions[policy_row + 1].height == 6
+        assert all(
+            ws.cell(policy_row + 1, col).value in (None, "")
+            for col in range(1, ws.max_column + 1)
+        )
+        assert any(
+            rng.min_row == policy_row == rng.max_row
+            and rng.min_col == 1
+            and rng.max_col == 2
+            for rng in ws.merged_cells.ranges
+        )
+
+        for label in (
+            "Maximum Limit Per Insured Person :",
+            "Experience Refund Formula / Maximum Loss Ratio :",
+        ):
+            matches = [cell.row for cell in ws["A"] if cell.value == label]
+            if not matches:  # the optional Unassigned sheet has no product terms
+                continue
+            label_row = matches[0]
+            assert any(
+                rng.min_row == label_row == rng.max_row
+                and rng.min_col == 1
+                and rng.max_col == 2
+                for rng in ws.merged_cells.ranges
+            )
+            assert ws.row_dimensions[label_row].height >= 18
+
+    # All variable plan/count/rate cells use a consistent middle-centre
+    # alignment. Text descriptors stay left-aligned but are vertically centred.
+    ghs = wb["GHS"]
+    basis_row = next(cell.row for cell in ghs["A"] if cell.value == "Basis of Cover :")
+    rate_row = next(cell.row for cell in ghs["A"] if cell.value == "Rate :")
+    for row in range(basis_row + 1, rate_row):
+        for col in range(5, ghs.max_column + 1):
+            cell = ghs.cell(row, col)
+            if cell.value not in (None, "") and cell.border.left.style:
+                assert cell.alignment.horizontal == "center"
+                assert cell.alignment.vertical == "center"
+
+    sob_row = next(
+        cell.row
+        for cell in ghs["A"]
+        if cell.value == "SCHEDULE OF BENEFITS / DEFINITIONS / INSURER RESPONSE"
+    )
+    for row in range(sob_row + 1, ghs.max_row + 1):
+        for col in range(3, ghs.max_column + 1):
+            cell = ghs.cell(row, col)
+            if cell.value not in (None, "") and cell.border.left.style:
+                assert cell.alignment.horizontal == "center"
+                assert cell.alignment.vertical == "center"
+
 
 def test_voluntary_rates_block(client: TestClient) -> None:
     gtl = _cells(_download(client)["GTL"])

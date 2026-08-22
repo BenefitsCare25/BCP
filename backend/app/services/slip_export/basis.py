@@ -20,12 +20,15 @@ from app.services.matching_engine import insured_names
 from app.services.slip_export.context import SlipContext
 from app.services.slip_export.styles import (
     CENTER,
+    CENTER_WRAP,
     COUNT,
     HEADER,
+    MIDDLE_WRAP,
     NOTE,
     SECTION,
     border_row,
     numeric_or_text,
+    spacer_row,
     style_row,
 )
 
@@ -242,7 +245,7 @@ def write_basis_of_cover(
         new_block = key != prev_key
         if new_block:
             if prev_key is not None:
-                ws.append([])
+                spacer_row(ws)
             _header()
             prev_name = ""
         values = [_value(col, c, ctx) for col in cols]
@@ -258,7 +261,10 @@ def write_basis_of_cover(
         ])
         row = style_row(ws, wrap_cols=(2, 3, 4))
         border_row(ws, 2, last_col)
+        for col in range(2, 5):
+            ws.cell(row=row, column=col).alignment = MIDDLE_WRAP
         for i, (col, value) in enumerate(zip(cols, values, strict=True)):
+            ws.cell(row=row, column=5 + i).alignment = CENTER_WRAP
             if col.numeric and isinstance(value, (int, float)):
                 ws.cell(row=row, column=5 + i).number_format = COUNT
         prev_key = key

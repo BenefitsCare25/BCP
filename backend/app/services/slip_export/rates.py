@@ -25,11 +25,14 @@ from app.services.slip_export.basis import (
 )
 from app.services.slip_export.context import SlipContext
 from app.services.slip_export.styles import (
+    CENTER_WRAP,
     COUNT,
     HEADER,
+    MIDDLE_WRAP,
     MONEY,
     SECTION,
     border_row,
+    spacer_row,
     style_row,
 )
 
@@ -108,6 +111,10 @@ def _write_tiered_rates(
         ws.append(row)
         r = style_row(ws, wrap_cols=(2, 3))
         border_row(ws, 2, last_col)
+        for col in (2, 3):
+            ws.cell(row=r, column=col).alignment = MIDDLE_WRAP
+        for col in range(4, last_col + 1):
+            ws.cell(row=r, column=col).alignment = CENTER_WRAP
         for i in range(len(codes)):
             ws.cell(row=r, column=6 + 2 * i).number_format = MONEY
         prev_insured = insured
@@ -234,6 +241,10 @@ def _write_flat_rates(
         ws.append(row)
         r = style_row(ws, wrap_cols=(2, 3, premium_col))
         border_row(ws, 2, last_col)
+        for col in (2, 3):
+            ws.cell(row=r, column=col).alignment = MIDDLE_WRAP
+        for col in range(4, last_col + 1):
+            ws.cell(row=r, column=col).alignment = CENTER_WRAP
         if amount_col is not None and isinstance(amount, (int, float)):
             ws.cell(row=r, column=amount_col).number_format = COUNT
             amount_total += float(amount)
@@ -302,6 +313,9 @@ def _write_per_member_rates(
         ws.append(["", show_insured, label, "" if blank else emp_rate, premium])
         row = style_row(ws, wrap_cols=(2, 5))
         border_row(ws, 2, 5)
+        ws.cell(row=row, column=2).alignment = MIDDLE_WRAP
+        for col in range(3, 6):
+            ws.cell(row=row, column=col).alignment = CENTER_WRAP
         if not isinstance(premium, str):
             ws.cell(row=row, column=5).number_format = MONEY
         if not blank and stored is not None:
@@ -309,6 +323,9 @@ def _write_per_member_rates(
             found = True
         if dep_rate is not None and not combined:
             ws.append(["", "", f"{plan} - Dependents", "" if blank else dep_rate, ""])
+            row = style_row(ws)
+            for col in range(2, 6):
+                ws.cell(row=row, column=col).alignment = CENTER_WRAP
             border_row(ws, 2, 5)
         prev_insured = insured
     return running if found else None
@@ -333,7 +350,7 @@ def _write_voluntary_rates(
         blocks.append((c.display_name, bands))
     if not blocks:
         return
-    ws.append([])
+    spacer_row(ws)
     ws.append(["", "Voluntary Rates"])
     style_row(ws, font=SECTION)
     for name, bands in blocks:
@@ -347,6 +364,9 @@ def _write_voluntary_rates(
             if not isinstance(band, dict):
                 continue
             ws.append(["", str(band.get("label") or ""), "" if blank else band.get("rate")])
+            row = style_row(ws)
+            for col in range(2, 4):
+                ws.cell(row=row, column=col).alignment = CENTER_WRAP
             border_row(ws, 2, 3)
 
 
@@ -415,14 +435,14 @@ def write_rate_section(
     if not tiered and not per_member and not flat and not has_voluntary:
         return
     subtotals: list[float] = []
-    ws.append([])
+    spacer_row(ws)
     if tiered:
         t = _write_tiered_rates(ws, tiered, _tier_codes(tiered), blank, insured_default)
         if t is not None:
             subtotals.append(t)
     if per_member:
         if tiered:
-            ws.append([])
+            spacer_row(ws)
         t = _write_per_member_rates(
             ws, per_member, with_label=not tiered, blank=blank,
             insured_default=insured_default,
@@ -431,7 +451,7 @@ def write_rate_section(
             subtotals.append(t)
     if flat:
         if tiered or per_member:
-            ws.append([])
+            spacer_row(ws)
         t = _write_flat_rates(
             ws, flat, ctx, with_label=not (tiered or per_member), blank=blank,
             insured_default=insured_default,
@@ -445,11 +465,12 @@ def write_rate_section(
         style_row(ws, font=SECTION)
     _write_voluntary_rates(ws, categories, blank)
 
-    ws.append([])
+    spacer_row(ws)
     label = f"Annual Premium {gst_suffix(term)} :"
     total = None if blank or not subtotals else sum(subtotals)
     ws.append([label, "", total if total is not None else ""])
     r = style_row(ws, font=HEADER)
+    ws.cell(row=r, column=3).alignment = CENTER_WRAP
     if total is not None:
         ws.cell(row=r, column=3).number_format = MONEY
 

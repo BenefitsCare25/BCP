@@ -29,14 +29,17 @@ from app.services.slip_export.rates import (
 )
 from app.services.slip_export.sob import shared_cover, write_plan_details, write_sob
 from app.services.slip_export.styles import (
+    CENTER_WRAP,
     COUNT,
     HEADER,
+    MIDDLE_WRAP,
     MONEY,
     TITLE,
     border_row,
     finalize_sheet,
     set_compact_product_widths,
     set_widths,
+    spacer_row,
     style_row,
 )
 
@@ -109,14 +112,14 @@ def _write_product_sheet(
     py = ctx.policy_year
     ws.append([product.display_name if product else "Unassigned categories"])
     style_row(ws, font=TITLE)
-    ws.append([])
+    spacer_row(ws)
 
     insured = ", ".join(_distinct_insured(categories, product))
     answers = ctx.answers_for(product)
     write_header_block(
         ws, py, product, term, answers, insured, quotation=ctx.blank_rates
     )
-    ws.append([])
+    spacer_row(ws)
 
     if categories:
         # Per-block Insured cells fall back to the product-level entities for
@@ -131,11 +134,13 @@ def _write_product_sheet(
     # The terms ladder belongs to the PRODUCT, not its plans — a product still
     # awaiting its schedule has a non-evidence limit and needs the remaining
     # rows as labelled blanks, so it is never gated on plans existing.
-    ws.append([])
+    spacer_row(ws)
     for label, value in term_rows(term, plans):
         ws.append([label, "", value])
         row = style_row(ws)
         ws.cell(row=row, column=1).font = HEADER
+        ws.cell(row=row, column=1).alignment = MIDDLE_WRAP
+        ws.cell(row=row, column=3).alignment = MIDDLE_WRAP
     if plans:
         cover = shared_cover(plans)
         write_plan_details(ws, plans, cover)
@@ -176,7 +181,7 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]
     overview.append(["Note", "GST treatment is shown on each product sheet."])
     for r in range(2, 6):
         overview.cell(row=r, column=1).font = HEADER
-    overview.append([])
+    spacer_row(overview)
     overview.append([
         "Code", "Product", "Insurer", "Coverage Period", "Categories", "Plans",
         "Members", "Annual Premium",
@@ -203,6 +208,10 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]
         ])
         row = overview.max_row
         border_row(overview, 1, 8)
+        for col in range(1, 5):
+            overview.cell(row=row, column=col).alignment = MIDDLE_WRAP
+        for col in range(5, 9):
+            overview.cell(row=row, column=col).alignment = CENTER_WRAP
         if members is not None:
             overview.cell(row=row, column=7).number_format = COUNT
         if premium is not None:

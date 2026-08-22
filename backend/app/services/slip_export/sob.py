@@ -15,10 +15,12 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from app.models import Plan
 from app.services.slip_export.styles import (
+    CENTER_WRAP,
     HEADER,
+    MIDDLE_WRAP,
     SECTION,
-    WRAP,
     border_row,
+    spacer_row,
     style_row,
 )
 from app.services.sob_columns import sob_from_plan_items
@@ -213,12 +215,13 @@ def write_sob(
     first_value_col = 3
     last_value_col = 2 + len(columns)
 
-    ws.append([])
+    spacer_row(ws)
     # The stored sentence usually carries its own "Cover:" prefix — strip it,
     # the label cell already says it.
     cover_text = re.sub(r"(?i)^cover\s*:\s*", "", cover).strip() if cover else ""
     ws.append(["Cover :", cover_text])
-    style_row(ws, font=HEADER, wrap_cols=(2,))
+    style_row(ws, font=HEADER)
+    ws.cell(row=ws.max_row, column=2).alignment = MIDDLE_WRAP
     ws.cell(row=ws.max_row, column=2).font = Font(bold=False)
     if sob_last_col > 2:
         ws.merge_cells(
@@ -246,14 +249,14 @@ def write_sob(
             horizontal="center", vertical="center", wrap_text=True
         )
     border_row(ws, 1, sob_last_col)
-    value_cols = range(first_value_col, last_value_col + 1)
-
     def _shared_value_row(label: str, value: Any, indent: str) -> None:
         """Reference-style qualifier: label once, value across the plan span."""
         ws.append(["", f"{indent}• {label}", value])
         row = ws.max_row
-        ws.cell(row=row, column=2).alignment = WRAP
-        ws.cell(row=row, column=first_value_col).alignment = WRAP
+        ws.cell(row=row, column=2).alignment = MIDDLE_WRAP
+        ws.cell(row=row, column=first_value_col).alignment = CENTER_WRAP
+        if quotation:
+            ws.cell(row=row, column=sob_last_col).alignment = CENTER_WRAP
         border_row(ws, 1, sob_last_col)
         if last_value_col > first_value_col:
             ws.merge_cells(
@@ -275,9 +278,10 @@ def write_sob(
             + ([""] if quotation else [])
         )
         row = ws.max_row
-        ws.cell(row=row, column=2).alignment = WRAP
-        for col in value_cols:
-            ws.cell(row=row, column=col).alignment = WRAP
+        ws.cell(row=row, column=1).alignment = CENTER_WRAP
+        ws.cell(row=row, column=2).alignment = MIDDLE_WRAP
+        for col in range(first_value_col, sob_last_col + 1):
+            ws.cell(row=row, column=col).alignment = CENTER_WRAP
         border_row(ws, 1, sob_last_col)
 
     def _limit_rows(limits: Any, indent: str) -> None:
@@ -312,8 +316,9 @@ def write_sob(
                 + ([""] if quotation else [])
             )
             row = ws.max_row
-            for col in range(2, sob_last_col + 1):
-                ws.cell(row=row, column=col).alignment = WRAP
+            ws.cell(row=row, column=2).alignment = MIDDLE_WRAP
+            for col in range(first_value_col, sob_last_col + 1):
+                ws.cell(row=row, column=col).alignment = CENTER_WRAP
             border_row(ws, 1, sob_last_col)
 
     for it in items:
@@ -350,7 +355,7 @@ def write_plan_details(
     ]
     if not rows:
         return
-    ws.append([])
+    spacer_row(ws)
     ws.append(["Plan Details"])
     style_row(ws, font=SECTION)
     ws.append(["Plan", "Cover Description", "Annual Policy Limit", "Report Label"])
@@ -361,5 +366,9 @@ def write_plan_details(
             p.code, own,
             p.annual_policy_limit or "", p.report_label or "",
         ])
-        style_row(ws, wrap_cols=(2,))
+        row = style_row(ws)
+        ws.cell(row=row, column=1).alignment = CENTER_WRAP
+        for col in (2, 4):
+            ws.cell(row=row, column=col).alignment = MIDDLE_WRAP
+        ws.cell(row=row, column=3).alignment = CENTER_WRAP
         border_row(ws, 1, 4)

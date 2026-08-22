@@ -20,6 +20,8 @@ HEADER = Font(bold=True, color="6F0B1B")
 NOTE = Font(italic=True, size=9)
 WRAP = Alignment(wrap_text=True, vertical="top")
 CENTER = Alignment(horizontal="center", vertical="center")
+MIDDLE_WRAP = Alignment(vertical="center", wrap_text=True)
+CENTER_WRAP = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 MONEY = "#,##0.00"
 COUNT = "#,##0"
@@ -75,6 +77,20 @@ def style_row(
     return row
 
 
+def spacer_row(ws: Worksheet, height: float = 6) -> int:
+    """Append a real blank row and size that row, never the row above it.
+
+    ``Worksheet.append([])`` advances openpyxl's internal cursor without
+    creating a cell, so ``ws.max_row`` can still point at the preceding content
+    row.  Using ``[None]`` registers the spacer before its compact height is
+    assigned.
+    """
+    ws.append([None])
+    row = int(ws.max_row)
+    ws.row_dimensions[row].height = height
+    return row
+
+
 def border_row(ws: Worksheet, first: int, last: int, row: int | None = None) -> None:
     """Grid the table cells so the workbook reads like the reference slips."""
     r = row or ws.max_row
@@ -89,14 +105,14 @@ def label_value_rows(ws: Worksheet, rows: list[tuple[str, str] | None]) -> None:
     """
     for entry in rows:
         if entry is None:
-            ws.append([])
-            ws.row_dimensions[ws.max_row].height = 6
+            spacer_row(ws)
             continue
         label, value = entry
         ws.append([label, "", value])
         row = ws.max_row
         ws.cell(row=row, column=1).font = HEADER
-        ws.cell(row=row, column=3).alignment = WRAP
+        ws.cell(row=row, column=1).alignment = MIDDLE_WRAP
+        ws.cell(row=row, column=3).alignment = MIDDLE_WRAP
 
 
 def numeric_or_text(v: Any) -> Any:
@@ -136,7 +152,7 @@ def _content_height(ws: Worksheet, row: int, populated: list[Any]) -> float:
             for part in cell.value.splitlines() or [""]
         )
         lines = max(lines, cell_lines)
-    return min(300, max(15, lines * 15))
+    return min(300, max(18, lines * 15 + 3))
 
 
 def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
@@ -162,6 +178,7 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
 
     section_labels = {
         "Basis of Cover :",
+        "Rate :",
         "Plan Details",
         "SCHEDULE OF BENEFITS / PLAN",
         "SCHEDULE OF BENEFITS / DEFINITIONS / INSURER RESPONSE",
@@ -174,7 +191,7 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
             if isinstance(cell.value, str) and len(cell.value) > 32:
                 cell.alignment = Alignment(
                     horizontal=cell.alignment.horizontal,
-                    vertical="top",
+                    vertical=cell.alignment.vertical or "center",
                     wrap_text=True,
                 )
 
@@ -206,21 +223,33 @@ def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
             continue
 
         # Header/term label rows use A and C. Merge the intentionally blank A:B
-        # span so long reference labels do not consume the value column.
+        # span even when the value is blank; quotations deliberately blank
+        # Insurer, Policy No. and commercial terms, and those labels still need
+        # the full label width and a correctly calculated row height.
         if (
-            len(populated) == 2
-            and ws.cell(row=row, column=1).font.bold
+            first.value not in (None, "")
+            and first.font.bold
             and ws.cell(row=row, column=2).value in (None, "")
-            and ws.cell(row=row, column=3).value not in (None, "")
+            and all(
+                ws.cell(row=row, column=col).value in (None, "")
+                for col in range(4, last_col + 1)
+            )
+            and not any(
+                merged.min_row == row == merged.max_row
+                and merged.min_col <= 2 <= merged.max_col
+                for merged in ws.merged_cells.ranges
+            )
         ):
             ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-            if last_col > 3:
+            first.alignment = MIDDLE_WRAP
+            if ws.cell(row=row, column=3).value not in (None, "") and last_col > 3:
                 ws.merge_cells(
                     start_row=row,
                     start_column=3,
                     end_row=row,
                     end_column=last_col,
                 )
+            ws.cell(row=row, column=3).alignment = MIDDLE_WRAP
 
         if len(populated) >= 2 and all(cell.font.bold for cell in populated):
             first_col = min(cell.column for cell in populated)
