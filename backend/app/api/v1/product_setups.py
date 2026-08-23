@@ -18,6 +18,7 @@ tenant-checked policy year), matching the recommendations router pattern.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -1021,7 +1022,7 @@ def _collect_scalar(bucket: list[str], raw: Any) -> None:
         bucket.append(val)
 
 
-def _aggregate_suggestions(rows: list[ProductSetup]) -> FieldSuggestions:
+def _aggregate_suggestions(rows: Sequence[ProductSetup]) -> FieldSuggestions:
     out = FieldSuggestions()
     for setup in rows:
         answers = setup.answers or {}
@@ -1308,7 +1309,10 @@ def _benefit_schedule(answers: dict[str, Any], plan: dict[str, Any]) -> dict[str
         for it in items_in[:_MAX_BENEFIT_ITEMS]:
             if not isinstance(it, dict):
                 continue
-            subs_in = it.get("sub_items") if isinstance(it.get("sub_items"), list) else []
+            raw_sub_items = it.get("sub_items")
+            subs_in: list[Any] = (
+                raw_sub_items if isinstance(raw_sub_items, list) else []
+            )
             items.append({
                 "number": str(it.get("number") or ""),
                 "name": str(it.get("name") or ""),
