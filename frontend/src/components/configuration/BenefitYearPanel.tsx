@@ -1,72 +1,57 @@
 import { useState } from "react";
-import { CalendarPlus, Copy, FileText, Loader2, Trash2 } from "lucide-react";
+import { Archive, CalendarPlus, CheckCircle2, Copy, FileText, Loader2, Rocket, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/api/client";
 import {
+  useArchivePolicyYear,
   useCopyPolicyYear,
   useCreatePolicyYear,
   useDeletePolicyYear,
+  usePolicyYearDeletionImpact,
+  usePolicyYearReadiness,
+  useSetCurrentPolicyYear,
   useUpdatePolicyYear,
 } from "@/api/hooks";
-import { api } from "@/api/client";
 import { AlertDialog } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { formatError } from "@/lib/errors";
 import { triggerDownload } from "@/lib/download";
-import { policyYearForToday } from "@/lib/policy-year";
+import { formatError } from "@/lib/errors";
 import { notify } from "@/stores/notifications";
 import type { PolicyYear } from "@/types";
 
-/** `2026-01-01` + `2026-12-31` → `202601-202612` (insurer-style benefit-year id). */
 function benefitYearId(startIso: string, endIso: string): string {
-  const s = startIso.replaceAll("-", "").slice(0, 6);
-  const e = endIso.replaceAll("-", "").slice(0, 6);
-  return `${s}-${e}`;
+  return `${startIso.replaceAll("-", "").slice(0, 6)}-${endIso.replaceAll("-", "").slice(0, 6)}`;
 }
 
-/** Add whole days to an ISO date, returning an ISO date. UTC-based so a
- *  timezone offset (e.g. SGT +8) can't shift the result across a day. */
 function addDays(iso: string, days: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
-/** The day one year on, minus a day: `2026-01-01` → `2026-12-31`. */
 function oneYearMinusDay(startIso: string): string {
-  const [y, m, d] = startIso.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCFullYear(dt.getUTCFullYear() + 1);
-  dt.setUTCDate(dt.getUTCDate() - 1);
-  return dt.toISOString().slice(0, 10);
+  const [year, month, day] = startIso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  date.setUTCFullYear(date.getUTCFullYear() + 1);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function nextSpan(years: PolicyYear[]): { start: string; end: string } {
-  // Default a new year to the span right after the latest existing one, so it
-  // never overlaps (the server rejects overlaps).
-  if (years.length === 0) {
-    const y = new Date().getFullYear();
-    return { start: `${y}-01-01`, end: `${y}-12-31` };
+  if (!years.length) {
+    const year = new Date().getFullYear();
+    return { start: `${year}-01-01`, end: `${year}-12-31` };
   }
-  const latestEnd = years
-    .map((y) => y.end_date)
-    .reduce((a, b) => (a > b ? a : b));
+  const latestEnd = years.map((year) => year.end_date).sort().at(-1)!;
   const start = addDays(latestEnd, 1);
   return { start, end: oneYearMinusDay(start) };
 }
 
-function DownloadButton({
-  label,
-  title,
-  onDownload,
-}: {
+function DownloadButton({ label, title, onDownload }: {
   label: string;
   title: string;
   onDownload: () => Promise<void>;
@@ -82,324 +67,327 @@ function DownloadButton({
         setBusy(true);
         try {
           await onDownload();
-        } catch (e) {
-          notify({ message: formatError(e), tone: "error" });
+        } catch (error) {
+          notify({ message: formatError(error), tone: "error" });
         } finally {
           setBusy(false);
         }
       }}
     >
-      {busy ? (
-        <Loader2 className="size-3.5 animate-spin" />
-      ) : (
-        <FileText className="size-3.5" />
-      )}
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <FileText className="size-3.5" />}
       {label}
     </Button>
   );
 }
 
-export function BenefitYearPanel({
-  years,
-  viewingId,
-  onViewYear,
-}: {
+export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = false }: {
   years: PolicyYear[];
-  // The year currently being viewed on the Configuration page (highlighted).
   viewingId: string | null;
-  // Switch which year the config page views (add/copy select the new year;
-  // deleting the viewed year clears it back to the current one).
   onViewYear: (id: string | null) => void;
+  readOnly?: boolean;
 }) {
   const create = useCreatePolicyYear();
   const update = useUpdatePolicyYear();
   const remove = useDeletePolicyYear();
   const copy = useCopyPolicyYear();
-
+  const setCurrent = useSetCurrentPolicyYear();
+  const archive = useArchivePolicyYear();
   const [confirmDelete, setConfirmDelete] = useState<PolicyYear | null>(null);
-  // Date edit buffer, keyed by year id → field. Makes the date inputs
-  // controlled so a rejected PATCH (e.g. an overlap 409) reverts to the server
-  // value instead of leaving the invalid typed date on screen.
-  const [dateDraft, setDateDraft] = useState<
-    Record<string, { start_date?: string; end_date?: string }>
-  >({});
-
-  // "Copy" seeds the new year from the PREVIOUS period — the most recent
-  // existing year by date — since the new year's span sits right after it. That
-  // carries config forward at renewal even when building several years ahead
-  // (2027 → 2028), not just from the current/active year.
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [dateDraft, setDateDraft] = useState<Record<string, {
+    start_date?: string;
+    end_date?: string;
+  }>>({});
   const previousYear = years.length
     ? years.reduce((a, b) => (a.start_date > b.start_date ? a : b))
     : null;
-  const defaultYearId =
-    policyYearForToday(years)?.id ??
-    years.find((year) => year.status === "active")?.id ??
-    null;
+  const viewingYear = years.find((year) => year.id === viewingId) ?? null;
+  const readiness = usePolicyYearReadiness(viewingYear?.id);
+  const deletionImpact = usePolicyYearDeletionImpact(confirmDelete?.id);
 
   const clearDateDraft = (id: string, field: "start_date" | "end_date") =>
-    setDateDraft((d) => ({ ...d, [id]: { ...d[id], [field]: undefined } }));
+    setDateDraft((draft) => ({ ...draft, [id]: { ...draft[id], [field]: undefined } }));
 
-  const patchDates = async (
-    py: PolicyYear,
+  const patchDate = async (
+    policyYear: PolicyYear,
     field: "start_date" | "end_date",
     value: string,
   ) => {
-    if (!value || value === py[field]) {
-      clearDateDraft(py.id, field);
+    if (!value || value === policyYear[field]) {
+      clearDateDraft(policyYear.id, field);
       return;
     }
     try {
-      await update.mutateAsync({
-        policyYearId: py.id,
-        payload: { [field]: value },
-      });
-    } catch (e) {
-      toast.error(formatError(e));
+      await update.mutateAsync({ policyYearId: policyYear.id, payload: { [field]: value } });
+    } catch (error) {
+      toast.error(formatError(error));
     } finally {
-      // Drop the local buffer so the input reflects the server value —
-      // reverted on failure, refreshed on success.
-      clearDateDraft(py.id, field);
+      clearDateDraft(policyYear.id, field);
     }
   };
 
-  const onAdd = async () => {
+  const createYear = async (copyPrevious: boolean) => {
     const span = nextSpan(years);
     try {
-      const created = await create.mutateAsync({
-        start_date: span.start,
-        end_date: span.end,
-      });
-      onViewYear(created.id);
-      toast.success("Benefit year added");
-    } catch (e) {
-      toast.error(formatError(e));
+      if (copyPrevious && previousYear) {
+        const result = await copy.mutateAsync({
+          sourceId: previousYear.id,
+          payload: { start_date: span.start, end_date: span.end },
+        });
+        onViewYear(result.policy_year.id);
+        toast.success("Benefit year copied as a review-ready draft");
+      } else {
+        const created = await create.mutateAsync({ start_date: span.start, end_date: span.end });
+        onViewYear(created.id);
+        toast.success("Benefit year added");
+      }
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
-  const onCopy = async () => {
-    if (!previousYear) return;
-    const span = nextSpan(years);
+  const download = (policyYear: PolicyYear, path: string, filename: string) => async () => {
+    const response = await api.downloadResponse(`/policy-years/${policyYear.id}/${path}`);
+    triggerDownload(await response.blob(), `${filename}-${policyYear.year}`);
+  };
+
+  const runLifecycle = async (action: "live" | "archive") => {
+    if (!viewingYear) return;
     try {
-      const result = await copy.mutateAsync({
-        sourceId: previousYear.id,
-        payload: { start_date: span.start, end_date: span.end },
-      });
-      onViewYear(result.policy_year.id);
-      const n = Object.values(result.copied).reduce((a, b) => a + b, 0);
-      toast.success(
-        `Copied ${n} configuration rows from ${benefitYearId(
-          previousYear.start_date,
-          previousYear.end_date,
-        )} into the new benefit year`,
-      );
-    } catch (e) {
-      toast.error(formatError(e));
+      if (action === "live") {
+        await setCurrent.mutateAsync(viewingYear.id);
+        toast.success("Benefit year is now live");
+      } else {
+        await archive.mutateAsync(viewingYear.id);
+        toast.success("Benefit year archived");
+      }
+    } catch (error) {
+      toast.error(formatError(error));
     }
-  };
-
-  const downloadFactFind = (py: PolicyYear) => async () => {
-    const res = await api.downloadResponse(
-      `/policy-years/${py.id}/fact-find-form`,
-    );
-    triggerDownload(await res.blob(), `fact-find-${py.year}.docx`);
-  };
-
-  const downloadQuotation = (py: PolicyYear) => async () => {
-    const res = await api.downloadResponse(
-      `/policy-years/${py.id}/reports/quotation-slip`,
-    );
-    triggerDownload(await res.blob(), `quotation-slip-${py.year}.xlsx`);
-  };
-
-  const downloadPlacement = (py: PolicyYear) => async () => {
-    const res = await api.downloadResponse(
-      `/policy-years/${py.id}/reports/placement-slip`,
-    );
-    triggerDownload(await res.blob(), `placement-slip-${py.year}.xlsx`);
   };
 
   return (
     <Card>
       <CardHeader className="flex-col items-stretch gap-3 space-y-0 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <CardTitle>Benefit years</CardTitle>
-        </div>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:shrink-0 sm:flex-row">
+        <CardTitle>Benefit years</CardTitle>
+        {!readOnly && <div className="flex flex-col gap-2 sm:flex-row">
           <Button
             size="sm"
             variant="outline"
-            className="w-full sm:w-auto"
             disabled={!previousYear || copy.isPending}
-            onClick={onCopy}
-            title={
-              previousYear
-                ? `Create a new benefit year and copy ${benefitYearId(
-                    previousYear.start_date,
-                    previousYear.end_date,
-                  )}'s configuration into it`
-                : "Create a new benefit year seeded from the previous year"
-            }
+            onClick={() => createYear(true)}
           >
-            {copy.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Copy className="size-4" />
-            )}
-            Copy from previous year
+            <Copy className="size-4" />
+            Copy previous
           </Button>
-          <Button
-            size="sm"
-            className="w-full sm:w-auto"
-            disabled={create.isPending}
-            onClick={onAdd}
-          >
-            {create.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <CalendarPlus className="size-4" />
-            )}
+          <Button size="sm" disabled={create.isPending} onClick={() => createYear(false)}>
+            <CalendarPlus className="size-4" />
             Add benefit year
           </Button>
-        </div>
+        </div>}
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-2xs uppercase tracking-wider text-muted-foreground">
-                <th className="pb-2 pr-3 font-medium">Start date</th>
-                <th className="pb-2 pr-3 font-medium">End date</th>
-                <th className="pb-2 pr-3 font-medium">Documents</th>
-                <th className="pb-2 font-medium text-right">Remove</th>
-              </tr>
-            </thead>
-            <tbody>
-              {years.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="py-4 text-center text-sm text-muted-foreground"
-                  >
-                    No benefit years yet — use “Add benefit year” to create the
-                    first one.
-                  </td>
-                </tr>
-              )}
-              {years.map((py) => {
-                const isDefault = py.id === defaultYearId;
-                const isSelected = py.id === viewingId;
-                return (
-                  <tr
-                    key={py.id}
-                    className={`border-b border-border/60 ${
-                      isSelected ? "bg-muted/40" : ""
-                    }`}
-                  >
-                    <td className="py-2 pr-3">
-                      <Input
-                        type="date"
-                        aria-label={`Start date for benefit period ${py.start_date} to ${py.end_date}`}
-                        className="h-8 w-[150px]"
-                        value={dateDraft[py.id]?.start_date ?? py.start_date}
-                        onChange={(e) =>
-                          setDateDraft((d) => ({
-                            ...d,
-                            [py.id]: { ...d[py.id], start_date: e.target.value },
-                          }))
-                        }
-                        onBlur={(e) => patchDates(py, "start_date", e.target.value)}
+        {!years.length ? (
+          <div className="rounded-lg border border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+            Add the first period to begin configuration.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {years.map((policyYear) => {
+              const selected = policyYear.id === viewingId;
+              const period = benefitYearId(policyYear.start_date, policyYear.end_date);
+              return (
+                <section
+                  key={policyYear.id}
+                  aria-label={`${period} benefit year`}
+                  className={`rounded-lg border p-3 sm:p-4 ${
+                    selected ? "border-primary bg-primary/5" : "border-border bg-card"
+                  }`}
+                >
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
+                    <div className="flex min-w-44 items-center gap-2 self-start xl:self-center">
+                      <button
+                        type="button"
+                        className="rounded-sm text-left font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        onClick={() => onViewYear(policyYear.id)}
+                        aria-pressed={selected}
+                      >
+                        {period}
+                      </button>
+                      <Badge variant={
+                        policyYear.status === "active" ? "good" : policyYear.status === "draft" ? "info" : "default"
+                      }>
+                        {policyYear.status === "active" ? "Live" : policyYear.status === "draft" ? "Draft" : "Archived"}
+                      </Badge>
+                    </div>
+                    <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:max-w-[320px]">
+                      {(["start_date", "end_date"] as const).map((field) => (
+                        <label key={field} className="space-y-1 text-xs text-muted-foreground">
+                          {field === "start_date" ? "Start date" : "End date"}
+                          <Input
+                            type="date"
+                            className="h-8"
+                            disabled={readOnly}
+                            value={dateDraft[policyYear.id]?.[field] ?? policyYear[field]}
+                            onChange={(event) => setDateDraft((draft) => ({
+                              ...draft,
+                              [policyYear.id]: { ...draft[policyYear.id], [field]: event.target.value },
+                            }))}
+                            onBlur={(event) => patchDate(policyYear, field, event.target.value)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 xl:ml-auto">
+                      <DownloadButton
+                        label="Fact-find"
+                        title="Download the auto-filled Fact-Find Form"
+                        onDownload={download(policyYear, "fact-find-form", "fact-find")}
                       />
-                    </td>
-                    <td className="py-2 pr-3">
-                      <Input
-                        type="date"
-                        aria-label={`End date for benefit period ${py.start_date} to ${py.end_date}`}
-                        className="h-8 w-[150px]"
-                        value={dateDraft[py.id]?.end_date ?? py.end_date}
-                        onChange={(e) =>
-                          setDateDraft((d) => ({
-                            ...d,
-                            [py.id]: { ...d[py.id], end_date: e.target.value },
-                          }))
-                        }
-                        onBlur={(e) => patchDates(py, "end_date", e.target.value)}
+                      <DownloadButton
+                        label="Quotation"
+                        title="Download the quotation slip"
+                        onDownload={download(policyYear, "reports/quotation-slip", "quotation-slip")}
                       />
-                    </td>
-                    <td className="py-2 pr-3">
-                      <div className="flex gap-1.5">
-                        <DownloadButton
-                          label="Fact-find"
-                          title="Download the auto-filled Fact-Find Form (.docx)"
-                          onDownload={downloadFactFind(py)}
-                        />
-                        <DownloadButton
-                          label="Quotation"
-                          title="Download the quotation slip (.xlsx) — rates blank for insurers to quote"
-                          onDownload={downloadQuotation(py)}
-                        />
-                        <DownloadButton
-                          label="Placement"
-                          title="Download the placement slip (.xlsx) — the configured rates + premiums"
-                          onDownload={downloadPlacement(py)}
-                        />
-                      </div>
-                    </td>
-                    <td className="py-2 text-right">
-                      <Button
-                        size="icon"
+                      <DownloadButton
+                        label="Placement"
+                        title="Download the placement slip"
+                        onDownload={download(policyYear, "reports/placement-slip", "placement-slip")}
+                      />
+                      {!readOnly && <Button
+                        size="sm"
+                        variant={selected ? "secondary" : "outline"}
+                        onClick={() => onViewYear(policyYear.id)}
+                      >
+                        {selected ? "Viewing" : "View setup"}
+                      </Button>}
+                      {!readOnly && <Button
+                        size="icon-sm"
                         variant="ghost"
-                        className="size-8 text-error"
-                        disabled={isDefault}
-                        title={
-                          isDefault
-                            ? "The benefit year used as today's default cannot be removed"
-                            : "Delete this benefit year and its configuration"
-                        }
-                        onClick={() => setConfirmDelete(py)}
+                        className="text-error"
+                        disabled={policyYear.status === "active"}
+                        title={policyYear.status === "active"
+                          ? "The live benefit year cannot be deleted"
+                          : "Check whether this draft can be deleted"}
+                        onClick={() => {
+                          setDeleteConfirmation("");
+                          setConfirmDelete(policyYear);
+                        }}
                       >
                         <Trash2 className="size-4" />
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                        <span className="sr-only">Delete benefit year</span>
+                      </Button>}
+                    </div>
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        )}
 
+        {viewingYear && (
+          <section className="rounded-lg border border-border bg-muted/30 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="size-4 text-primary" />
+                  <h3 className="text-sm font-semibold text-foreground">Launch readiness</h3>
+                </div>
+                {readiness.isLoading ? (
+                  <p className="text-sm text-muted-foreground">Checking configuration…</p>
+                ) : readiness.data?.ready ? (
+                  <p className="text-sm text-good">Required configuration is complete.</p>
+                ) : (
+                  <ul className="list-disc space-y-1 pl-5 text-sm text-error">
+                    {(readiness.data?.blockers ?? ["Readiness could not be confirmed."]).map(
+                      (blocker) => <li key={blocker}>{blocker}</li>,
+                    )}
+                  </ul>
+                )}
+                {readiness.data?.warnings.map((warning) => (
+                  <p key={warning} className="text-sm text-warn">{warning}</p>
+                ))}
+              </div>
+              {!readOnly && <div className="flex flex-wrap gap-2">
+                {viewingYear.status !== "active" && (
+                  <Button
+                    size="sm"
+                    loading={setCurrent.isPending}
+                    disabled={!readiness.data?.ready}
+                    onClick={() => runLifecycle("live")}
+                  >
+                    <Rocket className="size-4" />
+                    Make live
+                  </Button>
+                )}
+                {viewingYear.status === "draft" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    loading={archive.isPending}
+                    onClick={() => runLifecycle("archive")}
+                  >
+                    <Archive className="size-4" />
+                    Archive
+                  </Button>
+                )}
+              </div>}
+            </div>
+          </section>
+        )}
       </CardContent>
 
       <AlertDialog
-        open={!!confirmDelete}
-        onOpenChange={(o) => !o && setConfirmDelete(null)}
-        title="Delete this benefit year?"
-        description={
-          confirmDelete ? (
-            <>
-              This permanently deletes the{" "}
-              <strong>
-                {benefitYearId(
-                  confirmDelete.start_date,
-                  confirmDelete.end_date,
-                )}
-              </strong>{" "}
-              benefit year and all its configuration (categories, plans,
-              product setups, flex scheme). This cannot be undone.
-            </>
-          ) : null
-        }
-        confirmLabel="Delete"
+        open={Boolean(confirmDelete)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmDelete(null);
+            setDeleteConfirmation("");
+          }
+        }}
+        title="Delete this draft benefit year?"
+        description={confirmDelete ? (
+          <>
+            This permanently deletes <strong>{benefitYearId(
+              confirmDelete.start_date,
+              confirmDelete.end_date,
+            )}</strong> and its configuration. Operational years are retained and must be archived instead.
+            {deletionImpact.isLoading ? (
+              <span className="mt-3 block">Checking linked records…</span>
+            ) : deletionImpact.data?.deletable ? (
+              <label className="mt-3 block space-y-1 text-foreground">
+                Type the benefit-year ID to confirm.
+                <Input
+                  value={deleteConfirmation}
+                  placeholder={benefitYearId(confirmDelete.start_date, confirmDelete.end_date)}
+                  onChange={(event) => setDeleteConfirmation(event.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+            ) : (
+              <span className="mt-3 block text-error">
+                {deletionImpact.data?.reason ?? "This benefit year cannot be deleted."}
+              </span>
+            )}
+          </>
+        ) : null}
+        confirmLabel="Delete draft"
         confirmVariant="destructive"
         loading={remove.isPending}
+        confirmDisabled={
+          !deletionImpact.data?.deletable ||
+          !confirmDelete ||
+          deleteConfirmation !== benefitYearId(confirmDelete.start_date, confirmDelete.end_date)
+        }
         onConfirm={async () => {
           if (!confirmDelete) return;
           try {
             await remove.mutateAsync(confirmDelete.id);
             if (confirmDelete.id === viewingId) onViewYear(null);
-            toast.success("Benefit year deleted");
+            toast.success("Draft benefit year deleted");
             setConfirmDelete(null);
-          } catch (e) {
-            toast.error(formatError(e));
+          } catch (error) {
+            toast.error(formatError(error));
           }
         }}
       />

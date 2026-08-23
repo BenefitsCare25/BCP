@@ -821,8 +821,9 @@ export function useEnrollmentRoster(
 
 export function useEnrollment(enrollmentId: string | null) {
   const cid = useClientId();
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   return useQuery({
-    queryKey: ["enrollment", enrollmentId, cid],
+    queryKey: ["enrollment", enrollmentId, cid, policyYearId],
     queryFn: () => api.get<EnrollmentDetail>(`/enrollments/${enrollmentId}`),
     enabled: !!enrollmentId,
   });
@@ -831,8 +832,9 @@ export function useEnrollment(enrollmentId: string | null) {
 /** Cohort-scoped, direction-aware electable tiers per product for one member. */
 export function useEnrollmentOptions(enrollmentId: string | null) {
   const cid = useClientId();
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   return useQuery({
-    queryKey: ["enrollment-options", enrollmentId, cid],
+    queryKey: ["enrollment-options", enrollmentId, cid, policyYearId],
     queryFn: () => api.get<EnrollmentOptions>(`/enrollments/${enrollmentId}/options`),
     enabled: !!enrollmentId,
   });

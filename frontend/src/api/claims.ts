@@ -537,8 +537,9 @@ export function useSetCaseType() {
 /** Single-claim detail — carries `remaining_limit`, which the list omits. */
 export function useBrokerClaimDetail(claimId: string | null) {
   const cid = useSession((s) => s.activeClientId);
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   return useQuery({
-    queryKey: ["claim-detail", cid, claimId],
+    queryKey: ["claim-detail", cid, policyYearId, claimId],
     queryFn: () => api.get<BrokerClaim>(`/claims/${claimId}`),
     enabled: !!claimId,
     meta: { localErrorHandling: true },
@@ -576,8 +577,9 @@ export function useClaimReview(
 /** Broker view of one employee's claim usage vs limits. */
 export function useEmployeeUtilization(employeeId: string | null) {
   const cid = useSession((s) => s.activeClientId);
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   return useQuery({
-    queryKey: ["employee-utilization", cid, employeeId],
+    queryKey: ["employee-utilization", cid, policyYearId, employeeId],
     queryFn: () => api.get<Utilization>(`/employees/${employeeId}/utilization`),
     enabled: !!employeeId,
   });

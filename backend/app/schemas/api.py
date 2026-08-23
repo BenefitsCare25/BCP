@@ -1,4 +1,5 @@
 """Pydantic request/response models for the API."""
+
 from __future__ import annotations
 
 import json
@@ -317,6 +318,20 @@ class PolicyYearCopyIn(BaseModel):
 class PolicyYearCopyResult(BaseModel):
     policy_year: PolicyYearOut
     copied: dict[str, int]
+
+
+class PolicyYearDeletionImpact(BaseModel):
+    deletable: bool
+    reason: str | None = None
+    counts: dict[str, int]
+    operational_records: int
+
+
+class PolicyYearReadinessOut(BaseModel):
+    ready: bool
+    metrics: dict[str, int]
+    blockers: list[str]
+    warnings: list[str]
 
 
 class ProductTermOut(BaseModel):

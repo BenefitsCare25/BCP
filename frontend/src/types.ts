@@ -1154,6 +1154,7 @@ export interface ProductSetup {
   origin: "manual" | "placement_slip";
   confirmed_at: string | null;
   materialized_product_id: string | null;
+  updated_at: string;
 }
 
 export interface ConfirmSetupResult {

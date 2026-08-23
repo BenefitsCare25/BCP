@@ -4,6 +4,7 @@ import {
   useAuditLog,
   useCategoriesGrouped,
   useEmployeeAttributes,
+  useMe,
   usePolicyYears,
   useProductSetups,
   useSetupProducts,
@@ -31,8 +32,7 @@ import {
   SlipUploadPanel,
   useSlipUpload,
 } from "@/components/configuration/UploadCard";
-import { cn } from "@/lib/cn";
-import { defaultPolicyYear, isPastPolicyPeriod } from "@/lib/policy-year";
+import { defaultPolicyYear } from "@/lib/policy-year";
 import { useSession } from "@/stores/session";
 import type { Category, InsuranceLine } from "@/types";
 import {
@@ -43,6 +43,7 @@ import {
 } from "@/lib/insuranceLines";
 
 export function ConfigurationPage() {
+  const { data: me } = useMe();
   const { data: policyYears = [], isLoading: yearsLoading } = usePolicyYears();
   const selectedYearId = useSession((s) => s.currentPolicyYearId);
   const setPolicyYear = useSession((s) => s.setPolicyYear);
@@ -54,9 +55,7 @@ export function ConfigurationPage() {
       ? selectedYearId
       : defaultPolicyYear(policyYears)?.id ?? null;
   const viewedYear = policyYears.find((y) => y.id === policyYearId) ?? null;
-  const readOnly = viewedYear
-    ? isPastPolicyPeriod(viewedYear.coverage_end)
-    : false;
+  const readOnly = me?.role === "broker_viewer";
 
   const { data: groups = [], isLoading } = useCategoriesGrouped(
     policyYearId ?? undefined,
@@ -229,6 +228,7 @@ export function ConfigurationPage() {
           years={policyYears}
           viewingId={policyYearId}
           onViewYear={setPolicyYear}
+          readOnly={readOnly}
         />
       </div>
     );
@@ -236,22 +236,25 @@ export function ConfigurationPage() {
 
   return (
     <div className="space-y-5">
-      {/* Config editing is disabled when viewing a past year. pointer-events is
-          inherited, so re-enabling it on the tab navigation (Radix tablists +
-          the product-form section tabs) keeps browsing available read-only. */}
-      <div
-        className={cn(
-          readOnly &&
-            "pointer-events-none select-none opacity-95 [&_[role=tablist]]:pointer-events-auto [&_.config-nav]:pointer-events-auto",
-        )}
-        aria-disabled={readOnly || undefined}
-      >
+      {readOnly && (
+        <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          Your broker viewer role is read-only. You can inspect benefit years,
+          products, documents, and audit history, but change controls are unavailable.
+        </div>
+      )}
+      {viewedYear?.status === "archived" && (
+        <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          You are viewing an archived benefit year. Authorized brokers may correct
+          its configuration; changes remain audited and do not make it member-visible.
+        </div>
+      )}
+      <div>
         {isLoading ? (
           <SkeletonTable rows={8} columns={4} />
         ) : (
           <Tabs value={tab} onValueChange={(v) => switchLine(v as InsuranceLine)}>
-            <div className="flex items-center justify-between gap-3">
-              <TabsList>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <TabsList className="h-auto max-w-full flex-wrap">
                 {INSURANCE_LINES.map((line) => (
                   <TabsTrigger key={line} value={line} className="gap-2">
                     {LINE_LABELS[line]}
@@ -263,15 +266,15 @@ export function ConfigurationPage() {
               </TabsList>
               {/* Insured products upload an .xls placement slip; the Flex tab
                   uploads its own (AI-extracted) benefit documents. */}
-              {tab === "flex" ? (
+              {!readOnly && (tab === "flex" ? (
                 <FlexUploadCard policyYearId={policyYearId} compact />
               ) : (
                 <SlipUploadButton slip={slip} />
-              )}
+              ))}
             </div>
 
             {/* Slip upload results + period guard — insured products only. */}
-            {tab !== "flex" && (
+            {tab !== "flex" && !readOnly && (
               <>
                 <SlipUploadPanel slip={slip} />
                 <SlipPeriodBanner policyYearId={policyYearId} />
@@ -283,6 +286,7 @@ export function ConfigurationPage() {
                 {line === "flex" ? (
                   <FlexPanel
                     policyYearId={policyYearId}
+                    readOnly={readOnly}
                   />
                 ) : (
                   <LineTab
@@ -291,6 +295,7 @@ export function ConfigurationPage() {
                     groups={groupsByLine[line]}
                     onSelectCategory={setSelected}
                     onBlockingEditChange={handleBlockingEditChange}
+                    readOnly={readOnly}
                   />
                 )}
               </TabsContent>
@@ -306,6 +311,7 @@ export function ConfigurationPage() {
         years={policyYears}
         viewingId={policyYearId}
         onViewYear={setPolicyYear}
+        readOnly={readOnly}
       />
 
       {audit && audit.items.length > 0 && (
@@ -324,8 +330,12 @@ export function ConfigurationPage() {
                   className="flex items-center justify-between gap-3 text-sm"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <Badge variant="outline">{entry.action}</Badge>
-                    <Badge variant="default">{entry.entity_type}</Badge>
+                    <Badge variant="outline">
+                      {entry.action.replaceAll("_", " ")}
+                    </Badge>
+                    <Badge variant="default">
+                      {entry.entity_type.replaceAll("_", " ")}
+                    </Badge>
                     {entry.cross_tenant_access && (
                       <Badge variant="error">Cross-tenant</Badge>
                     )}

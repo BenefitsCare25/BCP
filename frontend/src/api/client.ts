@@ -18,6 +18,16 @@ function tenantHeader(): Record<string, string> {
   return clientId ? { "X-Inspro-Client": clientId } : {};
 }
 
+/** Selected benefit year, used to reject stale detail requests server-side. */
+function policyYearHeader(): Record<string, string> {
+  const policyYearId = useSession.getState().currentPolicyYearId;
+  return policyYearId ? { "X-Inspro-Policy-Year-ID": policyYearId } : {};
+}
+
+function scopeHeaders(): Record<string, string> {
+  return { ...tenantHeader(), ...policyYearHeader() };
+}
+
 // Read the base from the build env; default keeps local dev (Vite proxy) working.
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
@@ -172,7 +182,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       ...auth,
-      ...tenantHeader(),
+      ...scopeHeaders(),
       ...init.headers,
     },
   });
@@ -204,7 +214,7 @@ export const api = {
   download: async (path: string): Promise<Blob> => {
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { ...auth, ...tenantHeader() },
+      headers: { ...auth, ...scopeHeaders() },
     });
     if (!res.ok) {
       return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
@@ -215,7 +225,7 @@ export const api = {
   downloadResponse: async (path: string): Promise<Response> => {
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { ...auth, ...tenantHeader() },
+      headers: { ...auth, ...scopeHeaders() },
     });
     if (!res.ok) {
       return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
@@ -227,7 +237,7 @@ export const api = {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       body: formData,
-      headers: { ...auth, ...tenantHeader() },
+      headers: { ...auth, ...scopeHeaders() },
     });
     if (!res.ok) {
       return fail(res, (text) => uploadError(text, res.statusText, res.status));

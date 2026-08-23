@@ -101,15 +101,25 @@ async function ensureYear(
 
 async function context(request: APIRequestContext, futureYear: number) {
   const me = await apiJson<Me>(await request.get(`${API}/me`));
-  const client = me.accessible_clients.find((candidate) => candidate.name === "CDL");
-  expect(client).toBeDefined();
-  const headers = { "X-Inspro-Client": client!.id };
   const now = new Date();
   const today = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
+  let client: Me["accessible_clients"][number] | undefined;
+  for (const candidate of me.accessible_clients) {
+    const candidateHeaders = { "X-Inspro-Client": candidate.id };
+    const candidateYears = await apiJson<PolicyYear[]>(
+      await request.get(`${API}/policy-years`, { headers: candidateHeaders }),
+    );
+    if (candidateYears.some((year) => year.start_date <= today && year.end_date >= today)) {
+      client = candidate;
+      break;
+    }
+  }
+  expect(client).toBeDefined();
+  const headers = { "X-Inspro-Client": client!.id };
   const current = (await apiJson<PolicyYear[]>(
     await request.get(`${API}/policy-years`, { headers }),
   )).find(

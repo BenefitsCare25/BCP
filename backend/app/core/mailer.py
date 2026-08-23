@@ -9,6 +9,7 @@ Mode selected by `INSPRO_MAIL_MODE`:
 - `acs`: Azure Communication Services — stubbed; raises until implemented so a
   misconfigured deploy fails loudly instead of silently dropping codes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -100,7 +101,10 @@ class LogMailer:
     ) -> None:
         logger.info(
             "Portal invite for %s: username=%s password=%s (%s)",
-            email, username, password, sign_in_url,
+            email,
+            username,
+            password,
+            sign_in_url,
         )
 
     def send_claim_update(self, email: str, portal_url: str) -> None:
@@ -126,6 +130,8 @@ class SmtpMailer:
             if smtp.has_extn("starttls"):
                 smtp.starttls()
                 smtp.ehlo()
+            elif get_settings().env == "prod":
+                raise RuntimeError("Production SMTP server does not advertise STARTTLS.")
             if self.user:
                 smtp.login(self.user, self.password)
             smtp.send_message(msg)
@@ -144,9 +150,7 @@ class SmtpMailer:
 
 class AcsMailer:
     def __init__(self) -> None:
-        raise RuntimeError(
-            "INSPRO_MAIL_MODE=acs is not implemented yet — use smtp or log."
-        )
+        raise RuntimeError("INSPRO_MAIL_MODE=acs is not implemented yet — use smtp or log.")
 
     def send_otp(self, email: str, code: str, magic_link: str) -> None:  # pragma: no cover
         raise NotImplementedError

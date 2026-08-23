@@ -130,6 +130,10 @@ jobs:
               aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ steps.img.outputs.image }}" \
+              smtpHost="${{ secrets.SMTP_HOST }}" \
+              smtpUser="${{ secrets.SMTP_USER }}" \
+              smtpFrom="${{ secrets.SMTP_FROM }}" \
+              smtpPassword="${{ secrets.SMTP_PASSWORD }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}" \
             | tee /tmp/drift-output.txt
 

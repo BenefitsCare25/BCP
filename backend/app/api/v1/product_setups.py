@@ -102,6 +102,7 @@ class SetupOut(BaseModel):
     origin: str = "manual"
     confirmed_at: datetime | None = None
     materialized_product_id: str | None = None
+    updated_at: datetime
 
 
 class SetupSaveIn(BaseModel):
@@ -110,6 +111,7 @@ class SetupSaveIn(BaseModel):
     # Proceed even though renaming/removing a benefit line would strand existing
     # claims that reference it by name (409 `orphaned_benefit_keys` otherwise).
     acknowledge: bool = False
+    expected_updated_at: datetime | None = None
 
 
 class ConfirmResult(BaseModel):
@@ -195,6 +197,7 @@ def _setup_out(s: ProductSetup) -> SetupOut:
         origin=s.origin,
         confirmed_at=s.confirmed_at,
         materialized_product_id=s.materialized_product_id,
+        updated_at=s.updated_at,
     )
 
 
@@ -593,7 +596,7 @@ def save_setup(
             status.HTTP_404_NOT_FOUND,
             f"No template or slip data for product {product_code!r}",
         )
-    setup = _upsert_draft(db, policy_year_id, tpl.code, body)
+    setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
     write_audit(
         db, user, action="save_setup_draft", entity_type="product_setup",
         entity_id=setup.id, after={"product_code": tpl.code, "policy_year_id": policy_year_id},
@@ -1114,6 +1117,24 @@ def _upsert_draft(
         db.add(setup)
         db.flush()
     else:
+        if body.expected_updated_at is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This setup has changed. Reload it before saving.",
+            )
+        current = setup.updated_at
+        expected = body.expected_updated_at
+        current_utc = current.replace(tzinfo=None)
+        expected_utc = (
+            expected.astimezone(UTC).replace(tzinfo=None)
+            if expected.tzinfo
+            else expected
+        )
+        if current_utc != expected_utc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This setup was updated by another user. Reload before saving.",
+            )
         # Shallow-merge top-level sections so a partial body (e.g. a confirm that
         # only carries `plans`) can't silently wipe a previously-saved section
         # like `categories` or `rate_table`. A section is only replaced when the

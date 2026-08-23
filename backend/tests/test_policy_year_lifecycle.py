@@ -18,8 +18,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Category, PolicyYear  # noqa: E402
+from app.models import Category, FlexScheme, PolicyYear  # noqa: E402
 from app.models.category import CategoryStatus, SourceKind  # noqa: E402
+from app.models.flex_scheme import FlexSchemeStatus  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
@@ -56,6 +57,18 @@ def _first_year_id(client: TestClient) -> str:
     return client.get(API).json()[0]["id"]
 
 
+def _make_ready(policy_year_id: str) -> None:
+    with SessionLocal() as db:
+        db.add(
+            FlexScheme(
+                policy_year_id=policy_year_id,
+                status=FlexSchemeStatus.confirmed,
+                scheme={},
+            )
+        )
+        db.commit()
+
+
 def test_create_with_grace_period(client: TestClient) -> None:
     res = client.post(
         API,
@@ -90,6 +103,8 @@ def test_set_current_demotes_previous(client: TestClient) -> None:
     b = client.post(
         API, json={"start_date": "2033-01-01", "end_date": "2033-12-31"}
     ).json()
+    _make_ready(a["id"])
+    _make_ready(b["id"])
 
     res_a = client.post(f"{API}/{a['id']}/set-current")
     assert res_a.status_code == 200
@@ -109,10 +124,11 @@ def test_cannot_delete_current_year(client: TestClient) -> None:
     y = client.post(
         API, json={"start_date": "2034-01-01", "end_date": "2034-12-31"}
     ).json()
+    _make_ready(y["id"])
     client.post(f"{API}/{y['id']}/set-current")
     res = client.delete(f"{API}/{y['id']}")
     assert res.status_code == 409
-    assert "current benefit year" in res.json()["detail"]
+    assert "live benefit year" in res.json()["detail"]
 
 
 def test_delete_draft_year(client: TestClient) -> None:

@@ -5,6 +5,7 @@ HR / portal surfaces is for. The prod behaviour matters: on a deployment with no
 custom domain there are no tenant subdomains to parse, so refusing the header in
 prod would 400 every member and HR sign-in.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -33,6 +34,10 @@ def prod_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("INSPRO_ENTRA_TENANT_ID", "t")
     monkeypatch.setenv("INSPRO_ENTRA_CLIENT_ID", "c")
     monkeypatch.setenv("INSPRO_MAIL_MODE", "smtp")
+    monkeypatch.setenv("INSPRO_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("INSPRO_SMTP_USER", "mailer@example.com")
+    monkeypatch.setenv("INSPRO_SMTP_FROM", "mailer@example.com")
+    monkeypatch.setenv("INSPRO_SMTP_PASSWORD", "test-password")
     monkeypatch.setenv("INSPRO_PORTAL_JWT_SECRET", "x" * 48)
     monkeypatch.setenv("INSPRO_STORAGE_MODE", "azure")
     monkeypatch.setenv("INSPRO_REDIS_URL", "rediss://cache.example:10000/0")
@@ -53,9 +58,7 @@ def test_header_accepted_in_prod_under_header_mode(prod_env):
     prod_env.setenv("INSPRO_TENANT_MODE", "header")
     clear_settings_cache()
     assert resolve_host_info(_request(), SURFACE_HR, "acme") == HostInfo(SURFACE_HR, "acme")
-    assert resolve_host_info(_request(), SURFACE_PORTAL, "acme") == HostInfo(
-        SURFACE_PORTAL, "acme"
-    )
+    assert resolve_host_info(_request(), SURFACE_PORTAL, "acme") == HostInfo(SURFACE_PORTAL, "acme")
 
 
 def test_real_host_always_wins_over_header(prod_env):

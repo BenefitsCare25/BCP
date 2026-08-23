@@ -1,11 +1,22 @@
 """Policy year — versions per client. Activation snapshots live here."""
+
 from __future__ import annotations
 
 import enum
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import JSON, Base, TimestampMixin, new_uuid
@@ -28,6 +39,13 @@ class PolicyYear(Base, TimestampMixin):
     # a calendar year but cannot share a start date.
     __table_args__ = (
         UniqueConstraint("client_id", "start_date", name="uq_policy_year_start"),
+        Index(
+            "uq_policy_year_active_client",
+            "client_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)

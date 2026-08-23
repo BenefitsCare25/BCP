@@ -14,6 +14,7 @@ Every portal endpoint must scope data through `resolve_member_employee` — the
 member's own Employee row in the active policy year — never by bare client_id
 (which would expose co-workers' data).
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -140,7 +141,9 @@ def issue_member_set_password_token(member_account_id: str, version: int) -> str
 
 def verify_member_set_password_token(token: str) -> tuple[str, int]:
     claims = jwt.decode(
-        token, _derive_key(_SET_PW_LABEL), algorithms=[_JWT_ALGORITHM],
+        token,
+        _derive_key(_SET_PW_LABEL),
+        algorithms=[_JWT_ALGORITHM],
         options={"require": ["sub", "exp"]},
     )
     if claims.get("typ") != _TOKEN_TYPE_SET_PW:
@@ -165,7 +168,9 @@ def issue_member_mfa_challenge_token(member_account_id: str, client_id: str) -> 
 
 def verify_member_mfa_challenge_token(token: str) -> tuple[str, str]:
     claims = jwt.decode(
-        token, _derive_key(_MFA_LABEL), algorithms=[_JWT_ALGORITHM],
+        token,
+        _derive_key(_MFA_LABEL),
+        algorithms=[_JWT_ALGORITHM],
         options={"require": ["sub", "exp"]},
     )
     if claims.get("typ") != _TOKEN_TYPE_MFA:
@@ -187,9 +192,7 @@ def resolve_member_credential(db: Session, client_id: str, identifier: str):
     )
     if "@" in identifier:
         return base.filter(MemberAccount.email == identifier.lower()).one_or_none()
-    account = base.filter(
-        MemberAccount.system_login_id == identifier.upper()
-    ).one_or_none()
+    account = base.filter(MemberAccount.system_login_id == identifier.upper()).one_or_none()
     if account is not None:
         return account
     return base.filter(MemberAccount.staff_id == identifier).one_or_none()
@@ -285,18 +288,16 @@ def get_current_member(
 
 
 def active_policy_year(db: Session, client_id: str):
-    """The benefit year covering today's business date.
+    """The one explicitly live benefit year for a company.
 
-    The legacy ``active`` flag remains a fallback for a gap and for an already
-    forward-started onboarding period, preserving existing companies while
-    normal operation no longer requires a broker to promote each renewal.
+    Coverage dates describe what the policy covers; they are not an activation
+    mechanism. A copied or incomplete draft must never become member-visible
+    merely because the calendar crossed its start date.
     """
-    from app.core.clock import today as business_today
     from app.models import PolicyYear
     from app.models.policy_year import PolicyYearStatus
 
-    today = business_today()
-    legacy_active = (
+    return (
         db.query(PolicyYear)
         .filter(
             PolicyYear.client_id == client_id,
@@ -305,26 +306,6 @@ def active_policy_year(db: Session, client_id: str):
         .order_by(PolicyYear.start_date.desc())
         .first()
     )
-    # Preserve a deliberately forward-started legacy year. The broker UI no
-    # longer creates this state, but existing onboarding flows may already have
-    # promoted the next period before it starts.
-    if legacy_active is not None and legacy_active.start_date > today:
-        return legacy_active
-
-    current = (
-        db.query(PolicyYear)
-        .filter(
-            PolicyYear.client_id == client_id,
-            PolicyYear.start_date <= today,
-            PolicyYear.end_date >= today,
-        )
-        .order_by(PolicyYear.start_date.desc())
-        .first()
-    )
-    if current is not None:
-        return current
-
-    return legacy_active
 
 
 def resolve_member_employee(
@@ -375,7 +356,9 @@ def resolve_member_employee(
     if ambiguous:
         logger.warning(
             "Ambiguous staff_id %s for member %s in policy year %s",
-            member.staff_id, member.member_account_id, year.id,
+            member.staff_id,
+            member.member_account_id,
+            year.id,
         )
         raise HTTPException(
             status.HTTP_409_CONFLICT,

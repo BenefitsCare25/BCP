@@ -33,7 +33,7 @@
  * Bulk portal invites live on Company settings → Authentication;
  * `MemberAccountActions` renders on `routes/operations/coverage.tsx` only.
  */
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -150,6 +150,12 @@ export function EmployeesPage() {
       search: { tab: "employees", ...(id ? { employee: id } : {}) },
       replace: true,
     });
+  const previousPolicyYearId = useRef(policyYearId);
+  useEffect(() => {
+    if (previousPolicyYearId.current === policyYearId) return;
+    previousPolicyYearId.current = policyYearId;
+    setSelectedId(null);
+  }, [policyYearId]);
   const [page, setPage] = useState(0);
   // One filter state for the whole bar, serialized to the SAME `MemberFilters`
   // the bulk tool sends — so the roster view and a bulk selection can never

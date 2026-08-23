@@ -6,13 +6,15 @@ flagged "current" (``status == active``) — that is the year the member portal
 reads and the one claims are submitted against. Setting a year current demotes
 the previously-current one to ``archived``.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -26,14 +28,36 @@ from app.schemas.api import (
     PolicyYearCopyIn,
     PolicyYearCopyResult,
     PolicyYearCreate,
+    PolicyYearDeletionImpact,
     PolicyYearOut,
+    PolicyYearReadinessOut,
     PolicyYearUpdate,
     SnapshotOut,
 )
 from app.services.policy_year_clone import clone_policy_year_config
+from app.services.policy_year_safety import deletion_counts, readiness
 from app.services.product_terms import envelope_for, envelopes_for
 
 router = APIRouter(prefix="/policy-years", tags=["policy-years"])
+
+
+def _lock_policy_year_scope(db: Session, client_id: str) -> None:
+    """Serialize benefit-year lifecycle writes for one company on Postgres."""
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:scope))"),
+            {"scope": f"policy-years:{client_id}"},
+        )
+
+
+def _raise_policy_year_conflict(db: Session, exc: IntegrityError) -> None:
+    db.rollback()
+    constraint = str(getattr(exc.orig, "diag", None) or exc.orig)
+    if "active_client" in constraint:
+        detail = "Another benefit year is already live for this company."
+    else:
+        detail = "The benefit-year dates overlap an existing period."
+    raise HTTPException(status.HTTP_409_CONFLICT, detail) from exc
 
 
 def _policy_year_out(py: PolicyYear, envelope: tuple[date, date]) -> PolicyYearOut:
@@ -104,6 +128,7 @@ def create_policy_year(
     db: Session = Depends(get_db),
 ) -> PolicyYearOut:
     client_id = require_client_id(user)
+    _lock_policy_year_scope(db, client_id)
     _assert_no_overlap(db, client_id, payload.start_date, payload.end_date)
     py = PolicyYear(
         client_id=client_id,
@@ -115,7 +140,10 @@ def create_policy_year(
         leaver_access_days=payload.leaver_access_days,
     )
     db.add(py)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        _raise_policy_year_conflict(db, exc)
     # Panel clinic selections behave like a per-company setting: a new year
     # inherits the previous year's tags instead of resetting the locator.
     from app.services.panel_cards import carry_over_card_assignments
@@ -180,6 +208,7 @@ def update_policy_year(
             "end_date must be on or after start_date",
         )
     if "start_date" in fields or "end_date" in fields:
+        _lock_policy_year_scope(db, py.client_id)
         _assert_no_overlap(db, py.client_id, new_start, new_end, exclude_id=py.id)
         py.start_date = new_start
         py.end_date = new_end
@@ -202,7 +231,10 @@ def update_policy_year(
             "leaver_access_days": py.leaver_access_days,
         },
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        _raise_policy_year_conflict(db, exc)
     db.refresh(py)
     return _policy_year_out(py, envelope_for(db, py))
 
@@ -213,18 +245,20 @@ def delete_policy_year(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Delete a benefit year and its configuration (cascade).
-
-    The date-derived current year can't be deleted, so the member portal never
-    loses today's coverage out from under it.
-    """
+    """Delete a configuration-only draft; retain every operational year."""
     current = active_policy_year(db, py.client_id)
-    if py.status == PolicyYearStatus.active or (
-        current is not None and current.id == py.id
-    ):
+    if py.status == PolicyYearStatus.active or (current is not None and current.id == py.id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "This is the current benefit year for today's date and cannot be deleted.",
+            "The live benefit year cannot be deleted.",
+        )
+    _, operational = deletion_counts(db, py.id)
+    if py.status != PolicyYearStatus.draft or operational:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Only a draft benefit year with no roster, claims, enrollment, "
+            "uploads, underwriting, or report history can be deleted. Archive "
+            "this year instead.",
         )
     write_audit(
         db,
@@ -236,14 +270,51 @@ def delete_policy_year(
             "year": py.year,
             "start_date": py.start_date.isoformat(),
             "end_date": py.end_date.isoformat(),
-            "status": py.status.value
-            if isinstance(py.status, PolicyYearStatus)
-            else py.status,
+            "status": py.status.value if isinstance(py.status, PolicyYearStatus) else py.status,
         },
     )
     db.delete(py)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/{policy_year_id}/deletion-impact",
+    response_model=PolicyYearDeletionImpact,
+)
+def policy_year_deletion_impact(
+    py: PolicyYear = Depends(load_policy_year),
+    db: Session = Depends(get_db),
+) -> PolicyYearDeletionImpact:
+    counts, operational = deletion_counts(db, py.id)
+    current = active_policy_year(db, py.client_id)
+    reason: str | None = None
+    if py.status != PolicyYearStatus.draft:
+        reason = "Live and archived benefit years are retained as company history."
+    elif current is not None and current.id == py.id:
+        reason = "The live benefit year cannot be deleted."
+    elif operational:
+        reason = "This year contains operational history and must be archived rather than deleted."
+    return PolicyYearDeletionImpact(
+        deletable=reason is None,
+        reason=reason,
+        counts=counts,
+        operational_records=operational,
+    )
+
+
+@router.get("/{policy_year_id}/readiness", response_model=PolicyYearReadinessOut)
+def policy_year_readiness(
+    py: PolicyYear = Depends(load_policy_year),
+    db: Session = Depends(get_db),
+) -> PolicyYearReadinessOut:
+    metrics, blockers, warnings = readiness(db, py.id)
+    return PolicyYearReadinessOut(
+        ready=not blockers,
+        metrics=metrics,
+        blockers=blockers,
+        warnings=warnings,
+    )
 
 
 @router.post("/{policy_year_id}/set-current", response_model=PolicyYearOut)
@@ -252,12 +323,25 @@ def set_current_policy_year(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PolicyYearOut:
-    """Flag this year as the current one the member portal reads.
+    """Make a ready year live and archive the previously-live year.
 
-    Exactly one year per client is current: any previously-current year is
-    demoted to ``archived``. No snapshot, no readiness gate — configuration
-    stays editable on every year.
+    Exactly one year per client is current. Activation is explicit and
+    readiness-gated; configuration remains editable afterwards and every
+    mutation is audited.
     """
+    metrics, blockers, warnings = readiness(db, py.id)
+    if blockers:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "benefit_year_not_ready",
+                "message": "This benefit year is not ready to go live.",
+                "blockers": blockers,
+                "warnings": warnings,
+                "metrics": metrics,
+            },
+        )
+    _lock_policy_year_scope(db, py.client_id)
     now = datetime.now(tz=UTC)
     others = (
         db.execute(
@@ -272,6 +356,11 @@ def set_current_policy_year(
     )
     for other in others:
         other.status = PolicyYearStatus.archived
+    # Partial unique indexes are checked per SQL statement. Persist demotions
+    # before promoting the target so the transition never briefly has two live
+    # rows inside the transaction.
+    if others:
+        db.flush()
     py.status = PolicyYearStatus.active
     py.activated_at = now
     py.activated_by = user.user_id
@@ -286,6 +375,37 @@ def set_current_policy_year(
             "year": py.year,
             "demoted": [o.id for o in others],
         },
+    )
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        _raise_policy_year_conflict(db, exc)
+    db.refresh(py)
+    return _policy_year_out(py, envelope_for(db, py))
+
+
+@router.post("/{policy_year_id}/archive", response_model=PolicyYearOut)
+def archive_policy_year(
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PolicyYearOut:
+    """Retain a non-live year and its operational history."""
+    if py.status == PolicyYearStatus.active:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Make another ready benefit year live before archiving this one.",
+        )
+    before = py.status.value
+    py.status = PolicyYearStatus.archived
+    write_audit(
+        db,
+        user,
+        action="archive",
+        entity_type="policy_year",
+        entity_id=py.id,
+        before={"status": before},
+        after={"status": PolicyYearStatus.archived.value},
     )
     db.commit()
     db.refresh(py)
@@ -305,6 +425,7 @@ def copy_policy_year(
 ) -> PolicyYearCopyResult:
     """Create a new benefit year and clone this year's configuration into it."""
     client_id = require_client_id(user)
+    _lock_policy_year_scope(db, client_id)
     _assert_no_overlap(db, client_id, payload.start_date, payload.end_date)
 
     target = PolicyYear(
@@ -327,7 +448,10 @@ def copy_policy_year(
         ),
     )
     db.add(target)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        _raise_policy_year_conflict(db, exc)
 
     from app.services.panel_cards import carry_over_card_assignments
     from app.services.panel_clinics import carry_over_panel_tags
@@ -337,9 +461,7 @@ def copy_policy_year(
     # would pair this year's products with a different year's configuration.
     carry_over_panel_tags(db, target, source_policy_year_id=py.id)
     carry_over_card_assignments(db, target, source_policy_year_id=py.id)
-    counts = clone_policy_year_config(
-        db, source_id=py.id, target_id=target.id, client_id=client_id
-    )
+    counts = clone_policy_year_config(db, source_id=py.id, target_id=target.id, client_id=client_id)
 
     write_audit(
         db,

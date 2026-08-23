@@ -625,7 +625,6 @@ export function CategoryCard({
           {renamingPlan ? (
             <div className="flex items-center gap-1">
               <Input
-                autoFocus
                 value={planLabel}
                 placeholder="Plan type name"
                 onChange={(e) => setPlanLabel(e.target.value)}

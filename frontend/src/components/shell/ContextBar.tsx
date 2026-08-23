@@ -112,7 +112,7 @@ function CompanyContext() {
           <Select value={selected ?? undefined} onValueChange={onChange}>
             <SelectTrigger
               aria-label="Select company"
-              className="h-7 min-w-[180px] border-0 bg-transparent px-1 font-medium shadow-none focus:ring-0"
+              className="h-7 min-w-[180px] border-0 bg-transparent px-1 font-medium shadow-none focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <SelectValue placeholder="Select company" />
             </SelectTrigger>

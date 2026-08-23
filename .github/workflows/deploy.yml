@@ -50,6 +50,12 @@ jobs:
         working-directory: backend
         run: uv run ruff check app tests scripts
 
+      - name: Backend dependency audit
+        working-directory: backend
+        run: |
+          uv export --no-dev --no-hashes --output-file requirements-audit.txt
+          uv run pip-audit --requirement requirements-audit.txt
+
       - name: Backend — pytest
         working-directory: backend
         run: PYTHONPATH=. uv run pytest
@@ -73,6 +79,18 @@ jobs:
       - name: Frontend — typecheck + build
         working-directory: frontend
         run: pnpm build
+
+      - name: Frontend dependency audit
+        working-directory: frontend
+        run: pnpm audit --prod
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Frontend end-to-end
+        working-directory: frontend
+        run: pnpm run test:e2e -- e2e/benefit-year-context.spec.ts
 
   # ── Non-gating static checks, deliberately OFF the critical path ───────────
   # mypy is `continue-on-error` and Bicep validation is re-proved by the actual
@@ -264,6 +282,10 @@ jobs:
               aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
               acrLoginServer="${{ env.REGISTRY }}" \
               containerImage="${{ steps.img.outputs.image }}" \
+              smtpHost="${{ secrets.SMTP_HOST }}" \
+              smtpUser="${{ secrets.SMTP_USER }}" \
+              smtpFrom="${{ secrets.SMTP_FROM }}" \
+              smtpPassword="${{ secrets.SMTP_PASSWORD }}" \
               alertEmail="${{ secrets.ALERT_EMAIL }}"
 
       # Applying the template PUTs `Microsoft.Web/sites`, which restarts the app.

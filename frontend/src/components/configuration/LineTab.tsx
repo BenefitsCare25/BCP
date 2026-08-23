@@ -38,6 +38,7 @@ interface Props {
       discard: () => void;
     } | null,
   ) => void;
+  readOnly?: boolean;
 }
 
 type PendingProductAction =
@@ -51,6 +52,7 @@ export function LineTab({
   groups,
   onSelectCategory,
   onBlockingEditChange,
+  readOnly = false,
 }: Props) {
   const [activeCode, setActiveCode] = useState("");
   // Codes created this session — shown optimistically until the refetch confirms
@@ -216,11 +218,11 @@ export function LineTab({
                 </TabsTrigger>
               ))}
             </TabsList>
-            <AddProductDialog
+            {!readOnly && <AddProductDialog
               policyYearId={policyYearId}
               line={line}
               onCreated={handleCreated}
-            />
+            />}
           </div>
           {products.map((p) => {
             const isEditing = editingCode === p.code;
@@ -230,7 +232,7 @@ export function LineTab({
                   <CardHeader>
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <CardTitle>{p.display_name}</CardTitle>
-                      <div className="flex items-center gap-2">
+                      {!readOnly && <div className="flex items-center gap-2">
                         <Button
                           variant={isEditing ? "secondary" : "outline"}
                           size="sm"
@@ -252,7 +254,7 @@ export function LineTab({
                         >
                           <Trash2 className="size-3.5" /> Remove
                         </Button>
-                      </div>
+                      </div>}
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -261,7 +263,7 @@ export function LineTab({
                       code={p.code}
                       group={groupByCode.get(p.code)}
                       onSelectCategory={onSelectCategory}
-                      isEditing={isEditing}
+                      isEditing={!readOnly && isEditing}
                       onDone={() => closeEdit(p.code)}
                       onDirtyChange={(dirty, sections) =>
                         setDirtyByCode((prev) => ({
@@ -283,11 +285,11 @@ export function LineTab({
             No {LINE_LABELS[line]} products yet — upload a placement slip above,
             or add a product to start configuring.
           </div>
-          <AddProductDialog
+          {!readOnly && <AddProductDialog
             policyYearId={policyYearId}
             line={line}
             onCreated={handleCreated}
-          />
+          />}
         </div>
       )}
 
@@ -300,6 +302,7 @@ export function LineTab({
             {unassigned.categories.map((c) => (
               <button
                 key={c.id}
+                disabled={readOnly}
                 onClick={() => onSelectCategory(c)}
                 className="w-full text-left rounded-lg border border-border bg-card hover:border-ring/40 hover:bg-muted/20 transition-colors p-3 text-sm"
               >

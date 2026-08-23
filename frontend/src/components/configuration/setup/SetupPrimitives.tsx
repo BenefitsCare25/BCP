@@ -119,7 +119,7 @@ function TagListControl({
         }}
         onBlur={add}
         placeholder={tags.length ? "" : "Type an ID and press Enter…"}
-        className="min-w-[8rem] flex-1 bg-transparent px-1 py-0.5 text-sm focus:outline-none"
+        className="min-w-[8rem] flex-1 rounded-sm bg-transparent px-1 py-0.5 text-sm focus-visible:ring-2 focus-visible:ring-ring/40"
       />
     </div>
   );
@@ -159,7 +159,7 @@ function AutoTextarea({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       rows={minRows}
-      className="resize-none overflow-hidden rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring/40"
+      className="resize-none overflow-hidden rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus-visible:ring-2 focus-visible:ring-ring/40"
     />
   );
 }

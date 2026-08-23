@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { CheckCircle2, LockOpen, Loader2, RotateCcw, Send, Users } from "lucide-react";
 import { toast } from "sonner";
@@ -79,6 +79,13 @@ export function EnrollmentElectionsPage() {
   const [q, setQ] = useState("");
   const { data: roster, isLoading } = useEnrollmentRoster(windowId, { q });
   const [selected, setSelected] = useState<string | null>(null);
+  const previousPolicyYearId = useRef(policyYearId);
+  useEffect(() => {
+    if (previousPolicyYearId.current === policyYearId) return;
+    previousPolicyYearId.current = policyYearId;
+    setSelected(null);
+    setWindowId(undefined);
+  }, [policyYearId]);
 
   if (!policyYearId) {
     return (

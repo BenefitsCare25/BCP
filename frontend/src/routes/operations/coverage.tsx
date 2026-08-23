@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Loader2, TableProperties, UserSearch } from "lucide-react";
 import { useEmployeeUtilization } from "@/api/claims";
@@ -120,6 +120,7 @@ export function EmployeeCoveragePage() {
   };
   const view: CoverageView = search.view === "employee" ? "employee" : "broker";
   const selectedId = search.employee ?? null;
+  const previousPolicyYearId = useRef(policyYearId);
 
   const [query, setQuery] = useState("");
   const [countFilter, setCountFilter] = useState<string>(ANY);
@@ -129,6 +130,16 @@ export function EmployeeCoveragePage() {
   // Portal access sheet — the sheet's `left`/`settling`/`ended` states are all
   // about people this list excludes (`services/coverage_summary.py`).
   const [includeLeft, setIncludeLeft] = useState(false);
+
+  useEffect(() => {
+    if (previousPolicyYearId.current === policyYearId) return;
+    previousPolicyYearId.current = policyYearId;
+    void navigate({
+      to: "/policy-admin/member-coverage",
+      search: { employee: undefined, view },
+      replace: true,
+    });
+  }, [navigate, policyYearId, view]);
 
   const { data: summary, isLoading: listLoading } = useCoverageSummary(
     policyYearId ?? undefined,

@@ -138,24 +138,24 @@ param enableVnetIntegration bool = true
 param alertEmail string = ''
 
 @description('Portal OTP mail delivery mode. The app refuses to boot in prod with "log" (OTP codes would land in application logs in cleartext).')
-@allowed(['log', 'smtp', 'acs'])
+@allowed(['smtp'])
 param mailMode string = 'smtp'
 
-@description('SMTP host for portal OTP mail (mailMode=smtp). Sends fail visibly (mail_sent=false) until configured.')
-param smtpHost string = ''
+@description('SMTP host for portal OTP and claim-update mail.')
+param smtpHost string
 
 @description('SMTP port.')
 param smtpPort string = '587'
 
 @description('SMTP username (also the default From address).')
-param smtpUser string = ''
+param smtpUser string
 
 @description('From address for portal OTP mail (defaults to smtpUser).')
-param smtpFrom string = ''
+param smtpFrom string
 
 @secure()
 @description('SMTP password (passed via CI --parameters override).')
-param smtpPassword string = ''
+param smtpPassword string
 
 var prefix = 'inspro-${env}'
 var isProd = env == 'prod'
@@ -351,6 +351,14 @@ resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-p
   }
 }
 
+resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+  parent: kv
+  name: 'smtp-password'
+  properties: {
+    value: smtpPassword
+  }
+}
+
 // ── Retained document storage (claim receipts, dependant proofs — PII) ──────
 // Private blob container; the app reads/writes via managed identity
 // (INSPRO_STORAGE_MODE=azure + INSPRO_STORAGE_ACCOUNT_URL, no keys in config).
@@ -430,15 +438,13 @@ var commonAppSettings = [
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
-  // Portal OTP mail. Fail-closed: the app refuses to boot in prod on "log"
-  // mode; with smtp unconfigured it boots and each send fails VISIBLY
-  // (mail_sent=false on invite responses) instead of leaking codes to logs.
+  // Portal mail is fail-closed in production and the password stays in Key Vault.
   { name: 'INSPRO_MAIL_MODE', value: mailMode }
   { name: 'INSPRO_SMTP_HOST', value: smtpHost }
   { name: 'INSPRO_SMTP_PORT', value: smtpPort }
   { name: 'INSPRO_SMTP_USER', value: smtpUser }
   { name: 'INSPRO_SMTP_FROM', value: smtpFrom }
-  { name: 'INSPRO_SMTP_PASSWORD', value: smtpPassword }
+  { name: 'INSPRO_SMTP_PASSWORD', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretSmtpPassword.name})' }
   { name: 'INSPRO_STORAGE_MODE', value: 'azure' }
   { name: 'INSPRO_STORAGE_ACCOUNT_URL', value: storage.properties.primaryEndpoints.blob }
   { name: 'INSPRO_STORAGE_CONTAINER', value: documentsContainer.name }
@@ -467,7 +473,7 @@ var siteConfig = {
   ftpsState: 'Disabled'
   minTlsVersion: '1.2'
   http20Enabled: true
-  healthCheckPath: '/health'
+  healthCheckPath: '/readiness'
   appSettings: webAppSettings
 }
 

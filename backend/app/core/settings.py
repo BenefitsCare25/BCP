@@ -247,18 +247,43 @@ def _resolve_mail_mode(env: Env) -> MailMode:
     explicitly, mirroring `_resolve_auth_mode`.
     """
     raw = os.environ.get("INSPRO_MAIL_MODE", "").strip().lower()
+    if raw == "acs":
+        raise RuntimeError(
+            "INSPRO_MAIL_MODE=acs is not implemented. Configure a verified SMTP sender."
+        )
     if raw not in ("", "log", "smtp", "acs"):
         raise RuntimeError(
             f"INSPRO_MAIL_MODE={raw!r} is invalid — expected 'log', 'smtp' or 'acs'."
         )
     if env == "prod":
+        host = os.environ.get("INSPRO_SMTP_HOST", "").strip()
+        user = os.environ.get("INSPRO_SMTP_USER", "").strip()
+        password = os.environ.get("INSPRO_SMTP_PASSWORD", "")
+        sender = os.environ.get("INSPRO_SMTP_FROM", user).strip()
         if raw in ("", "log"):
             raise RuntimeError(
                 "INSPRO_MAIL_MODE must be 'smtp' or 'acs' in production — the "
                 "'log' mailer writes member sign-in codes to the logs in "
                 "cleartext."
             )
-        return raw  # type: ignore[return-value]
+        if not host or not sender:
+            raise RuntimeError(
+                "Production SMTP requires INSPRO_SMTP_HOST and "
+                "INSPRO_SMTP_FROM (or INSPRO_SMTP_USER)."
+            )
+        if "@" not in sender:
+            raise RuntimeError("INSPRO_SMTP_FROM must be a valid email address.")
+        if user and not password:
+            raise RuntimeError(
+                "INSPRO_SMTP_PASSWORD is required when INSPRO_SMTP_USER is set."
+            )
+        try:
+            port = int(os.environ.get("INSPRO_SMTP_PORT", "587"))
+        except ValueError as exc:
+            raise RuntimeError("INSPRO_SMTP_PORT must be an integer.") from exc
+        if not 1 <= port <= 65535:
+            raise RuntimeError("INSPRO_SMTP_PORT must be between 1 and 65535.")
+        return "smtp"
     if raw == "":
         return "log"
     return raw  # type: ignore[return-value]

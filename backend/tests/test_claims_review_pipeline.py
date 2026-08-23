@@ -1913,14 +1913,13 @@ def test_import_sources_lists_only_same_firm_companies(broker: TestClient):
             s.commit()
 
 
-def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
+def test_options_scope_is_the_live_year_and_survives_a_bad_flex_scheme(
     broker: TestClient,
 ):
-    """The claim-type vocabulary is read from the CURRENT benefit year alone.
+    """The claim-type vocabulary is read from the explicitly live year alone.
 
-    Current follows the policy dates. Archiving a legacy forward-started year
-    therefore falls back to the year covering today instead of making the
-    vocabulary disappear. Also pins the two shapes the endpoint must tolerate:
+    Archiving the live year makes the vocabulary unavailable; calendar dates
+    never promote an incomplete draft. Also pins the two shapes tolerated:
     a `key` on every entry (the UI's join key — never re-derived client-side)
     and a `FlexScheme.scheme` that isn't an object (it is unvalidated JSON;
     raising there would take the whole AI-extraction tab down).
@@ -1956,7 +1955,7 @@ def test_options_scope_is_the_current_year_and_survives_a_bad_flex_scheme(
             s.commit()
 
         options = broker.get("/api/v1/claim-review-configs/options").json()
-        assert options["has_current_year"] is True
+        assert options["has_current_year"] is False
         assert options["claim_types"] == []
         # The defaults still come back — the editor prefills from them.
         assert options["default_config"]["field_maps"]

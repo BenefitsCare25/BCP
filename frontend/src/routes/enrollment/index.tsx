@@ -39,6 +39,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { useFlexPricingEditor } from "@/components/enrollment/FlexPricingCard";
 import { FlexProductList } from "@/components/enrollment/FlexProductList";
 import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
+import { useMe } from "@/api/hooks";
 
 const STATUS_VARIANT: Record<string, "primary" | "good" | "outline"> = {
   draft: "outline",
@@ -745,41 +746,66 @@ function EnrollmentLeaveTab() {
 // button and external deep links land on the right tab.
 export function EnrollmentPage() {
   const navigate = useNavigate();
+  const { data: me } = useMe();
+  const readOnly = me?.role === "broker_viewer";
   const search = useSearch({ strict: false }) as {
     tab?: string;
     window?: string;
   };
-  const tab: EnrollmentTab = isEnrollmentTab(search.tab) ? search.tab : "windows";
+  const requestedTab: EnrollmentTab = isEnrollmentTab(search.tab)
+    ? search.tab
+    : "windows";
+  const tab: EnrollmentTab = readOnly && requestedTab === "bulk"
+    ? "windows"
+    : requestedTab;
 
   return (
-    <Tabs
+    <div className="space-y-4">
+      {readOnly && (
+        <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+          Your broker viewer role can inspect enrolment configuration and member
+          progress but cannot change periods, elections, pricing, or leave terms.
+        </div>
+      )}
+      <Tabs
       value={tab}
       onValueChange={(value) =>
         navigate({ to: "/client-relations/enrollment", search: { tab: value } })
       }
     >
       <TabsList className="max-w-full overflow-x-auto">
-        {ENROLLMENT_TABS.map((t) => (
+        {ENROLLMENT_TABS.filter((t) => !readOnly || t.key !== "bulk").map((t) => (
           <TabsTrigger key={t.key} value={t.key}>
             {t.label}
           </TabsTrigger>
         ))}
       </TabsList>
       <TabsContent value="windows">
-        <EnrollmentDashboardPage />
+        <fieldset disabled={readOnly} className="contents">
+          <EnrollmentDashboardPage />
+        </fieldset>
       </TabsContent>
       <TabsContent value="elections">
-        <EnrollmentElectionsPage />
+        <fieldset disabled={readOnly} className="contents">
+          <EnrollmentElectionsPage />
+        </fieldset>
       </TabsContent>
       <TabsContent value="flex">
-        <EnrollmentPriceTagTab />
+        <fieldset disabled={readOnly} className="contents">
+          <EnrollmentPriceTagTab />
+        </fieldset>
       </TabsContent>
       <TabsContent value="leave">
-        <EnrollmentLeaveTab />
+        <fieldset disabled={readOnly} className="contents">
+          <EnrollmentLeaveTab />
+        </fieldset>
       </TabsContent>
-      <TabsContent value="bulk">
-        <EnrollmentBulkPage />
-      </TabsContent>
-    </Tabs>
+      {!readOnly && (
+        <TabsContent value="bulk">
+          <EnrollmentBulkPage />
+        </TabsContent>
+      )}
+      </Tabs>
+    </div>
   );
 }

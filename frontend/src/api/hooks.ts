@@ -251,8 +251,9 @@ export function useCoverageSummary(
 
 export function useEmployee(employeeId: string | null) {
   const cid = useActiveClientId();
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   return useQuery({
-    queryKey: ["employee", employeeId, cid],
+    queryKey: ["employee", employeeId, cid, policyYearId],
     queryFn: () => api.get<Employee>(`/employees/${employeeId}`),
     enabled: Boolean(employeeId),
   });
@@ -260,8 +261,9 @@ export function useEmployee(employeeId: string | null) {
 
 export function useBenefitStatement(employeeId: string | null) {
   const cid = useActiveClientId();
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   return useQuery({
-    queryKey: ["benefit-statement", employeeId, cid],
+    queryKey: ["benefit-statement", employeeId, cid, policyYearId],
     queryFn: () =>
       api.get<BenefitStatement>(`/employees/${employeeId}/benefit-statement`),
     enabled: Boolean(employeeId),
@@ -1597,15 +1599,78 @@ interface SetupMutationArgs {
   code: string;
   answers: SetupAnswers;
   templateVersion: number;
+  expectedUpdatedAt?: string | null;
+}
+
+export interface PolicyYearDeletionImpact {
+  deletable: boolean;
+  reason: string | null;
+  counts: Record<string, number>;
+  operational_records: number;
+}
+
+export interface PolicyYearReadiness {
+  ready: boolean;
+  metrics: Record<string, number>;
+  blockers: string[];
+  warnings: string[];
+}
+
+export function usePolicyYearDeletionImpact(policyYearId: string | undefined) {
+  const cid = useActiveClientId();
+  return useQuery({
+    queryKey: ["policy-year-deletion-impact", policyYearId, cid],
+    queryFn: () =>
+      api.get<PolicyYearDeletionImpact>(
+        `/policy-years/${policyYearId}/deletion-impact`,
+      ),
+    enabled: Boolean(policyYearId),
+  });
+}
+
+export function usePolicyYearReadiness(policyYearId: string | undefined) {
+  const cid = useActiveClientId();
+  return useQuery({
+    queryKey: ["policy-year-readiness", policyYearId, cid],
+    queryFn: () =>
+      api.get<PolicyYearReadiness>(`/policy-years/${policyYearId}/readiness`),
+    enabled: Boolean(policyYearId),
+  });
+}
+
+function usePolicyYearLifecycleMutation(action: "set-current" | "archive") {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (policyYearId: string) =>
+      api.post<PolicyYear>(`/policy-years/${policyYearId}/${action}`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["policy-years"] });
+      qc.invalidateQueries({ queryKey: ["policy-year-readiness"] });
+      qc.invalidateQueries({ queryKey: ["company-summary"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
+export function useSetCurrentPolicyYear() {
+  return usePolicyYearLifecycleMutation("set-current");
+}
+
+export function useArchivePolicyYear() {
+  return usePolicyYearLifecycleMutation("archive");
 }
 
 export function useSaveSetup(policyYearId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ code, answers, templateVersion }: SetupMutationArgs) =>
+    mutationFn: ({ code, answers, templateVersion, expectedUpdatedAt }: SetupMutationArgs) =>
       api.put<ProductSetup>(
         `/policy-years/${policyYearId}/product-setups/${code}`,
-        { answers, template_version: templateVersion },
+        {
+          answers,
+          template_version: templateVersion,
+          expected_updated_at: expectedUpdatedAt,
+        },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product-setups", policyYearId] });
@@ -1630,10 +1695,14 @@ export function useDiscardSetup(policyYearId: string) {
 export function useConfirmSetup(policyYearId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ code, answers, templateVersion }: SetupMutationArgs) =>
+    mutationFn: ({ code, answers, templateVersion, expectedUpdatedAt }: SetupMutationArgs) =>
       api.post<ConfirmSetupResult>(
         `/policy-years/${policyYearId}/product-setups/${code}/confirm`,
-        { answers, template_version: templateVersion },
+        {
+          answers,
+          template_version: templateVersion,
+          expected_updated_at: expectedUpdatedAt,
+        },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product-setups", policyYearId] });

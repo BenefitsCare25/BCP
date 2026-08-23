@@ -516,6 +516,7 @@ export function ProductSetupForm({
         code: template.code,
         answers,
         templateVersion: template.version,
+        expectedUpdatedAt: draft?.updated_at,
       });
       setConfirmOpen(false);
       savedSnapshot.current = JSON.stringify(answers);

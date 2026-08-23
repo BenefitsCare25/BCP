@@ -19,6 +19,7 @@ interface AlertDialogProps {
   tone?: "danger" | "info";
   onConfirm: () => void | Promise<void>;
   loading?: boolean;
+  confirmDisabled?: boolean;
 }
 
 const TONES = {
@@ -42,6 +43,7 @@ export function AlertDialog({
   tone = "danger",
   onConfirm,
   loading = false,
+  confirmDisabled = false,
 }: AlertDialogProps) {
   const { icon: ToneIcon, className: toneClass } = TONES[tone];
   return (
@@ -96,7 +98,7 @@ export function AlertDialog({
             <Button
               variant={confirmVariant}
               onClick={onConfirm}
-              disabled={loading}
+              disabled={loading || confirmDisabled}
             >
               {loading ? "Working…" : confirmLabel}
             </Button>

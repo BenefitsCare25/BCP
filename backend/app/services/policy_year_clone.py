@@ -3,8 +3,8 @@
 Copies only configuration rows — categories (with their ``plan_assignments``:
 voluntary rate tables, tier labels, benefit values), plans (Schedule of
 Benefits), product terms (GST + free-cover limit), product-setup drafts, the
-flex scheme, and the flex pricing matrix. Operational data (employees,
-dependants, claims, enrollment windows/elections, plan overrides, leave,
+flex scheme, flex pricing matrix, and leave policy. Operational data (employees,
+dependants, claims, enrollment windows/elections, plan overrides,
 underwriting cases, placement-slip uploads) is intentionally NOT copied: a new
 benefit year inherits the prior config but starts with a fresh roster/workflow.
 Panel-clinic tags are already carried over when the year is created.
@@ -22,6 +22,7 @@ Absolute dates tied to the source year are dropped rather than carried:
 
 The caller owns the surrounding transaction (audit + commit); this only flushes.
 """
+
 from __future__ import annotations
 
 import copy
@@ -33,9 +34,10 @@ from sqlalchemy.orm import Session
 from app.db.base import new_uuid
 from app.models.category import Category
 from app.models.flex_pricing import FlexPricing
-from app.models.flex_scheme import FlexScheme
+from app.models.flex_scheme import FlexScheme, FlexSchemeStatus
+from app.models.leave_policy import LeavePolicy
 from app.models.plan import Plan
-from app.models.product_setup import ProductSetup
+from app.models.product_setup import ProductSetup, ProductSetupStatus
 from app.models.product_term import ProductTerm
 
 
@@ -75,11 +77,7 @@ def clone_policy_year_config(
 
     # 1. Categories — the central config record. plan_assignments (voluntary
     #    rates, tier labels, benefit values) rides along verbatim.
-    cats = (
-        db.execute(select(Category).where(Category.policy_year_id == source_id))
-        .scalars()
-        .all()
-    )
+    cats = db.execute(select(Category).where(Category.policy_year_id == source_id)).scalars().all()
     for c in cats:
         new_id = new_uuid()
         id_map[c.id] = new_id
@@ -99,7 +97,7 @@ def clone_policy_year_config(
                 source=c.source,
                 source_ref=c.source_ref,
                 confidence=c.confidence,
-                status=c.status,
+                status="needs_review",
                 human_modified=c.human_modified,
                 modified_by=c.modified_by,
             )
@@ -107,11 +105,7 @@ def clone_policy_year_config(
     counts["categories"] = len(cats)
 
     # 2. Plans — per-plan Schedule of Benefits.
-    plans = (
-        db.execute(select(Plan).where(Plan.policy_year_id == source_id))
-        .scalars()
-        .all()
-    )
+    plans = db.execute(select(Plan).where(Plan.policy_year_id == source_id)).scalars().all()
     for p in plans:
         db.add(
             Plan(
@@ -127,7 +121,7 @@ def clone_policy_year_config(
                 source=p.source,
                 source_ref=p.source_ref,
                 confidence=p.confidence,
-                status=p.status,
+                status="needs_review",
                 human_modified=p.human_modified,
                 modified_by=p.modified_by,
             )
@@ -173,12 +167,12 @@ def clone_policy_year_config(
                 product_code=s.product_code,
                 template_version=s.template_version,
                 answers=copy.deepcopy(s.answers),
-                status=s.status,
+                status=ProductSetupStatus.draft,
                 origin=s.origin,
                 origin_ref=s.origin_ref,
-                confirmed_at=s.confirmed_at,
-                confirmed_by=s.confirmed_by,
-                materialized_product_id=s.materialized_product_id,
+                confirmed_at=None,
+                confirmed_by=None,
+                materialized_product_id=None,
             )
         )
     counts["product_setups"] = len(setups)
@@ -197,13 +191,13 @@ def clone_policy_year_config(
             FlexScheme(
                 id=new_uuid(),
                 policy_year_id=target_id,
-                status=scheme.status,
+                status=FlexSchemeStatus.draft,
                 scheme=scheme_bag,
                 origin=scheme.origin,
                 source_ref=scheme.source_ref,
                 confidence=scheme.confidence,
-                confirmed_at=scheme.confirmed_at,
-                confirmed_by=scheme.confirmed_by,
+                confirmed_at=None,
+                confirmed_by=None,
             )
         )
         counts["flex_scheme"] = 1
@@ -222,6 +216,30 @@ def clone_policy_year_config(
             )
         )
         counts["flex_pricing"] = 1
+
+    # Leave terms are annual configuration. Member elections are operational
+    # records and remain behind in the source year.
+    leave = db.execute(
+        select(LeavePolicy).where(LeavePolicy.policy_year_id == source_id)
+    ).scalar_one_or_none()
+    if leave is not None:
+        db.add(
+            LeavePolicy(
+                id=new_uuid(),
+                policy_year_id=target_id,
+                client_id=client_id,
+                allow_buy=leave.allow_buy,
+                allow_sell=leave.allow_sell,
+                min_buy_days=leave.min_buy_days,
+                max_buy_days=leave.max_buy_days,
+                min_sell_days=leave.min_sell_days,
+                max_sell_days=leave.max_sell_days,
+                increment_days=leave.increment_days,
+                leave_rates=copy.deepcopy(leave.leave_rates) or {},
+                notes=leave.notes,
+            )
+        )
+        counts["leave_policy"] = 1
 
     db.flush()
     return counts

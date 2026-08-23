@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
@@ -18,7 +18,7 @@ import {
   type CaseType,
 } from "@/api/claims";
 import { ConflictDetailError } from "@/api/client";
-import { useMe } from "@/api/hooks";
+import { useMe, usePolicyYears } from "@/api/hooks";
 import { ConversionLine, policyAmount } from "@/components/claims/ConversionLine";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -242,6 +242,17 @@ function QueueTab({
   // Target of the reclassify dialog; null = closed.
   const [relabelTo, setRelabelTo] = useState<CaseType | null>(null);
   const [relabelReason, setRelabelReason] = useState("");
+  const previousPolicyYearId = useRef(policyYearId);
+  useEffect(() => {
+    if (previousPolicyYearId.current === policyYearId) return;
+    previousPolicyYearId.current = policyYearId;
+    setSelectedId(null);
+    setDecision(null);
+    setLogFormOpen(false);
+    setSettling(null);
+    setRelabelTo(null);
+    setPage(0);
+  }, [policyYearId]);
 
   const qc = useQueryClient();
   const decide = useDecideClaim();
@@ -1463,6 +1474,9 @@ const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
 export function ClaimsQueuePage() {
   const navigate = useNavigate();
   const { data: me } = useMe();
+  const selectedPolicyYearId = useSession((state) => state.currentPolicyYearId);
+  const { data: policyYears = [] } = usePolicyYears();
+  const selectedPolicyYear = policyYears.find((year) => year.id === selectedPolicyYearId);
   const search = useSearch({ strict: false }) as {
     tab?: string;
     claim?: string;
@@ -1517,6 +1531,11 @@ export function ClaimsQueuePage() {
       </div>
 
       <TabsContent value="queue">
+        <p className="mb-3 text-xs text-muted-foreground">
+          Scope: selected benefit year{selectedPolicyYear
+            ? ` (${selectedPolicyYear.start_date} to ${selectedPolicyYear.end_date})`
+            : ""}.
+        </p>
         <QueueTab initialClaimId={search.claim} employeeId={search.employee} />
       </TabsContent>
 
@@ -1526,11 +1545,18 @@ export function ClaimsQueuePage() {
 
       {canConfigure && (
         <TabsContent value="ai-extraction">
+          <p className="mb-3 text-xs text-muted-foreground">
+            Scope: the live benefit year and its configured claim types.
+          </p>
           <ReviewRuleSettings />
         </TabsContent>
       )}
 
       {canConfigure && <TabsContent value="settings" className="space-y-5">
+        <p className="text-xs text-muted-foreground">
+          Deadline fields apply to the selected benefit year. Document naming
+          rules below apply company-wide across benefit years.
+        </p>
         <Card>
           <CardHeader className="pb-4">
             {/* Both fields are DEADLINES on the current benefit year, which is

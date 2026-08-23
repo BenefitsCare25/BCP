@@ -5,6 +5,7 @@ for query/form IDs. Both return 404 on cross-tenant access (not 403) so the
 API doesn't leak resource existence. `system_admin` bypasses the filter; the
 cross-tenant access is recorded via `AuditLog.cross_tenant_access`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,6 +35,7 @@ from app.models import (
 logger = logging.getLogger(__name__)
 _READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _CLAIMS_ROLES = frozenset({"broker_admin", "broker_viewer", ROLE_SYSTEM_ADMIN})
+_POLICY_YEAR_HEADER = "X-Inspro-Policy-Year-ID"
 
 
 def _deny_cross_tenant(user: CurrentUser, resource: str, resource_id: str) -> HTTPException:
@@ -44,7 +46,11 @@ def _deny_cross_tenant(user: CurrentUser, resource: str, resource_id: str) -> HT
     """
     logger.warning(
         "cross-tenant access denied: user=%s client=%s firm=%s resource=%s id=%s",
-        user.user_id, user.client_id, user.broker_firm_id, resource, resource_id,
+        user.user_id,
+        user.client_id,
+        user.broker_firm_id,
+        resource,
+        resource_id,
     )
     return HTTPException(status.HTTP_404_NOT_FOUND, f"{resource} not found")
 
@@ -56,6 +62,27 @@ def require_client_id(user: CurrentUser) -> str:
             "User has no active client",
         )
     return user.client_id
+
+
+def _assert_selected_policy_year(
+    request: Request,
+    actual_policy_year_id: str,
+    resource: str,
+) -> None:
+    """Reject a stale detail request after the company year was switched.
+
+    List endpoints already receive an explicit ``policy_year_id``. Detail URLs
+    only carry an opaque record id, so the UI also sends its selected year as a
+    request header. An absent header preserves compatibility for integrations;
+    a present, mismatched header is a stale browser action and must not mutate
+    or display a different year's record.
+    """
+    selected = request.headers.get(_POLICY_YEAR_HEADER)
+    if selected and selected != actual_policy_year_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{resource} belongs to a different benefit year. Refresh and try again.",
+        )
 
 
 def require_write_access(
@@ -174,9 +201,7 @@ def tenant_or_global(column, client_id: str | None):
     return or_(column.is_(None), column == client_id)
 
 
-def load_editable_global(
-    model, row_id: str, user: CurrentUser, db: Session, label: str
-):
+def load_editable_global(model, row_id: str, user: CurrentUser, db: Session, label: str):
     """Load a row from a tenant-or-global catalog table for WRITING.
 
     Encodes the policy shared by every `tenant_or_global` table (Product,
@@ -191,17 +216,13 @@ def load_editable_global(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found")
     if row.client_id is None:
         if not can_write_global(user):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults"
-            )
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Only admins can edit global defaults")
     elif not user_owns(user, row.client_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{label} not found")
     return row
 
 
-def assert_policy_year_for_user(
-    policy_year_id: str, user: CurrentUser, db: Session
-) -> PolicyYear:
+def assert_policy_year_for_user(policy_year_id: str, user: CurrentUser, db: Session) -> PolicyYear:
     """Load the PolicyYear or raise 404 — used when `policy_year_id` comes
     from a query/form parameter rather than the path."""
     py = db.get(PolicyYear, policy_year_id)
@@ -241,8 +262,10 @@ def load_category(
     # Single JOIN query — fetches the Category and proves tenant ownership
     # via the parent PolicyYear in one round trip.
     is_admin = user.role == ROLE_SYSTEM_ADMIN
-    stmt = select(Category).join(PolicyYear, Category.policy_year_id == PolicyYear.id).where(
-        Category.id == category_id
+    stmt = (
+        select(Category)
+        .join(PolicyYear, Category.policy_year_id == PolicyYear.id)
+        .where(Category.id == category_id)
     )
     if not is_admin:
         stmt = stmt.where(PolicyYear.client_id == user.client_id)
@@ -256,6 +279,7 @@ def load_category(
 
 def load_employee(
     employee_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Employee:
@@ -264,11 +288,13 @@ def load_employee(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found")
     if not user_owns(user, e.client_id):
         raise _deny_cross_tenant(user, "Employee", employee_id)
+    _assert_selected_policy_year(request, e.policy_year_id, "Employee")
     return e
 
 
 def load_dependant(
     dependant_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dependant:
@@ -277,6 +303,7 @@ def load_dependant(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Dependant not found")
     if not user_owns(user, d.client_id):
         raise _deny_cross_tenant(user, "Dependant", dependant_id)
+    _assert_selected_policy_year(request, d.policy_year_id, "Dependant")
     return d
 
 
@@ -303,6 +330,7 @@ def load_placement_slip(
 
 def load_enrollment_window(
     window_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EnrollmentWindow:
@@ -312,11 +340,13 @@ def load_enrollment_window(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found")
     if not user_owns(user, w.client_id):
         raise _deny_cross_tenant(user, "Enrollment window", window_id)
+    _assert_selected_policy_year(request, w.policy_year_id, "Enrollment period")
     return w
 
 
 def load_bulk_plan_update(
     batch_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BulkPlanUpdate:
@@ -326,11 +356,13 @@ def load_bulk_plan_update(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Coverage change not found")
     if not user_owns(user, b.client_id):
         raise _deny_cross_tenant(user, "Bulk plan update", batch_id)
+    _assert_selected_policy_year(request, b.policy_year_id, "Coverage change")
     return b
 
 
 def load_enrollment(
     enrollment_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Enrollment:
@@ -340,11 +372,13 @@ def load_enrollment(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrollment not found")
     if not user_owns(user, e.client_id):
         raise _deny_cross_tenant(user, "Enrollment", enrollment_id)
+    _assert_selected_policy_year(request, e.policy_year_id, "Enrollment")
     return e
 
 
 def load_claim(
     claim_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Claim:
@@ -354,11 +388,13 @@ def load_claim(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
     if not user_owns(user, c.client_id):
         raise _deny_cross_tenant(user, "Claim", claim_id)
+    _assert_selected_policy_year(request, c.policy_year_id, "Claim")
     return c
 
 
 def load_report_version(
     version_id: str,
+    request: Request,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ReportVersion:
@@ -368,6 +404,7 @@ def load_report_version(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Report version not found")
     if not user_owns(user, rv.client_id):
         raise _deny_cross_tenant(user, "Report version", version_id)
+    _assert_selected_policy_year(request, rv.policy_year_id, "Report version")
     return rv
 
 

@@ -9,6 +9,7 @@ import { FlexOverviewCard } from "./FlexOverviewCard";
 
 interface Props {
   policyYearId: string;
+  readOnly?: boolean;
 }
 
 /**
@@ -18,7 +19,7 @@ interface Props {
  * review/edit form appears. The family-status headcount + coverage checks are
  * shown above it, tying the scheme back to the actual member population.
  */
-export function FlexPanel({ policyYearId }: Props) {
+export function FlexPanel({ policyYearId, readOnly = false }: Props) {
   const { data: scheme, isLoading, isError, error, refetch } =
     useFlexScheme(policyYearId);
 
@@ -49,7 +50,9 @@ export function FlexPanel({ policyYearId }: Props) {
   return (
     <div className="space-y-4">
       <FlexOverviewCard policyYearId={policyYearId} />
-      {scheme && <FlexSchemeForm policyYearId={policyYearId} scheme={scheme} />}
+      {scheme && !readOnly && (
+        <FlexSchemeForm policyYearId={policyYearId} scheme={scheme} />
+      )}
     </div>
   );
 }
