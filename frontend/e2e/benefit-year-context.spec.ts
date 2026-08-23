@@ -21,6 +21,10 @@ interface Me {
   accessible_clients: Array<{ id: string; name: string }>;
 }
 
+interface PanelListing {
+  id: string;
+}
+
 const API = "/api/v1";
 
 function runtimeMonitor(page: Page) {
@@ -318,6 +322,38 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   await selectYear(page, years.future.year);
   await expect(grace).toHaveValue("46");
 
+  const draft =
+    testInfo.project.name === "mobile-chromium"
+      ? { code: "GTL", line: "Life Insurance" }
+      : { code: "GHS", line: "Medical Insurance" };
+  const draftResponse = await request.put(
+    `${API}/policy-years/${years.current.id}/product-setups/${draft.code}`,
+    {
+      headers: years.headers,
+      data: { answers: {}, template_version: 1 },
+    },
+  );
+  expect(draftResponse.ok(), await draftResponse.text()).toBeTruthy();
+  const listingResponse = await request.post(`${API}/panel-listings`, {
+    headers: years.headers,
+    data: {
+      insurer: `E2E-${testInfo.project.name}`,
+      panel_provider: "Release gate",
+      country: "SG",
+      clinic_type: "gp",
+    },
+  });
+  expect(listingResponse.ok(), await listingResponse.text()).toBeTruthy();
+  const listing = (await listingResponse.json()) as PanelListing;
+  const panelsResponse = await request.put(
+    `${API}/policy-years/${years.current.id}/panels`,
+    {
+      headers: years.headers,
+      data: { panel_listing_ids: [listing.id] },
+    },
+  );
+  expect(panelsResponse.ok(), await panelsResponse.text()).toBeTruthy();
+
   await selectYear(page, 2025);
   await page.goto("/client-relations/company-benefits");
   for (const line of ["Medical Insurance", "Life Insurance", "General Insurance"]) {
@@ -326,8 +362,10 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   }
 
   await selectYear(page, 2026);
-  const currentTabs = page.getByRole("tablist").first();
-  await expect(currentTabs).toContainText(/\d/);
+  const currentTab = page.getByRole("tab", {
+    name: new RegExp(`^${draft.line}`),
+  });
+  await expect(currentTab).toContainText(/\d/);
 
   await page.goto("/policy-admin/panel-clinics");
   const switches = page.getByRole("switch");

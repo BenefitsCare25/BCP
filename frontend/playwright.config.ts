@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -10,28 +10,23 @@ const e2eDirectory = mkdtempSync(join(tmpdir(), "inspro-e2e-"));
 const e2eDatabase = join(e2eDirectory, "inspro.db");
 const databaseUrl = `sqlite:///${e2eDatabase.replaceAll("\\", "/")}`;
 const e2eEncryptionKey = `${randomBytes(32).toString("base64url")}=`;
-const seedDatabase = resolve("../backend/inspro.db");
-if (existsSync(seedDatabase)) {
-  copyFileSync(seedDatabase, e2eDatabase);
-} else {
-  const env = {
-    ...process.env,
-    INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
-    INSPRO_DATABASE_URL: databaseUrl,
-  };
-  for (const args of [
-    ["run", "alembic", "upgrade", "head"],
-    ["run", "python", "-m", "scripts.seed_demo"],
-  ]) {
-    const result = spawnSync("uv", args, {
-      cwd: resolve("../backend"),
-      env,
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    });
-    if (result.status !== 0) {
-      throw new Error(result.stderr || result.stdout || "E2E database setup failed");
-    }
+const env = {
+  ...process.env,
+  INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
+  INSPRO_DATABASE_URL: databaseUrl,
+};
+for (const args of [
+  ["run", "alembic", "upgrade", "head"],
+  ["run", "python", "-m", "scripts.seed_demo"],
+]) {
+  const result = spawnSync("uv", args, {
+    cwd: resolve("../backend"),
+    env,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout || "E2E database setup failed");
   }
 }
 process.once("exit", () => rmSync(e2eDirectory, { recursive: true, force: true }));
@@ -39,6 +34,7 @@ process.once("exit", () => rmSync(e2eDirectory, { recursive: true, force: true }
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./test-results",
+  globalTimeout: process.env.CI ? 8 * 60_000 : undefined,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,

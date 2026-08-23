@@ -90,7 +90,8 @@ jobs:
 
       - name: Frontend end-to-end
         working-directory: frontend
-        run: pnpm run test:e2e -- e2e/benefit-year-context.spec.ts
+        timeout-minutes: 10
+        run: pnpm exec playwright test e2e/benefit-year-context.spec.ts
 
   # ── Non-gating static checks, deliberately OFF the critical path ───────────
   # mypy is `continue-on-error` and Bicep validation is re-proved by the actual
