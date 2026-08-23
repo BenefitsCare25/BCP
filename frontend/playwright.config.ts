@@ -1,5 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,11 +9,16 @@ const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5176";
 const e2eDirectory = mkdtempSync(join(tmpdir(), "inspro-e2e-"));
 const e2eDatabase = join(e2eDirectory, "inspro.db");
 const databaseUrl = `sqlite:///${e2eDatabase.replaceAll("\\", "/")}`;
+const e2eEncryptionKey = `${randomBytes(32).toString("base64url")}=`;
 const seedDatabase = resolve("../backend/inspro.db");
 if (existsSync(seedDatabase)) {
   copyFileSync(seedDatabase, e2eDatabase);
 } else {
-  const env = { ...process.env, INSPRO_DATABASE_URL: databaseUrl };
+  const env = {
+    ...process.env,
+    INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
+    INSPRO_DATABASE_URL: databaseUrl,
+  };
   for (const args of [
     ["run", "alembic", "upgrade", "head"],
     ["run", "python", "-m", "scripts.seed_demo"],
@@ -54,6 +60,7 @@ export default defineConfig({
         INSPRO_ENV: "dev",
         INSPRO_AUTH_MODE: "mock",
         INSPRO_MOCK_ROLE: "broker_admin",
+        INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
         INSPRO_DATABASE_URL: databaseUrl,
         INSPRO_E2E: "1",
       },
