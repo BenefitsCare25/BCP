@@ -272,6 +272,7 @@ def _checkpoint(
 ) -> None:
     """Persist progress only while this exact lease and claim revision are current."""
     now = datetime.now(UTC)
+    job: ClaimReviewJob | None = None
     if job_id is not None:
         job = db.get(ClaimReviewJob, job_id)
         if job is not None:
@@ -306,11 +307,12 @@ def _checkpoint(
     superseded = db.scalar(
         select(ClaimAIReview.superseded).where(ClaimAIReview.id == review.id)
     )
-    if (
-        superseded is not False
-        or (job_id is not None and claim.status != CLAIM_STATUS_AI_REVIEW_PENDING)
-        or (job_id is not None and job.claim_revision != claim.revision)
-    ):
+    ownership_changed = job_id is not None and (
+        job is None
+        or claim.status != CLAIM_STATUS_AI_REVIEW_PENDING
+        or job.claim_revision != claim.revision
+    )
+    if superseded is not False or ownership_changed:
         db.rollback()
         raise ReviewOwnershipLost("Claim or review ownership changed")
     review.stage = stage
@@ -349,7 +351,11 @@ def _compare_verify_and_finalize(
     _checkpoint(db, claim, review, stage="vision", job_id=job_id, lease_owner=lease_owner)
     stage_started = time.monotonic()
 
-    def vision_checkpoint(current, checks, calls) -> None:
+    def vision_checkpoint(
+        current: list[dict[str, Any]],
+        checks: list[dict[str, Any]],
+        calls: list[dict[str, Any]],
+    ) -> None:
         review.field_comparisons = list(current)
         review.vision_checks = list(checks)
         _apply_call_metadata(review, all_calls + list(calls))
@@ -427,7 +433,11 @@ def _extract_stage(
     )
     stage_started = time.monotonic()
 
-    def extraction_checkpoint(current, warnings, calls) -> None:
+    def extraction_checkpoint(
+        current: list[dict[str, Any]],
+        warnings: list[dict[str, Any]],
+        calls: list[dict[str, Any]],
+    ) -> None:
         review.extractions = list(current)
         review.rule_results = det_results + list(warnings)
         review.progress_current = len(current) + len(warnings)
@@ -452,7 +462,7 @@ def _extract_stage(
 
 
 def _run_stages(
-    db,
+    db: Session,
     claim: Claim,
     review: ClaimAIReview,
     broker_firm_id: str | None = None,

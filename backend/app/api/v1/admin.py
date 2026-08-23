@@ -92,7 +92,7 @@ def _assert_grantable_role(user: CurrentUser, role: str) -> None:
             )
         return
     if role not in _FIRM_GRANTABLE_ROLES or role not in VALID_ROLES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Invalid role: {role}")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"Invalid role: {role}")
 
 
 def _clients_in_firm(db: Session, firm_id: str, client_ids: list[str]) -> list[Client]:
@@ -159,13 +159,15 @@ def list_broker_firms(
     user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> list[BrokerFirmOut]:
-    counts = dict(
-        db.execute(
+    counts: dict[str, int] = {
+        firm_id: int(count)
+        for firm_id, count in db.execute(
             select(Client.broker_firm_id, func.count(Client.id)).group_by(
                 Client.broker_firm_id
             )
         ).all()
-    )
+        if firm_id is not None
+    }
     firms = db.execute(select(BrokerFirm).order_by(BrokerFirm.name)).scalars().all()
     return [
         BrokerFirmOut(id=f.id, name=f.name, client_count=int(counts.get(f.id, 0)))
@@ -264,7 +266,7 @@ def create_client(
     try:
         assign_slug(db, client, body.slug)
     except SlugError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     write_audit(db, user, action="create", entity_type="client", entity_id=client.id,
                 after={"name": client.name, "broker_firm_id": firm_id,
                        "slug": client.slug, "legal_name": client.legal_name})
@@ -311,7 +313,7 @@ def patch_client(
         try:
             assign_slug(db, client, body.slug)
         except SlugError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     after = {
         "name": client.name,
         "slug": client.slug,
@@ -487,7 +489,7 @@ def patch_user(
         target.role = body.role
     if body.status is not None:
         if body.status not in (USER_STATUS_ACTIVE, USER_STATUS_DISABLED, USER_STATUS_INVITED):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid status")
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid status")
         target.status = body.status
     if body.client_ids is not None:
         # Grants are validated against the TARGET's firm. A firm-less user
@@ -542,7 +544,7 @@ def create_invitation(
     _assert_grantable_role(user, body.role)
     email = body.email.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid email address.")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address.")
 
     # A user's email is a global platform identity (one person → one firm),
     # required for DB-backed Entra matching by email. So an email already in

@@ -1,6 +1,21 @@
 """Optional OpenTelemetry instruments for the durable review queue."""
 from __future__ import annotations
 
+from typing import Any
+
+_jobs: Any | None = None
+_duration: Any | None = None
+_stage_duration: Any | None = None
+_stage_failures: Any | None = None
+_provider_calls: Any | None = None
+_provider_duration: Any | None = None
+_cache: Any | None = None
+_queue_age: Any | None = None
+_queue_depth: Any | None = None
+_active_jobs: Any | None = None
+_invariants: Any | None = None
+_leases: Any | None = None
+
 try:
     from opentelemetry import metrics
 
@@ -18,9 +33,7 @@ try:
     _invariants = _meter.create_counter("claim_review.invariant_failures")
     _leases = _meter.create_counter("claim_review.lease_expirations")
 except Exception:  # pragma: no cover - telemetry is optional in local/test
-    _jobs = _duration = _stage_duration = _stage_failures = None
-    _provider_calls = _provider_duration = _cache = None
-    _queue_age = _queue_depth = _active_jobs = _invariants = _leases = None
+    pass
 
 
 def job(state: str, *, error_code: str | None = None) -> None:

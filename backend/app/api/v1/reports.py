@@ -24,6 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
+from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -106,13 +107,13 @@ def _require_configured_insurer(db: Session, py: PolicyYear, insurer: str) -> No
         )
 
 
-def _xlsx_bytes(wb) -> bytes:
+def _xlsx_bytes(wb: Workbook) -> bytes:
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def _xlsx_response(wb, filename: str) -> Response:
+def _xlsx_response(wb: Workbook, filename: str) -> Response:
     return _bytes_response(_xlsx_bytes(wb), filename)
 
 

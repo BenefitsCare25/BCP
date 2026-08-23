@@ -32,7 +32,8 @@ from dataclasses import dataclass
 from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 from starlette.types import ASGIApp
 
 SURFACE_BROKER = "broker"
@@ -227,7 +228,9 @@ class TenantMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._base_domain = base_domain
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         request.state.host_info = parse_host(
             request.headers.get("host", ""), self._base_domain
         )

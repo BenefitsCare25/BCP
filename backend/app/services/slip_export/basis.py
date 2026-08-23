@@ -263,8 +263,8 @@ def write_basis_of_cover(
         ])
         row = style_row(ws, wrap_cols=(2, 3, 4))
         border_row(ws, 2, last_col)
-        for col in range(2, 5):
-            ws.cell(row=row, column=col).alignment = MIDDLE_WRAP
+        for column_index in range(2, 5):
+            ws.cell(row=row, column=column_index).alignment = MIDDLE_WRAP
         for i, (col, value) in enumerate(zip(cols, values, strict=True)):
             ws.cell(row=row, column=5 + i).alignment = CENTER_WRAP
             if col.numeric and isinstance(value, (int, float)):

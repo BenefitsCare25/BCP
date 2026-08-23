@@ -65,7 +65,7 @@ from app.schemas.portal import (
     PortalRolloutMember,
     PortalRolloutOut,
 )
-from app.services.member_access import access_for_account, access_map
+from app.services.member_access import MemberAccess, access_for_account, access_map
 from app.services.member_invite import (
     clear_invite_expiry,
     issue_invite_credential,
@@ -103,7 +103,9 @@ def _login_source(db: Session, client_id: str | None) -> str | None:
     return get_auth_policy(db, client_id).portal_login_source
 
 
-def _with_access(out: MemberAccountOut, access) -> MemberAccountOut:
+def _with_access(
+    out: MemberAccountOut, access: MemberAccess | None
+) -> MemberAccountOut:
     """Stamp the derived access state onto a serialized account.
 
     Kept separate from `_account_out` because the LIST resolves every account's
@@ -155,7 +157,7 @@ def _validated_email(raw: str) -> str:
     email = raw.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid email address."
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address."
         )
     return email
 
@@ -415,12 +417,12 @@ def member_set_password_direct(
     policy = get_auth_policy(db, account.client_id)
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
     if not ok:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, reason)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
     # Same breach gate the member-facing portal set-password enforces, so the
     # broker can't seed a known-breached credential the member never could.
     if policy.breach_check_enabled and is_breached(body.password):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This password has appeared in a known data breach — choose another.",
         )
     from datetime import UTC, datetime
@@ -468,7 +470,7 @@ def update_member_account(
 ) -> MemberAccountOut:
     if body.status not in (MEMBER_STATUS_ACTIVE, MEMBER_STATUS_DISABLED):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "status must be 'active' or 'disabled'.",
         )
     account = _load_account(account_id, user, db)

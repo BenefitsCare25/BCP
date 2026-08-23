@@ -118,7 +118,7 @@ def revoke_all_for_subject(db: Session, subject_type: str, subject_id: str) -> i
         )
         .values(revoked_at=datetime.now(UTC))
     )
-    return result.rowcount or 0
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 @dataclass(frozen=True)

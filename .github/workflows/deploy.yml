@@ -23,8 +23,8 @@ env:
   PROD_PG: inspro-prod-pg
 
 # There is deliberately no staging environment — prod is the only deployment
-# target. That makes `test` the sole gate before a release reaches members, so
-# it must stay green and must not be bypassed. Reintroducing a pre-prod
+# target. That makes CI and static validation the gates before a release reaches
+# members, so they must stay green and must not be bypassed. Reintroducing a pre-prod
 # environment means re-adding a job here plus infra/bicep/parameters.staging.json.
 jobs:
   # ── CI gate: runs on every PR + push to main ────────────────────────────────
@@ -91,14 +91,12 @@ jobs:
       - name: Frontend end-to-end
         working-directory: frontend
         timeout-minutes: 10
-        run: pnpm exec playwright test e2e/benefit-year-context.spec.ts
+        run: pnpm exec playwright test
 
-  # ── Non-gating static checks, deliberately OFF the critical path ───────────
-  # mypy is `continue-on-error` and Bicep validation is re-proved by the actual
-  # `az deployment group create` later, so neither should sit in front of a
-  # release. Kept as a separate job so failures stay visible on the run.
+  # ── Static quality gate ────────────────────────────────────────────────────
+  # Strict typing and infrastructure validation must both pass before release.
   static-checks:
-    name: Static checks (non-gating)
+    name: Static checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -118,10 +116,6 @@ jobs:
       - name: Backend — mypy (strict)
         working-directory: backend
         run: uv run mypy app
-        # mypy strict surfaces a lot on a half-typed codebase. Don't gate
-        # merges on it yet — TODO: flip to required once the type debt is
-        # paid down.
-        continue-on-error: true
 
       - name: Validate Bicep
         run: az bicep build --file infra/bicep/main.bicep
@@ -133,7 +127,7 @@ jobs:
   build:
     name: Build container
     # Deliberately NOT `needs: test`. The image is inert until `deploy-prod`
-    # ships it, and that job DOES gate on the tests — so building in parallel
+    # ships it, and that job gates on tests and static checks — so building in parallel
     # takes ~90s off every release in exchange for occasionally building an
     # image for a commit that then fails its tests, which costs a few cheap ACR
     # minutes and is never deployed.
@@ -170,9 +164,9 @@ jobs:
   # ── Production ─────────────────────────────────────────────────────────────
   deploy-prod:
     name: Deploy to prod
-    # Gates on BOTH: `build` only proves an image exists, `test` is the sole
-    # quality gate before a release reaches members (there is no staging).
-    needs: [test, build]
+    # Gates on tests, strict typing, infrastructure validation and the image
+    # build before a release reaches members (there is no staging).
+    needs: [test, static-checks, build]
     runs-on: ubuntu-latest
     environment: prod
     # Serialise deploys. Two pushes in quick succession would otherwise run two

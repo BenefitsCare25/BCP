@@ -65,6 +65,7 @@ from app.services.flex_assignment import FlexAssignmentSummary, assign_and_audit
 from app.services.flex_intake import FlexIntakeError, normalize_flex_document
 from app.services.flex_membership import (
     COVERAGE_PREVIEW_CAP,
+    FlexCoverage,
     ResolvedEmployee,
     _is_catch_all,
     cap_bucket,
@@ -94,6 +95,14 @@ _SECTION_KINDS: dict[str, tuple[type, ...]] = {
 _SCHEME_SECTIONS = tuple(_SECTION_KINDS)
 
 
+def _dict_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list_value(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _section_shape_errors(body: dict[str, Any]) -> list[str]:
     """Validate the kind of each provided top-level section (write boundary)."""
     errs: list[str] = []
@@ -114,7 +123,7 @@ def _reopen_as_draft(row: FlexScheme) -> None:
 
 def _tier_sig(tier: dict[str, Any]) -> str:
     """Identity of a tier for dedupe across files: country + eligibility + name."""
-    et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
+    et = _dict_value(tier.get("employee_type"))
     return "|".join(
         s.strip().lower()
         for s in (
@@ -135,19 +144,17 @@ def _merge_schemes(existing: dict[str, Any], new: list[dict[str, Any]]) -> dict[
     it. Scalar meta/eligibility/dependant fields keep the existing value, else
     take the first non-empty value the new documents provide.
     """
-    merged_meta = (
-        dict(existing.get("meta")) if isinstance(existing.get("meta"), dict) else {}
-    )
+    merged_meta = dict(_dict_value(existing.get("meta")))
     eligibility = existing.get("eligibility")
     dependant = existing.get("dependant_def")
 
     tiers_by_sig: dict[str, dict[str, Any]] = {}
-    for t in existing.get("tiers") or []:
+    for t in _list_value(existing.get("tiers")):
         if isinstance(t, dict):
             tiers_by_sig[_tier_sig(t)] = t
 
     for sch in new:
-        meta = sch.get("meta") if isinstance(sch.get("meta"), dict) else {}
+        meta = _dict_value(sch.get("meta"))
         for k, v in meta.items():
             if v not in (None, "", []) and not merged_meta.get(k):
                 merged_meta[k] = v
@@ -155,7 +162,7 @@ def _merge_schemes(existing: dict[str, Any], new: list[dict[str, Any]]) -> dict[
             eligibility = sch.get("eligibility")
         if dependant is None:
             dependant = sch.get("dependant_def")
-        for t in sch.get("tiers") or []:
+        for t in _list_value(sch.get("tiers")):
             if isinstance(t, dict):
                 tiers_by_sig[_tier_sig(t)] = t
 
@@ -337,7 +344,7 @@ def _validate_tier(
     if tier_currency and not _CURRENCY_RE.match(tier_currency):
         errors.append(f"{label}: currency '{tier_currency}' is not a 3-letter ISO code.")
 
-    emp = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
+    emp = _dict_value(tier.get("employee_type"))
     md, mg = emp.get("match_designations"), emp.get("match_grades")
     has_desig = isinstance(md, list) and any(str(x).strip() for x in md)
     has_grade_set = isinstance(mg, list) and any(str(x).strip() for x in mg)
@@ -353,10 +360,10 @@ def _validate_tier(
 
     tier_cap = tier.get("system_cap")
     has_tier_cap = isinstance(tier_cap, (int, float))
-    if has_tier_cap and tier_cap < 0:
+    if isinstance(tier_cap, (int, float)) and tier_cap < 0:
         errors.append(f"{label}: flat annual cap must be ≥ 0.")
 
-    limits = tier.get("limits") if isinstance(tier.get("limits"), list) else []
+    limits = _list_value(tier.get("limits"))
     if not limits and not has_tier_cap and not has_system_cap:
         errors.append(
             f"{label}: needs at least one family-status limit row, or a flat annual cap."
@@ -405,8 +412,8 @@ def _validate_tier(
 def validate_scheme(scheme: dict[str, Any]) -> list[str]:
     """Return a list of human-readable validation errors (empty == valid)."""
     errors: list[str] = []
-    meta = scheme.get("meta") if isinstance(scheme.get("meta"), dict) else {}
-    tiers = scheme.get("tiers") if isinstance(scheme.get("tiers"), list) else []
+    meta = _dict_value(scheme.get("meta"))
+    tiers = _list_value(scheme.get("tiers"))
 
     if not tiers:
         errors.append("Scheme must have at least one eligibility tier.")
@@ -521,13 +528,12 @@ async def extract_flex(
         try:
             # The AI call is a blocking multi-second round-trip — offload it too.
             result = await run_in_threadpool(
-                lambda text=text, images=images: extract_flex_scheme(
-                    db,
-                    client_id=client_id,
-                    policy_year_id=policy_year_id,
-                    text=text,
-                    images=images,
-                )
+                extract_flex_scheme,
+                db,
+                client_id=client_id,
+                policy_year_id=policy_year_id,
+                text=text,
+                images=images,
             )
         except AINotConfiguredError as exc:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
@@ -651,7 +657,7 @@ def flex_coverage(
         dependants_ok=cov.dependants_ok,
         has_tiers=cov.has_tiers,
         scheme_status=cov.scheme_status,
-        buckets=[asdict(cap_bucket(b)) for b in cov.buckets],
+        buckets=[CoverageBucketOut(**asdict(cap_bucket(b))) for b in cov.buckets],
         preview_cap=COVERAGE_PREVIEW_CAP,
     )
 
@@ -674,7 +680,7 @@ def _employee_issues(r: ResolvedEmployee, has_tiers: bool) -> str:
 
 
 def _build_coverage_workbook(
-    cov, resolved: list[ResolvedEmployee], label: str
+    cov: FlexCoverage, resolved: list[ResolvedEmployee], label: str
 ) -> bytes:
     """Full (uncapped) coverage report: summary + one sheet per non-empty
     exception bucket + the complete resolved roster."""

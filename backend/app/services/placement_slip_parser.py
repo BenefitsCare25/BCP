@@ -62,7 +62,6 @@ from app.services.slip_parsing.participation import (
 )
 from app.services.slip_parsing.rates import (
     _blended_product_rate,
-    _currency_amount,
     _enrich_with_rates,
     _extract_rate_data,
     _extract_voluntary_rates,
@@ -71,6 +70,7 @@ from app.services.slip_parsing.rates import (
 )
 from app.services.slip_parsing.text import (
     _cell_text,
+    _currency_amount,
     _int_code,
     _lower,
     _non_empty,

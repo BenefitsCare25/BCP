@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,7 +42,7 @@ def _norm(value: object) -> str:
     return str(value or "").strip().casefold()
 
 
-def dependant_name(attrs: dict) -> str:
+def dependant_name(attrs: dict[str, Any]) -> str:
     """The dependant's OWN name.
 
     ``roster_attributes.NAME_KEYS`` must not be used here: it includes
@@ -52,7 +53,7 @@ def dependant_name(attrs: dict) -> str:
     return str(first_value(attrs, DEP_NAME_KEYS) or "").strip()
 
 
-def role_of(attrs: dict) -> str:
+def role_of(attrs: dict[str, Any]) -> str:
     """spouse / child / other — ``classify_relationship``'s None, named."""
     return classify_relationship(first_value(attrs, REL_KEYS)) or "other"
 
@@ -167,13 +168,15 @@ def _matches(
         return False
 
     if f.q:
-        if not _matches_needle(dep, attrs, _norm(f.q), normalize_nric(f.q)):
+        if not _matches_needle(
+            dep, attrs, _norm(f.q), normalize_nric(f.q) or ""
+        ):
             return False
     return True
 
 
 def _matches_needle(
-    dep: Dependant, attrs: dict, needle: str, nric_needle: str
+    dep: Dependant, attrs: dict[str, Any], needle: str, nric_needle: str
 ) -> bool:
     """Same fields the existing dependants search covers: the dependant's name
     and NRIC, plus the sponsoring employee's staff id and name."""

@@ -15,12 +15,13 @@ from __future__ import annotations
 import copy
 import io
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from docx import Document
 from docx.oxml.ns import qn
 from docx.shared import Pt
-from docx.table import Table, _Cell
+from docx.table import Table, _Cell, _Row
 from docx.text.paragraph import Paragraph
 from sqlalchemy.orm import Session
 
@@ -35,7 +36,13 @@ from app.services.fact_find_form import (
 )
 
 if TYPE_CHECKING:
-    from app.services.fact_find_form import FactFindContext, SectionContext
+    from docx.document import Document as DocumentType
+
+    from app.services.fact_find_form import (
+        FactFindContext,
+        OtherProductContext,
+        SectionContext,
+    )
 
 _NUMERAL_RE = re.compile(r"^([ivx]+)\)", re.I)
 
@@ -132,7 +139,7 @@ def _keep_table_together(table: Table) -> None:
                 paragraph.paragraph_format.keep_with_next = True
 
 
-def _physical_cells(row) -> list[_Cell]:
+def _physical_cells(row: _Row) -> list[_Cell]:
     """Cells as they exist visually, without python-docx merge aliases.
 
     ``row.cells`` repeats the same cell object for every grid column covered by
@@ -150,7 +157,7 @@ def _physical_cells(row) -> list[_Cell]:
     return cells
 
 
-def _remove_unconfigured_pages(doc, ctx: FactFindContext) -> None:
+def _remove_unconfigured_pages(doc: DocumentType, ctx: FactFindContext) -> None:
     """Remove product-page blocks that are not configured for this year."""
     section = "GI"
     body = doc.element.body
@@ -264,11 +271,15 @@ def _fill_company(ctx: FactFindContext, table: Table) -> None:
                 _set(cells[3], ctx.total_employees)
 
 
-def _matrix_row_text(product) -> str:
+def _matrix_row_text(product: OtherProductContext) -> str:
     return f"{product.title} ({product.code})\n-  for employees\n-  for dependants"
 
 
-def _apply_matrix_modes(employee_row, dependant_row, product) -> None:
+def _apply_matrix_modes(
+    employee_row: _Row,
+    dependant_row: _Row,
+    product: OtherProductContext,
+) -> None:
     employee_cells = _physical_cells(employee_row)
     dependant_cells = _physical_cells(dependant_row)
     _set(employee_cells[0], _matrix_row_text(product))
@@ -419,7 +430,7 @@ def _is_disposable_blank(paragraph: Paragraph) -> bool:
     return not any(paragraph._p.xpath(f".//w:{name}") for name in protected)
 
 
-def _normalise_pagination(doc) -> None:
+def _normalise_pagination(doc: DocumentType) -> None:
     """Replace the template's fixed three-page layout with content-aware flow.
 
     Populated tables grow beyond the legacy form's fixed slots.  Hard internal
@@ -544,7 +555,7 @@ def _fill_free_cover_limit(sec: SectionContext, table: Table) -> None:
             _set(cells[2], sec.nel_age_limit)
 
 
-def _is_vmerge_continuation_row(row, anchor_col: int) -> bool:
+def _is_vmerge_continuation_row(row: _Row, anchor_col: int) -> bool:
     """True when ``row`` continues a vertical merge in its anchor column.
 
     Reads the raw ``<w:tc>`` of the physical row (not python-docx's merge-resolved
@@ -560,7 +571,7 @@ def _is_vmerge_continuation_row(row, anchor_col: int) -> bool:
     v_merge = tc_pr.find(qn("w:vMerge"))
     if v_merge is None:
         return False
-    return v_merge.get(qn("w:val")) != "restart"
+    return str(v_merge.get(qn("w:val"))) != "restart"
 
 
 def _basis_units(table: Table, anchor_col: int) -> list[list[int]]:
@@ -593,7 +604,7 @@ def _clone_last_unit(table: Table, units: list[list[int]]) -> None:
 
 
 def _write_designation(
-    cells: list[_Cell],
+    cells: Sequence[_Cell],
     c_num: int | None,
     c_desig: int | None,
     numeral: str,
@@ -668,7 +679,7 @@ def _fill_basis(sec: SectionContext, table: Table) -> None:
             break  # safety: a clone that isn't re-detected as a unit would loop forever
 
     for idx, (unit, br) in enumerate(zip(units, sec.basis_rows, strict=False)):
-        cells = table.rows[unit[0]].cells
+        cells = _physical_cells(table.rows[unit[0]])
         _write_designation(cells, c_num, c_desig, f"{_roman(idx + 1)})", br.designation)
         # Always write (even blank) so cloned rows don't inherit stale values.
         if c_count is not None and c_count < len(cells):
@@ -691,7 +702,7 @@ def _fill_basis(sec: SectionContext, table: Table) -> None:
         # benefit schedule; never substitute a fixed GP/SP schedule.
         if c_benefit is not None:
             for line_idx, row_idx in enumerate(unit):
-                line_cells = table.rows[row_idx].cells
+                line_cells = _physical_cells(table.rows[row_idx])
                 line = br.clinical_lines[line_idx] if line_idx < len(br.clinical_lines) else None
                 for target, value in (
                     (c_benefit, line.name if line else ""),
@@ -863,11 +874,11 @@ def _fill_travel_basis(sec: SectionContext, table: Table, last_para: str) -> Non
     return
 
 
-def _data_rows(table: Table, header_rows: int) -> list:
+def _data_rows(table: Table, header_rows: int) -> list[_Row]:
     return list(table.rows[header_rows:])
 
 
-def _ensure_data_rows(table: Table, header_rows: int, needed: int) -> list:
+def _ensure_data_rows(table: Table, header_rows: int, needed: int) -> list[_Row]:
     rows = _data_rows(table, header_rows)
     if not rows or len(_physical_cells(rows[-1])) <= 1:
         return rows

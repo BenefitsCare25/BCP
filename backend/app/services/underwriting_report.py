@@ -123,11 +123,11 @@ def _stamp(*values: datetime | None) -> datetime | None:
     full timestamp at least makes the offset visible, and matches how every
     other report in the toolkit writes model timestamps (``naive``).
     """
-    stamps = [naive(v) for v in values if v is not None]
+    stamps = [stamp for value in values if value is not None if (stamp := naive(value))]
     return max(stamps) if stamps else None
 
 
-def _load(db: Session, model, ids: set[str]) -> dict[str, Any]:
+def _load(db: Session, model: Any, ids: set[str]) -> dict[str, Any]:
     if not ids:
         return {}
     return {

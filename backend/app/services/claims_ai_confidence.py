@@ -19,10 +19,10 @@ def _scope(value: str | None) -> str:
 def _threshold(value: Any, where: str) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"{where} must be numeric")
-    value = float(value)
-    if not 0 <= value <= 1:
+    threshold = float(value)
+    if not 0 <= threshold <= 1:
         raise ValueError(f"{where} must be between 0 and 1")
-    return value
+    return threshold
 
 
 def confidence_profile_path() -> Path:
@@ -34,9 +34,12 @@ def confidence_profile_path() -> Path:
 def load_confidence_profile() -> dict[str, Any]:
     path = confidence_profile_path()
     try:
-        profile = json.loads(path.read_text(encoding="utf-8"))
+        raw_profile: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Claims AI confidence profile is unreadable: {path}") from exc
+    if not isinstance(raw_profile, dict):
+        raise RuntimeError("Claims AI confidence profile must be an object")
+    profile: dict[str, Any] = raw_profile
     if profile.get("schema_version") != 1:
         raise RuntimeError("Claims AI confidence profile schema_version must be 1")
     dataset_hash = profile.get("dataset_sha256")

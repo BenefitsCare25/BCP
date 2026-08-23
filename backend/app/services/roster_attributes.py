@@ -52,7 +52,9 @@ _SPOUSE_RE = re.compile(r"(?i)spouse|wife|husband|partner|married")
 _CHILD_RE = re.compile(r"(?i)child|son|daughter|kid|dependent child")
 
 
-def family_tier_bucket(dependant_values: object) -> str:
+def family_tier_bucket(
+    dependant_values: Iterable[dict[str, Any]] | None,
+) -> str:
     """Canonical composite tier for a household: EO / ES / EC / EF.
 
     Takes an iterable of dependant ``attribute_values`` dicts (not ORM rows) so
@@ -164,6 +166,8 @@ def is_valid_sg_nric(raw: object | None) -> bool:
     if not looks_like_sg_nric(raw):
         return False
     canon = normalize_nric(raw)
+    if canon is None:
+        return False
     return sg_nric_check_letter(canon[0], canon[1:8]) == canon[8]
 
 
@@ -237,8 +241,9 @@ def last_day_of_service(member: Any) -> date | str | None:
     that reads "end of June" is worth printing, and dropping it would make a
     leaver look like they had no last day at all.
     """
-    if getattr(member, "terminated_effective", None) is not None:
-        return member.terminated_effective
+    terminated = getattr(member, "terminated_effective", None)
+    if isinstance(terminated, date):
+        return terminated
     return roster_date(first_value(member.attribute_values or {}, LAST_DAY_KEYS))
 
 

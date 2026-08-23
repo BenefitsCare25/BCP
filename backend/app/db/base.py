@@ -15,7 +15,7 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
-def JSON() -> TypeEngine:
+def JSON() -> TypeEngine[object]:
     """Cross-dialect JSON: native JSON on SQLite, JSONB on Postgres.
 
     Use this instead of `sa.JSON()` so JSONB indexing and ops work in prod

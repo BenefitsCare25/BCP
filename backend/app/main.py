@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()  # loads backend/.env before settings / crypto initialise
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
@@ -92,6 +92,12 @@ def _allowed_origins() -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
+def _handle_rate_limit(request: Request, exc: Exception) -> Response:
+    if not isinstance(exc, RateLimitExceeded):
+        raise exc
+    return _rate_limit_exceeded_handler(request, exc)
+
+
 def create_app() -> FastAPI:
     install_log_filter()
     configure_telemetry()
@@ -122,7 +128,7 @@ def create_app() -> FastAPI:
     # (added last) runs first on the inbound path so downstream logging /
     # auditing can read the correlation ID.
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_exception_handler(RateLimitExceeded, _handle_rate_limit)
 
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(

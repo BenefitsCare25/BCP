@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -37,6 +38,7 @@ from app.models.claim import (
     CLAIM_STATUS_SENT_TO_INSURER,
     SETTLED_STATUSES,
 )
+from app.schemas.claims import ClaimAssessmentIn
 
 # Terminal states that carry no `paid_on` — the insurer's clock stopped, but no
 # money moved. See `_insurer_clock_stop`.
@@ -301,9 +303,10 @@ def send_to_insurer(
         claim.insurer_deadline_on = deadline_on
     else:
         days = turnaround_days or DEFAULT_INSURER_TURNAROUND_DAYS
-        claim.insurer_deadline_on = _as_date(claim.sent_to_insurer_at) + timedelta(
-            days=days
-        )
+        dispatch_date = _as_date(claim.sent_to_insurer_at)
+        if dispatch_date is None:
+            raise RuntimeError("A dispatched claim must have a dispatch date.")
+        claim.insurer_deadline_on = dispatch_date + timedelta(days=days)
     claim.status = CLAIM_STATUS_SENT_TO_INSURER
     return claim
 
@@ -324,7 +327,7 @@ def record_payment(
     """
     claim.paid_on = paid_on
     claim.payment_amount = (
-        amount if amount is not None else claim.amount_approved
+        Decimal(str(amount)) if amount is not None else claim.amount_approved
     )
     claim.status = CLAIM_STATUS_PAID
     return claim
@@ -399,7 +402,11 @@ def assert_settlement_amendable(
         )
 
 
-def apply_settlement_amendment(claim: Claim, body, present: frozenset[str] | set[str]):
+def apply_settlement_amendment(
+    claim: Claim,
+    body: ClaimAssessmentIn,
+    present: frozenset[str] | set[str],
+) -> None:
     """Correct the recorded settlement dates without touching the status.
 
     `send_to_insurer` and `record_payment` are TRANSITIONS, offered only from
@@ -421,12 +428,17 @@ def apply_settlement_amendment(claim: Claim, body, present: frozenset[str] | set
     if not present:
         return
 
-    def effective(field: str, current):
-        return getattr(body, field) if field in present else current
-
-    sent = effective("sent_to_insurer_on", _as_date(claim.sent_to_insurer_at))
-    deadline = effective("insurer_deadline_on", claim.insurer_deadline_on)
-    paid = effective("paid_on", claim.paid_on)
+    sent = (
+        body.sent_to_insurer_on
+        if "sent_to_insurer_on" in present
+        else _as_date(claim.sent_to_insurer_at)
+    )
+    deadline = (
+        body.insurer_deadline_on
+        if "insurer_deadline_on" in present
+        else claim.insurer_deadline_on
+    )
+    paid = body.paid_on if "paid_on" in present else claim.paid_on
 
     # A cleared date input sends null, so this is one keystroke away on the
     # form. Clearing the dispatch date of a claim that IS with the insurer
@@ -436,19 +448,19 @@ def apply_settlement_amendment(claim: Claim, body, present: frozenset[str] | set
     # deleting it out from under the status is not.
     if sent is None and was_dispatched(claim):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This claim has been sent to the insurer, so it must keep a "
             "dispatch date. Correct the date rather than clearing it.",
         )
 
     if sent is not None and deadline is not None and deadline < sent:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "The insurer deadline cannot precede the date sent to the insurer.",
         )
     if sent is not None and paid is not None and paid < sent:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "The payment date cannot precede the date sent to the insurer.",
         )
 
@@ -463,4 +475,8 @@ def apply_settlement_amendment(claim: Claim, body, present: frozenset[str] | set
     if "paid_on" in present:
         claim.paid_on = paid
     if "payment_amount" in present:
-        claim.payment_amount = body.payment_amount
+        claim.payment_amount = (
+            Decimal(str(body.payment_amount))
+            if body.payment_amount is not None
+            else None
+        )

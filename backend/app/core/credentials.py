@@ -21,8 +21,16 @@ class LockableCredential(Protocol):
 
     failed_attempts: int
     locked_until: datetime | None
-    password_updated_at: datetime | None
-    must_rotate_after: datetime | None
+
+
+class RotatingCredential(Protocol):
+    @property
+    def must_rotate_after(self) -> datetime | None: ...
+
+
+class VersionedCredential(Protocol):
+    @property
+    def password_updated_at(self) -> datetime | None: ...
 
 
 def is_locked(cred: LockableCredential, now: datetime | None = None) -> bool:
@@ -63,7 +71,7 @@ def next_rotation_deadline(
     return updated_at + timedelta(days=rotation_days)
 
 
-def rotation_due(cred: LockableCredential, now: datetime | None = None) -> bool:
+def rotation_due(cred: RotatingCredential, now: datetime | None = None) -> bool:
     """True when a configured forced-rotation deadline has passed. NULL
     `must_rotate_after` (no rotation policy) is never due."""
     deadline = cred.must_rotate_after
@@ -75,7 +83,7 @@ def rotation_due(cred: LockableCredential, now: datetime | None = None) -> bool:
     return deadline <= now
 
 
-def credential_version(cred: LockableCredential) -> int:
+def credential_version(cred: VersionedCredential) -> int:
     """Monotonic stamp that makes set-password tokens single-use: the password's
     last-update time in MICROSECONDS (second granularity would collide when a
     set-password lands in the same second as provisioning), 0 if never set."""

@@ -36,6 +36,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -186,6 +187,7 @@ def _insert_ignoring_conflicts(db: Session, values: dict[str, object]) -> None:
     both dialects in use support it. The loser of the race simply keeps the
     winner's row, which is the same market fact.
     """
+    stmt: Any
     if db.get_bind().dialect.name == "postgresql":
         stmt = pg_insert(FxRate).values(**values).on_conflict_do_nothing(
             index_elements=["base_currency", "quote_currency", "as_of_date"]

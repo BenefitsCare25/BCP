@@ -25,7 +25,7 @@ from openpyxl import Workbook as OpenpyxlWorkbook
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import PanelClinic, PanelListing, PolicyYearPanel
+from app.models import PanelClinic, PanelListing, PolicyYear, PolicyYearPanel
 from app.models.panel_clinic import clinic_type_label
 from app.schemas.panel import (
     ClinicFilters,
@@ -321,7 +321,9 @@ def export_listing_workbook(clinics: list[PanelClinic]) -> bytes:
 
 
 def carry_over_panel_tags(
-    db: Session, new_year, source_policy_year_id: str | None = None
+    db: Session,
+    new_year: PolicyYear,
+    source_policy_year_id: str | None = None,
 ) -> int:
     """Copy panel-listing tags onto a freshly created policy year, so 'which
     panel networks does this company use' behaves like a per-company setting
@@ -336,8 +338,6 @@ def carry_over_panel_tags(
     Flush only — the caller (policy-year create) owns the commit. Returns the
     number of tags copied.
     """
-    from app.models import PolicyYear  # local: avoid widening module imports
-
     prior_year_id = source_policy_year_id
     if prior_year_id is None:
         prior_year_id = db.execute(
@@ -456,8 +456,9 @@ def search_policy_year_clinics(
     Distance sorting is in-process — tagged panels are bounded (hundreds to a
     few thousand rows) — and payloads are built only for the returned page.
     """
-    rows: list[_Row] = list(
-        db.execute(
+    rows: list[_Row] = [
+        (clinic, listing)
+        for clinic, listing in db.execute(
             select(PanelClinic, PanelListing)
             .join(PanelListing, PanelClinic.panel_listing_id == PanelListing.id)
             .join(
@@ -466,7 +467,7 @@ def search_policy_year_clinics(
             )
             .where(PolicyYearPanel.policy_year_id == policy_year_id)
         ).all()
-    )
+    ]
 
     type_counts: dict[tuple[str, str], int] = {}
     for _clinic, listing in rows:
@@ -489,17 +490,20 @@ def search_policy_year_clinics(
         needle = q.lower()
         filtered = [r for r in filtered if _matches_q(r[0], needle)]
 
-    have_origin = lat is not None and lng is not None
     # Sort lightweight (distance, row) pairs; serialize only the page slice.
-    scored: list[tuple[float | None, _Row]] = [
-        (
-            round(haversine_km(lat, lng, c.latitude, c.longitude), 2)
-            if have_origin and c.latitude is not None and c.longitude is not None
-            else None,
-            (c, listing),
-        )
-        for c, listing in filtered
-    ]
+    if lat is not None and lng is not None:
+        scored: list[tuple[float | None, _Row]] = [
+            (
+                round(haversine_km(lat, lng, clinic.latitude, clinic.longitude), 2)
+                if clinic.latitude is not None and clinic.longitude is not None
+                else None,
+                (clinic, listing),
+            )
+            for clinic, listing in filtered
+        ]
+    else:
+        scored = [(None, row) for row in filtered]
+    have_origin = lat is not None and lng is not None
     if have_origin:
         # Nearest first; clinics without coordinates sink to the end (still
         # alphabetical there).

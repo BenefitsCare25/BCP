@@ -396,8 +396,12 @@ def _column_id_for_plan(sob: dict[str, Any], plan_code: str) -> str | None:
     columns = sob.get("columns") or []
     for col in columns:
         if plan_code in (col.get("plan_codes") or []):
-            return col.get("id")
-    return columns[0].get("id") if len(columns) == 1 else None
+            column_id = col.get("id")
+            return column_id if isinstance(column_id, str) else None
+    if len(columns) == 1:
+        column_id = columns[0].get("id")
+        return column_id if isinstance(column_id, str) else None
+    return None
 
 
 def resolve_plan_schedule(

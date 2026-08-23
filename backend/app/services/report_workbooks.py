@@ -103,7 +103,7 @@ class SheetSpec:
     """
 
     title: str
-    build: Callable[..., Workbook]
+    build: Callable[[Session, PolicyYear, BuildContext], Workbook]
     # What the sheet holds, in one line. SERVED to the Reports page so a broker
     # knows what is inside a workbook before downloading it — the reason this
     # is data and not a frontend constant is that a sheet added here must not
@@ -140,25 +140,45 @@ class WorkbookSpec:
 # a feature most requests never touch.
 
 
-def _employee_listing(db, py, ctx: BuildContext):
+def _require_insurer(ctx: BuildContext) -> str:
+    if ctx.insurer is None:
+        raise ValueError("An insurer is required for this report")
+    return ctx.insurer
+
+
+def _require_date_range(ctx: BuildContext) -> tuple[date, date]:
+    if ctx.start is None or ctx.end is None:
+        raise ValueError("A start and end date are required for this report")
+    return ctx.start, ctx.end
+
+
+def _employee_listing(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.insurer_listings import build_employee_listing
 
-    return build_employee_listing(db, py, ctx.insurer, masked=ctx.masked)
+    return build_employee_listing(db, py, _require_insurer(ctx), masked=ctx.masked)
 
 
-def _dependant_listing(db, py, ctx: BuildContext):
+def _dependant_listing(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.insurer_listings import build_dependant_listing
 
-    return build_dependant_listing(db, py, ctx.insurer, masked=ctx.masked)
+    return build_dependant_listing(db, py, _require_insurer(ctx), masked=ctx.masked)
 
 
-def _benefit_selection(db, py, ctx: BuildContext):
+def _benefit_selection(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.insurer_reports import build_benefit_selection_workbook
 
     return build_benefit_selection_workbook(db, py, masked=ctx.masked)
 
 
-def _built_in_employees(db, py, ctx: BuildContext):
+def _built_in_employees(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.built_in_listings import build_built_in_employee_listing
 
     return build_built_in_employee_listing(
@@ -166,7 +186,9 @@ def _built_in_employees(db, py, ctx: BuildContext):
     )
 
 
-def _built_in_dependants(db, py, ctx: BuildContext):
+def _built_in_dependants(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.built_in_listings import build_built_in_dependant_listing
 
     return build_built_in_dependant_listing(
@@ -174,31 +196,37 @@ def _built_in_dependants(db, py, ctx: BuildContext):
     )
 
 
-def _employee_coverage(db, py, ctx: BuildContext):
+def _employee_coverage(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.roster_reports import build_employee_report_workbook
 
     return build_employee_report_workbook(db, py.id)
 
 
-def _dependant_coverage(db, py, ctx: BuildContext):
+def _dependant_coverage(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.roster_reports import build_dependant_report_workbook
 
     return build_dependant_report_workbook(db, py.id)
 
 
-def _portal_access(db, py, ctx: BuildContext):
+def _portal_access(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.portal_access_report import build_portal_access_workbook
 
     return build_portal_access_workbook(db, py)
 
 
-def _all_claims(db, py, ctx: BuildContext):
+def _all_claims(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.claims_reports import build_insurance_claims_workbook
 
     return build_insurance_claims_workbook(db, py, scope="all", masked=ctx.masked)
 
 
-def _inpatient_claims(db, py, ctx: BuildContext):
+def _inpatient_claims(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.claims_reports import build_insurance_claims_workbook
 
     return build_insurance_claims_workbook(
@@ -206,7 +234,9 @@ def _inpatient_claims(db, py, ctx: BuildContext):
     )
 
 
-def _outpatient_claims(db, py, ctx: BuildContext):
+def _outpatient_claims(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.claims_reports import build_insurance_claims_workbook
 
     return build_insurance_claims_workbook(
@@ -214,43 +244,45 @@ def _outpatient_claims(db, py, ctx: BuildContext):
     )
 
 
-def _employee_claims(db, py, ctx: BuildContext):
+def _employee_claims(
+    db: Session, py: PolicyYear, ctx: BuildContext
+) -> Workbook:
     from app.services.claims_reports import build_employee_claims_workbook
 
     return build_employee_claims_workbook(db, py, masked=ctx.masked)
 
 
-def _adjudication(db, py, ctx: BuildContext):
+def _adjudication(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.claims_register import build_claims_register_workbook
 
     return build_claims_register_workbook(db, py)
 
 
-def _wallet_summary(db, py, ctx: BuildContext):
+def _wallet_summary(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.flex_ledger import build_utilisation_summary_workbook
 
     return build_utilisation_summary_workbook(db, py, masked=ctx.masked)
 
 
-def _wallet_ledger(db, py, ctx: BuildContext):
+def _wallet_ledger(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.flex_ledger import build_utilisation_workbook
 
     return build_utilisation_workbook(db, py, masked=ctx.masked)
 
 
-def _leaver_summary(db, py, ctx: BuildContext):
+def _leaver_summary(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.leaver_reports import build_leaver_summary_workbook
 
     return build_leaver_summary_workbook(db, py, masked=ctx.masked)
 
 
-def _leaver_details(db, py, ctx: BuildContext):
+def _leaver_details(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.leaver_reports import build_leaver_details_workbook
 
     return build_leaver_details_workbook(db, py, masked=ctx.masked)
 
 
-def _underwriting(db, py, ctx: BuildContext):
+def _underwriting(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.underwriting import adopt_orphan_cases
     from app.services.underwriting_report import build_underwriting_report
 
@@ -263,16 +295,18 @@ def _underwriting(db, py, ctx: BuildContext):
     return build_underwriting_report(db, py, masked=ctx.masked)
 
 
-def _portal_activity(db, py, ctx: BuildContext):
+def _portal_activity(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.activity_reports import build_portal_activity_workbook
 
-    return build_portal_activity_workbook(db, py, ctx.start, ctx.end)
+    start, end = _require_date_range(ctx)
+    return build_portal_activity_workbook(db, py, start, end)
 
 
-def _company_activity(db, py, ctx: BuildContext):
+def _company_activity(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
     from app.services.activity_reports import build_company_activity_workbook
 
-    return build_company_activity_workbook(db, py, ctx.start, ctx.end)
+    start, end = _require_date_range(ctx)
+    return build_company_activity_workbook(db, py, start, end)
 
 
 # ── The composites ───────────────────────────────────────────────────────────

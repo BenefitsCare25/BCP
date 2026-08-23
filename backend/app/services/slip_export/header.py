@@ -162,15 +162,18 @@ def write_header_block(
 
     # Dynamic tail: anything this product's form captured that the ladder does
     # not print. Template order, template labels.
-    extras = [
-        (f"{labels.get(fid) or _humanize(fid)} :", captured[fid])
+    extras: list[tuple[str, str]] = [
+        (f"{labels.get(fid) or _humanize(fid)} :", str(captured[fid]))
         for fid in list(labels) + [k for k in captured if k not in labels]
         if fid in captured and fid not in _LADDER_IDS
     ]
     seen: set[str] = set()
-    unique_extras = [
-        row for row in extras if not (row[0] in seen or seen.add(row[0]))
-    ]
+    unique_extras: list[tuple[str, str]] = []
+    for row in extras:
+        if row[0] in seen:
+            continue
+        seen.add(row[0])
+        unique_extras.append(row)
     if unique_extras:
         rows.append(None)
         rows.extend(unique_extras)

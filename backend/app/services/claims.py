@@ -615,12 +615,12 @@ def create_claim(
 ) -> Claim:
     if body.claim_kind == CLAIM_KIND_INSURED and not body.product_code:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "An insured claim must name the product it draws on.",
         )
     if body.claim_kind == CLAIM_KIND_FLEX and not body.flex_category_name:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A flex claim must name the claimable benefit category.",
         )
     if body.dependant_id:
@@ -632,7 +632,7 @@ def create_claim(
         # benefit statement's active-only filter).
         if dep.status != "active":
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "This dependant is pending your broker's approval and can't "
                 "be claimed for yet.",
             )
@@ -758,8 +758,11 @@ def _stamp_fx_acknowledgement(claim: Claim, body: Any) -> None:
         return
     if fx_state(claim) != FX_STATE_CONVERTED:
         return
+    converted_amount = claim.amount_converted
+    if converted_amount is None:
+        return
     shown = getattr(body, "fx_quoted_amount", None)
-    if shown is not None and abs(float(shown) - float(claim.amount_converted)) > 0.005:
+    if shown is not None and abs(float(shown) - float(converted_amount)) > 0.005:
         return
     claim.fx_acknowledged_at = datetime.now(UTC)
 
@@ -908,13 +911,13 @@ def _apply_gp_rider_benefit_key(
     )
     if row is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Your {claim.product_code} plan does not include "
             f"{claim.sub_type} cover.",
         )
     if explicit_benefit_key and (claim.benefit_key or "").strip() != row:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "benefit_key_derived",
                 "message": (
@@ -940,7 +943,7 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
         )
         if line is None:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"You have no {claim.product_code} coverage to claim against.",
             )
         # Products settled outside the portal (Major Medical, term life,
@@ -957,7 +960,7 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
             and not claim_profile_for(claim.product_code).member_claimable
         ):
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"{claim.product_code} claims aren't submitted through the "
                 "portal — please contact your broker.",
             )
@@ -966,14 +969,14 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
             names = {str(i.get("name", "")).strip().lower() for i in items if isinstance(i, dict)}
             if claim.benefit_key.strip().lower() not in names:
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
                     f"'{claim.benefit_key}' is not a benefit item on your "
                     f"{claim.product_code} schedule.",
                 )
         if claim.dependant_id:
             if not line.covers_dependants:
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
                     f"Your {claim.product_code} coverage does not extend to "
                     "dependants.",
                 )
@@ -982,7 +985,7 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
             # too, not just in the form's picker.
             if claim.dependant_id not in {d.id for d in line.covered_dependants}:
                 raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
                     f"This dependant is not covered under your "
                     f"{claim.product_code} plan.",
                 )
@@ -991,7 +994,7 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
     flex = statement.flex
     if flex is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "You have no flex wallet to claim against.",
         )
     # Flex claims may draw down the member's wallet for a dependant's expense,
@@ -1001,7 +1004,7 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
         d.id for d in statement.dependants
     }:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This dependant is not active on your record, so their expenses "
             "can't be claimed from your flex wallet.",
         )
@@ -1012,7 +1015,7 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
     )
     if category is None or not category.claimable:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{claim.flex_category_name}' is not a claimable flex benefit for you.",
         )
 
@@ -1178,11 +1181,11 @@ def assert_incurred_in_period(
     window = claim_period_window(db, year, claim.claim_kind, employee)
     if window.is_empty:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, window.empty_note
+            status.HTTP_422_UNPROCESSABLE_CONTENT, window.empty_note
         )
     if not (window.start <= claim.incurred_date <= window.end):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"The incurred date must fall within the {window.label} "
             f"({window.start.isoformat()} to {window.end.isoformat()}).",
         )
@@ -1431,6 +1434,17 @@ def assert_fx_acknowledged(claim: Claim) -> None:
     """
     if fx_state(claim) != FX_STATE_CONVERTED or claim.fx_acknowledged_at is not None:
         return
+    if claim.amount_claimed is None or claim.amount_converted is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "fx_conversion_incomplete",
+                "message": (
+                    "The currency conversion is incomplete. "
+                    "Refresh the claim and try again."
+                ),
+            },
+        )
     raise HTTPException(
         status.HTTP_409_CONFLICT,
         detail={
@@ -1490,7 +1504,7 @@ def submit_claim(
         and (current_year is None or year.id != current_year.id)
     ):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Claims can only be submitted against the benefit year for today's date.",
         )
     # Asserted HERE rather than inside the shared chain, and the order is not
@@ -1519,7 +1533,7 @@ def submit_claim(
         # morning would be refused a day early (`core/clock.py`).
         if business_today() > deadline:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"The claim submission window for this {window.period_label} closed on "
                 f"{deadline.isoformat()} (period end + "
                 f"{year.claim_grace_period_days} days grace).",
@@ -1647,7 +1661,7 @@ def assert_amendment_reason(claim: Claim, reason: str | None) -> None:
     if reason and reason.strip():
         return
     raise HTTPException(
-        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail={
             "code": "reason_required",
             "message": (
@@ -1729,7 +1743,7 @@ def apply_claim_amendment(
     patch = set(body.model_fields_set) & allowed
     if not patch:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "This request changes nothing."
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "This request changes nothing."
         )
     columns = patch - {_REFERRAL_FLAG}
 
@@ -1943,7 +1957,7 @@ def assert_stay_dates_valid(
         and discharge_date < admission_date
     ):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "The discharge date cannot be before the admission date.",
         )
 

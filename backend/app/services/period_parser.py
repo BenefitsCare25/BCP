@@ -58,10 +58,10 @@ def _parse_one(token: str) -> date | None:
         if not mdy:
             return None
         mon, day, year = mdy.group(1), int(mdy.group(2)), int(mdy.group(3))
-    month = _MONTHS.get(mon.lower())
-    if not month:
+    parsed_month = _MONTHS.get(mon.lower())
+    if not parsed_month:
         return None
-    return _valid(year, month, day)
+    return _valid(year, parsed_month, day)
 
 
 def parse_period_of_insurance(text: str | None) -> tuple[date, date] | None:

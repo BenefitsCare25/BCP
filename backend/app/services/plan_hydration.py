@@ -363,7 +363,9 @@ def salary_multiple(pa: dict[str, Any]) -> tuple[float, bool] | None:
     return mult, "annual" in m.group(2).lower()
 
 
-def resolve_basis_amount(pa: dict[str, Any], attribute_values: dict | None) -> float | None:
+def resolve_basis_amount(
+    pa: dict[str, Any], attribute_values: dict[str, Any] | None
+) -> float | None:
     """Per-member sum assured: a plain-amount basis, else a salary-multiple
     basis resolved against the member's roster monthly salary.
 
@@ -398,7 +400,9 @@ def voluntary_rate_for_age(bands: list[Any] | None, age: int | None) -> float | 
 
 
 def member_financials(
-    pa: dict[str, Any], age: int | None = None, attribute_values: dict | None = None
+    pa: dict[str, Any],
+    age: int | None = None,
+    attribute_values: dict[str, Any] | None = None,
 ) -> PlanFinancials | None:
     """Per-MEMBER view of a category's financials for any per-employee read path.
 

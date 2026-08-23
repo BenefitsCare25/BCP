@@ -8,7 +8,7 @@ member actions (submit claim, add dependant) stay portal-only.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -146,6 +146,11 @@ def portal_preview_coverage_options(
     """Mirror of `GET /portal/coverage-options` (the member claim-form picker
     state) — same shared builder, keyed off the previewed employee's own year."""
     year = db.get(PolicyYear, employee.policy_year_id)
+    if year is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This employee no longer belongs to a benefit year.",
+        )
     statement = build_member_statement(db, employee)
     return build_coverage_options(db, statement, employee, year)
 

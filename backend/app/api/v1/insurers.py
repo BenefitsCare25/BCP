@@ -170,7 +170,7 @@ def update_insurer(
     row = _load_editable(insurer_id, user, db)
     patch = payload.model_dump(exclude_unset=True)
     if "name" in patch and patch["name"] is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Name is required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Name is required")
     if "name" in patch:
         _assert_name_free(patch["name"], _visible(user, db), exclude_id=row.id)
     before: dict[str, object] = {}

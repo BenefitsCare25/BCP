@@ -42,11 +42,11 @@ from app.services.benefit_statement import _category_covers_dependants
 from app.services.coverage_resolver import load_overrides
 from app.services.flex_membership import classify_relationship
 from app.services.insurer_reports import (
-    _as_date,
     _autosize,
     _bold_header,
-    _last_day_of_service,
     append_safe,
+    as_date,
+    last_day_of_service,
     report_employees,
     resolved_last_day,
 )
@@ -496,7 +496,7 @@ def build_employee_listing(
             emp.staff_id,
             emp.employee_name or "",
             _ident(attrs, EMPLOYEE_ID_KEYS, masked),
-            _as_date(first_value(attrs, ("date_of_birth", "dob"))),
+            as_date(first_value(attrs, ("date_of_birth", "dob"))),
             first_value(attrs, ("gender", "sex")) or "",
             first_value(attrs, ("marital_status",)) or "",
             first_value(attrs, ("employment_status",)) or "",
@@ -504,10 +504,10 @@ def build_employee_listing(
             first_value(attrs, ("country_of_work",)) or "",
             first_value(attrs, ("pass",)) or "",
             first_value(attrs, ("nationality",)) or "",
-            _as_date(first_value(attrs, ("date_of_hire", "hire_date"))),
-            _as_date(first_value(attrs, ("confirmation_date",))),
-            _as_date(first_value(attrs, ("effective_date",))),
-            _last_day_of_service(emp),
+            as_date(first_value(attrs, ("date_of_hire", "hire_date"))),
+            as_date(first_value(attrs, ("confirmation_date",))),
+            as_date(first_value(attrs, ("effective_date",))),
+            last_day_of_service(emp),
             first_value(attrs, ("category",)) or "",
             first_value(attrs, ("job_grade", "grade")) or "",
             first_value(attrs, ("division",)) or "",
@@ -603,12 +603,12 @@ def build_dependant_listing(
         per_product = coverage.get(emp.id, {})
         for dep in deps_by_emp.get(emp.id, []):
             dattrs = dep.attribute_values or {}
-            role = classify_relationship(first_value(dattrs, REL_KEYS))
+            dependant_role = classify_relationship(first_value(dattrs, REL_KEYS))
             cells: list[object] = []
             covered_any = False
             for b, brole in role_blocks:
                 cov = per_product.get(b.product.id)
-                if role != brole or cov is None:
+                if dependant_role != brole or cov is None:
                     cells += ["", "", "", ""]
                     continue
                 if dep.id not in cov.covered_dependant_ids:
@@ -620,7 +620,7 @@ def build_dependant_listing(
                 # cells (the broker/enrollment supplies the level) rather than
                 # silently dropping a covered life the insurer must bill.
                 covered_any = True
-                amount = _dependant_amount(b, cov, role)
+                amount = _dependant_amount(b, cov, dependant_role)
                 if amount is None:
                     cells += ["", "", "", ""]
                 else:
@@ -647,11 +647,11 @@ def build_dependant_listing(
                 first_value(dattrs, ("dependant_name", "name")) or "",
                 _ident(dattrs, DEPENDANT_ID_KEYS, masked),
                 first_value(dattrs, ("relationship", "relation")) or "",
-                _as_date(first_value(dattrs, ("date_of_marriage",))),
+                as_date(first_value(dattrs, ("date_of_marriage",))),
                 first_value(dattrs, ("gender", "sex")) or "",
-                _as_date(first_value(dattrs, ("date_of_birth", "dob"))),
-                _as_date(first_value(dattrs, ("effective_date",))),
-                _as_date(first_value(dattrs, ("termination_date",))),
+                as_date(first_value(dattrs, ("date_of_birth", "dob"))),
+                as_date(first_value(dattrs, ("effective_date",))),
+                as_date(first_value(dattrs, ("termination_date",))),
                 first_value(dattrs, ("remarks",)) or "",
                 _member_id(dattrs, insurer),
                 dep.terminated_effective,

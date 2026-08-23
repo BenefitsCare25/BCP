@@ -443,7 +443,9 @@ def build_member_cards(
 
 
 def carry_over_card_assignments(
-    db: Session, new_year, source_policy_year_id: str | None = None
+    db: Session,
+    new_year: PolicyYear,
+    source_policy_year_id: str | None = None,
 ) -> int:
     """Copy card assignments onto a freshly created policy year, so "which
     e-cards does this company issue" survives a renewal.

@@ -72,7 +72,7 @@ def _is_annotation(value: str | None) -> bool:
     being an annotation and the other a real value IS a change, and "As charged"
     never wears brackets.
     """
-    return bool(value) and value.startswith("(") and value.endswith(")")
+    return value is not None and value.startswith("(") and value.endswith(")")
 
 
 
@@ -182,7 +182,12 @@ def _rows(items: list[dict[str, Any]]) -> dict[str, _Row]:
     return out
 
 
-def _entry(row: _Row, current: str | None, elected: str | None, kind: str | None):
+def _entry(
+    row: _Row,
+    current: str | None,
+    elected: str | None,
+    kind: str | None,
+) -> dict[str, str | None]:
     return {
         "group": row.group,
         "benefit": row.benefit,

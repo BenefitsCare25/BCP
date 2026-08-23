@@ -28,7 +28,7 @@ from app.core.storage import get_storage
 from app.db.session import get_db
 from app.models.report_version import ReportVersion
 from app.services.insurer_listings import configured_insurers_for_year
-from app.services.report_registry import REGISTRY, spec_for
+from app.services.report_registry import REGISTRY, ReportSpec, spec_for
 from app.services.report_versions import (
     ReportTooLargeError,
     actor_names,
@@ -67,7 +67,7 @@ class CreateVersionIn(BaseModel):
     label: str | None = None
 
 
-def _spec_or_404(report_type: str):
+def _spec_or_404(report_type: str) -> ReportSpec:
     try:
         return spec_for(report_type)
     except KeyError:

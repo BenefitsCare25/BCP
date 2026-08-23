@@ -9,10 +9,12 @@ cross-tenant access is recorded via `AuditLog.cross_tenant_access`.
 from __future__ import annotations
 
 import logging
+from typing import Any, Protocol
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
 from app.db.session import get_db
@@ -192,7 +194,7 @@ def can_write_global(user: CurrentUser) -> bool:
     return user.role in (ROLE_SYSTEM_ADMIN, "broker_admin")
 
 
-def tenant_or_global(column, client_id: str | None):
+def tenant_or_global(column: Any, client_id: str | None) -> ColumnElement[bool]:
     """SQLAlchemy predicate for "global (NULL client_id) OR this tenant".
 
     Use for tables like EmployeeAttributeSchema and Product that mix
@@ -201,7 +203,18 @@ def tenant_or_global(column, client_id: str | None):
     return or_(column.is_(None), column == client_id)
 
 
-def load_editable_global(model, row_id: str, user: CurrentUser, db: Session, label: str):
+class _TenantOwned(Protocol):
+    @property
+    def client_id(self) -> str | None: ...
+
+
+def load_editable_global[RowT: _TenantOwned](
+    model: type[RowT],
+    row_id: str,
+    user: CurrentUser,
+    db: Session,
+    label: str,
+) -> RowT:
     """Load a row from a tenant-or-global catalog table for WRITING.
 
     Encodes the policy shared by every `tenant_or_global` table (Product,

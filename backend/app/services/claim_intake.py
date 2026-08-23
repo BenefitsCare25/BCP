@@ -26,6 +26,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models import Claim, Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
@@ -591,7 +592,7 @@ def assert_documents_satisfy_slots(
             names.get(key, key.replace("_", " ")) for key in missing
         )
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Missing required documents: {missing_labels}.",
         )
 
@@ -615,7 +616,7 @@ def person_employee_ids(db: Session, employee: Employee) -> list[str]:
     """
     if not employee.staff_id:
         return [employee.id]
-    owned = Employee.member_account_id.is_(None)
+    owned: ColumnElement[bool] = Employee.member_account_id.is_(None)
     if employee.member_account_id:
         owned = or_(owned, Employee.member_account_id == employee.member_account_id)
     ids = list(
@@ -680,7 +681,7 @@ def resolve_sp_referral(
     """
     if visit_type not in VISIT_TYPES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Specialist claims must state whether this is a first visit or a "
             "follow-up visit.",
         )
@@ -693,12 +694,12 @@ def resolve_sp_referral(
         if letter is not None:
             return letter.id
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "We couldn't find a referral letter on file for your follow-up "
             "visit — attach the referral letter for this treatment.",
         )
     raise HTTPException(
-        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
         "Specialist first visits need a referral letter — attach one or pick "
         "a previously uploaded letter.",
     )
@@ -728,7 +729,7 @@ def assert_doctor_name_valid(
         product_code, sub_type, claim_kind=claim_kind
     ) and not (doctor_name or "").strip():
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Name the doctor you saw — a pre- or post-hospitalisation "
             "follow-up is claimed against your hospital admission, and the "
             "doctor's name is how it's matched to it.",
@@ -757,7 +758,7 @@ def assert_intake_valid(
 
     if currency.upper() not in ALLOWED_CURRENCIES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{currency}' is not a supported claim currency.",
         )
 
@@ -767,23 +768,23 @@ def assert_intake_valid(
     if profile.sub_types:
         if not sub_type and profile.sub_type_required:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Select the claim sub-type for this hospital & surgical claim.",
             )
         if sub_type and sub_type not in profile.sub_types:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"'{sub_type}' is not a valid sub-type for {product_code} claims.",
             )
     elif sub_type:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"{product_code} claims do not take a claim sub-type.",
         )
 
     if profile.diagnosis_required and not effective_diagnosis(diagnosis):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Select the diagnosis for this claim (choose 'Other' and describe "
             "it if it isn't listed).",
         )
@@ -798,25 +799,25 @@ def assert_intake_valid(
         # before this validation, so a valid claim arrives with one set).
         if visit_type not in VISIT_TYPES:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Specialist claims must state whether this is a first visit "
                 "or a follow-up visit.",
             )
         if referral_document_id is None:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Specialist claims need a referral letter — attach one or "
                 "pick a previously uploaded letter.",
             )
     else:
         if referral_document_id is not None:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"{product_code} claims do not take a referral letter.",
             )
         if visit_type is not None:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"{product_code} claims do not take a visit type.",
             )
 

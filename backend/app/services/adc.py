@@ -212,7 +212,9 @@ def _canon(value: Any) -> str:
     return re.sub(r"[,\s]+", " ", text)
 
 
-def _merge_and_diff(existing: dict[str, Any], new: dict) -> tuple[dict, list[AdcFieldDiff]]:
+def _merge_and_diff(
+    existing: dict[str, Any], new: dict[str, Any]
+) -> tuple[dict[str, Any], list[AdcFieldDiff]]:
     """Overlay non-empty ``new`` values onto ``existing``; return the merged dict
     and the list of fields that actually changed. Empty cells never clear a
     field — a pre-filled template blank means 'unchanged', not 'delete'."""
@@ -325,12 +327,12 @@ def _resolve(
         return _Match(conflict=True, candidates=every)
 
     seen: set[str] = set()
-    candidates = [
-        r
-        for _, recs in matched
-        for r in recs
-        if not (r.id in seen or seen.add(r.id))
-    ]
+    candidates: list[Employee] = []
+    for _, records in matched:
+        for record in records:
+            if record.id not in seen:
+                seen.add(record.id)
+                candidates.append(record)
     free = [r for r in candidates if r.id not in consumed]
     if not free:
         return _Match(exhausted=True, candidates=every)

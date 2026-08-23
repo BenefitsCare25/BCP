@@ -31,6 +31,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -76,7 +77,7 @@ def normalize_name(raw: object) -> str:
     return _WS.sub(" ", text).strip().casefold()
 
 
-def _dob_key(attrs: dict) -> str:
+def _dob_key(attrs: dict[str, Any]) -> str:
     """ISO date of birth, or "" when it cannot be parsed.
 
     ``parse_dob`` and ``iso_date`` disagree on unparseable input — the first
@@ -344,7 +345,16 @@ def coverage_by_employee(
     # `_category_covers_dependants` needs product/category fields `MatchedPlan`
     # does not carry, so one bulk query for the categories in play.
     cat_ids = {mp.category_id for rows in plans.values() for mp in rows if mp.category_id}
-    cat_info: dict[str, tuple[bool, dict | None, str | None, str | None]] = {}
+    cat_info: dict[
+        str,
+        tuple[
+            bool,
+            dict[str, Any] | None,
+            dict[str, Any] | None,
+            str | None,
+            str | None,
+        ],
+    ] = {}
     if cat_ids:
         for cat, has_dep in db.execute(
             select(Category, Product.has_dependants)
@@ -354,6 +364,7 @@ def coverage_by_employee(
             cat_info[cat.id] = (
                 bool(has_dep),
                 cat.plan_assignments,
+                cat.participation_detail,
                 cat.display_name,
                 cat.raw_description,
             )
@@ -375,7 +386,9 @@ def coverage_by_employee(
             # employee held — group term life included — after a drop had
             # removed them from the three that actually carry dependants.
             covers = (
-                _category_covers_dependants(bool(own), info[1], info[2], info[3])
+                _category_covers_dependants(
+                    bool(own), info[1], info[2], info[3], info[4]
+                )
                 if info
                 else False
             )
@@ -570,7 +583,7 @@ def _opportunities(
     out: list[Opportunity] = []
     for pair in sorted(couples):
         a, b = (roster.emp_by_id[pair[0]], roster.emp_by_id[pair[1]])
-        for holder, other in ((a, b), (b, a)):
+        for holder, other_employee in ((a, b), (b, a)):
             for dep in deps_by_emp.get(holder.id, []):
                 attrs = dep.attribute_values or {}
                 if classify_relationship(first_value(attrs, REL_KEYS)) != "child":
@@ -589,14 +602,14 @@ def _opportunities(
                                 holder.employee_name, None, "employee",
                             ),
                             Party(
-                                other.id, other.staff_id or "",
-                                other.employee_name, None, "employee",
+                                other_employee.id, other_employee.staff_id or "",
+                                other_employee.employee_name, None, "employee",
                             ),
                         ],
                         child_name=str(first_value(attrs, DEP_NAME_KEYS) or "").strip(),
                         child_dob=ident.dob,
                         listed_under_staff_id=holder.staff_id or "",
-                        other_staff_id=other.staff_id or "",
+                        other_staff_id=other_employee.staff_id or "",
                     )
                 )
     return sorted(out, key=lambda o: (o.listed_under_staff_id, o.child_name))

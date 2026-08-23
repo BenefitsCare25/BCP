@@ -5,6 +5,7 @@ Idempotent: re-running won't duplicate. Run once after `alembic upgrade head`.
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from app.core.auth import (
     DEMO_BROKER_FIRM_ID,
@@ -43,7 +44,7 @@ _ROLE_DERIVATION_RULE = {
     "cases": [{"pattern": pattern, "value": role} for pattern, role in _ROLE_PATTERNS],
 }
 
-SINGAPORE_ATTRIBUTES: list[dict] = [
+SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
     {
         "attribute_id": "grade",
         "display_name": "Hay Job Grade",
@@ -351,7 +352,7 @@ SINGAPORE_ATTRIBUTES: list[dict] = [
     },
 ]
 
-PRODUCT_CATALOG: list[dict] = [
+PRODUCT_CATALOG: list[dict[str, Any]] = [
     {"code": "GTL", "display_name": "Group Term Life", "has_dependants": False},
     {"code": "GHS", "display_name": "Group Hospital & Surgical", "has_dependants": True},
     {"code": "GMM", "display_name": "Group Major Medical", "has_dependants": True},
@@ -487,12 +488,12 @@ def seed() -> None:
             .all()
         }
         for spec in SINGAPORE_ATTRIBUTES:
-            existing = existing_attr_rows.get(spec["attribute_id"])
-            if existing is None:
+            existing_attribute = existing_attr_rows.get(str(spec["attribute_id"]))
+            if existing_attribute is None:
                 db.add(EmployeeAttributeSchema(client_id=None, **spec))
             else:
-                existing.derived_from = spec.get("derived_from")
-                existing.derivation_rule = spec.get("derivation_rule")
+                existing_attribute.derived_from = spec.get("derived_from")
+                existing_attribute.derivation_rule = spec.get("derivation_rule")
 
         # Product catalog (global — client_id null)
         # Idempotent: missing rows are inserted; existing rows have their
@@ -503,12 +504,12 @@ def seed() -> None:
             for p in db.query(Product).filter(Product.client_id.is_(None)).all()
         }
         for spec in PRODUCT_CATALOG:
-            existing = existing_products.get(spec["code"])
-            if existing is None:
+            existing_product = existing_products.get(str(spec["code"]))
+            if existing_product is None:
                 db.add(Product(client_id=None, **spec))
             else:
                 for field_name, value in spec.items():
-                    setattr(existing, field_name, value)
+                    setattr(existing_product, field_name, value)
 
         # Insurer name library (global — client_id null). Same idempotent
         # upsert; see scripts/seed_insurers.py.

@@ -10,7 +10,7 @@ pricing snapshots a broker-on-behalf election does.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -29,6 +29,7 @@ from app.models.enrollment import ElectionAction, EnrollmentStatus
 from app.models.enrollment_window import WindowStatus
 from app.models.leave_election import LeaveAction, LeaveElectionStatus
 from app.models.product import Product as ProductModel
+from app.schemas.api import PlanFinancials
 from app.schemas.enrollment import (
     BenefitDifferenceOut,
     CohortTierOut,
@@ -42,15 +43,19 @@ from app.schemas.enrollment import (
     EnrollmentOptionsOut,
     EnrollmentOut,
     EnrollmentWindowOut,
+    LeaveActionStr,
     LeaveElectionIn,
     LeaveElectionOut,
     MemberLeaveOptionsOut,
-    PlanFinancials,
     PortalEnrollmentOut,
     ProductTierSetOut,
 )
 from app.services import flex_proration
-from app.services.cohort_tiers import electable_tiers_for_employee, tier_key
+from app.services.cohort_tiers import (
+    ProductTierSet,
+    electable_tiers_for_employee,
+    tier_key,
+)
 from app.services.coverage_resolver import employee_compulsory_product_ids
 from app.services.enrollment_flex_guard import (
     assert_elections_priced,
@@ -102,6 +107,61 @@ from app.services.leave_pricing_resolver import (
     leave_sell_eligible,
 )
 from app.services.plan_hydration import apply_gst_to_financials
+
+
+def _require_window(db: Session, enrollment: Enrollment) -> EnrollmentWindow:
+    window = db.get(EnrollmentWindow, enrollment.window_id)
+    if window is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The enrollment window no longer exists. Reload before continuing.",
+        )
+    return window
+
+
+def _require_policy_year(db: Session, enrollment: Enrollment) -> PolicyYear:
+    policy_year = db.get(PolicyYear, enrollment.policy_year_id)
+    if policy_year is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The enrollment benefit year no longer exists. Reload before continuing.",
+        )
+    return policy_year
+
+
+def _require_employee(db: Session, enrollment: Enrollment) -> Employee:
+    employee = db.get(Employee, enrollment.employee_id)
+    if employee is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The enrollment member no longer exists. Reload before continuing.",
+        )
+    return employee
+
+
+def _leave_action(value: str) -> LeaveActionStr:
+    if value not in (LeaveAction.none, LeaveAction.buy, LeaveAction.sell):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "The saved leave election has an invalid action.",
+        )
+    return cast(LeaveActionStr, value)
+
+
+def _benefit_difference_out(
+    difference: dict[str, str | None],
+) -> BenefitDifferenceOut:
+    benefit = difference.get("benefit")
+    if benefit is None:
+        raise ValueError("A benefit difference is missing its benefit label")
+    return BenefitDifferenceOut(
+        group=difference.get("group"),
+        benefit=benefit,
+        qualifier=difference.get("qualifier"),
+        current=difference.get("current"),
+        elected=difference.get("elected"),
+        kind=difference.get("kind"),
+    )
 
 
 def open_window_for(db: Session, employee: Employee) -> EnrollmentWindow | None:
@@ -380,7 +440,7 @@ def build_enrollment_options(
                     # scrubs `financials` only, so these survive to the
                     # portal untouched.
                     differences=[
-                        BenefitDifferenceOut(**d) for d in t.differences
+                        _benefit_difference_out(d) for d in t.differences
                     ],
                     differences_total=t.differences_total,
                 )
@@ -439,7 +499,11 @@ def _member_leave_options(
 
 
 def _dependant_pricing_out(
-    pricing, family_slip_idx, source_map, ts, dep_profiles_by_id=None
+    pricing: dict[str, Any] | None,
+    family_slip_idx: dict[str, Any] | None,
+    source_map: dict[str, Any] | None,
+    ts: ProductTierSet,
+    dep_profiles_by_id: dict[str, tuple[str, int | None]] | None = None,
 ) -> DependantPricingOut | None:
     """The product's dependant pricing, priced PER tier (the amount differs per
     plan), with the scheme's display labels. None when dependant pricing doesn't
@@ -492,7 +556,10 @@ def _dependant_pricing_out(
 
 
 def _option_choices_out(
-    choices: dict[str, Any], dep_profiles_by_id: dict, age_limits: dict, gst_mult: float = 1.0
+    choices: dict[str, list[dict[str, Any]]],
+    dep_profiles_by_id: dict[str, tuple[str, int | None]],
+    age_limits: dict[str, dict[str, int]],
+    gst_mult: float = 1.0,
 ) -> list[DependantOptionRoleOut]:
     """Freestanding dependant option LEVELS as API output, with each level's flex
     amount resolved per the member's own dependants (age-banded levels price on
@@ -570,18 +637,18 @@ def apply_elections(
 ) -> None:
     """Validate + upsert plan elections onto an enrollment. Flushes but does
     NOT audit or commit — the caller owns actor attribution."""
-    window = db.get(EnrollmentWindow, enr.window_id)
+    window = _require_window(db, enr)
     assert_window_accepts_edits(window)
     if prepare_edit:
         _prepare_enrollment_edit(enr)
     if not window.allow_plan_change:
         raise HTTPException(status.HTTP_409_CONFLICT, "Plan changes are disabled for this window.")
-    py = db.get(PolicyYear, enr.policy_year_id)
-    employee = db.get(Employee, enr.employee_id)
+    py = _require_policy_year(db, enr)
+    employee = _require_employee(db, enr)
     baseline_products = (enr.baseline_snapshot or {}).get("products", {})
     rank_cache: dict[str, dict[str, int]] = {}
     avail_cache: dict[str, set[str]] = {}
-    compulsory_ids = employee_compulsory_product_ids(db, employee) if employee else set()
+    compulsory_ids = employee_compulsory_product_ids(db, employee)
     # Cohort-scoped electable tiers per product — restricts the election to the
     # member's own cohort instead of every plan of the product. Validating an
     # election needs tier IDENTITY only, so skip the schedule-difference pass:
@@ -589,8 +656,6 @@ def apply_elections(
     # discards the result.
     tier_sets = (
         electable_tiers_for_employee(db, employee, include_differences=False)
-        if employee
-        else {}
     )
     # Flex price-tag snapshot inputs, resolved once: the matrix, the member's age,
     # and the window's source/rule config (slip vs matrix; full vs on-change).
@@ -599,7 +664,7 @@ def apply_elections(
     slip_idx = maybe_slip_index(db, py.id, source_map)
     family_slip_idx = maybe_family_slip_index(db, py.id, source_map)
     ref = reference_date(db, py.id)
-    member_age = employee_age(employee, ref) if employee else None
+    member_age = employee_age(employee, ref)
 
     for item in elections:
         product = resolve_product_by_code(db, py, item.product_code)
@@ -745,7 +810,7 @@ def apply_leave(
 ) -> LeaveElection:
     """Validate + upsert the buy/sell-leave election. Flushes but does NOT
     audit or commit."""
-    window = db.get(EnrollmentWindow, enr.window_id)
+    window = _require_window(db, enr)
     assert_window_accepts_edits(window)
     if prepare_edit:
         _prepare_enrollment_edit(enr)
@@ -754,7 +819,7 @@ def apply_leave(
     policy = db.execute(
         select(LeavePolicy).where(LeavePolicy.policy_year_id == enr.policy_year_id)
     ).scalar_one_or_none()
-    employee = db.get(Employee, enr.employee_id)
+    employee = _require_employee(db, enr)
     # Load the employee FIRST: the day caps are per grade/designation tier, so
     # validating without them would enforce the company default for everyone.
     validate_leave(policy, body.action, body.days, employee)
@@ -762,7 +827,6 @@ def apply_leave(
     # Leave"); absent = eligible. Shared with the insurer reports.
     if (
         body.action == LeaveAction.sell
-        and employee is not None
         and not leave_sell_eligible(employee)
     ):
         raise HTTPException(
@@ -789,7 +853,7 @@ def apply_leave(
     # Snapshot the signed flex-wallet impact (buy spends, sell credits) from the
     # member's leave rate so the available-balance recompute stays stable if the
     # policy's rates change later.
-    rate = leave_rate_for(policy, employee) if employee else None
+    rate = leave_rate_for(policy, employee)
     leave.flex_amount = leave_flex_amount(body.action, body.days, rate)
     if enr.status == EnrollmentStatus.not_started:
         enr.status = EnrollmentStatus.in_progress
@@ -832,7 +896,7 @@ def revalidate_enrollment(db: Session, enr: Enrollment) -> None:
         apply_leave(
             db,
             enr,
-            LeaveElectionIn(action=leave.action, days=leave.days),
+            LeaveElectionIn(action=_leave_action(leave.action), days=leave.days),
             prepare_edit=False,
         )
 
@@ -844,7 +908,7 @@ def perform_submit(
     does NOT audit or commit."""
     if enr.status in (EnrollmentStatus.confirmed, EnrollmentStatus.deemed):
         raise HTTPException(status.HTTP_409_CONFLICT, "Enrollment is already finalized.")
-    window = db.get(EnrollmentWindow, enr.window_id)
+    window = _require_window(db, enr)
     assert_window_accepts_edits(window)
     # Flex guards: an overdrawn wallet blocks (unless the window allows
     # overdrafts); changed-but-unpriced elections need explicit acknowledgment.

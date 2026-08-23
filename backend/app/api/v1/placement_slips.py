@@ -64,7 +64,7 @@ from app.services.eligibility_mapping import auto_map_policy_year, category_sign
 from app.services.matching_engine import insured_names, match_policy_year, normalize_entity
 from app.services.period_parser import parse_period_of_insurance
 from app.services.placement_slip_parser import (
-    ProductSlip,
+    PlacementSlip,
     normalize_participation,
     parse_participation,
     parse_placement_slip,
@@ -129,7 +129,7 @@ def _prefill_setup_drafts(
     db: Session,
     policy_year_id: str,
     slip_id: str,
-    slip: ProductSlip,
+    slip: PlacementSlip,
     products_cache: dict[str, Product],
 ) -> list[str]:
     """Pre-fill a guided-setup draft for every detected product so its form
@@ -180,6 +180,10 @@ def _prefill_setup_drafts(
         ):
             prefilled.append(tpl.code)
     return prefilled
+
+
+def _affected_rows(result: object) -> int:
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 def _confirmed_setup_codes(db: Session, policy_year_id: str) -> set[str]:
@@ -384,7 +388,7 @@ async def parse_upload(
                 Category.product_id.notin_(confirmed_product_ids),
             )
         )
-    replaced_categories = db.execute(clear_stmt).rowcount or 0
+    replaced_categories = _affected_rows(db.execute(clear_stmt))
 
     # Same idempotency for plans: drop the previous parse's still-unreviewed,
     # auto-generated plans before re-materializing the Schedule of Benefits.
@@ -403,7 +407,7 @@ async def parse_upload(
         plan_clear = plan_clear.where(
             Plan.product_id.notin_(confirmed_product_ids)
         )
-    replaced_plans = db.execute(plan_clear).rowcount or 0
+    replaced_plans = _affected_rows(db.execute(plan_clear))
 
     high_conf = 0
     total = 0
@@ -503,8 +507,8 @@ async def parse_upload(
             )
             continue
         for extracted_plan in product_slip.plans:
-            key = (product.id, extracted_plan.code)
-            if key in seen_plan_keys:
+            plan_key = (product.id, extracted_plan.code)
+            if plan_key in seen_plan_keys:
                 plans_dup_skipped += 1
                 logger.warning(
                     "Duplicate plan code %r for product %s across sheets — keeping "
@@ -512,7 +516,7 @@ async def parse_upload(
                     extracted_plan.code, product.code, product_slip.sheet, slip_row.id,
                 )
                 continue
-            seen_plan_keys.add(key)
+            seen_plan_keys.add(plan_key)
             existing = db.execute(
                 select(Plan).where(
                     Plan.product_id == product.id,

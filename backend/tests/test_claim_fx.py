@@ -954,7 +954,7 @@ def test_the_quoted_figure_and_the_stored_one_agree_to_the_cent(upstream):
         s.commit()
         claim = Claim(currency="USD", amount_claimed=odd, incurred_date=INCURRED)
         apply_conversion(s, claim)
-    assert quoted == claim.amount_converted
+    assert quoted == float(claim.amount_converted)
 
 
 # ── Everything downstream of the figure ──────────────────────────────────────

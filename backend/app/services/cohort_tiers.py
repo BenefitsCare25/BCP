@@ -393,7 +393,7 @@ def electable_tiers_for_employee(
     if not baselines:
         return {}
 
-    product_ids = {c.product_id for c in baselines}
+    product_ids = {c.product_id for c in baselines if c.product_id is not None}
     # All candidate tier categories across the matched products, in one query.
     by_product: dict[str, list[Category]] = {}
     for c in db.execute(
@@ -402,13 +402,15 @@ def electable_tiers_for_employee(
             Category.product_id.in_(product_ids),
         )
     ).scalars():
-        by_product.setdefault(c.product_id, []).append(c)
+        if c.product_id is not None:
+            by_product.setdefault(c.product_id, []).append(c)
 
-    code_by_pid = dict(
-        db.execute(
+    code_by_pid: dict[str, str] = {
+        product_id: product_code
+        for product_id, product_code in db.execute(
             select(Product.id, Product.code).where(Product.id.in_(product_ids))
         ).all()
-    )
+    }
 
     # Configured plan codes per product, scoped to THIS policy year so a product
     # shared across years can't leak another year's plans into the tier list.
@@ -627,9 +629,10 @@ def first_category_per_product(
     """
     out: dict[str, str] = {}
     for m in matched_categories or []:
-        cid = m.get("category_id")
+        raw_category_id = m.get("category_id")
+        cid = raw_category_id if isinstance(raw_category_id, str) else None
         pid = product_of.get(cid) if cid else None
-        if pid and pid not in out:
+        if pid and cid is not None and pid not in out:
             out[pid] = cid
     return out
 
@@ -658,14 +661,16 @@ def list_product_tiers(
         return {}
     by_product: dict[str, list[Category]] = {}
     for c in cats:
-        by_product.setdefault(c.product_id, []).append(c)
+        if c.product_id is not None:
+            by_product.setdefault(c.product_id, []).append(c)
 
     product_ids = list(by_product)
-    code_by_pid = dict(
-        db.execute(
+    code_by_pid: dict[str, str] = {
+        product_id: product_code
+        for product_id, product_code in db.execute(
             select(Product.id, Product.code).where(Product.id.in_(product_ids))
         ).all()
-    )
+    }
     plan_codes_by_pid: dict[str, set[str]] = {}
     for pid_val, code_val in db.execute(
         select(Plan.product_id, Plan.code).where(
@@ -792,11 +797,13 @@ def tier_index_for_product(
     return ProductTierIndex(sets=sets, categories={c.id: c for c in cats})
 
 
-def _group_by_cohort(cats: list[Category]) -> dict[tuple[str, str], list[Category]]:
+def _group_by_cohort(
+    cats: list[Category],
+) -> dict[tuple[str, frozenset[str]], list[Category]]:
     """Cohorts are scoped per insured entity as well as description — a
     multi-subsidiary slip repeats category names per entity block and those must
     not merge into one cohort."""
-    groups: dict[tuple[str, str], list[Category]] = {}
+    groups: dict[tuple[str, frozenset[str]], list[Category]] = {}
     for c in cats:
         groups.setdefault(
             (cohort_key(c.raw_description), _insured_key(c)), []

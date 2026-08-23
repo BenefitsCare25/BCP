@@ -24,7 +24,7 @@ from anthropic import (
 )
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Session, aliased
 
 from app.db.session import SessionLocal, engine
 from app.db.tenancy import is_postgres, set_search_path
@@ -134,7 +134,7 @@ def _safe_error(exc: BaseException) -> str:
     return "Claim review failed. Route the claim to manual review."
 
 
-def _record_queue_health(db, now: datetime) -> None:
+def _record_queue_health(db: Session, now: datetime) -> None:
     global _last_queue_warning
     available = (
         ClaimReviewJob.state.in_((JOB_STATE_QUEUED, JOB_STATE_RETRY_WAIT)),

@@ -39,12 +39,12 @@ def _validate_identity(body: ClaimDocumentSetupIn) -> None:
     if body.claim_kind == "flex":
         if body.scope_code != SCOPE_STANDARD:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Flexible-benefit document setups use the standard scope.",
             )
     elif body.scope_code not in CLAIM_SCOPE_CODES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f'Unknown claim scope code "{body.scope_code}".',
         )
 
@@ -163,7 +163,7 @@ def _target_setup(
     )
     if target is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "claim_type_not_available",
                 "message": (

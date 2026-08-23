@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -54,6 +55,7 @@ from app.models.stored_document import (
     DOC_ENTITY_REFERRAL,
     STORAGE_AVAILABLE,
 )
+from app.schemas.api import BenefitStatementOut, CoverageLine
 from app.schemas.claims import (
     ClaimAmendIn,
     ClaimAnchorOut,
@@ -61,6 +63,7 @@ from app.schemas.claims import (
     ClaimIntakeSuggestionOut,
     ClaimList,
     ClaimOut,
+    ClaimSetupDocument,
     ClaimTypeOption,
     CoverageOptionsOut,
     DiagnosisOut,
@@ -167,19 +170,28 @@ def _own_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
     return load_member_claim(db, claim_id, employee_id)
 
 
+def _active_year(db: Session, member: CurrentMember) -> PolicyYear:
+    year = active_policy_year(db, member.client_id)
+    if year is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No active coverage")
+    return year
+
+
 @options_router.get("/coverage-options", response_model=CoverageOptionsOut)
 def coverage_options(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> CoverageOptionsOut:
     """What the member may claim against — drives the claim-form pickers."""
-    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
-    year = active_policy_year(db, member.client_id)
+    year = _active_year(db, member)
+    employee = resolve_member_employee(
+        db, member, requires=Capability.CLAIM, year=year
+    )
     statement = build_member_statement(db, employee)
     return build_coverage_options(db, statement, employee, year)
 
 
-def _slots(documents) -> list[DocSlotOut]:
+def _slots(documents: Sequence[ClaimSetupDocument]) -> list[DocSlotOut]:
     return [
         DocSlotOut(
             key=document.key,
@@ -191,7 +203,7 @@ def _slots(documents) -> list[DocSlotOut]:
 
 
 def _claim_type_option(
-    db: Session, client_id: str, line, scope: ClaimScopeDefinition
+    db: Session, client_id: str, line: CoverageLine, scope: ClaimScopeDefinition
 ) -> ClaimTypeOption:
     """One dropdown entry with its required-document slots.
 
@@ -242,7 +254,10 @@ def _claim_type_option(
 
 
 def build_coverage_options(
-    db: Session, statement, employee: Employee, year: PolicyYear
+    db: Session,
+    statement: BenefitStatementOut,
+    employee: Employee,
+    year: PolicyYear,
 ) -> CoverageOptionsOut:
     """Shared by the live portal endpoint above and the broker employee-view
     preview (`portal_preview.py`) so the two can never drift.
@@ -408,7 +423,7 @@ async def _extract_with_throttle_retry(
     sha256: str,
     blocks: list[dict[str, Any]],
     file_name: str,
-):
+) -> ai_gateway.ClaimExtractionResult:
     """`ai_gateway.extract_claim_document` with a bounded async backoff on
     provider throttling (429). Any other error propagates unchanged. The DB
     session is rolled back before each sleep so the pooled connection is
@@ -459,15 +474,17 @@ async def extract_claim_intake(
     it degrades to `available=False` and the form stays manual.
     """
     if not files:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No file uploaded.")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "No file uploaded.")
     if len(files) > MAX_INTAKE_FILES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Upload at most {MAX_INTAKE_FILES} documents at a time.",
         )
 
-    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
-    year = active_policy_year(db, member.client_id)
+    year = _active_year(db, member)
+    employee = resolve_member_employee(
+        db, member, requires=Capability.CLAIM, year=year
+    )
 
     extractions: list[dict[str, Any]] = []
     for upload_index, upload in enumerate(files):
@@ -671,7 +688,7 @@ async def upload_my_referral_letter(
     employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
     if issued_on is not None and issued_on > business_today():
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A referral letter can't be dated in the future.",
         )
     doc = await attach_document(
@@ -913,7 +930,7 @@ async def upload_my_claim_document(
     valid_slots = {document.key for document in setup_for_claim(db, claim).documents}
     if doc_type is not None and doc_type not in valid_slots:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{doc_type}' is not a recognised document type.",
         )
     doc = await attach_document(
@@ -1122,9 +1139,13 @@ def confirm_my_conversion(
     claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     assert_member_may_amend(claim)
     apply_conversion(db, claim)
+    converted_amount = claim.amount_converted
     if fx_state(claim) == FX_STATE_CONVERTED and (
-        body.converted_amount is None
-        or abs(float(body.converted_amount) - float(claim.amount_converted)) <= 0.005
+        converted_amount is not None
+        and (
+            body.converted_amount is None
+            or abs(float(body.converted_amount) - float(converted_amount)) <= 0.005
+        )
     ):
         claim.fx_acknowledged_at = datetime.now(UTC)
         write_member_audit(

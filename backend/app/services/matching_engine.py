@@ -16,7 +16,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -37,6 +37,14 @@ from app.services.derivation_engine import derive
 from app.services.rule_evaluator import evaluate
 
 logger = logging.getLogger(__name__)
+
+
+class MatchableEmployee(Protocol):
+    @property
+    def attribute_values(self) -> dict[str, Any]: ...
+
+    @property
+    def derived_attribute_values(self) -> dict[str, Any]: ...
 
 FUZZY_THRESHOLD = 0.6
 CONTAINMENT_CONFIDENCE = 0.7
@@ -305,7 +313,7 @@ def rule_specificity(rule: object) -> int:
 
 
 def match_one(
-    employee: Employee,
+    employee: MatchableEmployee,
     categories_by_priority: list[Category],
     exact_lookup: dict[str, Category],
     category_tokens: dict[str, set[str]],
@@ -412,8 +420,8 @@ def match_one(
     # priority. Confidence is fixed below the fuzzy tier so reviewers can tell
     # containment matches apart.
     if emp_tokens and (emp_tokens - _FUZZY_STOPWORDS):
-        best_extra: int | None = None
-        best_priority = None
+        best_extra = 2**31 - 1
+        best_priority = 2**31 - 1
         best_cat = None
         for cat in categories_by_priority:
             if not _allowed(cat):

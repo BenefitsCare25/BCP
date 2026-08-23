@@ -12,6 +12,7 @@ commit to the caller — matching the rest of the codebase.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -46,7 +47,7 @@ from app.services.override_writer import upsert_override
 def _invalid_submissions(
     db: Session,
     window: EnrollmentWindow,
-    enrollments: list[Enrollment],
+    enrollments: Sequence[Enrollment],
 ) -> list[dict[str, Any]]:
     """Validate every submitted row before any projection begins."""
     from app.services.enrollment_elections import revalidate_enrollment

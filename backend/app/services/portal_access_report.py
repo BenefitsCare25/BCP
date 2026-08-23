@@ -26,11 +26,11 @@ from app.core.clock import today as business_today
 from app.models import AuthMfa, Client, Employee, MemberAccount, PolicyYear
 from app.models.auth import SUBJECT_MEMBER
 from app.services.insurer_reports import (
-    _last_day_of_service,
     append_safe,
     as_date,
     autosize,
     bold_header,
+    last_day_of_service,
     naive,
     report_employees,
 )
@@ -89,7 +89,9 @@ def _account_status(account: MemberAccount | None) -> str:
     return STATUS_INVITED if account.invite_sent_at else STATUS_INVITE_PENDING
 
 
-def _accounts_for(db: Session, py: PolicyYear):
+def _accounts_for(
+    db: Session, py: PolicyYear
+) -> tuple[dict[str, MemberAccount], dict[str, MemberAccount]]:
     """(by id, by staff id) indexes over this client's member accounts."""
     rows = list(
         db.execute(
@@ -155,7 +157,7 @@ def build_portal_access_workbook(db: Session, py: PolicyYear) -> Workbook:
                 as_date(first_value(attrs, _HIRE_KEYS)),
                 as_date(first_value(attrs, _CONFIRM_KEYS)),
                 as_date(first_value(attrs, _EFFECTIVE_KEYS)),
-                _last_day_of_service(emp),
+                last_day_of_service(emp),
                 first_value(attrs, _CATEGORY_KEYS) or "",
                 # The account's email is the one that receives the invite; the
                 # roster's is what HR supplied. They differ when a roster edit

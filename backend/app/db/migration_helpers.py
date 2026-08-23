@@ -14,18 +14,20 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import Connection
 
 
-def json_variant() -> sa.types.TypeEngine:
+def json_variant() -> sa.types.TypeEngine[Any]:
     """JSON column that uses Postgres `jsonb` and generic `json` elsewhere."""
     return sa.JSON().with_variant(JSONB(), "postgresql")
 
 
 @contextlib.contextmanager
-def sqlite_fk_guard(bind) -> Iterator[None]:
+def sqlite_fk_guard(bind: Connection) -> Iterator[None]:
     """Disable SQLite FK enforcement for the duration of a batch table-recreate.
 
     The app engine sets ``PRAGMA foreign_keys=ON`` on every connection, so any

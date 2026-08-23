@@ -723,20 +723,22 @@ def _enrich_with_rates(
     enriched: list[ExtractedCategory] = []
     for cat in categories:
         # Try matching by plan_code first (for tiered formats: "1", "2", etc.)
-        rd = None
+        matched_rate: _RateRow | None = None
         if cat.plan_code:
             # Normalize numeric plan codes: "1.0" → "1"
             plan_key = _int_code(cat.plan_code).lower()
-            rd = _pick(rate_by_plan.get(plan_key, []), cat.insured)
+            matched_rate = _pick(rate_by_plan.get(plan_key, []), cat.insured)
         # Then by category text
-        if rd is None:
-            rd = _pick(rate_by_text.get(cat.category.strip().lower(), []), cat.insured)
+        if matched_rate is None:
+            matched_rate = _pick(
+                rate_by_text.get(cat.category.strip().lower(), []), cat.insured
+            )
         # Try with "Plan X: <category>" pattern
-        if rd is None and cat.plan_code:
+        if matched_rate is None and cat.plan_code:
             key = f"plan {cat.plan_code}: {cat.category}".lower()
-            rd = _pick(rate_by_text.get(key, []), cat.insured)
+            matched_rate = _pick(rate_by_text.get(key, []), cat.insured)
 
-        if rd is None:
+        if matched_rate is None:
             enriched.append(cat)
             continue
 
@@ -746,11 +748,11 @@ def _enrich_with_rates(
         # e.g. "2 - Employees / Dependents $454" → dependant rate = $454). Capture it
         # so dependant coverage prices per dependant from the slip.
         dep_rate = None
-        if cat.plan_code and rd.member_type == "both":
-            dep_rate = rd.rate
-        elif cat.plan_code and rd.member_type in ("employee", None):
+        if cat.plan_code and matched_rate.member_type == "both":
+            dep_rate = matched_rate.rate
+        elif cat.plan_code and matched_rate.member_type in ("employee", None):
             plan_key = _int_code(cat.plan_code).lower()
-            ins = _norm_ins(rd.insured)
+            ins = _norm_ins(matched_rate.insured)
             for c in rate_by_plan.get(plan_key, []):
                 if c.member_type == "dependent" and (
                     not ins or _norm_ins(c.insured) == ins
@@ -762,10 +764,10 @@ def _enrich_with_rates(
         # per-member rate by member tier. Surface the split as rate_tiers so the
         # category setup shows a cell per tier instead of silently keeping only
         # the first row's figure. Genuinely tiered tables keep their own tiers.
-        rate_tiers = rd.rate_tiers
-        if rate_tiers is None and cat.plan_code and rd.expand_tokens:
+        rate_tiers = matched_rate.rate_tiers
+        if rate_tiers is None and cat.plan_code and matched_rate.expand_tokens:
             plan_key = _int_code(cat.plan_code).lower()
-            ins = _norm_ins(rd.insured)
+            ins = _norm_ins(matched_rate.insured)
             tier_cells: dict[str, dict[str, float]] = {}
             for c in rate_by_plan.get(plan_key, []):
                 if ins and _norm_ins(c.insured) not in ("", ins):
@@ -780,14 +782,14 @@ def _enrich_with_rates(
 
         enriched.append(replace(
             cat,
-            premium_rate=rd.rate,
-            annual_premium=rd.annual_premium,
-            rate_basis=rd.rate_basis,
+            premium_rate=matched_rate.rate,
+            annual_premium=matched_rate.annual_premium,
+            rate_basis=matched_rate.rate_basis,
             rate_tiers=rate_tiers,
-            sum_insured=cat.sum_insured or rd.sum_insured,
+            sum_insured=cat.sum_insured or matched_rate.sum_insured,
             dependant_rate=dep_rate,
-            estimated_annual_earnings=rd.estimated_annual_earnings,
-            premium_note=rd.premium_note,
+            estimated_annual_earnings=matched_rate.estimated_annual_earnings,
+            premium_note=matched_rate.premium_note,
         ))
 
     return _propagate_annual_flat(tuple(enriched), rate_data)

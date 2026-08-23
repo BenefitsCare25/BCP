@@ -54,12 +54,12 @@ from app.services.flex_ledger import WALLET_NAME, _flex_claims, member_flex
 from app.services.flex_pricing_resolver import flex_year_context
 from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_reports import (
-    _last_day_of_service,
     append_safe,
     as_date,
     autosize,
     benefit_window,
     bold_header,
+    last_day_of_service,
     report_employees,
 )
 from app.services.roster_attributes import (
@@ -172,7 +172,7 @@ def build_leaver_summary_workbook(
             emp.employee_name or "",
             mask_nric(raw_id) if masked else (raw_id or ""),
             as_date(first_value(attrs, _HIRE_KEYS)),
-            _last_day_of_service(emp),
+            last_day_of_service(emp),
             leaver.benefit_start,
             # Their last day, NOT the year's end — see the module docstring.
             leaver.benefit_end,

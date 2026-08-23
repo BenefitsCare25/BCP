@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.models import Category, Plan, Product
 from app.services.form_profiles import infer_profile
 from app.services.product_templates import (
+    BenefitKind,
     ParticipationModel,
     ProductTemplate,
     TemplateBenefitItem,
@@ -157,7 +158,7 @@ def _has_dependant_signals(cats: list[Category]) -> bool:
 _COPAY_PROP_PREFIXES = ("per_visit", "co_payment", "per_policy_year")
 
 
-def _line_kind(item: dict[str, Any]) -> str:
+def _line_kind(item: dict[str, Any]) -> BenefitKind:
     """Editor kind for a stored benefit line: copay when it carries structured
     per-visit / co-payment properties (outpatient dash groups), boolean for
     Yes/No values, else the generic amount input."""
@@ -173,7 +174,7 @@ def _line_kind(item: dict[str, Any]) -> str:
 
 def _benefit_lines(
     plans: list[Plan],
-) -> list[tuple[str, str, str, list[tuple[str, str]]]]:
+) -> list[tuple[str, str, BenefitKind, list[tuple[str, str]]]]:
     """Union of benefit lines across all plans, keyed by line number.
 
     The form renders one canonical line set shared by every plan (per-plan values
@@ -188,7 +189,7 @@ def _benefit_lines(
         return items if isinstance(items, list) else []
 
     ordered = sorted(plans, key=lambda p: len(_items(p)), reverse=True)
-    lines: list[tuple[str, str, str, list[tuple[str, str]]]] = []
+    lines: list[tuple[str, str, BenefitKind, list[tuple[str, str]]]] = []
     seen: set[str] = set()
     for p in ordered:
         for it in _items(p):

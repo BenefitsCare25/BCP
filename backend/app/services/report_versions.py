@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
+from collections.abc import Callable, Sequence
+from datetime import datetime
 from io import BytesIO
 from typing import Any
 
@@ -132,7 +134,11 @@ def _content_signature(spec: ReportSpec, blob_bytes: bytes) -> str | None:
         return None
 
 
-def _summary(spec: ReportSpec, manifest: dict[str, Any] | None, params: dict) -> dict:
+def _summary(
+    spec: ReportSpec,
+    manifest: dict[str, Any] | None,
+    params: dict[str, Any],
+) -> dict[str, Any]:
     out: dict[str, Any] = {"masked": bool(params.get("masked", True))}
     if manifest is not None:
         members = manifest.get("members", [])
@@ -329,7 +335,11 @@ def create_version(
         )
 
     content_hash = _content_signature(spec, blob_bytes)
-    if content_hash is not None and content_hash == prior_hash:
+    if (
+        content_hash is not None
+        and content_hash == prior_hash
+        and comparable is not None
+    ):
         # `comparable`, not `prior` — the identical bytes belong to THAT version,
         # and it is the one the download is being recorded against.
         return comparable, False, None
@@ -445,14 +455,18 @@ def load_version_blob(rv: ReportVersion) -> bytes:
     return get_storage().read(rv.storage_path)
 
 
-def _max_data_change(db: Session, py: PolicyYear, extra_models=()):
+def _max_data_change(
+    db: Session,
+    py: PolicyYear,
+    extra_models: tuple[Any, ...] = (),
+) -> datetime | None:
     """Newest ``updated_at`` across the roster + config rows that feed the
     reports (plus any report-specific ``extra_models``). ADC inserts (new
     ``created_at`` == ``updated_at``) and soft-terminations (status/
     terminated_effective bump ``updated_at``) both move this, so it is a cheap
     gate for "did anything change since the version".
     """
-    times = []
+    times: list[datetime] = []
     for model in (Employee, Dependant, Category, Plan, *extra_models):
         t = db.execute(
             select(func.max(model.updated_at)).where(model.policy_year_id == py.id)
@@ -541,14 +555,14 @@ _TERMINATED = "terminated"
 _CHANGE_FIELDS = ("member_id", "relationship")
 
 
-def _newly_terminated(old: dict[str, Any], new: dict) -> bool:
+def _newly_terminated(old: dict[str, Any], new: dict[str, Any]) -> bool:
     """A member that stayed on the listing but just went terminated — a mid-year
     leaver reads as a DELETION on the movement report, not a field change (they
     remain on the full listing for the insurer to off-bill)."""
     return new.get("status") == _TERMINATED and old.get("status") != _TERMINATED
 
 
-def _member_diffs(old: dict[str, Any], new: dict) -> list[str]:
+def _member_diffs(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     diffs = []
     for f in _CHANGE_FIELDS:
         if old.get(f) != new.get(f):
@@ -560,7 +574,7 @@ def _member_diffs(old: dict[str, Any], new: dict) -> list[str]:
 
 def _baseline_and_target(
     db: Session, rv: ReportVersion, since: ReportVersion | str | None
-) -> tuple[list[dict[str, Any]], list[dict], str, str]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str]:
     """Resolve (old_members, new_members, old_label, new_label) for a movement.
 
     ``since`` is a prior ReportVersion → diff(since → rv); the string ``"live"``
@@ -575,6 +589,8 @@ def _baseline_and_target(
         return target, live, f"v{rv.version_no}", "current roster"
     if since is None:
         return [], target, "initial", f"v{rv.version_no}"
+    if isinstance(since, str):
+        raise ValueError(f"Unsupported movement baseline {since!r}.")
     prior = (since.manifest or {}).get("members", [])
     return prior, target, f"v{since.version_no}", f"v{rv.version_no}"
 
@@ -609,7 +625,12 @@ def compute_movement(
     append_safe(ws, [f"Movement report — {insurer or 'insurer'} ({old_label} → {new_label})"])
     append_safe(ws, [])
 
-    def _section(title: str, rows: list[Any], cols: list[str], to_row) -> None:
+    def _section(
+        title: str,
+        rows: list[Any],
+        cols: Sequence[object],
+        to_row: Callable[[Any], Sequence[object]],
+    ) -> None:
         append_safe(ws, [f"{title} ({len(rows)})"])
         append_safe(ws, cols)
         # Bold this section's column-header row (the one just written), not row 1.

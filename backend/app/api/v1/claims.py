@@ -7,6 +7,7 @@ Phase 3 — these endpoints are its data layer and already usable directly.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from io import BytesIO
 
 from fastapi import (
@@ -114,6 +115,7 @@ from app.services.claim_messages import (
 )
 from app.services.claim_settlement import (
     AMENDMENT_COLUMNS,
+    DocumentDates,
     apply_settlement_amendment,
     assert_settlement_amendable,
     days_over_deadline,
@@ -266,7 +268,7 @@ def _broker_out(
     documents: dict[str, list[StoredDocument]] | None = None,
     anchors: dict[str, Claim] | None = None,
     unread_messages: dict[str, int] | None = None,
-    doc_dates: dict[str, object] | None = None,
+    doc_dates: dict[str, DocumentDates] | None = None,
     reviews: dict[str, ClaimAIReview] | None = None,
     can_mutate: bool = True,
 ) -> BrokerClaimOut:
@@ -538,7 +540,7 @@ def decide_claim(
             approving = policy_amount(claim)
         if approving is None:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "code": "fx_amount_required",
                     "message": (
@@ -604,7 +606,7 @@ def decide_claim(
                         "policy_currency": POLICY_CURRENCY,
                     },
                 )
-        claim.amount_approved = approving
+        claim.amount_approved = Decimal(str(approving)).quantize(Decimal("0.01"))
         claim.decided_at = datetime.now(UTC)
         claim.decided_by = user.user_id
     elif body.action == "reject":
@@ -919,7 +921,7 @@ def update_claim_assessment(
     if "hospital_type" in fields and body.hospital_type is not None:
         if body.hospital_type not in HOSPITAL_TYPES:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"hospital_type must be one of {sorted(HOSPITAL_TYPES)}.",
             )
     # Compare the EFFECTIVE pair — what the claim will hold after the merge —
@@ -940,7 +942,7 @@ def update_claim_assessment(
         and effective_discharge < effective_admission
     ):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "discharge_date cannot precede admission_date.",
         )
     # Settlement dates are AMENDMENTS — see `ClaimAssessmentIn`. The service
@@ -1131,7 +1133,7 @@ async def upload_claim_document(
     valid_slots = {document.key for document in setup_for_claim(db, claim).documents}
     if doc_type is not None and doc_type not in valid_slots:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{doc_type}' is not a recognised document type.",
         )
     doc = await attach_document(

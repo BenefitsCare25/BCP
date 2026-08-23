@@ -55,6 +55,14 @@ FAMILY_CODES: tuple[str, ...] = ("S", "M", "M1C", "M2C", "M3C")
 # currency dropdown; the *resolved* currency always flows from API responses.
 DEFAULT_CURRENCY = (os.environ.get("INSPRO_DEFAULT_CURRENCY", "").strip().upper() or "SGD")
 
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list_value(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
 # Relationship classification for dependant records. Matched case-insensitively
 # against the dependant's ``relationship`` attribute.
 _SPOUSE_WORDS = ("spouse", "husband", "wife", "partner")
@@ -104,7 +112,7 @@ def flex_effective_window(
         select(FlexScheme).where(FlexScheme.policy_year_id == policy_year.id)
     ).scalar_one_or_none()
     scheme = (row.scheme or {}) if row is not None else {}
-    meta = scheme.get("meta") if isinstance(scheme.get("meta"), dict) else {}
+    meta = _dict_value(scheme.get("meta"))
     start = _meta_date(meta, "effective_start") or policy_year.start_date
     end = _meta_date(meta, "effective_end") or policy_year.end_date
     return start, end
@@ -124,7 +132,9 @@ def _coerce_int(value: object) -> int | None:
     return None
 
 
-def _grade_source(derived: dict[str, Any], raw_attrs: dict) -> object:
+def _grade_source(
+    derived: dict[str, Any], raw_attrs: dict[str, Any]
+) -> object:
     """The employee's grade value, preferring the derived attribute. Uses an
     explicit None/"" check (not truthiness) so an integer grade of 0 survives."""
     for src in (derived, raw_attrs):
@@ -147,7 +157,7 @@ def _grade_token(raw: object) -> str | None:
 
 
 def employee_signals(
-    derived: dict[str, Any], raw_attrs: dict
+    derived: dict[str, Any], raw_attrs: dict[str, Any]
 ) -> tuple[int | None, str | None, str | None]:
     """The three matching inputs for one employee, resolved from ONE place so the
     vocabulary, the live match, and assignment can never drift: the numeric grade
@@ -205,7 +215,11 @@ def family_status_from_counts(married: bool, children: int) -> str:
 
 
 def resolve_family_status(
-    derived: dict[str, Any], raw_attrs: dict, spouse_count: int, child_count: int, has_deps: bool
+    derived: dict[str, Any],
+    raw_attrs: dict[str, Any],
+    spouse_count: int,
+    child_count: int,
+    has_deps: bool,
 ) -> tuple[str | None, str]:
     """Resolve an employee's family status + the source it came from.
 
@@ -249,7 +263,7 @@ def nationality_country(nationality: object) -> str | None:
 
 
 def _tier_band(tier: dict[str, Any]) -> tuple[int | None, int | None]:
-    et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
+    et = _dict_value(tier.get("employee_type"))
     return _coerce_int(et.get("job_grade_min")), _coerce_int(et.get("job_grade_max"))
 
 
@@ -315,7 +329,7 @@ def _normalize_label(value: object) -> str:
 
 def _tier_labels(tier: dict[str, Any]) -> set[str]:
     """Normalized job-title labels a tier can be matched by (name + raw text)."""
-    et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
+    et = _dict_value(tier.get("employee_type"))
     labels = {_normalize_label(tier.get("name")), _normalize_label(et.get("raw"))}
     labels.discard("")
     return labels
@@ -323,7 +337,7 @@ def _tier_labels(tier: dict[str, Any]) -> set[str]:
 
 def _is_catch_all(tier: dict[str, Any]) -> bool:
     """A band-less tier with no specific job-title label — a pool's fallback."""
-    et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
+    et = _dict_value(tier.get("employee_type"))
     raw = str(et.get("raw") or "").strip().lower()
     name = str(tier.get("name") or "").strip().lower()
     if not raw and not name:
@@ -331,7 +345,9 @@ def _is_catch_all(tier: dict[str, Any]) -> bool:
     return any(w in f"{raw} {name}" for w in _CATCH_ALL_WORDS)
 
 
-def employee_designation(derived: dict[str, Any], raw_attrs: dict) -> str | None:
+def employee_designation(
+    derived: dict[str, Any], raw_attrs: dict[str, Any]
+) -> str | None:
     """The employee's job-title / designation string, or None."""
     for key in _DESIGNATION_KEYS:
         for src in (derived, raw_attrs):
@@ -365,7 +381,7 @@ def _match_designation(
 
 def _tier_match_sets(tier: dict[str, Any]) -> tuple[set[str], set[str]]:
     """Normalized (grades, designations) value sets a tier explicitly claims."""
-    et = tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}
+    et = _dict_value(tier.get("employee_type"))
     raw_grades = et.get("match_grades")
     raw_desigs = et.get("match_designations")
     grades = {
@@ -521,12 +537,16 @@ def _match_in_pool(
     return None
 
 
-def tier_wallet(tier: dict[str, Any] | None, family_status: str | None, meta: dict) -> float | None:
+def tier_wallet(
+    tier: dict[str, Any] | None,
+    family_status: str | None,
+    meta: dict[str, Any],
+) -> float | None:
     """Resolve the wallet amount for a family status: per-family limit, else the
     tier flat cap, else the scheme-level system cap."""
     if tier is None:
         return None
-    limits = tier.get("limits") if isinstance(tier.get("limits"), list) else []
+    limits = _list_value(tier.get("limits"))
     if family_status:
         for row in limits:
             if isinstance(row, dict) and row.get("family_status") == family_status:
@@ -789,8 +809,8 @@ def resolve_roster(
         select(FlexScheme).where(FlexScheme.policy_year_id == policy_year_id)
     ).scalar_one_or_none()
     scheme = (scheme_row.scheme or {}) if scheme_row else {}
-    meta = scheme.get("meta") if isinstance(scheme.get("meta"), dict) else {}
-    tiers = [t for t in (scheme.get("tiers") or []) if isinstance(t, dict)]
+    meta = _dict_value(scheme.get("meta"))
+    tiers = [t for t in _list_value(scheme.get("tiers")) if isinstance(t, dict)]
 
     # Scheme-wide dependant age window + renewal date (ANB is relative to renewal),
     # applied to family-status counts so the wallet isn't sized on ineligible deps.

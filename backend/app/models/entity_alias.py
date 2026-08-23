@@ -54,7 +54,7 @@ class EntityAlias(Base, TimestampMixin):
     # Every registered spelling this alias stands for. NULL on rows written
     # before the column existed; readers fall back to ``[canonical]`` then, so
     # no data migration is required in the per-firm schemas.
-    canonicals: Mapped[list | None] = mapped_column(json_variant(), nullable=True)
+    canonicals: Mapped[list[str] | None] = mapped_column(json_variant(), nullable=True)
     # normalize_entity(alias), persisted so the unique constraint enforces one
     # mapping per normalized alias.
     alias_normalized: Mapped[str] = mapped_column(String(255), nullable=False)

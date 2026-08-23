@@ -176,7 +176,7 @@ def _assert_unique_combo(
 def _validate_face(face: str) -> str:
     if face not in CARD_FACES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"face must be one of {list(CARD_FACES)}",
         )
     return face
@@ -387,12 +387,12 @@ async def upload_card_artwork(
                 width, height = image.size
         except Exception as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "Artwork could not be read as an image.",
             ) from exc
         if not width or not height:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, "Artwork has no dimensions."
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "Artwork has no dimensions."
             )
         suffix = tmp_path.suffix.lower()
         storage_path = document_path(
@@ -558,7 +558,7 @@ def _resolve_assignment_refs(
         raise _deny_cross_tenant(user, "Panel card", card.id)
     if not card.artwork_front_path:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "card_has_no_artwork",
                 "message": "Upload the front artwork before assigning this card.",

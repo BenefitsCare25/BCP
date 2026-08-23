@@ -102,7 +102,9 @@ def _limit_unparsed(limit: float | None, display: str | None) -> bool:
     """True when a limit text with digits exists but no annual limit was
     derived — the approve-guard is silently inactive for this bucket and the
     broker should know that's not the same as 'unlimited'."""
-    return limit is None and bool(display) and any(c.isdigit() for c in display)
+    if limit is not None or not display:
+        return False
+    return any(char.isdigit() for char in display)
 
 
 # `claim_fx.policy_amount` returns None when a foreign claim's SGD value is not
@@ -215,6 +217,8 @@ def _insured_buckets(
             ((k, v) for k, v in sums.items() if k[0] == line.product_code and k[1]),
             key=lambda kv: kv[0][1] or "",
         ):
+            if key is None:
+                continue
             item_limit = _annual_benefit_limit(item_values.get(key.lower()))
             item_display = (
                 str(item_values[key.lower()])
@@ -303,12 +307,12 @@ def _flex_utilization(
             per_category[cat.lower()]["approved"] += amount
         else:
             pending_claim_ids.append(str(claim.id))
-            amount = _claim_amount(claim)
-            if amount is None:
+            pending_amount = _claim_amount(claim)
+            if pending_amount is None:
                 pending_unconverted += 1
                 continue
-            pending += amount
-            per_category[cat.lower()]["pending"] += amount
+            pending += pending_amount
+            per_category[cat.lower()]["pending"] += pending_amount
 
     # Chain: wallet → minus price-tags (flex_balance) → minus approved claims.
     #
@@ -334,22 +338,25 @@ def _flex_utilization(
         available = drawn_down if base < 0 else max(0.0, drawn_down)
 
     categories: list[FlexCategoryUtilization] = []
-    for cat in flex.benefit_categories:
-        if not cat.claimable:
+    for benefit_category in flex.benefit_categories:
+        if not benefit_category.claimable:
             continue
-        row = per_category.pop(cat.name.strip().lower(), {"approved": 0.0, "pending": 0.0})
+        row = per_category.pop(
+            benefit_category.name.strip().lower(),
+            {"approved": 0.0, "pending": 0.0},
+        )
         categories.append(
             FlexCategoryUtilization(
-                name=cat.name,
-                sub_limit=cat.sub_limit,
+                name=benefit_category.name,
+                sub_limit=benefit_category.sub_limit,
                 approved=round(row["approved"], 2),
                 pending=round(row["pending"], 2),
                 # Floors at 0 for the same reason the wallet does: a sub-limit
                 # pays UP TO its cap, so "SGD -200 left" is not a quantity
                 # anyone has. Claims beyond the cap are the member's own cost.
                 remaining=(
-                    max(0.0, round(cat.sub_limit - row["approved"], 2))
-                    if cat.sub_limit is not None
+                    max(0.0, round(benefit_category.sub_limit - row["approved"], 2))
+                    if benefit_category.sub_limit is not None
                     else None
                 ),
             )

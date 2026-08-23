@@ -43,10 +43,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.core.clock import today as business_today
 from app.models import Claim, Employee, PolicyYear
@@ -98,6 +99,13 @@ class MemberAccess:
 
     def allows(self, capability: Capability) -> bool:
         return capability in self.capabilities
+
+
+class AccessPayload(TypedDict):
+    state: AccessState
+    capabilities: list[str]
+    last_day: str | None
+    access_ends_on: str | None
 
 
 # No Employee row anywhere for this account. NOT the same as "ended": the usual
@@ -176,7 +184,7 @@ def refusal(access: MemberAccess, capability: Capability) -> dict[str, object] |
     }
 
 
-def access_payload(access: MemberAccess) -> dict[str, object]:
+def access_payload(access: MemberAccess) -> AccessPayload:
     """`MemberAccess` as the client receives it (`PortalAccessOut`).
 
     One serializer, so `/portal/me` and the broker preview cannot describe the
@@ -371,7 +379,7 @@ def access_map(
         wanted_staff = [
             s for a in accounts if (s := getattr(a, "staff_id", None))
         ]
-        match_row = Employee.member_account_id.in_(wanted_ids)
+        match_row: ColumnElement[bool] = Employee.member_account_id.in_(wanted_ids)
         if wanted_staff:
             match_row = or_(match_row, Employee.staff_id.in_(wanted_staff))
         for emp in db.execute(
@@ -417,17 +425,20 @@ def access_map(
     context: dict[str, tuple[Employee, PolicyYear | None]] = {}
     resolved: dict[str, MemberAccess] = {}
     for account in accounts:
-        emp, emp_year = _current(account), year
-        if emp is None:
+        employee = _current(account)
+        employee_year = year
+        if employee is None:
             previous = history.get(account.id)
             # An ACTIVE row in an older year proves nothing about this one — it
             # means the new roster has not landed. Absence is not evidence.
             if previous is None or not has_left(previous[0]):
                 resolved[account.id] = UNKNOWN
                 continue
-            emp, emp_year = previous
-        context[account.id] = (emp, emp_year)
-        resolved[account.id] = access_for_employee(emp, emp_year, today=when)
+            employee, employee_year = previous
+        context[account.id] = (employee, employee_year)
+        resolved[account.id] = access_for_employee(
+            employee, employee_year, today=when
+        )
 
     expired = {
         aid: context[aid] for aid, a in resolved.items() if a.state == "ended"

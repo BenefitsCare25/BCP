@@ -39,6 +39,7 @@ from app.models.claim import (
 from app.services.claim_fx import is_foreign, policy_amount
 from app.services.claim_intake import is_inpatient_product
 from app.services.claim_settlement import (
+    DocumentDates,
     days_over_deadline,
     document_dates,
     insurer_days,
@@ -128,7 +129,7 @@ class _Row:
 
 def _claim_rows(
     db: Session, py: PolicyYear, *, masked: bool
-) -> tuple[list[_Row], dict[str, object]]:
+) -> tuple[list[_Row], dict[str, DocumentDates]]:
     rows = list(
         db.execute(
             select(Claim, Employee)

@@ -85,7 +85,8 @@ def gst_multiplier(included: bool | None, rate: float | None) -> float:
     if not included:
         return 1.0
     valid = isinstance(rate, (int, float)) and not isinstance(rate, bool)
-    return 1.0 + (rate if valid else DEFAULT_GST_RATE) / 100.0
+    effective_rate = float(rate) if valid and rate is not None else DEFAULT_GST_RATE
+    return 1.0 + effective_rate / 100.0
 
 
 def product_gst_multipliers(db: Session, policy_year_id: str) -> dict[str, float]:

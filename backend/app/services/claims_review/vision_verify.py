@@ -72,7 +72,11 @@ def run_vision_checks(
 
     # Stable sort so mismatch/uncertain rechecks claim the budget before
     # missing-value rechecks; mutations still land on the `updated` dicts.
-    ordered = sorted(updated, key=lambda c: _STATUS_PRIORITY.get(c.get("status"), 0))
+    def status_priority(comparison: dict[str, Any]) -> int:
+        value = comparison.get("status")
+        return _STATUS_PRIORITY.get(value, 0) if isinstance(value, str) else 0
+
+    ordered = sorted(updated, key=status_priority)
     for comparison in ordered:
         if calls >= MAX_VISION_CHECKS:
             break

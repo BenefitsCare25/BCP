@@ -123,7 +123,7 @@ PROFILE_SECTIONS: dict[FormProfile, list[str]] = {
 
 
 def _coerce(value: str | None) -> FormProfile:
-    return value if value in PROFILE_SECTIONS else DEFAULT_PROFILE  # type: ignore[return-value]
+    return value if value in PROFILE_SECTIONS else DEFAULT_PROFILE
 
 
 def infer_profile(code: str, override: str | None = None) -> FormProfile:
@@ -132,7 +132,7 @@ def infer_profile(code: str, override: str | None = None) -> FormProfile:
     override is ignored (falls through to inference) rather than silently
     forcing the medical default."""
     if override and override in PROFILE_SECTIONS:
-        return override  # type: ignore[return-value]
+        return override
     return _CODE_PROFILE.get((code or "").strip().upper(), DEFAULT_PROFILE)
 
 

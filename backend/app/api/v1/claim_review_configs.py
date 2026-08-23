@@ -108,12 +108,12 @@ def _payload(body: ClaimReviewConfigIn) -> dict[str, Any]:
     scope_code = body.scope_code.casefold()
     if scope_code != "*" and scope_code not in CLAIM_SCOPE_CODES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f'Unknown claim scope code "{body.scope_code}".',
         )
     if body.claim_kind == CLAIM_KIND_FLEX and scope_code != "*":
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Flex claim review rules do not support subtype scopes.",
         )
     return {
@@ -453,7 +453,7 @@ def _accessible_source(
     active_id = require_client_id(user)
     if source_client_id == active_id:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Choose a different company to import from.",
         )
     source = assert_client_accessible(
@@ -641,7 +641,7 @@ def import_review_configs(
         destination = target_catalog.get(source_key)
         if destination is None or source_key not in source_catalog:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "code": "claim_type_not_available",
                     "message": (
@@ -675,7 +675,7 @@ def import_review_configs(
             )
         except ValidationError as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "The source setup contains unsupported or invalid review fields. "
                 "Correct it in the source company before importing.",
             ) from exc

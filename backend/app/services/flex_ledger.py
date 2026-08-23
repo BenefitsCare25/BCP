@@ -42,12 +42,12 @@ from app.services.flex_pricing_resolver import (
 )
 from app.services.flex_proration import describe
 from app.services.insurer_reports import (
-    _last_day_of_service,
     append_safe,
     as_date,
     autosize,
     benefit_window,
     bold_header,
+    last_day_of_service,
     report_employees,
 )
 from app.services.roster_attributes import (
@@ -328,9 +328,9 @@ def member_flex(
             # resolved conversion contributes nothing rather than its face
             # value: the wallet is in the policy currency and adding a USD
             # figure to it would overstate what the member has committed.
-            amount = _claim_amount(claim)
-            if amount is not None:
-                pending += amount
+            pending_amount = _claim_amount(claim)
+            if pending_amount is not None:
+                pending += pending_amount
 
     return MemberFlex(
         employee=employee,
@@ -379,7 +379,7 @@ def build_utilisation_workbook(
             emp.employee_name or "",
             mask_nric(raw_id) if masked else (raw_id or ""),
             as_date(first_value(attrs, _HIRE_KEYS)),
-            _last_day_of_service(emp),
+            last_day_of_service(emp),
             start,
             end,
         ]
@@ -434,7 +434,7 @@ def build_utilisation_summary_workbook(
             emp.employee_name or "",
             mask_nric(raw_id) if masked else (raw_id or ""),
             as_date(first_value(attrs, _HIRE_KEYS)),
-            _last_day_of_service(emp),
+            last_day_of_service(emp),
             start,
             end,
             first_value(attrs, _CATEGORY_KEYS) or "",

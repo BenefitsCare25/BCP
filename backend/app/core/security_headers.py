@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import os
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 DEFAULT_CSP = (
     "default-src 'self'; "
@@ -27,7 +28,7 @@ DEFAULT_CSP = (
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, csp: str | None = None) -> None:
+    def __init__(self, app: ASGIApp, *, csp: str | None = None) -> None:
         super().__init__(app)
         self._csp = csp or os.environ.get("INSPRO_CSP_OVERRIDE", DEFAULT_CSP)
         # HSTS is meaningful only over HTTPS; App Service terminates TLS so
@@ -37,7 +38,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             os.environ.get("INSPRO_ENV", "dev").lower() in ("staging", "prod")
         )
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = self._csp
         response.headers["X-Content-Type-Options"] = "nosniff"

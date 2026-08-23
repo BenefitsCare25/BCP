@@ -311,6 +311,11 @@ def reset_enrollment(
             "This enrollment is finalized; revert the member's coverage instead.",
         )
     window = db.get(EnrollmentWindow, enr.window_id)
+    if window is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This enrollment no longer belongs to an enrollment period.",
+        )
     assert_window_accepts_edits(window)
     elections = db.execute(
         select(EnrollmentElection).where(EnrollmentElection.enrollment_id == enr.id)

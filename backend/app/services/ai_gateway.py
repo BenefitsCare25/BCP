@@ -21,7 +21,7 @@ from anthropic import AuthenticationError, PermissionDeniedError, RateLimitError
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.core.ai_config import load_ai_config
+from app.core.ai_config import AIConfig, load_ai_config
 from app.models import AISpendLog, Client, PlatformAIUsage
 from app.schemas.api import AttributeSchemaOut
 from app.schemas.rule import RuleEnvelope
@@ -265,11 +265,19 @@ def record_platform_usage(db: Session, tokens: int) -> None:
         return
     table = PlatformAIUsage.__table__
     dialect = db.get_bind().dialect.name
+    stmt: Any
     if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert as _upsert
+        from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+
+        stmt = postgresql_insert(PlatformAIUsage).values(
+            year_month=_current_year_month(), total_tokens=tokens
+        )
     else:
-        from sqlalchemy.dialects.sqlite import insert as _upsert
-    stmt = _upsert(table).values(year_month=_current_year_month(), total_tokens=tokens)
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        stmt = sqlite_insert(PlatformAIUsage).values(
+            year_month=_current_year_month(), total_tokens=tokens
+        )
     stmt = stmt.on_conflict_do_update(
         index_elements=["year_month"],
         set_={"total_tokens": table.c.total_tokens + tokens},
@@ -535,7 +543,9 @@ def _slot(limit: int, db: Session | None = None) -> Any:
         sem.release()
 
 
-def _record_provider_metric(cfg: Any, operation: str, started: float, outcome: str) -> None:
+def _record_provider_metric(
+    cfg: AIConfig, operation: str, started: float, outcome: str
+) -> None:
     review_metrics.provider_call(
         provider=cfg.provider,
         model=cfg.model,
@@ -545,17 +555,17 @@ def _record_provider_metric(cfg: Any, operation: str, started: float, outcome: s
     )
 
 
-def _run_cached_ai_call(
+def _run_cached_ai_call[ResultT](
     db: Session,
     *,
     client_id: str,
     policy_year_id: str | None,
     operation: str,
-    cfg: Any,
+    cfg: AIConfig,
     cache_key: str,
-    on_hit: Callable[[dict[str, Any]], Any],
-    invoke: Callable[[], tuple[dict[str, Any], dict[str, Any], Any]],
-) -> Any:
+    on_hit: Callable[[dict[str, Any]], ResultT],
+    invoke: Callable[[], tuple[dict[str, Any], dict[str, Any], ResultT]],
+) -> ResultT:
     """Shared cache / budget / breaker / spend plumbing for every gateway call.
 
     ``on_hit(cached_payload)`` rebuilds the result on a cache hit. ``invoke()``
@@ -950,7 +960,7 @@ def extract_product_structure_for_slip(
     )
 
 
-def _require_ai_config(db: Session, client_id: str) -> Any:
+def _require_ai_config(db: Session, client_id: str) -> AIConfig:
     cfg = load_ai_config(db, client_id)
     if cfg is None:
         raise AINotConfiguredError(

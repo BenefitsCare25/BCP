@@ -71,11 +71,11 @@ from app.services.insurer_listings import (
     product_blocks,
 )
 from app.services.insurer_reports import (
-    _last_day_of_service,
     append_safe,
     as_date,
     autosize,
     bold_header,
+    last_day_of_service,
     report_employees,
 )
 from app.services.leave_pricing_resolver import leave_sell_eligible
@@ -303,7 +303,7 @@ def build_built_in_employee_listing(
             as_date(first_value(attrs, ("date_of_hire", "hire_date"))),
             as_date(first_value(attrs, ("confirmation_date",))),
             as_date(first_value(attrs, ("effective_date",))),
-            _last_day_of_service(emp),
+            last_day_of_service(emp),
             first_value(attrs, ("category",)) or "",
             first_value(attrs, ("division",)) or "",
             first_value(attrs, ("department",)) or "",
@@ -411,7 +411,7 @@ def build_built_in_dependant_listing(
     bold_header(ws)
 
     for dep in deps:
-        emp = by_id.get(dep.employee_id)
+        emp = by_id.get(dep.employee_id) if dep.employee_id else None
         if emp is None:
             continue
         dattrs = dep.attribute_values or {}

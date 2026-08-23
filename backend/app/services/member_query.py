@@ -341,7 +341,7 @@ def _filtered(
     # A broker searching "S1234567A" types the punctuation the roster may not
     # store, so the NRIC leg compares normalized forms. The Dependants tab has
     # always searched NRIC; the Employees tab did not, which brokers hit at once.
-    nric_needle = normalize_nric(query.q) if query.q else ""
+    nric_needle = (normalize_nric(query.q) or "") if query.q else ""
     categories = set(query.category_ids)
     products = {c.strip().casefold() for c in query.product_codes if c.strip()}
     plans = {p.strip().casefold() for p in query.current_plan_codes if p.strip()}

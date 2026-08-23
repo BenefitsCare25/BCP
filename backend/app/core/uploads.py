@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import AsyncIterator, Set
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,9 +22,9 @@ FLEX_SUFFIXES: frozenset[str] = frozenset(
 @asynccontextmanager
 async def saved_upload(
     file: UploadFile,
-    allowed_suffixes: set[str],
+    allowed_suffixes: Set[str],
     max_bytes: int = DEFAULT_MAX_BYTES,
-):
+) -> AsyncIterator[Path]:
     """Persist an UploadFile to a temp path, yield the Path, then clean up.
 
     Enforces both the extension allowlist and the max-size cap. Streams in

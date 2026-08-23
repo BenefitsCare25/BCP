@@ -39,6 +39,7 @@ from app.core.tenancy_host import (
 )
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
+from app.models import Employee, MemberAccount, PolicyYear
 from app.services.member_access import (
     UNSET as _UNSET,  # "year not supplied", distinct from "no active year"
 )
@@ -178,7 +179,9 @@ def verify_member_mfa_challenge_token(token: str) -> tuple[str, str]:
     return str(claims["sub"]), str(claims.get("cid", ""))
 
 
-def resolve_member_credential(db: Session, client_id: str, identifier: str):
+def resolve_member_credential(
+    db: Session, client_id: str, identifier: str
+) -> MemberAccount | None:
     """Locate a member account by username WITHIN a client, accepting any of the
     three identifier forms (email / system id / staff id) — the broker's chosen
     source drives the UI label, but a member can present whichever they have."""
@@ -287,7 +290,7 @@ def get_current_member(
     )
 
 
-def active_policy_year(db: Session, client_id: str):
+def active_policy_year(db: Session, client_id: str) -> PolicyYear | None:
     """The one explicitly live benefit year for a company.
 
     Coverage dates describe what the policy covers; they are not an activation
@@ -314,7 +317,7 @@ def resolve_member_employee(
     *,
     requires: Capability | None = Capability.RECORD,
     year: Any = _UNSET,
-):
+) -> Employee:
     """The member's own Employee row in the active policy year.
 
     Prefers the stamped `member_account_id` binding; falls back to a
@@ -376,10 +379,10 @@ def resolve_member_employee(
 
 def assert_member_capability(
     db: Session,
-    employee,
+    employee: Employee,
     capability: Capability,
     *,
-    year=None,
+    year: Any = None,
 ) -> None:
     """403 unless this member still holds `capability`. The ONE raise site.
 

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -138,15 +139,18 @@ def apply_conversion(
         return None
 
     converted = fx.convert(float(claim.amount_claimed or 0.0))
-    claim.amount_converted = converted
-    claim.fx_rate = fx.rate
+    converted_amount = Decimal(str(converted)).quantize(Decimal("0.01"))
+    claim.amount_converted = converted_amount
+    claim.fx_rate = Decimal(str(fx.rate)).quantize(Decimal("0.00000001"))
     claim.fx_rate_date = fx.rate_date
     claim.fx_source = fx.source
     # Unchanged figure → the member's existing acknowledgement still describes
     # what they saw, so a re-save (or a needs_info resubmission) must not force
     # them to confirm the same number twice.
     claim.fx_acknowledged_at = (
-        previous_ack if previous is not None and previous == converted else None
+        previous_ack
+        if previous is not None and previous == converted_amount
+        else None
     )
     return fx
 
@@ -233,9 +237,15 @@ def set_manual_conversion(claim: Claim, converted: float) -> None:
     person. `fx_rate_date` stays NULL: nothing was published, so naming a date
     would dress a judgement call as a market fact.
     """
-    claim.amount_converted = round(float(converted), 2)
+    claim.amount_converted = Decimal(str(round(float(converted), 2))).quantize(
+        Decimal("0.01")
+    )
     amount = float(claim.amount_claimed or 0.0)
-    claim.fx_rate = round(claim.amount_converted / amount, 6) if amount else None
+    claim.fx_rate = (
+        (claim.amount_converted / Decimal(str(amount))).quantize(Decimal("0.000001"))
+        if amount
+        else None
+    )
     claim.fx_rate_date = None
     claim.fx_source = FX_SOURCE_BROKER
     # **The claimant has not accepted THIS figure**, so any earlier consent is

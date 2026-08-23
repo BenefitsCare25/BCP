@@ -11,6 +11,7 @@ from typing import Any
 
 import jwt
 from cachetools import LRUCache
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from jwt import PyJWKClient
 
 from app.core.settings import Settings
@@ -72,6 +73,8 @@ def verify_entra_token(
         if key_match is None:
             raise EntraAuthError(f"no matching JWK for kid={kid}")
         signing_key = jwt.algorithms.RSAAlgorithm.from_jwk(key_match)
+        if isinstance(signing_key, RSAPrivateKey):
+            signing_key = signing_key.public_key()
     else:
         try:
             signing_key = _jwk_client(settings.entra_jwks_url).get_signing_key_from_jwt(token).key

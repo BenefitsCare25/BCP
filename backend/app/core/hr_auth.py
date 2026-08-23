@@ -23,7 +23,7 @@ import secrets
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, Request, Response, status
@@ -43,6 +43,9 @@ from app.core.tenancy_host import (
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 from app.models.auth import SUBJECT_USER
+
+if TYPE_CHECKING:
+    from app.models import AuthCredential, User
 
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TYPE_HR = "hr"
@@ -256,7 +259,9 @@ def generate_hr_login_id() -> str:
 
 
 # ── Login resolution ───────────────────────────────────────────────────────────
-def resolve_hr_credential(db: Session, tenant: TenantContext, identifier: str):
+def resolve_hr_credential(
+    db: Session, tenant: TenantContext, identifier: str
+) -> tuple[User, AuthCredential] | None:
     """Locate the (User, AuthCredential) for an identifier WITHIN a tenant.
 
     `identifier` is an email or an HR login id. The user must hold an HR role

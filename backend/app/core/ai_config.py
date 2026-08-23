@@ -23,7 +23,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -331,7 +331,32 @@ def _load_platform(db: Session) -> AIConfig | None:
     )
 
 
-def _row_is_activated(row, location: str | None, model: str | None, capacity: str | None) -> bool:
+class _ActivatedCredential(Protocol):
+    @property
+    def validation_status(self) -> str | None: ...
+
+    @property
+    def validated_fingerprint(self) -> str | None: ...
+
+    @property
+    def key_fingerprint(self) -> str | None: ...
+
+    @property
+    def validated_location(self) -> str | None: ...
+
+    @property
+    def validated_model(self) -> str | None: ...
+
+    @property
+    def validated_capacity_mode(self) -> str | None: ...
+
+
+def _row_is_activated(
+    row: _ActivatedCredential,
+    location: str | None,
+    model: str | None,
+    capacity: str | None,
+) -> bool:
     return bool(
         row.validation_status == "active"
         and row.validated_fingerprint == row.key_fingerprint

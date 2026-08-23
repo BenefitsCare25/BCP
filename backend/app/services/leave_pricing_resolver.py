@@ -115,6 +115,8 @@ def employee_leave_value(employee: Employee, attribute: str) -> str | None:
 
 def leave_rate_for(policy: LeavePolicy | None, employee: Employee) -> float | None:
     """The member's per-day leave rate, or None when no rate applies to them."""
+    if policy is None:
+        return None
     attribute = leave_attribute(policy)
     if attribute is None:
         return None

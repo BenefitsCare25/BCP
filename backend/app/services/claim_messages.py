@@ -23,9 +23,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm.attributes import InstrumentedAttribute
+from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import Case, ColumnElement
+from sqlalchemy.sql.selectable import Subquery
 
 from app.models import Claim, ClaimMessage, Employee, MemberEnquiry, User
 from app.models.claim import CLAIM_STATUS_NEEDS_INFO, member_visible_claims
@@ -77,7 +82,7 @@ MEMBER_REPLY_SUBJECT = "Your reply"
 _SYMBOL = {"SGD": "S$", "MYR": "RM", "USD": "US$", "EUR": "€", "GBP": "£"}
 
 
-def _in(code: str, amount: float | None) -> str:
+def _in(code: str, amount: Decimal | float | None) -> str:
     if amount is None:
         return ""
     code = (code or "").strip().upper()
@@ -85,7 +90,12 @@ def _in(code: str, amount: float | None) -> str:
     # Cents in full when there are any, omitted when there are none — the same
     # rule `moneyText` follows, so a round figure isn't given a decorative
     # ".00" the member's receipt doesn't have.
-    figure = f"{amount:,.2f}" if round(abs(amount) * 100) % 100 else f"{amount:,.0f}"
+    normalized = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    figure = (
+        f"{normalized:,.2f}"
+        if normalized != normalized.to_integral_value()
+        else f"{normalized:,.0f}"
+    )
     return f"{symbol}{figure}" if symbol else f"{code} {figure}".strip()
 
 
@@ -103,7 +113,7 @@ def _claimed(claim: Claim) -> str:
     return f"{stated} ({_in(POLICY_CURRENCY, claim.amount_converted)})"
 
 
-def _settled(amount: float | None) -> str:
+def _settled(amount: Decimal | float | None) -> str:
     """An amount WE decided — approved or paid.
 
     Always the policy currency, never `claim.currency`. On a foreign claim these
@@ -376,7 +386,9 @@ def post_broker_enquiry_message(
 # ── Reads ─────────────────────────────────────────────────────────────────────
 
 
-def _owned_by(claim_id: str | None, enquiry_id: str | None):
+def _owned_by(
+    claim_id: str | None, enquiry_id: str | None
+) -> ColumnElement[bool]:
     """The filter selecting ONE thread's messages, under the same
     exactly-one-owner invariant `_post` writes with. A caller that named
     neither would otherwise read (or mark read) every message in the tenant."""
@@ -517,7 +529,7 @@ class ConversationRow:
     unread: int
 
 
-def _member_unread_case():
+def _member_unread_case() -> Case[int]:
     """A message the MEMBER hasn't opened. Mirrors `member_unread_count` — their
     own replies never count, per the two-read-column rule in the model."""
     return case(
@@ -532,7 +544,11 @@ def _member_unread_case():
     )
 
 
-def _thread_parts(unread_case, owner_col, scope):
+def _thread_parts(
+    unread_case: ColumnElement[int],
+    owner_col: InstrumentedAttribute[str | None],
+    scope: Select[tuple[str]],
+) -> tuple[Subquery, Subquery, type[ClaimMessage]]:
     """Two derived tables over `claim_messages`, keyed by whichever column OWNS
     the thread — `claim_id` for a claim's conversation, `enquiry_id` for a
     question's.
@@ -668,7 +684,7 @@ def member_conversations(
     return total, rows[offset : offset + limit]
 
 
-def _broker_unread_case():
+def _broker_unread_case() -> Case[int]:
     """A member's message nobody here has opened. The mirror of the member's
     case — same two columns, opposite sense, which is exactly why the model
     keeps them apart."""
@@ -885,7 +901,7 @@ def claim_subject(claim: Claim) -> ConversationSubjectOut:
         product_code=claim.product_code,
         flex_category_name=claim.flex_category_name,
         incurred_date=claim.incurred_date,
-        amount_claimed=claim.amount_claimed,
+        amount_claimed=float(claim.amount_claimed),
         currency=claim.currency,
         status=claim.status,
     )

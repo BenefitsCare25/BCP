@@ -58,11 +58,11 @@ def assert_topic_storable(topic: str) -> None:
     entry = _BY_KEY.get(topic)
     if entry is None:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown topic '{topic}'."
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"Unknown topic '{topic}'."
         )
     if entry.routes_to_claim:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A question about one claim belongs on that claim — open it and "
             "write there.",
         )

@@ -161,11 +161,12 @@ def _account_out(db: Session, user: User, cred: AuthCredential, client_id: str) 
 
 
 def _client_id_for(db: Session, user_id: str) -> str | None:
-    return (
+    client_id = (
         db.query(UserClientAccess.client_id)
         .filter(UserClientAccess.user_id == user_id)
         .scalar()
     )
+    return client_id if isinstance(client_id, str) else None
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -176,12 +177,12 @@ def create_account(
     db: Session = Depends(get_db),
 ) -> HrAccountCreated:
     if body.role not in HR.HR_ROLES:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid HR role.")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HR role.")
     client = _load_firm_client(db, user, body.client_id)
     firm_id = client.broker_firm_id
     email = body.email.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid email address.")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address.")
     if db.query(User).filter(User.email == email).one_or_none() is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "That email is already registered on the platform."
@@ -253,6 +254,8 @@ def regenerate_login_id(
     db: Session = Depends(get_db),
 ) -> HrAccountOut:
     target, cred = _load_hr_user(db, user, user_id)
+    if not cred.broker_firm_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "HR account has no broker firm.")
     cred.hr_login_id = _unique_login_id(db, cred.broker_firm_id)
     write_audit(db, user, action="update", entity_type="hr_account", entity_id=target.id,
                 after={"hr_login_id": cred.hr_login_id})

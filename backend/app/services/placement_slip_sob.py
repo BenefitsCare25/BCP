@@ -466,7 +466,10 @@ def _parse_sob_items(
                     if val:
                         current_properties[prop] = val
                     continue
-            letter = (sub_match or bare_letter).group(1)
+            item_match = sub_match or bare_letter
+            if item_match is None:
+                continue
+            letter = item_match.group(1)
             key = f"({letter})"
             value, note, sub_na = _split_value_note(plan_cell)
             sub: dict[str, Any] = {

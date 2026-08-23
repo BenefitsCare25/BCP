@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.ai_config import load_ai_config
 from app.services import product_registry
-from app.services.ai_gateway import extract_product_structure_for_slip
+from app.services.ai_gateway import SlipExtractionResult, extract_product_structure_for_slip
 from app.services.excel_reader import open_workbook
 from app.services.placement_slip_parser import (
     ExtractedBenefitItem,
@@ -41,7 +41,7 @@ _AI_RATE_BASES = frozenset(
 )
 
 
-def _num(value) -> float | None:
+def _num(value: object) -> float | None:
     """Defensively coerce an AI-emitted number; junk → None, never a crash."""
     if value is None or isinstance(value, bool):
         return None
@@ -53,12 +53,12 @@ def _num(value) -> float | None:
         return None
 
 
-def _count(value) -> int | None:
+def _count(value: object) -> int | None:
     n = _num(value)
     return round(n) if n is not None and n >= 0 else None
 
 
-def _tiers(value) -> dict[str, dict[str, float]] | None:
+def _tiers(value: object) -> dict[str, dict[str, float]] | None:
     if not isinstance(value, dict):
         return None
     out: dict[str, dict[str, float]] = {}
@@ -72,10 +72,10 @@ def _tiers(value) -> dict[str, dict[str, float]] | None:
     return out or None
 
 
-def _rate_basis(value, product_code: str) -> str | None:
+def _rate_basis(value: object, product_code: str) -> str | None:
     """Validate the AI's rate_basis: must be a known value and, for registry-
     known products, one the product can actually persist."""
-    if value not in _AI_RATE_BASES:
+    if not isinstance(value, str) or value not in _AI_RATE_BASES:
         return None
     if product_registry.is_known(product_code):
         entry = product_registry.resolve_entry(product_code)
@@ -84,7 +84,9 @@ def _rate_basis(value, product_code: str) -> str | None:
     return value
 
 
-def _build_product_slip(template: ProductSlip, payload) -> ProductSlip | None:
+def _build_product_slip(
+    template: ProductSlip, payload: SlipExtractionResult
+) -> ProductSlip | None:
     code = template.product_code
     cats = tuple(
         ExtractedCategory(

@@ -180,7 +180,7 @@ def employee_compulsory_product_ids(db: Session, employee: Employee) -> set[str]
             Category.product_id.is_not(None),
         )
     ).scalars().all()
-    return set(rows)
+    return {product_id for product_id in rows if product_id is not None}
 
 
 def find_orphan_overrides(
@@ -213,11 +213,12 @@ def find_orphan_overrides(
                 cat_ids.add(m["category_id"])
     cat_product: dict[str, str | None] = {}
     if cat_ids:
-        cat_product = dict(
-            db.execute(
+        cat_product = {
+            category_id: product_id
+            for category_id, product_id in db.execute(
                 select(Category.id, Category.product_id).where(Category.id.in_(cat_ids))
             ).all()
-        )
+        }
 
     emp_product_ids: dict[str, set[str]] = {}
     for e in employees:

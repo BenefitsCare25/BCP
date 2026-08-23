@@ -30,6 +30,7 @@ from app.core.breach_check import is_breached
 from app.core.hr_auth import get_auth_policy
 from app.core.portal_auth import (
     OTP_MAX_ATTEMPTS,
+    CurrentMember,
     get_current_member,
     hash_otp_code,
     issue_member_mfa_challenge_token,
@@ -71,6 +72,26 @@ from app.services.member_otp import as_utc, can_issue_otp, issue_otp, send_otp
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/portal/auth", tags=["portal-auth"])
+
+
+class MemberLoginIn(BaseModel):
+    identifier: str = Field(min_length=1, max_length=320)  # email / member id / staff id
+    password: str = Field(min_length=1, max_length=256)
+
+
+class MemberSetPasswordIn(BaseModel):
+    token: str = Field(min_length=1)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class MemberMfaIn(BaseModel):
+    challenge_token: str = Field(min_length=1)
+    code: str = Field(min_length=1, max_length=16)
+
+
+class MemberChallengeOut(BaseModel):
+    status: str = "mfa_required"
+    challenge_token: str
 
 
 def _accounts_for_email(
@@ -134,7 +155,7 @@ def verify_code(
     body: OtpVerifyIn,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-):
+) -> OtpVerifyOut | MemberChallengeOut:
     """Verify an emailed sign-in code.
 
     A correct code proves control of the mailbox — it is the FIRST factor, not a
@@ -230,26 +251,6 @@ def verify_code(
 
 
 # ── Credential login (username + password) ────────────────────────────────────
-class MemberLoginIn(BaseModel):
-    identifier: str = Field(min_length=1, max_length=320)  # email / member id / staff id
-    password: str = Field(min_length=1, max_length=256)
-
-
-class MemberSetPasswordIn(BaseModel):
-    token: str = Field(min_length=1)
-    password: str = Field(min_length=1, max_length=256)
-
-
-class MemberMfaIn(BaseModel):
-    challenge_token: str = Field(min_length=1)
-    code: str = Field(min_length=1, max_length=16)
-
-
-class MemberChallengeOut(BaseModel):
-    status: str = "mfa_required"
-    challenge_token: str
-
-
 _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
 
 
@@ -257,7 +258,9 @@ _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
 _client_ip = client_ip
 
 
-def _member_out(token: str, expires_at, account: MemberAccount) -> OtpVerifyOut:
+def _member_out(
+    token: str, expires_at: datetime, account: MemberAccount
+) -> OtpVerifyOut:
     return OtpVerifyOut(
         token=token,
         expires_at=expires_at,
@@ -265,7 +268,12 @@ def _member_out(token: str, expires_at, account: MemberAccount) -> OtpVerifyOut:
     )
 
 
-def _issue_member_login(db: Session, request: Request, account: MemberAccount, client_id: str):
+def _issue_member_login(
+    db: Session,
+    request: Request,
+    account: MemberAccount,
+    client_id: str,
+) -> OtpVerifyOut:
     # **The one choke point for every session this surface issues** — password
     # login, OTP verify, MFA and set-password all end here, so the leaver
     # refusal is checked once rather than at four call sites that could drift.
@@ -325,7 +333,7 @@ def member_login(
     body: MemberLoginIn,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-):
+) -> OtpVerifyOut | MemberChallengeOut:
     account = resolve_member_credential(db, tenant.client_id, body.identifier)
     if account is None or account.password_hash is None:
         PW.dummy_verify(body.password)
@@ -409,7 +417,7 @@ def member_mfa(
     body: MemberMfaIn,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-):
+) -> OtpVerifyOut:
     try:
         member_id, cid = verify_member_mfa_challenge_token(body.challenge_token)
     except jwt.InvalidTokenError as exc:
@@ -454,7 +462,7 @@ def member_set_password(
     body: MemberSetPasswordIn,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-):
+) -> OtpVerifyOut | MemberChallengeOut:
     try:
         member_id, version = verify_member_set_password_token(body.token)
     except jwt.InvalidTokenError as exc:
@@ -474,10 +482,10 @@ def member_set_password(
     policy = get_auth_policy(db, tenant.client_id)
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
     if not ok:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, reason)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
     if policy.breach_check_enabled and is_breached(body.password):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This password has appeared in a known data breach — choose another.",
         )
     account.password_hash = PW.hash_password(body.password)
@@ -515,7 +523,10 @@ class MemberMfaDisableIn(BaseModel):
 
 
 @router.post("/mfa/enroll/start")
-def member_mfa_start(member=Depends(get_current_member), db: Session = Depends(get_db)):
+def member_mfa_start(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
     if not get_auth_policy(db, member.client_id).mfa_portal_enabled:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -530,9 +541,9 @@ def member_mfa_start(member=Depends(get_current_member), db: Session = Depends(g
 @router.post("/mfa/enroll/confirm")
 def member_mfa_confirm(
     body: MemberMfaConfirmIn,
-    member=Depends(get_current_member),
+    member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
-):
+) -> dict[str, str | list[str]]:
     recovery = mfa.confirm_enrollment(
         db, SUBJECT_MEMBER, member.member_account_id, body.code.strip()
     )
@@ -545,9 +556,9 @@ def member_mfa_confirm(
 @router.post("/mfa/disable")
 def member_mfa_disable(
     body: MemberMfaDisableIn,
-    member=Depends(get_current_member),
+    member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
-):
+) -> dict[str, str]:
     account = db.get(MemberAccount, member.member_account_id)
     if (
         account is None
@@ -561,7 +572,10 @@ def member_mfa_disable(
 
 
 @router.get("/security-status")
-def member_security_status(member=Depends(get_current_member), db: Session = Depends(get_db)):
+def member_security_status(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> dict[str, str | bool]:
     return {
         "mfa_status": mfa.status_for(db, SUBJECT_MEMBER, member.member_account_id),
         "mfa_available": get_auth_policy(db, member.client_id).mfa_portal_enabled,

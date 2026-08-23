@@ -157,14 +157,12 @@ def required_documents_for(
     elif sub in _SUB_TYPE_REQUIRED_DOCS:
         docs = list(_SUB_TYPE_REQUIRED_DOCS[sub])
     else:
-        docs = None
+        docs = list(_DEFAULT_REQUIRED_DOCS)
         wanted = (claim_type or "").strip().lower()
         for keywords, mapped in REQUIRED_DOCUMENTS:
             if any(k in wanted for k in keywords):
                 docs = list(mapped)
                 break
-        if docs is None:
-            docs = list(_DEFAULT_REQUIRED_DOCS)
     if requires_referral and not any("referral" in d.lower() for d in docs):
         docs.append("referral letter or memo")
     return docs

@@ -19,6 +19,7 @@ all functions here are no-ops, so the single-schema code path is unchanged.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import MetaData, Table, UniqueConstraint, event, text
 from sqlalchemy import inspect as sa_inspect
@@ -97,7 +98,10 @@ def shared_columns(conn: Connection, firm_schema: str, table_name: str) -> str:
 
 
 def _referred_schema(
-    table: Table, to_schema: str | None, constraint, referred_schema: str | None
+    table: Table,
+    to_schema: str | None,
+    constraint: Any,
+    referred_schema: str | None,
 ) -> str | None:
     """FK target schema when copying a tenant table into a firm schema:
     control tables (clients, …) stay in public; tenant tables point at the
@@ -146,7 +150,7 @@ def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None
         # skips re-creating them.
         for tbl in Base.metadata.sorted_tables:
             if tbl.name in CONTROL_TABLES:
-                tbl.to_metadata(staging, schema=None)
+                tbl.to_metadata(staging)
         for tbl in tenant_tables():
             tbl.to_metadata(staging, schema=schema, referred_schema_fn=_referred_schema)
         staging.create_all(conn, checkfirst=True)
@@ -304,7 +308,9 @@ def set_search_path(session: Session, firm_id: str | None) -> None:
 
 
 @event.listens_for(Session, "after_begin")
-def _reapply_search_path(session: Session, _transaction, connection: Connection) -> None:
+def _reapply_search_path(
+    session: Session, _transaction: Any, connection: Connection
+) -> None:
     """Re-establish the firm schema on every new transaction of a session.
 
     ``SET search_path`` is per-CONNECTION, but a Session releases its connection

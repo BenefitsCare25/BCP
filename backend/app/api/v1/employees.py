@@ -114,7 +114,7 @@ def list_employees(
         # did not, so the same search text found a person on one tab only.
         # Normalized both sides, so typed punctuation still matches.
         nric = normalize_nric(q)
-        if looks_like_nric(nric):
+        if nric is not None and looks_like_nric(nric):
             legs.append(
                 Employee.national_id_normalized.ilike(
                     f"%{_escape_like(nric)}%", escape="\\"

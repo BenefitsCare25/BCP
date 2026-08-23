@@ -24,11 +24,13 @@ from app.core import credentials as CRED
 from app.core import hr_auth as HR
 from app.core import passwords as PW
 from app.core import sessions as SESS
+from app.core.auth import CurrentUser
 from app.core.breach_check import is_breached
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
+from app.models import User
 from app.models.auth import SUBJECT_USER
 from app.models.user import USER_STATUS_ACTIVE
 
@@ -40,6 +42,12 @@ _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
 # Aliased rather than re-implemented — see core/request_context.
 _client_ip = client_ip
 _ua = user_agent
+
+
+def _current_client_id(current: CurrentUser) -> str:
+    if current.client_id is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    return current.client_id
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -108,7 +116,7 @@ def _company_name(db: Session, client_id: str) -> str | None:
     return c.name if c else None
 
 
-def _me(db: Session, user, client_id: str) -> HrMeOut:
+def _me(db: Session, user: User, client_id: str) -> HrMeOut:
     return HrMeOut(
         user_id=user.id,
         email=user.email,
@@ -125,7 +133,7 @@ def _issue_login(
     db: Session,
     response: Response,
     request: Request,
-    user,
+    user: User,
     tenant: TenantContext,
     *,
     mfa_enrollment_required: bool = False,
@@ -182,7 +190,7 @@ def login(
     response: Response,
     tenant: TenantContext = Depends(HR.require_hr_tenant),
     db: Session = Depends(get_db),
-):
+) -> TokenOut | LoginChallengeOut:
     now = datetime.now(UTC)
     resolved = HR.resolve_hr_credential(db, tenant, body.identifier)
 
@@ -283,7 +291,7 @@ def verify_mfa(
     response: Response,
     tenant: TenantContext = Depends(HR.require_hr_tenant),
     db: Session = Depends(get_db),
-):
+) -> TokenOut:
     from app.models import User
 
     try:
@@ -340,10 +348,11 @@ def verify_mfa(
 # ── MFA enrolment (authenticated, self-service) ────────────────────────────────
 @router.post("/mfa/enroll/start", response_model=MfaStartOut)
 def mfa_enroll_start(
-    current=Depends(HR.get_current_hr_user),
+    current: CurrentUser = Depends(HR.get_current_hr_user),
     db: Session = Depends(get_db),
 ) -> MfaStartOut:
-    if not HR.get_auth_policy(db, current.client_id).mfa_hr_enabled:
+    client_id = _current_client_id(current)
+    if not HR.get_auth_policy(db, client_id).mfa_hr_enabled:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Two-factor authentication isn't enabled for your company.",
@@ -359,15 +368,16 @@ def mfa_enroll_start(
 def mfa_enroll_confirm(
     body: MfaConfirmIn,
     request: Request,
-    current=Depends(HR.get_current_hr_user),
+    current: CurrentUser = Depends(HR.get_current_hr_user),
     db: Session = Depends(get_db),
 ) -> MfaConfirmOut:
+    client_id = _current_client_id(current)
     recovery = HR.confirm_user_mfa_enrollment(db, current.user_id, body.code.strip())
     if recovery is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That code didn't match — try again.")
     EV.write_auth_event(
         db, event_type=EV.EVENT_MFA_SUCCESS, outcome=EV.OUTCOME_SUCCESS, surface="hr",
-        subject_type=SUBJECT_USER, subject_id=current.user_id, client_id=current.client_id,
+        subject_type=SUBJECT_USER, subject_id=current.user_id, client_id=client_id,
         broker_firm_id=current.broker_firm_id, ip=_client_ip(request),
         user_agent=_ua(request), subdomain=request.headers.get("host"),
         detail={"event": "mfa_enrolled"},
@@ -379,9 +389,9 @@ def mfa_enroll_confirm(
 @router.post("/mfa/disable", status_code=200)
 def mfa_disable(
     body: MfaDisableIn,
-    current=Depends(HR.get_current_hr_user),
+    current: CurrentUser = Depends(HR.get_current_hr_user),
     db: Session = Depends(get_db),
-):
+) -> dict[str, str]:
     from app.models import AuthCredential
 
     # Re-authenticate with the password before removing a security factor.
@@ -405,7 +415,7 @@ def refresh(
     response: Response,
     tenant: TenantContext = Depends(HR.require_hr_tenant),
     db: Session = Depends(get_db),
-):
+) -> TokenOut:
     from app.models import User
 
     token = request.cookies.get(HR.REFRESH_COOKIE_NAME)
@@ -470,7 +480,7 @@ def logout(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-):
+) -> dict[str, str]:
     token = request.cookies.get(HR.REFRESH_COOKIE_NAME)
     if token:
         revoked = SESS.revoke_token(db, token)
@@ -505,7 +515,7 @@ def set_password(
     response: Response,
     tenant: TenantContext = Depends(HR.require_hr_tenant),
     db: Session = Depends(get_db),
-):
+) -> TokenOut | LoginChallengeOut:
     from app.models import AuthCredential, User, UserClientAccess
     from app.models.user import USER_STATUS_DISABLED, USER_STATUS_INVITED
 
@@ -544,10 +554,10 @@ def set_password(
     policy = HR.get_auth_policy(db, tenant.client_id)
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
     if not ok:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, reason)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
     if policy.breach_check_enabled and is_breached(body.password):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This password has appeared in a known data breach — choose another.",
         )
 
@@ -598,10 +608,10 @@ def set_password(
 # ── Me ─────────────────────────────────────────────────────────────────────────
 @router.get("/me", response_model=HrMeOut)
 def me(
-    current=Depends(HR.get_current_hr_user),
+    current: CurrentUser = Depends(HR.get_current_hr_user),
     db: Session = Depends(get_db),
-):
-    from app.models import User
-
+) -> HrMeOut:
     user = db.get(User, current.user_id)
-    return _me(db, user, current.client_id)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    return _me(db, user, _current_client_id(current))

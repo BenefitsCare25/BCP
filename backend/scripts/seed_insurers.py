@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, engine
 from app.db.tenancy import is_postgres, set_search_path
@@ -30,7 +31,7 @@ from app.models import BrokerFirm, Insurer
 from app.services.insurer_catalog import SG_INSURERS
 
 
-def seed_insurers(db) -> tuple[int, int]:
+def seed_insurers(db: Session) -> tuple[int, int]:
     """Upsert every library entry. Returns (created, updated)."""
     existing = {
         row.name.strip().lower(): row

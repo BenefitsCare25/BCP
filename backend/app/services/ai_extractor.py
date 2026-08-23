@@ -33,6 +33,12 @@ _AI_SAMPLES_PER_COLUMN = 20
 _AI_SAMPLES_HIGH_CARDINALITY = 6
 _HIGH_CARDINALITY_THRESHOLD = 60
 
+
+def _dict_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
 _DEPENDANT_CLAUSE_TERMS = frozenset(
     {
         "and",
@@ -635,7 +641,7 @@ def propose_derivation_rules_via_ai(
     if not isinstance(raw_payload, dict) or not isinstance(raw_payload.get("proposals"), list):
         raise AIParseError("AI derivation payload missing 'proposals' list")
 
-    proposals = [p for p in raw_payload["proposals"] if isinstance(p, dict)]
+    proposals = _dict_list(raw_payload.get("proposals"))
     metadata = {
         "provider": cfg.provider,
         "model": cfg.model,
@@ -846,12 +852,8 @@ def recommend_schema_via_ai(
         raise AIParseError("AI recommendation payload is not a dict")
 
     payload = {
-        "attributes": [
-            a for a in (raw_payload.get("attributes") or []) if isinstance(a, dict)
-        ],
-        "products": [
-            p for p in (raw_payload.get("products") or []) if isinstance(p, dict)
-        ],
+        "attributes": _dict_list(raw_payload.get("attributes")),
+        "products": _dict_list(raw_payload.get("products")),
     }
     metadata = {
         "provider": cfg.provider,
@@ -1043,8 +1045,8 @@ def extract_slip_structure_via_ai(
     if not isinstance(raw, dict):
         raise AIParseError("AI slip payload is not a dict")
     payload = {
-        "categories": [c for c in (raw.get("categories") or []) if isinstance(c, dict)],
-        "plans": [p for p in (raw.get("plans") or []) if isinstance(p, dict)],
+        "categories": _dict_list(raw.get("categories")),
+        "plans": _dict_list(raw.get("plans")),
     }
     metadata = {
         "provider": cfg.provider,
@@ -1404,9 +1406,7 @@ def extract_flex_scheme_via_ai(
     # Backfill required sub-fields so a tier the model emitted without `limits`
     # or `benefit_categories` can't crash readers that assume the lists exist.
     tiers: list[dict[str, Any]] = []
-    for t in raw.get("tiers") or []:
-        if not isinstance(t, dict):
-            continue
+    for t in _dict_list(raw.get("tiers")):
         tier = dict(t)
         tier["employee_type"] = (
             tier.get("employee_type") if isinstance(tier.get("employee_type"), dict) else {}

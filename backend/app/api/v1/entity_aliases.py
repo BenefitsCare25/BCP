@@ -69,7 +69,7 @@ def _prepare(alias: str, canonicals: list[str]) -> tuple[str, list[str]]:
     norm_alias = normalize_entity(alias)
     if not norm_alias:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "The alias must be a real name."
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "The alias must be a real name."
         )
     seen: set[str] = set()
     out: list[str] = []
@@ -77,11 +77,11 @@ def _prepare(alias: str, canonicals: list[str]) -> tuple[str, list[str]]:
         nc = normalize_entity(c)
         if not nc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, f"{c!r} is not a real name."
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"{c!r} is not a real name."
             )
         if nc == norm_alias:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"{alias!r} and {c!r} already compare equal — no alias needed.",
             )
         if nc in seen:
@@ -90,7 +90,7 @@ def _prepare(alias: str, canonicals: list[str]) -> tuple[str, list[str]]:
         out.append(c)
     if not out:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "An alias must map to at least one entity.",
         )
     return norm_alias, out

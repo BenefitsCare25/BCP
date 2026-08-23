@@ -40,6 +40,7 @@ from app.models import (
     Client,
     Dependant,
     Employee,
+    EmployeePlanOverride,
     Plan,
     PolicyYear,
     Product,
@@ -377,7 +378,8 @@ def _display_amount(value: object) -> str:
 def _item_property(item: dict[str, Any] | None, *keys: str) -> str:
     if not item:
         return ""
-    props = item.get("properties") if isinstance(item.get("properties"), dict) else {}
+    raw_properties = item.get("properties")
+    props: dict[str, Any] = raw_properties if isinstance(raw_properties, dict) else {}
     for key in keys:
         value = props.get(key)
         if value not in (None, ""):
@@ -616,7 +618,7 @@ class _FormData:
     # {product_id: insurer} for THIS year (services/product_insurer.py).
     insurers: dict[str, str]
     defaults: dict[str, dict[str, tuple[str, str | None]]]
-    overrides: dict[str, Any]
+    overrides: dict[tuple[str, str], EmployeePlanOverride]
     emp_cat_by_product: dict[str, dict[str, str]]
     baseline_category_ids: set[str]
 
@@ -826,14 +828,14 @@ def _aggregate(
             )
             pa = cat.plan_assignments if isinstance(cat.plan_assignments, dict) else {}
             plan_code = str(pa.get("plan_code") or "")
-            plan = data.plans.get((product.id, plan_code))
+            seed_plan = data.plans.get((product.id, plan_code))
             _accumulate_basis(
                 basis_acc,
                 section_code,
                 cat.id,
                 cat,
-                plan,
-                _plan_label(plan, plan_code),
+                seed_plan,
+                _plan_label(seed_plan, plan_code),
                 product.code,
             )
             # Seeding calls the same accumulator as live membership; cancel its
@@ -892,24 +894,26 @@ def _aggregate(
             if resolved.declined:
                 continue  # declined override drops the coverage line entirely
 
-            product = data.products.get(product_id)
+            employee_product = data.products.get(product_id)
             sec = section(section_code)
 
             cid = data.emp_cat_by_product.get(emp.id, {}).get(product_id)
-            cat = data.categories.get(cid) if cid else None
+            employee_category = data.categories.get(cid) if cid else None
             # An explicit tier election carries the actual category/basis. A
             # plan-code-only override keeps the baseline category.
             if override and override.tier_category_id:
-                cat = data.categories.get(override.tier_category_id, cat)
-                cid = cat.id if cat else cid
+                employee_category = data.categories.get(
+                    override.tier_category_id, employee_category
+                )
+                cid = employee_category.id if employee_category else cid
 
             covered_deps = deps if sec.has_dependants else []
             if override and override.covered_dependant_ids is not None:
                 ids = set(override.covered_dependant_ids)
                 covered_deps = [d for d in deps if d.id in ids]
 
-            plan = data.plans.get((product_id, resolved.plan_code or ""))
-            plan_name = _plan_label(plan, resolved.plan_code)
+            employee_plan = data.plans.get((product_id, resolved.plan_code or ""))
+            plan_name = _plan_label(employee_plan, resolved.plan_code)
 
             if section_code not in counted:
                 counted.add(section_code)
@@ -926,8 +930,9 @@ def _aggregate(
                     sec.age_bands[anb_band] = (m + (gender == "M"), f + (gender == "F"))
 
                     plan_assignments = (
-                        cat.plan_assignments
-                        if cat and isinstance(cat.plan_assignments, dict)
+                        employee_category.plan_assignments
+                        if employee_category
+                        and isinstance(employee_category.plan_assignments, dict)
                         else {}
                     )
                     basis = resolve_basis_amount(plan_assignments, av)
@@ -947,17 +952,17 @@ def _aggregate(
                             sec.oldest_insured_age = age
                             sec.oldest_insured_sum = basis
 
-            if cid and product:
+            if cid and employee_product:
                 key = (section_code, cid)
                 if key not in basis_acc:
                     _accumulate_basis(
                         basis_acc,
                         section_code,
                         cid,
-                        cat,
-                        plan,
+                        employee_category,
+                        employee_plan,
                         plan_name,
-                        product.code,
+                        employee_product.code,
                     )
                 else:
                     basis_acc[key]["count"] += 1
@@ -971,10 +976,16 @@ def _aggregate(
             continue
         if acc["count"]:
             continue
-        cat = data.categories.get(cid)
-        product = data.products.get(cat.product_id or "") if cat else None
-        if cat and product:
-            acc["count"] = _configured_count(data, product, cat)
+        fallback_category = data.categories.get(cid)
+        fallback_product = (
+            data.products.get(fallback_category.product_id or "")
+            if fallback_category
+            else None
+        )
+        if fallback_category and fallback_product:
+            acc["count"] = _configured_count(
+                data, fallback_product, fallback_category
+            )
 
     return sections, basis_acc, insurers
 
@@ -1078,26 +1089,12 @@ def _populate_claims(
 
     claims = list(
         db.execute(
-            select(
-                Claim.policy_year_id,
-                Claim.employee_id,
-                Claim.product_code,
-                Claim.status,
-                Claim.incurred_date,
-                Claim.sub_type,
-                Claim.claim_type,
-                Claim.benefit_key,
-                Claim.payment_amount,
-                Claim.amount_approved,
-                Claim.currency,
-                Claim.amount_claimed,
-                Claim.amount_converted,
-            ).where(
+            select(Claim).where(
                 Claim.policy_year_id.in_(year_by_id),
                 Claim.status.notin_((CLAIM_STATUS_DRAFT, CLAIM_STATUS_REJECTED)),
                 Claim.claim_kind == "insured",
             )
-        ).all()
+        ).scalars().all()
     )
     grouped: dict[tuple[str, str], list[Claim]] = {}
     for claim in claims:
@@ -1228,7 +1225,9 @@ def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
 
     insured_name = _common_setup_value(data, "header", "insured")
     policyholder = _common_setup_value(data, "header", "policyholder")
-    company_name = insured_name or policyholder or (client.legal_name if client else "")
+    company_name = insured_name or policyholder or (
+        (client.legal_name or "") if client else ""
+    )
     if not company_name and client:
         company_name = client.name
     other_products = _other_product_contexts(data)

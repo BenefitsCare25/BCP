@@ -11,6 +11,7 @@ the endpoint gates that behind a write-capable role and audits every download.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
@@ -205,7 +206,7 @@ def safe_cell(value: object) -> object:
     return value
 
 
-def append_safe(ws: Worksheet, row: list[object]) -> None:
+def append_safe(ws: Worksheet, row: Sequence[object]) -> None:
     """Append a row with every string cell neutralized against formula
     injection (see ``safe_cell``)."""
     ws.append([safe_cell(v) for v in row])

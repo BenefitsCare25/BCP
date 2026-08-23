@@ -13,12 +13,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models import AuthMfa
+
 logger = logging.getLogger(__name__)
 
 
-def _row(db: Session, subject_type: str, subject_id: str):
-    from app.models import AuthMfa
-
+def _row(db: Session, subject_type: str, subject_id: str) -> AuthMfa | None:
     return db.execute(
         select(AuthMfa).where(
             AuthMfa.subject_type == subject_type, AuthMfa.subject_id == subject_id

@@ -154,13 +154,14 @@ def list_panel_listings(
     if not listings:
         return []
     ids = [listing.id for listing in listings]
-    counts: dict[str, int] = dict(
-        db.execute(
+    counts: dict[str, int] = {
+        listing_id: int(count)
+        for listing_id, count in db.execute(
             select(PanelClinic.panel_listing_id, func.count(PanelClinic.id))
             .where(PanelClinic.panel_listing_id.in_(ids))
             .group_by(PanelClinic.panel_listing_id)
         ).all()
-    )
+    }
     tags: dict[str, list[str]] = {}
     for listing_id, year_id in db.execute(
         select(PolicyYearPanel.panel_listing_id, PolicyYearPanel.policy_year_id).where(
@@ -294,7 +295,7 @@ async def upload_panel_clinics(
             parsed = parse_panel_workbook(tmp_path)
         except PanelParseError as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
+                status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)
             ) from exc
 
     replace_listing_clinics(db, listing, parsed.clinics)
@@ -502,7 +503,7 @@ def set_listing_companies(
     no_year = [cid for cid in wanted if by_client[cid].policy_year_id is None]
     if no_year:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "client_has_no_policy_year",
                 "message": "Create a policy year for the company before enabling panel lists.",
@@ -588,13 +589,14 @@ def set_policy_year_panels(
     if wanted:
         # A listing is taggable when it's a shared library entry (client_id
         # NULL) or pinned to this policy year's own client.
-        owner_by_id: dict[str, str | None] = dict(
-            db.execute(
+        owner_by_id: dict[str, str | None] = {
+            listing_id: owner_id
+            for listing_id, owner_id in db.execute(
                 select(PanelListing.id, PanelListing.client_id).where(
                     PanelListing.id.in_(wanted)
                 )
             ).all()
-        )
+        }
         for listing_id in wanted:
             if listing_id not in owner_by_id:
                 raise HTTPException(

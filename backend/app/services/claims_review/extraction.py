@@ -38,9 +38,9 @@ def _extract_with_throttle_retry(
     db: Session,
     claim: Claim,
     doc: StoredDocument,
-    blocks,
+    blocks: list[dict[str, Any]],
     broker_firm_id: str | None,
-):
+) -> ai_gateway.ClaimExtractionResult:
     """`ai_gateway.extract_claim_document` with one bounded backoff on 429.
 
     Before sleeping we COMMIT (persisting earlier documents' spend rows and

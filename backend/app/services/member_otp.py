@@ -97,11 +97,15 @@ def send_otp(
     `magic_link`. Optional so a caller with no tenant to hand still sends a
     usable CODE; only the one-click link degrades.
     """
+    email = (account.email or "").strip()
+    if not email:
+        logger.error("Cannot send portal OTP for account %s without email", account.id)
+        return False
     try:
         get_mailer().send_otp(
-            account.email,
+            email,
             issued.code,
-            magic_link(account.email, issued.code, slug),
+            magic_link(email, issued.code, slug),
         )
         return True
     except Exception:

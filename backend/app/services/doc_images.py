@@ -37,7 +37,7 @@ def normalize_image_bytes(raw: bytes) -> dict[str, Any] | None:
         raise DocImageError("Pillow is not installed; cannot process images.") from exc
 
     try:
-        img = Image.open(io.BytesIO(raw))
+        img: Image.Image = Image.open(io.BytesIO(raw))
         img.load()
     except Exception:
         return None

@@ -133,7 +133,7 @@ def _derived_premium(pa: dict[str, Any], sum_insured: float | None) -> float | N
     if pa.get("annual_premium") is not None or pa.get("rate_basis") != "per_1000_si":
         return None
     rate = pa.get("premium_rate")
-    if rate is None or sum_insured in (None, 0):
+    if rate is None or sum_insured is None or sum_insured == 0:
         return None
     return round(float(sum_insured) / 1000.0 * float(rate), 2)
 

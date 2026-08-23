@@ -74,7 +74,7 @@ class RedisAICache:
 
     def __init__(self, url: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
         # Imported lazily so test runs that never touch Redis don't need it.
-        import redis  # type: ignore[import-not-found]
+        import redis
 
         self._redis = redis.Redis.from_url(url, decode_responses=True)
         self._ttl = ttl
@@ -129,10 +129,11 @@ class RedisAICache:
             logger.exception("Redis GET failed; falling back to in-memory")
             self._mark_degraded()
             return self._fallback.get(key)
-        if raw is None:
+        if not isinstance(raw, (str, bytes, bytearray)):
             return None
         try:
-            return json.loads(raw)
+            decoded: object = json.loads(raw)
+            return decoded if isinstance(decoded, dict) else None
         except json.JSONDecodeError:
             logger.warning("Discarding malformed cache entry for %s", key)
             return None

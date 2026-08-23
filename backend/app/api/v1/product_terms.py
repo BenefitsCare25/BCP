@@ -167,12 +167,12 @@ def set_product_term(
     has_life_thresholds = uses_life_thresholds(product)
     if not has_life_thresholds and {"free_cover_limit", "nel_age_limit"} & sent:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Free cover limit and NEL age apply only to Life products.",
         )
     if product.line not in ("medical", "general") and "underwriting_required" in sent:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Underwriting Yes/No applies only to Medical and General products.",
         )
     if term is None:
@@ -222,10 +222,8 @@ def set_product_term(
         after={
             "policy_year_id": py.id,
             "product_id": product_id,
-            "coverage_start": term.coverage_start.isoformat() if has_dates else None,
-            "coverage_end": (
-                term.coverage_end.isoformat() if term.coverage_end else None
-            ),
+            "coverage_start": start.isoformat() if has_dates else None,
+            "coverage_end": end.isoformat() if has_dates else None,
             "gst_included": term.gst_included,
             "gst_rate": term.gst_rate,
             "free_cover_limit": term.free_cover_limit,

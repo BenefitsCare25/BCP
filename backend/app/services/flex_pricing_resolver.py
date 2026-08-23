@@ -16,14 +16,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Any, TypeGuard
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
 from app.models import Category, Dependant, Employee, FlexPricing, FlexScheme, PolicyYear
-from app.models.enrollment_window import FlexDrawdownRule, FlexPriceSource
+from app.models.employee_plan_override import EmployeePlanOverride
+from app.models.enrollment_window import (
+    EnrollmentWindow,
+    FlexDrawdownRule,
+    FlexPriceSource,
+    WindowStatus,
+)
+from app.models.leave_election import LeaveElection
+from app.schemas.api import PlanFinancials
 from app.services import flex_proration
 from app.services.cohort_tiers import first_category_per_product, tier_key
 from app.services.coverage_resolver import employee_category_defaults, load_overrides
@@ -121,7 +129,7 @@ def validate_pricing_shape(pricing: dict[str, Any]) -> list[str]:
     return errs
 
 
-def _is_age(v: object) -> bool:
+def _is_age(v: object) -> TypeGuard[int]:
     """A valid age bound: a non-negative int that is NOT a bool (``bool`` is an
     ``int`` subclass, so a JSON ``true`` would otherwise slip through as 1)."""
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
@@ -247,7 +255,9 @@ def _flex_scheme_meta(db: Session, policy_year_id: str) -> dict[str, Any]:
     return meta if isinstance(meta, dict) else {}
 
 
-def _gst_stamp(db: Session, policy_year_id: str, meta: dict[str, Any]) -> dict | None:
+def _gst_stamp(
+    db: Session, policy_year_id: str, meta: dict[str, Any]
+) -> dict[str, Any] | None:
     """The GST block for ``_GST_KEY`` — None when nothing is configured. ``meta`` is
     the pre-loaded flex scheme meta (see ``_flex_scheme_meta``)."""
     from app.services.product_terms import gst_multiplier, product_gst_multipliers
@@ -259,7 +269,7 @@ def _gst_stamp(db: Session, policy_year_id: str, meta: dict[str, Any]) -> dict |
     return {"default": default, "products": products}
 
 
-def _dep_age_stamp(meta: dict[str, Any]) -> dict | None:
+def _dep_age_stamp(meta: dict[str, Any]) -> dict[str, dict[str, int]] | None:
     """The scheme-level dependant age-limit default (``meta.dependant_age_limits``)
     for the ``_DEP_AGE_KEY`` stamp — None when nothing valid is configured.
     Sanitized to ``{role: {min?, max?}}`` (valid ages only) so a malformed bag can
@@ -277,7 +287,9 @@ def _dep_age_stamp(meta: dict[str, Any]) -> dict | None:
     return out or None
 
 
-def stamp_pricing(db: Session, policy_year_id: str, pricing: dict[str, Any] | None) -> dict | None:
+def stamp_pricing(
+    db: Session, policy_year_id: str, pricing: dict[str, Any] | None
+) -> dict[str, Any] | None:
     """Attach the non-persisted ``__gst__`` and ``__dep_age__`` stamps to a raw
     pricing bag so every resolution helper can gross up its output and resolve the
     scheme-level dependant age default without new plumbing. Loads the flex scheme
@@ -306,7 +318,9 @@ def get_pricing(db: Session, policy_year_id: str) -> dict[str, Any] | None:
     return stamp_pricing(db, policy_year_id, pricing)
 
 
-def _product_block(pricing: dict[str, Any] | None, product_id: str) -> dict | None:
+def _product_block(
+    pricing: dict[str, Any] | None, product_id: str
+) -> dict[str, Any] | None:
     products = (pricing or {}).get("products")
     if not isinstance(products, dict):
         return None
@@ -330,7 +344,9 @@ def _plan_of_key(key: str) -> str:
     return key.split("::", 1)[1] if "::" in key else ""
 
 
-def _unambiguous_by_plan(by_key: dict[str, Any], key: str):
+def _unambiguous_by_plan[ValueT](
+    by_key: dict[str, ValueT], key: str
+) -> ValueT | None:
     """The single value in ``by_key`` whose key shares ``key``'s plan_code, or None
     when zero or more than one match.
 
@@ -348,7 +364,9 @@ def _unambiguous_by_plan(by_key: dict[str, Any], key: str):
     return matches[0] if len(matches) == 1 else None
 
 
-def _tier_row(by_key: dict[str, Any] | None, key: str):
+def _tier_row[ValueT](
+    by_key: dict[str, ValueT] | None, key: str
+) -> ValueT | None:
     """A tier's value from a ``{tier_key: value}`` map: the exact key, else the
     unambiguous plan-code row (mirrors ``price_tag_for``'s fallback so a tier whose
     category half drifted still resolves). The single lookup shared by every
@@ -360,7 +378,9 @@ def _tier_row(by_key: dict[str, Any] | None, key: str):
     return _unambiguous_by_plan(by_key, key)
 
 
-def _plan_code_fallback(tags: dict[str, Any], key: str) -> dict | None:
+def _plan_code_fallback(
+    tags: dict[str, Any], key: str
+) -> dict[str, Any] | None:
     """Matrix plan-code fallback: the unambiguous price row for ``key``'s plan."""
     row = _unambiguous_by_plan(tags, key)
     return row if isinstance(row, dict) else None
@@ -398,7 +418,7 @@ def price_tag_for(
 # the benefit statement — agrees on the number.
 
 
-def _per_member_slip_premium(fin) -> float | None:
+def _per_member_slip_premium(fin: PlanFinancials | None) -> float | None:
     """The PER-MEMBER annual premium to use as a slip-derived flex price tag.
 
     A slip states a GROUP premium, but the flex tag is deducted from one member's
@@ -775,7 +795,9 @@ def profile_counts(profiles: list[tuple[str, int | None]]) -> tuple[int, int]:
     return spouse, child
 
 
-def _dependant_block(pricing: dict[str, Any] | None, product_id: str) -> dict:
+def _dependant_block(
+    pricing: dict[str, Any] | None, product_id: str
+) -> dict[str, Any]:
     block = _product_block(pricing, product_id) or {}
     dep = block.get("dependant")
     return dep if isinstance(dep, dict) else {}
@@ -799,7 +821,11 @@ def _effective_dependant_mode(
     tier correctly instead of forcing the whole product to one mode. Otherwise
     ``none``."""
     raw = _dependant_block(pricing, product_id).get("mode")
-    if raw in (DependantMode.none, DependantMode.family_group, DependantMode.per_pax):
+    if isinstance(raw, str) and raw in (
+        DependantMode.none,
+        DependantMode.family_group,
+        DependantMode.per_pax,
+    ):
         return raw
     if source == FlexPriceSource.slip:
         shape = _slip_dependant_shape(family_slip_idx, product_id, key)
@@ -837,7 +863,7 @@ def slip_family_increments(rate_tiers: object) -> dict[str, float]:
     return incr
 
 
-def _slip_dependant_for_tier(fin) -> dict[str, float]:
+def _slip_dependant_for_tier(fin: PlanFinancials | None) -> dict[str, float]:
     """The slip-derived dependant pricing for ONE tier, as either:
 
     - family increments ``{spouse, child, both}`` from an EO/ES/EC/EF rate table, or
@@ -934,7 +960,9 @@ def dependant_option_role(text: str | None) -> str | None:
     return "spouse" if m.group(1).lower().startswith("spouse") else "child"
 
 
-def _dependant_option_spec(pa: dict[str, Any]) -> float | dict | None:
+def _dependant_option_spec(
+    pa: dict[str, Any]
+) -> float | dict[str, Any] | None:
     """A dependant option row's per-dependant price spec: a flat amount, or an
     age-banded ``{basis, voluntary_rates}`` spec (same dual shape as
     ``slip_premium_index``) priced by the DEPENDANT's age at draw time.
@@ -1022,7 +1050,7 @@ def dependant_option_overlay(
             for role, amt in payload.items():
                 row.setdefault(role, amt)
 
-    for pid in {c.product_id for c in dep_cats}:
+    for pid in {c.product_id for c in dep_cats if c.product_id is not None}:
         p_deps = [c for c in dep_cats if c.product_id == pid]
         p_emps = [c for c in emp_cats if c.product_id == pid]
         emp_keys_all = [
@@ -1098,7 +1126,8 @@ def dependant_option_overlay(
 
 
 def _merge_family_overlay(
-    base: dict[str, dict[str, dict[str, Any]]], overlay: dict[str, dict[str, dict]]
+    base: dict[str, dict[str, dict[str, Any]]],
+    overlay: dict[str, dict[str, dict[str, Any]]],
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Merge dependant-option rows UNDER the tier-derived index: an employee
     tier that already carries slip dependant pricing (its own EO/ES/EC/EF
@@ -1214,7 +1243,9 @@ def dependant_option_choices(
 
 
 def _chosen_option_spec(
-    choices: dict[str, list[dict[str, Any]]], role: str, dep_option_ids: dict | None
+    choices: dict[str, list[dict[str, Any]]],
+    role: str,
+    dep_option_ids: dict[str, Any] | None,
 ) -> object | None:
     """The elected level's price spec for one role — None when no level is
     chosen or the chosen id no longer matches a choice (re-parse drift)."""
@@ -1360,8 +1391,8 @@ def _dependant_tag_raw(
         if rate is None:
             return None
         return round(rate * (spouse_count + child_count), 2)
-    role = family_role(spouse_count, child_count)
-    if role is None:
+    family_status_role = family_role(spouse_count, child_count)
+    if family_status_role is None:
         return 0.0  # Employee-Only — covered, no dependant cost
     # A manual family_tags value is a sparse OVERRIDE that wins; otherwise the "slip"
     # source falls back to the slip's EO/ES/EC/EF increment for the role.
@@ -1369,12 +1400,15 @@ def _dependant_tag_raw(
         _dependant_block(pricing, product_id).get("family_tags"),
         tier_category_id, plan_code,
     )
-    amt = row.get(role) if isinstance(row, dict) else None
+    amt = row.get(family_status_role) if isinstance(row, dict) else None
     if isinstance(amt, (int, float)):
         return round(float(amt), 2)
     if source == FlexPriceSource.slip:
         incr = family_slip_incr(
-            family_slip_idx, product_id, tier_key(tier_category_id, plan_code), role
+            family_slip_idx,
+            product_id,
+            tier_key(tier_category_id, plan_code),
+            family_status_role,
         )
         if incr is not None:
             return round(incr, 2)
@@ -1550,7 +1584,7 @@ def maybe_family_slip_index(
     return family_slip_index(db, policy_year_id) if _uses_slip(source_map) else None
 
 
-def window_flex_config(window) -> tuple[dict[str, str], str]:
+def window_flex_config(window: EnrollmentWindow) -> tuple[dict[str, str], str]:
     """``(source_map, drawdown_rule)`` for one window. A product absent from the map
     defaults to the slip source (``DEFAULT_FLEX_SOURCE``); the drawdown rule
     defaults to full."""
@@ -1566,8 +1600,6 @@ def governing_flex_config(
     The drawdown rule is a company-wide setting, so the most recent non-draft
     window for the year governs; with no window yet, returns ({}, full) — an empty
     source map means every product defaults to the slip source."""
-    from app.models.enrollment_window import EnrollmentWindow, WindowStatus
-
     w = (
         db.execute(
             select(EnrollmentWindow)
@@ -1593,7 +1625,7 @@ def maybe_slip_index(
 
 def maybe_slip_indices(
     db: Session, policy_year_id: str, source_map: dict[str, Any] | None
-) -> tuple[dict[str, Any] | None, dict | None]:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """``(slip_premium_idx, family_slip_idx)`` from a SINGLE ``list_product_tiers``
     load when any product uses the slip source, else ``(None, None)``. Use this on
     paths that need both (the benefit statement) so the expensive tier load runs
@@ -1652,7 +1684,7 @@ class FlexPriceSummary:
     leave_flex_amount: float | None = None
 
 
-def _effective_leave(db: Session, employee: Employee):
+def _effective_leave(db: Session, employee: Employee) -> LeaveElection | None:
     """The member's effective, priced buy/sell-leave trade for the year.
 
     Uses the shared ``latest_confirmed_leave`` selector (newest confirmed row) so
@@ -1689,7 +1721,7 @@ class FlexYearContext:
     source_map: dict[str, str]
     rule: str
     slip_idx: dict[str, Any] | None
-    family_slip_idx: dict | None
+    family_slip_idx: dict[str, Any] | None
 
 
 def flex_year_context(db: Session, policy_year_id: str) -> FlexYearContext:
@@ -1804,7 +1836,7 @@ def _member_flex_line(
     product_code: str,
     default_plan: str | None,
     base_cat: str | None,
-    ov,
+    ov: EmployeePlanOverride | None,
     age: int | None,
     ref: date | None,
     dependants_compulsory: bool,
@@ -1905,11 +1937,13 @@ def _baseline_category_ids(db: Session, employee: Employee) -> dict[str, str]:
     ]
     if not cat_ids:
         return {}
-    product_of = dict(
-        db.execute(
+    product_of: dict[str, str] = {
+        category_id: product_id
+        for category_id, product_id in db.execute(
             select(Category.id, Category.product_id).where(
                 Category.id.in_(cat_ids), Category.product_id.is_not(None)
             )
         ).all()
-    )
+        if product_id is not None
+    }
     return first_category_per_product(employee.matched_categories or [], product_of)

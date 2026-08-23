@@ -84,7 +84,7 @@ def _own_row(db: Session, doc_type_id: str, client_id: str) -> ClaimDocType:
 def _validate_slot_key(slot_key: str | None) -> None:
     if slot_key is not None and slot_key not in DOC_SLOT_LABELS:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{slot_key}' is not a recognised document slot.",
         )
 
@@ -122,7 +122,7 @@ def _clean_claim_scope_keys(values: list[str]) -> list[str]:
         )
         if not valid:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"'{raw}' is not a recognised claim scope.",
             )
         if key not in seen:
@@ -215,7 +215,7 @@ def create_claim_doc_type(
     base = _SLUG_RE.sub("_", data["display"].lower()).strip("_")[:64]
     if not base:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, "Enter a document type name."
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Enter a document type name."
         )
     existing = client_doc_type_rows(db, client_id)
     if not existing:
@@ -270,7 +270,7 @@ def update_claim_doc_scope_assignments(
         body.assignments
     ):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Each document type may appear only once.",
         )
 

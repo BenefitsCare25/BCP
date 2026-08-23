@@ -162,7 +162,7 @@ def create_category(
 
     name = payload.display_name.strip()
     if not name:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Name required")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Name required")
     base_priority = (
         db.execute(
             select(func.max(Category.priority)).where(

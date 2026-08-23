@@ -44,20 +44,27 @@ def _stored_config_is_validated(db: Session, client_id: str) -> bool:
     if cfg.source == "env":
         return os.environ.get("INSPRO_AI_CONFIG_VALIDATED", "").lower() == "true"
     if cfg.source == "byok":
-        row = db.execute(
+        byok_row = db.execute(
             select(ClientAIConfig).where(ClientAIConfig.client_id == client_id)
         ).scalar_one_or_none()
-        fingerprint = row.key_fingerprint if row else None
+        if byok_row is None:
+            return False
+        return bool(
+            byok_row.validation_status == "active"
+            and byok_row.validated_fingerprint == byok_row.key_fingerprint
+            and byok_row.validated_model == cfg.model
+            and byok_row.validated_location == cfg.gcp_location
+            and byok_row.validated_capacity_mode == cfg.capacity_mode
+        )
     else:
-        row = db.get(PlatformAISetting, SINGLETON_ID)
-        fingerprint = row.key_fingerprint if row else None
+        platform_row = db.get(PlatformAISetting, SINGLETON_ID)
     return bool(
-        row
-        and row.validation_status == "active"
-        and row.validated_fingerprint == fingerprint
-        and row.validated_model == cfg.model
-        and row.validated_location == cfg.gcp_location
-        and row.validated_capacity_mode == cfg.capacity_mode
+        platform_row
+        and platform_row.validation_status == "active"
+        and platform_row.validated_fingerprint == platform_row.key_fingerprint
+        and platform_row.validated_model == cfg.model
+        and platform_row.validated_location == cfg.gcp_location
+        and platform_row.validated_capacity_mode == cfg.capacity_mode
     )
 
 

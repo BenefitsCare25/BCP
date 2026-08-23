@@ -52,9 +52,11 @@ router = APIRouter(prefix="/platform-ai-settings", tags=["platform-ai-settings"]
 def _credentials_out(row: PlatformAISetting | None) -> PlatformAICredentialsOut:
     if row is None or not row.encrypted_service_account:
         return PlatformAICredentialsOut(configured=False)
+    if (row.provider or "vertex") != "vertex":
+        return PlatformAICredentialsOut(configured=False)
     return PlatformAICredentialsOut(
         configured=True,
-        provider=row.provider or "vertex",
+        provider="vertex",
         location=row.location,
         model=row.model,
         capacity_mode=row.capacity_mode,

@@ -162,13 +162,17 @@ def extract_claim_document_via_ai(
     if tool_use is None:
         raise AIParseError("AI did not return a tool_use block")
     raw = tool_use.input
-    if not isinstance(raw, dict) or not isinstance(raw.get("fields"), list):
+    if not isinstance(raw, dict):
         raise AIParseError("AI claim extraction payload missing 'fields' list")
-    if any(not isinstance(field, dict) for field in raw["fields"]):
+    raw_fields = raw.get("fields")
+    if not isinstance(raw_fields, list):
+        raise AIParseError("AI claim extraction payload missing 'fields' list")
+    if any(not isinstance(field, dict) for field in raw_fields):
         raise AIParseError("AI claim extraction payload has an invalid field")
+    fields = [field for field in raw_fields if isinstance(field, dict)]
     payload = {
         "document_type": str(raw.get("document_type") or "unknown"),
-        "fields": list(raw["fields"]),
+        "fields": fields,
     }
     metadata = {
         "provider": cfg.provider,
@@ -407,6 +411,7 @@ def review_claim_via_ai(
     raw = tool_use.input
     if not isinstance(raw, dict):
         raise AIParseError("AI claim review payload is not an object")
+    validated_lists: dict[str, list[dict[str, Any]]] = {}
     for name in (
         "field_comparisons",
         "rule_results",
@@ -417,16 +422,22 @@ def review_claim_via_ai(
             not isinstance(item, dict) for item in value
         ):
             raise AIParseError(f"AI claim review payload has invalid '{name}'")
+        validated_lists[name] = [item for item in value if isinstance(item, dict)]
+    confidence_raw = raw.get("confidence")
+    if isinstance(confidence_raw, bool) or not isinstance(
+        confidence_raw, (str, int, float)
+    ):
+        raise AIParseError("AI claim review confidence is invalid")
     try:
-        confidence = float(raw.get("confidence"))
+        confidence = float(confidence_raw)
     except (TypeError, ValueError) as exc:
         raise AIParseError("AI claim review confidence is invalid") from exc
     if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
         raise AIParseError("AI claim review confidence is outside 0..1")
     payload = {
-        "field_comparisons": list(raw["field_comparisons"]),
-        "rule_results": list(raw["rule_results"]),
-        "required_documents_check": list(raw["required_documents_check"]),
+        "field_comparisons": validated_lists["field_comparisons"],
+        "rule_results": validated_lists["rule_results"],
+        "required_documents_check": validated_lists["required_documents_check"],
         "summary": str(raw.get("summary") or ""),
         "confidence": confidence,
     }

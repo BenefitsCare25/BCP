@@ -57,7 +57,7 @@ class DualCoverageDecision(Base, TimestampMixin):
     # the decision attached through the workflow's own success: the broker fills
     # in the missing NRIC the case prompted them to fix, and a single-key scheme
     # would orphan the decision it just produced.
-    subject_keys: Mapped[list | None] = mapped_column(json_variant(), nullable=True)
+    subject_keys: Mapped[list[str] | None] = mapped_column(json_variant(), nullable=True)
 
     decision: Mapped[str] = mapped_column(String(32))
     carried_by_employee_id: Mapped[str | None] = mapped_column(

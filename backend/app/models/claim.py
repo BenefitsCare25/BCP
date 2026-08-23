@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import (
     Boolean,
@@ -42,6 +42,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.base import JSON, Base, TimestampMixin, new_uuid
 
@@ -248,8 +249,8 @@ VALID_TRANSITIONS: dict[str, frozenset[str]] = {
     CLAIM_STATUS_REJECTED: frozenset(),
 }
 
-CLAIM_KIND_INSURED = "insured"
-CLAIM_KIND_FLEX = "flex"
+CLAIM_KIND_INSURED: Literal["insured"] = "insured"
+CLAIM_KIND_FLEX: Literal["flex"] = "flex"
 
 # ── Case type ────────────────────────────────────────────────────────────────
 #
@@ -606,7 +607,7 @@ class Claim(Base, TimestampMixin):
     admin_remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-def member_visible_claims():
+def member_visible_claims() -> ColumnElement[bool]:
     """The SQL condition selecting claims a MEMBER may see: their own
     submissions, never a case an assessor recorded from an email.
 

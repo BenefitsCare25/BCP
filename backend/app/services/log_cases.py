@@ -101,17 +101,17 @@ def assert_log_valid(
     evidence — see the module docstring for what is deliberately absent."""
     if claim.claim_kind == CLAIM_KIND_INSURED and not claim.product_code:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A LOG case must name the coverage it draws on.",
         )
     if claim.claim_kind == CLAIM_KIND_FLEX and not claim.flex_category_name:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A flex LOG case must name the claimable benefit category.",
         )
     if claim.currency.upper() not in ALLOWED_CURRENCIES:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{claim.currency}' is not a supported claim currency.",
         )
     if claim.dependant_id:
@@ -120,7 +120,7 @@ def assert_log_valid(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Dependant not found")
         if dep.status != "active":
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 "This dependant is pending approval and can't be claimed for yet.",
             )
     assert_incurred_in_period(db, year, claim, employee)
@@ -146,7 +146,7 @@ def create_log_case(
     current_year = active_policy_year(db, year.client_id)
     if current_year is None or year.id != current_year.id:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "LOG cases can only be recorded against the benefit year for today's date.",
         )
 
@@ -283,7 +283,7 @@ def case_type_or_400(value: str | None) -> str | None:
         return None
     if value not in (CASE_TYPE_CLAIM, CASE_TYPE_LOG):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"'{value}' is not a claim case type.",
         )
     return value

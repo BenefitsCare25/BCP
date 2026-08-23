@@ -63,7 +63,7 @@ else:
 engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
-def _is_sqlite_connection(dbapi_connection) -> bool:
+def _is_sqlite_connection(dbapi_connection: Any) -> bool:
     """Whether THIS connection is SQLite, read off the connection itself.
 
     Both listeners below are registered on the Engine CLASS, so they fire for
@@ -76,7 +76,7 @@ def _is_sqlite_connection(dbapi_connection) -> bool:
 
 
 @event.listens_for(Engine, "connect")
-def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+def _sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
     if _is_sqlite_connection(dbapi_connection):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
@@ -85,7 +85,7 @@ def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
 
 
 @event.listens_for(Engine, "checkin")
-def _reset_search_path(dbapi_connection, _connection_record) -> None:
+def _reset_search_path(dbapi_connection: Any, _connection_record: Any) -> None:
     """Reset the per-tenant search_path when a Postgres connection returns to
     the pool, so a later request can never inherit a previous request's firm
     schema. Tenant routing (`set_search_path`) re-establishes it per request;

@@ -121,7 +121,9 @@ def _attribute_labels(db: Session, client_id: str) -> dict[str, str]:
     return {aid: name for aid, name in rows}
 
 
-def _find_tier(scheme: dict[str, Any], tier_name: str | None) -> dict | None:
+def _find_tier(
+    scheme: dict[str, Any], tier_name: str | None
+) -> dict[str, Any] | None:
     """Locate the scheme tier the employee was assigned to, by name."""
     if not tier_name:
         return None
@@ -173,7 +175,8 @@ def _build_flex_coverage(db: Session, employee: Employee) -> FlexCoverageLine | 
         return None
 
     scheme = scheme_row.scheme or {}
-    meta = scheme.get("meta") if isinstance(scheme.get("meta"), dict) else {}
+    raw_meta = scheme.get("meta")
+    meta: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
     tier = _find_tier(scheme, employee.flex_tier_name)
 
     categories: list[FlexBenefitCategoryLine] = []

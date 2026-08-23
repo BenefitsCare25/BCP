@@ -121,11 +121,22 @@ def _expand_code_range(
         a, b = int(lo), int(hi)
         return _num_run("", a, b) or None
     if len(lo) == len(hi) and lo[:-1] == hi[:-1] and lo[:-1]:  # shared prefix
-        prefix, a, b = lo[:-1], lo[-1], hi[-1]
-        if a.isdigit() and b.isdigit() and int(a) <= int(b):
-            return _num_run(prefix, int(a), int(b)) or None
-        if a.isalpha() and b.isalpha() and ord(a) <= ord(b):
-            return [f"{prefix}{chr(n)}" for n in range(ord(a), ord(b) + 1)]
+        prefix, first_suffix, last_suffix = lo[:-1], lo[-1], hi[-1]
+        if (
+            first_suffix.isdigit()
+            and last_suffix.isdigit()
+            and int(first_suffix) <= int(last_suffix)
+        ):
+            return _num_run(prefix, int(first_suffix), int(last_suffix)) or None
+        if (
+            first_suffix.isalpha()
+            and last_suffix.isalpha()
+            and ord(first_suffix) <= ord(last_suffix)
+        ):
+            return [
+                f"{prefix}{chr(number)}"
+                for number in range(ord(first_suffix), ord(last_suffix) + 1)
+            ]
     return None
 
 # ── Role hierarchy ─────────────────────────────────────────────────────────
@@ -406,13 +417,13 @@ def _detect_grade(d: str) -> tuple[Rule | None, str]:
         ranges.append((lo, hi))
 
     ge: int | None = None
-    if m := _RX_GRADE_ABOVE.search(d):
-        ge = int(m.group(1))
-    elif m := _RX_GRADE_PLUS.search(d):
-        ge = int(m.group(1))
+    if above_match := _RX_GRADE_ABOVE.search(d):
+        ge = int(above_match.group(1))
+    elif plus_match := _RX_GRADE_PLUS.search(d):
+        ge = int(plus_match.group(1))
     le: int | None = None
-    if m := _RX_GRADE_BELOW.search(d):
-        le = int(m.group(1))
+    if below_match := _RX_GRADE_BELOW.search(d):
+        le = int(below_match.group(1))
 
     if not ranges and ge is None and le is None:
         return None, ""

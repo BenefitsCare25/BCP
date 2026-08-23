@@ -62,8 +62,10 @@ def _extract_pdf(path: Path) -> tuple[str, list[dict[str, Any]]]:
         try:
             texts: list[str] = []
             images: list[dict[str, Any]] = []
-            matrix = fitz.Matrix(_PDF_RASTER_ZOOM, _PDF_RASTER_ZOOM)
-            with fitz.open(str(path)) as doc:
+            matrix_factory: Any = fitz.Matrix
+            document_factory: Any = fitz.open
+            matrix = matrix_factory(_PDF_RASTER_ZOOM, _PDF_RASTER_ZOOM)
+            with document_factory(str(path)) as doc:
                 for page in doc:
                     page_text = (page.get_text() or "").strip()
                     if page_text:
@@ -111,7 +113,8 @@ def _extract_msg(path: Path) -> tuple[str, list[dict[str, Any]]]:
         raise FlexIntakeError("extract-msg is not installed; cannot read .msg files.") from exc
 
     try:
-        msg = extract_msg.Message(str(path))
+        message_factory: Any = extract_msg.Message
+        msg = message_factory(str(path))
     except Exception as exc:
         raise FlexIntakeError("Could not read the .msg file (corrupt or unsupported).") from exc
 

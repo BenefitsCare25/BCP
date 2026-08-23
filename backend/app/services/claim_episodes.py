@@ -328,7 +328,7 @@ def resolve_anchor(
         return None
     if anchor_id == exclude_claim_id:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A claim can't be a follow-up to itself.",
         )
     claimant = _claimant(db, employee, dependant_id)
@@ -350,18 +350,18 @@ def resolve_anchor(
         )
     if anchor.id == exclude_claim_id:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "A claim can't be a follow-up to itself.",
         )
     if not claimant.matches(anchor):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "That visit was for a different person — pick a visit for the same "
             "patient as this claim.",
         )
     if anchor.status == CLAIM_STATUS_DRAFT or not _matches_mode(anchor, mode):
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "That visit can't be followed up by this claim type."
             if mode == ANCHOR_SP_COURSE
             else "Pick the hospital admission this consultation is claimed "
