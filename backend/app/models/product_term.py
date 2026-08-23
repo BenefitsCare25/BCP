@@ -32,6 +32,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -74,7 +75,7 @@ class ProductTerm(Base, TimestampMixin):
     # Medical / general products use an explicit Yes/No setting instead of
     # life-product FCL / NEL thresholds.
     underwriting_required: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
+        Boolean, nullable=False, default=False, server_default=false()
     )
     # Insurer-issued policy number for this product's placement. Operational
     # metadata (issued after activation) — editable on active years, like FCL.
