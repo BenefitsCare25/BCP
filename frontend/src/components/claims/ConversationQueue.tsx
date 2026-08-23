@@ -273,7 +273,7 @@ function PaneHead({
   onBack?: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-20 -mx-5 flex flex-wrap items-start justify-between gap-3 border-b border-border bg-card px-5 pb-4 pt-1">
+    <div className="-mx-5 flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-border bg-card px-5 pb-4 pt-1">
       <div className="flex min-w-0 flex-1 items-start gap-2">
         {onBack && (
           <Button
@@ -361,7 +361,7 @@ function EnquiryPane({
   }
 
   return (
-    <div className="flex min-h-full flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <PaneHead
         onBack={onBack}
         who={data.employee?.employee_name ?? "Unknown employee"}
@@ -458,7 +458,7 @@ function ClaimPane({
 }) {
   const employee = conversation.employee;
   return (
-    <div className="flex min-h-full flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <PaneHead
         onBack={onBack}
         who={employee?.employee_name ?? "Unknown employee"}
@@ -546,12 +546,12 @@ export function ConversationQueue() {
   return (
     <section
       aria-labelledby="message-inbox-heading"
-      className="overflow-hidden rounded-xl border border-border bg-card lg:h-[calc(100dvh-12rem)] lg:min-h-[36rem] lg:max-h-[52rem]"
+      className="h-full min-h-0 overflow-hidden rounded-xl border border-border bg-card"
     >
       <div className="grid h-full min-w-0 lg:grid-cols-[25rem_minmax(0,1fr)]">
         <aside
           className={cn(
-            "min-w-0 flex-col bg-card lg:flex lg:border-r lg:border-border",
+            "min-h-0 min-w-0 flex-col bg-card lg:flex lg:border-r lg:border-border",
             pickedKey ? "hidden" : "flex",
           )}
           aria-label="Conversation inbox"
@@ -637,7 +637,7 @@ export function ConversationQueue() {
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overscroll-contain overflow-y-auto">
             {isLoading ? (
               <div
                 className="space-y-2 p-3"
@@ -753,7 +753,7 @@ export function ConversationQueue() {
 
         <section
           className={cn(
-            "min-h-[32rem] min-w-0 flex-col bg-card lg:flex lg:min-h-0",
+            "min-h-0 min-w-0 flex-col bg-card lg:flex",
             pickedKey ? "flex" : "hidden",
           )}
           aria-label="Selected conversation"
@@ -765,7 +765,7 @@ export function ConversationQueue() {
               <Skeleton className="h-20 w-full" />
             </div>
           ) : selected ? (
-            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-5">
               {selected.subject.kind === "enquiry" ? (
                 <EnquiryPane
                   key={selected.subject.id}

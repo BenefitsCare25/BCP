@@ -75,7 +75,7 @@ export function AppShell() {
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar title={title} onMenuClick={() => setMobileNavOpen(true)} />
         <ContextBar />
-        <main className="flex-1 overflow-y-auto p-5">
+        <main className="min-h-0 flex-1 overflow-y-auto p-5">
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading…

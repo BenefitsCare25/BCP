@@ -183,42 +183,52 @@ export function ThreadMessages({
   };
 
   return (
-    <div className={cn("flex flex-col gap-3", stickyComposer && "flex-1")}>
-      {loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : error ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm text-error">Couldn&rsquo;t load this conversation.</p>
-          {onRetry && (
-            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
-              <RefreshCw className="size-4" /> Retry
-            </Button>
-          )}
-        </div>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{emptyText}</p>
-      ) : (
-        <ul className="-mx-3 space-y-1">
-          {rows.map((m) => {
-            const day = dayOf(m.created_at);
-            const heading = day !== lastDay ? dayLabel(m.created_at) : null;
-            lastDay = day;
-            return (
-              <Fragment key={m.id}>
-                {heading && <DayRule label={heading} />}
-                <MessageRow message={m} threadSubject={threadSubject} />
-              </Fragment>
-            );
-          })}
-        </ul>
-      )}
+    <div className={cn("flex flex-col gap-3", stickyComposer && "min-h-0 flex-1")}>
+      <div
+        role={stickyComposer ? "region" : undefined}
+        aria-label={stickyComposer ? "Conversation messages" : undefined}
+        tabIndex={stickyComposer ? 0 : undefined}
+        className={cn(
+          stickyComposer &&
+            "-mx-3 min-h-0 flex-1 overscroll-contain overflow-y-auto px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40",
+        )}
+      >
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : error ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm text-error">Couldn&rsquo;t load this conversation.</p>
+            {onRetry && (
+              <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+                <RefreshCw className="size-4" /> Retry
+              </Button>
+            )}
+          </div>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{emptyText}</p>
+        ) : (
+          <ul className="-mx-3 space-y-1">
+            {rows.map((m) => {
+              const day = dayOf(m.created_at);
+              const heading = day !== lastDay ? dayLabel(m.created_at) : null;
+              lastDay = day;
+              return (
+                <Fragment key={m.id}>
+                  {heading && <DayRule label={heading} />}
+                  <MessageRow message={m} threadSubject={threadSubject} />
+                </Fragment>
+              );
+            })}
+          </ul>
+        )}
+      </div>
 
       {onSend ? (
         <form
           className={cn(
             "space-y-2 border-t border-border pt-3",
             stickyComposer &&
-              "thread-composer-dock sticky bottom-0 z-10 -mx-1 mt-auto bg-card px-1 pb-1",
+              "thread-composer-dock -mx-1 mt-auto shrink-0 bg-card px-1 pb-1",
           )}
           onSubmit={(e) => {
             e.preventDefault();

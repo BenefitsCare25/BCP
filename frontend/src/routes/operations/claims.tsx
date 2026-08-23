@@ -1492,12 +1492,13 @@ export function ClaimsQueuePage() {
 
   return (
     <Tabs
+      className="flex h-full min-h-0 flex-col"
       value={tab}
       onValueChange={(v) =>
         navigate({ to: "/claims/review", search: { tab: v } })
       }
     >
-      <div className="max-w-full overflow-x-auto">
+      <div className="sticky top-0 z-30 max-w-full shrink-0 overflow-x-auto bg-background">
         <TabsList className="min-w-max">
           <TabsTrigger value="queue">Queue</TabsTrigger>
           {/* The count is the whole point: with no email in prod, this badge is
@@ -1539,7 +1540,7 @@ export function ClaimsQueuePage() {
         <QueueTab initialClaimId={search.claim} employeeId={search.employee} />
       </TabsContent>
 
-      <TabsContent value="messages">
+      <TabsContent value="messages" className="min-h-0 flex-1 overflow-hidden">
         <ConversationQueue />
       </TabsContent>
 
