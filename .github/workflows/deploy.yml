@@ -326,7 +326,8 @@ jobs:
         if: steps.changed.outputs.infra == 'true'
         run: |
           sleep 45
-          curl -fsS --retry 40 --retry-delay 5 --retry-all-errors \
+          curl -fsS --connect-timeout 5 --max-time 10 \
+            --retry 40 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_APP }}.azurewebsites.net/health" \
             || echo "::warning::Site not healthy after the Bicep restart; continuing — Smoke-test prod is the gate."
 
@@ -335,19 +336,16 @@ jobs:
       # the Bicep above), so no public IP allowlist has to be maintained. The
       # old sync enumerated ~44 App Service outbound IPs as individual rules,
       # which Azure applies one server-update at a time — ~20 minutes per deploy.
-      # The next four steps are skipped unless this push actually added a
-      # migration. Alembic migrations only ever live in backend/alembic/versions,
-      # so their absence is a reliable signal there is nothing to apply — and
-      # `Allow runner IP` alone costs ~1m40s, because admitting a single IP is a
-      # full Postgres server update.
+      # Run migrations on every release. Alembic is idempotent, and comparing
+      # only the latest commit is unsafe after a failed deployment: a retry
+      # commit may contain no migration file even though production never
+      # applied the migration from the earlier commit.
       - name: Setup Python (for migrate)
-        if: steps.changed.outputs.migrations == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        if: steps.changed.outputs.migrations == 'true'
         run: pip install --no-cache-dir uv
 
       # Migrations run from this runner, not from inside the VNet, so the runner
@@ -364,7 +362,6 @@ jobs:
       # every prod release. See modules/ci-firewall-rule.bicep.
       - name: Allow runner IP on Postgres
         id: fw
-        if: steps.changed.outputs.migrations == 'true'
         run: |
           IP=$(curl -fsS https://api.ipify.org)
           echo "::add-mask::$IP"
@@ -381,7 +378,6 @@ jobs:
             --query "properties.provisioningState" -o tsv
 
       - name: Run database migrations + provision tenant schemas
-        if: steps.changed.outputs.migrations == 'true'
         working-directory: backend
         env:
           INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@inspro-prod-pg.postgres.database.azure.com:5432/inspro?sslmode=require
@@ -455,17 +451,23 @@ jobs:
           # it can reach Postgres — which now means the private endpoint
           # resolved and the VNet integration is carrying traffic, so this is
           # the gate that catches a broken private DNS link.
-          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+          curl -fsS --connect-timeout 5 --max-time 15 \
+            --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_APP }}.azurewebsites.net/health"
-          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+          curl -fsS --connect-timeout 5 --max-time 15 \
+            --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
-          curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
+          curl -fsS --connect-timeout 5 --max-time 15 \
+            --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"
 
           # Require a stable window after the first successful probe. This
           # catches delayed Gunicorn worker-boot failures that briefly leave the
           # platform health endpoint green.
           sleep 30
-          curl -fsS "https://${{ env.PROD_APP }}.azurewebsites.net/health"
-          curl -fsS "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
-          curl -fsS "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"
+          curl -fsS --connect-timeout 5 --max-time 15 \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+          curl -fsS --connect-timeout 5 --max-time 15 \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
+          curl -fsS --connect-timeout 5 --max-time 15 \
+            "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"

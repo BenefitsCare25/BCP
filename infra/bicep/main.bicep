@@ -137,9 +137,9 @@ param enableVnetIntegration bool = true
 @description('Notification email for HTTP 5xx alerts (optional).')
 param alertEmail string = ''
 
-@description('Portal mail delivery mode. Use disabled until a verified STARTTLS SMTP sender is configured. Log is retained only for backward-compatible rollout and is normalized to disabled by production builds.')
+@description('Portal mail delivery mode. Keep disabled until a verified STARTTLS SMTP sender is configured.')
 @allowed(['disabled', 'log', 'smtp'])
-param mailMode string = 'log'
+param mailMode string = 'disabled'
 
 @description('SMTP host for portal OTP and claim-update mail.')
 param smtpHost string = ''
@@ -351,7 +351,7 @@ resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-p
   }
 }
 
-resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (mailMode == 'smtp') {
+resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (mailMode == 'smtp' && !empty(smtpPassword)) {
   parent: kv
   name: 'smtp-password'
   properties: {
@@ -438,14 +438,13 @@ var commonAppSettings = [
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
-  // Production maps legacy `log` to disabled during the backward-compatible
-  // rollout. SMTP passwords stay in Key Vault when SMTP is enabled later.
+  // Mail stays disabled until a complete STARTTLS SMTP sender is configured.
   { name: 'INSPRO_MAIL_MODE', value: mailMode }
   { name: 'INSPRO_SMTP_HOST', value: smtpHost }
   { name: 'INSPRO_SMTP_PORT', value: smtpPort }
   { name: 'INSPRO_SMTP_USER', value: smtpUser }
   { name: 'INSPRO_SMTP_FROM', value: smtpFrom }
-  { name: 'INSPRO_SMTP_PASSWORD', value: mailMode == 'smtp' ? '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=smtp-password)' : '' }
+  { name: 'INSPRO_SMTP_PASSWORD', value: mailMode == 'smtp' && !empty(smtpPassword) ? '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=smtp-password)' : '' }
   { name: 'INSPRO_STORAGE_MODE', value: 'azure' }
   { name: 'INSPRO_STORAGE_ACCOUNT_URL', value: storage.properties.primaryEndpoints.blob }
   { name: 'INSPRO_STORAGE_CONTAINER', value: documentsContainer.name }

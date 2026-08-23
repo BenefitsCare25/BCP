@@ -265,6 +265,8 @@ def _resolve_mail_mode(env: Env) -> MailMode:
         user = os.environ.get("INSPRO_SMTP_USER", "").strip()
         password = os.environ.get("INSPRO_SMTP_PASSWORD", "")
         sender = os.environ.get("INSPRO_SMTP_FROM", user).strip()
+        if raw == "smtp" and not any((host, user, password, sender)):
+            return "disabled"
         if not host or not sender:
             raise RuntimeError(
                 "Production SMTP requires INSPRO_SMTP_HOST and "

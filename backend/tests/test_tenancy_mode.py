@@ -98,7 +98,7 @@ def test_invalid_tenant_mode_is_fatal(monkeypatch):
     clear_settings_cache()
 
 
-@pytest.mark.parametrize("configured_mode", ["", "log", "disabled"])
+@pytest.mark.parametrize("configured_mode", ["", "log", "disabled", "smtp"])
 def test_production_mail_fails_closed_without_smtp(prod_env, configured_mode):
     """A skipped SMTP setup must never leak OTP or invite credentials to logs."""
     if configured_mode:
