@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 AuthMode = Literal["mock", "entra"]
 Env = Literal["dev", "staging", "prod"]
-MailMode = Literal["log", "smtp", "acs"]
+MailMode = Literal["disabled", "log", "smtp", "acs"]
 StorageMode = Literal["local", "azure"]
 TenantMode = Literal["subdomain", "header"]
 
@@ -239,33 +239,32 @@ def _resolve_redis_url(env: Env) -> str:
 
 
 def _resolve_mail_mode(env: Env) -> MailMode:
-    """Mail mode is fail-closed in production.
+    """Resolve mail delivery without exposing credentials in production.
 
     The `log` mailer writes sign-in OTP codes to the application logs in
     cleartext — an account-takeover credential for anyone with log access.
-    Fine for dev/staging; in prod a real delivery mode must be chosen
-    explicitly, mirroring `_resolve_auth_mode`.
+    It remains useful in dev/staging. In prod, both an explicit `disabled` and
+    the legacy `log` value resolve to a mailer that rejects delivery without
+    logging the message. Treating legacy `log` this way keeps a rolling deploy
+    safe while the older container is still serving.
     """
     raw = os.environ.get("INSPRO_MAIL_MODE", "").strip().lower()
     if raw == "acs":
         raise RuntimeError(
             "INSPRO_MAIL_MODE=acs is not implemented. Configure a verified SMTP sender."
         )
-    if raw not in ("", "log", "smtp", "acs"):
+    if raw not in ("", "disabled", "log", "smtp", "acs"):
         raise RuntimeError(
-            f"INSPRO_MAIL_MODE={raw!r} is invalid — expected 'log', 'smtp' or 'acs'."
+            f"INSPRO_MAIL_MODE={raw!r} is invalid — expected 'disabled', "
+            "'log', 'smtp' or 'acs'."
         )
     if env == "prod":
+        if raw in ("", "disabled", "log"):
+            return "disabled"
         host = os.environ.get("INSPRO_SMTP_HOST", "").strip()
         user = os.environ.get("INSPRO_SMTP_USER", "").strip()
         password = os.environ.get("INSPRO_SMTP_PASSWORD", "")
         sender = os.environ.get("INSPRO_SMTP_FROM", user).strip()
-        if raw in ("", "log"):
-            raise RuntimeError(
-                "INSPRO_MAIL_MODE must be 'smtp' or 'acs' in production — the "
-                "'log' mailer writes member sign-in codes to the logs in "
-                "cleartext."
-            )
         if not host or not sender:
             raise RuntimeError(
                 "Production SMTP requires INSPRO_SMTP_HOST and "

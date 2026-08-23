@@ -96,3 +96,29 @@ def test_invalid_tenant_mode_is_fatal(monkeypatch):
     with pytest.raises(RuntimeError, match="INSPRO_TENANT_MODE"):
         get_settings()
     clear_settings_cache()
+
+
+@pytest.mark.parametrize("configured_mode", ["", "log", "disabled"])
+def test_production_mail_fails_closed_without_smtp(prod_env, configured_mode):
+    """A skipped SMTP setup must never leak OTP or invite credentials to logs."""
+    if configured_mode:
+        prod_env.setenv("INSPRO_MAIL_MODE", configured_mode)
+    else:
+        prod_env.delenv("INSPRO_MAIL_MODE", raising=False)
+    for name in (
+        "INSPRO_SMTP_HOST",
+        "INSPRO_SMTP_USER",
+        "INSPRO_SMTP_FROM",
+        "INSPRO_SMTP_PASSWORD",
+    ):
+        prod_env.delenv(name, raising=False)
+    clear_settings_cache()
+
+    from app.core.mailer import DisabledMailer, get_mailer
+    from app.core.settings import get_settings
+
+    assert get_settings().mail_mode == "disabled"
+    mailer = get_mailer()
+    assert isinstance(mailer, DisabledMailer)
+    with pytest.raises(RuntimeError, match="Outbound mail is disabled"):
+        mailer.send_otp("member@example.com", "123456", "https://example.com/secret")

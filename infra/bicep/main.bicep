@@ -137,25 +137,25 @@ param enableVnetIntegration bool = true
 @description('Notification email for HTTP 5xx alerts (optional).')
 param alertEmail string = ''
 
-@description('Portal OTP mail delivery mode. The app refuses to boot in prod with "log" (OTP codes would land in application logs in cleartext).')
-@allowed(['smtp'])
-param mailMode string = 'smtp'
+@description('Portal mail delivery mode. Use disabled until a verified STARTTLS SMTP sender is configured. Log is retained only for backward-compatible rollout and is normalized to disabled by production builds.')
+@allowed(['disabled', 'log', 'smtp'])
+param mailMode string = 'log'
 
 @description('SMTP host for portal OTP and claim-update mail.')
-param smtpHost string
+param smtpHost string = ''
 
 @description('SMTP port.')
 param smtpPort string = '587'
 
 @description('SMTP username (also the default From address).')
-param smtpUser string
+param smtpUser string = ''
 
 @description('From address for portal OTP mail (defaults to smtpUser).')
-param smtpFrom string
+param smtpFrom string = ''
 
 @secure()
 @description('SMTP password (passed via CI --parameters override).')
-param smtpPassword string
+param smtpPassword string = ''
 
 var prefix = 'inspro-${env}'
 var isProd = env == 'prod'
@@ -351,7 +351,7 @@ resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-p
   }
 }
 
-resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (mailMode == 'smtp') {
   parent: kv
   name: 'smtp-password'
   properties: {
@@ -438,13 +438,14 @@ var commonAppSettings = [
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
-  // Portal mail is fail-closed in production and the password stays in Key Vault.
+  // Production maps legacy `log` to disabled during the backward-compatible
+  // rollout. SMTP passwords stay in Key Vault when SMTP is enabled later.
   { name: 'INSPRO_MAIL_MODE', value: mailMode }
   { name: 'INSPRO_SMTP_HOST', value: smtpHost }
   { name: 'INSPRO_SMTP_PORT', value: smtpPort }
   { name: 'INSPRO_SMTP_USER', value: smtpUser }
   { name: 'INSPRO_SMTP_FROM', value: smtpFrom }
-  { name: 'INSPRO_SMTP_PASSWORD', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretSmtpPassword.name})' }
+  { name: 'INSPRO_SMTP_PASSWORD', value: mailMode == 'smtp' ? '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=smtp-password)' : '' }
   { name: 'INSPRO_STORAGE_MODE', value: 'azure' }
   { name: 'INSPRO_STORAGE_ACCOUNT_URL', value: storage.properties.primaryEndpoints.blob }
   { name: 'INSPRO_STORAGE_CONTAINER', value: documentsContainer.name }

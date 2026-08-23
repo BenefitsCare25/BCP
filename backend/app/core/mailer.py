@@ -2,8 +2,9 @@
 
 Mode selected by `INSPRO_MAIL_MODE`:
 
-- `log` (default): the code is logged at INFO — dev/local, and the safe prod
-  fallback until SMTP/ACS is configured.
+- `disabled`: delivery is rejected without logging message contents.
+- `log` (default): the code is logged at INFO for dev/local only. Production
+  settings normalize this legacy value to `disabled` during rolling upgrades.
 - `smtp`: plain SMTP via `INSPRO_SMTP_HOST/PORT/USER/PASSWORD/FROM`
   (STARTTLS when the server offers it).
 - `acs`: Azure Communication Services — stubbed; raises until implemented so a
@@ -111,6 +112,25 @@ class LogMailer:
         logger.info("Claim update email accepted for %s (%s)", email, portal_url)
 
 
+class DisabledMailer:
+    """Fail closed when production mail delivery has not been configured."""
+
+    @staticmethod
+    def _raise() -> None:
+        raise RuntimeError("Outbound mail is disabled.")
+
+    def send_otp(self, email: str, code: str, magic_link: str) -> None:
+        self._raise()
+
+    def send_member_invite(
+        self, email: str, username: str, password: str, sign_in_url: str
+    ) -> None:
+        self._raise()
+
+    def send_claim_update(self, email: str, portal_url: str) -> None:
+        self._raise()
+
+
 class SmtpMailer:
     def __init__(self) -> None:
         self.host = os.environ.get("INSPRO_SMTP_HOST", "").strip()
@@ -166,6 +186,8 @@ class AcsMailer:
 
 def get_mailer() -> Mailer:
     mode = get_settings().mail_mode
+    if mode == "disabled":
+        return DisabledMailer()
     if mode == "smtp":
         return SmtpMailer()
     if mode == "acs":

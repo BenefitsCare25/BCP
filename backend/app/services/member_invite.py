@@ -158,18 +158,20 @@ def portal_sign_in_url(slug: str | None) -> str:
 
 
 def mail_deliverable() -> bool:
-    """Whether the configured mailer can even be BUILT.
+    """Whether the configured mailer can deliver an invite.
 
     This is the production failure worth catching before a rollout, not after:
     `INSPRO_MAIL_MODE=smtp` with an empty `INSPRO_SMTP_HOST` raises on
     construction, so every send fails and the run reports hundreds queued while
     delivering none. Which is the live prod configuration today.
 
-    `log` mode deliberately counts as deliverable — it writes invites to the
-    application log, which is how the flow is rehearsed in dev/staging, and prod
-    is fail-closed against it at boot. The UI warns about it instead.
+    `log` mode deliberately counts as deliverable in dev/staging. Production
+    normalizes both `log` and an explicit `disabled` to a fail-closed mailer, so
+    the UI reports delivery as unavailable without exposing invite credentials.
     """
     try:
+        if get_settings().mail_mode == "disabled":
+            return False
         get_mailer()
         return True
     except Exception:
