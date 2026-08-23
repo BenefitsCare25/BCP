@@ -59,11 +59,11 @@ export function AppShell() {
       : "ready";
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden">
+    <div className="flex h-screen w-full overflow-hidden">
       <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar onMenuClick={() => setMobileNavOpen(true)} />
-        <main className="min-h-0 flex-1 overflow-y-auto p-5">
+        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading…

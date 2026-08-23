@@ -1498,7 +1498,7 @@ export function ClaimsQueuePage() {
 
   return (
     <Tabs
-      className="flex h-full min-h-0 flex-col"
+      className="flex min-h-full flex-col"
       value={tab}
       onValueChange={(v) =>
         navigate({ to: "/claims/review", search: { tab: v } })

@@ -11,7 +11,7 @@ export const PageTabsBar = React.forwardRef<
   <div
     ref={ref}
     data-page-tabs-bar=""
-    className={cn("sticky top-0 z-30 max-w-full bg-background", className)}
+    className={cn("sticky -top-5 z-30 max-w-full bg-background", className)}
     {...props}
   />
 ));
