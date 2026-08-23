@@ -340,6 +340,8 @@ class ProductTermOut(BaseModel):
     free_cover_limit: float | None = None
     # NEL age (ANB): members at/above it require underwriting regardless of SI.
     nel_age_limit: int | None = None
+    # Explicit setup for Medical and General products; defaults to No.
+    underwriting_required: bool = False
     # Insurer-issued policy number for this product's placement.
     policy_number: str | None = None
     # Whether this product's claims draw on an inpatient benefit. SERVED from
@@ -365,6 +367,7 @@ class ProductTermUpdate(BaseModel):
     gst_rate: float | None = Field(default=None, ge=0, le=100)
     free_cover_limit: float | None = Field(default=None, ge=0)
     nel_age_limit: int | None = Field(default=None, ge=1, le=120)
+    underwriting_required: bool = False
     policy_number: str | None = Field(default=None, max_length=64)
     # Bounded at a year: these are transcribed from policy wording, where the
     # figures are 30 to 180 days. An unbounded field invites a typo that silently

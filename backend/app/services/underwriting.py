@@ -39,6 +39,7 @@ from app.models import (
     Dependant,
     Employee,
     PolicyYear,
+    Product,
     ProductTerm,
     UnderwritingCase,
     UnderwritingReview,
@@ -55,6 +56,7 @@ from app.models.underwriting_case import (
 )
 from app.services.flex_membership import classify_relationship
 from app.services.product_insurer import insurer_map_for_ids
+from app.services.product_terms import uses_life_thresholds
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     NAME_KEYS,
@@ -145,25 +147,37 @@ def report_uw_amounts(
 
 
 def free_cover_limits(db: Session, policy_year_id: str) -> dict[str, float]:
-    """{product_id: FCL} for products with an explicit dollar limit."""
+    """Life-product FCLs only; stale non-life values are ignored."""
     rows = db.execute(
-        select(ProductTerm.product_id, ProductTerm.free_cover_limit).where(
+        select(ProductTerm, Product)
+        .join(Product, Product.id == ProductTerm.product_id)
+        .where(
             ProductTerm.policy_year_id == policy_year_id,
             ProductTerm.free_cover_limit.isnot(None),
         )
     ).all()
-    return {pid: float(fcl) for pid, fcl in rows}
+    return {
+        term.product_id: float(term.free_cover_limit)
+        for term, product in rows
+        if uses_life_thresholds(product) and term.free_cover_limit is not None
+    }
 
 
 def nel_age_limits(db: Session, policy_year_id: str) -> dict[str, int]:
-    """{product_id: ANB age gate} for products with an explicit NEL age."""
+    """Life-product ANB age gates only; stale non-life values are ignored."""
     rows = db.execute(
-        select(ProductTerm.product_id, ProductTerm.nel_age_limit).where(
+        select(ProductTerm, Product)
+        .join(Product, Product.id == ProductTerm.product_id)
+        .where(
             ProductTerm.policy_year_id == policy_year_id,
             ProductTerm.nel_age_limit.isnot(None),
         )
     ).all()
-    return {pid: int(age) for pid, age in rows}
+    return {
+        term.product_id: int(term.nel_age_limit)
+        for term, product in rows
+        if uses_life_thresholds(product) and term.nel_age_limit is not None
+    }
 
 
 @dataclass

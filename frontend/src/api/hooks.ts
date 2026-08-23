@@ -1473,6 +1473,7 @@ interface ProductTermArgs {
   gstRate?: number | null;
   freeCoverLimit?: number | null;
   nelAgeLimit?: number | null;
+  underwritingRequired?: boolean;
   policyNumber?: string | null;
   preHospDays?: number | null;
   postHospDays?: number | null;
@@ -1489,6 +1490,7 @@ export function useSetProductTerm(policyYearId: string) {
       gstRate,
       freeCoverLimit,
       nelAgeLimit,
+      underwritingRequired,
       policyNumber,
       preHospDays,
       postHospDays,
@@ -1502,6 +1504,9 @@ export function useSetProductTerm(policyYearId: string) {
       if (gstRate !== undefined) body.gst_rate = gstRate;
       if (freeCoverLimit !== undefined) body.free_cover_limit = freeCoverLimit;
       if (nelAgeLimit !== undefined) body.nel_age_limit = nelAgeLimit;
+      if (underwritingRequired !== undefined) {
+        body.underwriting_required = underwritingRequired;
+      }
       if (policyNumber !== undefined) body.policy_number = policyNumber;
       if (preHospDays !== undefined) body.pre_hosp_days = preHospDays;
       if (postHospDays !== undefined) body.post_hosp_days = postHospDays;

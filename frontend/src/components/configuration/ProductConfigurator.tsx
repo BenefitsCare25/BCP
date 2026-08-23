@@ -74,17 +74,7 @@ export function ProductConfigurator({
   }
 
   return (
-    <div className="space-y-5">
-      {term && (
-        <CoveragePeriodEditor
-          // The editor's inputs are a pure function of server state. Remount
-          // on the server values so save/reset discards local edits.
-          key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}:${term.free_cover_limit ?? ""}:${term.nel_age_limit ?? ""}`}
-          policyYearId={policyYearId}
-          term={term}
-        />
-      )}
-
+    <div>
       <ProductSetupForm
         // Key on the product code only, not draft.id. Keying on draft.id
         // remounted the form the moment the first save created a draft, which
@@ -97,6 +87,17 @@ export function ProductConfigurator({
         onEditRule={onSelectCategory}
         onConfirmed={onDone}
         onDirtyChange={onDirtyChange}
+        insuranceLine={term?.line ?? "medical"}
+        termEditor={
+          term ? (
+            <CoveragePeriodEditor
+              // Remount on server values so save/reset discards local edits.
+              key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}:${term.free_cover_limit ?? ""}:${term.nel_age_limit ?? ""}:${term.underwriting_required}`}
+              policyYearId={policyYearId}
+              term={term}
+            />
+          ) : null
+        }
       />
     </div>
   );

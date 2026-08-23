@@ -59,6 +59,9 @@ export function CoveragePeriodEditor({
   const [nelAge, setNelAge] = useState<string>(
     term.nel_age_limit != null ? String(term.nel_age_limit) : "",
   );
+  const [underwritingRequired, setUnderwritingRequired] = useState(
+    term.underwriting_required,
+  );
   // Pre-/post-hospitalisation claim window. Blank is NOT zero — it means the
   // product states no window, and the review's check does not run.
   const [preDays, setPreDays] = useState<string>(
@@ -79,6 +82,9 @@ export function CoveragePeriodEditor({
   // SERVED (`ProductTermOut.is_inpatient`), never matched on the code or the
   // line here: product-type knowledge lives in `product_registry.py` alone.
   const isInpatientLine = term.is_inpatient;
+  const isLife = term.line === "life";
+  const hasUnderwritingChoice =
+    term.line === "medical" || term.line === "general";
 
   const datesDirty = start !== term.coverage_start || end !== term.coverage_end;
   const parsedRate = gstRate.trim() === "" ? null : Number(gstRate);
@@ -87,15 +93,24 @@ export function CoveragePeriodEditor({
     gstOpinion !== initialOpinion ||
     (gstOpinion === "include" && parsedRate !== term.gst_rate);
   const parsedFcl = fcl.trim() === "" ? null : Number(fcl.replace(/,/g, ""));
-  const fclDirty = parsedFcl !== term.free_cover_limit;
+  const fclDirty = isLife && parsedFcl !== term.free_cover_limit;
   const parsedNelAge = nelAge.trim() === "" ? null : Number(nelAge);
-  const nelAgeDirty = parsedNelAge !== term.nel_age_limit;
+  const nelAgeDirty = isLife && parsedNelAge !== term.nel_age_limit;
+  const underwritingDirty =
+    hasUnderwritingChoice &&
+    underwritingRequired !== term.underwriting_required;
   const parsedPre = preDays.trim() === "" ? null : Number(preDays);
   const parsedPost = postDays.trim() === "" ? null : Number(postDays);
   const preDirty = parsedPre !== term.pre_hosp_days;
   const postDirty = parsedPost !== term.post_hosp_days;
   const dirty =
-    datesDirty || gstDirty || fclDirty || nelAgeDirty || preDirty || postDirty;
+    datesDirty ||
+    gstDirty ||
+    fclDirty ||
+    nelAgeDirty ||
+    underwritingDirty ||
+    preDirty ||
+    postDirty;
 
   const datesValid = Boolean(start) && Boolean(end) && end >= start;
   const rateValid =
@@ -124,6 +139,7 @@ export function CoveragePeriodEditor({
     term.gst_rate != null ||
     term.free_cover_limit != null ||
     term.nel_age_limit != null ||
+    (hasUnderwritingChoice && term.underwriting_required) ||
     term.pre_hosp_days != null ||
     term.post_hosp_days != null;
 
@@ -142,6 +158,7 @@ export function CoveragePeriodEditor({
           : {}),
         ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
         ...(nelAgeDirty ? { nelAgeLimit: parsedNelAge } : {}),
+        ...(underwritingDirty ? { underwritingRequired } : {}),
         ...(preDirty ? { preHospDays: parsedPre } : {}),
         ...(postDirty ? { postHospDays: parsedPost } : {}),
       });
@@ -205,48 +222,78 @@ export function CoveragePeriodEditor({
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <Label className="text-xs text-muted-foreground">
-              Free cover limit
-            </Label>
-            <InfoHint>
-              Sum insured auto-accepted without medical underwriting. Members
-              (or covered dependants) whose eligible SI exceeds it appear in
-              the Underwriting queue; insurer listings show the excess as
-              “Pending U/W” until a decision is recorded. Blank = no limit.
-            </InfoHint>
-            <Input
-              type="number"
-              min={0}
-              step={1000}
-              className="w-[130px]"
-              value={fcl}
-              onChange={(e) => setFcl(e.target.value)}
-              placeholder="No limit"
-              aria-label={`${term.code} free cover limit`}
-            />
-          </div>
+          {isLife && (
+            <>
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Free cover limit
+                </Label>
+                <InfoHint>
+                  Sum insured auto-accepted without medical underwriting.
+                  Members whose eligible SI exceeds it appear in the
+                  Underwriting queue. Blank = no limit.
+                </InfoHint>
+                <Input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  className="w-[130px]"
+                  value={fcl}
+                  onChange={(e) => setFcl(e.target.value)}
+                  placeholder="No limit"
+                  aria-label={`${term.code} free cover limit`}
+                />
+              </div>
 
-          <div className="flex items-center gap-1.5">
-            <Label className="text-xs text-muted-foreground">NEL age</Label>
-            <InfoHint>
-              Non-Evidence-Limit age (age next birthday). Members at or above
-              it require the insurer's underwriting regardless of sum insured
-              — a new hire has nothing guaranteed; an existing member keeps
-              last year's covered sum. Auto-filled from the placement slip
-              ("age 69 last birthday" → 70). Blank = no age gate.
-            </InfoHint>
-            <Input
-              type="number"
-              min={1}
-              max={120}
-              className="w-[80px]"
-              value={nelAge}
-              onChange={(e) => setNelAge(e.target.value)}
-              placeholder="—"
-              aria-label={`${term.code} NEL age limit`}
-            />
-          </div>
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs text-muted-foreground">NEL age</Label>
+                <InfoHint>
+                  Non-Evidence-Limit age (age next birthday). Members at or
+                  above it require underwriting regardless of sum insured.
+                  Blank = no age gate.
+                </InfoHint>
+                <Input
+                  type="number"
+                  min={1}
+                  max={120}
+                  className="w-[80px]"
+                  value={nelAge}
+                  onChange={(e) => setNelAge(e.target.value)}
+                  placeholder="—"
+                  aria-label={`${term.code} NEL age limit`}
+                />
+              </div>
+            </>
+          )}
+
+          {hasUnderwritingChoice && (
+            <div className="flex items-center gap-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Underwriting
+              </Label>
+              <InfoHint>
+                Whether this product requires insurer underwriting. New
+                Medical and General products default to No.
+              </InfoHint>
+              <Select
+                value={underwritingRequired ? "yes" : "no"}
+                onValueChange={(value) =>
+                  setUnderwritingRequired(value === "yes")
+                }
+              >
+                <SelectTrigger
+                  className="w-[110px]"
+                  aria-label={`${term.code} underwriting required`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="no">No</SelectItem>
+                  <SelectItem value="yes">Yes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Only on products whose claims draw on an inpatient benefit — the
               window is meaningless on a dental or GP line, and an input that

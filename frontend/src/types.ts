@@ -189,6 +189,8 @@ export interface ProductTerm {
   // Non-Evidence-Limit age (ANB): members at/above it require underwriting
   // regardless of sum insured. Null = no age gate.
   nel_age_limit: number | null;
+  // Explicit setup for Medical and General products; defaults to No.
+  underwriting_required: boolean;
   // Insurer-issued policy number for this product's placement.
   policy_number: string | null;
   // Whether this product's claims draw on an inpatient benefit. SERVED from the

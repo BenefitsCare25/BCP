@@ -17,6 +17,7 @@ import type {
   Category,
   CategoryGroup,
   EndorsementAnswer,
+  InsuranceLine,
   PlanAnswer,
   ProductSetup,
   ProductTemplate,
@@ -52,6 +53,8 @@ interface Props {
   onEditRule: (c: Category) => void;
   onConfirmed?: () => void;
   onDirtyChange?: (dirty: boolean, sections: string[]) => void;
+  insuranceLine: InsuranceLine;
+  termEditor?: React.ReactNode;
 }
 
 // Single-row tab labels per setup section.
@@ -303,6 +306,8 @@ export function ProductSetupForm({
   onEditRule,
   onConfirmed,
   onDirtyChange,
+  insuranceLine,
+  termEditor,
 }: Props) {
   const [answers, setAnswers] = useState<SetupAnswers>(() =>
     buildAnswers(template, draft),
@@ -537,6 +542,9 @@ export function ProductSetupForm({
     answers.eligibility.member_cover_eligibility,
   );
   const visibleEligibilityFields = template.eligibility_fields.filter((f) => {
+    if (f.id === "age_limit_no_underwriting" && insuranceLine !== "life") {
+      return false;
+    }
     if (f.id === "spouse_age_limit") return coveredMembers.has("Spouse");
     if (f.id === "child_age_limit") return coveredMembers.has("Child");
     return true;
@@ -548,6 +556,7 @@ export function ProductSetupForm({
   const sectionInner: Record<string, React.ReactNode> = {
     header: (
       <div className="flex flex-col gap-4">
+        {termEditor}
         {/* Two columns, not three: these are slip fields whose values are long
             (entity lists, addresses, period wording), and a third column made
             every one of them truncate. Every field takes one column — the long

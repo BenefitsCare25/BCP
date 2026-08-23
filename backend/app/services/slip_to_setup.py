@@ -42,7 +42,6 @@ _HEADER_FIELD_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("insured", ("insured",)),
     ("address", ("address",)),
     ("business", ("business",)),
-    ("period", ("period_of_insurance", "period")),
     ("insurer", ("insurer",)),
     ("policy_no", ("policy_no",)),
     ("admin_basis", ("admin_basis",)),

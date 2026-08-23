@@ -71,6 +71,11 @@ class ProductTerm(Base, TimestampMixin):
     # convention): members at/above this ANB require underwriting regardless of
     # sum insured ("… or age 69 (age last birthday)" → 70). None = no age gate.
     nel_age_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Medical / general products use an explicit Yes/No setting instead of
+    # life-product FCL / NEL thresholds.
+    underwriting_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     # Insurer-issued policy number for this product's placement. Operational
     # metadata (issued after activation) — editable on active years, like FCL.
     policy_number: Mapped[str | None] = mapped_column(String(64), nullable=True)

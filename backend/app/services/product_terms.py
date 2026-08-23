@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Category, Plan, PolicyYear, Product, ProductTerm
 from app.models.product_term import DEFAULT_GST_RATE
+from app.services import product_registry
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,23 @@ class ResolvedTerm:
     free_cover_limit: float | None = None
     # NEL age (ANB) — members at/above it require underwriting. None = no gate.
     nel_age_limit: int | None = None
+    # Explicit underwriting setup for Medical / General products.
+    underwriting_required: bool = False
     # Insurer-issued policy number — None until the placement is issued.
     policy_number: str | None = None
     # Pre-/post-hospitalisation claim window in days. None = no rule.
     pre_hosp_days: int | None = None
     post_hosp_days: int | None = None
+
+
+def uses_life_thresholds(product: Product) -> bool:
+    """Life line, plus legacy products that predate explicit classification."""
+    if product.line == "life":
+        return True
+    metadata = product.product_metadata
+    explicit_line = metadata.get("line") if isinstance(metadata, dict) else None
+    legacy_unclassified = not product_registry.is_known(product.code) and not explicit_line
+    return legacy_unclassified
 
 
 def term_window(
@@ -144,6 +157,7 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
             term.coverage_end if term else None,
             py,
         )
+        has_life_thresholds = uses_life_thresholds(product)
         out.append(
             ResolvedTerm(
                 product_id=pid,
@@ -154,8 +168,17 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
                 is_default=is_default,
                 gst_included=term.gst_included if term else None,
                 gst_rate=term.gst_rate if term else None,
-                free_cover_limit=term.free_cover_limit if term else None,
-                nel_age_limit=term.nel_age_limit if term else None,
+                free_cover_limit=(
+                    term.free_cover_limit if term and has_life_thresholds else None
+                ),
+                nel_age_limit=(
+                    term.nel_age_limit if term and has_life_thresholds else None
+                ),
+                underwriting_required=(
+                    bool(term.underwriting_required)
+                    if term and product.line in ("medical", "general")
+                    else False
+                ),
                 policy_number=term.policy_number if term else None,
                 pre_hosp_days=term.pre_hosp_days if term else None,
                 post_hosp_days=term.post_hosp_days if term else None,
@@ -163,6 +186,30 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
         )
     out.sort(key=lambda r: (r.code, r.display_name))
     return out
+
+
+def _term_for_update(
+    db: Session, policy_year_id: str, product_id: str
+) -> ProductTerm:
+    """Find a stored or pending term in this autoflush-disabled session."""
+    for pending in db.new:
+        if (
+            isinstance(pending, ProductTerm)
+            and pending.policy_year_id == policy_year_id
+            and pending.product_id == product_id
+        ):
+            return pending
+    term = db.execute(
+        select(ProductTerm).where(
+            ProductTerm.policy_year_id == policy_year_id,
+            ProductTerm.product_id == product_id,
+        )
+    ).scalar_one_or_none()
+    if term is not None:
+        return term
+    term = ProductTerm(policy_year_id=policy_year_id, product_id=product_id)
+    db.add(term)
+    return term
 
 
 def autofill_nel_terms(
@@ -187,16 +234,8 @@ def autofill_nel_terms(
         nel_age = None
     if nel_amount is None and nel_age is None:
         return False
-    term = db.execute(
-        select(ProductTerm).where(
-            ProductTerm.policy_year_id == policy_year_id,
-            ProductTerm.product_id == product_id,
-        )
-    ).scalar_one_or_none()
+    term = _term_for_update(db, policy_year_id, product_id)
     changed = False
-    if term is None:
-        term = ProductTerm(policy_year_id=policy_year_id, product_id=product_id)
-        db.add(term)
     if nel_amount is not None and term.free_cover_limit is None:
         term.free_cover_limit = float(nel_amount)
         changed = True
@@ -204,6 +243,24 @@ def autofill_nel_terms(
         term.nel_age_limit = int(nel_age)
         changed = True
     return changed
+
+
+def autofill_term_window(
+    db: Session,
+    policy_year_id: str,
+    product_id: str,
+    coverage_start: date,
+    coverage_end: date,
+) -> bool:
+    """Fill product dates from a slip without overwriting a broker's edit."""
+    if coverage_end < coverage_start:
+        return False
+    term = _term_for_update(db, policy_year_id, product_id)
+    if term.coverage_start is not None or term.coverage_end is not None:
+        return False
+    term.coverage_start = coverage_start
+    term.coverage_end = coverage_end
+    return True
 
 
 def _envelope_from_pairs(

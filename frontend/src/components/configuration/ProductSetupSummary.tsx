@@ -64,18 +64,29 @@ function termRows(term: ProductTerm | null): { label: string; value: string }[] 
       : term.gst_included
         ? `Include${term.gst_rate != null ? ` (${term.gst_rate}%)` : ""}`
         : "Exclude";
-  const rows = [
+  const rows: { label: string; value: string }[] = [
     {
       label: "Coverage period",
       value: `${fmtDay(term.coverage_start)} to ${fmtDay(term.coverage_end)}`,
     },
     { label: "GST", value: gst },
-    { label: "Free cover limit", value: moneyValue(term.free_cover_limit) },
-    {
-      label: "NEL age",
-      value: term.nel_age_limit == null ? "Not set" : String(term.nel_age_limit),
-    },
   ];
+  if (term.line === "life") {
+    rows.push(
+      { label: "Free cover limit", value: moneyValue(term.free_cover_limit) },
+      {
+        label: "NEL age",
+        value:
+          term.nel_age_limit == null ? "Not set" : String(term.nel_age_limit),
+      },
+    );
+  }
+  if (term.line === "medical" || term.line === "general") {
+    rows.push({
+      label: "Underwriting",
+      value: term.underwriting_required ? "Yes" : "No",
+    });
+  }
   if (term.is_inpatient) {
     rows.push({
       label: "Pre / post days",
@@ -92,15 +103,18 @@ function FieldList({
   title,
   fields,
   values,
+  detailRows,
 }: {
   title: string;
   fields: TemplateField[];
   values: Record<string, unknown>;
+  detailRows?: { label: string; value: string }[];
 }) {
   if (!fields.length) return null;
   return (
     <section className="space-y-2 border-t border-border pt-4">
       <h4 className="text-sm font-semibold text-foreground">{title}</h4>
+      {detailRows && <DetailStrip rows={detailRows} />}
       <dl className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {fields.map((field) => (
           <div key={field.id} className="min-w-0">
@@ -151,6 +165,9 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
     answers?.eligibility?.member_cover_eligibility,
   );
   const eligibilityFields = template.eligibility_fields.filter((field) => {
+    if (field.id === "age_limit_no_underwriting" && term?.line !== "life") {
+      return false;
+    }
     if (field.id === "spouse_age_limit") return memberCover.has("Spouse");
     if (field.id === "child_age_limit") return memberCover.has("Child");
     return true;
@@ -175,8 +192,6 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
           setup details and confirm it.
         </div>
       )}
-
-      <DetailStrip rows={termRows(term)} />
 
       <section className="space-y-3 border-t border-border pt-4">
         <h4 className="text-sm font-semibold text-foreground">Product Setup</h4>
@@ -222,6 +237,7 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
         title="Header & Policy"
         fields={template.header_fields}
         values={answers?.header ?? {}}
+        detailRows={termRows(term)}
       />
       <FieldList
         title="Eligibility"

@@ -30,6 +30,7 @@ from app.services.product_terms import (
     product_ids_in_year,
     resolve_terms,
     term_window,
+    uses_life_thresholds,
 )
 from app.services.underwriting import refresh_underwriting_cases
 
@@ -68,6 +69,7 @@ def list_product_terms(
             gst_rate=r.gst_rate,
             free_cover_limit=r.free_cover_limit,
             nel_age_limit=r.nel_age_limit,
+            underwriting_required=r.underwriting_required,
             policy_number=r.policy_number,
             is_inpatient=is_inpatient_product(r.code),
             pre_hosp_days=r.pre_hosp_days,
@@ -112,8 +114,17 @@ def list_product_terms(
                     line=cp.line,
                     gst_included=t.gst_included if t else None,
                     gst_rate=t.gst_rate if t else None,
-                    free_cover_limit=t.free_cover_limit if t else None,
-                    nel_age_limit=t.nel_age_limit if t else None,
+                    free_cover_limit=(
+                        t.free_cover_limit if t and uses_life_thresholds(cp) else None
+                    ),
+                    nel_age_limit=(
+                        t.nel_age_limit if t and uses_life_thresholds(cp) else None
+                    ),
+                    underwriting_required=(
+                        bool(t.underwriting_required)
+                        if t and cp.line in ("medical", "general")
+                        else False
+                    ),
                     policy_number=t.policy_number if t else None,
                     is_inpatient=is_inpatient_product(cp.code),
                     pre_hosp_days=t.pre_hosp_days if t else None,
@@ -141,16 +152,29 @@ def set_product_term(
     # touching only those stay editable after activation. Coverage dates / GST
     # keep the lock.
     if not body.model_fields_set <= {
-        "free_cover_limit", "nel_age_limit", "policy_number",
+        "free_cover_limit", "nel_age_limit", "underwriting_required",
+        "policy_number",
     }:
         assert_policy_year_editable(py)
     product = _require_product_in_year(db, py, product_id)
+    sent = body.model_fields_set
     term = db.execute(
         select(ProductTerm).where(
             ProductTerm.policy_year_id == py.id,
             ProductTerm.product_id == product_id,
         )
     ).scalar_one_or_none()
+    has_life_thresholds = uses_life_thresholds(product)
+    if not has_life_thresholds and {"free_cover_limit", "nel_age_limit"} & sent:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Free cover limit and NEL age apply only to Life products.",
+        )
+    if product.line not in ("medical", "general") and "underwriting_required" in sent:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Underwriting Yes/No applies only to Medical and General products.",
+        )
     if term is None:
         term = ProductTerm(policy_year_id=py.id, product_id=product_id)
         db.add(term)
@@ -161,7 +185,6 @@ def set_product_term(
     # Partial update: apply ONLY the dimensions the caller actually sent, so a
     # GST-only body can't wipe the coverage period and a dates-only body can't
     # reset GST. Dates move as a pair (enforced by ProductTermUpdate).
-    sent = body.model_fields_set
     if "coverage_start" in sent or "coverage_end" in sent:
         term.coverage_start = body.coverage_start
         term.coverage_end = body.coverage_end
@@ -173,6 +196,11 @@ def set_product_term(
         term.free_cover_limit = body.free_cover_limit
     if "nel_age_limit" in sent:
         term.nel_age_limit = body.nel_age_limit
+    if "underwriting_required" in sent:
+        term.underwriting_required = body.underwriting_required
+        # Clean any legacy thresholds that were recorded before line scoping.
+        term.free_cover_limit = None
+        term.nel_age_limit = None
     for field in ("pre_hosp_days", "post_hosp_days"):
         if field in sent:
             setattr(term, field, getattr(body, field))
@@ -202,6 +230,7 @@ def set_product_term(
             "gst_rate": term.gst_rate,
             "free_cover_limit": term.free_cover_limit,
             "nel_age_limit": term.nel_age_limit,
+            "underwriting_required": term.underwriting_required,
             "pre_hosp_days": term.pre_hosp_days,
             "post_hosp_days": term.post_hosp_days,
             "policy_number": term.policy_number,
@@ -218,8 +247,13 @@ def set_product_term(
         line=product.line,
         gst_included=term.gst_included,
         gst_rate=term.gst_rate,
-        free_cover_limit=term.free_cover_limit,
-        nel_age_limit=term.nel_age_limit,
+        free_cover_limit=term.free_cover_limit if has_life_thresholds else None,
+        nel_age_limit=term.nel_age_limit if has_life_thresholds else None,
+        underwriting_required=(
+            bool(term.underwriting_required)
+            if product.line in ("medical", "general")
+            else False
+        ),
         policy_number=term.policy_number,
         is_inpatient=is_inpatient_product(product.code),
         pre_hosp_days=term.pre_hosp_days,

@@ -195,6 +195,12 @@ def ensure_standard_header_fields(fields: list[TemplateField]) -> list[TemplateF
     field is normalised to the "Office Address" label/textarea rather than
     duplicated. Mutates and returns the list.
     """
+    # Coverage dates now live in ProductTerm and are filled directly from the
+    # placement slip. Remove the legacy duplicate text field from every
+    # hand-authored and synthesized template.
+    fields[:] = [
+        field for field in fields if field.id not in {"period_of_insurance", "period"}
+    ]
     # Normalise an existing address field.
     for f in fields:
         if f.id == "address":
