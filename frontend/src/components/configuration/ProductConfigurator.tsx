@@ -5,7 +5,6 @@ import {
   useProductTerms,
   useSetupTemplate,
 } from "@/api/hooks";
-import { CoveragePeriodEditor } from "./CoveragePeriodEditor";
 import { ProductSetupForm } from "./ProductSetupForm";
 import { ProductSetupSummary } from "./ProductSetupSummary";
 import type { Category, CategoryGroup } from "@/types";
@@ -88,16 +87,7 @@ export function ProductConfigurator({
         onConfirmed={onDone}
         onDirtyChange={onDirtyChange}
         insuranceLine={term?.line ?? "medical"}
-        termEditor={
-          term ? (
-            <CoveragePeriodEditor
-              // Remount on server values so save/reset discards local edits.
-              key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}:${term.free_cover_limit ?? ""}:${term.nel_age_limit ?? ""}:${term.underwriting_required}`}
-              policyYearId={policyYearId}
-              term={term}
-            />
-          ) : null
-        }
+        term={term}
       />
     </div>
   );

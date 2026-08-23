@@ -21,6 +21,7 @@ import type {
   PlanAnswer,
   ProductSetup,
   ProductTemplate,
+  ProductTerm,
   SetupAnswers,
   SobSchedule,
   TemplateField,
@@ -34,6 +35,10 @@ import { EmployeeCategoryPlanTab } from "./EmployeeCategoryPlanTab";
 import { employeeCategoryIssueCount } from "./employeeCategoryGroups";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
+import {
+  CoveragePeriodEditor,
+  type CoveragePeriodEditorHandle,
+} from "./CoveragePeriodEditor";
 import {
   hasSelectedDependants,
   inferMemberCoverFromAnswers,
@@ -54,7 +59,7 @@ interface Props {
   onConfirmed?: () => void;
   onDirtyChange?: (dirty: boolean, sections: string[]) => void;
   insuranceLine: InsuranceLine;
-  termEditor?: React.ReactNode;
+  term: ProductTerm | null;
 }
 
 // Single-row tab labels per setup section.
@@ -307,7 +312,7 @@ export function ProductSetupForm({
   onConfirmed,
   onDirtyChange,
   insuranceLine,
-  termEditor,
+  term,
 }: Props) {
   const [answers, setAnswers] = useState<SetupAnswers>(() =>
     buildAnswers(template, draft),
@@ -319,6 +324,12 @@ export function ProductSetupForm({
   const confirm = useConfirmSetup(policyYearId);
   const { data: suggestions } = useFieldSuggestions(policyYearId, template.code);
   const confirmInFlight = useRef(false);
+  const termEditorRef = useRef<CoveragePeriodEditorHandle>(null);
+  const [termStatus, setTermStatus] = useState({
+    dirty: false,
+    valid: true,
+    busy: false,
+  });
 
   // Serialized snapshot of what's saved on the server, so we only auto-save on
   // tab-switch when the form is actually dirty (avoids materializing a draft for
@@ -478,42 +489,54 @@ export function ProductSetupForm({
     [answers],
   );
 
+  const formDirty = isDirty || termStatus.dirty;
+  const formDirtySections = useMemo(
+    () => {
+      const sections = isDirty ? dirtySections : [];
+      return termStatus.dirty && !sections.includes("Header & Policy")
+        ? ["Header & Policy", ...sections]
+        : sections;
+    },
+    [dirtySections, isDirty, termStatus.dirty],
+  );
+
   useEffect(() => {
-    onDirtyChange?.(isDirty, dirtySections);
-  }, [dirtySections, isDirty, onDirtyChange]);
+    onDirtyChange?.(formDirty, formDirtySections);
+  }, [formDirty, formDirtySections, onDirtyChange]);
 
   const isConfirmed =
     draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
   const confirmLabel = isConfirmed ? "Update setup" : "Confirm setup";
-  const onConfirm = () => {
+  const onConfirm = async () => {
     if (confirmInFlight.current) return;
     confirmInFlight.current = true;
-    confirm.mutate(
-      { code: template.code, answers, templateVersion: template.version },
-      {
-        onSuccess: (r) => {
-          setConfirmOpen(false);
-          savedSnapshot.current = JSON.stringify(answers);
-          onDirtyChange?.(false, []);
-          const planMsg = `${r.plans_created + r.plans_updated} plan(s)`;
-          const catMsg =
-            r.categories_created > 0
-              ? `, ${r.categories_created} categor${r.categories_created === 1 ? "y" : "ies"} seeded`
-              : "";
-          const matchMsg = r.rematched
-            ? `, employees re-matched${r.employees_matched != null ? ` (${r.employees_matched} matched)` : ""}`
-            : "";
-          toast.success(
-            `${template.code} configured - ${planMsg}${catMsg}${matchMsg}`,
-          );
-          onConfirmed?.();
-        },
-        onError: (e) => toast.error(formatError(e)),
-        onSettled: () => {
-          confirmInFlight.current = false;
-        },
-      },
-    );
+    try {
+      await termEditorRef.current?.save();
+      const r = await confirm.mutateAsync({
+        code: template.code,
+        answers,
+        templateVersion: template.version,
+      });
+      setConfirmOpen(false);
+      savedSnapshot.current = JSON.stringify(answers);
+      onDirtyChange?.(false, []);
+      const planMsg = `${r.plans_created + r.plans_updated} plan(s)`;
+      const catMsg =
+        r.categories_created > 0
+          ? `, ${r.categories_created} categor${r.categories_created === 1 ? "y" : "ies"} seeded`
+          : "";
+      const matchMsg = r.rematched
+        ? `, employees re-matched${r.employees_matched != null ? ` (${r.employees_matched} matched)` : ""}`
+        : "";
+      toast.success(
+        `${template.code} configured - ${planMsg}${catMsg}${matchMsg}`,
+      );
+      onConfirmed?.();
+    } catch (error) {
+      toast.error(formatError(error));
+    } finally {
+      confirmInFlight.current = false;
+    }
   };
   const enabledArrangements = Object.values(answers.arrangements).filter(
     Boolean,
@@ -556,7 +579,16 @@ export function ProductSetupForm({
   const sectionInner: Record<string, React.ReactNode> = {
     header: (
       <div className="flex flex-col gap-4">
-        {termEditor}
+        {term ? (
+          <CoveragePeriodEditor
+            ref={termEditorRef}
+            // Remount on server values so confirmation/reset discards local edits.
+            key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}:${term.free_cover_limit ?? ""}:${term.nel_age_limit ?? ""}:${term.underwriting_required}`}
+            policyYearId={policyYearId}
+            term={term}
+            onStatusChange={setTermStatus}
+          />
+        ) : null}
         {/* Two columns, not three: these are slip fields whose values are long
             (entity lists, addresses, period wording), and a third column made
             every one of them truncate. Every field takes one column — the long
@@ -756,7 +788,12 @@ export function ProductSetupForm({
         <div className="flex items-center gap-2">
           <Button
             onClick={() => setConfirmOpen(true)}
-            disabled={selectedPlans.length === 0 || confirm.isPending}
+            disabled={
+              selectedPlans.length === 0 ||
+              confirm.isPending ||
+              termStatus.busy ||
+              !termStatus.valid
+            }
           >
             {confirmLabel}
           </Button>
@@ -770,7 +807,7 @@ export function ProductSetupForm({
         confirmLabel={confirmLabel}
         confirmVariant="default"
         tone="info"
-        loading={confirm.isPending}
+        loading={confirm.isPending || termStatus.busy}
         onConfirm={onConfirm}
         description={
           <span>
@@ -778,9 +815,10 @@ export function ProductSetupForm({
             <strong>{template.code}</strong> product setup and{" "}
             <strong>{selectedPlans.length}</strong> plan
             {selectedPlans.length === 1 ? "" : "s"} with their rates &
-            Schedule of Benefits. Eligibility categories are managed in the
-            Employee Category &amp; Plan Type cards and are left untouched here.
-            Re-confirming refreshes the product and plans only.
+            Schedule of Benefits and policy terms. Eligibility categories are
+            managed in the Employee Category &amp; Plan Type cards and are left
+            untouched here. Re-confirming refreshes the product, plans, and
+            policy terms.
           </span>
         }
       />

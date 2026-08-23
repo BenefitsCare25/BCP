@@ -60,7 +60,7 @@ function termRows(term: ProductTerm | null): { label: string; value: string }[] 
   if (!term) return [];
   const gst =
     term.gst_included === null
-      ? "Exclude (default)"
+      ? "Exclude"
       : term.gst_included
         ? `Include${term.gst_rate != null ? ` (${term.gst_rate}%)` : ""}`
         : "Exclude";
@@ -73,7 +73,7 @@ function termRows(term: ProductTerm | null): { label: string; value: string }[] 
   ];
   if (term.line === "life") {
     rows.push(
-      { label: "Free cover limit", value: moneyValue(term.free_cover_limit) },
+      { label: "FCL", value: moneyValue(term.free_cover_limit) },
       {
         label: "NEL age",
         value:

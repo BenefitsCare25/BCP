@@ -1,4 +1,10 @@
-import { useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useState,
+} from "react";
 import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,8 +27,22 @@ import type { ProductTerm } from "@/types";
 import { toast } from "sonner";
 
 // Product premiums are GST-exclusive unless the broker explicitly includes it.
-// Legacy null values therefore render as the clear product default: Exclude.
+// Legacy null values therefore render as Exclude.
 type GstOpinion = "include" | "exclude";
+
+export interface CoveragePeriodEditorHandle {
+  save: () => Promise<void>;
+}
+
+interface CoveragePeriodEditorProps {
+  policyYearId: string;
+  term: ProductTerm;
+  onStatusChange?: (status: {
+    dirty: boolean;
+    valid: boolean;
+    busy: boolean;
+  }) => void;
+}
 
 function toOpinion(v: boolean | null): GstOpinion {
   return v ? "include" : "exclude";
@@ -32,18 +52,17 @@ function fromOpinion(o: GstOpinion): boolean {
 }
 
 /**
- * Compact per-product terms editor: coverage period + GST. Inputs are a pure
- * function of server state — remount (via a key on the server values) after a
- * save/reset to discard local edits. Coverage dates and GST are independent
- * dimensions; each saves only the fields it changed (partial update).
+ * Compact staged editor for per-product terms. Confirm Setup calls the exposed
+ * save method, which sends only changed fields. A server-value key remounts the
+ * editor after confirmation or reset so local state follows persisted values.
  */
-export function CoveragePeriodEditor({
-  policyYearId,
-  term,
-}: {
-  policyYearId: string;
-  term: ProductTerm;
-}) {
+export const CoveragePeriodEditor = forwardRef<
+  CoveragePeriodEditorHandle,
+  CoveragePeriodEditorProps
+>(function CoveragePeriodEditor(
+  { policyYearId, term, onStatusChange },
+  ref,
+) {
   const [start, setStart] = useState(term.coverage_start);
   const [end, setEnd] = useState(term.coverage_end);
   const [gstOpinion, setGstOpinion] = useState<GstOpinion>(
@@ -74,7 +93,7 @@ export function CoveragePeriodEditor({
   // Reset (DELETE) clears the whole row incl. the activation-locked coverage
   // dates / GST, so the server rejects it on a non-draft year. Only the
   // operational fields (FCL, policy no.) stay editable there — cleared by
-  // blanking + Save — so don't offer a Reset that would only 409.
+  // blanking + confirmation — so don't offer a Reset that would only 409.
   const { data: policyYears = [] } = usePolicyYears();
   const activeYear = policyYears.find((y) => y.id === policyYearId);
   const locked = activeYear !== undefined && activeYear.status !== "draft";
@@ -142,30 +161,55 @@ export function CoveragePeriodEditor({
     term.pre_hosp_days != null ||
     term.post_hosp_days != null;
 
-  const save = async () => {
-    try {
-      // Partial update — send only the dimension(s) actually changed so one
-      // never resets the other. Dates ride along only when edited.
-      await setTerm.mutateAsync({
-        productId: term.product_id,
-        ...(datesDirty ? { coverageStart: start, coverageEnd: end } : {}),
-        ...(gstDirty
-          ? {
-              gstIncluded: fromOpinion(gstOpinion),
-              gstRate: gstOpinion === "include" ? parsedRate : null,
-            }
-          : {}),
-        ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
-        ...(nelAgeDirty ? { nelAgeLimit: parsedNelAge } : {}),
-        ...(underwritingDirty ? { underwritingRequired } : {}),
-        ...(preDirty ? { preHospDays: parsedPre } : {}),
-        ...(postDirty ? { postHospDays: parsedPost } : {}),
-      });
-      toast.success(`Updated ${term.code} terms`);
-    } catch (err) {
-      toast.error(formatError(err));
-    }
-  };
+  const save = useCallback(async () => {
+    if (!dirty) return;
+    if (!valid) throw new Error("Review the policy term fields before confirming.");
+
+    // Partial update — send only the dimension(s) actually changed so one
+    // never resets the other. Dates ride along only when edited.
+    await setTerm.mutateAsync({
+      productId: term.product_id,
+      ...(datesDirty ? { coverageStart: start, coverageEnd: end } : {}),
+      ...(gstDirty
+        ? {
+            gstIncluded: fromOpinion(gstOpinion),
+            gstRate: gstOpinion === "include" ? parsedRate : null,
+          }
+        : {}),
+      ...(fclDirty ? { freeCoverLimit: parsedFcl } : {}),
+      ...(nelAgeDirty ? { nelAgeLimit: parsedNelAge } : {}),
+      ...(underwritingDirty ? { underwritingRequired } : {}),
+      ...(preDirty ? { preHospDays: parsedPre } : {}),
+      ...(postDirty ? { postHospDays: parsedPost } : {}),
+    });
+  }, [
+    datesDirty,
+    dirty,
+    end,
+    fclDirty,
+    gstDirty,
+    gstOpinion,
+    nelAgeDirty,
+    parsedFcl,
+    parsedNelAge,
+    parsedPost,
+    parsedPre,
+    parsedRate,
+    postDirty,
+    preDirty,
+    setTerm,
+    start,
+    term.product_id,
+    underwritingDirty,
+    underwritingRequired,
+    valid,
+  ]);
+
+  useImperativeHandle(ref, () => ({ save }), [save]);
+
+  useEffect(() => {
+    onStatusChange?.({ dirty, valid, busy });
+  }, [busy, dirty, onStatusChange, valid]);
 
   const reset = async () => {
     try {
@@ -182,21 +226,21 @@ export function CoveragePeriodEditor({
           <div className="flex shrink-0 items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">GST</Label>
             <InfoHint>
-              Product premiums exclude GST by default. Choose Include GST to
-              gross premiums and flex price tags by this rate (default 9%).
+              Product premiums exclude GST. Choose Include GST to gross
+              premiums and flex price tags by this rate (normally 9%).
             </InfoHint>
             <Select
               value={gstOpinion}
               onValueChange={(v) => setGstOpinion(v as GstOpinion)}
             >
               <SelectTrigger
-                className="h-8 w-[172px] whitespace-nowrap"
+                className="h-8 w-[136px] whitespace-nowrap"
                 aria-label={`${term.code} GST`}
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="exclude">Exclude GST (default)</SelectItem>
+                <SelectItem value="exclude">Exclude GST</SelectItem>
                 <SelectItem value="include">Include GST</SelectItem>
               </SelectContent>
             </Select>
@@ -222,7 +266,7 @@ export function CoveragePeriodEditor({
             <>
               <div className="flex shrink-0 items-center gap-1.5">
                 <Label className="text-xs text-muted-foreground">
-                  Free cover limit
+                  FCL
                 </Label>
                 <InfoHint>
                   Sum insured auto-accepted without medical underwriting.
@@ -337,7 +381,7 @@ export function CoveragePeriodEditor({
               aria-label={`${term.code} coverage start`}
               value={start}
               onChange={(e) => setStart(e.target.value)}
-              className="h-8 w-[132px] px-2"
+              className="h-8 w-[152px] min-w-[152px] px-2"
             />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -348,17 +392,9 @@ export function CoveragePeriodEditor({
               value={end}
               min={start || undefined}
               onChange={(e) => setEnd(e.target.value)}
-              className="h-8 w-[132px] px-2"
+              className="h-8 w-[152px] min-w-[152px] px-2"
             />
           </div>
-          <Button
-            className="h-8 shrink-0"
-            size="sm"
-            disabled={!dirty || !valid || busy}
-            onClick={save}
-          >
-            Save
-          </Button>
           {hasOverride && !locked && (
             <Button
               className="shrink-0"
@@ -389,4 +425,4 @@ export function CoveragePeriodEditor({
       )}
     </div>
   );
-}
+});
