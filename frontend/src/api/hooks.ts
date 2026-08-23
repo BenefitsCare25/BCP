@@ -985,6 +985,7 @@ export function useCreatePolicyYear() {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -1007,6 +1008,7 @@ export function useUpdatePolicyYear() {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -1019,6 +1021,7 @@ export function useDeletePolicyYear() {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -1055,6 +1058,7 @@ export function useCopyPolicyYear() {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -1649,6 +1653,7 @@ function usePolicyYearLifecycleMutation(action: "set-current" | "archive") {
       qc.invalidateQueries({ queryKey: ["company-summary"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -1714,6 +1719,7 @@ export function useConfirmSetup(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["match-results"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 

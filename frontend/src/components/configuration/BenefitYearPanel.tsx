@@ -1,5 +1,15 @@
 import { useState } from "react";
-import { Archive, CalendarPlus, CheckCircle2, Copy, FileText, Loader2, Rocket, Trash2 } from "lucide-react";
+import {
+  Archive,
+  CalendarPlus,
+  CheckCircle2,
+  Copy,
+  FileText,
+  Loader2,
+  Rocket,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import {
@@ -21,6 +31,10 @@ import { triggerDownload } from "@/lib/download";
 import { formatError } from "@/lib/errors";
 import { notify } from "@/stores/notifications";
 import type { PolicyYear } from "@/types";
+import {
+  BenefitYearDateFields,
+  type BenefitYearDateField,
+} from "./BenefitYearDateFields";
 
 function benefitYearId(startIso: string, endIso: string): string {
   return `${startIso.replaceAll("-", "").slice(0, 6)}-${endIso.replaceAll("-", "").slice(0, 6)}`;
@@ -49,6 +63,29 @@ function nextSpan(years: PolicyYear[]): { start: string; end: string } {
   const latestEnd = years.map((year) => year.end_date).sort().at(-1)!;
   const start = addDays(latestEnd, 1);
   return { start, end: oneYearMinusDay(start) };
+}
+
+function dateRangeError(
+  years: PolicyYear[],
+  policyYear: PolicyYear,
+  start: string,
+  end: string,
+  field: BenefitYearDateField,
+): string | null {
+  if (end < start) {
+    return field === "start_date"
+      ? "Start date must be on or before the end date."
+      : "End date must be on or after the start date.";
+  }
+  const overlap = years.find(
+    (candidate) =>
+      candidate.id !== policyYear.id &&
+      start <= candidate.end_date &&
+      candidate.start_date <= end,
+  );
+  return overlap
+    ? `Overlaps ${benefitYearId(overlap.start_date, overlap.end_date)} (${overlap.start_date} to ${overlap.end_date}).`
+    : null;
 }
 
 function DownloadButton({ label, title, onDownload }: {
@@ -94,10 +131,14 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
   const archive = useArchivePolicyYear();
   const [confirmDelete, setConfirmDelete] = useState<PolicyYear | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [panelError, setPanelError] = useState<string | null>(null);
   const [dateDraft, setDateDraft] = useState<Record<string, {
     start_date?: string;
     end_date?: string;
   }>>({});
+  const [dateErrors, setDateErrors] = useState<
+    Record<string, Partial<Record<BenefitYearDateField, string>>>
+  >({});
   const previousYear = years.length
     ? years.reduce((a, b) => (a.start_date > b.start_date ? a : b))
     : null;
@@ -105,29 +146,54 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
   const readiness = usePolicyYearReadiness(viewingYear?.id);
   const deletionImpact = usePolicyYearDeletionImpact(confirmDelete?.id);
 
-  const clearDateDraft = (id: string, field: "start_date" | "end_date") =>
+  const clearDateDraft = (id: string, field: BenefitYearDateField) =>
     setDateDraft((draft) => ({ ...draft, [id]: { ...draft[id], [field]: undefined } }));
+
+  const setDateError = (id: string, field: BenefitYearDateField, message?: string) =>
+    setDateErrors((errors) => ({
+      ...errors,
+      [id]: { ...errors[id], [field]: message },
+    }));
+
+  const clearDateErrors = (id: string) =>
+    setDateErrors((errors) => ({ ...errors, [id]: {} }));
 
   const patchDate = async (
     policyYear: PolicyYear,
-    field: "start_date" | "end_date",
+    field: BenefitYearDateField,
     value: string,
   ) => {
     if (!value || value === policyYear[field]) {
       clearDateDraft(policyYear.id, field);
+      setDateError(policyYear.id, field);
       return;
     }
+    const start = field === "start_date"
+      ? value
+      : dateDraft[policyYear.id]?.start_date ?? policyYear.start_date;
+    const end = field === "end_date"
+      ? value
+      : dateDraft[policyYear.id]?.end_date ?? policyYear.end_date;
+    const validationError = dateRangeError(years, policyYear, start, end, field);
+    if (validationError) {
+      setDateError(policyYear.id, field, validationError);
+      return;
+    }
+    setPanelError(null);
+    setDateError(policyYear.id, field);
     try {
       await update.mutateAsync({ policyYearId: policyYear.id, payload: { [field]: value } });
-    } catch (error) {
-      toast.error(formatError(error));
-    } finally {
       clearDateDraft(policyYear.id, field);
+    } catch (error) {
+      const message = formatError(error);
+      setDateError(policyYear.id, field, message);
+      toast.error(message);
     }
   };
 
   const createYear = async (copyPrevious: boolean) => {
     const span = nextSpan(years);
+    setPanelError(null);
     try {
       if (copyPrevious && previousYear) {
         const result = await copy.mutateAsync({
@@ -142,7 +208,9 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
         toast.success("Benefit year added");
       }
     } catch (error) {
-      toast.error(formatError(error));
+      const message = formatError(error);
+      setPanelError(message);
+      toast.error(message);
     }
   };
 
@@ -153,6 +221,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
 
   const runLifecycle = async (action: "live" | "archive") => {
     if (!viewingYear) return;
+    setPanelError(null);
     try {
       if (action === "live") {
         await setCurrent.mutateAsync(viewingYear.id);
@@ -162,7 +231,9 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
         toast.success("Benefit year archived");
       }
     } catch (error) {
-      toast.error(formatError(error));
+      const message = formatError(error);
+      setPanelError(message);
+      toast.error(message);
     }
   };
 
@@ -187,6 +258,15 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
         </div>}
       </CardHeader>
       <CardContent className="space-y-4">
+        {panelError && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-error/30 bg-error-soft px-3 py-2.5 text-sm text-error"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>{panelError}</span>
+          </div>
+        )}
         {!years.length ? (
           <div className="rounded-lg border border-border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
             Add the first period to begin configuration.
@@ -220,24 +300,24 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                         {policyYear.status === "active" ? "Live" : policyYear.status === "draft" ? "Draft" : "Archived"}
                       </Badge>
                     </div>
-                    <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:max-w-[320px]">
-                      {(["start_date", "end_date"] as const).map((field) => (
-                        <label key={field} className="space-y-1 text-xs text-muted-foreground">
-                          {field === "start_date" ? "Start date" : "End date"}
-                          <Input
-                            type="date"
-                            className="h-8"
-                            disabled={readOnly}
-                            value={dateDraft[policyYear.id]?.[field] ?? policyYear[field]}
-                            onChange={(event) => setDateDraft((draft) => ({
-                              ...draft,
-                              [policyYear.id]: { ...draft[policyYear.id], [field]: event.target.value },
-                            }))}
-                            onBlur={(event) => patchDate(policyYear, field, event.target.value)}
-                          />
-                        </label>
-                      ))}
-                    </div>
+                    <BenefitYearDateFields
+                      policyYear={policyYear}
+                      draft={dateDraft[policyYear.id]}
+                      errors={dateErrors[policyYear.id]}
+                      readOnly={readOnly}
+                      onChange={(field, value) => {
+                        setPanelError(null);
+                        clearDateErrors(policyYear.id);
+                        setDateDraft((draft) => ({
+                          ...draft,
+                          [policyYear.id]: {
+                            ...draft[policyYear.id],
+                            [field]: value,
+                          },
+                        }));
+                      }}
+                      onBlur={(field, value) => patchDate(policyYear, field, value)}
+                    />
                     <div className="flex flex-wrap gap-1.5 xl:ml-auto">
                       <DownloadButton
                         label="Fact-find"
@@ -295,6 +375,10 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                 </div>
                 {readiness.isLoading ? (
                   <p className="text-sm text-muted-foreground">Checking configuration…</p>
+                ) : readiness.isError ? (
+                  <p role="alert" className="text-sm text-error">
+                    Could not check launch readiness. {formatError(readiness.error)}
+                  </p>
                 ) : readiness.data?.ready ? (
                   <p className="text-sm text-good">Required configuration is complete.</p>
                 ) : (
@@ -354,6 +438,10 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
             )}</strong> and its configuration. Operational years are retained and must be archived instead.
             {deletionImpact.isLoading ? (
               <span className="mt-3 block">Checking linked records…</span>
+            ) : deletionImpact.isError ? (
+              <span role="alert" className="mt-3 block text-error">
+                Could not check linked records. {formatError(deletionImpact.error)}
+              </span>
             ) : deletionImpact.data?.deletable ? (
               <label className="mt-3 block space-y-1 text-foreground">
                 Type the benefit-year ID to confirm.
@@ -382,12 +470,17 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
         onConfirm={async () => {
           if (!confirmDelete) return;
           try {
+            setPanelError(null);
             await remove.mutateAsync(confirmDelete.id);
             if (confirmDelete.id === viewingId) onViewYear(null);
             toast.success("Draft benefit year deleted");
             setConfirmDelete(null);
           } catch (error) {
-            toast.error(formatError(error));
+            const message = formatError(error);
+            setPanelError(message);
+            setConfirmDelete(null);
+            setDeleteConfirmation("");
+            toast.error(message);
           }
         }}
       />

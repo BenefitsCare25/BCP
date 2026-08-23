@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,9 +27,10 @@ import type {
   SobSchedule,
   TemplateField,
 } from "@/types";
-import { formatError } from "@/lib/errors";
+import { formatError, isStaleConfigurationError } from "@/lib/errors";
 import { insuredNames } from "@/lib/insured";
 import { InsuredPicker } from "./InsuredPicker";
+import { SetupConflictAlert } from "./SetupConflictAlert";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
 import { EmployeeCategoryPlanTab } from "./EmployeeCategoryPlanTab";
@@ -321,6 +323,9 @@ export function ProductSetupForm({
   // Which section tab is open. Local: the form no longer remounts on the first
   // save (parent keys on `code`), so this survives naturally.
   const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
+  const queryClient = useQueryClient();
   const confirm = useConfirmSetup(policyYearId);
   const { data: suggestions } = useFieldSuggestions(policyYearId, template.code);
   const confirmInFlight = useRef(false);
@@ -354,6 +359,7 @@ export function ProductSetupForm({
     if (serverChanged || (idChanged && !formIsDirty)) {
       setAnswers(rebuilt);
       savedSnapshot.current = nextSnapshot;
+      setConflictMessage(null);
     }
     builtFromId.current = currentId;
   }, [draft, template]);
@@ -534,7 +540,12 @@ export function ProductSetupForm({
       );
       onConfirmed?.();
     } catch (error) {
-      toast.error(formatError(error));
+      const message = formatError(error);
+      if (isStaleConfigurationError(error)) {
+        setConfirmOpen(false);
+        setConflictMessage(message);
+      }
+      toast.error(message);
     } finally {
       confirmInFlight.current = false;
     }
@@ -734,8 +745,31 @@ export function ProductSetupForm({
     setActiveSection(next);
   };
 
+  const reloadLatestSetup = async () => {
+    setReloading(true);
+    try {
+      await queryClient.refetchQueries(
+        { queryKey: ["product-setups", policyYearId] },
+        { throwOnError: true },
+      );
+      setConflictMessage(null);
+      toast.success("Latest product setup loaded");
+    } catch (error) {
+      toast.error(formatError(error));
+    } finally {
+      setReloading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
+      {conflictMessage && (
+        <SetupConflictAlert
+          message={conflictMessage}
+          reloading={reloading}
+          onReload={reloadLatestSetup}
+        />
+      )}
       {/* Single-row section tabs. Section navigation stays inside the current
           edit session; leaving the product is guarded by the parent. */}
       <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted/40 p-1">

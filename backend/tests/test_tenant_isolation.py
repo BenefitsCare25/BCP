@@ -1350,6 +1350,28 @@ def test_product_setup_discard_cross_tenant_404(client_as_a: TestClient) -> None
     assert res.status_code == 404
 
 
+def test_product_setup_stale_conflict_is_structured(
+    client_as_a: TestClient,
+) -> None:
+    policy_year_id = client_as_a.get("/api/v1/policy-years").json()[0]["id"]
+    path = f"/api/v1/policy-years/{policy_year_id}/product-setups/GTPD"
+    created = client_as_a.put(
+        path,
+        json={"answers": {}, "template_version": 1},
+    )
+    assert created.status_code == 200, created.text
+
+    stale = client_as_a.put(
+        path,
+        json={"answers": {"plans": []}, "template_version": 1},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "stale_configuration"
+    assert "Reload the latest version" in stale.json()["detail"]["message"]
+
+    assert client_as_a.delete(path).status_code == 204
+
+
 def test_member_counts_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.post(
         f"/api/v1/policy-years/{PY_B}/member-counts",

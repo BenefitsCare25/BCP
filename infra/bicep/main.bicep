@@ -245,6 +245,19 @@ resource postgresDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08
   }
 }
 
+// Required by the policy-year GiST exclusion constraint that prevents two
+// benefit periods for the same company from overlapping. Azure PostgreSQL
+// supports btree_gist but blocks CREATE EXTENSION until it is explicitly
+// allow-listed. This dynamic parameter does not replace the server or database.
+resource postgresExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'azure.extensions'
+  properties: {
+    source: 'user-override'
+    value: 'btree_gist'
+  }
+}
+
 // ── Private network path to Postgres ────────────────────────────────────────
 // The app reaches the database over a private endpoint in our own VNet, NOT
 // over the public internet through a firewall allowlist.

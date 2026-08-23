@@ -1097,6 +1097,13 @@ def _find_setup(
     return db.execute(stmt).scalar_one_or_none()
 
 
+def _stale_setup(message: str) -> HTTPException:
+    return HTTPException(
+        status.HTTP_409_CONFLICT,
+        {"code": "stale_configuration", "message": message},
+    )
+
+
 def _upsert_draft(
     db: Session,
     policy_year_id: str,
@@ -1118,9 +1125,8 @@ def _upsert_draft(
         db.flush()
     else:
         if body.expected_updated_at is None:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "This setup has changed. Reload it before saving.",
+            raise _stale_setup(
+                "This setup has changed. Reload the latest version before saving."
             )
         current = setup.updated_at
         expected = body.expected_updated_at
@@ -1131,9 +1137,8 @@ def _upsert_draft(
             else expected
         )
         if current_utc != expected_utc:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "This setup was updated by another user. Reload before saving.",
+            raise _stale_setup(
+                "This setup was updated by another user. Reload the latest version before saving."
             )
         # Shallow-merge top-level sections so a partial body (e.g. a confirm that
         # only carries `plans`) can't silently wipe a previously-saved section

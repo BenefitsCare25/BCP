@@ -277,6 +277,15 @@ test("benefit-year selection defaults to today and follows every module", async 
   const benefitHeading = page.getByRole("heading", { name: "Benefit years" });
   await expect(benefitHeading).toBeVisible();
   await expect(page.getByRole("button", { name: "Add benefit year" })).toBeVisible();
+  const invalidEndDate = page.getByTestId(
+    `benefit-year-${years.past.id}-end_date`,
+  );
+  await invalidEndDate.fill(years.current.start_date);
+  await invalidEndDate.blur();
+  await expect(
+    page.getByText(new RegExp(`Overlaps .*${years.current.start_date}`)),
+  ).toBeVisible();
+  await expect(invalidEndDate).toHaveAttribute("aria-invalid", "true");
   const tabs = page.getByRole("tablist").first();
   const [tabsBox, benefitBox] = await Promise.all([
     tabs.boundingBox(),
