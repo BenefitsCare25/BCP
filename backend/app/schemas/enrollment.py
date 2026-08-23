@@ -193,17 +193,22 @@ class ElectionsUpdate(BaseModel):
     elections: list[EnrollmentElectionIn] = Field(min_length=1)
 
 
-class EnrollmentSubmitIn(BaseModel):
-    """Optional submit body. ``acknowledge_unpriced`` lets the broker
-    deliberately submit elections that change coverage without a configured
-    flex price (otherwise submit 409s with code ``unpriced_elections``)."""
-
-    acknowledge_unpriced: bool = False
-
-
 class LeaveElectionIn(BaseModel):
     action: LeaveActionStr = "none"
     days: float = Field(default=0.0, ge=0)
+
+
+class EnrollmentSubmitIn(BaseModel):
+    """Submit the exact reviewed choices in one transaction.
+
+    Fields remain optional for callers that already saved a draft. New clients
+    send the reviewed payload so stale stored choices cannot be submitted after
+    a failed draft-save request.
+    """
+
+    acknowledge_unpriced: bool = False
+    elections: list[EnrollmentElectionIn] | None = Field(default=None, min_length=1)
+    leave: LeaveElectionIn | None = None
 
 
 class EnrollmentElectionOut(_Base):
@@ -461,6 +466,7 @@ class WindowCloseSummary(BaseModel):
     deemed_kept: int
     deemed_declined: int
     already: int
+    invalid_submitted: int = 0
 
 
 class PortalEnrollmentOut(BaseModel):

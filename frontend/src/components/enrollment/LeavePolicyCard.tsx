@@ -25,7 +25,13 @@ function anyTierAllows(
 // the Leave tab of the enrollment page, beside the windows that switch trading
 // on; the window form only opens/closes windows. Keyed by policyYearId at the
 // call site so local edit state resets on a year switch.
-export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
+export function LeavePolicyCard({
+  policyYearId,
+  readOnly = false,
+}: {
+  policyYearId: string;
+  readOnly?: boolean;
+}) {
   const { data: policy } = useLeavePolicy(policyYearId);
   const upsert = useUpsertLeavePolicy(policyYearId);
   const [maxBuy, setMaxBuy] = useState<string>("");
@@ -49,7 +55,7 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-1">
-        <h3 className="text-sm font-semibold text-foreground">Leave policy</h3>
+        <h2 className="text-sm font-semibold text-foreground">Leave policy</h2>
         <InfoHint>
           How much leave members may trade this benefit year, and what a day is
           worth. Buying spends the per-day rate from the member's flex wallet;
@@ -61,6 +67,12 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
       <p className="mt-1 text-2xs uppercase tracking-wider text-muted-foreground">
         Company default
       </p>
+      {readOnly && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          This policy is locked while an enrolment period is open.
+        </p>
+      )}
+      <fieldset disabled={readOnly} className="contents">
       <div className="mt-1.5 grid gap-3 sm:grid-cols-3">
         <div>
           <Label htmlFor="lp-buy">Max buy (days)</Label>
@@ -151,6 +163,7 @@ export function LeavePolicyCard({ policyYearId }: { policyYearId: string }) {
           Save leave policy
         </Button>
       </div>
+      </fieldset>
     </div>
   );
 }

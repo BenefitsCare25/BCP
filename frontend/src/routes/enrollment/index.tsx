@@ -24,9 +24,10 @@ import {
   useEnrollmentWindows,
   useFlexPricing,
   useOpenWindow,
+  useSaveEnrollmentPricingConfig,
   useUpdateWindow,
 } from "@/api/enrollment";
-import { formatError } from "@/lib/errors";
+import { ConflictDetailError, formatError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,8 +70,8 @@ function configuredSourceMap(
 }
 
 function editableWindowsOf(windows: EnrollmentWindow[] | undefined) {
-  // A closed window is a historical record — the server 409s a PATCH on one.
-  return (windows ?? []).filter((w) => w.status !== "closed");
+  // Price source is part of the reviewed configuration and is frozen on open.
+  return (windows ?? []).filter((w) => w.status === "draft");
 }
 
 function sourceWindow(
@@ -198,7 +199,7 @@ export function EnrollmentDashboardPage() {
       {/* Create window */}
       <div className="rounded-lg border border-border bg-card p-4">
         <div className="flex items-center gap-1">
-          <h3 className="text-sm font-semibold text-foreground">New enrolment period</h3>
+          <h2 className="text-sm font-semibold text-foreground">New enrolment period</h2>
           <InfoHint>
             Define when members may change their benefits selection. Opening the
             period pre-fills each member with their current plan (reverse
@@ -510,11 +511,23 @@ export function EnrollmentDashboardPage() {
           closeWindow.mutate(confirmClose.id, {
             onSuccess: (s) => {
               toast.success(
-                `Closed — ${s.confirmed} confirmed, ${s.deemed_kept} kept.`,
+                `Closed — ${s.confirmed} confirmed at close, ${s.deemed_kept} defaults kept, ${s.already} already final.`,
               );
               setConfirmClose(null);
             },
-            onError: (e) => toast.error(formatError(e)),
+            onError: (e) => {
+              if (
+                e instanceof ConflictDetailError &&
+                e.detail.code === "invalid_submissions"
+              ) {
+                const count = typeof e.detail.count === "number" ? e.detail.count : 0;
+                toast.error(
+                  `${count || "Some"} submitted enrollment${count === 1 ? "" : "s"} need review before this period can close.`,
+                );
+                return;
+              }
+              toast.error(formatError(e));
+            },
           });
         }}
       />
@@ -577,8 +590,8 @@ function EnrollmentPriceTagTab() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: flexPricing, isLoading } = useFlexPricing(policyYearId);
   const flexEditor = useFlexPricingEditor(policyYearId);
+  const savePricingConfig = useSaveEnrollmentPricingConfig(policyYearId);
   const { data: windows } = useEnrollmentWindows(policyYearId);
-  const updateWindow = useUpdateWindow();
   const [openEditor, setOpenEditor] = useState<Record<string, boolean>>({});
   // Unsaved source picks, over the saved map.
   const [sourceEdits, setSourceEdits] = useState<Record<string, FlexPriceSource>>({});
@@ -600,20 +613,13 @@ function EnrollmentPriceTagTab() {
   }
 
   const products = flexPricing?.products ?? [];
-  const canEditSource = editableWindows.length > 0;
+  const hasOpenWindow = (windows ?? []).some((w) => w.status === "open");
+  const canEditSource = editableWindows.length > 0 && !hasOpenWindow;
 
   async function save() {
-    // The matrix and the source are two independent writes behind one button, so
-    // the matrix goes first and unconditionally: a failing source PATCH must not
-    // silently discard the prices typed in the same sitting.
-    if (flexEditor.dirty) flexEditor.onSave();
-    if (!sourceDirty) return;
-    // `windows` can refetch between render and click (someone else closes the
-    // last period), which leaves the button dirty with nothing to write to —
-    // Promise.all([]) would resolve and report a save that never happened.
-    if (!editableWindows.length) {
+    if (!canEditSource) {
       toast.error(
-        "No open or draft enrolment period to write the price-tag source to.",
+        "Price tags can only be changed while a draft period exists and none is open.",
       );
       return;
     }
@@ -625,21 +631,15 @@ function EnrollmentPriceTagTab() {
       products.map((p) => [p.product_id, sourceFor(p.product_id)]),
     ) as Record<string, FlexPriceSource>;
     try {
-      await Promise.all(
-        editableWindows.map((w) =>
-          updateWindow.mutateAsync({ id: w.id, body: { flex_price_source: map } }),
-        ),
-      );
+      await savePricingConfig.mutateAsync({
+        pricing: flexEditor.pricing,
+        flexPriceSource: map,
+      });
+      flexEditor.markSaved();
       setSourceEdits({});
-      if (!flexEditor.dirty) toast.success("Price-tag source saved");
+      toast.success("Price tags saved");
     } catch (e) {
-      // One period can commit while another fails, leaving them priced
-      // differently. The edits are KEPT and the button stays dirty, and since a
-      // retry rewrites the same complete map to all of them, pressing Save again
-      // is what repairs the split — so say so rather than just echoing the error.
-      toast.error(
-        `Price-tag source may not have reached every enrolment period — press Save again. (${formatError(e)})`,
-      );
+      toast.error(formatError(e));
     }
   }
 
@@ -647,7 +647,7 @@ function EnrollmentPriceTagTab() {
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1">
-          <h3 className="text-sm font-semibold text-foreground">Flex price tags</h3>
+          <h2 className="text-sm font-semibold text-foreground">Flex price tags</h2>
           <InfoHint>
             What each plan draws from the member&apos;s flex wallet — separate
             from the insurer premium. A blank matrix cell falls back to the
@@ -660,9 +660,11 @@ function EnrollmentPriceTagTab() {
             size="sm"
             variant="outline"
             onClick={() => void save()}
-            disabled={flexEditor.saving || updateWindow.isPending}
+            disabled={
+              !canEditSource || savePricingConfig.isPending
+            }
           >
-            {(flexEditor.saving || updateWindow.isPending) && (
+            {savePricingConfig.isPending && (
               <Loader2 className="size-4 animate-spin" />
             )}
             Save price tags
@@ -674,9 +676,8 @@ function EnrollmentPriceTagTab() {
           control that saves nowhere. */}
       {!canEditSource && products.length > 0 && (
         <p className="mt-2 text-2xs text-muted-foreground">
-          Each product is priced from the placement slip until an enrolment
-          period carries a different source. Create one on the Enrolment Period
-          tab to switch a product to its manual matrix.
+          Price tags are read-only while a period is open. Create or edit a
+          draft period to configure its source and matrix before opening.
         </p>
       )}
       <div className="mt-3">
@@ -695,12 +696,15 @@ function EnrollmentPriceTagTab() {
                 ? (pid, v) => setSourceEdits((s) => ({ ...s, [pid]: v }))
                 : undefined
             }
-            openEditor={openEditor}
-            onToggleEditor={(pid) =>
-              setOpenEditor((s) => ({
-                ...s,
-                [pid]: !(s[pid] ?? sourceFor(pid) === "manual"),
-              }))
+            openEditor={canEditSource ? openEditor : undefined}
+            onToggleEditor={
+              canEditSource
+                ? (pid) =>
+                    setOpenEditor((s) => ({
+                      ...s,
+                      [pid]: !(s[pid] ?? sourceFor(pid) === "manual"),
+                    }))
+                : undefined
             }
             emptyHint={
               <p className="text-sm text-muted-foreground">
@@ -718,6 +722,7 @@ function EnrollmentPriceTagTab() {
 
 function EnrollmentLeaveTab() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const { data: windows } = useEnrollmentWindows(policyYearId ?? undefined);
   if (!policyYearId) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -725,7 +730,13 @@ function EnrollmentLeaveTab() {
       </p>
     );
   }
-  return <LeavePolicyCard key={policyYearId} policyYearId={policyYearId} />;
+  return (
+    <LeavePolicyCard
+      key={policyYearId}
+      policyYearId={policyYearId}
+      readOnly={(windows ?? []).some((window) => window.status === "open")}
+    />
+  );
 }
 
 // The enrollment surface is one workflow (open a window → manage member
@@ -747,7 +758,7 @@ export function EnrollmentPage() {
         navigate({ to: "/client-relations/enrollment", search: { tab: value } })
       }
     >
-      <TabsList>
+      <TabsList className="max-w-full overflow-x-auto">
         {ENROLLMENT_TABS.map((t) => (
           <TabsTrigger key={t.key} value={t.key}>
             {t.label}

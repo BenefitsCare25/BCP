@@ -101,7 +101,7 @@ export function EnrollmentElectionsPage() {
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Enrolment period</span>
           <Select value={windowId} onValueChange={(v) => { setWindowId(v); setSelected(null); }}>
-            <SelectTrigger className="w-[240px]">
+            <SelectTrigger className="w-[240px]" aria-label="Enrolment period">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -260,8 +260,20 @@ function ElectionPanel({
   const submitBlocked = !!flex && flex.balance < -0.005 && !allowOverdraft;
 
   function doSubmit(acknowledgeUnpriced: boolean) {
+    const days = Number(leaveDays);
+    if (allowLeave && (!Number.isFinite(days) || days < 0)) {
+      toast.error("Enter a valid non-negative number of leave days.");
+      return;
+    }
     submit.mutate(
-      { id: enrollmentId, acknowledgeUnpriced },
+      {
+        id: enrollmentId,
+        acknowledgeUnpriced,
+        elections: tierSets.length
+          ? buildElectionsPayload(state, tierSets, dependants, allowDeps)
+          : undefined,
+        leave: allowLeave ? { action: leaveAction, days } : undefined,
+      },
       {
         onSuccess: () => {
           setUnpricedProducts(null);
@@ -307,9 +319,9 @@ function ElectionPanel({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-foreground">
+          <h2 className="text-base font-semibold text-foreground">
             {enr.employee_name ?? enr.staff_id}
-          </h3>
+          </h2>
           <p className="font-mono text-xs text-muted-foreground">{enr.staff_id}</p>
         </div>
         <Badge variant={finalized ? "good" : "outline"}>{enr.status.replace("_", " ")}</Badge>
@@ -395,7 +407,7 @@ function ElectionPanel({
           </Button>
           <Button
             variant="outline"
-            disabled={confirm.isPending}
+            disabled={confirm.isPending || enr.status !== "submitted"}
             onClick={() =>
               confirm.mutate(enrollmentId, {
                 onSuccess: () => toast.success("Confirmed — coverage updated."),

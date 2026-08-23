@@ -107,9 +107,11 @@ def _replayable(
     ).scalars().first()
     if existing is None:
         return None
-    same = existing.policy_year_id == py.id and (existing.changes or []) == [
-        c.model_dump() for c in body.changes
-    ]
+    same = (
+        existing.policy_year_id == py.id
+        and (existing.changes or []) == [c.model_dump() for c in body.changes]
+        and (existing.query or {}) == body.query.model_dump()
+    )
     if not same:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -218,11 +220,6 @@ def apply_bulk_update(
     changes = _resolve_changes(db, py, body)
 
     if body.request_id:
-        # Idempotency. A retry after a timeout on a batch that actually
-        # committed, or a resubmitted form, must not apply twice — so a replayed
-        # request_id returns the batch it already produced rather than a second
-        # one. The unique index is what makes this safe under concurrency; this
-        # lookup just avoids doing the work and hitting it (see the commit).
         existing = _replayable(db, py, body)
         if existing is not None:
             return _replay(existing, limit)
@@ -313,13 +310,15 @@ def apply_bulk_update(
     )
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         # Another request with the same ``request_id`` committed while this one
         # was evaluating — the lookup above ran before it existed. The unique
         # index is what actually enforces idempotency; rolling back discards
         # THIS run's overrides (the winner already wrote them) and the replay
         # returns the batch that did land.
         db.rollback()
+        if not _is_request_id_conflict(exc):
+            raise
         winner = db.execute(
             select(BulkPlanUpdate).where(
                 BulkPlanUpdate.client_id == py.client_id,
@@ -338,6 +337,16 @@ def apply_bulk_update(
         groups=result.groups,
         warnings=result.warnings,
         impact=result.impact,
+    )
+
+
+def _is_request_id_conflict(exc: IntegrityError) -> bool:
+    """Distinguish the expected idempotency race from unrelated DB faults."""
+    message = str(exc.orig).casefold()
+    return "ix_bulk_plan_updates_request" in message or (
+        "unique constraint failed" in message
+        and "bulk_plan_updates.client_id" in message
+        and "bulk_plan_updates.request_id" in message
     )
 
 

@@ -664,7 +664,7 @@ function DeckStep({
       aria-label={
         slide
           ? `${isNext ? "Next" : "Previous"} ${noun}: ${slide.label}`
-          : undefined
+          : `${isNext ? "Next" : "Previous"} ${noun} unavailable`
       }
       className={cn(
         glassSurface,

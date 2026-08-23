@@ -14,7 +14,7 @@ Tenant scoping rides on ``load_policy_year``.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -26,8 +26,10 @@ from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import assert_policy_year_editable, load_policy_year
 from app.db.session import get_db
-from app.models import Category, FlexPricing, PolicyYear, Product
+from app.models import Category, EnrollmentWindow, FlexPricing, PolicyYear, Product
+from app.models.enrollment_window import WindowStatus
 from app.services.cohort_tiers import list_product_tiers, tier_key
+from app.services.enrollment_validation import assert_enrollment_config_editable
 from app.services.flex_pricing_resolver import (
     DependantMode,
     _per_member_slip_premium,
@@ -98,6 +100,10 @@ class FlexPricingOut(BaseModel):
 
 class FlexPricingIn(BaseModel):
     pricing: dict[str, Any]
+
+
+class EnrollmentPricingConfigIn(FlexPricingIn):
+    flex_price_source: dict[str, Literal["slip", "manual"]]
 
 
 def _cohort_label(display_name: str | None) -> str | None:
@@ -220,18 +226,12 @@ def get_flex_pricing(
     )
 
 
-@router.put(
-    "/policy-years/{policy_year_id}/flex-pricing", response_model=FlexPricingOut
-)
-def upsert_flex_pricing(
-    policy_year_id: str,
-    body: FlexPricingIn,
-    py: PolicyYear = Depends(load_policy_year),
-    user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> FlexPricingOut:
-    assert_policy_year_editable(py)
-    errors = validate_pricing_shape(body.pricing)
+def _upsert_pricing_row(
+    db: Session,
+    py: PolicyYear,
+    pricing: dict[str, Any],
+) -> tuple[FlexPricing, str]:
+    errors = validate_pricing_shape(pricing)
     if errors:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -245,12 +245,77 @@ def upsert_flex_pricing(
         row = FlexPricing(policy_year_id=py.id, client_id=py.client_id)
         db.add(row)
         action = "set_flex_pricing"
-    row.pricing = body.pricing
+    row.pricing = pricing
     flag_modified(row, "pricing")
     db.flush()
+    return row, action
+
+
+@router.put(
+    "/policy-years/{policy_year_id}/flex-pricing", response_model=FlexPricingOut
+)
+def upsert_flex_pricing(
+    policy_year_id: str,
+    body: FlexPricingIn,
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FlexPricingOut:
+    assert_policy_year_editable(py)
+    assert_enrollment_config_editable(db, py.id, "Flex pricing")
+    row, action = _upsert_pricing_row(db, py, body.pricing)
     write_audit(
         db, user, action=action, entity_type="flex_pricing",
         entity_id=row.id, after={"products": list(body.pricing.get("products", {}))},
+    )
+    db.commit()
+    db.refresh(row)
+    pricing = row.pricing or {}
+    return FlexPricingOut(
+        policy_year_id=py.id,
+        pricing=pricing,
+        products=_available_products(db, py.id, pricing),
+    )
+
+
+@router.put(
+    "/policy-years/{policy_year_id}/enrollment-pricing-config",
+    response_model=FlexPricingOut,
+)
+def upsert_enrollment_pricing_config(
+    policy_year_id: str,
+    body: EnrollmentPricingConfigIn,
+    py: PolicyYear = Depends(load_policy_year),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> FlexPricingOut:
+    """Save the matrix and every draft period's source as one transaction."""
+    assert_policy_year_editable(py)
+    assert_enrollment_config_editable(db, py.id, "Flex pricing")
+    windows = db.execute(
+        select(EnrollmentWindow).where(
+            EnrollmentWindow.policy_year_id == py.id,
+            EnrollmentWindow.status == WindowStatus.draft,
+        )
+    ).scalars().all()
+    if not windows:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Create a draft enrolment period before configuring price tags.",
+        )
+    row, _action = _upsert_pricing_row(db, py, body.pricing)
+    for window in windows:
+        window.flex_price_source = dict(body.flex_price_source)
+    write_audit(
+        db,
+        user,
+        action="update_enrollment_pricing_config",
+        entity_type="flex_pricing",
+        entity_id=row.id,
+        after={
+            "products": list(body.pricing.get("products", {})),
+            "window_ids": [window.id for window in windows],
+        },
     )
     db.commit()
     db.refresh(row)

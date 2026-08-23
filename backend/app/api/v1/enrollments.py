@@ -51,7 +51,9 @@ from app.services.enrollment_elections import (
     apply_leave,
     build_enrollment_options,
     enrollment_detail,
+    lock_enrollment,
     perform_submit,
+    revalidate_enrollment,
 )
 from app.services.enrollment_flex_guard import assert_within_wallet
 from app.services.enrollment_lifecycle import project_enrollment
@@ -136,6 +138,7 @@ def set_elections(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
+    enr = lock_enrollment(db, enr)
     apply_elections(db, enr, body.elections)
     write_audit(
         db, user, action="update_enrollment_elections", entity_type="enrollment",
@@ -155,6 +158,7 @@ def set_leave(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
+    enr = lock_enrollment(db, enr)
     leave = apply_leave(db, enr, body)
     write_audit(
         db, user, action="update_enrollment_leave", entity_type="enrollment",
@@ -175,6 +179,20 @@ def submit_enrollment(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
+    enr = lock_enrollment(db, enr)
+    if (
+        body
+        and body.acknowledge_unpriced
+        and user.role not in ("broker_admin", "system_admin")
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only an administrator can accept unpriced elections.",
+        )
+    if body and body.elections is not None:
+        apply_elections(db, enr, body.elections)
+    if body and body.leave is not None:
+        apply_leave(db, enr, body.leave)
     perform_submit(
         db, enr,
         acknowledge=bool(body and body.acknowledge_unpriced),
@@ -182,6 +200,10 @@ def submit_enrollment(
     )
     write_audit(
         db, user, action="submit_enrollment", entity_type="enrollment", entity_id=enr.id,
+        after={
+            "elections_included": bool(body and body.elections is not None),
+            "leave_included": bool(body and body.leave is not None),
+        },
         employee_id=enr.employee_id,
     )
     db.commit()
@@ -196,6 +218,7 @@ def confirm_enrollment(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
+    enr = lock_enrollment(db, enr)
     if enr.status == EnrollmentStatus.confirmed:
         return enrollment_detail(db, enr)
     if enr.status != EnrollmentStatus.submitted:
@@ -207,6 +230,7 @@ def confirm_enrollment(
     if window is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
     assert_window_accepts_edits(window)
+    revalidate_enrollment(db, enr)
     # Re-check the wallet at confirm: pricing/elections could have changed
     # between submit and confirm (unpriced acknowledgment made at submit is
     # not re-litigated here — only the hard overdraft rule is).
@@ -241,6 +265,7 @@ def reopen_enrollment(
     re-projects). Gated to an open, in-period window — once the window closes,
     finalized coverage is changed via the coverage-revert endpoints instead.
     """
+    enr = lock_enrollment(db, enr)
     if enr.status != EnrollmentStatus.confirmed:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -279,6 +304,7 @@ def reset_enrollment(
     ``POST /employees/{id}/coverage/revert`` instead, which this returns 409 to
     steer toward.
     """
+    enr = lock_enrollment(db, enr)
     if enr.status in (EnrollmentStatus.confirmed, EnrollmentStatus.deemed):
         raise HTTPException(
             status.HTTP_409_CONFLICT,

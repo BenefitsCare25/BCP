@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,33 @@ from app.services.coverage_resolver import (
     load_overrides,
 )
 from app.services.override_writer import upsert_override
+
+
+def _invalid_submissions(
+    db: Session,
+    window: EnrollmentWindow,
+    enrollments: list[Enrollment],
+) -> list[dict[str, Any]]:
+    """Validate every submitted row before any projection begins."""
+    from app.services.enrollment_elections import revalidate_enrollment
+    from app.services.enrollment_flex_guard import assert_within_wallet
+
+    invalid: list[dict[str, Any]] = []
+    for enrollment in enrollments:
+        if enrollment.status != EnrollmentStatus.submitted:
+            continue
+        try:
+            revalidate_enrollment(db, enrollment)
+            assert_within_wallet(db, enrollment, window)
+        except HTTPException as exc:
+            invalid.append(
+                {
+                    "enrollment_id": enrollment.id,
+                    "employee_id": enrollment.employee_id,
+                    "detail": exc.detail,
+                }
+            )
+    return invalid
 
 
 def plan_rank(db: Session, policy_year_id: str, product_id: str) -> dict[str, int]:
@@ -298,19 +326,27 @@ def close_window(
 ) -> dict[str, int]:
     """Finalize all enrollments per default_behavior and close the window.
 
-    Submitted enrollments are re-validated against the flex wallet before
-    projection: elections can be edited after submit, so the submit-time check
-    alone can't guarantee the projected coverage isn't overdrawn. A violating
-    submission falls back to the window's default behavior (audited) instead
-    of silently materializing an overdrawn wallet.
+    Every submitted enrollment is revalidated before any finalization begins.
+    Invalid submissions block the close as one atomic operation; they never
+    silently fall back to the window default.
     """
-    from fastapi import HTTPException  # local import: service stays view-free
-
-    from app.services.enrollment_flex_guard import assert_within_wallet
-
     enrollments = db.execute(
         select(Enrollment).where(Enrollment.window_id == window.id)
     ).scalars().all()
+    invalid = _invalid_submissions(db, window, enrollments)
+    if invalid:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "invalid_submissions",
+                "message": (
+                    "The enrolment period cannot close until every submitted "
+                    "enrollment passes current eligibility and flex checks."
+                ),
+                "count": len(invalid),
+                "enrollments": invalid,
+            },
+        )
     summary = {
         "confirmed": 0, "deemed_kept": 0, "deemed_declined": 0, "already": 0,
         "invalid_submitted": 0,
@@ -320,21 +356,9 @@ def close_window(
             summary["already"] += 1
             continue
         if enr.status == EnrollmentStatus.submitted:
-            try:
-                assert_within_wallet(db, enr, window)
-            except HTTPException as exc:
-                write_audit(
-                    db, user, action="close_window_invalid_submission",
-                    entity_type="enrollment", entity_id=enr.id,
-                    after={"detail": getattr(exc, "detail", None)},
-                    employee_id=enr.employee_id,
-                )
-                summary["invalid_submitted"] += 1
-                # Fall through to the default-behavior branch below.
-            else:
-                project_enrollment(db, enr, user)
-                summary["confirmed"] += 1
-                continue
+            project_enrollment(db, enr, user)
+            summary["confirmed"] += 1
+            continue
         # not_started / in_progress / declined → apply default behavior.
         if enr.status == EnrollmentStatus.declined or (
             window.default_behavior == DefaultBehavior.decline

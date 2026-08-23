@@ -117,7 +117,7 @@ export function PortalEnrollmentPage() {
         }
         onSaveElections={(elections) => saveElections.mutateAsync(elections)}
         onSaveLeave={(input) => setLeave.mutateAsync(input)}
-        onSubmit={(ack) => submit.mutateAsync(ack)}
+        onSubmit={(input) => submit.mutateAsync(input)}
         saving={saveElections.isPending}
         savingLeave={setLeave.isPending}
         submitting={submit.isPending}

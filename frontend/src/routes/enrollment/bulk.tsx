@@ -68,6 +68,8 @@ import {
 } from "@/components/enrollment/bulk/WarningPanel";
 import { BatchHistory } from "@/components/enrollment/bulk/BatchHistory";
 
+const MAX_FULLY_REVERSIBLE_CHANGES = 5000;
+
 const OUTCOME_COLOR: Record<string, string> = {
   applied: "text-good",
   would_apply: "text-info",
@@ -280,6 +282,10 @@ export function EnrollmentBulkPage() {
   }
 
   function runApply() {
+    if (!result?.selection_digest || !attemptId) {
+      toast.error("Run Preview again before applying this change.");
+      return;
+    }
     // The digest from the preview rides along: if the roster moved since, the
     // server refuses rather than applying to a population nobody approved.
     //
@@ -289,7 +295,7 @@ export function EnrollmentBulkPage() {
     // press, or a retry after a timeout on a batch that actually committed,
     // carried a DIFFERENT id and applied the whole thing again.
     const body = buildRequest({
-      selection_digest: result?.selection_digest ?? null,
+      selection_digest: result.selection_digest,
       acknowledge: acknowledged,
       request_id: attemptId,
     });
@@ -358,9 +364,9 @@ export function EnrollmentBulkPage() {
       {/* ── 1. Who ─────────────────────────────────────────────────────── */}
       <section className="rounded-lg border border-border bg-card p-4">
         <div className="flex items-center gap-1">
-          <h3 className="text-sm font-semibold text-foreground">
+          <h2 className="text-sm font-semibold text-foreground">
             1. Who changes
-          </h3>
+          </h2>
           <InfoHint>
             Filter the roster instead of typing staff IDs. Everything the filters
             match is selected; you can paste extra members in, and untick anyone
@@ -383,7 +389,7 @@ export function EnrollmentBulkPage() {
       {/* ── 2. What ────────────────────────────────────────────────────── */}
       <section className="rounded-lg border border-border bg-card p-4">
         <div className="flex items-center gap-1">
-          <h3 className="text-sm font-semibold text-foreground">2. What changes</h3>
+          <h2 className="text-sm font-semibold text-foreground">2. What changes</h2>
           <InfoHint>
             Several products can move in one run — they apply together or not at
             all, so a renewal never leaves the roster half-moved.
@@ -417,6 +423,7 @@ export function EnrollmentBulkPage() {
               apply.isPending ||
               !result ||
               willChange === 0 ||
+              willChange > MAX_FULLY_REVERSIBLE_CHANGES ||
               applied ||
               outstanding.length > 0
             }
@@ -425,6 +432,8 @@ export function EnrollmentBulkPage() {
                 ? "Run Preview first"
                 : outstanding.length
                   ? "Confirm the warnings below first"
+                  : willChange > MAX_FULLY_REVERSIBLE_CHANGES
+                    ? `Narrow the selection to ${MAX_FULLY_REVERSIBLE_CHANGES.toLocaleString()} changes or fewer so the whole batch remains undoable`
                   : undefined
             }
           >
@@ -637,7 +646,7 @@ export function EnrollmentBulkPage() {
       {showHistory && (
         <section className="rounded-lg border border-border bg-card p-4">
           <div className="flex items-center gap-1">
-            <h3 className="text-sm font-semibold text-foreground">Past changes</h3>
+            <h2 className="text-sm font-semibold text-foreground">Past changes</h2>
             <InfoHint>
               Re-run loads the stored selection back into the builder — it
               re-resolves against today&apos;s roster and still has to be
@@ -665,7 +674,7 @@ export function EnrollmentBulkPage() {
           (acknowledged.length
             ? ` You have accepted ${acknowledged.length} warning${acknowledged.length === 1 ? "" : "s"}, which is recorded on the change.`
             : "") +
-          " It can be undone from Past changes."
+          " Every change in this batch can be undone from Past changes."
         }
         confirmLabel="Apply"
         confirmVariant="default"

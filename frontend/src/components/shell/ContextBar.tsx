@@ -93,7 +93,8 @@ function CompanyContext() {
   const todayYearId = policyYearForToday(years)?.id;
 
   return (
-    <div
+    <nav
+      aria-label="Company and benefit year"
       data-context-bar="company"
       className="flex min-h-10 shrink-0 flex-col gap-2 border-b border-border bg-card px-4 py-1.5 text-sm sm:flex-row sm:items-center sm:gap-3 sm:px-6"
     >
@@ -157,6 +158,6 @@ function CompanyContext() {
           </span>
         )}
       </div>
-    </div>
+    </nav>
   );
 }

@@ -21,6 +21,7 @@ Registered in ``main.py`` OUTSIDE the broker gate.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
@@ -46,6 +47,7 @@ from app.services.enrollment_elections import (
     build_portal_enrollment,
     enrollment_detail,
     find_enrollment,
+    lock_enrollment,
     member_window_for,
     perform_submit,
 )
@@ -78,9 +80,19 @@ def _get_or_create_enrollment(
         status=EnrollmentStatus.not_started,
         baseline_snapshot=baseline_for(db, employee),
     )
-    db.add(enr)
-    db.flush()
-    return enr
+    try:
+        with db.begin_nested():
+            db.add(enr)
+            db.flush()
+        return enr
+    except IntegrityError:
+        # A concurrent first portal read/write can create the same lazy row.
+        # The unique (window, employee) key chooses the winner; the savepoint
+        # keeps the outer request transaction usable for the follow-up query.
+        winner = find_enrollment(db, window, employee)
+        if winner is None:
+            raise
+        return winner
 
 
 def _assert_member_editable(enr: Enrollment) -> None:
@@ -91,15 +103,6 @@ def _assert_member_editable(enr: Enrollment) -> None:
             status.HTTP_409_CONFLICT,
             "Your enrollment has been finalized. Contact your broker or HR to reopen it.",
         )
-
-
-def _reopen_if_submitted(enr: Enrollment) -> None:
-    """Editing after submit returns the enrollment to in_progress — the member
-    must resubmit, so window close can never auto-confirm elections that were
-    changed after the submit-time validation ran."""
-    if enr.status == EnrollmentStatus.submitted:
-        enr.status = EnrollmentStatus.in_progress
-        enr.submitted_at = None
 
 
 def _require_open_enrollment(
@@ -140,8 +143,8 @@ def set_my_elections(
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
     employee, _window, enr = _require_open_enrollment(db, member)
+    enr = lock_enrollment(db, enr)
     _assert_member_editable(enr)
-    _reopen_if_submitted(enr)
     apply_elections(db, enr, body.elections)
     write_member_audit(
         db, member, action="update_enrollment_elections", entity_type="enrollment",
@@ -162,8 +165,8 @@ def set_my_leave(
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
     employee, _window, enr = _require_open_enrollment(db, member)
+    enr = lock_enrollment(db, enr)
     _assert_member_editable(enr)
-    _reopen_if_submitted(enr)
     leave = apply_leave(db, enr, body)
     write_member_audit(
         db, member, action="update_enrollment_leave", entity_type="enrollment",
@@ -188,14 +191,29 @@ def submit_my_enrollment(
     live coverage happens at broker confirm (or window-close deeming) — never
     directly from the portal."""
     employee, _window, enr = _require_open_enrollment(db, member)
+    enr = lock_enrollment(db, enr)
+    if body and body.acknowledge_unpriced:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only an authorized administrator can accept unpriced elections.",
+        )
+    if body and body.elections is not None:
+        apply_elections(db, enr, body.elections)
+    if body and body.leave is not None:
+        apply_leave(db, enr, body.leave)
     perform_submit(
         db, enr,
-        acknowledge=bool(body and body.acknowledge_unpriced),
+        acknowledge=False,
         actor_id=member.member_account_id,
     )
     write_member_audit(
         db, member, action="submit_enrollment", entity_type="enrollment",
-        entity_id=enr.id, employee_id=employee.id,
+        entity_id=enr.id,
+        after={
+            "elections_included": bool(body and body.elections is not None),
+            "leave_included": bool(body and body.leave is not None),
+        },
+        employee_id=employee.id,
     )
     db.commit()
     db.refresh(enr)

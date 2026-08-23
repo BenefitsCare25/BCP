@@ -30,8 +30,8 @@
  * working — spent, traded, left — is on the review step, with the total it
  * explains.
  *
- * **3. It ends in a review.** See `ReviewMount` — including why Send now saves
- * first, which was a real defect rather than a nicety.
+ * **3. It ends in a review.** See `ReviewMount`; Send carries the reviewed
+ * choices as one atomic request rather than racing a separate draft save.
  *
  * Products the window gives the member no say over are folded into one slide
  * (`StandardMount`): given a mount each they were indistinguishable in the index
@@ -43,7 +43,11 @@
  * to agree, and it is the only part that can. */
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import type { ElectionIn, ProductTierSet } from "@/api/enrollment";
+import type {
+  ElectionIn,
+  EnrollmentSubmitInput,
+  ProductTierSet,
+} from "@/api/enrollment";
 import type { PortalEnrollmentData } from "@/api/portal";
 import {
   type DependantRef,
@@ -57,7 +61,6 @@ import {
   sameElection,
   seedElectionState,
 } from "@/components/enrollment/electionCore";
-import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Deck, type DeckSlide } from "@/components/portal/leaf/Deck";
 import { HeadRail, useHeadRailWidth } from "@/components/portal/leaf/HeadRail";
 import { Mount, glassHover, glassSurface } from "@/components/portal/leaf/Mount";
@@ -176,7 +179,7 @@ export function MemberEnrollmentPanel({
   onSlideKeyChange?: (key: string) => void;
   onSaveElections?: (elections: ElectionIn[]) => Promise<unknown>;
   onSaveLeave?: (input: { action: string; days: number }) => Promise<unknown>;
-  onSubmit?: (acknowledgeUnpriced: boolean) => Promise<unknown>;
+  onSubmit?: (input: EnrollmentSubmitInput) => Promise<unknown>;
   saving?: boolean;
   savingLeave?: boolean;
   submitting?: boolean;
@@ -209,7 +212,6 @@ export function MemberEnrollmentPanel({
   const [state, setState] = useState<Record<string, ProductState>>({});
   const [leaveAction, setLeaveAction] = useState("none");
   const [leaveDays, setLeaveDays] = useState("0");
-  const [unpricedProducts, setUnpricedProducts] = useState<string[] | null>(null);
 
   // The state the server would produce if the member touched nothing — both the
   // seed and, once saved, the thing local edits are compared against to know
@@ -328,7 +330,7 @@ export function MemberEnrollmentPanel({
 
   async function saveAll(): Promise<boolean> {
     try {
-      if (onSaveElections) {
+      if (electionsDirty && onSaveElections) {
         await onSaveElections(
           buildElectionsPayload(current, tierSets, dependants, allowDeps),
         );
@@ -345,21 +347,28 @@ export function MemberEnrollmentPanel({
     if (await saveAll()) toast.success("Your choices are saved.");
   }
 
-  async function doSubmit(acknowledgeUnpriced: boolean) {
+  async function doSubmit() {
     if (!onSubmit) return;
-    // **Always written before submitting.** `POST /submit` carries no
-    // elections — it submits what is STORED — so a Send that skipped this
-    // reported success while sending the member's PREVIOUS choices.
-    if (!(await saveAll())) return;
+    // Send carries the exact reviewed choices in one atomic request.
     try {
-      await onSubmit(acknowledgeUnpriced);
-      setUnpricedProducts(null);
+      await onSubmit({
+        acknowledgeUnpriced: false,
+        elections: tierSets.length
+          ? buildElectionsPayload(current, tierSets, dependants, allowDeps)
+          : undefined,
+        leave: win?.allow_leave ? chosenLeave : undefined,
+      });
       toast.success("Sent — you'll be told once it's confirmed.");
     } catch (e) {
       if (e instanceof ConflictDetailError) {
         if (e.detail.code === "unpriced_elections") {
-          setUnpricedProducts(
-            Array.isArray(e.detail.products) ? (e.detail.products as string[]) : [],
+          const products = Array.isArray(e.detail.products)
+            ? (e.detail.products as string[])
+            : [];
+          toast.error(
+            products.length
+              ? `Pricing is missing for ${products.join(", ")}. Contact your HR team before sending.`
+              : "Pricing is missing for one or more choices. Contact your HR team before sending.",
           );
           return;
         }
@@ -502,7 +511,7 @@ export function MemberEnrollmentPanel({
         submitting={submitting}
         blocked={blocked}
         onSave={() => void saveOnly()}
-        onSubmit={() => void doSubmit(false)}
+        onSubmit={() => void doSubmit()}
       />
     ),
   });
@@ -555,26 +564,6 @@ export function MemberEnrollmentPanel({
         />
       )}
 
-      <AlertDialog
-        open={unpricedProducts !== null}
-        onOpenChange={(open) => {
-          if (!open) setUnpricedProducts(null);
-        }}
-        title="Some choices have no price yet"
-        // The member's symbol and the member's people: `$0` contradicted the
-        // `S$` every other figure on this surface uses, and "your broker" is
-        // broker vocabulary — a member's route to a question is their HR team,
-        // which is who the rest of the portal names.
-        description={`${
-          unpricedProducts?.length
-            ? `These plans change your coverage but don't have a price set yet, so they would draw ${money}0 from your flex dollars: ${unpricedProducts.join(", ")}. `
-            : ""
-        }You can send them anyway, or check with your HR team first.`}
-        confirmLabel="Send anyway"
-        confirmVariant="default"
-        loading={submitting}
-        onConfirm={() => void doSubmit(true)}
-      />
     </div>
   );
 }

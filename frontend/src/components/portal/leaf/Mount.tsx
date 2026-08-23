@@ -227,12 +227,14 @@ export function MountRow({
   children: ReactNode;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-2">
-      <div className="min-w-0">
-        <dt className="text-row text-record">{term}</dt>
-        {gloss && <dd className="mt-0.5 text-row text-label">{gloss}</dd>}
-      </div>
-      <dd className="shrink-0 text-right text-row text-record">{children}</dd>
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 py-2">
+      <dt className="min-w-0 text-row text-record">{term}</dt>
+      <dd className="col-start-2 row-span-2 row-start-1 shrink-0 text-right text-row text-record">
+        {children}
+      </dd>
+      {gloss && (
+        <dd className="col-start-1 mt-0.5 min-w-0 text-row text-label">{gloss}</dd>
+      )}
     </div>
   );
 }

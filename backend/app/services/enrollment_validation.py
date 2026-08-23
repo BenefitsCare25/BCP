@@ -57,6 +57,25 @@ def assert_window_accepts_edits(window: EnrollmentWindow) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, "The enrolment period has closed.")
 
 
+def assert_enrollment_config_editable(
+    db: Session,
+    policy_year_id: str,
+    label: str,
+) -> None:
+    """Freeze reviewed pricing/rules while any period in the year is open."""
+    open_window = db.execute(
+        select(EnrollmentWindow.id).where(
+            EnrollmentWindow.policy_year_id == policy_year_id,
+            EnrollmentWindow.status == WindowStatus.open,
+        )
+    ).scalars().first()
+    if open_window:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label} cannot change while an enrolment period is open.",
+        )
+
+
 def assert_not_compulsory_decline(
     product_code: str, compulsory_product_ids: set[str], product_id: str
 ) -> None:
@@ -204,6 +223,7 @@ def assert_dependants_owned(
         db.execute(
             select(Dependant.id).where(
                 Dependant.employee_id == employee.id,
+                Dependant.status == "active",
                 Dependant.id.in_(dependant_ids),
             )
         ).scalars()
@@ -212,7 +232,8 @@ def assert_dependants_owned(
     if missing:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"Dependants do not belong to this employee: {', '.join(missing)}.",
+            "Dependants are inactive or do not belong to this employee: "
+            f"{', '.join(missing)}.",
         )
 
 

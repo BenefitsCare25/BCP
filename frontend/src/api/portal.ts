@@ -4,6 +4,7 @@ import type {
   ElectionIn,
   EnrollmentDetail,
   EnrollmentOptions,
+  EnrollmentSubmitInput,
   EnrollmentWindow,
 } from "@/api/enrollment";
 import {
@@ -326,9 +327,11 @@ export function useSetMyLeave() {
 export function useSubmitMyEnrollment() {
   const qc = usePortalQueryInvalidator();
   return useMutation({
-    mutationFn: (acknowledgeUnpriced: boolean) =>
+    mutationFn: (input: EnrollmentSubmitInput) =>
       portalApi.post<EnrollmentDetail>("/portal/enrollment/submit", {
-        acknowledge_unpriced: acknowledgeUnpriced,
+        acknowledge_unpriced: input.acknowledgeUnpriced ?? false,
+        elections: input.elections,
+        leave: input.leave,
       }),
     onSuccess: qc,
     meta: { localErrorHandling: true },

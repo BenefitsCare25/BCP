@@ -36,6 +36,35 @@ from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollment-windows"])
 
+_OPEN_EDITABLE_FIELDS = {
+    "name",
+    "closes_at",
+    "member_self_service",
+    "allow_overdraft",
+}
+
+
+def _assert_no_open_overlap(db: Session, window: EnrollmentWindow) -> None:
+    db.execute(
+        select(PolicyYear.id)
+        .where(PolicyYear.id == window.policy_year_id)
+        .with_for_update()
+    ).scalar_one()
+    overlap = db.execute(
+        select(EnrollmentWindow.id).where(
+            EnrollmentWindow.policy_year_id == window.policy_year_id,
+            EnrollmentWindow.id != window.id,
+            EnrollmentWindow.status == WindowStatus.open,
+            EnrollmentWindow.opens_at < window.closes_at,
+            EnrollmentWindow.closes_at > window.opens_at,
+        )
+    ).scalars().first()
+    if overlap:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This enrolment period overlaps another open period in the benefit year.",
+        )
+
 
 @router.get(
     "/policy-years/{policy_year_id}/enrollment-windows",
@@ -70,6 +99,12 @@ def create_window(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EnrollmentWindow:
+    if body.window_type != "open":
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "New-hire and life-event periods are not available until their "
+            "eligibility rules are configured.",
+        )
     window = EnrollmentWindow(
         policy_year_id=py.id,
         client_id=py.client_id,
@@ -128,12 +163,28 @@ def patch_window(
             status.HTTP_409_CONFLICT, "A closed enrolment period can no longer be edited."
         )
     data = body.model_dump(exclude_unset=True)
+    if window.status == WindowStatus.open:
+        locked = sorted(set(data) - _OPEN_EDITABLE_FIELDS)
+        if locked:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "code": "open_window_configuration_locked",
+                    "message": (
+                        "Selection, pricing, and default rules are locked after "
+                        "an enrolment period opens."
+                    ),
+                    "fields": locked,
+                },
+            )
     for field, value in data.items():
         setattr(window, field, value)
     if window.opens_at >= window.closes_at:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "opens_at must be before closes_at."
         )
+    if window.status == WindowStatus.open:
+        _assert_no_open_overlap(db, window)
     db.flush()
     write_audit(
         db, user, action="update_enrollment_window", entity_type="enrollment_window",
@@ -161,10 +212,17 @@ def open_enrollment_window(
     Returns the count created so the UI can tell the broker whether the sync
     actually did anything (a re-uploaded roster reads as 0 existing + N created).
     """
+    window = db.execute(
+        select(EnrollmentWindow)
+        .where(EnrollmentWindow.id == window.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
     if window.status == WindowStatus.closed:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "A closed enrolment period cannot be reopened."
         )
+    _assert_no_open_overlap(db, window)
     created = open_window(db, window, user)
     db.commit()
     db.refresh(window)
@@ -185,6 +243,12 @@ def close_enrollment_window(
 ) -> WindowCloseSummary:
     """Close the window: finalize untouched enrollments per default_behavior and
     project every enrollment's elections into effective overrides."""
+    window = db.execute(
+        select(EnrollmentWindow)
+        .where(EnrollmentWindow.id == window.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
     if window.status != WindowStatus.open:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Only an open enrolment period can be closed."

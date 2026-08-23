@@ -102,6 +102,7 @@ export interface WindowCloseSummary {
   deemed_kept: number;
   deemed_declined: number;
   already: number;
+  invalid_submitted: number;
 }
 
 /** Response from opening/syncing a window — the window plus how many new
@@ -474,6 +475,12 @@ export interface ElectionIn {
   notes?: string | null;
 }
 
+export interface EnrollmentSubmitInput {
+  acknowledgeUnpriced?: boolean;
+  elections?: ElectionIn[];
+  leave?: { action: string; days: number };
+}
+
 export interface BulkRowOutcome {
   employee_id: string | null;
   staff_id: string | null;
@@ -765,6 +772,31 @@ export function useSaveFlexPricing(policyYearId: string | undefined) {
   });
 }
 
+export function useSaveEnrollmentPricingConfig(
+  policyYearId: string | undefined,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      pricing,
+      flexPriceSource,
+    }: {
+      pricing: FlexPricingBag;
+      flexPriceSource: Record<string, FlexPriceSource>;
+    }) =>
+      api.put<FlexPricing>(
+        `/policy-years/${policyYearId}/enrollment-pricing-config`,
+        { pricing, flex_price_source: flexPriceSource },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["flex-pricing"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+    },
+  });
+}
+
 // ── Enrollments ──────────────────────────────────────────────────────────────
 
 export function useEnrollmentRoster(
@@ -840,12 +872,15 @@ export function useSubmitEnrollment() {
     mutationFn: ({
       id,
       acknowledgeUnpriced = false,
+      elections,
+      leave,
     }: {
       id: string;
-      acknowledgeUnpriced?: boolean;
-    }) =>
+    } & EnrollmentSubmitInput) =>
       api.post<EnrollmentDetail>(`/enrollments/${id}/submit`, {
         acknowledge_unpriced: acknowledgeUnpriced,
+        elections,
+        leave,
       }),
     onSuccess: () => invalidateEnrollment(qc),
     // The election panel handles submit errors itself (overdraft toast /

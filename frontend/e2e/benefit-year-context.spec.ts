@@ -99,7 +99,7 @@ async function ensureYear(
   return apiJson<PolicyYear>(updated);
 }
 
-async function context(request: APIRequestContext) {
+async function context(request: APIRequestContext, futureYear: number) {
   const me = await apiJson<Me>(await request.get(`${API}/me`));
   const client = me.accessible_clients.find((candidate) => candidate.name === "CDL");
   expect(client).toBeDefined();
@@ -132,8 +132,8 @@ async function context(request: APIRequestContext) {
   const future = await ensureYear(
     request,
     headers,
-    "2027-01-01",
-    "2027-12-31",
+    `${futureYear}-01-01`,
+    `${futureYear}-12-31`,
     45,
   );
   return { client: client!, headers, current: patchedCurrent, past, future };
@@ -192,7 +192,10 @@ test("benefit-year selection defaults to today and follows every module", async 
   page,
   request,
 }, testInfo) => {
-  const years = await context(request);
+  const years = await context(
+    request,
+    testInfo.project.name === "mobile-chromium" ? 2028 : 2027,
+  );
   const runtimeErrors = runtimeMonitor(page);
   const apiRequests: string[] = [];
   page.on("request", (pending) => {
@@ -283,7 +286,10 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   page,
   request,
 }, testInfo) => {
-  const years = await context(request);
+  const years = await context(
+    request,
+    testInfo.project.name === "mobile-chromium" ? 2028 : 2027,
+  );
   const runtimeErrors = runtimeMonitor(page);
   await installSession(page, years.client.id);
   await page.goto("/claims/review?tab=settings");
@@ -293,13 +299,13 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   await expect(grace).toHaveValue("15");
   await selectYear(page, 2026);
   await expect(grace).toHaveValue("30");
-  await selectYear(page, 2027);
+  await selectYear(page, years.future.year);
   await expect(grace).toHaveValue("45");
   await grace.fill("46");
   await grace.blur();
   await expect(page.getByText("Claim grace period updated")).toBeVisible();
   await selectYear(page, 2026);
-  await selectYear(page, 2027);
+  await selectYear(page, years.future.year);
   await expect(grace).toHaveValue("46");
 
   await selectYear(page, 2025);

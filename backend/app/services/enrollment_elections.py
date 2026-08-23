@@ -535,13 +535,45 @@ def _option_choices_out(
     return out
 
 
+def _prepare_enrollment_edit(enr: Enrollment) -> None:
+    """Move broker-editable records back to draft and reject deemed records."""
+    if enr.status == EnrollmentStatus.deemed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A deemed enrollment is finalized and cannot be edited.",
+        )
+    if enr.status in (EnrollmentStatus.submitted, EnrollmentStatus.confirmed):
+        enr.status = EnrollmentStatus.in_progress
+        enr.submitted_at = None
+        enr.submitted_by = None
+    if enr.confirmed_at is not None or enr.confirmed_by is not None:
+        enr.confirmed_at = None
+        enr.confirmed_by = None
+
+
+def lock_enrollment(db: Session, enr: Enrollment) -> Enrollment:
+    """Serialize mutations to one member's enrollment lifecycle."""
+    return db.execute(
+        select(Enrollment)
+        .where(Enrollment.id == enr.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+
+
 def apply_elections(
-    db: Session, enr: Enrollment, elections: list[EnrollmentElectionIn]
+    db: Session,
+    enr: Enrollment,
+    elections: list[EnrollmentElectionIn],
+    *,
+    prepare_edit: bool = True,
 ) -> None:
     """Validate + upsert plan elections onto an enrollment. Flushes but does
     NOT audit or commit — the caller owns actor attribution."""
     window = db.get(EnrollmentWindow, enr.window_id)
     assert_window_accepts_edits(window)
+    if prepare_edit:
+        _prepare_enrollment_edit(enr)
     if not window.allow_plan_change:
         raise HTTPException(status.HTTP_409_CONFLICT, "Plan changes are disabled for this window.")
     py = db.get(PolicyYear, enr.policy_year_id)
@@ -704,11 +736,19 @@ def apply_elections(
     db.flush()
 
 
-def apply_leave(db: Session, enr: Enrollment, body: LeaveElectionIn) -> LeaveElection:
+def apply_leave(
+    db: Session,
+    enr: Enrollment,
+    body: LeaveElectionIn,
+    *,
+    prepare_edit: bool = True,
+) -> LeaveElection:
     """Validate + upsert the buy/sell-leave election. Flushes but does NOT
     audit or commit."""
     window = db.get(EnrollmentWindow, enr.window_id)
     assert_window_accepts_edits(window)
+    if prepare_edit:
+        _prepare_enrollment_edit(enr)
     if not window.allow_leave:
         raise HTTPException(status.HTTP_409_CONFLICT, "Leave trading is disabled for this window.")
     policy = db.execute(
@@ -755,6 +795,46 @@ def apply_leave(db: Session, enr: Enrollment, body: LeaveElectionIn) -> LeaveEle
         enr.status = EnrollmentStatus.in_progress
     db.flush()
     return leave
+
+
+def revalidate_enrollment(db: Session, enr: Enrollment) -> None:
+    """Re-run saved choices against current plans, eligibility, and pricing."""
+    elections = db.execute(
+        select(EnrollmentElection).where(EnrollmentElection.enrollment_id == enr.id)
+    ).scalars().all()
+    if elections:
+        saved_tags = {e.id: e.flex_price_tag for e in elections}
+        apply_elections(
+            db,
+            enr,
+            [
+                EnrollmentElectionIn(
+                    product_code=e.product_code,
+                    plan_code=e.elected_plan_code,
+                    tier_category_id=e.tier_category_id,
+                    declined=e.action == ElectionAction.decline,
+                    covered_dependant_ids=e.covered_dependant_ids,
+                    dependant_option_ids=e.dependant_option_ids,
+                    notes=e.notes,
+                )
+                for e in elections
+            ],
+            prepare_edit=False,
+        )
+        # Price tags are submission snapshots. Structural revalidation must not
+        # rewrite an already-reviewed wallet debit during confirmation/close.
+        for election in elections:
+            election.flex_price_tag = saved_tags[election.id]
+    leave = db.execute(
+        select(LeaveElection).where(LeaveElection.enrollment_id == enr.id)
+    ).scalar_one_or_none()
+    if leave is not None:
+        apply_leave(
+            db,
+            enr,
+            LeaveElectionIn(action=leave.action, days=leave.days),
+            prepare_edit=False,
+        )
 
 
 def perform_submit(

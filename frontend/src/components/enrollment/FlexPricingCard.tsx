@@ -79,6 +79,8 @@ export type FlexPricingEditor = {
   isLoading: boolean;
   dirty: boolean;
   saving: boolean;
+  pricing: FlexPricingBag;
+  markSaved: () => void;
   blockFor: (pid: string) => FlexPricingProductBlock;
   modeFor: (product: FlexPricingProduct) => FlexPricingMode;
   setMode: (pid: string, mode: FlexPricingMode, currentMode: FlexPricingMode) => void;
@@ -301,6 +303,8 @@ export function useFlexPricingEditor(
     isLoading: !data,
     dirty,
     saving: save.isPending,
+    pricing: bag,
+    markSaved: () => setDirty(false),
     blockFor,
     modeFor,
     setMode,

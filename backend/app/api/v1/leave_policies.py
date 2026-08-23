@@ -23,6 +23,7 @@ from app.core.deps import load_policy_year
 from app.db.session import get_db
 from app.models import Employee, LeavePolicy, PolicyYear
 from app.schemas.enrollment import LeavePolicyOut, LeavePolicyUpsert, LeaveRateOptions
+from app.services.enrollment_validation import assert_enrollment_config_editable
 from app.services.leave_pricing_resolver import (
     build_leave_rate_options,
     validate_leave_rates_shape,
@@ -77,9 +78,6 @@ def upsert_leave_policy(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeavePolicy:
-    policy = db.execute(
-        select(LeavePolicy).where(LeavePolicy.policy_year_id == py.id)
-    ).scalar_one_or_none()
     errs = validate_leave_rates_shape(
         body.leave_rates,
         min_buy_days=body.min_buy_days,
@@ -87,6 +85,10 @@ def upsert_leave_policy(
     )
     if errs:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "; ".join(errs))
+    assert_enrollment_config_editable(db, py.id, "The leave policy")
+    policy = db.execute(
+        select(LeavePolicy).where(LeavePolicy.policy_year_id == py.id)
+    ).scalar_one_or_none()
     action = "update_leave_policy"
     if policy is None:
         policy = LeavePolicy(policy_year_id=py.id, client_id=py.client_id)
