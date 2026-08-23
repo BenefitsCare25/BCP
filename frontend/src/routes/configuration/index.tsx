@@ -18,7 +18,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { SkeletonTable } from "@/components/ui/skeleton";
 import { BenefitYearPanel } from "@/components/configuration/BenefitYearPanel";
@@ -253,7 +259,7 @@ export function ConfigurationPage() {
           <SkeletonTable rows={8} columns={4} />
         ) : (
           <Tabs value={tab} onValueChange={(v) => switchLine(v as InsuranceLine)}>
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <PageTabsBar className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <TabsList className="h-auto max-w-full flex-wrap">
                 {INSURANCE_LINES.map((line) => (
                   <TabsTrigger key={line} value={line} className="gap-2">
@@ -271,7 +277,7 @@ export function ConfigurationPage() {
               ) : (
                 <SlipUploadButton slip={slip} />
               ))}
-            </div>
+            </PageTabsBar>
 
             {/* Slip upload results + period guard — insured products only. */}
             {tab !== "flex" && !readOnly && (

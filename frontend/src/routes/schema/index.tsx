@@ -2,7 +2,13 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { SchemaAttributesPage } from "./attributes";
 import { SchemaInsurersPage } from "./insurers";
 import { SchemaProductsPage } from "./products";
@@ -52,18 +58,18 @@ export function SchemaPage() {
         navigate({ to: "/firm/schema", search: { tab: value } })
       }
     >
-      <div className="flex items-center justify-between gap-3">
-        <TabsList>
+      <PageTabsBar className="flex items-center justify-between gap-3 overflow-x-auto">
+        <TabsList className="min-w-max shrink-0">
           {TABS.map((t) => (
             <TabsTrigger key={t.key} value={t.key}>
               {t.label}
             </TabsTrigger>
           ))}
         </TabsList>
-        <Button onClick={() => setOpen(active.key)(true)}>
+        <Button className="shrink-0" onClick={() => setOpen(active.key)(true)}>
           <Plus className="size-4" /> {active.addLabel}
         </Button>
-      </div>
+      </PageTabsBar>
       {TABS.map(({ key, Panel }) => (
         <TabsContent key={key} value={key}>
           <Panel open={Boolean(addOpen[key])} onOpenChange={setOpen(key)} />

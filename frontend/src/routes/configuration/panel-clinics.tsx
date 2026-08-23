@@ -71,7 +71,13 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { InfoHint } from "@/components/ui/tooltip";
 import {
   Table,
@@ -611,11 +617,13 @@ export function PanelClinicsPage() {
       onValueChange={(v) => setTab(v as TabKey)}
       className="space-y-4"
     >
-      <TabsList>
-        <TabsTrigger value="locations">Locations</TabsTrigger>
-        <TabsTrigger value="cards">Cards</TabsTrigger>
-        <TabsTrigger value="history">History</TabsTrigger>
-      </TabsList>
+      <PageTabsBar className="overflow-x-auto">
+        <TabsList className="min-w-max">
+          <TabsTrigger value="locations">Locations</TabsTrigger>
+          <TabsTrigger value="cards">Cards</TabsTrigger>
+          <TabsTrigger value="history">History</TabsTrigger>
+        </TabsList>
+      </PageTabsBar>
 
       <TabsContent value="history">
         <PanelSetupHistory />

@@ -20,8 +20,7 @@ import {
 } from "lucide-react";
 
 // Single source of truth for broker navigation. The Sidebar renders these
-// groups and the AppShell derives its TopBar titles from the same records, so
-// links and titles can't drift apart.
+// groups while the app shell supplies company and benefit-year context.
 //
 // Two tiers, mirroring the multi-tenant model:
 //   COMPANY_NAV — sections that act on ONE insured company (the active client).
@@ -30,7 +29,6 @@ import {
 export type NavItem = {
   label: string;
   to: string;
-  title: string;
   icon: LucideIcon;
   adminOnly?: boolean;
 };
@@ -54,13 +52,11 @@ export const COMPANY_NAV: NavGroup[] = [
       {
         label: "Company & Benefits",
         to: "/client-relations/company-benefits",
-        title: "Company & Benefits",
         icon: Boxes,
       },
       {
         label: "Enrollment",
         to: "/client-relations/enrollment",
-        title: "Benefits Selection",
         icon: CalendarCheck,
       },
     ],
@@ -73,25 +69,21 @@ export const COMPANY_NAV: NavGroup[] = [
       {
         label: "Member Listing",
         to: "/policy-admin/member-listing",
-        title: "Member Listing / Upload",
         icon: Upload,
       },
       {
         label: "Member Coverage",
         to: "/policy-admin/member-coverage",
-        title: "Member Coverage",
         icon: UserCheck,
       },
       {
         label: "Panel & Clinics",
         to: "/policy-admin/panel-clinics",
-        title: "Panel Clinic Locations",
         icon: Stethoscope,
       },
       {
         label: "Underwriting",
         to: "/policy-admin/underwriting",
-        title: "Underwriting Queue",
         icon: ClipboardCheck,
       },
     ],
@@ -104,13 +96,11 @@ export const COMPANY_NAV: NavGroup[] = [
       {
         label: "Claims Review",
         to: "/claims/review",
-        title: "Claims Review",
         icon: ReceiptText,
       },
       {
         label: "Reports Center",
         to: "/claims/reports",
-        title: "Reports Center",
         icon: BarChart3,
       },
     ],
@@ -123,13 +113,11 @@ export const COMPANY_NAV: NavGroup[] = [
       {
         label: "Company settings",
         to: "/settings/company",
-        title: "Company settings",
         icon: Cog,
       },
       {
         label: "AI Provider",
         to: "/settings/ai",
-        title: "AI Provider",
         icon: Sparkles,
         adminOnly: true,
       },
@@ -147,13 +135,11 @@ export const FIRM_NAV: NavGroup = {
     {
       label: "Schema & Reference",
       to: "/firm/schema",
-      title: "Schema & Reference",
       icon: SlidersHorizontal,
     },
     {
       label: "Access & Companies",
       to: "/firm/access",
-      title: "Access & Companies",
       icon: Building2,
     },
   ],
@@ -171,10 +157,3 @@ export function isCompanyPath(pathname: string): boolean {
     (p) => pathname === p || pathname.startsWith(`${p}/`),
   );
 }
-
-// Pathname → TopBar title, derived from every nav record above.
-export const PAGE_TITLES: Record<string, string> = Object.fromEntries(
-  [...COMPANY_NAV, FIRM_NAV].flatMap((group) =>
-    group.items.map((item) => [item.to, item.title]),
-  ),
-);

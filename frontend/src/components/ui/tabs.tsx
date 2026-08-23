@@ -4,6 +4,19 @@ import { cn } from "@/lib/cn";
 
 export const Tabs = TabsPrimitive.Root;
 
+export const PageTabsBar = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    data-page-tabs-bar=""
+    className={cn("sticky top-0 z-30 max-w-full bg-background", className)}
+    {...props}
+  />
+));
+PageTabsBar.displayName = "PageTabsBar";
+
 export const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>

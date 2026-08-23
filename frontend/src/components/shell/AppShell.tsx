@@ -5,14 +5,8 @@ import { useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
-import { ContextBar } from "./ContextBar";
 import { CompanyPickerDialog } from "./CompanyPickerDialog";
-import { isCompanyPath, PAGE_TITLES } from "./nav";
-
-const EXTRA_TITLES: Record<string, string> = {
-  "/home": "Home",
-  "/dashboard": "Company Dashboard",
-};
+import { isCompanyPath } from "./nav";
 
 /**
  * Keep the stored active client honest for the HARD gate: clear a stale
@@ -52,11 +46,6 @@ export function AppShell() {
     setMobileNavOpen(false);
   }, [path]);
 
-  const title =
-    EXTRA_TITLES[path] ??
-    PAGE_TITLES[path] ??
-    "Inspro Configuration Platform";
-
   // Hard gate: a company page needs a deliberately chosen company. While we
   // don't yet know the caller's companies, hold the page (avoid a flash of the
   // default tenant); with a real choice pending, prompt; otherwise render.
@@ -73,8 +62,7 @@ export function AppShell() {
     <div className="flex h-screen w-screen overflow-hidden">
       <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
-        <TopBar title={title} onMenuClick={() => setMobileNavOpen(true)} />
-        <ContextBar />
+        <TopBar onMenuClick={() => setMobileNavOpen(true)} />
         <main className="min-h-0 flex-1 overflow-y-auto p-5">
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">

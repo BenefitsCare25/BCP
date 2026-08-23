@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { usePendingDependants } from "@/components/operations/DependantApprovals";
 import { useSession } from "@/stores/session";
 import { RosterActionsSlot } from "./rosterTabActions";
@@ -37,7 +43,7 @@ export function RosterPage() {
         navigate({ to: "/policy-admin/member-listing", search: { tab: value } })
       }
     >
-      <div className="flex items-center justify-between gap-3">
+      <PageTabsBar className="flex items-center justify-between gap-3 overflow-x-auto">
         <TabsList>
           {TABS.map((t) => (
             <TabsTrigger key={t.key} value={t.key}>
@@ -54,8 +60,8 @@ export function RosterPage() {
             </TabsTrigger>
           ))}
         </TabsList>
-        <div ref={setActionSlot} className="flex items-center gap-2" />
-      </div>
+        <div ref={setActionSlot} className="flex shrink-0 items-center gap-2" />
+      </PageTabsBar>
       <RosterActionsSlot.Provider value={actionSlot}>
         <TabsContent value="employees">
           <EmployeesPage />

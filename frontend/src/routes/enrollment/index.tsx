@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { EnrollmentElectionsPage } from "./elections";
 import { EnrollmentBulkPage } from "./bulk";
 import {
@@ -773,13 +779,15 @@ export function EnrollmentPage() {
         navigate({ to: "/client-relations/enrollment", search: { tab: value } })
       }
     >
-      <TabsList className="max-w-full overflow-x-auto">
-        {ENROLLMENT_TABS.filter((t) => !readOnly || t.key !== "bulk").map((t) => (
-          <TabsTrigger key={t.key} value={t.key}>
-            {t.label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      <PageTabsBar className="overflow-x-auto">
+        <TabsList className="min-w-max">
+          {ENROLLMENT_TABS.filter((t) => !readOnly || t.key !== "bulk").map((t) => (
+            <TabsTrigger key={t.key} value={t.key}>
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </PageTabsBar>
       <TabsContent value="windows">
         <fieldset disabled={readOnly} className="contents">
           <EnrollmentDashboardPage />

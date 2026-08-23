@@ -3,14 +3,13 @@ import { Menu } from "lucide-react";
 import { useMe } from "@/api/hooks";
 import { cn } from "@/lib/cn";
 import { AccountMenu } from "./AccountMenu";
+import { ContextBar } from "./ContextBar";
 import { NotificationBell } from "./NotificationBell";
 import { FIRM_NAV } from "./nav";
 
 export function TopBar({
-  title,
   onMenuClick,
 }: {
-  title: string;
   onMenuClick?: () => void;
 }) {
   const { data: me } = useMe();
@@ -22,8 +21,11 @@ export function TopBar({
   const firmItems = FIRM_NAV.items.filter((i) => i.to !== "/firm/access" || canAdmin);
 
   return (
-    <header className="h-14 border-b border-border bg-card px-4 sm:px-6 flex items-center justify-between gap-2 shrink-0">
-      <div className="flex items-center gap-2 min-w-0">
+    <header
+      data-top-bar=""
+      className="h-14 border-b border-border bg-card px-4 sm:px-6 flex items-center justify-between gap-2 shrink-0"
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {onMenuClick && (
           <button
             type="button"
@@ -34,9 +36,9 @@ export function TopBar({
             <Menu className="size-5" />
           </button>
         )}
-        <h1 className="truncate text-base font-semibold text-foreground">{title}</h1>
+        <ContextBar />
       </div>
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         <nav className="flex items-center gap-1" aria-label="Firm-wide">
           {firmItems.map((item) => {
             const Icon = item.icon;

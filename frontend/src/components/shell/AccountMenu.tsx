@@ -14,9 +14,13 @@ import { ENTRA_ENABLED, signIn, signOut } from "@/auth/msal";
 export function AccountMenu() {
   if (!ENTRA_ENABLED) {
     return (
-      <Badge variant="info" className="gap-1.5">
+      <Badge
+        variant="info"
+        title="Mock authentication (development)"
+        className="size-8 justify-center p-0 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-2.5 sm:py-0.5"
+      >
         <ShieldCheck className="size-3" />
-        Mock auth (dev)
+        <span className="hidden sm:inline">Mock auth (dev)</span>
       </Badge>
     );
   }
@@ -52,9 +56,14 @@ function SignedInOrOut() {
 
   if (!account) {
     return (
-      <Button size="sm" variant="outline" onClick={() => void signIn()}>
+      <Button
+        size="sm"
+        variant="outline"
+        aria-label="Sign in"
+        onClick={() => void signIn()}
+      >
         <LogIn className="size-4" />
-        Sign in
+        <span className="hidden sm:inline">Sign in</span>
       </Button>
     );
   }
@@ -67,12 +76,17 @@ function SignedInOrOut() {
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        aria-label={`Account menu for ${display}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
         className="flex h-8 items-center gap-2 rounded-md border border-border bg-card px-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <div className="flex size-6 items-center justify-center rounded-full bg-primary text-2xs font-semibold text-primary-foreground">
           {initials}
         </div>
-        <span className="max-w-[160px] truncate text-foreground">{display}</span>
+        <span className="hidden max-w-[160px] truncate text-foreground sm:inline">
+          {display}
+        </span>
       </button>
       {open && (
         <div

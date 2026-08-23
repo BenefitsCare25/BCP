@@ -52,7 +52,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { ClaimGracePeriodField } from "@/components/claims/ClaimGracePeriodField";
 import { LeaverAccessField } from "@/components/claims/LeaverAccessField";
 import { ClaimMessages } from "@/components/claims/ClaimMessages";
@@ -1498,7 +1504,7 @@ export function ClaimsQueuePage() {
         navigate({ to: "/claims/review", search: { tab: v } })
       }
     >
-      <div className="sticky top-0 z-30 max-w-full shrink-0 overflow-x-auto bg-background">
+      <PageTabsBar className="shrink-0 overflow-x-auto">
         <TabsList className="min-w-max">
           <TabsTrigger value="queue">Queue</TabsTrigger>
           {/* The count is the whole point: with no email in prod, this badge is
@@ -1529,7 +1535,7 @@ export function ClaimsQueuePage() {
             <TabsTrigger value="settings">Claim settings</TabsTrigger>
           )}
         </TabsList>
-      </div>
+      </PageTabsBar>
 
       <TabsContent value="queue">
         <p className="mb-3 text-xs text-muted-foreground">

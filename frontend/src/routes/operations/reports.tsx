@@ -25,7 +25,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { ReportWorkbookRow } from "@/components/operations/ReportWorkbookRow";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import {
@@ -629,13 +635,15 @@ export function ReportsPage() {
           navigate({ to: "/claims/reports", search: { tab: value } })
         }
       >
-        <TabsList>
-          {TEAMS.map((t) => (
-            <TabsTrigger key={t.key} value={t.key}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <PageTabsBar className="overflow-x-auto">
+          <TabsList className="min-w-max">
+            {TEAMS.map((t) => (
+              <TabsTrigger key={t.key} value={t.key}>
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </PageTabsBar>
 
         <TabsContent value="cr">
           {selectedYear ? <CrReports year={selectedYear} /> : <NoYearNotice />}

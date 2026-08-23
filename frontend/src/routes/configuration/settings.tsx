@@ -3,7 +3,13 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useMe } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  PageTabsBar,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { HrAdminSettings } from "@/components/settings/HrAdminSettings";
 import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 
@@ -46,10 +52,12 @@ export function CompanySettingsPage() {
           navigate({ to: "/settings/company", search: { tab: v } })
         }
       >
-        <TabsList>
-          <TabsTrigger value="aliases">Entity aliases</TabsTrigger>
-          {canAdmin && <TabsTrigger value="hr">Authentication</TabsTrigger>}
-        </TabsList>
+        <PageTabsBar className="overflow-x-auto">
+          <TabsList className="min-w-max">
+            <TabsTrigger value="aliases">Entity aliases</TabsTrigger>
+            {canAdmin && <TabsTrigger value="hr">Authentication</TabsTrigger>}
+          </TabsList>
+        </PageTabsBar>
 
         <TabsContent value="aliases">
           <div className="mb-3 flex justify-end">
