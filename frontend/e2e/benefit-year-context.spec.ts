@@ -220,7 +220,7 @@ test("benefit-year selection defaults to today and follows every module", async 
   await page.goto("/dashboard");
   const yearSelect = page.getByRole("combobox", { name: "Select benefit year" });
   await expect(yearSelect).toContainText("2026");
-  await expect(yearSelect).toContainText("Today");
+  await expect(yearSelect).not.toContainText("Today");
   if (testInfo.project.name === "desktop-chromium") {
     const contextBar = page.locator('[data-context-bar="company"]');
     const companyName = contextBar.getByText(years.client.name, { exact: true });

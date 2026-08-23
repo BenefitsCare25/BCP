@@ -65,7 +65,12 @@ async function bootstrap() {
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
-        <Toaster richColors position="top-right" />
+        <Toaster
+          richColors
+          position="top-right"
+          offset={{ top: 64, right: 16 }}
+          mobileOffset={{ top: 64, right: 16, left: 16 }}
+        />
       </QueryClientProvider>
     </React.StrictMode>
   );
