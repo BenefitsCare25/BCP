@@ -220,14 +220,15 @@ export function BenefitYearPanel({
 
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
+      <CardHeader className="flex-col items-stretch gap-3 space-y-0 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <CardTitle>Benefit years</CardTitle>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:shrink-0 sm:flex-row">
           <Button
             size="sm"
             variant="outline"
+            className="w-full sm:w-auto"
             disabled={!previousYear || copy.isPending}
             onClick={onCopy}
             title={
@@ -246,7 +247,12 @@ export function BenefitYearPanel({
             )}
             Copy from previous year
           </Button>
-          <Button size="sm" disabled={create.isPending} onClick={onAdd}>
+          <Button
+            size="sm"
+            className="w-full sm:w-auto"
+            disabled={create.isPending}
+            onClick={onAdd}
+          >
             {create.isPending ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
@@ -292,6 +298,7 @@ export function BenefitYearPanel({
                     <td className="py-2 pr-3">
                       <Input
                         type="date"
+                        aria-label={`Start date for benefit period ${py.start_date} to ${py.end_date}`}
                         className="h-8 w-[150px]"
                         value={dateDraft[py.id]?.start_date ?? py.start_date}
                         onChange={(e) =>
@@ -306,6 +313,7 @@ export function BenefitYearPanel({
                     <td className="py-2 pr-3">
                       <Input
                         type="date"
+                        aria-label={`End date for benefit period ${py.start_date} to ${py.end_date}`}
                         className="h-8 w-[150px]"
                         value={dateDraft[py.id]?.end_date ?? py.end_date}
                         onChange={(e) =>

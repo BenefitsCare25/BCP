@@ -73,8 +73,10 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await assertAccessible(page);
 
   await claimSettings.click();
-  await expect(page.getByText("Claim document types")).toBeVisible();
-  await expect(page.getByText("Discharge Summary", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Required documents by claim type" }),
+  ).toBeVisible();
+  await expect(page.getByText("Invoice or receipt", { exact: true }).first()).toBeVisible();
   await screenshot(page, testInfo, "claim-settings");
   await assertAccessible(page);
 

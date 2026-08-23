@@ -148,7 +148,7 @@ export function ReportWorkbookRow({
           </div>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
           {workbook.supports_masking && (
             <Segmented
               value={masked ? "masked" : "full"}

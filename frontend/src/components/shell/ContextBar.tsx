@@ -93,36 +93,43 @@ function CompanyContext() {
   const todayYearId = policyYearForToday(years)?.id;
 
   return (
-    <div className="min-h-10 shrink-0 border-b border-border bg-card px-4 py-1.5 sm:px-6 flex flex-wrap items-center gap-3 text-sm">
-      <Link
-        to="/home"
-        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ChevronLeft className="size-3.5" />
-        All companies
-      </Link>
-      <div className="h-4 w-px bg-border" />
-      <Building2 className="size-4 text-primary" />
-      {clients.length > 1 ? (
-        <Select value={selected ?? undefined} onValueChange={onChange}>
-          <SelectTrigger
-            aria-label="Select company"
-            className="h-7 min-w-[180px] border-0 bg-transparent px-1 font-medium shadow-none focus:ring-0"
-          >
-            <SelectValue placeholder="Select company" />
-          </SelectTrigger>
-          <SelectContent>
-            {clients.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : (
-        <span className="font-medium text-foreground">{activeName}</span>
-      )}
-      <div className="ml-auto flex min-w-0 items-center gap-2">
+    <div
+      data-context-bar="company"
+      className="flex min-h-10 shrink-0 flex-col gap-2 border-b border-border bg-card px-4 py-1.5 text-sm sm:flex-row sm:items-center sm:gap-3 sm:px-6"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <Link
+          to="/home"
+          className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronLeft className="size-3.5" />
+          All companies
+        </Link>
+        <div className="h-4 w-px shrink-0 bg-border" />
+        <Building2 className="size-4 shrink-0 text-primary" />
+        {clients.length > 1 ? (
+          <Select value={selected ?? undefined} onValueChange={onChange}>
+            <SelectTrigger
+              aria-label="Select company"
+              className="h-7 min-w-[180px] border-0 bg-transparent px-1 font-medium shadow-none focus:ring-0"
+            >
+              <SelectValue placeholder="Select company" />
+            </SelectTrigger>
+            <SelectContent>
+              {clients.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <span className="truncate font-medium text-foreground">
+            {activeName}
+          </span>
+        )}
+      </div>
+      <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
         <CalendarRange className="size-4 shrink-0 text-muted-foreground" />
         {years.length > 0 ? (
           <Select
@@ -131,7 +138,7 @@ function CompanyContext() {
           >
             <SelectTrigger
               aria-label="Select benefit year"
-              className="h-8 w-[17rem] max-w-[65vw] whitespace-nowrap"
+              className="h-8 w-[17rem] max-w-[calc(100vw-4.5rem)] whitespace-nowrap sm:max-w-[65vw]"
             >
               <SelectValue placeholder="Select benefit year" />
             </SelectTrigger>
