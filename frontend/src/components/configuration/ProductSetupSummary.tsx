@@ -60,7 +60,7 @@ function termRows(term: ProductTerm | null): { label: string; value: string }[] 
   if (!term) return [];
   const gst =
     term.gst_included === null
-      ? "Inherit"
+      ? "Exclude (default)"
       : term.gst_included
         ? `Include${term.gst_rate != null ? ` (${term.gst_rate}%)` : ""}`
         : "Exclude";

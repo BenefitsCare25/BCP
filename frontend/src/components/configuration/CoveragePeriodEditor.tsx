@@ -20,15 +20,14 @@ import { formatError } from "@/lib/errors";
 import type { ProductTerm } from "@/types";
 import { toast } from "sonner";
 
-// Tri-state GST opinion: inherit (null) / include (true) / exclude (false).
-type GstOpinion = "inherit" | "include" | "exclude";
+// Product premiums are GST-exclusive unless the broker explicitly includes it.
+// Legacy null values therefore render as the clear product default: Exclude.
+type GstOpinion = "include" | "exclude";
 
 function toOpinion(v: boolean | null): GstOpinion {
-  if (v === null) return "inherit";
   return v ? "include" : "exclude";
 }
-function fromOpinion(o: GstOpinion): boolean | null {
-  if (o === "inherit") return null;
+function fromOpinion(o: GstOpinion): boolean {
   return o === "include";
 }
 
@@ -178,30 +177,27 @@ export function CoveragePeriodEditor({
   };
 
   return (
-    <div className="rounded-lg border border-border bg-muted/20 p-4">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
-          <div className="flex items-center gap-1.5">
+    <div className="overflow-x-auto rounded-lg border border-border bg-muted/20 p-3">
+      <div className="flex min-w-max items-center gap-3">
+          <div className="flex shrink-0 items-center gap-1.5">
             <Label className="text-xs text-muted-foreground">GST</Label>
             <InfoHint>
-              Slip amounts are GST-exclusive. “Include” grosses premiums and flex
-              price tags by this rate (default 9%). “Inherit” follows the flex
-              scheme’s GST setting.
+              Product premiums exclude GST by default. Choose Include GST to
+              gross premiums and flex price tags by this rate (default 9%).
             </InfoHint>
             <Select
               value={gstOpinion}
               onValueChange={(v) => setGstOpinion(v as GstOpinion)}
             >
               <SelectTrigger
-                className="w-[224px] whitespace-nowrap"
+                className="h-8 w-[172px] whitespace-nowrap"
                 aria-label={`${term.code} GST`}
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="inherit">Inherit (scheme default)</SelectItem>
+                <SelectItem value="exclude">Exclude GST (default)</SelectItem>
                 <SelectItem value="include">Include GST</SelectItem>
-                <SelectItem value="exclude">Exclude GST</SelectItem>
               </SelectContent>
             </Select>
             {gstOpinion === "include" && (
@@ -211,7 +207,7 @@ export function CoveragePeriodEditor({
                   min={0}
                   max={100}
                   step={0.1}
-                  className="w-[90px]"
+                  className="h-8 w-[64px] px-2"
                   value={gstRate}
                   onChange={(e) => setGstRate(e.target.value)}
                   placeholder="9"
@@ -224,7 +220,7 @@ export function CoveragePeriodEditor({
 
           {isLife && (
             <>
-              <div className="flex items-center gap-1.5">
+              <div className="flex shrink-0 items-center gap-1.5">
                 <Label className="text-xs text-muted-foreground">
                   Free cover limit
                 </Label>
@@ -237,7 +233,7 @@ export function CoveragePeriodEditor({
                   type="number"
                   min={0}
                   step={1000}
-                  className="w-[130px]"
+                  className="h-8 w-[108px] px-2"
                   value={fcl}
                   onChange={(e) => setFcl(e.target.value)}
                   placeholder="No limit"
@@ -245,7 +241,7 @@ export function CoveragePeriodEditor({
                 />
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex shrink-0 items-center gap-1.5">
                 <Label className="text-xs text-muted-foreground">NEL age</Label>
                 <InfoHint>
                   Non-Evidence-Limit age (age next birthday). Members at or
@@ -256,7 +252,7 @@ export function CoveragePeriodEditor({
                   type="number"
                   min={1}
                   max={120}
-                  className="w-[80px]"
+                  className="h-8 w-[64px] px-2"
                   value={nelAge}
                   onChange={(e) => setNelAge(e.target.value)}
                   placeholder="—"
@@ -267,7 +263,7 @@ export function CoveragePeriodEditor({
           )}
 
           {hasUnderwritingChoice && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-1.5">
               <Label className="text-xs text-muted-foreground">
                 Underwriting
               </Label>
@@ -282,7 +278,7 @@ export function CoveragePeriodEditor({
                 }
               >
                 <SelectTrigger
-                  className="w-[110px]"
+                  className="h-8 w-[88px]"
                   aria-label={`${term.code} underwriting required`}
                 >
                   <SelectValue />
@@ -299,7 +295,7 @@ export function CoveragePeriodEditor({
               window is meaningless on a dental or GP line, and an input that
               can never matter is noise on a row that already carries five. */}
           {isInpatientLine && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex shrink-0 items-center gap-1.5">
               <Label className="text-xs text-muted-foreground">
                 Pre / post days
               </Label>
@@ -314,7 +310,7 @@ export function CoveragePeriodEditor({
                 type="number"
                 min={0}
                 max={365}
-                className="w-[70px]"
+                className="h-8 w-[58px] px-2"
                 value={preDays}
                 onChange={(e) => setPreDays(e.target.value)}
                 placeholder="—"
@@ -325,7 +321,7 @@ export function CoveragePeriodEditor({
                 type="number"
                 min={0}
                 max={365}
-                className="w-[70px]"
+                className="h-8 w-[58px] px-2"
                 value={postDays}
                 onChange={(e) => setPostDays(e.target.value)}
                 placeholder="—"
@@ -333,56 +329,64 @@ export function CoveragePeriodEditor({
               />
             </div>
           )}
-        </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-xs text-muted-foreground">Starts</Label>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">Start</Label>
             <Input
               type="date"
               aria-label={`${term.code} coverage start`}
               value={start}
               onChange={(e) => setStart(e.target.value)}
-              className="w-[150px]"
+              className="h-8 w-[132px] px-2"
             />
           </div>
-          <div className="flex items-center gap-1.5">
-            <Label className="text-xs text-muted-foreground">Ends</Label>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Label className="text-xs text-muted-foreground">End</Label>
             <Input
               type="date"
               aria-label={`${term.code} coverage end`}
               value={end}
               min={start || undefined}
               onChange={(e) => setEnd(e.target.value)}
-              className="w-[150px]"
+              className="h-8 w-[132px] px-2"
             />
           </div>
-          <Button size="sm" disabled={!dirty || !valid || busy} onClick={save}>
+          <Button
+            className="h-8 shrink-0"
+            size="sm"
+            disabled={!dirty || !valid || busy}
+            onClick={save}
+          >
             Save
           </Button>
           {hasOverride && !locked && (
             <Button
-              size="sm"
+              className="shrink-0"
+              size="icon-sm"
               variant="outline"
               disabled={busy}
               onClick={reset}
-              title="Reset to the policy year's dates (clears GST too)"
+              aria-label={`Reset ${term.code} terms to defaults`}
+              title="Reset product terms to defaults"
             >
-              <RotateCcw className="size-3.5" /> Reset
+              <RotateCcw className="size-3.5" />
             </Button>
           )}
-        </div>
-        {!datesValid && dirty && (
-          <p className="w-full text-xs text-error">
-            End date must be on or after the start date.
-          </p>
-        )}
-        {!rateValid && (
-          <p className="w-full text-xs text-error">
-            GST rate must be between 0 and 100.
-          </p>
-        )}
       </div>
+      {((!datesValid && dirty) || !rateValid) && (
+        <div className="mt-2 space-y-1">
+          {!datesValid && dirty && (
+            <p className="text-xs text-error">
+              End date must be on or after the start date.
+            </p>
+          )}
+          {!rateValid && (
+            <p className="text-xs text-error">
+              GST rate must be between 0 and 100.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
