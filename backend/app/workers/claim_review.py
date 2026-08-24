@@ -498,6 +498,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
             except Exception:
                 ok = False
         self.send_response(200 if ok else 503)
+        self.send_header("X-Inspro-Version", os.environ.get("INSPRO_GIT_SHA", "unknown"))
         self.end_headers()
         self.wfile.write(b"ok" if ok else b"unavailable")
 

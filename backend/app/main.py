@@ -240,8 +240,9 @@ def create_app() -> FastAPI:
     app.include_router(portal_enquiries.router, prefix=api_prefix)
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
+    async def health(response: Response) -> dict[str, str]:
         """Liveness probe. Process is up — does NOT check DB connectivity."""
+        response.headers["X-Inspro-Version"] = os.environ.get("INSPRO_GIT_SHA", "unknown")
         return {"status": "ok"}
 
     @app.get("/readiness")

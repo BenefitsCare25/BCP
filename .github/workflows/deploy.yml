@@ -27,9 +27,67 @@ env:
 # members, so they must stay green and must not be bypassed. Reintroducing a pre-prod
 # environment means re-adding a job here plus infra/bicep/parameters.staging.json.
 jobs:
+  # Classify the diff once so unrelated stacks do not hold up a release. Any
+  # compare failure fails open and runs every gate.
+  changes:
+    name: Detect CI scope
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Classify changed files
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          BACKEND=true
+          FRONTEND=true
+          INFRA=true
+          BASE=""
+          HEAD="${{ github.sha }}"
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="$PR_BASE"
+            HEAD="$PR_HEAD"
+          elif [ "${{ github.event_name }}" = "push" ] && \
+               [ -n "$BEFORE" ] && \
+               [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            BASE="$BEFORE"
+          fi
+
+          if [ -n "$BASE" ] && \
+             FILES=$(gh api "repos/${{ github.repository }}/compare/${BASE}...${HEAD}" \
+                       --paginate --jq '.files[].filename' 2>/dev/null); then
+            BACKEND=false
+            FRONTEND=false
+            INFRA=false
+            echo "$FILES" | grep -qE '^(backend/|\.dockerignore$)' && BACKEND=true || true
+            echo "$FILES" | grep -q '^frontend/' && FRONTEND=true || true
+            echo "$FILES" | grep -q '^infra/' && INFRA=true || true
+            if echo "$FILES" | grep -q '^\.github/workflows/deploy\.yml$'; then
+              BACKEND=true
+              FRONTEND=true
+              INFRA=true
+            fi
+          fi
+
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "infra=$INFRA" >> "$GITHUB_OUTPUT"
+          echo "backend=$BACKEND  frontend=$FRONTEND  infra=$INFRA"
+
   # ── CI gate: runs on every PR + push to main ────────────────────────────────
-  test:
-    name: Lint + test
+  backend-test:
+    name: Backend checks
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +117,28 @@ jobs:
       - name: Backend — pytest
         working-directory: backend
         run: PYTHONPATH=. uv run pytest
+
+  frontend-test:
+    name: Frontend checks
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Playwright starts FastAPI and prepares an Alembic database, so the
+      # backend environment is required even for a UI-only change.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install --no-cache-dir uv
+
+      - name: Backend install for end-to-end
+        working-directory: backend
+        run: uv sync --frozen
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -93,10 +173,38 @@ jobs:
         timeout-minutes: 10
         run: pnpm exec playwright test
 
+  # Preserve the established required-check name while the independent stacks
+  # execute in parallel. A skipped stack is valid; a failed classifier or stack
+  # is not.
+  test:
+    name: Lint + test
+    needs: [changes, backend-test, frontend-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required CI jobs
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BACKEND_RESULT: ${{ needs.backend-test.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-test.result }}
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Change classification ended with $CHANGES_RESULT."
+            exit 1
+          fi
+          for result in "$BACKEND_RESULT" "$FRONTEND_RESULT"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "::error::A required CI job ended with $result."
+              exit 1
+            fi
+          done
+
   # ── Static quality gate ────────────────────────────────────────────────────
   # Strict typing and infrastructure validation must both pass before release.
   static-checks:
     name: Static checks
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -118,6 +226,7 @@ jobs:
         run: uv run mypy app
 
       - name: Validate Bicep
+        if: needs.changes.outputs.infra == 'true'
         run: az bicep build --file infra/bicep/main.bicep
 
   # ── Build + push the prod container ────────────────────────────────────────
@@ -152,6 +261,7 @@ jobs:
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           docker build -f backend/Dockerfile -t "$IMAGE" \
+            --build-arg INSPRO_GIT_SHA="${{ github.sha }}" \
             --build-arg VITE_API_BASE_URL=/api/v1 \
             --build-arg VITE_TENANT_MODE=header \
             --build-arg VITE_ENTRA_TENANT_ID="${{ secrets.AZURE_TENANT_ID }}" \
@@ -167,6 +277,12 @@ jobs:
     # Gates on tests, strict typing, infrastructure validation and the image
     # build before a release reaches members (there is no staging).
     needs: [test, static-checks, build]
+    if: >-
+      always() &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.test.result == 'success' &&
+      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
+      needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: prod
     # Serialise deploys. Two pushes in quick succession would otherwise run two
@@ -205,7 +321,6 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           INFRA=true
-          MIGRATIONS=true
           if [ "${{ github.event_name }}" = "push" ] && \
              [ -n "$BEFORE" ] && \
              [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
@@ -214,12 +329,10 @@ jobs:
               # The workflow itself counts as infra: it passes the parameters
               # that main.bicep is deployed with.
               echo "$FILES" | grep -qE '^(infra/|\.github/workflows/)' && INFRA=true || INFRA=false
-              echo "$FILES" | grep -q '^backend/alembic/versions/' && MIGRATIONS=true || MIGRATIONS=false
             fi
           fi
           echo "infra=$INFRA" >> "$GITHUB_OUTPUT"
-          echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
-          echo "infra=$INFRA  migrations=$MIGRATIONS"
+          echo "infra=$INFRA"
 
       - name: Azure login (OIDC)
         id: login
@@ -242,7 +355,6 @@ jobs:
       # order is always: infra -> migrate -> code.
       - name: Read the currently deployed image
         id: img
-        if: steps.changed.outputs.infra == 'true'
         run: |
           NEW="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           CURRENT=$(az webapp config show --name "${{ env.PROD_APP }}" \
@@ -255,8 +367,36 @@ jobs:
             echo "No parseable running image; using the new tag."
             IMAGE="$NEW"
           fi
+          TAG="${IMAGE##*:}"
+          if echo "$TAG" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "sha=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "Bicep will assert image: $IMAGE"
+
+      # Compare from the image production is actually serving, not merely from
+      # the previous push. If an earlier release failed before shipping its
+      # image, this range still contains its unapplied migrations. Any failure
+      # to prove the range safe runs migrations.
+      - name: Detect pending database changes
+        id: pending
+        env:
+          BASE_SHA: ${{ steps.img.outputs.sha }}
+        run: |
+          MIGRATIONS=true
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" = "${{ github.sha }}" ]; then
+            MIGRATIONS=false
+          elif [ -n "$BASE_SHA" ] && \
+               git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 && \
+               FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
+            MIGRATIONS=false
+            echo "$FILES" | grep -qE '^backend/(alembic(/|\.ini$)|app/models/|app/db/(tenancy|migration_helpers)\.py$|scripts/provision_tenants\.py$|app/services/claims_review/recovery\.py$)' \
+              && MIGRATIONS=true || true
+          fi
+          echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
+          echo "production_sha=${BASE_SHA:-unknown}  migrations=$MIGRATIONS"
 
       # Skipped when no infra changed. `Deploy image` below sets the container
       # tag in 10s, so the image still ships — this template's only other job on
@@ -330,16 +470,17 @@ jobs:
       # the Bicep above), so no public IP allowlist has to be maintained. The
       # old sync enumerated ~44 App Service outbound IPs as individual rules,
       # which Azure applies one server-update at a time — ~20 minutes per deploy.
-      # Run migrations on every release. Alembic is idempotent, and comparing
-      # only the latest commit is unsafe after a failed deployment: a retry
-      # commit may contain no migration file even though production never
-      # applied the migration from the earlier commit.
+      # Database work runs only when the range from the currently deployed image
+      # contains schema/provisioning changes. The production-SHA comparison above
+      # preserves migrations from any earlier release that failed before rollout.
       - name: Setup Python (for migrate)
+        if: steps.pending.outputs.migrations == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
+        if: steps.pending.outputs.migrations == 'true'
         run: pip install --no-cache-dir uv
 
       # Migrations run from this runner, not from inside the VNet, so the runner
@@ -356,6 +497,7 @@ jobs:
       # every prod release. See modules/ci-firewall-rule.bicep.
       - name: Allow runner IP on Postgres
         id: fw
+        if: steps.pending.outputs.migrations == 'true'
         run: |
           IP=$(curl -fsS https://api.ipify.org)
           echo "::add-mask::$IP"
@@ -372,6 +514,7 @@ jobs:
             --query "properties.provisioningState" -o tsv
 
       - name: Run database migrations + provision tenant schemas
+        if: steps.pending.outputs.migrations == 'true'
         working-directory: backend
         env:
           INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@inspro-prod-pg.postgres.database.azure.com:5432/inspro?sslmode=require
@@ -435,11 +578,43 @@ jobs:
 
       - name: Smoke-test prod
         run: |
-          # App Service keeps the previous container serving while it schedules
-          # a recycle. Wait beyond the observed slowest application import so
-          # this gate cannot pass against the old process or a new process that
-          # is still booting and will fail shortly afterwards.
-          sleep 120
+          # App Service serves the old container while scheduling a recycle.
+          # Wait for both endpoints to report the SHA baked into the new image,
+          # which proves the rollout happened without a blind startup sleep.
+          wait_for_version() {
+            NAME="$1"
+            URL="$2"
+            for _ in $(seq 1 24); do
+              HEADERS=$(curl -fsS --connect-timeout 3 --max-time 5 \
+                -D - -o /dev/null "$URL" 2>/dev/null || true)
+              VERSION=$(printf '%s\n' "$HEADERS" | awk \
+                'tolower($1) == "x-inspro-version:" { gsub("\r", "", $2); print $2 }' \
+                | tail -1)
+              if [ "$VERSION" = "${{ github.sha }}" ]; then
+                echo "$NAME is serving $VERSION."
+                return 0
+              fi
+              echo "$NAME is serving ${VERSION:-no version yet}; waiting."
+              sleep 5
+            done
+            echo "::error::$NAME did not serve ${{ github.sha }} before timeout."
+            return 1
+          }
+
+          # Avoid probing during the short front-end route handoff; Azure's own
+          # AlwaysOn probe recorded a transient 502 three seconds after the last
+          # rollout even though the previous container was still healthy.
+          sleep 15
+          wait_for_version portal \
+            "https://${{ env.PROD_APP }}.azurewebsites.net/health" &
+          PORTAL_PID=$!
+          wait_for_version worker \
+            "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz" &
+          WORKER_PID=$!
+          STATUS=0
+          wait "$PORTAL_PID" || STATUS=1
+          wait "$WORKER_PID" || STATUS=1
+          [ "$STATUS" = "0" ] || exit "$STATUS"
 
           # /health proves the container booted; /readiness additionally proves
           # it can reach Postgres — which now means the private endpoint

@@ -62,9 +62,12 @@ RUN uv export --frozen --no-dev --format requirements-txt > /tmp/requirements.tx
 # ── Runtime ──────────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
+ARG INSPRO_GIT_SHA=unknown
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8000
+    PORT=8000 \
+    INSPRO_GIT_SHA=$INSPRO_GIT_SHA
 
 WORKDIR /app
 
