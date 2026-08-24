@@ -57,6 +57,10 @@ export function AlertDialog({
 }: AlertDialogProps) {
   const { icon: ToneIcon, className: toneClass } = TONES[tone];
   const busy = loading || secondaryLoading;
+  const hasSecondaryAction = Boolean(secondaryLabel && onSecondary);
+  const actionClassName = hasSecondaryAction
+    ? "w-full min-w-0"
+    : "w-full sm:w-auto";
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -70,7 +74,8 @@ export function AlertDialog({
         <DialogPrimitive.Content
           className={cn(
             "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
-            "w-[90vw] max-w-md rounded-xl border border-border bg-card shadow-xl",
+            "w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-xl",
+            hasSecondaryAction ? "max-w-2xl" : "max-w-md",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
             "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             "data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95",
@@ -96,13 +101,20 @@ export function AlertDialog({
               </DialogPrimitive.Description>
             </div>
           </div>
-          <div className="flex flex-col gap-2 rounded-b-xl border-t border-border bg-muted/40 px-6 py-4 sm:flex-row sm:justify-end">
+          <div
+            className={cn(
+              "gap-2 rounded-b-xl border-t border-border bg-muted/40 px-6 py-4",
+              hasSecondaryAction
+                ? "grid grid-cols-1 md:grid-cols-3"
+                : "flex flex-col sm:flex-row sm:justify-end",
+            )}
+          >
             {cancelLabel && (
               <Button
                 variant="outline"
                 onClick={() => onOpenChange(false)}
                 disabled={busy}
-                className="w-full sm:w-auto"
+                className={actionClassName}
               >
                 {cancelLabel}
               </Button>
@@ -113,7 +125,7 @@ export function AlertDialog({
                 onClick={onSecondary}
                 loading={secondaryLoading}
                 disabled={busy || secondaryDisabled}
-                className="w-full sm:w-auto"
+                className={actionClassName}
               >
                 {secondaryLabel}
               </Button>
@@ -123,7 +135,7 @@ export function AlertDialog({
               onClick={onConfirm}
               loading={loading}
               disabled={busy || confirmDisabled}
-              className="w-full sm:w-auto"
+              className={actionClassName}
             >
               {confirmLabel}
             </Button>

@@ -4,13 +4,14 @@ import type { NewClaimForm } from "./useNewClaimForm";
 const STEP_LABELS = ["Claim type", "Visit details", "Documents"] as const;
 
 export function ClaimSubmissionHeader({ form }: { form: NewClaimForm }) {
+  const claimTypeComplete = Boolean(form.selection);
   const providerComplete = form.isHospitalisation
     ? Boolean(
         form.hospital &&
           (form.hospital !== OTHER_HOSPITAL || form.provider.trim().length >= 2),
       )
     : form.provider.trim().length >= 2;
-  const visitComplete = Boolean(
+  const visitComplete = claimTypeComplete && Boolean(
     form.incurredDate &&
       providerComplete &&
       form.invoiceNumber.trim() &&
@@ -23,10 +24,12 @@ export function ClaimSubmissionHeader({ form }: { form: NewClaimForm }) {
     !form.needsReferral ||
     (form.referralMode === "upload" && Boolean(form.referralFile)) ||
     (form.referralMode === "existing" && Boolean(form.referralExistingId));
-  const documentsComplete = form.docSlots.every(
-    (slot) => form.slotFiles[slot.key],
-  ) && referralComplete;
-  const steps = [Boolean(form.selection), visitComplete, documentsComplete];
+  const documentsComplete =
+    visitComplete &&
+    form.docSlots.length > 0 &&
+    form.docSlots.every((slot) => form.slotFiles[slot.key]) &&
+    referralComplete;
+  const steps = [claimTypeComplete, visitComplete, documentsComplete];
   const completed = steps.filter(Boolean).length;
 
   return (
