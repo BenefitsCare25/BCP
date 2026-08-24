@@ -12,6 +12,9 @@ interface AlertDialogProps {
   confirmLabel?: string;
   cancelLabel?: string | null;
   confirmVariant?: ButtonProps["variant"];
+  secondaryLabel?: string | null;
+  secondaryVariant?: ButtonProps["variant"];
+  onSecondary?: () => void | Promise<void>;
   /** Visual register of the prompt. Defaults to `danger` so existing
    * destructive call sites are unchanged; use `info` for a confirmation that
    * isn't destructive — a red warning triangle over "Approve this claim?"
@@ -19,7 +22,9 @@ interface AlertDialogProps {
   tone?: "danger" | "info";
   onConfirm: () => void | Promise<void>;
   loading?: boolean;
+  secondaryLoading?: boolean;
   confirmDisabled?: boolean;
+  secondaryDisabled?: boolean;
 }
 
 const TONES = {
@@ -40,12 +45,18 @@ export function AlertDialog({
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
   confirmVariant = "destructive",
+  secondaryLabel = null,
+  secondaryVariant = "outline",
+  onSecondary,
   tone = "danger",
   onConfirm,
   loading = false,
+  secondaryLoading = false,
   confirmDisabled = false,
+  secondaryDisabled = false,
 }: AlertDialogProps) {
   const { icon: ToneIcon, className: toneClass } = TONES[tone];
+  const busy = loading || secondaryLoading;
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -85,22 +96,36 @@ export function AlertDialog({
               </DialogPrimitive.Description>
             </div>
           </div>
-          <div className="px-6 py-4 border-t border-border bg-muted/40 flex gap-2 justify-end rounded-b-xl">
+          <div className="flex flex-col gap-2 rounded-b-xl border-t border-border bg-muted/40 px-6 py-4 sm:flex-row sm:justify-end">
             {cancelLabel && (
               <Button
                 variant="outline"
                 onClick={() => onOpenChange(false)}
-                disabled={loading}
+                disabled={busy}
+                className="w-full sm:w-auto"
               >
                 {cancelLabel}
+              </Button>
+            )}
+            {secondaryLabel && onSecondary && (
+              <Button
+                variant={secondaryVariant}
+                onClick={onSecondary}
+                loading={secondaryLoading}
+                disabled={busy || secondaryDisabled}
+                className="w-full sm:w-auto"
+              >
+                {secondaryLabel}
               </Button>
             )}
             <Button
               variant={confirmVariant}
               onClick={onConfirm}
-              disabled={loading || confirmDisabled}
+              loading={loading}
+              disabled={busy || confirmDisabled}
+              className="w-full sm:w-auto"
             >
-              {loading ? "Working…" : confirmLabel}
+              {confirmLabel}
             </Button>
           </div>
         </DialogPrimitive.Content>

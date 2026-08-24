@@ -173,12 +173,13 @@ export function useNewClaimForm() {
     setReferralExistingId(draft.referral_existing_id);
     setAnchorId(draft.anchor_id);
   };
+  const draftMeaningful = Object.entries(draftData).some(
+    ([key, value]) => key !== "currency" && value.trim().length > 0,
+  );
   const draftSync = useClaimDraftSync({
     data: draftData,
     ready: options.isSuccess,
-    meaningful: Object.entries(draftData).some(
-      ([key, value]) => key !== "currency" && value.trim().length > 0,
-    ),
+    meaningful: draftMeaningful,
     busy,
     onRestore: restoreDraft,
   });
@@ -1072,9 +1073,8 @@ export function useNewClaimForm() {
     error,
     busy,
     draftStatus: draftSync.status,
-    draftRestored: draftSync.restored,
     hasLocalAttachments,
-    hasUnsubmittedWork: hasLocalAttachments || draftSync.hasUnsavedChanges,
+    hasUnsubmittedWork: hasLocalAttachments || draftMeaningful,
     // actions
     changeClaimant,
     changeSelection,
@@ -1098,6 +1098,8 @@ export function useNewClaimForm() {
     runAutofill,
     pickFiles,
     dropAutofillFile,
+    saveDraft: draftSync.saveNow,
+    discardDraft: draftSync.clear,
     submit,
   };
 }

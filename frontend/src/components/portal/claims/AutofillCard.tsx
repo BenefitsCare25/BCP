@@ -13,7 +13,14 @@
  * component would otherwise need to know where "back" goes. */
 import type { ReactNode } from "react";
 import { useRef } from "react";
-import { Loader2, Paperclip, Sparkles } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Cloud,
+  Loader2,
+  Paperclip,
+  Sparkles,
+} from "lucide-react";
 import { Hint } from "@/components/ui/hint";
 import { Action } from "@/components/portal/leaf/Action";
 import { MountRule } from "@/components/portal/leaf/Mount";
@@ -23,6 +30,30 @@ import {
   MAX_AUTOFILL_FILES,
 } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
+
+function DraftStatus({ status }: { status: NewClaimForm["draftStatus"] }) {
+  if (status === "idle") return null;
+  const error = status === "error";
+  const Icon = error ? AlertCircle : status === "saved" ? CheckCircle2 : Cloud;
+  const label =
+    status === "saving"
+      ? "Saving draft…"
+      : error
+        ? "Draft not saved"
+        : "Draft saved";
+
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1.5 text-row font-medium ${
+        error ? "text-strike-rejected" : "text-record"
+      }`}
+      aria-live="polite"
+    >
+      <Icon className="size-4 shrink-0" aria-hidden />
+      {label}
+    </span>
+  );
+}
 
 export function AutofillCard({
   form,
@@ -44,42 +75,45 @@ export function AutofillCard({
           the one thing that explains what the shortcut does. */}
       <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
         {leading}
-        <div className="flex min-w-0 items-center gap-1 max-sm:w-full">
-          <input
-            ref={input}
-            type="file"
-            accept={ACCEPT}
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const picked = Array.from(e.target.files ?? []);
-              e.target.value = "";
-              if (picked.length) void form.runAutofill(picked);
-            }}
-          />
-          <Action
-            type="button"
-            className="min-w-0 flex-1 justify-start sm:flex-none"
-            disabled={form.extractIntake.isPending}
-            onClick={() => input.current?.click()}
-          >
-            {form.extractIntake.isPending ? (
-              <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
-            ) : (
-              <Sparkles className="size-4 shrink-0" aria-hidden />
-            )}
-            <span className="truncate">
-              {autofillDocs.length > 0
-                ? `${autofillDocs.length} document${autofillDocs.length === 1 ? "" : "s"} uploaded`
-                : "Autofill from your documents"}
-            </span>
-          </Action>
-          <Hint label="How to get the best autofill">
-            Upload the full document set for this claim together (up to{" "}
-            {MAX_AUTOFILL_FILES} files) — for example a tax invoice, itemised
-            bill and discharge summary. Keep every page of a document in one
-            file. You can edit everything before submitting.
-          </Hint>
+        <div className="flex min-w-0 flex-col items-start gap-2 max-sm:w-full sm:flex-row sm:items-center">
+          <DraftStatus status={form.draftStatus} />
+          <div className="flex min-w-0 items-center gap-1 max-sm:w-full">
+            <input
+              ref={input}
+              type="file"
+              accept={ACCEPT}
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                if (picked.length) void form.runAutofill(picked);
+              }}
+            />
+            <Action
+              type="button"
+              className="min-w-0 flex-1 justify-start sm:flex-none"
+              disabled={form.extractIntake.isPending}
+              onClick={() => input.current?.click()}
+            >
+              {form.extractIntake.isPending ? (
+                <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+              ) : (
+                <Sparkles className="size-4 shrink-0" aria-hidden />
+              )}
+              <span className="truncate">
+                {autofillDocs.length > 0
+                  ? `${autofillDocs.length} document${autofillDocs.length === 1 ? "" : "s"} uploaded`
+                  : "Autofill from your documents"}
+              </span>
+            </Action>
+            <Hint label="How to get the best autofill">
+              Upload the full document set for this claim together (up to{" "}
+              {MAX_AUTOFILL_FILES} files) — for example a tax invoice, itemised
+              bill and discharge summary. Keep every page of a document in one
+              file. You can edit everything before submitting.
+            </Hint>
+          </div>
         </div>
       </div>
 

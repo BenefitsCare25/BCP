@@ -10,13 +10,13 @@
  * type requires. The claim is created as a draft, its evidence attaches, and
  * submit runs the backend validations (intake profile, coverage/eligibility,
  * in-period, duplicates). */
-import { useEffect, useState } from "react";
-import { useBlocker, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Loader2, Send } from "lucide-react";
 import { AnchorField } from "@/components/portal/claims/AnchorField";
 import { AutofillCard } from "@/components/portal/claims/AutofillCard";
 import { ClaimTypeFields } from "@/components/portal/claims/ClaimTypeFields";
 import { ClaimSubmissionHeader } from "@/components/portal/claims/ClaimSubmissionHeader";
+import { ClaimLeavePrompt } from "@/components/portal/claims/ClaimLeavePrompt";
 import { DocumentFields } from "@/components/portal/claims/DocumentFields";
 import { PendingClaimsNotice } from "@/components/portal/claims/PendingClaimsNotice";
 import { ReferralField } from "@/components/portal/claims/ReferralField";
@@ -30,7 +30,6 @@ import { Mount } from "@/components/portal/leaf/Mount";
 import { errorStatus, formatError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
-import { AlertDialog } from "@/components/ui/alert-dialog";
 
 function focusFirstInvalidField(form: HTMLFormElement) {
   requestAnimationFrame(() => {
@@ -56,20 +55,6 @@ export function PortalNewClaimPage() {
   useDocumentTitle("Make a claim");
   const form = useNewClaimForm();
   const { options } = form;
-  const [leavePromptOpen, setLeavePromptOpen] = useState(false);
-  const navigationBlocker = useBlocker({
-    shouldBlockFn: ({ current, next }) =>
-      form.hasUnsubmittedWork &&
-      !form.busy &&
-      current.pathname !== next.pathname,
-    enableBeforeUnload: () => form.hasUnsubmittedWork && !form.busy,
-    disabled: !form.hasUnsubmittedWork || form.busy,
-    withResolver: true,
-  });
-
-  useEffect(() => {
-    if (navigationBlocker.status === "blocked") setLeavePromptOpen(true);
-  }, [navigationBlocker.status]);
 
   if (options.isLoading) return <LeafSkeleton label="Loading the claim form" />;
   if (
@@ -210,24 +195,7 @@ export function PortalNewClaimPage() {
           </Action>
         </form>
       </Mount>
-      <AlertDialog
-        open={leavePromptOpen}
-        onOpenChange={(open) => {
-          setLeavePromptOpen(open);
-          if (!open && navigationBlocker.status === "blocked") {
-            navigationBlocker.reset();
-          }
-        }}
-        title="Leave this claim?"
-        description="Your saved answers will remain, but files selected on this device must be attached again when you return."
-        confirmLabel="Leave claim"
-        cancelLabel="Continue editing"
-        confirmVariant="destructive"
-        onConfirm={() => {
-          setLeavePromptOpen(false);
-          if (navigationBlocker.status === "blocked") navigationBlocker.proceed();
-        }}
-      />
+      <ClaimLeavePrompt form={form} />
     </div>
   );
 }
