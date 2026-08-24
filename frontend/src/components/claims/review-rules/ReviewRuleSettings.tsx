@@ -15,7 +15,7 @@
  * configured product list.
  */
 import { useMemo, useState } from "react";
-import { Copy, Pencil, RefreshCw, RotateCcw } from "lucide-react";
+import { Pencil, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import {
   useClaimReviewConfigs,
@@ -32,15 +32,11 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { SectionLabel } from "@/components/ui/section-label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NoCurrentYearNotice } from "@/components/shell/CurrentYearBanner";
 import { formatError } from "@/lib/errors";
-import { ImportRulesDialog } from "./ImportRulesDialog";
 import {
   ReviewConfigEditor,
   type EditorTarget,
@@ -131,17 +127,19 @@ function TypeSection({
   note,
   children,
 }: {
-  title: string;
+  title?: string;
   note?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-t border-border">
-      <div className="space-y-1 bg-muted/40 px-5 py-2.5">
-        <SectionLabel as="h3">{title}</SectionLabel>
-        {note && <p className="max-w-prose text-xs text-subtle">{note}</p>}
-      </div>
-      <div className="divide-y divide-border border-t border-border">
+    <section className={title ? "border-t border-border" : undefined}>
+      {title && (
+        <div className="space-y-1 bg-muted/40 px-5 py-2.5">
+          <SectionLabel as="h3">{title}</SectionLabel>
+          {note && <p className="max-w-prose text-xs text-subtle">{note}</p>}
+        </div>
+      )}
+      <div className={`divide-y divide-border ${title ? "border-t border-border" : ""}`}>
         {children}
       </div>
     </section>
@@ -166,7 +164,6 @@ export function ReviewRuleSettings() {
   const del = useDeleteClaimReviewConfig();
   const [editing, setEditing] = useState<EditorTarget | null>(null);
   const [reverting, setReverting] = useState<ClaimReviewConfig | null>(null);
-  const [importOpen, setImportOpen] = useState(false);
 
   // Keyed on the SERVER's `key` on both sides of the join — see
   // `ClaimReviewConfig.key`.
@@ -294,38 +291,13 @@ export function ReviewRuleSettings() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader className="pb-5">
-        {/* basis-80 + shrink-0 keeps the action on the title's line; without it
-            the description absorbs the row and drops the button below. */}
-        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-          <div className="min-w-0 flex-1 basis-80 space-y-1">
-            <CardTitle>AI review rules by claim type</CardTitle>
-            <CardDescription className="max-w-prose">
-              What the AI checks after submission — field comparisons and
-              business rules, configurable per claim choice. Required uploads
-              are managed separately under Claim settings and are checked
-              automatically from the claim&apos;s saved document setup.
-            </CardDescription>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            onClick={() => setImportOpen(true)}
-          >
-            <Copy className="size-3.5" />
-            <span className="ml-1.5">Duplicate from another company</span>
-          </Button>
-        </div>
-        </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="px-5 pb-5">
+            <div className="p-5">
               <Skeleton className="h-40 w-full" />
             </div>
           ) : options.isError || configs.isError ? (
-            <div className="flex flex-col items-start gap-3 px-5 pb-5">
+            <div className="flex flex-col items-start gap-3 p-5">
               <p className="text-sm text-error">
                 Couldn&apos;t load review rules. {formatError(options.error ?? configs.error)}
               </p>
@@ -342,7 +314,7 @@ export function ReviewRuleSettings() {
               </Button>
             </div>
           ) : claimTypes.length === 0 && unmatched.length === 0 ? (
-            <div className="px-5 pb-5">
+            <div className="p-5">
               {hasCurrentYear ? (
                 <p className="text-sm text-muted-foreground">
                   No claim types yet — they appear once the current benefit year
@@ -355,15 +327,12 @@ export function ReviewRuleSettings() {
           ) : (
             <>
               {!hasCurrentYear && (
-                <div className="px-5 pb-5">
+                <div className="p-5">
                   <NoCurrentYearNotice />
                 </div>
               )}
               {insured.length > 0 && (
-                <TypeSection
-                  title="Insurance products"
-                  note="Set a product default once, then override only the claim choices that need different checks."
-                >
+                <TypeSection>
                   {insured.map((t) => {
                     const cfg = configByType.get(t.key) ?? null;
                     const enabledParent = cfg?.enabled ? cfg : null;
@@ -493,7 +462,6 @@ export function ReviewRuleSettings() {
           )}
           onClose={() => setEditing(null)}
         />
-        <ImportRulesDialog open={importOpen} onOpenChange={setImportOpen} />
         <AlertDialog
           open={reverting !== null}
           onOpenChange={(open) => !open && setReverting(null)}

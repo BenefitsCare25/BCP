@@ -55,7 +55,6 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
 
   await messages.click();
   await expect(messages).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("heading", { name: "Messages" })).toBeVisible();
   const conversationSearch = page.getByRole("searchbox", {
     name: "Search conversations",
   });
@@ -63,7 +62,9 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await expect(page.getByLabel("Conversation view")).toBeVisible();
 
   await reviewRules.click();
-  await expect(page.getByText("AI review rules by claim type")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Duplicate from another company" }),
+  ).toBeVisible();
   const configuredClaimType = page.getByText("GP (General Practitioner)", {
     exact: true,
   });
@@ -123,6 +124,26 @@ test("message workbench supports search and empty inboxes", async ({ page }, tes
   } else {
     await expect(page.getByText("No conversations yet")).toBeVisible();
   }
+  const scrollOwners = await page.evaluate(() => {
+    const main = document.querySelector("main");
+    const inbox = document.querySelector('[aria-label="Conversation inbox"]');
+    if (!main || !inbox) throw new Error("Message workbench shell is missing");
+    const nested = Array.from(inbox.querySelectorAll<HTMLElement>("*")).filter(
+      (element) => {
+        const overflow = getComputedStyle(element).overflowY;
+        return (
+          (overflow === "auto" || overflow === "scroll") &&
+          element.scrollHeight > element.clientHeight
+        );
+      },
+    );
+    return {
+      mainRange: main.scrollHeight - main.clientHeight,
+      nestedCount: nested.length,
+    };
+  });
+  if (hasConversations) expect(scrollOwners.mainRange).toBeGreaterThan(0);
+  expect(scrollOwners.nestedCount).toBe(0);
   await screenshot(page, testInfo, "message-inbox");
   await assertAccessible(page);
 
@@ -274,7 +295,9 @@ test("message workbench recovers when the final pagination item is replied to", 
 test("Claims Review stays within the viewport", async ({ page }, testInfo) => {
   const runtimeErrors = monitorRuntime(page);
   await openClaimsReview(page, "ai-extraction");
-  await expect(page.getByText("AI review rules by claim type")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Duplicate from another company" }),
+  ).toBeVisible();
   await expect(
     page.getByText("The benefit year covering today is not live."),
   ).toBeVisible();

@@ -116,14 +116,14 @@ const ENQUIRY_BADGE: Record<
   closed: { variant: "outline", label: "Closed" },
 };
 
-/** A Letter of Guarantee request. The one topic where the delay is the harm —
- * the member is usually standing at an admissions counter — so it is lifted to
- * the top of the queue SERVER-side (`claim_messages._row_is_urgent`) and marked
- * here. Read off the served flag, never matched on the topic key: the
- * vocabulary lives on the backend and a key spelled out in TypeScript is a
- * second place for it to drift. */
-function isUrgent(c: BrokerConversation): boolean {
-  return c.subject.kind === "enquiry" && c.subject.topic_urgent;
+function conversationType(c: BrokerConversation): string {
+  const subject = c.subject;
+  if (subject.kind === "enquiry") {
+    return subject.topic_label || subject.topic || "Question";
+  }
+  return subject.claim_kind === "flex"
+    ? subject.flex_category_name || "Flexible benefit"
+    : subject.claim_type || subject.product_code || "Claim";
 }
 
 /** What the thread is about, in the broker's vocabulary — the product and the
@@ -138,18 +138,14 @@ function subjectLine(c: BrokerConversation): string {
   if (s.kind === "enquiry") {
     return [
       "Question",
-      s.topic_label || s.topic,
+      conversationType(c),
       ENQUIRY_BADGE[s.status ?? ""]?.label ?? s.status,
     ]
       .filter(Boolean)
       .join(" · ");
   }
-  const name =
-    s.claim_kind === "flex"
-      ? s.flex_category_name || "Flexible benefit"
-      : s.claim_type || s.product_code || "Claim";
   return [
-    name,
+    conversationType(c),
     s.incurred_date ? fmtDay(s.incurred_date) : null,
     s.amount_claimed != null ? fmtMoney(s.amount_claimed) : null,
   ]
@@ -180,7 +176,7 @@ function ConversationRow({
         onClick={() => onOpen(conversation)}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "focus-ring block min-h-24 w-full px-4 py-3.5 text-left transition-colors",
+          "focus-ring block min-h-20 w-full px-4 py-3.5 text-left transition-colors",
           selected
             ? "bg-accent/70 ring-1 ring-inset ring-border-strong"
             : "hover:bg-muted/60",
@@ -226,27 +222,9 @@ function ConversationRow({
                 </p>
               </div>
             </div>
-            <div className="mt-2 flex min-w-0 items-center gap-2">
-              <Badge variant="outline" className="shrink-0">
-                {conversation.subject.kind === "claim" ? "Claim" : "Question"}
-              </Badge>
-              {isUrgent(conversation) && <Badge variant="error">Urgent</Badge>}
-              <p className="truncate text-sm font-medium text-foreground">
-                {subjectLine(conversation)}
-              </p>
-            </div>
-
-            <div className="mt-1.5 flex items-center gap-2">
-              <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-                <span className="text-foreground">{last.mine ? "Us" : name}:</span>{" "}
-                {last.body}
-              </p>
-              {conversation.unread > 0 && (
-                <Badge variant="warn" className="shrink-0">
-                  {conversation.unread} new
-                </Badge>
-              )}
-            </div>
+            <p className="mt-2 truncate text-sm font-medium text-foreground">
+              {conversationType(conversation)}
+            </p>
           </div>
         </div>
       </button>
@@ -361,7 +339,7 @@ function EnquiryPane({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PaneHead
         onBack={onBack}
         who={data.employee?.employee_name ?? "Unknown employee"}
@@ -440,7 +418,6 @@ function EnquiryPane({
                 }
               }
         }
-        stickyComposer
       />
     </div>
   );
@@ -458,7 +435,7 @@ function ClaimPane({
 }) {
   const employee = conversation.employee;
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <PaneHead
         onBack={onBack}
         who={employee?.employee_name ?? "Unknown employee"}
@@ -475,7 +452,7 @@ function ClaimPane({
           </Button>
         }
       />
-      <ClaimMessages claimId={conversation.subject.id} stickyComposer />
+      <ClaimMessages claimId={conversation.subject.id} />
     </div>
   );
 }
@@ -545,39 +522,19 @@ export function ConversationQueue() {
 
   return (
     <section
-      aria-labelledby="message-inbox-heading"
-      className="h-full min-h-0 overflow-hidden rounded-xl border border-border bg-card"
+      aria-label="Messages"
+      className="rounded-xl border border-border bg-card"
     >
-      <div className="grid h-full min-w-0 lg:grid-cols-[25rem_minmax(0,1fr)]">
+      <div className="grid min-w-0 items-start lg:grid-cols-[25rem_minmax(0,1fr)]">
         <aside
           className={cn(
-            "min-h-0 min-w-0 flex-col bg-card lg:flex lg:border-r lg:border-border",
+            "min-w-0 flex-col bg-card lg:flex lg:border-r lg:border-border",
             pickedKey ? "hidden" : "flex",
           )}
           aria-label="Conversation inbox"
         >
-          <header className="border-b border-border px-4 pb-4 pt-4">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h2 id="message-inbox-heading" className="text-base font-semibold">
-                  Messages
-                </h2>
-                <p className="mt-0.5 text-sm text-muted-foreground" aria-live="polite">
-                  {isLoading
-                    ? "Loading conversations…"
-                    : view === "us"
-                      ? `${total} ${total === 1 ? "member" : "members"} waiting for a reply`
-                      : `${total} ${total === 1 ? "conversation" : "conversations"} this benefit year`}
-                </p>
-              </div>
-              {view === "us" && total > 0 && (
-                <Badge variant="warn" className="shrink-0">
-                  {total} open
-                </Badge>
-              )}
-            </div>
-
-            <div className="relative mt-4">
+          <header className="border-b border-border p-4">
+            <div className="relative">
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
@@ -637,7 +594,7 @@ export function ConversationQueue() {
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overscroll-contain overflow-y-auto">
+          <div>
             {isLoading ? (
               <div
                 className="space-y-2 p-3"
@@ -753,7 +710,7 @@ export function ConversationQueue() {
 
         <section
           className={cn(
-            "min-h-0 min-w-0 flex-col bg-card lg:flex",
+            "min-w-0 flex-col bg-card lg:flex",
             pickedKey ? "flex" : "hidden",
           )}
           aria-label="Selected conversation"
@@ -765,7 +722,7 @@ export function ConversationQueue() {
               <Skeleton className="h-20 w-full" />
             </div>
           ) : selected ? (
-            <div className="min-h-0 min-w-0 flex-1 overflow-hidden p-5">
+            <div className="min-w-0 flex-1 p-5">
               {selected.subject.kind === "enquiry" ? (
                 <EnquiryPane
                   key={selected.subject.id}

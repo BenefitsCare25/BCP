@@ -46,6 +46,20 @@ export function AppShell() {
     setMobileNavOpen(false);
   }, [path]);
 
+  // The app shell owns scrolling through <main>. Lock the document while this
+  // shell is mounted so viewport changes cannot create a second body scrollbar
+  // or expose blank space through scroll chaining.
+  useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    root.classList.add("app-shell-mounted");
+    body.classList.add("app-shell-mounted");
+    return () => {
+      root.classList.remove("app-shell-mounted");
+      body.classList.remove("app-shell-mounted");
+    };
+  }, []);
+
   // Hard gate: a company page needs a deliberately chosen company. While we
   // don't yet know the caller's companies, hold the page (avoid a flash of the
   // default tenant); with a real choice pending, prompt; otherwise render.
@@ -59,11 +73,11 @@ export function AppShell() {
       : "ready";
 
   return (
-    <div className="flex h-screen w-full overflow-hidden">
+    <div className="fixed inset-0 flex w-full overflow-hidden">
       <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar onMenuClick={() => setMobileNavOpen(true)} />
-        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-5">
+        <main className="min-h-0 flex-1 overscroll-contain overflow-x-hidden overflow-y-auto p-5">
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading…

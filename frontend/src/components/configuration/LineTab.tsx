@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProductSetups, useRemoveProduct, useSetupProducts } from "@/api/hooks";
 import { useRegistry } from "@/api/registry";
 import { ProductConfigurator } from "./ProductConfigurator";
+import { ProductSetupStatus } from "./ProductSetupSummary";
 import { AddProductDialog } from "./AddProductDialog";
 import { LINE_LABELS, isProductAdded, lineForCode } from "@/lib/insuranceLines";
 import { formatError } from "@/lib/errors";
@@ -226,12 +227,21 @@ export function LineTab({
           </div>
           {products.map((p) => {
             const isEditing = editingCode === p.code;
+            const productDraft =
+              setups.find((setup) => setup.product_code === p.code) ?? null;
+            const productGroup = groupByCode.get(p.code);
             return (
               <TabsContent key={p.code} value={p.code}>
                 <Card>
                   <CardHeader>
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <CardTitle>{p.display_name}</CardTitle>
+                      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                        <CardTitle>{p.display_name}</CardTitle>
+                        <ProductSetupStatus
+                          draft={productDraft}
+                          group={productGroup}
+                        />
+                      </div>
                       {!readOnly && <div className="flex items-center gap-2">
                         <Button
                           variant={isEditing ? "secondary" : "outline"}
@@ -261,7 +271,7 @@ export function LineTab({
                     <ProductConfigurator
                       policyYearId={policyYearId}
                       code={p.code}
-                      group={groupByCode.get(p.code)}
+                      group={productGroup}
                       onSelectCategory={onSelectCategory}
                       isEditing={!readOnly && isEditing}
                       onDone={() => closeEdit(p.code)}

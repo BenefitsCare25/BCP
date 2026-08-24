@@ -58,15 +58,6 @@ export function CompanyDashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">{company.name}</h1>
-        <p className="text-sm text-muted-foreground">
-          {company.current_year
-            ? `${company.current_year.year} benefit year · selected`
-            : "No benefit year selected"}
-        </p>
-      </div>
-
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Kpi label="Members" value={company.member_count} icon={Users} />
         <Kpi label="Dependants" value={company.dependant_count} icon={UserPlus} />

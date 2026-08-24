@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge";
 import { fmtDay, fmtMoney } from "@/lib/format";
-import { insuredNames } from "@/lib/insured";
 import type {
   CategoryGroup,
   ProductSetup,
@@ -32,12 +31,31 @@ function moneyValue(value: number | null | undefined): string {
   return value == null ? "Not set" : fmtMoney(value);
 }
 
-function countEnabled(answers: SetupAnswers | null): number {
-  return Object.values(answers?.arrangements ?? {}).filter(Boolean).length;
-}
-
 function selectedPlans(answers: SetupAnswers | null) {
   return (answers?.plans ?? []).filter((plan) => plan.selected);
+}
+
+export function ProductSetupStatus({
+  draft,
+  group,
+}: Pick<Props, "draft" | "group">) {
+  const answers = draft?.answers ?? null;
+  const plans = selectedPlans(answers);
+  const categoryCount = groupEmployeeCategories(group?.categories ?? []).length;
+  const benefitRowCount = answers?.sob?.items.length ?? 0;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge variant={draft?.status === "confirmed" ? "good" : "outline"}>
+        {draft?.status === "confirmed" ? "Confirmed" : "Draft"}
+      </Badge>
+      <span className="text-sm text-muted-foreground">
+        {plans.length} plan{plans.length === 1 ? "" : "s"} · {categoryCount}{" "}
+        employee categor{categoryCount === 1 ? "y" : "ies"} · {benefitRowCount}{" "}
+        benefit row{benefitRowCount === 1 ? "" : "s"}
+      </span>
+    </div>
+  );
 }
 
 function categoryStatus(group: EmployeeCategoryGroup) {
@@ -155,12 +173,7 @@ function DetailStrip({
 
 export function ProductSetupSummary({ template, draft, group, term }: Props) {
   const answers = draft?.answers ?? null;
-  const plans = selectedPlans(answers);
   const categoryGroups = groupEmployeeCategories(group?.categories ?? []);
-  const categoryCount = categoryGroups.length;
-  const sobCount = answers?.sob?.items.length ?? 0;
-  const arrangements = countEnabled(answers);
-  const entities = insuredNames(answers?.header?.entities);
   const memberCover = selectedMemberCover(
     answers?.eligibility?.member_cover_eligibility,
   );
@@ -175,63 +188,12 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={draft?.status === "confirmed" ? "good" : "outline"}>
-          {draft?.status === "confirmed" ? "Confirmed" : "Draft"}
-        </Badge>
-        <span className="text-sm text-muted-foreground">
-          {plans.length} plan{plans.length === 1 ? "" : "s"} · {categoryCount}{" "}
-          employee categor{categoryCount === 1 ? "y" : "ies"} · {sobCount} benefit row
-          {sobCount === 1 ? "" : "s"}
-        </span>
-      </div>
-
       {!draft && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
           This product has not been configured yet. Open edit mode to enter the
           setup details and confirm it.
         </div>
       )}
-
-      <section className="space-y-3 border-t border-border pt-4">
-        <h4 className="text-sm font-semibold text-foreground">Product Setup</h4>
-        <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <dt className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Product code
-            </dt>
-            <dd className="mt-1 font-mono text-sm font-semibold text-foreground">
-              {template.code}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Plans
-            </dt>
-            <dd className="mt-1 text-sm text-foreground">
-              {plans.length
-                ? plans.map((plan) => plan.label || plan.code).join(", ")
-                : "Not set"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Entities covered
-            </dt>
-            <dd className="mt-1 text-sm text-foreground">
-              {entities.length ? entities.join(", ") : "All entities"}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Arrangements
-            </dt>
-            <dd className="mt-1 text-sm text-foreground">
-              {arrangements ? `${arrangements} enabled` : "None enabled"}
-            </dd>
-          </div>
-        </dl>
-      </section>
 
       <FieldList
         title="Header & Policy"

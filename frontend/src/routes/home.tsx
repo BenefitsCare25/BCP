@@ -17,8 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Kpi } from "@/components/ui/kpi";
 import { TableRow } from "@/components/ui/table";
-import { cn } from "@/lib/cn";
-import { companyAttention, daysUntil } from "@/lib/attention";
+import { daysUntil } from "@/lib/attention";
 import { useSession } from "@/stores/session";
 
 export function HomePage() {
@@ -33,8 +32,6 @@ export function HomePage() {
       ),
     [companies, q],
   );
-
-  const attention = useMemo(() => buildAttention(companies), [companies]);
 
   if (isLoading) {
     return (
@@ -53,14 +50,6 @@ export function HomePage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Your companies</h1>
-        <p className="text-sm text-muted-foreground">
-          {data.firm.company_count} companies · pick one to manage its benefits,
-          members and claims.
-        </p>
-      </div>
-
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Kpi label="Companies" value={data.firm.company_count} icon={Building2} />
         <Kpi label="Members" value={data.firm.member_count} icon={Users} />
@@ -89,31 +78,6 @@ export function HomePage() {
         />
       </div>
 
-      {attention.length > 0 && (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <h2 className="mb-2 text-sm font-semibold text-foreground">
-            Needs attention
-          </h2>
-          <ul className="space-y-1.5">
-            {attention.map((a) => (
-              <li
-                key={a.key}
-                className="flex items-center gap-2 text-sm text-foreground/80"
-              >
-                <span
-                  className={cn(
-                    "inline-block size-1.5 rounded-full",
-                    a.tone === "warn" ? "bg-warn" : "bg-error",
-                  )}
-                />
-                <span className="font-medium text-foreground">{a.company}</span>
-                <span className="text-muted-foreground">· {a.message}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       <div className="relative w-full sm:w-72">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -127,32 +91,6 @@ export function HomePage() {
       <CompanyTable companies={filtered} query={q} />
     </div>
   );
-}
-
-type FirmAttention = {
-  key: string;
-  company: string;
-  message: string;
-  tone: "warn" | "error";
-};
-
-// Flatten every company's attention items into one firm-wide list, error-tone
-// first (a missing benefit year outranks operational backlog), capped so the
-// panel stays a glance not a wall.
-function buildAttention(companies: CompanySummary[]): FirmAttention[] {
-  const out: FirmAttention[] = [];
-  for (const c of companies) {
-    for (const a of companyAttention(c)) {
-      out.push({
-        key: `${c.id}-${a.key}`,
-        company: c.name,
-        message: a.short,
-        tone: a.tone,
-      });
-    }
-  }
-  out.sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "error" ? -1 : 1));
-  return out.slice(0, 8);
 }
 
 // "Enrollment open" gains urgency when it's about to close — show the countdown

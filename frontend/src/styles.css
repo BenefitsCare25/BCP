@@ -132,6 +132,12 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  html.app-shell-mounted,
+  body.app-shell-mounted {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;

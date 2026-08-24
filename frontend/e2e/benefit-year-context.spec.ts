@@ -238,10 +238,8 @@ test("benefit-year selection defaults to today and follows every module", async 
   await expect(page.getByRole("listbox")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(yearSelect).toBeFocused();
-  await expect(page.getByText("2026 benefit year · selected")).toBeVisible();
 
   await selectYear(page, 2025);
-  await expect(page.getByText("2025 benefit year · selected")).toBeVisible();
   const persisted = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("inspro-session") ?? "{}"),
   );
@@ -274,6 +272,23 @@ test("benefit-year selection defaults to today and follows every module", async 
   await assertAccessible(page);
 
   await page.goto("/client-relations/company-benefits");
+  await expect(page.locator("main")).toBeVisible();
+  const verticalScroll = await page.evaluate(() => {
+    const main = document.querySelector("main");
+    if (!main) throw new Error("App shell main element is missing");
+    return {
+      htmlRange:
+        document.documentElement.scrollHeight -
+        document.documentElement.clientHeight,
+      bodyRange: document.body.scrollHeight - document.body.clientHeight,
+      htmlOverflow: getComputedStyle(document.documentElement).overflowY,
+      bodyOverflow: getComputedStyle(document.body).overflowY,
+    };
+  });
+  expect(verticalScroll.htmlRange).toBeLessThanOrEqual(1);
+  expect(verticalScroll.bodyRange).toBeLessThanOrEqual(1);
+  expect(verticalScroll.htmlOverflow).toBe("hidden");
+  expect(verticalScroll.bodyOverflow).toBe("hidden");
   const benefitHeading = page.getByRole("heading", { name: "Benefit years" });
   await expect(benefitHeading).toBeVisible();
   await expect(page.getByRole("button", { name: "Add benefit year" })).toBeVisible();

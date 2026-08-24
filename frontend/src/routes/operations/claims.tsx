@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
+import { Copy, Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
 import {
   DOC_TYPE_LABELS,
   RECEIVED_VIA_LABELS,
@@ -18,7 +18,7 @@ import {
   type CaseType,
 } from "@/api/claims";
 import { ConflictDetailError } from "@/api/client";
-import { useMe, usePolicyYears } from "@/api/hooks";
+import { useMe } from "@/api/hooks";
 import { ConversionLine, policyAmount } from "@/components/claims/ConversionLine";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -77,6 +77,7 @@ import { LogCaseForm } from "@/components/claims/LogCaseForm";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ClaimDocumentSettings } from "@/components/claims/ClaimDocumentSettings";
 import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
+import { ImportRulesDialog } from "@/components/claims/review-rules/ImportRulesDialog";
 import { InfoHint } from "@/components/ui/tooltip";
 import { PageGuide } from "@/components/ui/page-guide";
 import { formatError } from "@/lib/errors";
@@ -1480,9 +1481,7 @@ const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
 export function ClaimsQueuePage() {
   const navigate = useNavigate();
   const { data: me } = useMe();
-  const selectedPolicyYearId = useSession((state) => state.currentPolicyYearId);
-  const { data: policyYears = [] } = usePolicyYears();
-  const selectedPolicyYear = policyYears.find((year) => year.id === selectedPolicyYearId);
+  const [reviewRulesImportOpen, setReviewRulesImportOpen] = useState(false);
   const search = useSearch({ strict: false }) as {
     tab?: string;
     claim?: string;
@@ -1504,49 +1503,58 @@ export function ClaimsQueuePage() {
         navigate({ to: "/claims/review", search: { tab: v } })
       }
     >
-      <PageTabsBar className="shrink-0 overflow-x-auto">
-        <TabsList className="min-w-max">
-          <TabsTrigger value="queue">Queue</TabsTrigger>
+      <PageTabsBar className="flex shrink-0 items-center justify-between gap-3">
+        <div className="min-w-0 overflow-x-auto">
+          <TabsList className="min-w-max">
+            <TabsTrigger value="queue">Queue</TabsTrigger>
           {/* The count is the whole point: with no email in prod, this badge is
               the ONLY signal a broker gets that a member has written. It has to
               be visible from the page, not inside the tab. */}
-          <TabsTrigger value="messages">
-            Messages
-            {awaiting.count > 0 && (
-              <Badge variant="warn" className="ml-2">
-                {awaiting.count}
-              </Badge>
+            <TabsTrigger value="messages">
+              Messages
+              {awaiting.count > 0 && (
+                <Badge variant="warn" className="ml-2">
+                  {awaiting.count}
+                </Badge>
+              )}
+              {awaiting.isError && (
+                <Badge
+                  variant="error"
+                  className="ml-2"
+                  title="Couldn't check which conversations need a reply"
+                  aria-label="Message count unavailable"
+                >
+                  !
+                </Badge>
+              )}
+            </TabsTrigger>
+            {canConfigure && (
+              <TabsTrigger value="ai-extraction">Review rules</TabsTrigger>
             )}
-            {awaiting.isError && (
-              <Badge
-                variant="error"
-                className="ml-2"
-                title="Couldn't check which conversations need a reply"
-                aria-label="Message count unavailable"
-              >
-                !
-              </Badge>
+            {canConfigure && (
+              <TabsTrigger value="settings">Claim settings</TabsTrigger>
             )}
-          </TabsTrigger>
-          {canConfigure && (
-            <TabsTrigger value="ai-extraction">Review rules</TabsTrigger>
-          )}
-          {canConfigure && (
-            <TabsTrigger value="settings">Claim settings</TabsTrigger>
-          )}
-        </TabsList>
+          </TabsList>
+        </div>
+        {tab === "ai-extraction" && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setReviewRulesImportOpen(true)}
+          >
+            <Copy className="size-3.5" />
+            Duplicate from another company
+          </Button>
+        )}
       </PageTabsBar>
 
       <TabsContent value="queue">
-        <p className="mb-3 text-xs text-muted-foreground">
-          Scope: selected benefit year{selectedPolicyYear
-            ? ` (${selectedPolicyYear.start_date} to ${selectedPolicyYear.end_date})`
-            : ""}.
-        </p>
         <QueueTab initialClaimId={search.claim} employeeId={search.employee} />
       </TabsContent>
 
-      <TabsContent value="messages" className="min-h-0 flex-1 overflow-hidden">
+      <TabsContent value="messages">
         <ConversationQueue />
       </TabsContent>
 
@@ -1560,33 +1568,18 @@ export function ClaimsQueuePage() {
       )}
 
       {canConfigure && <TabsContent value="settings" className="space-y-5">
-        <p className="text-xs text-muted-foreground">
-          Deadline fields apply to the selected benefit year. Document naming
-          rules below apply company-wide across benefit years.
-        </p>
         <Card>
-          <CardHeader className="pb-4">
-            {/* Both fields are DEADLINES on the current benefit year, which is
-                what they have in common — the old "Claim submission" titled the
-                card after the first field only, and the second one governs
-                portal access, not submission. */}
-            <CardTitle>Deadlines</CardTitle>
-            <CardDescription className="max-w-prose">
-              How long members have to send claims in, and how long someone who
-              has left keeps the portal. Both apply to the current benefit year.
-            </CardDescription>
-          </CardHeader>
-          {/* `space-y-5`: two `PolicyYearDaysField`s are sibling stacks with
-              their own internal `gap-1.5`, so with nothing between them the
-              second label sat flush against the first input and the pair read
-              as one four-line control. */}
-          <CardContent className="space-y-5 pb-6">
+          <CardContent className="flex flex-wrap items-end gap-4 p-5">
             <ClaimGracePeriodField />
             <LeaverAccessField />
           </CardContent>
         </Card>
         <ClaimDocumentSettings />
       </TabsContent>}
+      <ImportRulesDialog
+        open={reviewRulesImportOpen}
+        onOpenChange={setReviewRulesImportOpen}
+      />
     </Tabs>
   );
 }

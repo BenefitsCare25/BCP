@@ -27,7 +27,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -756,9 +755,6 @@ export function ClaimDocumentSettings() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1 basis-80 space-y-1">
             <CardTitle>Required documents by claim type</CardTitle>
-            <CardDescription className="max-w-prose">
-              Every claim choice owns its required uploads and recognition library. Changes apply to new claims; existing claims keep the requirements they started with.
-            </CardDescription>
           </div>
           {(setups.data?.length ?? 0) > 6 && (
             <label className="relative w-full sm:w-72">
