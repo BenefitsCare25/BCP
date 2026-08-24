@@ -18,6 +18,7 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
 from datetime import date  # noqa: E402
 from io import BytesIO  # noqa: E402
+from zipfile import ZipFile  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
@@ -246,10 +247,42 @@ def client() -> TestClient:
         app.dependency_overrides.pop(get_current_user, None)
 
 
+class _QuotationArchive:
+    """Test view over insurer workbooks, keyed by their product sheet names."""
+
+    def __init__(self, content: bytes) -> None:
+        with ZipFile(BytesIO(content)) as archive:
+            self._workbooks = [
+                load_workbook(BytesIO(archive.read(name)))
+                for name in archive.namelist()
+                if name.endswith(".xlsx")
+            ]
+        self._sheets = {
+            sheet.title: sheet
+            for workbook in self._workbooks
+            for sheet in workbook.worksheets
+            if sheet.title not in {"Overview", "Unassigned"}
+        }
+        for title in ("Overview", "Unassigned"):
+            for workbook in self._workbooks:
+                if title in workbook.sheetnames:
+                    self._sheets.setdefault(title, workbook[title])
+
+    def __getitem__(self, name: str):
+        return self._sheets[name]
+
+    @property
+    def worksheets(self) -> list:
+        return list(self._sheets.values())
+
+
 def _download(client: TestClient, kind: str = "placement"):
     res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/{kind}-slip")
     assert res.status_code == 200, res.text
     assert res.content[:2] == b"PK"
+    if kind == "quotation":
+        assert res.headers["content-type"] == "application/zip"
+        return _QuotationArchive(res.content)
     return load_workbook(BytesIO(res.content))
 
 

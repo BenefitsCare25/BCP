@@ -41,6 +41,12 @@ interface Props {
    * both the chip and the filter use.
    */
   renderValue?: (value: string) => string;
+  /** Search text when aliases or secondary labels should match too. */
+  searchText?: (value: string) => string;
+  /** Insurer and other catalog pickers do not have roster headcounts. */
+  showCounts?: boolean;
+  /** Render selected tokens inside the input's bordered field. */
+  inlineChips?: boolean;
 }
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -73,10 +79,14 @@ export function MatchSetPicker({
   unknownNote = "Not found on the current roster",
   countNoun = "employee",
   renderValue = (v) => v,
+  searchText = renderValue,
+  showCounts = true,
+  inlineChips = false,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(-1);
+  const inputId = useId();
   const listId = useId();
   const sel = selected ?? [];
   const has = (v: string) => sel.some((s) => norm(s) === norm(v));
@@ -90,7 +100,7 @@ export function MatchSetPicker({
     const q = norm(draft);
     return options
       .filter((o) => !has(o.value))
-      .filter((o) => !q || norm(renderValue(o.value)).includes(q));
+      .filter((o) => !q || norm(searchText(o.value)).includes(q));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options, draft, sel]);
   const shown = matches.slice(0, MAX_VISIBLE);
@@ -100,57 +110,127 @@ export function MatchSetPicker({
     if (!v || has(v)) return;
     onChange([...sel, v]);
     setDraft("");
-    setActive(0);
+    setActive(-1);
   };
-  const remove = (v: string) => onChange(sel.filter((s) => s !== v));
+  const remove = (v: string) =>
+    onChange(sel.filter((s) => norm(s) !== norm(v)));
+  const selectedChips = sel.map((v) => {
+    const c = countFor(v);
+    const inRoster = c !== undefined;
+    return (
+      <span
+        key={v}
+        className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${
+          inRoster
+            ? "border-border bg-muted/40"
+            : "border-warn/50 bg-warn-soft/40"
+        }`}
+        title={
+          inRoster
+            ? showCounts
+              ? `${c} ${countNoun}${c === 1 ? "" : "s"} on the roster`
+              : undefined
+            : unknownNote
+        }
+      >
+        <span className="text-foreground">{renderValue(v)}</span>
+        {showCounts && inRoster && (
+          <span className="text-muted-foreground">· {c}</span>
+        )}
+        <button
+          type="button"
+          onClick={() => remove(v)}
+          aria-label={`Remove ${renderValue(v)}`}
+          className="inline-flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <X className="size-3" />
+        </button>
+      </span>
+    );
+  });
 
   return (
     <div className="space-y-1.5">
-      <FieldLabel hint={hint || undefined}>{label}</FieldLabel>
+      <FieldLabel hint={hint || undefined} htmlFor={inputId}>
+        {label}
+      </FieldLabel>
       <div className="relative">
-        <Input
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listId}
-          autoComplete="off"
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setActive(0);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          // Blur closes the list; option clicks use onMouseDown (fires before blur)
-          // so a selection isn't cancelled. Pending search text is discarded — it's
-          // a filter, never a committed value.
-          onBlur={() => setOpen(false)}
-          onKeyDown={(e) => {
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setOpen(true);
-              setActive((a) => Math.min(a + 1, shown.length - 1));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setActive((a) => Math.max(a - 1, 0));
-            } else if (e.key === "Enter") {
-              e.preventDefault();
-              // The highlighted suggestion wins; otherwise commit the typed
-              // text as its own token when free entry is allowed.
-              if (shown[active]) addValue(shown[active].value);
-              else if (allowCustom) addValue(draft.trim());
-            } else if (e.key === "Tab" && allowCustom && draft.trim()) {
-              // Tab commits the token and keeps focus, so several entities can
-              // be entered in a row without reaching for the mouse.
-              e.preventDefault();
-              addValue(draft.trim());
-            } else if (e.key === "Escape") {
-              setOpen(false);
-            }
-          }}
-          placeholder={placeholder ?? "Search roster…"}
-          className="h-8 pr-8"
-        />
-        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <div
+          className={
+            inlineChips
+              ? "flex min-h-9 flex-wrap items-center gap-1.5 rounded-md border border-input bg-card px-2 py-1 shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/40"
+              : undefined
+          }
+        >
+          {inlineChips && selectedChips}
+          <div
+            className={inlineChips ? "relative min-w-40 flex-1" : "relative"}
+          >
+            <Input
+              id={inputId}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                open && active >= 0 && shown[active]
+                  ? `${listId}-option-${active}`
+                  : undefined
+              }
+              autoComplete="off"
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setActive(-1);
+                setOpen(true);
+              }}
+              onFocus={() => setOpen(true)}
+              // Blur closes the list; option clicks use onMouseDown (fires before blur)
+              // so a selection isn't cancelled. Pending search text is discarded — it's
+              // a filter, never a committed value.
+              onBlur={() => setOpen(false)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setOpen(true);
+                  setActive((a) =>
+                    shown.length
+                      ? Math.min(a < 0 ? 0 : a + 1, shown.length - 1)
+                      : -1,
+                  );
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActive((a) =>
+                    shown.length ? Math.max(a - 1, 0) : -1,
+                  );
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  const choice = shown[active] ?? shown[0];
+                  if (choice) addValue(choice.value);
+                  else if (allowCustom) addValue(draft.trim());
+                } else if (
+                  e.key === "Tab" &&
+                  allowCustom &&
+                  draft.trim()
+                ) {
+                  e.preventDefault();
+                  addValue(draft.trim());
+                } else if (e.key === "Escape") {
+                  setOpen(false);
+                } else if (e.key === "Backspace" && !draft && sel.length) {
+                  remove(sel[sel.length - 1]);
+                }
+              }}
+              placeholder={placeholder ?? "Search roster…"}
+              className={
+                inlineChips
+                  ? "h-7 border-0 bg-transparent pr-8 shadow-none focus-visible:ring-0"
+                  : "h-8 pr-8"
+              }
+            />
+            <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          </div>
+        </div>
         {open && (
           <ul
             id={listId}
@@ -167,7 +247,12 @@ export function MatchSetPicker({
               </li>
             ) : (
               shown.map((o, i) => (
-                <li key={o.value} role="option" aria-selected={i === active}>
+                <li
+                  id={`${listId}-option-${i}`}
+                  key={o.value}
+                  role="option"
+                  aria-selected="false"
+                >
                   <button
                     type="button"
                     // preventDefault keeps focus on the input so the list stays
@@ -184,9 +269,11 @@ export function MatchSetPicker({
                     <span className="truncate text-foreground">
                       {renderValue(o.value)}
                     </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {o.count} staff{o.claimed ? claimedNote : ""}
-                    </span>
+                    {showCounts && (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {o.count} staff{o.claimed ? claimedNote : ""}
+                      </span>
+                    )}
                   </button>
                 </li>
               ))
@@ -199,40 +286,14 @@ export function MatchSetPicker({
           </ul>
         )}
       </div>
-      {sel.length > 0 && (
+      {!inlineChips && sel.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1.5">
-          {sel.map((v) => {
-            const c = countFor(v);
-            const inRoster = c !== undefined;
-            return (
-              <span
-                key={v}
-                className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${
-                  inRoster
-                    ? "border-border bg-muted/40"
-                    : "border-warn/50 bg-warn-soft/40"
-                }`}
-                title={
-                  inRoster
-                    ? `${c} ${countNoun}${c === 1 ? "" : "s"} on the roster`
-                    : unknownNote
-                }
-              >
-                <span className="text-foreground">{renderValue(v)}</span>
-                {inRoster && <span className="text-muted-foreground">· {c}</span>}
-                <button
-                  type="button"
-                  onClick={() => remove(v)}
-                  aria-label={`Remove ${renderValue(v)}`}
-                  className="text-muted-foreground hover:text-error"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            );
-          })}
+          {selectedChips}
         </div>
       )}
+      <span className="sr-only" aria-live="polite">
+        {sel.length} selected
+      </span>
     </div>
   );
 }

@@ -294,8 +294,8 @@ function CrReports({ year }: { year: PolicyYear }) {
       icon: FileSpreadsheet,
       title: "Quotation Slip",
       description:
-        "Placement slip with rates left blank — send to insurers to quote against this year's configured benefits. Member counts, tier splits and sums insured come from the current roster.",
-      format: ".xlsx",
+        "Insurer-separated quotation workbooks with rates left blank. Live listing counts take priority, with placement-slip counts used when listing data is unavailable.",
+      format: ".zip",
       action: (
         <ReportVersionActions
           policyYearId={year.id}

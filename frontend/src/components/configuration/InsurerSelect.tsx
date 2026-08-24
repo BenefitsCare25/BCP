@@ -1,6 +1,8 @@
 import { useId } from "react";
 import { useInsurers } from "@/api/insurers";
+import { MatchSetPicker } from "@/components/configuration/flex/MatchSetPicker";
 import { Input } from "@/components/ui/input";
+import type { VocabValue } from "@/types";
 
 /**
  * Insurer picker for a product form.
@@ -68,5 +70,90 @@ export function InsurerSelect({
         <p className="text-xs text-muted-foreground">{match.legal_name}</p>
       )}
     </div>
+  );
+}
+
+function selectedInsurers(
+  value: string | string[],
+  configured: { name: string; aliases: string[] }[],
+): string[] {
+  const raw = Array.isArray(value) ? value : [value];
+  const exact = !Array.isArray(value)
+    ? configured.find(
+        (item) =>
+          item.name.trim().toLowerCase() === value.trim().toLowerCase(),
+      )
+    : undefined;
+  const parts = exact
+    ? [exact.name]
+    : raw
+        .flatMap((item) => item.split(/[,;\n]+/))
+        .map((item) => item.trim())
+        .filter(Boolean);
+  const seen = new Set<string>();
+  const selected: string[] = [];
+  for (const part of parts) {
+    const normalized = part.toLowerCase();
+    const match = configured.find(
+      (item) =>
+        item.name.trim().toLowerCase() === normalized ||
+        item.aliases.some((alias) => alias.trim().toLowerCase() === normalized),
+    );
+    const name = match?.name.trim() || part;
+    const key = name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      selected.push(name);
+    }
+  }
+  return selected;
+}
+
+/** Searchable, select-only insurer tokens for quotation recipients. */
+export function InsurerMultiSelect({
+  value,
+  onChange,
+  label = "Insurers",
+}: {
+  value: string | string[];
+  onChange: (value: string[]) => void;
+  label?: string;
+}) {
+  const query = useInsurers();
+  const insurers = query.data ?? [];
+  const selected = selectedInsurers(value, insurers);
+  const options: VocabValue[] = insurers.map((insurer) => ({
+    value: insurer.name,
+    count: 0,
+  }));
+  const byName = new Map(
+    insurers.map((insurer) => [insurer.name.trim().toLowerCase(), insurer]),
+  );
+  const emptyHint = query.isLoading
+    ? "Loading insurers…"
+    : query.isError
+      ? "Could not load Insurer Settings. Refresh and try again."
+      : "No insurers configured. Add one under Settings → Insurers.";
+
+  return (
+    <MatchSetPicker
+      label={label}
+      hint="Select every insurer that should receive this product for quotation. The product sheet will be included in each selected insurer's workbook."
+      selected={selected}
+      options={options}
+      onChange={onChange}
+      placeholder="Search configured insurers…"
+      allowCustom={false}
+      emptyHint={emptyHint}
+      unknownNote="Not found in Insurer Settings. Remove it or add the insurer in Settings before sending quotations."
+      showCounts={false}
+      inlineChips
+      searchText={(name) => {
+        const insurer = byName.get(name.trim().toLowerCase());
+        return [name, insurer?.legal_name, ...(insurer?.aliases ?? [])]
+          .filter(Boolean)
+          .join(" ");
+      }}
+    />
   );
 }

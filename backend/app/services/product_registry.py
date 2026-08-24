@@ -116,6 +116,29 @@ def tier_order() -> list[str]:
     return seen
 
 
+def dependant_count_from_tiers(tier_counts: object) -> int | None:
+    """Exact dependant lives stated by spouse/child/dependant tier columns.
+
+    Composite EO/ES/EC/EF tiers partition employees by household shape; they
+    cannot reveal the number of dependant lives (an EC household may have one
+    child or several). Only dependant-scoped tiers are therefore additive.
+    """
+    if not isinstance(tier_counts, dict):
+        return None
+    scopes = tier_scope_map()
+    values: list[int] = []
+    for key, value in tier_counts.items():
+        if scopes.get(str(key)) != "dependant" or isinstance(value, bool):
+            continue
+        try:
+            count = int(float(value))
+        except (TypeError, ValueError):
+            continue
+        if count >= 0:
+            values.append(count)
+    return sum(values) if values else None
+
+
 # ── Product entries ──────────────────────────────────────────────────────────
 
 

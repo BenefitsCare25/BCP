@@ -33,7 +33,8 @@ from app.core.deps import tenant_or_global
 from app.models import Category, Plan, PolicyYear, Product, ProductSetup, ProductTerm
 from app.services.category_member_counts import build_category_member_counts
 from app.services.plan_hydration import basis_amount
-from app.services.product_insurer import insurer_from_answers
+from app.services.product_insurer import insurer_from_answers, insurers_from_answers
+from app.services.product_registry import dependant_count_from_tiers
 
 Mode = Literal["placement", "quotation"]
 
@@ -112,6 +113,10 @@ class SlipContext:
         legacy catalog value as fallback), off the answers already loaded."""
         return insurer_from_answers(self.answers_for(product), product)
 
+    def insurers_for(self, product: Product | None) -> list[str]:
+        """Every insurer selected to receive this product for quotation."""
+        return insurers_from_answers(self.answers_for(product), product)
+
     def figures_for(self, category: Category) -> CategoryFigures:
         """Resolved figures for a category, computing them if it wasn't loaded.
 
@@ -142,6 +147,9 @@ def _resolve_figures(
     pa = _plan_assignments(cat)
     stored_members = pa.get("num_employees")
     stored_tiers = pa.get("tier_counts")
+    stored_dependants = pa.get("num_dependants")
+    if stored_dependants is None:
+        stored_dependants = dependant_count_from_tiers(stored_tiers)
     stored_si = pa.get("sum_insured")
 
     members = live.get("employees", 0) if live else 0
@@ -170,16 +178,20 @@ def _resolve_figures(
             rebuilt = False
         return CategoryFigures(
             members=members,
-            dependants=live.get("dependants") or None,
+            dependants=live.get("dependants"),
             tier_counts=dict(live.get("tier_counts") or {}),
             sum_insured=sum_insured,
             source=SOURCE_ROSTER,
             cover_from_roster=rebuilt,
         )
-    if stored_members is not None:
+    if (
+        stored_members is not None
+        or stored_dependants is not None
+        or bool(stored_tiers)
+    ):
         return CategoryFigures(
             members=stored_members,
-            dependants=None,
+            dependants=stored_dependants,
             tier_counts=dict(stored_tiers or {}),
             sum_insured=stored_si,
             source=SOURCE_SLIP,

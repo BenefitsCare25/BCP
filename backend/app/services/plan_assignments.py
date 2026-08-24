@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.plan_hydration import GROUP_RATE_FIELDS
+from app.services.product_registry import dependant_count_from_tiers
 
 
 def build_plan_assignments(
@@ -37,6 +38,9 @@ def build_plan_assignments(
         pa["num_employees"] = cat.num_employees
     if getattr(cat, "tier_counts", None):
         pa["tier_counts"] = cat.tier_counts
+        dependant_count = dependant_count_from_tiers(cat.tier_counts)
+        if dependant_count is not None:
+            pa["num_dependants"] = dependant_count
     if cat.sum_insured is not None:
         pa["sum_insured"] = cat.sum_insured
     if cat.premium_rate is not None:

@@ -612,7 +612,7 @@ export function ProductSetupForm({
             <FieldControl
               key={f.id}
               field={f}
-              value={String(answers.header[f.id] ?? "")}
+              value={answers.header[f.id] ?? ""}
               onChange={(v) => setHeader(f.id, v)}
               suggestions={suggestions?.header[f.id] ?? []}
             />
@@ -649,7 +649,9 @@ export function ProductSetupForm({
             <FieldControl
               field={prepareEligibilityField(f)}
               value={answers.eligibility[f.id] ?? ""}
-              onChange={(v) => setElig(f.id, v)}
+              onChange={(v) =>
+                setElig(f.id, Array.isArray(v) ? v.join(",") : v)
+              }
               suggestions={suggestions?.eligibility[f.id] ?? []}
             />
           </div>

@@ -154,7 +154,12 @@ def _write_product_sheet(
     set_compact_product_widths(ws)
 
 
-def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]) -> None:
+def _write_overview(
+    wb: Workbook,
+    ctx: SlipContext,
+    db_envelope: tuple[Any, ...],
+    products: list[Product],
+) -> None:
     py = ctx.policy_year
     doc_name = "Quotation Slip" if ctx.blank_rates else "Placement Slip"
     overview = wb.active
@@ -192,7 +197,7 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]
 
     premium_total = 0.0
     premium_found = False
-    for product in ctx.products:
+    for product in products:
         categories = ctx.cats_by_product.get(product.id, [])
         members = _product_members(categories, ctx)
         premium = product_premium_total(categories, ctx)
@@ -230,17 +235,20 @@ def _write_overview(wb: Workbook, ctx: SlipContext, db_envelope: tuple[Any, ...]
         overview.cell(row=row, column=8).number_format = MONEY
 
 
-def build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
-    ctx = load_context(db, py, mode)
-    envelope = envelope_for(db, py)
-
+def _assemble(
+    ctx: SlipContext,
+    envelope: tuple[Any, ...],
+    products: list[Product],
+    *,
+    include_unassigned: bool,
+) -> Workbook:
     wb = Workbook()
-    _write_overview(wb, ctx, envelope)
+    _write_overview(wb, ctx, envelope, products)
     overview = wb["Overview"]
     doc_name = "Quotation Slip" if ctx.blank_rates else "Placement Slip"
 
     taken: set[str] = {"overview"}
-    for product in ctx.products:
+    for product in products:
         ws = wb.create_sheet(_sheet_title(product.code, taken))
         _write_product_sheet(
             ws,
@@ -255,7 +263,7 @@ def build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
                 doc_name=doc_name,
         )
 
-    unassigned = ctx.cats_by_product.get(None, [])
+    unassigned = ctx.cats_by_product.get(None, []) if include_unassigned else []
     if unassigned:
         ws = wb.create_sheet(_sheet_title("Unassigned", taken))
         _write_product_sheet(ws, ctx, None, unassigned, [], None)
@@ -271,4 +279,72 @@ def build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
     return wb
 
 
-__all__ = ["build", "insured_text"]
+def build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
+    ctx = load_context(db, py, mode)
+    return _assemble(
+        ctx,
+        envelope_for(db, py),
+        ctx.products,
+        include_unassigned=True,
+    )
+
+
+def build_quotation_groups(
+    db: Session, py: PolicyYear
+) -> list[tuple[str, Workbook]]:
+    """One quotation workbook per configured insurer.
+
+    Insurer matching is case-insensitive while the first configured spelling is
+    retained for the filename. A product selected for multiple insurers is
+    included in every corresponding workbook. Products or categories without
+    an insurer are kept in an explicit Unassigned workbook so the ZIP never
+    drops configuration silently.
+    """
+    ctx = load_context(db, py, "quotation")
+    envelope = envelope_for(db, py)
+    groups: dict[str, tuple[str, list[Product]]] = {}
+    unassigned: list[Product] = []
+    for product in ctx.products:
+        insurers = ctx.insurers_for(product)
+        if not insurers:
+            unassigned.append(product)
+            continue
+        for insurer in insurers:
+            name = insurer.strip()
+            if not name:
+                continue
+            key = name.casefold()
+            if key not in groups:
+                groups[key] = (name, [])
+            groups[key][1].append(product)
+
+    workbooks = [
+        (
+            insurer,
+            _assemble(
+                ctx,
+                envelope,
+                products,
+                include_unassigned=False,
+            ),
+        )
+        for insurer, products in sorted(
+            groups.values(), key=lambda group: group[0].casefold()
+        )
+    ]
+    if unassigned or ctx.cats_by_product.get(None) or not workbooks:
+        workbooks.append(
+            (
+                "Unassigned",
+                _assemble(
+                    ctx,
+                    envelope,
+                    unassigned,
+                    include_unassigned=True,
+                ),
+            )
+        )
+    return workbooks
+
+
+__all__ = ["build", "build_quotation_groups", "insured_text"]

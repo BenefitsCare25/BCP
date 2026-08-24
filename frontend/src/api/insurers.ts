@@ -1,9 +1,9 @@
 /** Typed calls + query hooks for the insurer name catalog.
  *
  * The catalog supplies the vocabulary for every insurer field; it is not a
- * foreign key, so a product still stores the insurer's `name` as a plain
- * string. Deleting or renaming an entry therefore never orphans a product —
- * it only changes what the dropdown offers.
+ * foreign key, so product setup stores insurer names as strings (or a list of
+ * strings for quotation recipients). Renaming an entry therefore never
+ * orphans a product; it changes what the picker offers.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
@@ -43,8 +43,8 @@ export function useInsurers() {
   return useQuery({
     queryKey: ["insurers", cid],
     queryFn: () => api.get<Insurer[]>("/schemas/insurers"),
-    // `in_use` is derived server-side from Product.insurer, PanelListing.insurer
-    // and PanelCard.insurer, so it can be invalidated by mutations all over the
+  // `in_use` is derived server-side from setup answers, Product.insurer,
+  // PanelListing.insurer and PanelCard.insurer, so mutations all over the
     // app. Rather than teach every one of those about this query (and miss the
     // next one), opt out of the global 30s staleTime so mounting the Insurers
     // tab — or any insurer dropdown — always reflects current usage. The

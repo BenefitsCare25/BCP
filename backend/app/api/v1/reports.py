@@ -46,7 +46,7 @@ from app.services.insurer_reports import build_benefit_selection_workbook
 from app.services.member_listing_template import build_member_listing_template
 from app.services.placement_slip_export import (
     build_placement_slip_workbook,
-    build_quotation_slip_workbook,
+    build_quotation_slip_archive,
 )
 from app.services.report_registry import (
     RETENTION_KEEP,
@@ -118,7 +118,10 @@ def _xlsx_response(wb: Workbook, filename: str) -> Response:
 
 
 def _bytes_response(
-    data: bytes, filename: str, retained: dict[str, Any] | None = None
+    data: bytes,
+    filename: str,
+    retained: dict[str, Any] | None = None,
+    media_type: str = _XLSX_MEDIA_TYPE,
 ) -> Response:
     """The file, plus what its retention did.
 
@@ -138,7 +141,7 @@ def _bytes_response(
             headers["X-Inspro-Report-Filed"] = f"v{retained['version_no']}"
         else:
             headers["X-Inspro-Report-Filed"] = f"unchanged:v{retained['version_no']}"
-    return Response(content=data, media_type=_XLSX_MEDIA_TYPE, headers=headers)
+    return Response(content=data, media_type=media_type, headers=headers)
 
 
 def _retain_download(
@@ -332,20 +335,23 @@ def download_quotation_slip_export(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Quotation-slip export (.xlsx) — the shopping document that accompanies
-    the Fact-Find form. Same structure as the placement slip, but the insurer
-    and every rate/premium cell are left blank for the quoting insurer.
-    Config-only (no member PII), audited like every export.
+    """Insurer-separated quotation workbooks in one ZIP download.
+
+    Each workbook contains only that insurer's tagged product sheets. Rates and
+    premiums stay blank, and untagged configuration is retained in an explicit
+    Unassigned workbook instead of being silently omitted.
     """
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    wb = build_quotation_slip_workbook(db, py)
+    data = build_quotation_slip_archive(db, py)
     write_audit(
         db, user, action="export", entity_type="placement_slip",
         entity_id=policy_year_id, after={"report": "quotation-slip"},
     )
     db.commit()
-    return _xlsx_response(
-        wb, f"quotation-slip-{py.year}-{business_today():%Y%m%d}.xlsx"
+    return _bytes_response(
+        data,
+        f"quotation-slips-by-insurer-{py.year}-{business_today():%Y%m%d}.zip",
+        media_type="application/zip",
     )
 
 

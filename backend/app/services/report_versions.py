@@ -103,6 +103,19 @@ def _manifest_hash(manifest: dict[str, Any] | None) -> str:
 _VOLATILE_OOXML = frozenset({"docProps/core.xml"})
 
 
+def _ooxml_signature(blob_bytes: bytes) -> bytes:
+    """Stable digest of one XLSX/DOCX package, excluding its timestamps."""
+    with zipfile.ZipFile(BytesIO(blob_bytes)) as package:
+        digest = hashlib.sha256()
+        for name in sorted(package.namelist()):
+            if name in _VOLATILE_OOXML:
+                continue
+            digest.update(name.encode("utf-8"))
+            digest.update(b"\x00")
+            digest.update(package.read(name))
+        return digest.digest()
+
+
 def _content_signature(spec: ReportSpec, blob_bytes: bytes) -> str | None:
     """A stable, data-only fingerprint of a non-listing artifact, used to skip a
     no-op "save". Hashes the package's data parts directly — deterministic for
@@ -111,25 +124,23 @@ def _content_signature(spec: ReportSpec, blob_bytes: bytes) -> str | None:
     ``load_workbook``) on the save/download hot path. Masking is captured
     naturally (the masked NRIC lives in the cells). Returns None when no stable
     signature can be computed."""
-    if spec.fmt not in ("xlsx", "docx"):
+    if spec.fmt not in ("xlsx", "docx", "zip"):
         return None
     try:
-        with zipfile.ZipFile(BytesIO(blob_bytes)) as z:
-            # Hash every package part except the volatile timestamp, in a stable
-            # order — deterministic for identical data from both openpyxl (xlsx)
-            # and python-docx (docx), with no workbook re-parse. Hashing ALL
-            # parts (not just word/document.xml) is what makes docx correct: a
-            # change confined to a header/footer, embedded numbering/styles, or
-            # an image part still moves the fingerprint, so the no-op guard can't
-            # silently drop a genuinely new version.
-            h = hashlib.sha256()
-            for name in sorted(z.namelist()):
-                if name in _VOLATILE_OOXML:
-                    continue
-                h.update(name.encode("utf-8"))
-                h.update(b"\x00")
-                h.update(z.read(name))
-            return h.hexdigest()
+        if spec.fmt != "zip":
+            return _ooxml_signature(blob_bytes).hex()
+        with zipfile.ZipFile(BytesIO(blob_bytes)) as archive:
+            digest = hashlib.sha256()
+            for name in sorted(archive.namelist()):
+                digest.update(name.encode("utf-8"))
+                digest.update(b"\x00")
+                member = archive.read(name)
+                digest.update(
+                    _ooxml_signature(member)
+                    if name.casefold().endswith(".xlsx")
+                    else member
+                )
+            return digest.hexdigest()
     except (KeyError, zipfile.BadZipFile):
         return None
 

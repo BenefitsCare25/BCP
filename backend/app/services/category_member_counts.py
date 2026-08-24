@@ -43,7 +43,9 @@ class CategoryMembers:
     """Who the roster currently places in one category."""
 
     employees: int = 0
-    dependants: int = 0
+    # None means this category does not cover dependants. Zero is a real roster
+    # answer and must override a non-zero figure retained from the placement slip.
+    dependants: int | None = None
     # Composite tier split (EO/ES/EC/EF) of the employees above — only populated
     # for products that cover dependants, where the split is what prices the
     # cover. Keys are the canonical tier codes from the product registry.
@@ -177,7 +179,9 @@ def build_category_member_counts(
     return {
         cid: CategoryMembers(
             employees=count,
-            dependants=dep_counts.get(cid, 0),
+            dependants=(
+                dep_counts.get(cid, 0) if covers_dependants.get(cid) else None
+            ),
             tier_counts=dict(tier_counts.get(cid, {})),
             sum_insured=(
                 round(basis_totals[cid], 2)

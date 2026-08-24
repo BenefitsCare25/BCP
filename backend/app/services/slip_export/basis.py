@@ -37,6 +37,7 @@ from app.services.slip_export.styles import (
 TIER_ORDER: dict[str, int] = {
     key: i for i, key in enumerate(product_registry.tier_order())
 }
+TIER_SCOPE = product_registry.tier_scope_map()
 
 _DISCLAIMER_TAIL = (
     "Actual figures for billing must be provided within 30 days from policy "
@@ -91,11 +92,17 @@ def participation_text(c: Category) -> str:
     return text
 
 
-def _tier_keys(categories: list[Category], ctx: SlipContext) -> list[str]:
-    """Every tier the product's own counts are split by, canonically ordered."""
+def _tier_keys(
+    categories: list[Category], ctx: SlipContext, scope: str
+) -> list[str]:
+    """Count tiers of one population scope, in canonical display order."""
     keys: set[str] = set()
     for c in categories:
-        keys.update(ctx.figures_for(c).tier_counts)
+        keys.update(
+            key
+            for key in ctx.figures_for(c).tier_counts
+            if TIER_SCOPE.get(key) == scope
+        )
     return sorted(keys, key=lambda k: (TIER_ORDER.get(k, 99), k))
 
 
@@ -106,19 +113,28 @@ def _columns(categories: list[Category], ctx: SlipContext) -> list[_Col]:
     if any(pa.get("plan_code") not in (None, "") for pa in pas):
         cols.append(_Col("Plan", kind=_PA, key="plan_code"))
 
-    tiers = _tier_keys(categories, ctx)
-    if tiers:
+    member_tiers = _tier_keys(categories, ctx, "composite")
+    if member_tiers:
         # Split block: one column per tier present, then the total — the shape
         # the medical slips print ("* Number" spanning EO/ES/EC/EF).
         cols += [
             _Col("* No. of members", sub=key, kind=_TIER, key=key, numeric=True)
-            for key in tiers
+            for key in member_tiers
         ]
         cols.append(_Col("* No. of members", sub="Total", kind=_MEMBERS, numeric=True))
     else:
         cols.append(_Col("* No. of employees", kind=_MEMBERS, numeric=True))
 
-    if any(f.dependants for f in figures):
+    dependant_tiers = _tier_keys(categories, ctx, "dependant")
+    if dependant_tiers:
+        cols += [
+            _Col("* No. of dependants", sub=key, kind=_TIER, key=key, numeric=True)
+            for key in dependant_tiers
+        ]
+        cols.append(
+            _Col("* No. of dependants", sub="Total", kind=_DEPENDANTS, numeric=True)
+        )
+    elif any(f.dependants is not None for f in figures):
         cols.append(_Col("* No. of dependants", kind=_DEPENDANTS, numeric=True))
     if any(pa.get("basis") for pa in pas):
         cols.append(_Col("Basis", kind=_PA, key="basis", numeric=True))
@@ -143,7 +159,7 @@ def _value(col: _Col, cat: Category, ctx: SlipContext) -> Any:
     if col.kind == _TIER:
         return figures.tier_counts.get(col.key, "")
     if col.kind == _DEPENDANTS:
-        return figures.dependants if figures.dependants else ""
+        return figures.dependants if figures.dependants is not None else ""
     if col.kind == _SUM_INSURED:
         return figures.sum_insured if figures.sum_insured is not None else ""
     value = plan_assignments(cat).get(col.key)

@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { triggerDownload } from "@/lib/download";
+import { downloadResponseAsFile } from "@/lib/download";
 import { formatError } from "@/lib/errors";
 import { notify } from "@/stores/notifications";
 import type { PolicyYear } from "@/types";
@@ -216,7 +216,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
 
   const download = (policyYear: PolicyYear, path: string, filename: string) => async () => {
     const response = await api.downloadResponse(`/policy-years/${policyYear.id}/${path}`);
-    triggerDownload(await response.blob(), `${filename}-${policyYear.year}`);
+    await downloadResponseAsFile(response, `${filename}-${policyYear.year}`);
   };
 
   const runLifecycle = async (action: "live" | "archive") => {

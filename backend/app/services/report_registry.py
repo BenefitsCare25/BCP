@@ -46,6 +46,7 @@ from app.models.report_version import MODE_LATEST, MODE_VERSIONED
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_ZIP_MIME = "application/zip"
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,7 @@ REGISTRY: dict[str, ReportSpec] = {
         "fact_find", "Fact-Find Form", MODE_LATEST, None, "docx", False,
     ),
     "quotation_slip": ReportSpec(
-        "quotation_slip", "Quotation Slip", MODE_LATEST, None, "xlsx", False,
+        "quotation_slip", "Quotation Slip", MODE_LATEST, None, "zip", False,
     ),
     "placement_slip": ReportSpec(
         "placement_slip", "Placement Slip", MODE_LATEST, None, "xlsx", False,
@@ -127,7 +128,11 @@ def retained_type_for(download_key: str) -> str | None:
 
 
 def mime_for(fmt: str) -> str:
-    return _DOCX_MIME if fmt == "docx" else _XLSX_MIME
+    if fmt == "docx":
+        return _DOCX_MIME
+    if fmt == "zip":
+        return _ZIP_MIME
+    return _XLSX_MIME
 
 
 def scope_key_for(spec: ReportSpec, params: dict[str, Any]) -> str | None:
@@ -162,7 +167,7 @@ def build_report_bytes(
     from app.services.insurer_reports import build_benefit_selection_workbook
     from app.services.placement_slip_export import (
         build_placement_slip_workbook,
-        build_quotation_slip_workbook,
+        build_quotation_slip_archive,
     )
 
     masked = bool(params.get("masked", True))
@@ -196,7 +201,7 @@ def build_report_bytes(
             )
         )
     if report_type == "quotation_slip":
-        return _xlsx_bytes(build_quotation_slip_workbook(db, py))
+        return build_quotation_slip_archive(db, py)
     if report_type == "placement_slip":
         return _xlsx_bytes(build_placement_slip_workbook(db, py))
     if report_type == "fact_find":

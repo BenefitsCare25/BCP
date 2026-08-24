@@ -81,7 +81,7 @@ export interface ReportSpec {
   label: string;
   mode: ReportMode;
   scope: "insurer" | "window" | null;
-  fmt: "xlsx" | "docx";
+  fmt: "xlsx" | "docx" | "zip";
   has_movement: boolean;
 }
 

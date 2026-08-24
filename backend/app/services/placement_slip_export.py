@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.services.slip_export import (
     build_placement_slip_workbook,
+    build_quotation_slip_archive,
     build_quotation_slip_workbook,
 )
 from app.services.slip_export.context import Mode
@@ -15,5 +16,6 @@ from app.services.slip_export.context import Mode
 __all__ = [
     "Mode",
     "build_placement_slip_workbook",
+    "build_quotation_slip_archive",
     "build_quotation_slip_workbook",
 ]

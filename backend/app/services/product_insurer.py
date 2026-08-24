@@ -14,7 +14,7 @@ wrong, and both bit us:
 The broker enters it once per year where the placement lives — Company &
 Benefits → <product> → Header & Policy → Insurer — which is
 ``ProductSetup.answers["header"]["insurer"]``: the same field the placement slip
-is parsed into and exported from, backed by the insurer catalog dropdown. This
+is parsed into and exported from, backed by the insurer catalog picker. This
 module is the ONE place that reads it.
 
 ``Product.insurer`` survives ONLY as a fallback for rows written before the
@@ -24,6 +24,7 @@ above for any company whose setup carries the current answer.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 
@@ -40,8 +41,8 @@ def _norm(code: str | None) -> str:
     return (code or "").strip().upper()
 
 
-def _captured(answers: dict[str, Any] | None) -> str:
-    """The Header & Policy answer — the broker's per-year entry.
+def _captured_values(answers: dict[str, Any] | None) -> list[str]:
+    """The Header & Policy answers — the broker's per-year entries.
 
     ``answers`` is unvalidated ``dict[str, Any]`` (``SetupSaveIn``), so nothing
     guarantees the shape: guard like ``slip_export.header.captured_answers``
@@ -51,11 +52,28 @@ def _captured(answers: dict[str, Any] | None) -> str:
     """
     header = (answers or {}).get("header")
     if not isinstance(header, dict):
-        return ""
+        return []
     value = header.get("insurer")
-    if isinstance(value, (list, tuple)):
-        value = ", ".join(str(v) for v in value if v)
-    return str(value or "").strip()
+    raw_values = (
+        value
+        if isinstance(value, (list, tuple, set))
+        else re.split(r"[,;\n]+", str(value or ""))
+    )
+    seen: set[str] = set()
+    names: list[str] = []
+    for raw_value in raw_values:
+        name = str(raw_value or "").strip()
+        key = name.casefold()
+        if name and key not in seen:
+            seen.add(key)
+            names.append(name)
+    return names
+
+
+def _captured(answers: dict[str, Any] | None) -> str:
+    """The first selected insurer, used as the operational primary insurer."""
+    values = _captured_values(answers)
+    return values[0] if values else ""
 
 
 def setup_insurers(db: Session, policy_year_id: str) -> dict[str, str]:
@@ -98,7 +116,7 @@ def insurers_named_in_setups(db: Session, client_id: str | None) -> set[str]:
         .join(PolicyYear, PolicyYear.id == ProductSetup.policy_year_id)
         .where(PolicyYear.client_id == client_id)
     ).scalars()
-    return {name for answers in rows if (name := _captured(answers))}
+    return {name for answers in rows for name in _captured_values(answers)}
 
 
 def _legacy(product: Product | None) -> str:
@@ -123,6 +141,17 @@ def insurer_from_answers(
     answers (the slip export loads them for the header wording): the captured
     Header & Policy answer, else the legacy company-scoped catalog value."""
     return _captured(answers) or _legacy(product)
+
+
+def insurers_from_answers(
+    answers: dict[str, Any] | None, product: Product | None
+) -> list[str]:
+    """All quotation recipients, falling back to the legacy primary insurer."""
+    captured = _captured_values(answers)
+    if captured:
+        return captured
+    legacy = _legacy(product)
+    return [legacy] if legacy else []
 
 
 def insurer_map(

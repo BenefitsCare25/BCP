@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { InsurerSelect } from "@/components/configuration/InsurerSelect";
+import { InsurerMultiSelect } from "@/components/configuration/InsurerSelect";
 import type { TemplateField } from "@/types";
 
 /** Comma-joined string ↔ list, used by multichoice + taglist fields. Trims and
@@ -171,12 +171,23 @@ export function FieldControl({
   suggestions = [],
 }: {
   field: TemplateField;
-  value: string;
-  onChange: (v: string) => void;
+  value: string | string[];
+  onChange: (v: string | string[]) => void;
   /** Values used before for this field — shown as a quick-pick. Read live from
    *  the client's prior setups, never hardcoded. */
   suggestions?: string[];
 }) {
+  if (field.id === "insurer") {
+    return (
+      <InsurerMultiSelect
+        label={field.label}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
+
+  const textValue = Array.isArray(value) ? value.join(",") : value;
   const hasSuggestions = suggestions.length > 0;
   return (
     <div className="flex flex-col gap-1.5">
@@ -186,27 +197,17 @@ export function FieldControl({
       {field.type === "multichoice" ? (
         <MultiChoiceControl
           options={field.options ?? []}
-          value={value}
+          value={textValue}
           onChange={onChange}
         />
       ) : field.type === "taglist" ? (
-        <TagListControl value={value} onChange={onChange} />
+        <TagListControl value={textValue} onChange={onChange} />
       ) : isWideField(field) ? (
-        <AutoTextarea value={value} onChange={onChange} />
-      ) : field.id === "insurer" ? (
-        // Every product template carries an `insurer` header field, so routing
-        // it here turns all of them into the catalog dropdown at once. Prior
-        // values for this client ride along as extra options rather than the
-        // separate "Suggestions…" select the other text fields get.
-        <InsurerSelect
-          value={value}
-          onChange={onChange}
-          extraOptions={suggestions}
-        />
+        <AutoTextarea value={textValue} onChange={onChange} />
       ) : (
         <div className="flex items-center gap-2">
           <Input
-            value={value}
+            value={textValue}
             type={field.type === "number" ? "number" : "text"}
             onChange={(e) => onChange(e.target.value)}
             className="flex-1"
