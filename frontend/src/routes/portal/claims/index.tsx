@@ -1,7 +1,7 @@
 /** "My claims" — the member's claims for the current benefit year. */
 import { Link } from "@tanstack/react-router";
-import { FilePlus2 } from "lucide-react";
-import { usePortalClaims, usePortalMe } from "@/api/portal";
+import { FilePlus2, Loader2 } from "lucide-react";
+import { usePortalClaimPages, usePortalMe } from "@/api/portal";
 import { holds } from "@/components/portal/capabilities";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
@@ -67,7 +67,7 @@ const MEASURE = "mx-auto max-w-3xl";
 
 export function PortalClaimsPage() {
   const company = useCompany();
-  const claims = usePortalClaims();
+  const claims = usePortalClaimPages();
   // The FOURTH entry point that closes on the served capability list, beside
   // the shell nav, the home mosaic and the broker's preview frame. A settling
   // leaver keeps this page — reading their claims and answering us is the whole
@@ -85,7 +85,8 @@ export function PortalClaimsPage() {
     return <PortalErrorState onRetry={() => void claims.refetch()} />;
   }
 
-  const rows = claims.data?.items ?? [];
+  const rows = claims.data?.pages.flatMap((page) => page.items) ?? [];
+  const total = claims.data?.pages[0]?.total ?? 0;
 
   // Nothing to scroll past, so nothing to float over: the action belongs IN the
   // empty state, where it is the only thing on the screen to do. Full width on
@@ -129,7 +130,22 @@ export function PortalClaimsPage() {
           either. Measured, not guessed: at `pb-10` the phone left 14px and the
           ledger read as though the pill were resting on it. */}
       <div className={`${MEASURE} pb-14`}>
-        <ClaimList items={rows} total={claims.data?.total} interactive />
+        <ClaimList items={rows} total={total} interactive />
+        {claims.hasNextPage && (
+          <div className="mt-4 flex justify-center">
+            <button
+              type="button"
+              className={actionClass("quiet")}
+              disabled={claims.isFetchingNextPage}
+              onClick={() => void claims.fetchNextPage()}
+            >
+              {claims.isFetchingNextPage && (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              )}
+              Load older claims
+            </button>
+          </div>
+        )}
       </div>
     </>
   );

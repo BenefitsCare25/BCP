@@ -326,6 +326,11 @@ export function ClaimReviewPanel({
       )}
 
       <div className="border-t border-border pt-3 text-2xs text-subtle">
+        Rules {review.review_config_label ?? "Built-in defaults"}
+        {review.review_config_fingerprint && (
+          <> ({review.review_config_fingerprint.slice(0, 10)})</>
+        )}
+        {" · "}
         {review.model && <>Model {review.model} · </>}
         {(review.input_tokens ?? 0) + (review.output_tokens ?? 0)} tokens
         {review.cost_estimate_usd != null && (

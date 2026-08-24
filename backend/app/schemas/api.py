@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validat
 ParticipationModelStr = Literal["standard", "extended", "eo_only"]
 InsuranceLineStr = Literal["medical", "general", "life", "flex"]
 LayoutFamilyStr = Literal["si_based", "plan_tier", "travel", "named_person", "earnings"]
+MAX_CLAIM_WINDOW_DAYS = 3650
 
 
 class _Base(BaseModel):
@@ -248,17 +249,17 @@ class PolicyYearOut(_Base):
 class PolicyYearCreate(BaseModel):
     start_date: date
     end_date: date
-    claim_grace_period_days: int | None = None
-    leaver_access_days: int | None = None
+    claim_grace_period_days: int | None = Field(
+        default=None, ge=0, le=MAX_CLAIM_WINDOW_DAYS
+    )
+    leaver_access_days: int | None = Field(
+        default=None, ge=0, le=MAX_CLAIM_WINDOW_DAYS
+    )
 
     @model_validator(mode="after")
     def _check_range(self) -> PolicyYearCreate:
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
-        if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
-            raise ValueError("claim_grace_period_days must be zero or positive")
-        if self.leaver_access_days is not None and self.leaver_access_days < 0:
-            raise ValueError("leaver_access_days must be zero or positive")
         return self
 
 
@@ -271,8 +272,12 @@ class PolicyYearUpdate(BaseModel):
 
     start_date: date | None = None
     end_date: date | None = None
-    claim_grace_period_days: int | None = None
-    leaver_access_days: int | None = None
+    claim_grace_period_days: int | None = Field(
+        default=None, ge=0, le=MAX_CLAIM_WINDOW_DAYS
+    )
+    leaver_access_days: int | None = Field(
+        default=None, ge=0, le=MAX_CLAIM_WINDOW_DAYS
+    )
 
     @model_validator(mode="after")
     def _check(self) -> PolicyYearUpdate:
@@ -282,10 +287,6 @@ class PolicyYearUpdate(BaseModel):
             and self.end_date < self.start_date
         ):
             raise ValueError("end_date must be on or after start_date")
-        if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
-            raise ValueError("claim_grace_period_days must be zero or positive")
-        if self.leaver_access_days is not None and self.leaver_access_days < 0:
-            raise ValueError("leaver_access_days must be zero or positive")
         return self
 
 
@@ -301,17 +302,17 @@ class PolicyYearCopyIn(BaseModel):
 
     start_date: date
     end_date: date
-    claim_grace_period_days: int | None = None
-    leaver_access_days: int | None = None
+    claim_grace_period_days: int | None = Field(
+        default=None, ge=0, le=MAX_CLAIM_WINDOW_DAYS
+    )
+    leaver_access_days: int | None = Field(
+        default=None, ge=0, le=MAX_CLAIM_WINDOW_DAYS
+    )
 
     @model_validator(mode="after")
     def _check_range(self) -> PolicyYearCopyIn:
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
-        if self.claim_grace_period_days is not None and self.claim_grace_period_days < 0:
-            raise ValueError("claim_grace_period_days must be zero or positive")
-        if self.leaver_access_days is not None and self.leaver_access_days < 0:
-            raise ValueError("leaver_access_days must be zero or positive")
         return self
 
 
@@ -1005,6 +1006,7 @@ class AuditLogEntry(_Base):
     entity_type: str
     entity_id: str | None
     user_id: str | None
+    actor_name: str | None = None
     before: dict[str, Any] | None
     after: dict[str, Any] | None
     cross_tenant_access: bool

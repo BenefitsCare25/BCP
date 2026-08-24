@@ -19,7 +19,7 @@ export function LeaverAccessField() {
       label="Leaver portal access (days)"
       placeholder="60 (default)"
       noYearPrompt="Select a benefit year to set how long leavers keep portal access."
-      invalidMessage="Leaver access must be a whole number of days (or blank)."
+      invalidMessage="Leaver access must be a whole number from 0 to 3,650 days (or blank)."
       savedMessage="Leaver portal access updated"
       hint={
         <>

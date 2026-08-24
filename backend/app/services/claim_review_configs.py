@@ -16,6 +16,8 @@ default, and the UI shows a "Default" badge for such claim types.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -207,6 +209,64 @@ def default_review_config() -> ReviewConfig:
         ),
         ai_rules=DEFAULT_AI_RULES,
         required_documents=None,
+    )
+
+
+def review_config_snapshot(config: ReviewConfig) -> dict[str, Any]:
+    """Immutable, JSON-safe ruleset used by one queued review run."""
+    return {
+        "field_maps": [dict(item) for item in config.field_maps],
+        "ai_rules": [
+            {
+                "id": rule.id,
+                "rule": rule.rule,
+                "category": rule.category,
+                "severity": rule.severity,
+            }
+            for rule in config.ai_rules
+        ],
+        # Submission documents are authoritative in Claim settings and are
+        # snapshotted on the claim itself. Keep this compatibility value out of
+        # new review snapshots so one review never has two document contracts.
+        "required_documents": [],
+        "config_id": config.config_id,
+        "config_label": config.config_label,
+    }
+
+
+def review_config_fingerprint(snapshot: dict[str, Any]) -> str:
+    canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def review_config_from_snapshot(snapshot: dict[str, Any]) -> ReviewConfig:
+    """Defensively reconstruct a queued ruleset without consulting live config."""
+    maps = tuple(
+        item
+        for item in (
+            _field_map_from_dict(raw)
+            for raw in snapshot.get("field_maps", [])
+            if isinstance(raw, dict)
+        )
+        if item is not None
+    )[:MAX_FIELD_MAPS]
+    rules = tuple(
+        item
+        for index, raw in enumerate(snapshot.get("ai_rules", []))
+        if isinstance(raw, dict)
+        for item in [rule_from_dict(raw, index)]
+        if item is not None
+    )[:MAX_AI_RULES]
+    return ReviewConfig(
+        field_maps=maps or default_review_config().field_maps,
+        ai_rules=rules,
+        required_documents=None,
+        config_id=(str(snapshot.get("config_id")) if snapshot.get("config_id") else None),
+        config_label=(
+            str(snapshot.get("config_label"))[:128]
+            if snapshot.get("config_label")
+            else None
+        ),
     )
 
 

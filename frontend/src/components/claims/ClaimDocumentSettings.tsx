@@ -43,7 +43,9 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { formatError } from "@/lib/errors";
+import { ConfigurationHistory } from "./ConfigurationHistory";
 
 function setupInput(
   setup: ClaimDocumentSetup,
@@ -68,6 +70,43 @@ function copyDocuments(documents: ClaimSetupDocument[]): ClaimSetupDocument[] {
       keywords: [...field.keywords],
     })),
   }));
+}
+
+function documentsFromSnapshot(
+  snapshot: Record<string, unknown>,
+): ClaimSetupDocument[] | null {
+  const documents = snapshot.documents;
+  if (
+    !Array.isArray(documents) ||
+    !documents.every(
+      (document) =>
+        document &&
+        typeof document === "object" &&
+        typeof document.id === "string" &&
+        typeof document.key === "string" &&
+        typeof document.display === "string" &&
+        Array.isArray(document.aliases) &&
+        document.aliases.every((alias: unknown) => typeof alias === "string") &&
+        Array.isArray(document.key_fields) &&
+        document.key_fields.every(
+          (field: unknown) => {
+            if (!field || typeof field !== "object") return false;
+            const keyField = field as Record<string, unknown>;
+            return (
+              typeof keyField.name === "string" &&
+              typeof keyField.optional === "boolean" &&
+              Array.isArray(keyField.keywords) &&
+              keyField.keywords.every(
+                (keyword: unknown) => typeof keyword === "string",
+              )
+            );
+          },
+        ),
+    )
+  ) {
+    return null;
+  }
+  return copyDocuments(documents as ClaimSetupDocument[]);
 }
 
 function uniqueDocumentKey(documents: ClaimSetupDocument[]): string {
@@ -338,20 +377,19 @@ function DocumentEditor({
                     onChange({ ...document, key_fields });
                   }}
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="justify-start sm:justify-center"
-                  onClick={() => {
+                <label className="flex min-h-9 items-center gap-2 text-xs font-medium text-foreground">
+                  <Switch
+                    checked={!field.optional}
+                    aria-label={`${field.name || `Key field ${fieldIndex + 1}`} is required`}
+                    onCheckedChange={(required) => {
                     const key_fields = document.key_fields.map((item, i) =>
-                      i === fieldIndex ? { ...item, optional: !item.optional } : item,
+                      i === fieldIndex ? { ...item, optional: !required } : item,
                     );
                     onChange({ ...document, key_fields });
                   }}
-                >
-                  {field.optional ? "Optional" : "Required"}
-                </Button>
+                  />
+                  {field.optional ? "Optional field" : "Required field"}
+                </label>
                 <Button
                   type="button"
                   variant="ghost"
@@ -439,7 +477,12 @@ function SetupEditor({
           <SheetHeader>
             <SheetTitle>{setup?.display_label ?? "Document setup"}</SheetTitle>
             <SheetDescription>
-              {setup?.product_label}. Required uploads and recognition rules here are private to this claim type.
+              {setup?.product_label}. Required uploads and recognition rules here
+              are private to this claim type. Changes apply to new claim drafts;
+              claims already started keep their snapshotted requirements.
+              {setup?.updated_at && (
+                <> Last saved {new Date(setup.updated_at).toLocaleString()}.</>
+              )}
             </SheetDescription>
           </SheetHeader>
           <SheetBody className="space-y-6 px-0">
@@ -543,6 +586,21 @@ function SetupEditor({
                 <p className="text-sm text-subtle">No documents required.</p>
               )}
             </section>
+            <div className="px-6">
+              <ConfigurationHistory
+                entityType="claim_document_setup"
+                entityId={setup?.id ?? null}
+                onRestore={(snapshot) => {
+                  const restored = documentsFromSnapshot(snapshot);
+                  if (!restored) {
+                    toast.error("This saved version cannot be restored.");
+                    return;
+                  }
+                  setDocuments(restored);
+                  toast.success("Loaded the saved version. Review it, then save the setup.");
+                }}
+              />
+            </div>
           </SheetBody>
           <SheetFooter>
             <Button type="button" variant="ghost" disabled={save.isPending} onClick={requestClose}>

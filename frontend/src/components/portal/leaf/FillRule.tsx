@@ -119,7 +119,7 @@ export function FillRule({
       <div
         className={cn(
           "flex w-full overflow-hidden rounded-pill bg-track",
-          "shadow-[inset_0_1px_2px_rgb(30_28_24/0.08)]",
+          "shadow-[var(--shadow-fill-track)]",
           compact ? "h-1.5" : "h-2.5",
         )}
         role="img"

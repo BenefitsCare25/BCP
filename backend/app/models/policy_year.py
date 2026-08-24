@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -39,6 +40,15 @@ class PolicyYear(Base, TimestampMixin):
     # a calendar year but cannot share a start date.
     __table_args__ = (
         UniqueConstraint("client_id", "start_date", name="uq_policy_year_start"),
+        CheckConstraint(
+            "claim_grace_period_days IS NULL OR "
+            "claim_grace_period_days BETWEEN 0 AND 3650",
+            name="claim_grace_period_days_valid",
+        ),
+        CheckConstraint(
+            "leaver_access_days IS NULL OR leaver_access_days BETWEEN 0 AND 3650",
+            name="leaver_access_days_valid",
+        ),
         Index(
             "uq_policy_year_active_client",
             "client_id",

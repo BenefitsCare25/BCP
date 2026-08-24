@@ -55,6 +55,8 @@ export interface ClaimAIReviewSummary {
   completed_at: string | null;
   error_code: string | null;
   deterministic_short_circuit: boolean;
+  review_config_label: string | null;
+  review_config_fingerprint: string | null;
   created_at: string;
 }
 

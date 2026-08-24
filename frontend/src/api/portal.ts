@@ -1,5 +1,11 @@
 /** Typed calls + query hooks for the employee portal surface. */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type {
   ElectionIn,
   EnrollmentDetail,
@@ -464,6 +470,7 @@ export interface PortalClaimList {
   total: number;
   offset: number;
   limit: number;
+  next_cursor: string | null;
   items: PortalClaim[];
 }
 
@@ -736,10 +743,9 @@ export function useExtractClaimIntake() {
  * only when the rows reconcile with the bucket to the cent and therefore
  * vanishes wholesale when a claim is missing from the window.
  *
- * 200 is `core/pagination.MAX_LIMIT`, so this is as complete as one request
- * gets; the ledger still discloses the remainder from `total` above it. The
- * extra payload is paid only by members who genuinely have that many claims —
- * exactly the ones the truncation was wrong for. */
+ * The query follows the server's stable cursor until the full benefit year is
+ * loaded. Each request uses `core/pagination.MAX_LIMIT`, so ordinary members
+ * still pay for one request while long histories remain complete. */
 const CLAIMS_PAGE = 200;
 
 /** Used only to decide whether a quote is worth ASKING FOR — never to label a
@@ -751,10 +757,114 @@ const POLICY_CURRENCY_FALLBACK = "SGD";
 export function usePortalClaims() {
   return useQuery({
     queryKey: ["portal", "claims"],
-    queryFn: () =>
-      portalApi.get<PortalClaimList>(`/portal/claims?limit=${CLAIMS_PAGE}`),
+    queryFn: async () => {
+      const items: PortalClaim[] = [];
+      const seen = new Set<string>();
+      let cursor: string | null = null;
+      let first: PortalClaimList | null = null;
+      do {
+        const suffix: string = cursor
+          ? `&cursor=${encodeURIComponent(cursor)}`
+          : "";
+        const page: PortalClaimList = await portalApi.get<PortalClaimList>(
+          `/portal/claims?limit=${CLAIMS_PAGE}${suffix}`,
+        );
+        first ??= page;
+        items.push(...page.items);
+        cursor = page.next_cursor;
+        if (cursor && seen.has(cursor)) {
+          throw new Error("Claims pagination did not advance");
+        }
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+      return {
+        total: first?.total ?? 0,
+        offset: 0,
+        limit: CLAIMS_PAGE,
+        next_cursor: null,
+        items,
+      } satisfies PortalClaimList;
+    },
     meta: { localErrorHandling: true },
     retry: false,
+  });
+}
+
+export function usePortalClaimPages() {
+  return useInfiniteQuery({
+    queryKey: ["portal", "claims", "pages"],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const suffix = pageParam
+        ? `&cursor=${encodeURIComponent(pageParam)}`
+        : "";
+      return portalApi.get<PortalClaimList>(
+        `/portal/claims?limit=50${suffix}`,
+      );
+    },
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+export interface ClaimFormDraftData {
+  dependant_id: string;
+  selection: string;
+  incurred_date: string;
+  admission_date: string;
+  discharge_date: string;
+  provider: string;
+  hospital: string;
+  visit_type: string;
+  invoice_number: string;
+  doctor_name: string;
+  amount: string;
+  currency: string;
+  diagnosis: string;
+  remarks: string;
+  referral_mode: string;
+  referral_issued_on: string;
+  referral_existing_id: string;
+  anchor_id: string;
+}
+
+export interface ClaimFormDraft {
+  id: string;
+  form_data: ClaimFormDraftData;
+  version: number;
+  updated_at: string;
+}
+
+export function useClaimFormDraft() {
+  return useQuery({
+    queryKey: ["portal", "claim-form-draft"],
+    queryFn: () =>
+      portalApi.get<ClaimFormDraft | null>("/portal/claims/form/draft"),
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+export function useSaveClaimFormDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      form_data: ClaimFormDraftData;
+      expected_version: number | null;
+    }) => portalApi.put<ClaimFormDraft>("/portal/claims/form/draft", input),
+    onSuccess: (draft) =>
+      qc.setQueryData(["portal", "claim-form-draft"], draft),
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDeleteClaimFormDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => portalApi.delete<void>("/portal/claims/form/draft"),
+    onSuccess: () => qc.setQueryData(["portal", "claim-form-draft"], null),
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -821,9 +931,15 @@ export function useConfirmConversion() {
 }
 
 export function useCreateClaim() {
+  const key = useRef(crypto.randomUUID());
   return useMutation({
     mutationFn: (input: ClaimCreateInput) =>
-      portalApi.post<PortalClaim>("/portal/claims", input),
+      portalApi.postWithHeaders<PortalClaim>("/portal/claims", input, {
+        "Idempotency-Key": key.current,
+      }),
+    onSuccess: () => {
+      key.current = crypto.randomUUID();
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -845,10 +961,21 @@ export function useUploadClaimDocument() {
 
 export function useSubmitClaim() {
   const qc = usePortalQueryInvalidator();
+  const keys = useRef(new Map<string, string>());
   return useMutation({
-    mutationFn: (claimId: string) =>
-      portalApi.post<PortalClaim>(`/portal/claims/${claimId}/submit`, {}),
-    onSuccess: qc,
+    mutationFn: (claimId: string) => {
+      const idempotencyKey = keys.current.get(claimId) ?? crypto.randomUUID();
+      keys.current.set(claimId, idempotencyKey);
+      return portalApi.postWithHeaders<PortalClaim>(
+        `/portal/claims/${claimId}/submit`,
+        {},
+        { "Idempotency-Key": idempotencyKey },
+      );
+    },
+    onSuccess: (claim) => {
+      keys.current.delete(claim.id);
+      qc();
+    },
     meta: { localErrorHandling: true },
   });
 }

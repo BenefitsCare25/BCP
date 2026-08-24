@@ -112,11 +112,23 @@ def enqueue_claim_review(
         ).scalars():
             old.superseded = True
 
+    from app.services.claim_review_configs import (
+        resolve_review_config,
+        review_config_fingerprint,
+        review_config_snapshot,
+    )
+
+    config = resolve_review_config(db, claim)
+    config_snapshot = review_config_snapshot(config)
     review = ClaimAIReview(
         client_id=claim.client_id,
         claim_id=claim.id,
         status=REVIEW_STATUS_QUEUED,
         stage="queued",
+        review_config_id=config.config_id,
+        review_config_label=config.config_label,
+        review_config_fingerprint=review_config_fingerprint(config_snapshot),
+        review_config_snapshot=config_snapshot,
     )
     db.add(review)
     db.flush()

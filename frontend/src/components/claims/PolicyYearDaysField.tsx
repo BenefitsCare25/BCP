@@ -31,6 +31,8 @@ type DaysField = Extract<
   "claim_grace_period_days" | "leaver_access_days"
 >;
 
+const MAX_WINDOW_DAYS = 3650;
+
 export function PolicyYearDaysField({
   id,
   field,
@@ -92,7 +94,10 @@ export function PolicyYearDaysField({
     if (draft === null || update.isPending) return;
     const trimmed = draft.trim();
     const next = trimmed === "" ? null : Number(trimmed);
-    if (next !== null && (!Number.isInteger(next) || next < 0)) {
+    if (
+      next !== null &&
+      (!Number.isInteger(next) || next < 0 || next > MAX_WINDOW_DAYS)
+    ) {
       toast.error(invalidMessage);
       return;
     }
@@ -122,6 +127,7 @@ export function PolicyYearDaysField({
         id={id}
         type="number"
         min={0}
+        max={MAX_WINDOW_DAYS}
         placeholder={placeholder}
         className="h-9 w-40"
         disabled={update.isPending}

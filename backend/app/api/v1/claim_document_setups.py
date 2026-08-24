@@ -275,6 +275,7 @@ def duplicate_claim_document_setup(
         "claim_document_setup",
         target_id,
         after={
+            **_payload(target),
             "source_scope_key": source.scope_key,
             "target_scope_key": claim_scope_key(
                 target.claim_kind, target.claim_key, target.scope_code

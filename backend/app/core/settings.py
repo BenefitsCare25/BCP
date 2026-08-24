@@ -67,6 +67,9 @@ class Settings:
     # because the whole retry runs inside a member's submit.
     fx_max_retries: int = 2
     redis_url: str = ""
+    require_document_scan: bool = False
+    document_scan_command: str = ""
+    document_scan_timeout_seconds: int = 30
 
 
 def _flag(name: str, *, default: bool) -> bool:
@@ -380,6 +383,18 @@ def get_settings() -> Settings:
         ),
         fx_max_retries=_bounded_int("INSPRO_FX_MAX_RETRIES", default=2, ceiling=5),
         redis_url=_resolve_redis_url(env),
+        require_document_scan=_flag(
+            "INSPRO_REQUIRE_DOCUMENT_SCAN", default=env == "prod"
+        ),
+        document_scan_command=os.environ.get(
+            "INSPRO_DOCUMENT_SCAN_COMMAND", "clamscan" if env == "prod" else ""
+        ).strip(),
+        document_scan_timeout_seconds=max(
+            1,
+            _bounded_int(
+                "INSPRO_DOCUMENT_SCAN_TIMEOUT_SECONDS", default=30, ceiling=120
+            ),
+        ),
     )
 
 

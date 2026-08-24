@@ -212,8 +212,6 @@ export function ImportRulesDialog({
                                 </>
                               )}
                               {cfg.field_map_count} mappings · {cfg.rule_count} rules
-                              {cfg.required_document_count > 0 &&
-                                ` · ${cfg.required_document_count} required docs`}
                             </span>
                           </span>
                           <span className="ml-auto flex shrink-0 items-center gap-1.5">

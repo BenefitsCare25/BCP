@@ -41,7 +41,11 @@ from app.models.stored_document import STORAGE_AVAILABLE
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
 from app.services.claim_document_setups import definitions_for_claim
-from app.services.claim_review_configs import claim_key_for, resolve_review_config
+from app.services.claim_review_configs import (
+    claim_key_for,
+    resolve_review_config,
+    review_config_from_snapshot,
+)
 from app.services.claims import claim_documents
 from app.services.claims_review import (
     comparison,
@@ -490,7 +494,11 @@ def _run_stages(
     # gating and the verdict. Stamped BEFORE stage 1 so a deterministically
     # flagged claim still records which setup was in force (a NULL there means
     # "ran on the defaults", which would be a lie for a customized claim type).
-    cfg = resolve_review_config(db, claim)
+    cfg = (
+        review_config_from_snapshot(review.review_config_snapshot)
+        if isinstance(review.review_config_snapshot, dict)
+        else resolve_review_config(db, claim)
+    )
     review.review_config_id = cfg.config_id
     review.review_config_label = cfg.config_label
 

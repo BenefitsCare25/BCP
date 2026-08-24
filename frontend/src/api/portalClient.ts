@@ -172,6 +172,11 @@ export const portalApi = {
     request<T>(path, { signal: AbortSignal.timeout(milliseconds) }),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+  postWithHeaders: <T>(
+    path: string,
+    body: unknown,
+    headers: Record<string, string>,
+  ) => request<T>(path, { method: "POST", body: JSON.stringify(body), headers }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   /** A PARTIAL update — the body carries only what changed. Used by the claim

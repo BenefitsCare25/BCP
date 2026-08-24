@@ -721,6 +721,7 @@ export interface AuditLogEntry {
   entity_type: string;
   entity_id: string | null;
   user_id: string | null;
+  actor_name: string | null;
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
   cross_tenant_access: boolean;

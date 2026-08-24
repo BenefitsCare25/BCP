@@ -4,7 +4,10 @@ else 404s (same not-403 convention as tenant scoping)."""
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
+import json
 import logging
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
@@ -16,6 +19,7 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Query,
     Request,
@@ -23,7 +27,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
@@ -41,7 +45,7 @@ from app.core.rate_limit import limiter
 from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES, get_storage
 from app.core.uploads import saved_upload
 from app.db.session import get_db
-from app.models import Claim, Employee, PolicyYear, StoredDocument
+from app.models import Claim, ClaimFormDraft, Employee, PolicyYear, StoredDocument
 from app.models.claim import (
     AMENDED_BY_MEMBER,
     CLAIM_KIND_FLEX,
@@ -60,6 +64,8 @@ from app.schemas.claims import (
     ClaimAmendIn,
     ClaimAnchorOut,
     ClaimCreateIn,
+    ClaimFormDraftOut,
+    ClaimFormDraftSaveIn,
     ClaimIntakeSuggestionOut,
     ClaimList,
     ClaimOut,
@@ -110,6 +116,13 @@ from app.services.claim_intake import (
     supports_stay_dates,
 )
 from app.services.claim_intake_suggest import build_intake_suggestion
+from app.services.claim_integrity import (
+    is_replayed_claim_command,
+    lock_claim_command_key,
+    lock_claim_form_draft_scope,
+    record_claim_command,
+    replayed_claim_for_command,
+)
 from app.services.claim_messages import post_system_message
 from app.services.claims import (
     MEMBER_AMENDABLE_FIELDS,
@@ -138,6 +151,7 @@ from app.services.claims_review.queue import (
 )
 from app.services.doc_images import DocImageError, vision_blocks_for_document
 from app.services.enrollment_products import resolve_products_by_codes
+from app.services.file_security import scan_quarantined_document
 from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_listings import member_id_for_insurer
 from app.services.member_access import Capability
@@ -495,6 +509,7 @@ async def extract_claim_intake(
         async with saved_upload(
             upload, set(DOCUMENT_SUFFIXES), max_bytes=MAX_DOCUMENT_BYTES
         ) as tmp_path:
+            await asyncio.to_thread(scan_quarantined_document, tmp_path)
             data = tmp_path.read_bytes()
             suffix = tmp_path.suffix.lower()
         if not data:
@@ -761,6 +776,7 @@ def list_my_claims(
     status_filter: str | None = Query(default=None, alias="status"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
+    cursor: str | None = Query(default=None, max_length=256),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimList:
@@ -784,18 +800,58 @@ def list_my_claims(
     if status_filter:
         conditions.append(Claim.status == status_filter)
     total = db.scalar(select(func.count(Claim.id)).where(*conditions)) or 0
+    if cursor:
+        try:
+            padded = cursor + "=" * (-len(cursor) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(padded).decode())
+            cursor_created = datetime.fromisoformat(str(payload["created_at"]))
+            cursor_id = str(payload["id"])
+            if len(cursor_id) != 36:
+                raise ValueError
+        except (
+            binascii.Error,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            UnicodeDecodeError,
+            ValueError,
+        ) as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "The claims page cursor is invalid.",
+            ) from exc
+        conditions.append(
+            or_(
+                Claim.created_at < cursor_created,
+                and_(
+                    Claim.created_at == cursor_created,
+                    Claim.id < cursor_id,
+                ),
+            )
+        )
     rows = db.execute(
         select(Claim)
         .where(*conditions)
-        .order_by(Claim.created_at.desc())
-        .offset(offset)
-        .limit(limit)
+        .order_by(Claim.created_at.desc(), Claim.id.desc())
+        .offset(offset if cursor is None else 0)
+        .limit(limit + 1)
     ).scalars().all()
+    has_more = len(rows) > limit
+    page_rows = list(rows[:limit])
+    next_cursor = None
+    if has_more and page_rows:
+        last = page_rows[-1]
+        raw = json.dumps(
+            {"created_at": last.created_at.isoformat(), "id": last.id},
+            separators=(",", ":"),
+        ).encode()
+        next_cursor = base64.urlsafe_b64encode(raw).decode().rstrip("=")
     return ClaimList(
         total=total,
         offset=offset,
         limit=limit,
-        items=claims_to_out(db, list(rows)),
+        next_cursor=next_cursor,
+        items=claims_to_out(db, page_rows),
     )
 
 
@@ -804,10 +860,27 @@ def list_my_claims(
 def create_my_claim(
     request: Request,
     body: ClaimCreateIn,
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        max_length=128,
+    ),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
     employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
+    request_hash = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
+    lock_claim_command_key(db, employee.client_id, idempotency_key)
+    replayed = replayed_claim_for_command(
+        db,
+        client_id=employee.client_id,
+        employee_id=employee.id,
+        action="portal:create",
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+    if replayed is not None:
+        return claim_to_out(db, replayed)
     claim = create_claim(
         db, employee, body, submitted_by_member_id=member.member_account_id
     )
@@ -815,6 +888,13 @@ def create_my_claim(
         db, member, "claim.drafted", "claim", claim.id,
         after={"claim_kind": claim.claim_kind, "amount": claim.amount_claimed},
         employee_id=employee.id,
+    )
+    record_claim_command(
+        db,
+        claim,
+        "portal:create",
+        idempotency_key,
+        request_hash=request_hash,
     )
     db.commit()
     return claim_to_out(db, claim)
@@ -1167,6 +1247,11 @@ def confirm_my_conversion(
 def submit_my_claim(
     request: Request,
     claim_id: str,
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        max_length=128,
+    ),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> ClaimOut:
@@ -1176,6 +1261,10 @@ def submit_my_claim(
     # stops a member past their run-off filing a claim from a stale draft.
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
+    if is_replayed_claim_command(
+        db, claim, "portal:submit", idempotency_key
+    ):
+        return claim_to_out(db, claim)
     if claim.status == CLAIM_STATUS_DRAFT:
         assert_member_capability(db, employee, Capability.CLAIM)
     submit_claim(
@@ -1201,5 +1290,95 @@ def submit_my_claim(
         },
         employee_id=employee.id,
     )
+    record_claim_command(db, claim, "portal:submit", idempotency_key)
     db.commit()
     return claim_to_out(db, claim)
+
+
+@router.get("/form/draft", response_model=ClaimFormDraftOut | None)
+def get_my_claim_form_draft(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> ClaimFormDraftOut | None:
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
+    draft = db.scalar(
+        select(ClaimFormDraft).where(
+            ClaimFormDraft.employee_id == employee.id,
+            ClaimFormDraft.policy_year_id == employee.policy_year_id,
+        )
+    )
+    return ClaimFormDraftOut.model_validate(draft) if draft is not None else None
+
+
+@router.put("/form/draft", response_model=ClaimFormDraftOut)
+@limiter.limit("30/minute")
+def save_my_claim_form_draft(
+    request: Request,
+    body: ClaimFormDraftSaveIn,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> ClaimFormDraftOut:
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
+    lock_claim_form_draft_scope(db, employee.id, employee.policy_year_id)
+    draft = db.scalar(
+        select(ClaimFormDraft)
+        .where(
+            ClaimFormDraft.employee_id == employee.id,
+            ClaimFormDraft.policy_year_id == employee.policy_year_id,
+        )
+        .with_for_update()
+    )
+    if draft is None:
+        if body.expected_version is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "stale_claim_form_draft",
+                    "message": (
+                        "This saved draft changed in another session. "
+                        "Reload it and try again."
+                    ),
+                },
+            )
+        draft = ClaimFormDraft(
+            client_id=employee.client_id,
+            employee_id=employee.id,
+            policy_year_id=employee.policy_year_id,
+            form_data=body.form_data.model_dump(),
+        )
+        db.add(draft)
+    else:
+        if body.expected_version != draft.version:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "stale_claim_form_draft",
+                    "message": (
+                        "This saved draft changed in another session. "
+                        "Reload it and try again."
+                    ),
+                },
+            )
+        draft.form_data = body.form_data.model_dump()
+        draft.version += 1
+        draft.updated_at = datetime.now(UTC)
+    db.commit()
+    return ClaimFormDraftOut.model_validate(draft)
+
+
+@router.delete("/form/draft", status_code=status.HTTP_204_NO_CONTENT)
+def delete_my_claim_form_draft(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> None:
+    employee = resolve_member_employee(db, member, requires=Capability.CLAIM)
+    lock_claim_form_draft_scope(db, employee.id, employee.policy_year_id)
+    draft = db.scalar(
+        select(ClaimFormDraft).where(
+            ClaimFormDraft.employee_id == employee.id,
+            ClaimFormDraft.policy_year_id == employee.policy_year_id,
+        )
+    )
+    if draft is not None:
+        db.delete(draft)
+        db.commit()

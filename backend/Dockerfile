@@ -67,9 +67,19 @@ ARG INSPRO_GIT_SHA=unknown
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8000 \
-    INSPRO_GIT_SHA=$INSPRO_GIT_SHA
+    INSPRO_GIT_SHA=$INSPRO_GIT_SHA \
+    INSPRO_REQUIRE_DOCUMENT_SCAN=true \
+    INSPRO_DOCUMENT_SCAN_COMMAND=clamscan
 
 WORKDIR /app
+
+# Claim uploads remain in their temporary quarantine file until ClamAV and the
+# structural PDF/image guards have accepted them.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends clamav clamav-freshclam \
+    && rm -rf /var/lib/apt/lists/* \
+    && sed -i '/^NotifyClamd /d' /etc/clamav/freshclam.conf \
+    && (freshclam --stdout || true)
 
 # Copy installed packages from the builder stage.
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages

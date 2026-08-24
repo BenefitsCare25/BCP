@@ -25,3 +25,6 @@ class ClaimCommand(Base, TimestampMixin):
     claim_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Optional fingerprint of the request body. Portal claim creation uses it
+    # so a retried key cannot be reused with different claim facts.
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

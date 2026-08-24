@@ -326,15 +326,21 @@ export function useRunMatching() {
   });
 }
 
-export function useAuditLog(entityType?: string) {
+export function useAuditLog(
+  entityType?: string,
+  entityId?: string | null,
+  enabled = true,
+) {
   const cid = useActiveClientId();
   return useQuery({
-    queryKey: ["audit-log", entityType, cid],
+    queryKey: ["audit-log", entityType, entityId, cid],
     queryFn: () => {
       const params = new URLSearchParams({ limit: "20" });
       if (entityType) params.set("entity_type", entityType);
+      if (entityId) params.set("entity_id", entityId);
       return api.get<AuditLogPage>(`/audit-log?${params}`);
     },
+    enabled,
   });
 }
 

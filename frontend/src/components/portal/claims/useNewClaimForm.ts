@@ -18,6 +18,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   useClaimAnchors,
+  type ClaimFormDraftData,
   useCoverageOptions,
   useCreateClaim,
   useDeleteDraftClaim,
@@ -55,6 +56,7 @@ import {
   type TypeEntry,
 } from "./claimForm";
 import { useCompany } from "@/components/portal/useCompany";
+import { useClaimDraftSync } from "./useClaimDraftSync";
 
 export type NewClaimForm = ReturnType<typeof useNewClaimForm>;
 
@@ -110,6 +112,7 @@ export function useNewClaimForm() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const submitInFlight = useRef(false);
   // Document-driven autofill: the document set (up to 3) the member uploaded to
   // prefill the form — each reused as the claim's evidence in the slot the AI
   // identified it as, so they don't upload twice.
@@ -129,6 +132,56 @@ export function useNewClaimForm() {
   // auto-select below can never undo their choice.
   const [anchorId, setAnchorId] = useState("");
   const anchorTouched = useRef(false);
+
+  const draftData: ClaimFormDraftData = {
+    dependant_id: dependantId,
+    selection,
+    incurred_date: incurredDate,
+    admission_date: admissionDate,
+    discharge_date: dischargeDate,
+    provider,
+    hospital,
+    visit_type: visitType,
+    invoice_number: invoiceNumber,
+    doctor_name: doctorName,
+    amount,
+    currency,
+    diagnosis,
+    remarks,
+    referral_mode: referralMode,
+    referral_issued_on: referralIssuedOn,
+    referral_existing_id: referralExistingId,
+    anchor_id: anchorId,
+  };
+  const restoreDraft = (draft: ClaimFormDraftData) => {
+    setDependantId(draft.dependant_id);
+    setSelection(draft.selection);
+    setIncurredDate(draft.incurred_date);
+    setAdmissionDateState(draft.admission_date);
+    setDischargeDate(draft.discharge_date);
+    setProvider(draft.provider);
+    setHospital(draft.hospital);
+    setVisitType(draft.visit_type);
+    setInvoiceNumber(draft.invoice_number);
+    setDoctorName(draft.doctor_name);
+    setAmount(draft.amount);
+    setCurrency(draft.currency);
+    setDiagnosis(draft.diagnosis);
+    setRemarks(draft.remarks);
+    setReferralMode(draft.referral_mode as ReferralMode);
+    setReferralIssuedOn(draft.referral_issued_on);
+    setReferralExistingId(draft.referral_existing_id);
+    setAnchorId(draft.anchor_id);
+  };
+  const draftSync = useClaimDraftSync({
+    data: draftData,
+    ready: options.isSuccess,
+    meaningful: Object.entries(draftData).some(
+      ([key, value]) => key !== "currency" && value.trim().length > 0,
+    ),
+    busy,
+    onRestore: restoreDraft,
+  });
 
   // Kind + identifiers + sub-type are DERIVED from the single selection.
   const effectiveKind: "insured" | "flex" | null = selection.startsWith(
@@ -747,6 +800,7 @@ export function useNewClaimForm() {
   };
 
   const submit = async () => {
+    if (submitInFlight.current) return false;
     const errs = validate();
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) {
@@ -754,6 +808,7 @@ export function useNewClaimForm() {
       return false;
     }
     if (!effectiveKind) return; // guarded by validate; satisfies the type
+    submitInFlight.current = true;
     setError(null);
     setBusy(true);
     let claimId: string | null = null;
@@ -823,6 +878,12 @@ export function useNewClaimForm() {
         );
         advanceToNextClaim();
       } else {
+        try {
+          await draftSync.clear();
+        } catch {
+          // The claim is committed. A stale working-copy cleanup must never
+          // turn a successful submission into a visible failure.
+        }
         // THE RECEIPT: the claim's own page, which states what was sent, lists
         // every document and carries the status from here on. It replaces a
         // three-second toast that left nothing behind.
@@ -885,6 +946,7 @@ export function useNewClaimForm() {
         }
       }
     } finally {
+      submitInFlight.current = false;
       setBusy(false);
     }
   };
@@ -896,6 +958,12 @@ export function useNewClaimForm() {
   const unplacedAutofill = autofillDocs
     .map((d) => d.file)
     .filter((f) => !slottedSet.has(f) && !files.includes(f));
+  const hasLocalAttachments =
+    Object.values(slotFiles).some(Boolean) ||
+    files.length > 0 ||
+    autofillDocs.length > 0 ||
+    referralFile !== null ||
+    pendingClaims.some((claim) => claim.file !== null);
 
   return {
     // queries
@@ -1003,6 +1071,10 @@ export function useNewClaimForm() {
     fieldErrors,
     error,
     busy,
+    draftStatus: draftSync.status,
+    draftRestored: draftSync.restored,
+    hasLocalAttachments,
+    hasUnsubmittedWork: hasLocalAttachments || draftSync.hasUnsavedChanges,
     // actions
     changeClaimant,
     changeSelection,

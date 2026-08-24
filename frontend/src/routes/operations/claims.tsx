@@ -375,6 +375,13 @@ function QueueTab({
 
   const confirmDecision = async () => {
     if (!selected || !decision) return;
+    const noteRequired =
+      decision === "needs_info" ||
+      (decision === "reject" && selected.status === "sent_to_insurer");
+    if (noteRequired && !note.trim()) {
+      toast.error("Add the explanation the member needs before continuing");
+      return;
+    }
     try {
       const amount = approvedAmount.trim() ? Number(approvedAmount) : undefined;
       const converted = convertedAmount.trim()
@@ -1270,7 +1277,12 @@ function QueueTab({
             )}
             <label className="block space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground">
-                Note {decision === "needs_info" ? "(shown to the member)" : "(optional)"}
+                Note{
+                  decision === "needs_info" ||
+                  (decision === "reject" && selected?.status === "sent_to_insurer")
+                    ? " (required — shown to the member)"
+                    : " (optional)"
+                }
               </span>
               <Input
                 value={note}
@@ -1292,6 +1304,11 @@ function QueueTab({
               : "Send back"
         }
         loading={decide.isPending}
+        confirmDisabled={
+          (decision === "needs_info" ||
+            (decision === "reject" && selected?.status === "sent_to_insurer")) &&
+          !note.trim()
+        }
         onConfirm={confirmDecision}
       />
 

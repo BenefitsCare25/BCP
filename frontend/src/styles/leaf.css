@@ -52,6 +52,15 @@
      never from the fill. A surface that only reads where the ground happens to
      be pink is a surface that disappears on screen five. */
   --color-ground: #fafaf9;
+  --color-ground-bloom-primary: rgb(232 88 92 / 0.17);
+  --color-ground-bloom-secondary: rgb(238 132 130 / 0.11);
+  --color-ground-bloom-mid: rgb(210 27 33 / 0.05);
+  --color-ground-bloom-deep: rgb(186 30 46 / 0.05);
+  --color-ground-bloom-soft: rgb(238 138 132 / 0.07);
+  --color-ground-bloom-clear: rgb(210 27 33 / 0);
+  --color-specular-soft: rgb(255 255 255 / 0.22);
+  --color-specular-strong: rgb(255 255 255 / 0.35);
+  --color-specular-clear: rgb(255 255 255 / 0);
 
   /* The soft neutral fill: the active nav pill, the current tab, a selected
      chip, the benefit-year chip, an icon's hover. **Not the same thing as the
@@ -319,6 +328,7 @@
   --shadow-cta-hover:
     0 2px 3px rgb(96 45 26 / 0.28), 0 14px 26px -10px rgb(180 86 54 / 0.56),
     inset 0 1px 0 rgb(255 255 255 / 0.32);
+  --shadow-fill-track: inset 0 1px 2px rgb(30 28 24 / 0.08);
 
   /* ── Motion ────────────────────────────────────────────────────────────
      One easing for the whole world. */
@@ -473,15 +483,15 @@
        already falling off rather than as a hot spot under the bar. */
     radial-gradient(
       52% 62vh at -8% -10vh,
-      rgb(232 88 92 / 0.17) 0%,
-      rgb(232 88 92 / 0) 100%
+      var(--color-ground-bloom-primary) 0%,
+      var(--color-ground-bloom-clear) 100%
     ),
     /* 2 — a lighter rose, upper-right, reaching lower than 1 so the two do not
        resolve into a single band across the top. */
     radial-gradient(
       46% 66vh at 108% 2vh,
-      rgb(238 132 130 / 0.11) 0%,
-      rgb(238 132 130 / 0) 100%
+      var(--color-ground-bloom-secondary) 0%,
+      var(--color-ground-bloom-clear) 100%
     ),
     /* 3 — brand red, mid-left, document-scaled and quiet. The handover: on a
        nine-screen page blooms 1–2 are spent by the second screenful and 5–6
@@ -490,21 +500,21 @@
        reading as white boxes. */
     radial-gradient(
       46% 38% at -8% 44%,
-      rgb(210 27 33 / 0.05) 0%,
-      rgb(210 27 33 / 0) 100%
+      var(--color-ground-bloom-mid) 0%,
+      var(--color-ground-bloom-clear) 100%
     ),
     /* 4 — deep brand, mid-right: the depth accent that stops the field
        reading as one even gradient corner to corner. */
     radial-gradient(
       44% 34% at 96% 56%,
-      rgb(186 30 46 / 0.05) 0%,
-      rgb(186 30 46 / 0) 100%
+      var(--color-ground-bloom-deep) 0%,
+      var(--color-ground-bloom-clear) 100%
     ),
     /* 5 — blush, bottom-centre. */
     radial-gradient(
       74% 44% at 46% 106%,
-      rgb(238 138 132 / 0.07) 0%,
-      rgb(238 138 132 / 0) 100%
+      var(--color-ground-bloom-soft) 0%,
+      var(--color-ground-bloom-clear) 100%
     );
 
   /* THERE IS NO SIXTH, GREY BLOOM, AND IT MUST NOT COME BACK (2026-08-03).
@@ -589,13 +599,13 @@
   background-image:
     linear-gradient(
       180deg,
-      rgb(255 255 255 / 0.22) 0%,
-      rgb(255 255 255 / 0) 20%
+      var(--color-specular-soft) 0%,
+      var(--color-specular-clear) 20%
     ),
     linear-gradient(
       180deg,
-      rgb(255 255 255 / 0.35) 0%,
-      rgb(255 255 255 / 0) 100%
+      var(--color-specular-strong) 0%,
+      var(--color-specular-clear) 100%
     );
 }
 

@@ -831,7 +831,13 @@ def test_a_recovered_rate_does_not_silently_overwrite_the_assessor(
     broker.post(
         f"/api/v1/claims/{claim_id}/conversion", json={"converted_amount": 690.0}
     )
-    broker.post(f"/api/v1/claims/{claim_id}/decision", json={"action": "needs_info"})
+    broker.post(
+        f"/api/v1/claims/{claim_id}/decision",
+        json={
+            "action": "needs_info",
+            "note": "Please confirm the converted amount before resubmitting.",
+        },
+    )
 
     upstream.queue = [_ok()]  # the rate service recovers
     anon.post(

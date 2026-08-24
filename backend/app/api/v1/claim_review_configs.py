@@ -389,9 +389,16 @@ def delete_review_config(
     )
     write_audit(
         db, user, "claim_review_config.deleted", "claim_review_config", row.id,
-        before={"claim_kind": row.claim_kind, "claim_key": row.claim_key,
-                "scope_code": row.scope_code,
-                "display_label": row.display_label},
+        before={
+            "claim_kind": row.claim_kind,
+            "claim_key": row.claim_key,
+            "scope_code": row.scope_code,
+            "display_label": row.display_label,
+            "enabled": row.enabled,
+            "field_maps": row.field_maps,
+            "ai_rules": row.ai_rules,
+            "required_documents": row.required_documents,
+        },
     )
     db.delete(row)
     db.commit()
@@ -432,8 +439,9 @@ def preview_review_prompt(
         ],
         field_maps=data["field_maps"],
         ai_rules=rules,
-        required_documents=data["required_documents"]
-        or ["<derived automatically from the claim type>"],
+        required_documents=[
+            "<derived automatically from the claim type in Claim settings>"
+        ],
     )
     return ReviewPromptPreviewOut(prompt=prompt)
 
@@ -652,6 +660,13 @@ def import_review_configs(
                 },
             )
         resolved = config_from_row(src)
+        target = find_config_row(
+            db,
+            client_id,
+            destination.claim_kind,
+            destination.claim_key,
+            destination.scope_code,
+        )
         try:
             import_body = ClaimReviewConfigIn.model_validate(
                 {
@@ -670,7 +685,12 @@ def import_review_configs(
                         }
                         for rule in resolved.ai_rules
                     ],
-                    "required_documents": list(resolved.required_documents or ()),
+                    # Compatibility only. Claim Settings is the authoritative
+                    # document contract, so importing review rules never copies
+                    # the source company's old embedded document list.
+                    "required_documents": list(
+                        target.required_documents or () if target else ()
+                    ),
                 }
             )
         except ValidationError as exc:
@@ -680,16 +700,10 @@ def import_review_configs(
                 "Correct it in the source company before importing.",
             ) from exc
         data = _payload(import_body)
-        target = find_config_row(
-            db,
-            client_id,
-            destination.claim_kind,
-            destination.claim_key,
-            destination.scope_code,
-        )
         if target is None:
             target = ClaimReviewConfig(client_id=client_id, **data)
             db.add(target)
+            before = None
         else:
             assert_not_stale(
                 expected=body.target_versions.get(
@@ -698,10 +712,29 @@ def import_review_configs(
                 actual=target.updated_at,
                 label=f'Rules for "{target.display_label}"',
             )
+            before = {
+                "claim_kind": target.claim_kind,
+                "claim_key": target.claim_key,
+                "scope_code": target.scope_code,
+                "display_label": target.display_label,
+                "enabled": target.enabled,
+                "field_maps": target.field_maps,
+                "ai_rules": target.ai_rules,
+                "required_documents": target.required_documents,
+            }
             for field, value in data.items():
                 setattr(target, field, value)
             target.updated_at = datetime.now(UTC)
         db.flush()
+        write_audit(
+            db,
+            user,
+            "claim_review_config.imported",
+            "claim_review_config",
+            target.id,
+            before=before,
+            after={**data, "source_client_id": source.id},
+        )
         imported.append(target)
     write_audit(
         db, user, "claim_review_config.imported", "claim_review_config", None,

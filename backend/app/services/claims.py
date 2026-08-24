@@ -4,6 +4,7 @@ rules live in one place.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -14,7 +15,6 @@ from typing import Any
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import event, select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
@@ -30,7 +30,6 @@ from app.db.tenancy import is_postgres
 from app.models import (
     Claim,
     ClaimAIReview,
-    ClaimCommand,
     Dependant,
     Employee,
     PolicyYear,
@@ -87,7 +86,9 @@ from app.services.claim_intake import (
     resolve_sp_referral,
     supports_stay_dates,
 )
+from app.services.claim_integrity import lock_duplicate_invoice_scope
 from app.services.claim_settlement import mint_reference_no
+from app.services.file_security import scan_quarantined_document
 from app.services.flex_membership import flex_effective_window
 from app.services.fx import POLICY_CURRENCY
 from app.services.member_statement import build_member_statement
@@ -149,65 +150,6 @@ def lock_claim_utilization_bucket(db: Session, claim: Claim) -> None:
         text("SELECT pg_advisory_xact_lock(hashtextextended(:bucket, 0))"),
         {"bucket": bucket},
     )
-
-
-def is_replayed_claim_command(
-    db: Session,
-    claim: Claim,
-    action: str,
-    idempotency_key: str | None,
-) -> bool:
-    """Return true for a completed retry; reject cross-command key reuse."""
-    if not idempotency_key:
-        return False
-    existing = db.execute(
-        select(ClaimCommand).where(
-            ClaimCommand.client_id == claim.client_id,
-            ClaimCommand.idempotency_key == idempotency_key,
-        )
-    ).scalar_one_or_none()
-    if existing is None:
-        return False
-    if existing.claim_id != claim.id or existing.action != action:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "code": "idempotency_key_reused",
-                "message": "This Idempotency-Key was used for another command.",
-            },
-        )
-    return True
-
-
-def record_claim_command(
-    db: Session,
-    claim: Claim,
-    action: str,
-    idempotency_key: str | None,
-) -> None:
-    if not idempotency_key:
-        return
-    command = ClaimCommand(
-        client_id=claim.client_id,
-        claim_id=claim.id,
-        action=action,
-        idempotency_key=idempotency_key,
-    )
-    db.add(command)
-    try:
-        # Flush only the key reservation here. The claim row remains protected
-        # by its transaction lock, while a simultaneous reuse on another claim
-        # becomes a controlled 409 instead of an unhandled unique violation.
-        db.flush((command,))
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "code": "idempotency_key_reused",
-                "message": "This Idempotency-Key was used for another command.",
-            },
-        ) from None
 
 
 # Magic-byte signatures for the allowed document types. The stored mime_type
@@ -788,6 +730,7 @@ async def attach_document(
     async with saved_upload(
         file, set(DOCUMENT_SUFFIXES), max_bytes=MAX_DOCUMENT_BYTES
     ) as tmp_path:
+        await asyncio.to_thread(scan_quarantined_document, tmp_path)
         suffix = Path(file.filename or "").suffix.lower()
         path = document_path(
             broker_firm_id, client_id, entity_type, entity_id, doc_id, suffix
@@ -1413,6 +1356,7 @@ def validate_claim_facts(
         # entirely". Re-imposing it here made the very case created to solve
         # the problem permanently uncorrectable — it carries the duplicate
         # number by design.
+        lock_duplicate_invoice_scope(db, claim)
         _assert_no_duplicate_invoice(db, claim)
     return window
 

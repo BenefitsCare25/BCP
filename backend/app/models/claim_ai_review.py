@@ -96,3 +96,5 @@ class ClaimAIReview(Base, TimestampMixin):
     # survive the config row being deleted/reverted later.
     review_config_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     review_config_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_config_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_config_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)

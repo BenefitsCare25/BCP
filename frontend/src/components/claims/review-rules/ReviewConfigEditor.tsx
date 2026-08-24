@@ -20,6 +20,7 @@ import {
   Sheet,
   SheetBody,
   SheetContent,
+  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -29,6 +30,7 @@ import { InfoHint } from "@/components/ui/tooltip";
 import { formatError, isStaleConfigurationError } from "@/lib/errors";
 import { ReviewConfigEditorSection as EditorSection } from "./ReviewConfigEditorSection";
 import { ReviewPromptPreview } from "./ReviewPromptPreview";
+import { ConfigurationHistory } from "../ConfigurationHistory";
 import {
   MAX_AI_RULES,
   MAX_FIELD_MAPS,
@@ -41,9 +43,37 @@ export interface ReviewDuplicateSource {
   label: string;
   setup: Pick<
     ClaimReviewConfigInput,
-    "field_maps" | "ai_rules" | "required_documents"
+    "field_maps" | "ai_rules"
   >;
 }
+
+function isReviewFieldMap(value: unknown): value is ReviewFieldMap {
+  if (!value || typeof value !== "object") return false;
+  const mapping = value as Partial<ReviewFieldMap>;
+  return (
+    typeof mapping.portal_field === "string" &&
+    typeof mapping.document_field === "string" &&
+    ["fuzzy", "exact", "numeric"].includes(mapping.mode ?? "") &&
+    typeof mapping.verify_with_vision === "boolean" &&
+    typeof mapping.require_evidence === "boolean" &&
+    (mapping.tolerance == null ||
+      (typeof mapping.tolerance === "number" &&
+        Number.isFinite(mapping.tolerance) &&
+        mapping.tolerance >= 0))
+  );
+}
+
+function isReviewAIRule(value: unknown): value is ReviewAIRule {
+  if (!value || typeof value !== "object") return false;
+  const rule = value as Partial<ReviewAIRule>;
+  return (
+    typeof rule.rule === "string" &&
+    typeof rule.category === "string" &&
+    ["critical", "warning", "info"].includes(rule.severity ?? "") &&
+    (rule.id == null || typeof rule.id === "string")
+  );
+}
+
 export function ReviewConfigEditor({
   target,
   portalFields,
@@ -135,10 +165,17 @@ export function ReviewConfigEditor({
 
   return (
     <>
-    <Sheet open onOpenChange={(open) => !open && requestClose()}>
-      <SheetContent className="sm:max-w-2xl">
+      <Sheet open onOpenChange={(open) => !open && requestClose()}>
+        <SheetContent className="sm:max-w-2xl">
         <SheetHeader>
           <SheetTitle>{draft.display_label} — review rules</SheetTitle>
+          <SheetDescription>
+            Changes apply to reviews queued after you save. Queued and completed
+            reviews retain the exact ruleset snapshot they started with.
+            {target.expectedUpdatedAt && (
+              <> Last saved {new Date(target.expectedUpdatedAt).toLocaleString()}.</>
+            )}
+          </SheetDescription>
         </SheetHeader>
         <SheetBody className="space-y-7">
           <label className="flex items-center gap-2.5 rounded-md border border-border bg-muted/40 px-3.5 py-3 text-sm font-medium text-foreground">
@@ -160,8 +197,8 @@ export function ReviewConfigEditor({
                 Duplicate another claim type&apos;s setup
               </p>
               <p className="text-xs text-subtle">
-                Copies its effective mappings, rules and additional documents
-                into this editor. Nothing changes until you save.
+                Copies its effective mappings and rules into this editor.
+                Submission documents remain owned by Claim settings.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -193,7 +230,6 @@ export function ReviewConfigEditor({
                       ...mapping,
                     })),
                     ai_rules: source.setup.ai_rules.map((rule) => ({ ...rule })),
-                    required_documents: [...source.setup.required_documents],
                   });
                   toast.success(`Copied setup from ${source.label}`);
                 }}
@@ -452,6 +488,33 @@ export function ReviewConfigEditor({
               Manage submission documents in Claim settings
             </a>
           </EditorSection>
+
+          <ConfigurationHistory
+            entityType="claim_review_config"
+            entityId={target.configId}
+            onRestore={(snapshot) => {
+              if (
+                !Array.isArray(snapshot.field_maps) ||
+                !snapshot.field_maps.every(isReviewFieldMap) ||
+                !Array.isArray(snapshot.ai_rules) ||
+                !snapshot.ai_rules.every(isReviewAIRule)
+              ) {
+                toast.error("This saved version cannot be restored.");
+                return;
+              }
+              patch({
+                enabled:
+                  typeof snapshot.enabled === "boolean"
+                    ? snapshot.enabled
+                    : draft.enabled,
+                field_maps: snapshot.field_maps,
+                ai_rules: snapshot.ai_rules,
+              });
+              toast.success(
+                "Loaded the saved version. Review it, then save the setup.",
+              );
+            }}
+          />
 
           <ReviewPromptPreview
             prompt={promptText}

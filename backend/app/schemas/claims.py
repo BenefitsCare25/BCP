@@ -92,6 +92,41 @@ class ClaimCreateIn(BaseModel):
     fx_quoted_amount: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
+class ClaimFormDraftData(BaseModel):
+    """Incomplete member input that is safe to persist before validation."""
+
+    dependant_id: str = Field(default="", max_length=36)
+    selection: str = Field(default="", max_length=512)
+    incurred_date: str = Field(default="", max_length=10)
+    admission_date: str = Field(default="", max_length=10)
+    discharge_date: str = Field(default="", max_length=10)
+    provider: str = Field(default="", max_length=255)
+    hospital: str = Field(default="", max_length=255)
+    visit_type: str = Field(default="", max_length=16)
+    invoice_number: str = Field(default="", max_length=128)
+    doctor_name: str = Field(default="", max_length=255)
+    amount: str = Field(default="", max_length=32)
+    currency: str = Field(default="SGD", max_length=8)
+    diagnosis: str = Field(default="", max_length=512)
+    remarks: str = Field(default="", max_length=500)
+    referral_mode: str = Field(default="", max_length=16)
+    referral_issued_on: str = Field(default="", max_length=10)
+    referral_existing_id: str = Field(default="", max_length=36)
+    anchor_id: str = Field(default="", max_length=36)
+
+
+class ClaimFormDraftSaveIn(BaseModel):
+    form_data: ClaimFormDraftData
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class ClaimFormDraftOut(_Base):
+    id: str
+    form_data: ClaimFormDraftData
+    version: int
+    updated_at: datetime
+
+
 # Amendable fields the CLAIM cannot hold as NULL. Sending an explicit `null` for
 # one of these is a request to clear a column the model requires, which would
 # either 500 on flush or store a claim nothing downstream can render. Absence
@@ -422,6 +457,7 @@ class ClaimList(BaseModel):
     total: int
     offset: int
     limit: int
+    next_cursor: str | None = None
     items: list[ClaimOut] = Field(default_factory=list)
 
 
@@ -443,6 +479,8 @@ class ClaimAIReviewSummary(_Base):
     completed_at: datetime | None = None
     error_code: str | None = None
     deterministic_short_circuit: bool = False
+    review_config_label: str | None = None
+    review_config_fingerprint: str | None = None
     created_at: datetime
 
 
@@ -835,6 +873,13 @@ class ClaimDecisionIn(BaseModel):
     # assessor flow has no stale read to guard against, and making it mandatory
     # would break every existing caller. The queue always sends it.
     expected_revision: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_member_note(self) -> ClaimDecisionIn:
+        self.note = self.note.strip() if self.note else None
+        if self.action == "needs_info" and not self.note:
+            raise ValueError("A note explaining what is missing is required")
+        return self
 
 
 # ── Utilization (computed-on-read; see services/utilization.py) ───────────────

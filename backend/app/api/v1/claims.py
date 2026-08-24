@@ -106,6 +106,10 @@ from app.services.claim_fx import (
     set_manual_conversion,
 )
 from app.services.claim_intake import is_inpatient_product
+from app.services.claim_integrity import (
+    is_replayed_claim_command,
+    record_claim_command,
+)
 from app.services.claim_messages import (
     broker_message_out,
     mark_broker_read,
@@ -136,12 +140,10 @@ from app.services.claims import (
     assert_transition,
     attach_document,
     audit_cells,
-    is_replayed_claim_command,
     lock_claim_for_mutation,
     lock_claim_utilization_bucket,
     populate_claim_out,
     prefetch_claim_relations,
-    record_claim_command,
     stamp_document_amendment,
     supersede_review_for_amendment,
 )
@@ -510,6 +512,15 @@ def decide_claim(
     if is_replayed_claim_command(db, claim, command, idempotency_key):
         return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     new_status = _DECISION_STATUS[body.action]
+    if (
+        body.action == "reject"
+        and claim.status == CLAIM_STATUS_SENT_TO_INSURER
+        and not body.note
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Explain the insurer's rejection to the member before continuing.",
+        )
     assert_transition(claim, new_status)
     # The member may amend right up to this moment, so a decision carries the
     # revision the assessor actually read. Checked BEFORE anything is written:

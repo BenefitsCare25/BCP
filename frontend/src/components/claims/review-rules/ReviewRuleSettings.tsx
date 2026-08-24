@@ -15,7 +15,7 @@
  * configured product list.
  */
 import { useMemo, useState } from "react";
-import { Pencil, RefreshCw, RotateCcw } from "lucide-react";
+import { Pencil, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { toast } from "sonner";
 import {
   useClaimReviewConfigs,
@@ -36,6 +36,7 @@ import {
 import { SectionLabel } from "@/components/ui/section-label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NoCurrentYearNotice } from "@/components/shell/CurrentYearBanner";
+import { Input } from "@/components/ui/input";
 import { formatError } from "@/lib/errors";
 import {
   ReviewConfigEditor,
@@ -44,14 +45,10 @@ import {
 } from "./ReviewConfigEditor";
 
 function summarize(cfg: ClaimReviewConfig): string {
-  const parts = [
+  return [
     `${cfg.field_maps.length} mappings`,
     `${cfg.ai_rules.length} rules`,
-  ];
-  if (cfg.required_documents.length > 0) {
-    parts.push(`+${cfg.required_documents.length} required docs`);
-  }
-  return parts.join(" · ");
+  ].join(" · ");
 }
 
 function TypeRow({
@@ -164,6 +161,7 @@ export function ReviewRuleSettings() {
   const del = useDeleteClaimReviewConfig();
   const [editing, setEditing] = useState<EditorTarget | null>(null);
   const [reverting, setReverting] = useState<ClaimReviewConfig | null>(null);
+  const [query, setQuery] = useState("");
 
   // Keyed on the SERVER's `key` on both sides of the join — see
   // `ClaimReviewConfig.key`.
@@ -174,20 +172,31 @@ export function ReviewRuleSettings() {
   }, [configs.data]);
 
   const claimTypes = options.data?.claim_types ?? [];
+  const needle = query.trim().toLowerCase();
+  const visibleClaimTypes = useMemo(
+    () =>
+      needle
+        ? claimTypes.filter((type) =>
+            [
+              type.display_label,
+              ...type.scopes.map((scope) => scope.display_label),
+            ].some((label) => label.toLowerCase().includes(needle)),
+          )
+        : claimTypes,
+    [claimTypes, needle],
+  );
   const duplicateSources = useMemo<ReviewDuplicateSource[]>(() => {
     const defaults = options.data?.default_config;
     if (!defaults) return [];
     const builtIn = {
       field_maps: defaults.field_maps,
       ai_rules: defaults.ai_rules,
-      required_documents: defaults.required_documents,
     };
     const setupFrom = (config: ClaimReviewConfig | null) =>
       config?.enabled
         ? {
             field_maps: config.field_maps,
             ai_rules: config.ai_rules,
-            required_documents: config.required_documents,
           }
         : null;
     const out: ReviewDuplicateSource[] = [];
@@ -228,7 +237,11 @@ export function ReviewRuleSettings() {
   // vocabulary at all, so EVERY setup lands here and "No longer active" would
   // be a lie; the heading and note switch accordingly.
   const hasCurrentYear = options.data?.has_current_year ?? true;
-  const unmatched = (configs.data ?? []).filter((c) => !knownKeys.has(c.key));
+  const unmatched = (configs.data ?? []).filter(
+    (c) =>
+      !knownKeys.has(c.key) &&
+      (!needle || c.display_label.toLowerCase().includes(needle)),
+  );
 
   const openEditor = (
     t: RuleTarget,
@@ -284,14 +297,38 @@ export function ReviewRuleSettings() {
     });
   };
 
-  const insured = claimTypes.filter((t) => t.claim_kind === "insured");
-  const flex = claimTypes.filter((t) => t.claim_kind === "flex");
+  const insured = visibleClaimTypes.filter((t) => t.claim_kind === "insured");
+  const flex = visibleClaimTypes.filter((t) => t.claim_kind === "flex");
   const loading = options.isLoading || configs.isLoading;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardContent className="p-0">
+          <div className="flex flex-wrap items-center gap-3 border-b border-border p-5">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-foreground">
+                {claimTypes.length} claim types · {configs.data?.length ?? 0} custom setups
+              </p>
+              <p className="text-xs text-subtle">
+                Filter the review contract by product or claim choice.
+              </p>
+            </div>
+            <label className="relative w-full sm:w-72">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <span className="sr-only">Search review rules</span>
+              <Input
+                type="search"
+                value={query}
+                className="pl-9"
+                placeholder="Search claim types"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+          </div>
           {loading ? (
             <div className="p-5">
               <Skeleton className="h-40 w-full" />
@@ -324,6 +361,10 @@ export function ReviewRuleSettings() {
                 <NoCurrentYearNotice />
               )}
             </div>
+          ) : needle && visibleClaimTypes.length === 0 && unmatched.length === 0 ? (
+            <p className="p-5 text-sm text-muted-foreground">
+              No claim types match your search.
+            </p>
           ) : (
             <>
               {!hasCurrentYear && (
@@ -466,7 +507,7 @@ export function ReviewRuleSettings() {
           open={reverting !== null}
           onOpenChange={(open) => !open && setReverting(null)}
           title={`Revert "${reverting?.display_label}" to the default rules?`}
-          description="The custom field mappings, business rules and required documents are deleted. Reviews then inherit the product setup when one exists, or use the built-in defaults."
+          description="The custom field mappings and business rules are deleted. Reviews then inherit the product setup when one exists, or use the built-in defaults. Submission documents stay unchanged in Claim settings."
           confirmLabel="Revert to defaults"
           loading={del.isPending}
           onConfirm={() => {
