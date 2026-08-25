@@ -51,10 +51,15 @@ else:
     # overruns every small Postgres SKU. Defaults below give 2 x 5 = 10.
     # Raise together with WEB_CONCURRENCY and the DB tier.
     _engine_kwargs.update(
+        # Bound TCP/DNS connection establishment during an Azure database
+        # disruption so request workers fail closed instead of hanging.
+        connect_args={
+            "connect_timeout": _pool_setting("INSPRO_DB_CONNECT_TIMEOUT", 5),
+        },
         pool_size=_pool_setting("INSPRO_DB_POOL_SIZE", 3),
         max_overflow=_pool_setting("INSPRO_DB_MAX_OVERFLOW", 2),
         # Fail a starved request instead of hanging the worker indefinitely.
-        pool_timeout=_pool_setting("INSPRO_DB_POOL_TIMEOUT", 30),
+        pool_timeout=_pool_setting("INSPRO_DB_POOL_TIMEOUT", 5),
         # Recycle below Azure Postgres' idle cutoff so pooled connections
         # can't be handed out already dead.
         pool_recycle=_pool_setting("INSPRO_DB_POOL_RECYCLE", 1800),

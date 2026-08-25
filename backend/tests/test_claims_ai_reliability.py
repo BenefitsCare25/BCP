@@ -88,6 +88,7 @@ def test_redis_readiness_detects_failure_and_recovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = SimpleNamespace(failing=True)
+    connection_options: dict[str, object] = {}
 
     def ping() -> bool:
         if client.failing:
@@ -95,9 +96,11 @@ def test_redis_readiness_detects_failure_and_recovery(
         return True
 
     client.ping = ping
-    fake_redis = SimpleNamespace(
-        Redis=SimpleNamespace(from_url=lambda *_args, **_kwargs: client)
-    )
+    def from_url(*_args: object, **kwargs: object) -> object:
+        connection_options.update(kwargs)
+        return client
+
+    fake_redis = SimpleNamespace(Redis=SimpleNamespace(from_url=from_url))
     monkeypatch.setitem(sys.modules, "redis", fake_redis)
 
     cache = ai_cache.RedisAICache("redis://cache.example:6379/0")
@@ -106,6 +109,9 @@ def test_redis_readiness_detects_failure_and_recovery(
     client.failing = False
     assert cache.ready() is True
     assert cache.kind == "redis"
+    assert connection_options["socket_connect_timeout"] == 3.0
+    assert connection_options["socket_timeout"] == 3.0
+    assert connection_options["retry_on_timeout"] is False
 
 
 def test_readiness_returns_503_when_shared_cache_is_unavailable(
@@ -124,3 +130,25 @@ def test_readiness_returns_503_when_shared_cache_is_unavailable(
 
     assert response.status_code == 503
     assert "Redis is unavailable" in response.json()["detail"]
+
+
+def test_readiness_returns_503_when_database_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import session as db_session
+
+    class OfflineEngine:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def connect(self) -> None:
+            raise ConnectionError("offline")
+
+    configured = replace(get_settings(), redis_url=None)
+    monkeypatch.setattr(settings_module, "get_settings", lambda: configured)
+    monkeypatch.setattr(db_session, "engine", OfflineEngine())
+
+    with TestClient(create_app()) as client:
+        response = client.get("/readiness")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Database is unavailable."

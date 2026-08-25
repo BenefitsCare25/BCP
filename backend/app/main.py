@@ -1,6 +1,7 @@
 """FastAPI entry point for the Inspro backend."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -12,6 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1 import (
     adc,
@@ -82,6 +84,41 @@ from app.core.telemetry import configure_telemetry
 from app.core.tenancy_host import TenantMiddleware
 
 logger = logging.getLogger(__name__)
+
+READINESS_TOTAL_TIMEOUT_SECONDS = 10.0
+
+
+def _check_dependencies(redis_url: str | None) -> dict[str, str]:
+    """Run blocking dependency probes outside the ASGI event loop."""
+    from sqlalchemy import text
+
+    from app.db.session import engine
+
+    try:
+        with engine.connect() as conn:
+            # Bound database-side execution as well as connection and pool
+            # acquisition (configured on the engine in app.db.session).
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("SET LOCAL statement_timeout = 3000"))
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        logger.warning("Readiness database probe failed", exc_info=True)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database is unavailable.",
+        ) from None
+
+    redis_state = "not-required"
+    if redis_url:
+        from app.services.ai_cache import get_cache
+
+        if not get_cache().ready():
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Redis is unavailable; shared AI cache and rate limits are degraded.",
+            )
+        redis_state = "ok"
+    return {"status": "ready", "database": "ok", "redis": redis_state}
 
 
 def _allowed_origins() -> list[str]:
@@ -247,30 +284,26 @@ def create_app() -> FastAPI:
 
     @app.get("/readiness")
     async def readiness() -> dict[str, str]:
-        """Readiness probe. Verifies the DB is reachable (cheap SELECT 1).
+        """Deep readiness probe for traffic and synthetic monitoring.
 
-        Wired to App Service's health-check path is `/health` (faster, no
-        DB hit); load balancers / kube readiness probes can use this one
-        when DB-bound traffic should be steered away from a degraded node.
+        Blocking dependency calls run in a worker thread and the whole probe is
+        time-bounded, so a database outage cannot stall every ASGI request.
+        App Service itself uses `/health`, which is dependency-free liveness.
         """
-        from sqlalchemy import text
-
-        from app.db.session import engine
-
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        redis_state = "not-required"
-        if settings.redis_url:
-            from app.services.ai_cache import get_cache
-
-            cache = get_cache()
-            if not cache.ready():
-                raise HTTPException(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Redis is unavailable; shared AI cache and rate limits are degraded.",
-                )
-            redis_state = "ok"
-        return {"status": "ready", "database": "ok", "redis": redis_state}
+        try:
+            return await asyncio.wait_for(
+                run_in_threadpool(_check_dependencies, settings.redis_url),
+                timeout=READINESS_TOTAL_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Readiness probe exceeded %.1f seconds",
+                READINESS_TOTAL_TIMEOUT_SECONDS,
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Dependency readiness check timed out.",
+            ) from None
 
     # LAST: the SPA catch-all would shadow any route registered after it.
     # No-op unless a bundle was baked into the image (single-host deploys).

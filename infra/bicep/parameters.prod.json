@@ -16,6 +16,7 @@
     "postgresGeoRedundantBackup": { "value": false },
     "postgresHighAvailability": { "value": false },
     "redisSku": { "value": "Balanced_B0" },
+    "additionalAlertEmails": { "value": ["huien@inspro.com.sg"] },
     "tenantMode": { "value": "header" },
     "baseDomain": { "value": "" },
     "webConcurrency": { "value": 2 },

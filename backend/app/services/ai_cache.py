@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
 DEFAULT_MAX_ENTRIES = 10_000
+REDIS_SOCKET_TIMEOUT_SECONDS = 3.0
 
 
 def make_key(prompt_version: str, model: str, payload: dict[str, Any]) -> str:
@@ -76,7 +77,13 @@ class RedisAICache:
         # Imported lazily so test runs that never touch Redis don't need it.
         import redis
 
-        self._redis = redis.Redis.from_url(url, decode_responses=True)
+        self._redis = redis.Redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            retry_on_timeout=False,
+        )
         self._ttl = ttl
         self._fallback = InMemoryAICache()
         self._degraded = False

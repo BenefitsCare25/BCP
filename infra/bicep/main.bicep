@@ -134,8 +134,11 @@ param reviewWorkerDbMaxOverflow int = 2
 @description('Integrate the web app with the VNet so it reaches Postgres over the private endpoint. Setting this to false stops NEW deployments wiring the subnet, but does not tear down existing integration — for a rollback run `az webapp vnet-integration remove` as well, which reverts the app to the public path.')
 param enableVnetIntegration bool = true
 
-@description('Notification email for HTTP 5xx alerts (optional).')
+@description('Primary notification email for production alerts (optional).')
 param alertEmail string = ''
+
+@description('Additional notification emails. Production keeps the existing operations recipient and adds named responders here.')
+param additionalAlertEmails array = []
 
 @description('Portal mail delivery mode. Keep disabled until a verified STARTTLS SMTP sender is configured.')
 @allowed(['disabled', 'log', 'smtp'])
@@ -161,6 +164,8 @@ var prefix = 'inspro-${env}'
 var isProd = env == 'prod'
 var appName = empty(siteName) ? '${prefix}-api' : siteName
 var acrName = split(acrLoginServer, '.')[0]
+var alertRecipients = concat(empty(alertEmail) ? [] : [alertEmail], additionalAlertEmails)
+var hasAlertRecipients = length(alertRecipients) > 0
 
 // Built-in role IDs (https://learn.microsoft.com/azure/role-based-access-control/built-in-roles).
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -449,6 +454,8 @@ var commonAppSettings = [
   { name: 'INSPRO_TENANT_MODE', value: tenantMode }
   { name: 'INSPRO_BASE_DOMAIN', value: baseDomain }
   { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
+  { name: 'INSPRO_DB_CONNECT_TIMEOUT', value: '5' }
+  { name: 'INSPRO_DB_POOL_TIMEOUT', value: '5' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
   { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
   // Mail stays disabled until a complete STARTTLS SMTP sender is configured.
@@ -486,7 +493,9 @@ var siteConfig = {
   ftpsState: 'Disabled'
   minTlsVersion: '1.2'
   http20Enabled: true
-  healthCheckPath: '/readiness'
+  // Instance liveness must not depend on PostgreSQL or Redis. Dependency
+  // readiness is monitored separately by the Singapore synthetic probe.
+  healthCheckPath: '/health'
   appSettings: webAppSettings
 }
 
@@ -691,19 +700,22 @@ resource kvDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 }
 
 // ── Alerts ──────────────────────────────────────────────────────────────────
-resource alertActionGroup 'Microsoft.Insights/actionGroups@2024-10-01-preview' = if (!empty(alertEmail)) {
+resource alertActionGroup 'Microsoft.Insights/actionGroups@2024-10-01-preview' = if (hasAlertRecipients) {
   name: '${prefix}-ag'
   location: 'global'
   properties: {
     groupShortName: take('${env}alerts', 12)
     enabled: true
-    emailReceivers: [
-      { name: 'ops', emailAddress: alertEmail, useCommonAlertSchema: true }
+    emailReceivers: [for (email, index) in alertRecipients: {
+      name: 'ops-${index + 1}'
+      emailAddress: email
+      useCommonAlertSchema: true
+    }
     ]
   }
 }
 
-resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(alertEmail)) {
+resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (hasAlertRecipients) {
   name: '${prefix}-http5xx-alert'
   location: 'global'
   properties: {
@@ -726,13 +738,42 @@ resource http5xxAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(
         }
       ]
     }
-    actions: !empty(alertEmail) ? [
+    actions: hasAlertRecipients ? [
       { actionGroupId: alertActionGroup.id }
     ] : []
   }
 }
 
-resource reviewWorkerHealthAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (!empty(alertEmail)) {
+resource portalHealthAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (hasAlertRecipients) {
+  name: '${prefix}-portal-health-alert'
+  location: 'global'
+  properties: {
+    severity: 1
+    enabled: true
+    scopes: [webapp.id]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          name: 'PortalHealthCheck'
+          metricName: 'HealthCheckStatus'
+          metricNamespace: 'Microsoft.Web/sites'
+          operator: 'LessThan'
+          threshold: 100
+          timeAggregation: 'Average'
+          criterionType: 'StaticThresholdCriterion'
+        }
+      ]
+    }
+    actions: [
+      { actionGroupId: alertActionGroup.id }
+    ]
+  }
+}
+
+resource reviewWorkerHealthAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (hasAlertRecipients) {
   name: '${prefix}-review-worker-health-alert'
   location: 'global'
   properties: {
@@ -761,7 +802,152 @@ resource reviewWorkerHealthAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = 
   }
 }
 
-resource reviewQueueAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(alertEmail)) {
+resource portalLivenessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasAlertRecipients) {
+  name: '${prefix}-portal-liveness-sg'
+  location: location
+  tags: {
+    'hidden-link:${appInsights.id}': 'Resource'
+  }
+  properties: {
+    SyntheticMonitorId: '${prefix}-portal-liveness-sg'
+    Name: 'Production portal liveness (Singapore)'
+    Description: 'Checks that the production web process is externally reachable from Singapore.'
+    Enabled: true
+    Frequency: 300
+    Timeout: 30
+    Kind: 'standard'
+    RetryEnabled: true
+    Locations: [
+      { Id: 'apac-sg-sin-azr' }
+    ]
+    Request: {
+      RequestUrl: 'https://${appName}.azurewebsites.net/health'
+      HttpVerb: 'GET'
+      FollowRedirects: true
+      ParseDependentRequests: false
+    }
+    ValidationRules: {
+      ExpectedHttpStatusCode: 200
+      SSLCheck: true
+      SSLCertRemainingLifetimeCheck: 7
+    }
+  }
+}
+
+resource portalReadinessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasAlertRecipients) {
+  name: '${prefix}-portal-readiness-sg'
+  location: location
+  tags: {
+    'hidden-link:${appInsights.id}': 'Resource'
+  }
+  properties: {
+    SyntheticMonitorId: '${prefix}-portal-readiness-sg'
+    Name: 'Production dependency readiness (Singapore)'
+    Description: 'Checks the production portal, PostgreSQL, and Redis path from Singapore.'
+    Enabled: true
+    Frequency: 300
+    Timeout: 30
+    Kind: 'standard'
+    RetryEnabled: true
+    Locations: [
+      { Id: 'apac-sg-sin-azr' }
+    ]
+    Request: {
+      RequestUrl: 'https://${appName}.azurewebsites.net/readiness'
+      HttpVerb: 'GET'
+      FollowRedirects: true
+      ParseDependentRequests: false
+    }
+    ValidationRules: {
+      ExpectedHttpStatusCode: 200
+      SSLCheck: true
+      SSLCertRemainingLifetimeCheck: 7
+    }
+  }
+}
+
+resource portalLivenessAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (hasAlertRecipients) {
+  name: '${prefix}-portal-liveness-alert'
+  location: 'global'
+  properties: {
+    description: 'The production website is not reachable from the Singapore availability probe.'
+    severity: 0
+    enabled: true
+    scopes: [appInsights.id, portalLivenessTest.id]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria'
+      webTestId: portalLivenessTest.id
+      componentId: appInsights.id
+      failedLocationCount: 1
+    }
+    autoMitigate: true
+    actions: [
+      { actionGroupId: alertActionGroup.id }
+    ]
+  }
+}
+
+resource portalReadinessAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (hasAlertRecipients) {
+  name: '${prefix}-portal-readiness-alert'
+  location: 'global'
+  properties: {
+    description: 'A production dependency is unavailable from the Singapore readiness probe.'
+    severity: 0
+    enabled: true
+    scopes: [appInsights.id, portalReadinessTest.id]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria'
+      webTestId: portalReadinessTest.id
+      componentId: appInsights.id
+      failedLocationCount: 1
+    }
+    autoMitigate: true
+    actions: [
+      { actionGroupId: alertActionGroup.id }
+    ]
+  }
+}
+
+resource resourceHealthAlert 'Microsoft.Insights/activityLogAlerts@2020-10-01' = if (hasAlertRecipients) {
+  name: '${prefix}-resource-health-alert'
+  location: 'global'
+  properties: {
+    description: 'An Azure resource in the Singapore production resource group became degraded or unavailable.'
+    enabled: true
+    scopes: [resourceGroup().id]
+    condition: {
+      allOf: [
+        {
+          field: 'category'
+          equals: 'ResourceHealth'
+        }
+        {
+          anyOf: [
+            {
+              field: 'properties.currentHealthStatus'
+              equals: 'Degraded'
+            }
+            {
+              field: 'properties.currentHealthStatus'
+              equals: 'Unavailable'
+            }
+          ]
+        }
+      ]
+    }
+    actions: {
+      actionGroups: [
+        { actionGroupId: alertActionGroup.id }
+      ]
+    }
+  }
+}
+
+resource reviewQueueAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (hasAlertRecipients) {
   name: '${prefix}-review-queue-alert'
   location: location
   properties: {
@@ -795,7 +981,7 @@ resource reviewQueueAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = 
   }
 }
 
-resource reviewFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!empty(alertEmail)) {
+resource reviewFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (hasAlertRecipients) {
   name: '${prefix}-review-failure-alert'
   location: location
   properties: {
