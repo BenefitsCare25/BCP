@@ -140,7 +140,7 @@ param enableVnetIntegration bool = true
 @description('Primary notification email for production alerts (optional).')
 param alertEmail string = ''
 
-@description('Additional notification emails. Production keeps the existing operations recipient and adds named responders here.')
+@description('Additional notification emails. Production declares its named responders here to avoid duplicate delivery through forwarding aliases.')
 param additionalAlertEmails array = []
 
 @description('Portal mail delivery mode. Keep disabled until a verified STARTTLS SMTP sender is configured.')

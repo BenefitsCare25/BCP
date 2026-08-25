@@ -12,7 +12,7 @@ The approved recovery was a latest-point-in-time restore to `inspro-prod-pg-reco
 - Location: Southeast Asia, availability zone 1.
 - SKU: `Standard_B2s`, Burstable; 64 GiB storage.
 - Backup retention: 35 days; geo-redundant backup disabled.
-- Source preserved: `inspro-prod-pg` in availability zone 2.
+- Source retirement approved: `inspro-prod-pg` in availability zone 2 is no longer used by the API or worker, but its deletion is pending because Azure PostgreSQL has not detached the failed old private endpoint `inspro-prod-pg-pe`.
 - Restored server reached `Ready`; `is_db_alive` reported `1`.
 - Private endpoint `inspro-prod-pg-recovery-20260825-pe` was approved and registered as `10.20.2.7` in the Singapore VNet private DNS zone.
 - The claim-review worker returned `200 /readyz` against the restored database before API cutover.
@@ -20,7 +20,9 @@ The approved recovery was a latest-point-in-time restore to `inspro-prod-pg-reco
 - The API returned `200 /readiness` after cutover with PostgreSQL and Redis both healthy.
 - The `Standard_D2ds_v5` and zone-redundant HA upgrade was explicitly deferred. The single-server infrastructure-failure risk remains accepted until that decision changes.
 
-Do not delete the source server until the recovered production server has remained stable for at least 48–72 hours, recent transactions have been reconciled, and deletion receives explicit approval.
+Source deletion received explicit approval on 2026-08-25 after the recovered production path, Key Vault reference, private endpoint, probes and database connectivity were verified. Azure then blocked deletion with `PrivateEndpointServerWithActiveConnectionCannotBeDropped`, while repeated old-endpoint detach operations returned PostgreSQL resource-provider `InternalServerError` tracking IDs including `2bc0d40a-5b7e-4ffd-a3b5-b9aa368b4d3b`, `1e49ce36-df57-49cf-9429-b91afb450896` and `e8865d9f-009e-4fa3-9da0-3c965ac82e15`. The old server continues to incur charges until Microsoft clears that stale connection. Do not delete or modify `inspro-prod-pg-recovery-20260825` or `inspro-prod-pg-recovery-20260825-pe` while resolving this cleanup.
+
+After Microsoft clears the stale old connection, verify the exact resource IDs again, delete `inspro-prod-pg-pe`, delete `inspro-prod-pg`, and rerun the production health, readiness, worker, DNS, Key Vault and Singapore synthetic checks. Azure documents that backups for a deleted Flexible Server can remain available for five days, but restore is not guaranteed; the recovered server's independent 35-day automatic backup chain remains the production recovery path.
 
 ## Purpose and service objectives
 
@@ -51,7 +53,7 @@ The repository currently defines:
 - Private endpoints for PostgreSQL, Redis and Blob Storage; App Service VNet integration.
 - Key Vault soft delete and purge protection, managed identities, diagnostics and bounded database connection/pool timeouts.
 - Separate `/health` liveness and `/readiness` dependency probes.
-- Singapore synthetic probes and alerts to the configured operations recipient and `huien@inspro.com.sg`.
+- Singapore synthetic probes and alerts sent directly to `huien@inspro.com.sg`. Do not also route them through an email alias that forwards to the same address, because that produces duplicate incident notifications.
 
 The largest remaining resilience gaps are PostgreSQL HA being disabled, a single App Service Plan instance, in-place releases without deployment slots, and no independently administered immutable PostgreSQL backup vault or rehearsed clean-room restore.
 
@@ -185,7 +187,7 @@ This provides continuity of communication, not full zero-downtime transaction pr
 
 ### 7. Alert routing
 
-The existing Azure Monitor action group must continue emailing `huien@inspro.com.sg`. Add a second independent channel such as SMS, Teams or an on-call service, because ransomware can disrupt corporate email.
+The Azure Monitor action group must email `huien@inspro.com.sg` once per alert-state notification. Do not add a forwarding alias that also delivers to this address. Add a genuinely independent second channel such as SMS, Teams or an on-call service, because ransomware can disrupt corporate email.
 
 Severity-0 alerts should include:
 

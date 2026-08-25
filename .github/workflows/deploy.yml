@@ -420,8 +420,7 @@ jobs:
               smtpHost="${{ secrets.SMTP_HOST }}" \
               smtpUser="${{ secrets.SMTP_USER }}" \
               smtpFrom="${{ secrets.SMTP_FROM }}" \
-              smtpPassword="${{ secrets.SMTP_PASSWORD }}" \
-              alertEmail="${{ secrets.ALERT_EMAIL }}"
+              smtpPassword="${{ secrets.SMTP_PASSWORD }}"
 
       # Applying the template PUTs `Microsoft.Web/sites`, which restarts the app.
       # `Deploy image` below then issues a SECOND restart moments later, and
