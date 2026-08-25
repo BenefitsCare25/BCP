@@ -20,7 +20,7 @@ env:
   PROD_RG: rg-inspro-prod
   PROD_APP: inspro-portal
   PROD_WORKER: inspro-portal-review-worker
-  PROD_PG: inspro-prod-pg
+  PROD_PG: inspro-prod-pg-recovery-20260825
 
 # There is deliberately no staging environment — prod is the only deployment
 # target. That makes CI and static validation the gates before a release reaches
@@ -517,7 +517,7 @@ jobs:
         if: steps.pending.outputs.migrations == 'true'
         working-directory: backend
         env:
-          INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@inspro-prod-pg.postgres.database.azure.com:5432/inspro?sslmode=require
+          INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@${{ env.PROD_PG }}.postgres.database.azure.com:5432/inspro?sslmode=require
         run: |
           uv sync --frozen
           uv run alembic upgrade head

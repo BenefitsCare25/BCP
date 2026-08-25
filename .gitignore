@@ -74,3 +74,4 @@ backend/var/
 # only, deliberately not in the repo. Files stay in the working tree; they are
 # just never tracked. (CLAUDE.md is already excluded by the global gitignore.)
 *.md
+!docs/PRODUCTION_RESILIENCE_RUNBOOK.md

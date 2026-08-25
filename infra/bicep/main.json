@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "9600533288201002563"
+      "templateHash": "17283496659310284533"
     }
   },
   "parameters": {
@@ -36,6 +36,13 @@
       "type": "string",
       "metadata": {
         "description": "Postgres SKU."
+      }
+    },
+    "postgresServerName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Postgres server resource name. Leave empty for inspro-<env>-pg; production can override this after a PITR cutover without recreating the recovered server."
       }
     },
     "postgresTier": {
@@ -239,7 +246,14 @@
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Notification email for HTTP 5xx alerts (optional)."
+        "description": "Primary notification email for production alerts (optional)."
+      }
+    },
+    "additionalAlertEmails": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Additional notification emails. Production keeps the existing operations recipient and adds named responders here."
       }
     },
     "mailMode": {
@@ -294,7 +308,10 @@
     "prefix": "[format('inspro-{0}', parameters('env'))]",
     "isProd": "[equals(parameters('env'), 'prod')]",
     "appName": "[if(empty(parameters('siteName')), format('{0}-api', variables('prefix')), parameters('siteName'))]",
+    "effectivePostgresName": "[if(empty(parameters('postgresServerName')), format('{0}-pg', variables('prefix')), parameters('postgresServerName'))]",
     "acrName": "[split(parameters('acrLoginServer'), '.')[0]]",
+    "alertRecipients": "[concat(if(empty(parameters('alertEmail')), createArray(), createArray(parameters('alertEmail'))), parameters('additionalAlertEmails'))]",
+    "hasAlertRecipients": "[greater(length(variables('alertRecipients')), 0)]",
     "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
     "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
     "redisAppSettings": "[if(parameters('deployRedis'), createArray(createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=redis-url)', format('{0}-kv', variables('prefix'))))), createArray())]"
@@ -346,7 +363,7 @@
     {
       "type": "Microsoft.DBforPostgreSQL/flexibleServers",
       "apiVersion": "2024-08-01",
-      "name": "[format('{0}-pg', variables('prefix'))]",
+      "name": "[variables('effectivePostgresName')]",
       "location": "[parameters('location')]",
       "sku": {
         "name": "[parameters('postgresSku')]",
@@ -372,25 +389,25 @@
     {
       "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
       "apiVersion": "2024-08-01",
-      "name": "[format('{0}/{1}', format('{0}-pg', variables('prefix')), 'inspro')]",
+      "name": "[format('{0}/{1}', variables('effectivePostgresName'), 'inspro')]",
       "properties": {
         "charset": "UTF8",
         "collation": "en_US.UTF8"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName'))]"
       ]
     },
     {
       "type": "Microsoft.DBforPostgreSQL/flexibleServers/configurations",
       "apiVersion": "2024-08-01",
-      "name": "[format('{0}/{1}', format('{0}-pg', variables('prefix')), 'azure.extensions')]",
+      "name": "[format('{0}/{1}', variables('effectivePostgresName'), 'azure.extensions')]",
       "properties": {
         "source": "user-override",
         "value": "btree_gist"
       },
       "dependsOn": [
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName'))]"
       ]
     },
     {
@@ -444,11 +461,11 @@
       "apiVersion": "2024-04-01-preview",
       "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'database-url')]",
       "properties": {
-        "value": "[format('postgresql+psycopg://{0}:{1}@{2}:5432/inspro?sslmode=require', parameters('postgresAdminUser'), parameters('postgresAdminPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix'))), '2024-08-01').fullyQualifiedDomainName)]"
+        "value": "[format('postgresql+psycopg://{0}:{1}@{2}:5432/inspro?sslmode=require', parameters('postgresAdminUser'), parameters('postgresAdminPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName')), '2024-08-01').fullyQualifiedDomainName)]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName'))]"
       ]
     },
     {
@@ -576,7 +593,7 @@
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
         "httpsOnly": true,
         "virtualNetworkSubnetId": "[if(parameters('enableVnetIntegration'), reference(resourceId('Microsoft.Resources/deployments', format('private-networking-{0}', parameters('env'))), '2025-04-01').outputs.appSubnetId.value, null())]",
-        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/readiness', 'appSettings', concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('{0}{1}/discovery/v2.0/keys', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(and(equals(parameters('mailMode'), 'smtp'), not(empty(parameters('smtpPassword')))), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'WEB_CONCURRENCY', 'value', string(parameters('webConcurrency'))), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('dbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('dbMaxOverflow'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix')))))), createObject('alwaysOn', variables('isProd')))]"
+        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('{0}{1}/discovery/v2.0/keys', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_DB_CONNECT_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_DB_POOL_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(and(equals(parameters('mailMode'), 'smtp'), not(empty(parameters('smtpPassword')))), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'WEB_CONCURRENCY', 'value', string(parameters('webConcurrency'))), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('dbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('dbMaxOverflow'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix')))))), createObject('alwaysOn', variables('isProd')))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
@@ -613,7 +630,7 @@
           "http20Enabled": true,
           "healthCheckPath": "/readyz",
           "alwaysOn": true,
-          "appSettings": "[concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('{0}{1}/discovery/v2.0/keys', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(and(equals(parameters('mailMode'), 'smtp'), not(empty(parameters('smtpPassword')))), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8081'), createObject('name', 'PORT', 'value', '8081'), createObject('name', 'WEB_CONCURRENCY', 'value', '1'), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('reviewWorkerDbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('reviewWorkerDbMaxOverflow'))), createObject('name', 'INSPRO_REVIEW_WORKER_CONCURRENCY', 'value', string(parameters('reviewWorkerConcurrency'))), createObject('name', 'INSPRO_REVIEW_MAX_CONCURRENT_PER_CLIENT', 'value', string(parameters('reviewWorkerMaxConcurrentPerClient'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-claim-review-worker', variables('prefix')))))]"
+          "appSettings": "[concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('{0}{1}/discovery/v2.0/keys', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'database-url')), createObject('name', 'INSPRO_DB_CONNECT_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_DB_POOL_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'portal-jwt-secret')), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), 'ai-key-encryption-key')), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(and(equals(parameters('mailMode'), 'smtp'), not(empty(parameters('smtpPassword')))), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8081'), createObject('name', 'PORT', 'value', '8081'), createObject('name', 'WEB_CONCURRENCY', 'value', '1'), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('reviewWorkerDbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('reviewWorkerDbMaxOverflow'))), createObject('name', 'INSPRO_REVIEW_WORKER_CONCURRENCY', 'value', string(parameters('reviewWorkerConcurrency'))), createObject('name', 'INSPRO_REVIEW_MAX_CONCURRENT_PER_CLIENT', 'value', string(parameters('reviewWorkerMaxConcurrentPerClient'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-claim-review-worker', variables('prefix')))))]"
         }
       },
       "dependsOn": [
@@ -742,7 +759,7 @@
     {
       "type": "Microsoft.Insights/diagnosticSettings",
       "apiVersion": "2021-05-01-preview",
-      "scope": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]",
+      "scope": "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName'))]",
       "name": "to-law",
       "properties": {
         "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
@@ -761,7 +778,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]",
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]"
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName'))]"
       ]
     },
     {
@@ -790,25 +807,29 @@
       ]
     },
     {
-      "condition": "[not(empty(parameters('alertEmail')))]",
+      "condition": "[variables('hasAlertRecipients')]",
       "type": "Microsoft.Insights/actionGroups",
       "apiVersion": "2024-10-01-preview",
       "name": "[format('{0}-ag', variables('prefix'))]",
       "location": "global",
       "properties": {
-        "groupShortName": "[take(format('{0}alerts', parameters('env')), 12)]",
-        "enabled": true,
-        "emailReceivers": [
+        "copy": [
           {
-            "name": "ops",
-            "emailAddress": "[parameters('alertEmail')]",
-            "useCommonAlertSchema": true
+            "name": "emailReceivers",
+            "count": "[length(variables('alertRecipients'))]",
+            "input": {
+              "name": "[format('ops-{0}', add(copyIndex('emailReceivers'), 1))]",
+              "emailAddress": "[variables('alertRecipients')[copyIndex('emailReceivers')]]",
+              "useCommonAlertSchema": true
+            }
           }
-        ]
+        ],
+        "groupShortName": "[take(format('{0}alerts', parameters('env')), 12)]",
+        "enabled": true
       }
     },
     {
-      "condition": "[not(empty(parameters('alertEmail')))]",
+      "condition": "[variables('hasAlertRecipients')]",
       "type": "Microsoft.Insights/metricAlerts",
       "apiVersion": "2018-03-01",
       "name": "[format('{0}-http5xx-alert', variables('prefix'))]",
@@ -835,7 +856,7 @@
             }
           ]
         },
-        "actions": "[if(not(empty(parameters('alertEmail'))), createArray(createObject('actionGroupId', resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix'))))), createArray())]"
+        "actions": "[if(variables('hasAlertRecipients'), createArray(createObject('actionGroupId', resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix'))))), createArray())]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
@@ -843,7 +864,46 @@
       ]
     },
     {
-      "condition": "[not(empty(parameters('alertEmail')))]",
+      "condition": "[variables('hasAlertRecipients')]",
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-portal-health-alert', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "severity": 1,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+        ],
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "PortalHealthCheck",
+              "metricName": "HealthCheckStatus",
+              "metricNamespace": "Microsoft.Web/sites",
+              "operator": "LessThan",
+              "threshold": 100,
+              "timeAggregation": "Average",
+              "criterionType": "StaticThresholdCriterion"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Web/sites', variables('appName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('hasAlertRecipients')]",
       "type": "Microsoft.Insights/metricAlerts",
       "apiVersion": "2018-03-01",
       "name": "[format('{0}-review-worker-health-alert', variables('prefix'))]",
@@ -882,7 +942,199 @@
       ]
     },
     {
-      "condition": "[not(empty(parameters('alertEmail')))]",
+      "condition": "[variables('hasAlertRecipients')]",
+      "type": "Microsoft.Insights/webtests",
+      "apiVersion": "2022-06-15",
+      "name": "[format('{0}-portal-liveness-sg', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "[format('hidden-link:{0}', resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))))]": "Resource"
+      },
+      "properties": {
+        "SyntheticMonitorId": "[format('{0}-portal-liveness-sg', variables('prefix'))]",
+        "Name": "Production portal liveness (Singapore)",
+        "Description": "Checks that the production web process is externally reachable from Singapore.",
+        "Enabled": true,
+        "Frequency": 300,
+        "Timeout": 30,
+        "Kind": "standard",
+        "RetryEnabled": true,
+        "Locations": [
+          {
+            "Id": "apac-sg-sin-azr"
+          }
+        ],
+        "Request": {
+          "RequestUrl": "[format('https://{0}.azurewebsites.net/health', variables('appName'))]",
+          "HttpVerb": "GET",
+          "FollowRedirects": true,
+          "ParseDependentRequests": false
+        },
+        "ValidationRules": {
+          "ExpectedHttpStatusCode": 200,
+          "SSLCheck": true,
+          "SSLCertRemainingLifetimeCheck": 7
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('hasAlertRecipients')]",
+      "type": "Microsoft.Insights/webtests",
+      "apiVersion": "2022-06-15",
+      "name": "[format('{0}-portal-readiness-sg', variables('prefix'))]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "[format('hidden-link:{0}', resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))))]": "Resource"
+      },
+      "properties": {
+        "SyntheticMonitorId": "[format('{0}-portal-readiness-sg', variables('prefix'))]",
+        "Name": "Production dependency readiness (Singapore)",
+        "Description": "Checks the production portal, PostgreSQL, and Redis path from Singapore.",
+        "Enabled": true,
+        "Frequency": 300,
+        "Timeout": 30,
+        "Kind": "standard",
+        "RetryEnabled": true,
+        "Locations": [
+          {
+            "Id": "apac-sg-sin-azr"
+          }
+        ],
+        "Request": {
+          "RequestUrl": "[format('https://{0}.azurewebsites.net/readiness', variables('appName'))]",
+          "HttpVerb": "GET",
+          "FollowRedirects": true,
+          "ParseDependentRequests": false
+        },
+        "ValidationRules": {
+          "ExpectedHttpStatusCode": 200,
+          "SSLCheck": true,
+          "SSLCertRemainingLifetimeCheck": 7
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('hasAlertRecipients')]",
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-portal-liveness-alert', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "description": "The production website is not reachable from the Singapore availability probe.",
+        "severity": 0,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+          "[resourceId('Microsoft.Insights/webtests', format('{0}-portal-liveness-sg', variables('prefix')))]"
+        ],
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria",
+          "webTestId": "[resourceId('Microsoft.Insights/webtests', format('{0}-portal-liveness-sg', variables('prefix')))]",
+          "componentId": "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+          "failedLocationCount": 1
+        },
+        "autoMitigate": true,
+        "actions": [
+          {
+            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+        "[resourceId('Microsoft.Insights/webtests', format('{0}-portal-liveness-sg', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('hasAlertRecipients')]",
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-portal-readiness-alert', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "description": "A production dependency is unavailable from the Singapore readiness probe.",
+        "severity": 0,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+          "[resourceId('Microsoft.Insights/webtests', format('{0}-portal-readiness-sg', variables('prefix')))]"
+        ],
+        "evaluationFrequency": "PT1M",
+        "windowSize": "PT5M",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.WebtestLocationAvailabilityCriteria",
+          "webTestId": "[resourceId('Microsoft.Insights/webtests', format('{0}-portal-readiness-sg', variables('prefix')))]",
+          "componentId": "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+          "failedLocationCount": 1
+        },
+        "autoMitigate": true,
+        "actions": [
+          {
+            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]",
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+        "[resourceId('Microsoft.Insights/webtests', format('{0}-portal-readiness-sg', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('hasAlertRecipients')]",
+      "type": "Microsoft.Insights/activityLogAlerts",
+      "apiVersion": "2020-10-01",
+      "name": "[format('{0}-resource-health-alert', variables('prefix'))]",
+      "location": "global",
+      "properties": {
+        "description": "An Azure resource in the Singapore production resource group became degraded or unavailable.",
+        "enabled": true,
+        "scopes": [
+          "[resourceGroup().id]"
+        ],
+        "condition": {
+          "allOf": [
+            {
+              "field": "category",
+              "equals": "ResourceHealth"
+            },
+            {
+              "anyOf": [
+                {
+                  "field": "properties.currentHealthStatus",
+                  "equals": "Degraded"
+                },
+                {
+                  "field": "properties.currentHealthStatus",
+                  "equals": "Unavailable"
+                }
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            {
+              "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-ag', variables('prefix')))]"
+      ]
+    },
+    {
+      "condition": "[variables('hasAlertRecipients')]",
       "type": "Microsoft.Insights/scheduledQueryRules",
       "apiVersion": "2023-12-01",
       "name": "[format('{0}-review-queue-alert', variables('prefix'))]",
@@ -923,7 +1175,7 @@
       ]
     },
     {
-      "condition": "[not(empty(parameters('alertEmail')))]",
+      "condition": "[variables('hasAlertRecipients')]",
       "type": "Microsoft.Insights/scheduledQueryRules",
       "apiVersion": "2023-12-01",
       "name": "[format('{0}-review-failure-alert', variables('prefix'))]",
@@ -980,7 +1232,10 @@
             "value": "[parameters('location')]"
           },
           "postgresName": {
-            "value": "[format('{0}-pg', variables('prefix'))]"
+            "value": "[variables('effectivePostgresName')]"
+          },
+          "postgresPrivateEndpointName": {
+            "value": "[format('{0}-pe', variables('effectivePostgresName'))]"
           },
           "redisName": {
             "value": "[format('{0}-redis', variables('prefix'))]"
@@ -999,7 +1254,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "9004952527987163788"
+              "templateHash": "13496604220676494634"
             }
           },
           "parameters": {
@@ -1019,6 +1274,12 @@
               "type": "string",
               "metadata": {
                 "description": "Existing Postgres Flexible Server to place behind a private endpoint."
+              }
+            },
+            "postgresPrivateEndpointName": {
+              "type": "string",
+              "metadata": {
+                "description": "Private endpoint resource name for the selected PostgreSQL server. A PITR cutover uses a new endpoint so the source endpoint remains available for rollback."
               }
             },
             "redisName": {
@@ -1163,7 +1424,7 @@
             {
               "type": "Microsoft.Network/privateEndpoints",
               "apiVersion": "2024-05-01",
-              "name": "[format('{0}-pg-pe', parameters('prefix'))]",
+              "name": "[parameters('postgresPrivateEndpointName')]",
               "location": "[parameters('location')]",
               "properties": {
                 "subnet": {
@@ -1239,7 +1500,7 @@
             {
               "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
               "apiVersion": "2024-05-01",
-              "name": "[format('{0}/{1}', format('{0}-pg-pe', parameters('prefix')), 'default')]",
+              "name": "[format('{0}/{1}', parameters('postgresPrivateEndpointName'), 'default')]",
               "properties": {
                 "privateDnsZoneConfigs": [
                   {
@@ -1251,7 +1512,7 @@
                 ]
               },
               "dependsOn": [
-                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pg-pe', parameters('prefix')))]",
+                "[resourceId('Microsoft.Network/privateEndpoints', parameters('postgresPrivateEndpointName'))]",
                 "[resourceId('Microsoft.Network/privateDnsZones', variables('privateDnsZoneName'))]"
               ]
             },
@@ -1311,7 +1572,7 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix')))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName'))]",
         "[resourceId('Microsoft.Cache/redisEnterprise', format('{0}-redis', variables('prefix')))]",
         "[resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', ''))]"
       ]
@@ -1474,7 +1735,7 @@
     },
     "postgresFqdn": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('{0}-pg', variables('prefix'))), '2024-08-01').fullyQualifiedDomainName]"
+      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName')), '2024-08-01').fullyQualifiedDomainName]"
     },
     "redisHost": {
       "type": "string",

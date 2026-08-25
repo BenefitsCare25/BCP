@@ -3,11 +3,13 @@
   "contentVersion": "1.0.0.0",
   "_comment": "Secrets (postgresAdminPassword, containerImage, entraTenantId, entraClientId, acrLoginServer, portalJwtSecret, aiKeyEncryptionKey) are NOT in this file — CI passes them via --parameters overrides sourced from GitHub Secrets. See .github/workflows/deploy.yml. AI provider is per-tenant BYOK (frontend), not a deployment secret.",
   "_sizing": "B2 (2 vCPU/3.5GB) + Postgres B2s (2 vCore/4GB) + 64GiB (240 IOPS) + Azure Managed Redis Balanced_B0. The API uses at most 2 x (3+2) = 10 DB connections. The I/O-bound review worker runs 4 concurrent claims, capped at 2 per company, with an 8+4 DB pool. Combined ceiling: 22 connections. Keep one App Service Plan instance; scale the worker design and provider quota before scaling out the shared plan.",
+  "_recovery": "Production uses the 2026-08-25 Southeast Asia PITR server. Keep this name until a separately approved migration; changing it would redirect Key Vault, private networking and future deployments.",
   "parameters": {
     "env": { "value": "prod" },
     "location": { "value": "southeastasia" },
     "siteName": { "value": "inspro-portal" },
     "appServicePlanSku": { "value": "B2" },
+    "postgresServerName": { "value": "inspro-prod-pg-recovery-20260825" },
     "postgresSku": { "value": "Standard_B2s" },
     "postgresTier": { "value": "Burstable" },
     "postgresAdminUser": { "value": "insproadmin" },

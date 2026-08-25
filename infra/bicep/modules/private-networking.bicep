@@ -33,6 +33,9 @@ param location string
 @description('Existing Postgres Flexible Server to place behind a private endpoint.')
 param postgresName string
 
+@description('Private endpoint resource name for the selected PostgreSQL server. A PITR cutover uses a new endpoint so the source endpoint remains available for rollback.')
+param postgresPrivateEndpointName string
+
 param redisName string
 param deployRedis bool
 param storageName string
@@ -161,7 +164,7 @@ resource blobDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@
 }
 
 resource postgresPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' = {
-  name: '${prefix}-pg-pe'
+  name: postgresPrivateEndpointName
   location: location
   properties: {
     subnet: {

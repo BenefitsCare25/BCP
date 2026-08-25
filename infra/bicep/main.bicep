@@ -34,6 +34,9 @@ param appServicePlanSku string
 @description('Postgres SKU.')
 param postgresSku string
 
+@description('Postgres server resource name. Leave empty for inspro-<env>-pg; production can override this after a PITR cutover without recreating the recovered server.')
+param postgresServerName string = ''
+
 @description('Postgres tier.')
 param postgresTier string
 
@@ -163,6 +166,7 @@ param smtpPassword string = ''
 var prefix = 'inspro-${env}'
 var isProd = env == 'prod'
 var appName = empty(siteName) ? '${prefix}-api' : siteName
+var effectivePostgresName = empty(postgresServerName) ? '${prefix}-pg' : postgresServerName
 var acrName = split(acrLoginServer, '.')[0]
 var alertRecipients = concat(empty(alertEmail) ? [] : [alertEmail], additionalAlertEmails)
 var hasAlertRecipients = length(alertRecipients) > 0
@@ -214,7 +218,7 @@ resource kv 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
 
 // ── Postgres ─────────────────────────────────────────────────────────────────
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
-  name: '${prefix}-pg'
+  name: effectivePostgresName
   location: location
   sku: {
     name: postgresSku
@@ -286,6 +290,7 @@ module privateNetworking 'modules/private-networking.bicep' = {
     prefix: prefix
     location: location
     postgresName: postgres.name
+    postgresPrivateEndpointName: '${postgres.name}-pe'
     redisName: '${prefix}-redis'
     deployRedis: deployRedis
     storageName: replace('${prefix}docs', '-', '')
