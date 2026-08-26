@@ -799,16 +799,17 @@ function QueueTab({
             <>
               <div
                 className={cn(
-                  "flex min-h-0 flex-1 flex-col overflow-y-auto md:overflow-hidden",
+                  "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto md:overflow-hidden",
                   selectedDocuments.length > 0 &&
                     "md:grid md:grid-cols-[minmax(21rem,0.78fr)_minmax(26rem,1.22fr)]",
                 )}
               >
                 <div
                   className={cn(
-                    "space-y-5 px-5 py-4 md:overflow-y-auto sm:px-6",
+                    "min-w-0 space-y-5 overflow-x-hidden px-5 py-4 md:overflow-y-auto sm:px-6",
                     selectedDocuments.length === 0 && "mx-auto w-full max-w-4xl",
                   )}
+                  data-testid="claim-form-pane"
                 >
                   <ClaimFormDetails
                     key={selected.id}
@@ -917,7 +918,10 @@ function QueueTab({
                 </DetailSection>
                 </div>
                 {selectedDocuments.length > 0 && (
-                  <div className="flex min-h-0 border-t border-border bg-card md:border-l md:border-t-0">
+                  <div
+                    className="flex min-h-0 min-w-0 border-t border-border bg-card md:border-l md:border-t-0"
+                    data-testid="claim-document-pane"
+                  >
                     <ClaimDocumentViewer
                       claimId={selected.id}
                       documents={selectedDocuments}

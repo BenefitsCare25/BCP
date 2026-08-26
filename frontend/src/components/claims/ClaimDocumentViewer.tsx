@@ -94,7 +94,7 @@ export function ClaimDocumentViewer({
   }
 
   return (
-    <section id="claim-documents" className="flex min-h-0 flex-1 flex-col" aria-label="Claim documents">
+    <section id="claim-documents" className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label="Claim documents">
       <div className="shrink-0 border-b border-border px-4 py-3">
         <div className="flex min-h-10 items-center gap-3">
           <SectionLabel as="h3" className="shrink-0">
@@ -156,7 +156,7 @@ export function ClaimDocumentViewer({
         id="claim-document-preview"
         role="tabpanel"
         aria-label={selected ? `Preview of ${selected.file_name}` : "Document preview"}
-        className="relative flex min-h-96 flex-1 overflow-hidden bg-muted/30"
+        className="relative flex min-h-96 min-w-0 flex-1 overflow-hidden bg-muted/30"
       >
         {loading && (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -202,7 +202,7 @@ export function ClaimDocumentViewer({
             <iframe
               src={`${preview.url}#view=Fit&toolbar=1&navpanes=0`}
               title={`Preview of ${selected.file_name}`}
-              className="min-h-96 w-full border-0 bg-card"
+              className="min-h-96 min-w-0 w-full border-0 bg-card"
             />
             <Button
               ref={fullScreenTriggerRef}

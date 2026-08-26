@@ -313,6 +313,9 @@ test("Claims Review stays within the viewport", async ({ page }, testInfo) => {
 test("claim workspace keeps form details readable and documents in context", async ({
   page,
 }, testInfo) => {
+  if (testInfo.project.name === "desktop-chromium") {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+  }
   const runtimeErrors = monitorRuntime(page);
   const document = {
     id: "mock-document",
@@ -532,6 +535,14 @@ test("claim workspace keeps form details readable and documents in context", asy
   if (testInfo.project.name === "desktop-chromium") {
     const headerBox = await workspace.getByTestId("claim-workspace-header").boundingBox();
     expect(headerBox?.height).toBeLessThan(120);
+    const workspaceBox = await workspace.boundingBox();
+    const documentPaneBox = await workspace.getByTestId("claim-document-pane").boundingBox();
+    if (!workspaceBox || !documentPaneBox) {
+      throw new Error("Claim workspace panes have no layout box");
+    }
+    expect(documentPaneBox.x + documentPaneBox.width).toBeLessThanOrEqual(
+      workspaceBox.x + workspaceBox.width + 1,
+    );
   }
   await expect(
     workspace.getByText("Admission date", { exact: true }).locator(".."),
@@ -618,6 +629,13 @@ test("claim workspace keeps form details readable and documents in context", asy
   await expect(workspace.getByText("Assessment", { exact: true })).toHaveCount(0);
 
   await workspace.getByRole("button", { name: "Edit", exact: true }).click();
+  const formPane = workspace.getByTestId("claim-form-pane");
+  await expect
+    .poll(() =>
+      formPane.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )
+    .toBeLessThanOrEqual(1);
+  await screenshot(page, testInfo, "claim-review-workspace-edit");
   await expect(workspace.getByLabel("Admission date")).toHaveValue("2026-06-26");
   await expect(workspace.getByLabel("Discharge date")).toHaveValue("2026-06-29");
   await workspace.getByLabel("Admin remark").fill("Checked against invoice");

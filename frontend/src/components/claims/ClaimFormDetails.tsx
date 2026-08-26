@@ -165,10 +165,19 @@ function FormField({ label, htmlFor, hint, children }: {
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="min-w-0 space-y-1.5">
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
+function EditSummary({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-1.5 py-2">
+      <SectionLabel as="dt">{label}</SectionLabel>
+      <dd className="break-words text-sm leading-5 text-foreground">{children}</dd>
     </div>
   );
 }
@@ -526,9 +535,9 @@ export function ClaimFormDetails({
             if (canSave && !pending) void save();
           }}
         >
-          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 border-b border-border pb-4 sm:grid-cols-2">
-            <Detail label="Member">{memberLabel(viewClaim)}</Detail>
-            <Detail label="Coverage">{coverageLabel(viewClaim)}</Detail>
+          <dl className="grid min-w-0 grid-cols-1 gap-x-6 border-y border-border sm:grid-cols-2">
+            <EditSummary label="Member">{memberLabel(viewClaim)}</EditSummary>
+            <EditSummary label="Coverage">{coverageLabel(viewClaim)}</EditSummary>
           </dl>
 
           {movedUnderUs && (
