@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Download, FileText, Loader2, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Download, FileText, Loader2, Maximize2, RefreshCw } from "lucide-react";
 import {
   downloadClaimDocument,
   getClaimDocumentBlob,
@@ -7,6 +7,7 @@ import {
 } from "@/api/claims";
 import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/ui/section-label";
+import { ClaimDocumentLightbox } from "@/components/claims/ClaimDocumentLightbox";
 import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import { toast } from "sonner";
@@ -32,6 +33,8 @@ export function ClaimDocumentViewer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const [fullScreenOpen, setFullScreenOpen] = useState(false);
+  const fullScreenTriggerRef = useRef<HTMLButtonElement>(null);
 
   const selected = useMemo(
     () => documents.find((document) => document.id === selectedId) ?? documents[0],
@@ -50,6 +53,7 @@ export function ClaimDocumentViewer({
     let objectUrl: string | null = null;
     setPreview(null);
     setError(null);
+    setFullScreenOpen(false);
     if (!selected) {
       setLoading(false);
       return () => {
@@ -152,7 +156,7 @@ export function ClaimDocumentViewer({
         id="claim-document-preview"
         role="tabpanel"
         aria-label={selected ? `Preview of ${selected.file_name}` : "Document preview"}
-        className="relative flex min-h-96 flex-1 overflow-hidden bg-background"
+        className="relative flex min-h-96 flex-1 overflow-hidden bg-muted/30"
       >
         {loading && (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -172,24 +176,46 @@ export function ClaimDocumentViewer({
         )}
 
         {!loading && preview && selected && preview.mime.startsWith("image/") && (
-          <div className="flex min-h-96 w-full items-start justify-center overflow-auto p-4 sm:p-6">
+          <button
+            ref={fullScreenTriggerRef}
+            type="button"
+            className="absolute inset-0 flex cursor-zoom-in items-center justify-center overflow-hidden p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 sm:p-4"
+            aria-label={`Open ${selected.file_name} full screen`}
+            onClick={() => setFullScreenOpen(true)}
+          >
             <img
               src={preview.url}
               alt={`Preview of ${selected.file_name}`}
-              className="h-auto max-w-full bg-card object-contain shadow-lg"
+              className="h-full w-full object-contain"
             />
-          </div>
+            <span className="absolute bottom-3 right-3 inline-flex size-10 items-center justify-center rounded-md bg-foreground/85 text-card shadow-sm backdrop-blur-sm" aria-hidden>
+              <Maximize2 className="size-4" />
+            </span>
+          </button>
         )}
 
         {!loading &&
           preview &&
           selected &&
           preview.mime.toLowerCase().startsWith("application/pdf") && (
-          <iframe
-            src={`${preview.url}#view=FitH&toolbar=1&navpanes=0`}
-            title={`Preview of ${selected.file_name}`}
-            className="min-h-96 w-full border-0 bg-card"
-          />
+          <>
+            <iframe
+              src={`${preview.url}#view=Fit&toolbar=1&navpanes=0`}
+              title={`Preview of ${selected.file_name}`}
+              className="min-h-96 w-full border-0 bg-card"
+            />
+            <Button
+              ref={fullScreenTriggerRef}
+              type="button"
+              size="icon"
+              variant="secondary"
+              className="absolute bottom-3 right-3 z-10 size-10 bg-card/90 shadow-md backdrop-blur-sm"
+              aria-label={`Open ${selected.file_name} full screen`}
+              onClick={() => setFullScreenOpen(true)}
+            >
+              <Maximize2 className="size-4" aria-hidden />
+            </Button>
+          </>
         )}
 
         {!loading &&
@@ -206,6 +232,19 @@ export function ClaimDocumentViewer({
             </div>
           )}
       </div>
+
+      {preview && selected &&
+        (preview.mime.startsWith("image/") ||
+          preview.mime.toLowerCase().startsWith("application/pdf")) && (
+          <ClaimDocumentLightbox
+            fileName={selected.file_name}
+            mime={preview.mime}
+            onCloseAutoFocus={() => fullScreenTriggerRef.current?.focus()}
+            onOpenChange={setFullScreenOpen}
+            open={fullScreenOpen}
+            url={preview.url}
+          />
+        )}
     </section>
   );
 }

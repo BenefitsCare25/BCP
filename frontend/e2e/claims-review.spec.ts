@@ -539,15 +539,80 @@ test("claim workspace keeps form details readable and documents in context", asy
   await expect(workspace.getByText("2026-06-29", { exact: true })).toBeVisible();
   await expect(workspace.getByText("Taxable", { exact: true })).toHaveCount(0);
   await expect(workspace.getByText("CPF claimable", { exact: true })).toHaveCount(0);
+  const invoicePreview = workspace.getByRole("img", {
+    name: "Preview of hospital-invoice.png",
+  });
+  await expect(invoicePreview).toBeVisible();
+  await expect(invoicePreview).toHaveCSS("object-fit", "contain");
+
+  const openInvoice = workspace.getByRole("button", {
+    name: "Open hospital-invoice.png full screen",
+  });
+  await openInvoice.click();
+  const imageViewer = page.getByRole("dialog", {
+    name: "Full-screen preview of hospital-invoice.png",
+  });
+  await expect(imageViewer).toBeVisible();
   await expect(
-    workspace.getByRole("img", { name: "Preview of hospital-invoice.png" }),
+    imageViewer.getByText("Scroll to zoom · Drag to pan · Double-click to reset"),
   ).toBeVisible();
+
+  const interactivePreview = imageViewer.getByRole("region", {
+    name: "Interactive preview of hospital-invoice.png",
+  });
+  await interactivePreview.hover();
+  await page.mouse.wheel(0, -300);
+  await expect(interactivePreview).not.toHaveAttribute("data-zoom", "1.00");
+
+  const viewerImage = imageViewer.getByRole("img", {
+    name: "Preview of hospital-invoice.png",
+  });
+  const transformBeforePan = await viewerImage.evaluate((element) => element.style.transform);
+  const previewBox = await interactivePreview.boundingBox();
+  if (!previewBox) throw new Error("Full-screen document preview has no layout box");
+  await page.mouse.move(
+    previewBox.x + previewBox.width / 2,
+    previewBox.y + previewBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    previewBox.x + previewBox.width / 2 + 60,
+    previewBox.y + previewBox.height / 2 - 60,
+    { steps: 4 },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(() => viewerImage.evaluate((element) => element.style.transform))
+    .not.toBe(transformBeforePan);
+  await screenshot(page, testInfo, "claim-document-fullscreen-zoom");
+  await assertAccessible(page);
+
+  await interactivePreview.dblclick();
+  await expect(interactivePreview).toHaveAttribute("data-zoom", "1.00");
+  await imageViewer.getByRole("button", { name: "Close full-screen preview" }).click();
+  await expect(imageViewer).toBeHidden();
+  await expect(openInvoice).toBeFocused();
+
   await workspace.getByRole("tab", { name: "hospital-summary.png" }).click();
   await expect(
     workspace.getByRole("img", { name: "Preview of hospital-summary.png" }),
   ).toBeVisible();
   await workspace.getByRole("tab", { name: "hospital-bill.pdf" }).click();
-  await expect(workspace.getByTitle("Preview of hospital-bill.pdf")).toBeVisible();
+  const inlinePdf = workspace.getByTitle("Preview of hospital-bill.pdf");
+  await expect(inlinePdf).toBeVisible();
+  await expect(inlinePdf).toHaveAttribute("src", /#view=Fit&toolbar=1&navpanes=0$/);
+  await workspace
+    .getByRole("button", { name: "Open hospital-bill.pdf full screen" })
+    .click();
+  const pdfViewer = page.getByRole("dialog", {
+    name: "Full-screen preview of hospital-bill.pdf",
+  });
+  await expect(pdfViewer).toBeVisible();
+  await expect(pdfViewer.getByTitle("Full-screen preview of hospital-bill.pdf")).toHaveAttribute(
+    "src",
+    /#view=Fit&toolbar=1&navpanes=0$/,
+  );
+  await pdfViewer.getByRole("button", { name: "Close full-screen preview" }).click();
   await workspace.getByRole("tab", { name: "hospital-invoice.png" }).click();
   await expect(workspace.getByText("Correct the claim", { exact: true })).toHaveCount(0);
   await expect(workspace.getByText("Assessment", { exact: true })).toHaveCount(0);
