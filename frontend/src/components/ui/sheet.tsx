@@ -28,21 +28,23 @@ export const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     side?: "right" | "left";
+    variant?: "panel" | "workspace";
   }
->(({ className, side = "right", children, ...props }, ref) => (
+>(({ className, side = "right", variant = "panel", children, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed z-50 gap-4 bg-card shadow-2xl border-border",
+        "fixed z-50 flex flex-col bg-card shadow-2xl border-border",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "transition ease-in-out duration-300",
-        side === "right" &&
+        variant === "panel" && side === "right" &&
           "inset-y-0 right-0 h-full w-full sm:max-w-2xl border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
-        side === "left" &&
+        variant === "panel" && side === "left" &&
           "inset-y-0 left-0 h-full w-3/4 sm:max-w-sm border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left",
-        "flex flex-col",
+        variant === "workspace" &&
+          "inset-0 h-full w-full border data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 sm:inset-4 sm:h-auto sm:w-auto sm:rounded-xl",
         className,
       )}
       {...props}

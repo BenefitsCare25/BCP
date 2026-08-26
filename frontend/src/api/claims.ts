@@ -937,13 +937,22 @@ export async function downloadClaimDocument(
   claimId: string,
   doc: StoredDocumentMeta,
 ): Promise<void> {
-  const blob = await api.download(`/claims/${claimId}/documents/${doc.id}/download`);
+  const blob = await getClaimDocumentBlob(claimId, doc);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = doc.file_name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Fetch document bytes without forcing a browser download. Claim review uses
+ * this to keep the evidence visible beside the form and decision controls. */
+export function getClaimDocumentBlob(
+  claimId: string,
+  doc: StoredDocumentMeta,
+): Promise<Blob> {
+  return api.download(`/claims/${claimId}/documents/${doc.id}/download`);
 }
 
 /** Broker-configurable claim document-type registry (aliases + key fields).

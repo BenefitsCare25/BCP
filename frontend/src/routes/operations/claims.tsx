@@ -1,17 +1,14 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Copy, Download, Loader2, Plus, RefreshCw, Tag, X } from "lucide-react";
+import { Copy, FileText, Plus, RefreshCw, Tag, X } from "lucide-react";
 import {
-  DOC_TYPE_LABELS,
   RECEIVED_VIA_LABELS,
-  downloadClaimDocument,
   useBrokerClaimDetail,
   useBrokerClaims,
   useDecideClaim,
   useRecordClaimPayment,
   useSendToInsurer,
-  useRefreshClaimConversion,
   useRerunReview,
   useSetCaseType,
   type BrokerClaim,
@@ -19,7 +16,7 @@ import {
 } from "@/api/claims";
 import { ConflictDetailError } from "@/api/client";
 import { useMe } from "@/api/hooks";
-import { ConversionLine, policyAmount } from "@/components/claims/ConversionLine";
+import { policyAmount } from "@/components/claims/ConversionLine";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +34,6 @@ import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import {
   Sheet,
-  SheetBody,
   SheetContent,
   SheetFooter,
   SheetHeader,
@@ -67,8 +63,8 @@ import {
   useAwaitingReplyCount,
 } from "@/components/claims/ConversationQueue";
 import { ClaimReviewPanel } from "@/components/claims/ClaimReviewPanel";
-import { ClaimAmendPanel } from "@/components/claims/ClaimAmendPanel";
-import { ClaimAssessmentPanel } from "@/components/claims/ClaimAssessmentPanel";
+import { ClaimDocumentViewer } from "@/components/claims/ClaimDocumentViewer";
+import { ClaimFormDetails } from "@/components/claims/ClaimFormDetails";
 import {
   ClaimSettlementFacts,
   hasSettlement,
@@ -80,6 +76,7 @@ import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleS
 import { ImportRulesDialog } from "@/components/claims/review-rules/ImportRulesDialog";
 import { InfoHint } from "@/components/ui/tooltip";
 import { PageGuide } from "@/components/ui/page-guide";
+import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import { fmtDate } from "@/lib/format";
 import { toast } from "sonner";
@@ -266,7 +263,6 @@ function QueueTab({
   const sendToInsurer = useSendToInsurer();
   const recordPayment = useRecordClaimPayment();
   const rerun = useRerunReview();
-  const refreshFx = useRefreshClaimConversion();
   const setCaseTypeMutation = useSetCaseType();
   const { data, isLoading, isError, error, refetch } = useBrokerClaims(
     policyYearId ?? undefined,
@@ -285,7 +281,6 @@ function QueueTab({
   // Detail fetch rides alongside the list item for the fields the list omits
   // (the remaining benefit limit for this claim's bucket).
   const detail = useBrokerClaimDetail(selectedId);
-  const remainingLimit = detail.data?.remaining_limit ?? null;
 
   // Prefer the list row (already rendered, no wait), but FALL BACK to the
   // detail fetch: a deep-linked case — or one that just left the filtered list
@@ -297,6 +292,18 @@ function QueueTab({
     if (fromList) return fromList;
     return null;
   }, [data, selectedId, detail.data]);
+  const selectedDocuments = useMemo(() => {
+    if (!selected) return [];
+    if (
+      selected.referral_document &&
+      !selected.documents.some(
+        (document) => document.id === selected.referral_document?.id,
+      )
+    ) {
+      return [selected.referral_document, ...selected.documents];
+    }
+    return selected.documents;
+  }, [selected]);
 
   // What the claim is worth in the currency every limit is stated in. NULL on a
   // foreign claim nobody has converted yet — and that is the point: there is no
@@ -704,12 +711,59 @@ function QueueTab({
           if (!o) setSelectedId(null);
         }}
       >
-        <SheetContent className="sm:max-w-2xl">
-          {/* Keep an accessible title mounted even while the selected claim
-              refetches after deep-link navigation. Radix validates the dialog
-              immediately, before async detail data is guaranteed present. */}
-          <SheetHeader className={selected ? "sr-only" : "gap-3 pr-10"}>
-            <SheetTitle>{selected?.claim_type ?? "Claim details"}</SheetTitle>
+        <SheetContent variant="workspace">
+          <SheetHeader className="gap-3 pr-14">
+            <div className="flex flex-col gap-1">
+              <SheetTitle>{selected?.claim_type ?? "Claim details"}</SheetTitle>
+              {selected?.reference_no && (
+                <p className="font-mono text-xs tabular-nums text-muted-foreground">
+                  {selected.reference_no}
+                </p>
+              )}
+            </div>
+            {selected && (
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge status={selected.status} />
+                {selected.case_type === "log" && <Badge variant="info">LOG</Badge>}
+                <VerdictBadge claim={selected} />
+                {selectedDocuments.length > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="md:hidden"
+                    onClick={() =>
+                      document
+                        .getElementById("claim-documents")
+                        ?.scrollIntoView({ block: "start" })
+                    }
+                  >
+                    <FileText className="size-3.5" aria-hidden />
+                    Documents ({selectedDocuments.length})
+                  </Button>
+                )}
+                {can(selected, "rerun_review") &&
+                  selected.documents.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="sm:ml-auto"
+                      loading={rerun.isPending}
+                      onClick={async () => {
+                        try {
+                          await rerun.mutateAsync(selected.id);
+                          toast.success("AI review re-queued");
+                        } catch (err) {
+                          toast.error(formatError(err));
+                        }
+                      }}
+                    >
+                      <RefreshCw className="size-4" />
+                      Re-run AI review
+                    </Button>
+                  )}
+              </div>
+            )}
           </SheetHeader>
           {!selected && detail.isLoading && (
             <div className="px-6 py-8 text-sm text-muted-foreground">
@@ -733,237 +787,52 @@ function QueueTab({
           )}
           {selected && (
             <>
-              {/* Extra right padding keeps the title clear of the overlaid close control. */}
-              <div className="flex flex-col gap-3 px-6 pb-1 pt-6 pr-14">
-                <h2 className="text-lg font-semibold tracking-tight text-foreground">
-                  {selected.claim_type}
-                </h2>
-                {/* The reference is the string the member quotes on the phone
-                    and the key a broker reconciles against the insurer's
-                    ledger. It was minted at submit and rendered nowhere, which
-                    left support with only a uuid to look a claim up by. It
-                    identifies the claim, so it belongs beside its name. */}
-                {selected.reference_no && (
-                  <p className="-mt-1 font-mono text-xs tabular-nums text-muted-foreground">
-                    {selected.reference_no}
-                  </p>
+              <div
+                className={cn(
+                  "flex min-h-0 flex-1 flex-col overflow-y-auto md:overflow-hidden",
+                  selectedDocuments.length > 0 &&
+                    "md:grid md:grid-cols-[minmax(20rem,0.9fr)_minmax(24rem,1.35fr)]",
                 )}
-                {/* Status, verdict and the re-run action identify the claim, so
-                    they belong beside its name rather than as the first item of
-                    the scrolling body. */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge status={selected.status} />
-                  {selected.case_type === "log" && <Badge variant="info">LOG</Badge>}
-                  <VerdictBadge claim={selected} />
-                  {/* The pipeline compares a claim form against its documents,
-                      so a case with none can only fail and bounce back to
-                      manual review. Offering the control there spends an AI
-                      call to produce "review failed". */}
-                  {can(selected, "rerun_review") &&
-                    selected.documents.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="ml-auto"
-                      disabled={rerun.isPending}
-                      onClick={async () => {
-                        try {
-                          await rerun.mutateAsync(selected.id);
-                          toast.success("AI review re-queued");
-                        } catch (err) {
-                          toast.error(formatError(err));
-                        }
-                      }}
-                    >
-                      {rerun.isPending ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="size-4" />
-                      )}
-                      Re-run AI review
-                    </Button>
+              >
+                <div
+                  className={cn(
+                    "space-y-5 px-6 py-5 md:overflow-y-auto",
+                    selectedDocuments.length === 0 && "mx-auto w-full max-w-4xl",
                   )}
-                </div>
-              </div>
-              <SheetBody className="space-y-5">
-                <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
-                  <DetailField label="Amount claimed">
-                    <span className="font-medium tabular-nums">
-                      {selected.currency} {selected.amount_claimed.toFixed(2)}
-                    </span>
-                    {/* On a foreign claim the figure above is NOT the one that
-                        spends the limit — the SGD equivalent is. Shown together
-                        so an assessor never has to hold two currencies in their
-                        head, and so an unresolved conversion is visible before
-                        they reach for Approve. */}
-                    <ConversionLine claim={selected} />
-                    {/* The honest first move on an unpriced claim: the rate
-                        service was very likely just briefly unreachable when
-                        the member filed. One press beats typing a figure off a
-                        bank statement, and it clears the server's outage
-                        cooldown so "try now" means now. */}
-                    {needsConversion && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="mt-1.5"
-                        disabled={refreshFx.isPending}
-                        onClick={async () => {
-                          try {
-                            const out = await refreshFx.mutateAsync(selected.id);
-                            toast[
-                              out.fx_state === "converted" ? "success" : "error"
-                            ](
-                              out.fx_state === "converted"
-                                ? `Converted to ${out.policy_currency} ${(
-                                    out.amount_converted ?? 0
-                                  ).toFixed(2)}`
-                                : "Still no exchange rate — enter the value by hand.",
-                            );
-                          } catch (err) {
-                            toast.error(formatError(err));
-                          }
-                        }}
-                      >
-                        {refreshFx.isPending ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <RefreshCw className="size-3.5" />
+                >
+                  <ClaimFormDetails
+                    key={selected.id}
+                    claim={selected}
+                    editable={!readOnly}
+                  />
+
+                  {selectedDocuments.length === 0 && (
+                    <DetailSection title="Documents">
+                      <p className="text-sm text-muted-foreground">
+                        No documents were submitted with this claim.
+                      </p>
+                    </DetailSection>
+                  )}
+
+                  {(selected.amount_approved != null || selected.decision_notes) && (
+                    <DetailSection title="Decision">
+                      <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                        {selected.amount_approved != null && (
+                          <DetailField label="Approved amount">
+                            <span className="font-medium tabular-nums">
+                              {selected.policy_currency}{" "}
+                              {selected.amount_approved.toFixed(2)}
+                            </span>
+                          </DetailField>
                         )}
-                        Retry exchange rate
-                      </Button>
-                    )}
-                  </DetailField>
-                  {remainingLimit != null && (
-                    <DetailField label="Remaining limit">
-                      <span
-                        className={
-                          // Both sides in the POLICY currency. This used to
-                          // compare `amount_claimed` — a foreign figure — to an
-                          // SGD limit and print the limit with the claim's own
-                          // currency code, so a USD 500 bill looked like it fit
-                          // inside SGD 600 and the label agreed.
-                          claimedInPolicyCurrency != null &&
-                          claimedInPolicyCurrency > remainingLimit
-                            ? "font-medium tabular-nums text-warn"
-                            : "tabular-nums"
-                        }
-                      >
-                        {selected.policy_currency} {remainingLimit.toFixed(2)}
-                      </span>
-                    </DetailField>
-                  )}
-                  <DetailField label="Member">
-                    {selected.employee_name ?? "—"}{" "}
-                    <span className="text-muted-foreground">
-                      ({selected.staff_id})
-                    </span>
-                  </DetailField>
-                  {selected.dependant_name && (
-                    <DetailField label="Claimant">
-                      {selected.dependant_name}{" "}
-                      <span className="text-muted-foreground">(dependant)</span>
-                    </DetailField>
-                  )}
-                  <DetailField label="Coverage">
-                    {selected.claim_kind === "flex"
-                      ? `Flex · ${selected.flex_category_name}`
-                      : `${selected.product_code}${
-                          selected.sub_type
-                            ? ` · ${selected.sub_type}`
-                            : selected.benefit_key
-                              ? ` · ${selected.benefit_key}`
-                              : ""
-                        }`}
-                  </DetailField>
-                  <DetailField label="Incurred">
-                    <span className="tabular-nums">
-                      {fmtDate(selected.incurred_date)}
-                    </span>
-                  </DetailField>
-                  <DetailField label="Provider">
-                    {selected.provider_name ?? "—"}
-                  </DetailField>
-                  {/* Pre-/post-hospitalisation consults carry the treating
-                      doctor — the link back to the admission being claimed
-                      against. Absent on every other claim type. */}
-                  {selected.doctor_name && (
-                    <DetailField label="Doctor seen">
-                      {selected.doctor_name}
-                    </DetailField>
-                  )}
-                  {selected.diagnosis && (
-                    <DetailField label="Diagnosis / description" wide>
-                      {selected.diagnosis}
-                    </DetailField>
-                  )}
-                  {/* The visit this claim continues — the admission a pre-/post-
-                      consult is claimed against, or the first visit of a
-                      specialist course. This is the fact the insurer pays the
-                      consultation ON, so an assessor needs it in front of them
-                      alongside the doctor and the diagnosis it is matched by. */}
-                  {selected.related_claim && (
-                    <DetailField label="Follows" wide>
-                      {[
-                        selected.related_claim.provider_name,
-                        selected.related_claim.admission_date &&
-                        selected.related_claim.discharge_date
-                          ? `${fmtDate(selected.related_claim.admission_date)} – ${fmtDate(
-                              selected.related_claim.discharge_date,
-                            )}`
-                          : fmtDate(
-                              selected.related_claim.admission_date ??
-                                selected.related_claim.incurred_date,
-                            ),
-                        selected.related_claim.diagnosis,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </DetailField>
-                  )}
-                  {selected.claim_kind === "insured" &&
-                    (selected.referral_document ||
-                      selected.referral_not_applicable) && (
-                      <DetailField label="Referral letter" wide>
-                        {selected.referral_document ? (
-                          <button
-                            type="button"
-                            className="rounded text-left underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                            onClick={async () => {
-                              try {
-                                await downloadClaimDocument(
-                                  selected.id,
-                                  selected.referral_document!,
-                                );
-                              } catch (err) {
-                                toast.error(formatError(err));
-                              }
-                            }}
-                          >
-                            {selected.referral_document.file_name}
-                          </button>
-                        ) : (
-                          "Declared not applicable by the member"
+                        {selected.decision_notes && (
+                          <DetailField label="Decision note" wide>
+                            {selected.decision_notes}
+                          </DetailField>
                         )}
-                      </DetailField>
-                    )}
-                  {selected.amount_approved != null && (
-                    <DetailField label="Approved amount">
-                      <span className="font-medium tabular-nums">
-                        {/* `amount_approved` is ALWAYS the policy currency,
-                            never the claim's own — on a foreign claim the two
-                            differ by the exchange rate. */}
-                        {selected.policy_currency}{" "}
-                        {selected.amount_approved.toFixed(2)}
-                      </span>
-                    </DetailField>
+                      </dl>
+                    </DetailSection>
                   )}
-                  {selected.decision_notes && (
-                    <DetailField label="Decision note" wide>
-                      {selected.decision_notes}
-                    </DetailField>
-                  )}
-                </dl>
 
                 {/* Renders nothing before the insurer leg — see the component.
                     Gated on `hasSettlement`, not on the dispatch timestamp: a
@@ -974,73 +843,6 @@ function QueueTab({
                     <ClaimSettlementFacts claim={selected} />
                   </DetailSection>
                 )}
-
-                {/* Correcting what the MEMBER stated — kept apart from
-                    Assessment below it, which records facts the broker owns
-                    and the member never stated. Two different acts, two
-                    different audit actions, and once a claim is settled two
-                    different bars. */}
-                <DetailSection title="Claim details">
-                  {/* Keyed on the CLAIM, not on its revision. Per-revision
-                      remounting threw away whatever the assessor had typed
-                      every time the claim moved — including on the member's own
-                      document uploads. The panel now holds its own baseline and
-                      says when the claim has moved past it. */}
-                  <ClaimAmendPanel key={selected.id} claim={selected} />
-                </DetailSection>
-
-                {/* The assessor's own fields. Directly above Documents because
-                    the sector and admission window are read OFF those
-                    documents, and every field here is a column on the claims
-                    reports that nothing else in the product can fill. */}
-                <DetailSection title="Assessment">
-                  <ClaimAssessmentPanel claim={selected} />
-                </DetailSection>
-
-                <DetailSection title="Documents">
-                  {selected.documents.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No documents.</p>
-                  ) : (
-                    <ul className="space-y-2">
-                      {selected.documents.map((d) => (
-                        <li
-                          key={d.id}
-                          className="flex items-center justify-between gap-3 rounded-md border border-border bg-card py-2 pl-3 pr-2 text-sm"
-                        >
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                            <span className="truncate font-medium">
-                              {d.file_name}
-                            </span>
-                            {d.doc_type && DOC_TYPE_LABELS[d.doc_type] && (
-                              <Badge variant="outline">
-                                {DOC_TYPE_LABELS[d.doc_type]}
-                              </Badge>
-                            )}
-                            <span className="text-xs tabular-nums text-muted-foreground">
-                              {(d.size_bytes / 1024).toFixed(0)} KB
-                            </span>
-                          </span>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="shrink-0"
-                            aria-label={`Download ${d.file_name}`}
-                            onClick={async () => {
-                              try {
-                                await downloadClaimDocument(selected.id, d);
-                              } catch (err) {
-                                toast.error(formatError(err));
-                              }
-                            }}
-                          >
-                            <Download className="size-4" />
-                          </Button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </DetailSection>
-
                 {/* Above the AI review, deliberately: a member waiting on an
                     answer is a person, and burying their question under the
                     fraud evidence is how it goes unanswered for a week. */}
@@ -1103,7 +905,16 @@ function QueueTab({
                     </p>
                   )}
                 </DetailSection>
-              </SheetBody>
+                </div>
+                {selectedDocuments.length > 0 && (
+                  <div className="flex min-h-0 border-t border-border bg-muted/40 md:border-l md:border-t-0">
+                    <ClaimDocumentViewer
+                      claimId={selected.id}
+                      documents={selectedDocuments}
+                    />
+                  </div>
+                )}
+              </div>
 
               {/* Pinned: deciding is why this sheet is open, but the buttons sat
                   under the full AI review — every decision meant scrolling past

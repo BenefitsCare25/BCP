@@ -309,3 +309,239 @@ test("Claims Review stays within the viewport", async ({ page }, testInfo) => {
   await assertAccessible(page);
   expect(runtimeErrors).toEqual([]);
 });
+
+test("claim workspace keeps form details readable and documents in context", async ({
+  page,
+}, testInfo) => {
+  const runtimeErrors = monitorRuntime(page);
+  const document = {
+    id: "mock-document",
+    file_name: "hospital-invoice.png",
+    doc_type: "finalised_tax_invoice",
+    mime_type: "image/png",
+    size_bytes: 68,
+    sha256: "mock-sha",
+    created_at: "2026-06-27T08:00:00",
+  };
+  const secondDocument = {
+    ...document,
+    id: "mock-document-2",
+    file_name: "hospital-summary.png",
+    doc_type: "discharge_summary",
+    sha256: "mock-sha-2",
+  };
+  const baseClaim = {
+    client_id: "00000000-0000-0000-0000-000000000011",
+    policy_year_id: "mock-policy-year",
+    employee_id: "mock-employee",
+    staff_id: "100009",
+    employee_name: "Raymond Chow",
+    case_type: "claim",
+    origin: "portal",
+    received_via: null,
+    received_on: null,
+    requested_by: null,
+    benefit_key: null,
+    referral_document_id: null,
+    referral_document: null,
+    referral_not_applicable: false,
+    related_claim_id: null,
+    related_claim: null,
+    invoice_number: "INV-2026-001",
+    doctor_name: null,
+    remarks: null,
+    currency: "SGD",
+    amount_converted: null,
+    fx_state: "not_required",
+    fx_rate: null,
+    fx_rate_date: null,
+    fx_source: null,
+    fx_stale: false,
+    fx_acknowledged_at: null,
+    policy_currency: "SGD",
+    amount_approved: null,
+    status: "submitted",
+    dependant_id: null,
+    dependant_name: null,
+    submitted_at: "2026-06-27T08:00:00",
+    decided_at: null,
+    decision_notes: null,
+    created_at: "2026-06-27T08:00:00",
+    ai_review: null,
+    remaining_limit: 20000,
+    unread_member_messages: 0,
+    allowed_actions: ["approve", "assessment", "amend"],
+    reference_no: "CLM-2026-0009",
+    sent_to_insurer_at: null,
+    insurer_deadline_on: null,
+    paid_on: null,
+    payment_amount: null,
+    hospital_type: null,
+    hospital_type_derived: "government",
+    admin_remarks: null,
+    servicer_days: null,
+    insurer_days: null,
+    days_over_deadline: null,
+    revision: 1,
+    amended_at: null,
+    amended_by: null,
+    member_editable: true,
+    member_edit_block: null,
+  };
+  let insuredClaim = {
+    ...baseClaim,
+    id: "mock-insured",
+    claim_kind: "insured",
+    product_code: "GHS",
+    flex_category_name: null,
+    claim_type: "Hospital treatment",
+    sub_type: "Hospitalisation/Day Surgery/Other Inpatient Treatment",
+    incurred_date: "2026-06-26",
+    provider_name: "Aptus Surgery Centre",
+    diagnosis: "Appendicitis",
+    amount_claimed: 14126.13,
+    documents: [document, secondDocument],
+    admission_date: "2026-06-26",
+    discharge_date: "2026-06-29",
+    taxable: true,
+    cpf_claimable: true,
+    is_inpatient: true,
+  };
+  const flexClaim = {
+    ...baseClaim,
+    id: "mock-flex",
+    claim_kind: "flex",
+    product_code: null,
+    flex_category_name: "Dental",
+    claim_type: "Dental",
+    sub_type: null,
+    incurred_date: "2026-07-12",
+    provider_name: "Demo Dental Surgery",
+    diagnosis: "Dental treatment",
+    amount_claimed: 180,
+    documents: [],
+    admission_date: null,
+    discharge_date: null,
+    taxable: true,
+    cpf_claimable: false,
+    is_inpatient: false,
+  };
+
+  await page.route(/\/api\/v1\/claims\?.*/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        total: 2,
+        offset: 0,
+        limit: 10,
+        items: [insuredClaim, flexClaim],
+      },
+    });
+  });
+  await page.route(/\/api\/v1\/claims\/(mock-insured|mock-flex)$/, async (route) => {
+    const claim = route.request().url().endsWith("mock-flex")
+      ? flexClaim
+      : insuredClaim;
+    await route.fulfill({ status: 200, json: claim });
+  });
+  await page.route(/\/api\/v1\/claims\/(mock-insured|mock-flex)\/messages$/, async (route) => {
+    await route.fulfill({ status: 200, json: [] });
+  });
+  await page.route(/\/api\/v1\/claims\/(mock-insured|mock-flex)\/review$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: "mock-review",
+        status: "complete",
+        verdict: "clean",
+        confidence: 0.98,
+        summary: "The submitted details match the document.",
+        stage: "persist",
+        progress_current: 5,
+        progress_total: 5,
+        attempt: 1,
+        started_at: "2026-06-27T08:01:00",
+        heartbeat_at: "2026-06-27T08:02:00",
+        completed_at: "2026-06-27T08:02:00",
+        error_code: null,
+        deterministic_short_circuit: false,
+        review_config_label: "Demo review",
+        review_config_fingerprint: "mock",
+        created_at: "2026-06-27T08:01:00",
+        extractions: [],
+        field_comparisons: [],
+        rule_results: [],
+        vision_checks: [],
+        model: null,
+        input_tokens: null,
+        output_tokens: null,
+        cost_estimate_usd: null,
+        error_detail: null,
+        superseded: false,
+      },
+    });
+  });
+  await page.route(
+    /\/api\/v1\/claims\/mock-insured\/documents\/mock-document(?:-2)?\/download$/,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          "base64",
+        ),
+      });
+    },
+  );
+  await page.route(/\/api\/v1\/claims\/mock-insured\/assessment$/, async (route) => {
+    const body = route.request().postDataJSON() as { admin_remarks?: string };
+    insuredClaim = { ...insuredClaim, admin_remarks: body.admin_remarks ?? null };
+    await route.fulfill({ status: 200, json: insuredClaim });
+  });
+
+  await openClaimsReview(page, "queue");
+  await page.getByText("Hospital treatment", { exact: true }).first().click();
+
+  const workspace = page.getByRole("dialog", { name: "Hospital treatment" });
+  await expect(workspace.getByRole("heading", { name: "Form details" })).toBeVisible();
+  await expect(
+    workspace.getByText("Admission date", { exact: true }).locator(".."),
+  ).toContainText("2026-06-26");
+  await expect(workspace.getByText("2026-06-29", { exact: true })).toBeVisible();
+  await expect(workspace.getByText("Taxable", { exact: true })).toHaveCount(0);
+  await expect(workspace.getByText("CPF claimable", { exact: true })).toHaveCount(0);
+  await expect(
+    workspace.getByRole("img", { name: "Preview of hospital-invoice.png" }),
+  ).toBeVisible();
+  await workspace.getByRole("tab", { name: "hospital-summary.png" }).click();
+  await expect(
+    workspace.getByRole("img", { name: "Preview of hospital-summary.png" }),
+  ).toBeVisible();
+  await expect(workspace.getByText("Correct the claim", { exact: true })).toHaveCount(0);
+  await expect(workspace.getByText("Assessment", { exact: true })).toHaveCount(0);
+
+  await workspace.getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(workspace.getByLabel("Admission date")).toHaveValue("2026-06-26");
+  await expect(workspace.getByLabel("Discharge date")).toHaveValue("2026-06-29");
+  await workspace.getByLabel("Admin remark").fill("Checked against invoice");
+  await workspace.getByRole("button", { name: "Save changes" }).click();
+  await expect(workspace.getByText("Checked against invoice", { exact: true })).toBeVisible();
+  await screenshot(page, testInfo, "claim-review-workspace-insured");
+  await expect(page.getByText("Form details updated", { exact: true })).toBeHidden({
+    timeout: 10_000,
+  });
+  await assertAccessible(page);
+
+  await workspace.getByRole("button", { name: "Close" }).click();
+  await page.getByText("Dental", { exact: true }).first().click();
+  const flexWorkspace = page.getByRole("dialog", { name: "Dental" });
+  await expect(flexWorkspace.getByText("Taxable", { exact: true })).toBeVisible();
+  await expect(flexWorkspace.getByText("CPF claimable", { exact: true })).toBeVisible();
+  await expect(flexWorkspace.getByText("Admission date", { exact: true })).toHaveCount(0);
+  await expect(flexWorkspace.getByText("Discharge date", { exact: true })).toHaveCount(0);
+  await screenshot(page, testInfo, "claim-review-workspace-flex");
+  await assertAccessible(page);
+
+  expect(runtimeErrors).toEqual([]);
+});
