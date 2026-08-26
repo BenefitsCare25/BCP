@@ -44,6 +44,7 @@ def test_security_headers_present(client: TestClient) -> None:
     headers = {k.lower(): v for k, v in res.headers.items()}
     assert "content-security-policy" in headers
     assert "default-src 'self'" in headers["content-security-policy"]
+    assert "frame-src 'self' blob:" in headers["content-security-policy"]
     assert headers["x-content-type-options"] == "nosniff"
     assert headers["x-frame-options"] == "DENY"
     assert "permissions-policy" in headers

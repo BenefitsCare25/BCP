@@ -91,35 +91,13 @@ export function ClaimDocumentViewer({
 
   return (
     <section id="claim-documents" className="flex min-h-0 flex-1 flex-col" aria-label="Claim documents">
-      <div className="space-y-3 border-b border-border px-5 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="space-y-1">
-            <SectionLabel as="h3">Documents ({documents.length})</SectionLabel>
-            <p className="text-xs text-muted-foreground">
-              Select a file to review it without leaving the claim.
-            </p>
-          </div>
-          {selected && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              aria-label={`Download ${selected.file_name}`}
-              onClick={async () => {
-                try {
-                  await downloadClaimDocument(claimId, selected);
-                } catch (caught) {
-                  toast.error(formatError(caught));
-                }
-              }}
-            >
-              <Download className="size-3.5" aria-hidden />
-              Download
-            </Button>
-          )}
-        </div>
+      <div className="shrink-0 border-b border-border px-4 py-3">
+        <div className="flex min-h-10 items-center gap-3">
+          <SectionLabel as="h3" className="shrink-0">
+            Documents ({documents.length})
+          </SectionLabel>
         <div
-          className="flex max-w-full gap-2 overflow-x-auto pb-1"
+          className="flex min-w-0 flex-1 gap-2 overflow-x-auto"
           role="tablist"
           aria-label="Submitted documents"
         >
@@ -132,8 +110,9 @@ export function ClaimDocumentViewer({
                 role="tab"
                 aria-selected={active}
                 aria-controls="claim-document-preview"
+                title={document.file_name}
                 className={cn(
-                  "inline-flex h-9 max-w-64 shrink-0 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors",
+                  "inline-flex h-11 max-w-56 shrink-0 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors sm:h-9 lg:max-w-72",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
                   active
                     ? "border-input bg-foreground text-card"
@@ -147,13 +126,33 @@ export function ClaimDocumentViewer({
             );
           })}
         </div>
+          {selected && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-11 shrink-0 sm:h-9"
+              aria-label={`Download ${selected.file_name}`}
+              onClick={async () => {
+                try {
+                  await downloadClaimDocument(claimId, selected);
+                } catch (caught) {
+                  toast.error(formatError(caught));
+                }
+              }}
+            >
+              <Download className="size-3.5" aria-hidden />
+              <span className="hidden lg:inline">Download</span>
+            </Button>
+          )}
+        </div>
       </div>
 
       <div
         id="claim-document-preview"
         role="tabpanel"
         aria-label={selected ? `Preview of ${selected.file_name}` : "Document preview"}
-        className="relative flex min-h-96 flex-1 overflow-hidden bg-muted"
+        className="relative flex min-h-96 flex-1 overflow-hidden bg-background"
       >
         {loading && (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -182,9 +181,12 @@ export function ClaimDocumentViewer({
           </div>
         )}
 
-        {!loading && preview && selected && preview.mime === "application/pdf" && (
+        {!loading &&
+          preview &&
+          selected &&
+          preview.mime.toLowerCase().startsWith("application/pdf") && (
           <iframe
-            src={preview.url}
+            src={`${preview.url}#view=FitH&toolbar=1&navpanes=0`}
             title={`Preview of ${selected.file_name}`}
             className="min-h-96 w-full border-0 bg-card"
           />
@@ -194,7 +196,7 @@ export function ClaimDocumentViewer({
           preview &&
           selected &&
           !preview.mime.startsWith("image/") &&
-          preview.mime !== "application/pdf" && (
+          !preview.mime.toLowerCase().startsWith("application/pdf") && (
             <div className="m-auto flex max-w-md flex-col items-center gap-3 px-6 text-center">
               <FileText className="size-8 text-muted-foreground" aria-hidden />
               <p className="text-sm text-muted-foreground">

@@ -36,21 +36,21 @@ export const SheetContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed z-50 flex flex-col bg-card shadow-2xl border-border",
+        "fixed z-50 flex flex-col border-border bg-card",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "transition ease-in-out duration-300",
         variant === "panel" && side === "right" &&
-          "inset-y-0 right-0 h-full w-full sm:max-w-2xl border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right",
+          "inset-y-0 right-0 h-full w-full border-l shadow-2xl data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-2xl",
         variant === "panel" && side === "left" &&
-          "inset-y-0 left-0 h-full w-3/4 sm:max-w-sm border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left",
+          "inset-y-0 left-0 h-full w-3/4 border-r shadow-2xl data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
         variant === "workspace" &&
-          "inset-0 h-full w-full border data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 sm:inset-4 sm:h-auto sm:w-auto sm:rounded-xl",
+          "inset-0 h-full w-full overflow-hidden border shadow-xl data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 sm:inset-3 sm:h-auto sm:w-auto sm:rounded-lg",
         className,
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus:outline-none focus:ring-2 focus:ring-ring/40">
+      <DialogPrimitive.Close className="absolute right-2 top-2 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 sm:right-3 sm:top-3 sm:size-9">
         <X className="size-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

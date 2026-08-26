@@ -330,6 +330,14 @@ test("claim workspace keeps form details readable and documents in context", asy
     doc_type: "discharge_summary",
     sha256: "mock-sha-2",
   };
+  const pdfDocument = {
+    ...document,
+    id: "mock-document-3",
+    file_name: "hospital-bill.pdf",
+    doc_type: "itemised_tax_invoice",
+    mime_type: "application/pdf",
+    sha256: "mock-sha-3",
+  };
   const baseClaim = {
     client_id: "00000000-0000-0000-0000-000000000011",
     policy_year_id: "mock-policy-year",
@@ -370,7 +378,7 @@ test("claim workspace keeps form details readable and documents in context", asy
     ai_review: null,
     remaining_limit: 20000,
     unread_member_messages: 0,
-    allowed_actions: ["approve", "assessment", "amend"],
+    allowed_actions: ["approve", "assessment", "amend", "rerun_review"],
     reference_no: "CLM-2026-0009",
     sent_to_insurer_at: null,
     insurer_deadline_on: null,
@@ -400,7 +408,7 @@ test("claim workspace keeps form details readable and documents in context", asy
     provider_name: "Aptus Surgery Centre",
     diagnosis: "Appendicitis",
     amount_claimed: 14126.13,
-    documents: [document, secondDocument],
+    documents: [document, secondDocument, pdfDocument],
     admission_date: "2026-06-26",
     discharge_date: "2026-06-29",
     taxable: true,
@@ -494,6 +502,16 @@ test("claim workspace keeps form details readable and documents in context", asy
       });
     },
   );
+  await page.route(
+    /\/api\/v1\/claims\/mock-insured\/documents\/mock-document-3\/download$/,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        body: Buffer.from("%PDF-1.4\n%%EOF", "utf8"),
+      });
+    },
+  );
   await page.route(/\/api\/v1\/claims\/mock-insured\/assessment$/, async (route) => {
     const body = route.request().postDataJSON() as { admin_remarks?: string };
     insuredClaim = { ...insuredClaim, admin_remarks: body.admin_remarks ?? null };
@@ -505,6 +523,16 @@ test("claim workspace keeps form details readable and documents in context", asy
 
   const workspace = page.getByRole("dialog", { name: "Hospital treatment" });
   await expect(workspace.getByRole("heading", { name: "Form details" })).toBeVisible();
+  await expect(
+    workspace.getByText("The submitted claim and the assessor details recorded against it."),
+  ).toHaveCount(0);
+  await expect(
+    workspace.getByText("Select a file to review it without leaving the claim."),
+  ).toHaveCount(0);
+  if (testInfo.project.name === "desktop-chromium") {
+    const headerBox = await workspace.getByTestId("claim-workspace-header").boundingBox();
+    expect(headerBox?.height).toBeLessThan(120);
+  }
   await expect(
     workspace.getByText("Admission date", { exact: true }).locator(".."),
   ).toContainText("2026-06-26");
@@ -518,6 +546,9 @@ test("claim workspace keeps form details readable and documents in context", asy
   await expect(
     workspace.getByRole("img", { name: "Preview of hospital-summary.png" }),
   ).toBeVisible();
+  await workspace.getByRole("tab", { name: "hospital-bill.pdf" }).click();
+  await expect(workspace.getByTitle("Preview of hospital-bill.pdf")).toBeVisible();
+  await workspace.getByRole("tab", { name: "hospital-invoice.png" }).click();
   await expect(workspace.getByText("Correct the claim", { exact: true })).toHaveCount(0);
   await expect(workspace.getByText("Assessment", { exact: true })).toHaveCount(0);
 
@@ -527,10 +558,13 @@ test("claim workspace keeps form details readable and documents in context", asy
   await workspace.getByLabel("Admin remark").fill("Checked against invoice");
   await workspace.getByRole("button", { name: "Save changes" }).click();
   await expect(workspace.getByText("Checked against invoice", { exact: true })).toBeVisible();
-  await screenshot(page, testInfo, "claim-review-workspace-insured");
-  await expect(page.getByText("Form details updated", { exact: true })).toBeHidden({
+  const savedToast = page.getByText("Form details updated", { exact: true });
+  await expect(savedToast).toBeVisible();
+  await expect(savedToast).toBeHidden({
     timeout: 10_000,
   });
+  await expect(workspace.getByRole("heading", { name: "Form details" })).toBeInViewport();
+  await screenshot(page, testInfo, "claim-review-workspace-insured");
   await assertAccessible(page);
 
   await workspace.getByRole("button", { name: "Close" }).click();

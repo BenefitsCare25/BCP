@@ -712,58 +712,68 @@ function QueueTab({
         }}
       >
         <SheetContent variant="workspace">
-          <SheetHeader className="gap-3 pr-14">
-            <div className="flex flex-col gap-1">
-              <SheetTitle>{selected?.claim_type ?? "Claim details"}</SheetTitle>
-              {selected?.reference_no && (
-                <p className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {selected.reference_no}
-                </p>
-              )}
-            </div>
-            {selected && (
-              <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge status={selected.status} />
-                {selected.case_type === "log" && <Badge variant="info">LOG</Badge>}
-                <VerdictBadge claim={selected} />
-                {selectedDocuments.length > 0 && (
+          <SheetHeader
+            className="block shrink-0 px-5 py-3 pr-14 sm:px-6 sm:py-3.5 sm:pr-14"
+            data-testid="claim-workspace-header"
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 space-y-2">
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <SheetTitle className="text-base leading-tight sm:text-lg">
+                    {selected?.claim_type ?? "Claim details"}
+                  </SheetTitle>
+                  {selected?.reference_no && (
+                    <p className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                      {selected.reference_no}
+                    </p>
+                  )}
+                </div>
+                {selected && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusBadge status={selected.status} />
+                    {selected.case_type === "log" && <Badge variant="info">LOG</Badge>}
+                    <VerdictBadge claim={selected} />
+                    {selectedDocuments.length > 0 && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-11 md:hidden"
+                        onClick={() =>
+                          document
+                            .getElementById("claim-documents")
+                            ?.scrollIntoView({ block: "start" })
+                        }
+                      >
+                        <FileText className="size-3.5" aria-hidden />
+                        Documents ({selectedDocuments.length})
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+              {selected &&
+                can(selected, "rerun_review") &&
+                selected.documents.length > 0 && (
                   <Button
-                    type="button"
                     size="sm"
                     variant="outline"
-                    className="md:hidden"
-                    onClick={() =>
-                      document
-                        .getElementById("claim-documents")
-                        ?.scrollIntoView({ block: "start" })
-                    }
+                    className="h-11 shrink-0 self-start sm:h-9 sm:self-center"
+                    loading={rerun.isPending}
+                    onClick={async () => {
+                      try {
+                        await rerun.mutateAsync(selected.id);
+                        toast.success("AI review re-queued");
+                      } catch (err) {
+                        toast.error(formatError(err));
+                      }
+                    }}
                   >
-                    <FileText className="size-3.5" aria-hidden />
-                    Documents ({selectedDocuments.length})
+                    <RefreshCw className="size-4" />
+                    Re-run AI review
                   </Button>
                 )}
-                {can(selected, "rerun_review") &&
-                  selected.documents.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="sm:ml-auto"
-                      loading={rerun.isPending}
-                      onClick={async () => {
-                        try {
-                          await rerun.mutateAsync(selected.id);
-                          toast.success("AI review re-queued");
-                        } catch (err) {
-                          toast.error(formatError(err));
-                        }
-                      }}
-                    >
-                      <RefreshCw className="size-4" />
-                      Re-run AI review
-                    </Button>
-                  )}
-              </div>
-            )}
+            </div>
           </SheetHeader>
           {!selected && detail.isLoading && (
             <div className="px-6 py-8 text-sm text-muted-foreground">
@@ -791,12 +801,12 @@ function QueueTab({
                 className={cn(
                   "flex min-h-0 flex-1 flex-col overflow-y-auto md:overflow-hidden",
                   selectedDocuments.length > 0 &&
-                    "md:grid md:grid-cols-[minmax(20rem,0.9fr)_minmax(24rem,1.35fr)]",
+                    "md:grid md:grid-cols-[minmax(21rem,0.78fr)_minmax(26rem,1.22fr)]",
                 )}
               >
                 <div
                   className={cn(
-                    "space-y-5 px-6 py-5 md:overflow-y-auto",
+                    "space-y-5 px-5 py-4 md:overflow-y-auto sm:px-6",
                     selectedDocuments.length === 0 && "mx-auto w-full max-w-4xl",
                   )}
                 >
@@ -907,7 +917,7 @@ function QueueTab({
                 </DetailSection>
                 </div>
                 {selectedDocuments.length > 0 && (
-                  <div className="flex min-h-0 border-t border-border bg-muted/40 md:border-l md:border-t-0">
+                  <div className="flex min-h-0 border-t border-border bg-card md:border-l md:border-t-0">
                     <ClaimDocumentViewer
                       claimId={selected.id}
                       documents={selectedDocuments}
@@ -920,7 +930,7 @@ function QueueTab({
                   under the full AI review — every decision meant scrolling past
                   the evidence to reach them. */}
               {can(selected, "approve") && (
-                <SheetFooter className="justify-start">
+                <SheetFooter className="min-h-16 shrink-0 justify-start px-5 py-3 sm:px-6">
                   <Button onClick={() => setDecision("approve")}>Approve</Button>
                   <Button
                     variant="outline"
@@ -939,14 +949,14 @@ function QueueTab({
                   our decision or awaiting the insurer's — so one footer always
                   shows exactly the next thing to do. */}
               {can(selected, "send_to_insurer") && (
-                <SheetFooter className="justify-start">
+                <SheetFooter className="min-h-16 shrink-0 justify-start px-5 py-3 sm:px-6">
                   <Button onClick={() => setSettling("send")}>
                     Send to insurer
                   </Button>
                 </SheetFooter>
               )}
               {can(selected, "record_payment") && (
-                <SheetFooter className="justify-start">
+                <SheetFooter className="min-h-16 shrink-0 justify-start px-5 py-3 sm:px-6">
                   <Button onClick={() => setSettling("pay")}>
                     Record payment
                   </Button>

@@ -154,6 +154,20 @@
   }
 }
 
+/* Sonner's light-theme success ink misses AA at its 13px text size. Repoint
+   every rich toast to the product's measured semantic ramp so transient
+   feedback follows the same contrast rules as the rest of the application. */
+[data-sonner-toaster][data-theme="light"] {
+  --success-bg: var(--color-good-soft);
+  --success-text: var(--color-good);
+  --warning-bg: var(--color-warn-soft);
+  --warning-text: var(--color-warn);
+  --error-bg: var(--color-error-soft);
+  --error-text: var(--color-error);
+  --info-bg: var(--color-info-soft);
+  --info-text: var(--color-info);
+}
+
 @layer components {
   /* Focus affordance for native controls that don't go through the Input /
      Button primitives. The ring MUST stay behind :focus-visible — as a static

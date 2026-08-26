@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pencil } from "lucide-react";
 import {
   useAmendClaim,
@@ -148,9 +148,12 @@ function Detail({ label, wide, children }: {
   children: ReactNode;
 }) {
   return (
-    <div className={wide ? "sm:col-span-2" : undefined}>
-      <SectionLabel as="dt">{label}</SectionLabel>
-      <dd className="mt-1 text-sm text-foreground">{children}</dd>
+    <div
+      className="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[minmax(8.5rem,0.42fr)_minmax(0,0.58fr)] sm:gap-4"
+      data-wide={wide || undefined}
+    >
+      <SectionLabel as="dt" className="sm:pt-0.5">{label}</SectionLabel>
+      <dd className="min-w-0 text-sm text-foreground">{children}</dd>
     </div>
   );
 }
@@ -207,6 +210,8 @@ export function ClaimFormDetails({
   claim: BrokerClaim;
   editable: boolean;
 }) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
   const [viewClaim, setViewClaim] = useState(claim);
   const [editing, setEditing] = useState(false);
   const [base, setBase] = useState(() => ({
@@ -270,6 +275,14 @@ export function ClaimFormDetails({
     setEditing(true);
   };
 
+  const returnToDetails = () => {
+    setEditing(false);
+    requestAnimationFrame(() => {
+      sectionRef.current?.scrollIntoView({ block: "start" });
+      editButtonRef.current?.focus();
+    });
+  };
+
   const cancelEditing = () => {
     const next = draftOf(claim);
     setViewClaim(claim);
@@ -277,7 +290,7 @@ export function ClaimFormDetails({
     setDraft(next);
     setReason("");
     setOverpaymentWarning(null);
-    setEditing(false);
+    returnToDetails();
   };
 
   const rebase = () => {
@@ -351,7 +364,7 @@ export function ClaimFormDetails({
       setDraft(next);
       setReason("");
       setOverpaymentWarning(null);
-      setEditing(false);
+      returnToDetails();
       toast.success("Form details updated");
     } catch (error) {
       toast.error(formatError(error));
@@ -363,16 +376,18 @@ export function ClaimFormDetails({
   const effectiveSector = viewClaim.hospital_type ?? viewClaim.hospital_type_derived;
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <SectionLabel as="h3">Form details</SectionLabel>
-          <p className="text-xs text-muted-foreground">
-            The submitted claim and the assessor details recorded against it.
-          </p>
-        </div>
+    <section ref={sectionRef} className="space-y-3">
+      <div className="flex min-h-9 items-center justify-between gap-4">
+        <SectionLabel as="h3">Form details</SectionLabel>
         {editable && !editing && (
-          <Button type="button" size="sm" variant="outline" onClick={startEditing}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-11 sm:h-8"
+            ref={editButtonRef}
+            onClick={startEditing}
+          >
             <Pencil className="size-3.5" aria-hidden />
             Edit
           </Button>
@@ -380,7 +395,7 @@ export function ClaimFormDetails({
       </div>
 
       {!editing ? (
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+        <dl className="divide-y divide-border border-y border-border">
           <Detail label="Amount claimed">
             <span className="font-medium tabular-nums">
               {viewClaim.currency} {viewClaim.amount_claimed.toFixed(2)}
