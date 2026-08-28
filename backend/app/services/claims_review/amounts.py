@@ -7,6 +7,7 @@ completed review retains the exact breakdown that drove its verdict.
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from copy import deepcopy
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -17,6 +18,13 @@ from app.services.claim_intake_suggest import document_financial_reading
 
 _CENT = Decimal("0.01")
 _AMOUNT_RULE = "AI-extracted invoice/receipt amounts reconcile to the claim."
+_RECONCILIATION_VERSION = 2
+_NON_BILLING_SUPPORT_TYPES = (
+    "claim form",
+    "discharge summary",
+    "referral letter",
+    "referral memo",
+)
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -44,6 +52,15 @@ def _document_priority(row: dict[str, Any]) -> int:
     if "invoice" in document_type or "bill" in document_type:
         return 2
     return 0
+
+
+def _is_non_billing_support(row: dict[str, Any]) -> bool:
+    document_type = re.sub(
+        r"[_-]+", " ", str(row.get("document_type") or "").casefold()
+    )
+    if any(marker in document_type for marker in ("bill", "invoice", "receipt")):
+        return False
+    return any(marker in document_type for marker in _NON_BILLING_SUPPORT_TYPES)
 
 
 def _preferred_pool(
@@ -96,25 +113,43 @@ def reconcile_document_amounts(
     claimed = _decimal(claim.amount_claimed) or Decimal("0.00")
     claim_currency = str(claim.currency or "SGD").upper()
     candidates: list[int] = []
+    uncertain_currency = False
 
     for index, extraction in enumerate(rows):
         fields = [field for field in extraction.get("fields", []) if isinstance(field, dict)]
         reading = document_financial_reading(fields)
         amount = _decimal(reading.get("amount"))
+        currency_status = str(reading.get("currency_status") or "absent")
+        currency = reading.get("currency")
+        if currency_status == "absent":
+            currency = claim_currency
         extraction["financial"] = {
             "invoice_number": reading.get("invoice_number"),
             "invoice_key": reading.get("invoice_key"),
             "amount": float(amount) if amount is not None else None,
-            # An amount without an explicit printed currency is interpreted in
-            # the claim's declared currency, which is itself compared by AI.
-            "currency": str(reading.get("currency") or claim_currency).upper(),
+            # A document with no currency cue inherits the declared currency.
+            # An ambiguous/conflicting printed symbol stays unresolved and
+            # forces manual review instead of being silently rewritten.
+            "currency": str(currency).upper() if currency is not None else None,
+            "currency_status": currency_status,
+            "reconciliation_version": _RECONCILIATION_VERSION,
             "confidence": float(reading.get("confidence") or 0.0),
             "included_in_total": False,
             "resolution": "no_amount",
             "note": "No positive invoice or receipt total was read from this document.",
         }
         if amount is not None:
-            candidates.append(index)
+            if currency_status in {"ambiguous", "conflict"}:
+                uncertain_currency = True
+                extraction["financial"].update(
+                    resolution="ambiguous",
+                    note=(
+                        "The printed currency symbol is ambiguous or conflicts with another "
+                        "currency cue. Review the document manually."
+                    ),
+                )
+            else:
+                candidates.append(index)
 
     if not candidates:
         return rows, {
@@ -122,16 +157,30 @@ def reconcile_document_amounts(
             "status": "fail",
             "source": "deterministic",
             "severity": "critical",
-            "evidence": "No positive invoice or receipt amount was available to total.",
+            "evidence": (
+                "The printed document currency is ambiguous or conflicting."
+                if uncertain_currency
+                else "No positive invoice or receipt amount was available to total."
+            ),
         }
+
+    billing_candidates: list[int] = []
+    for index in candidates:
+        if _is_non_billing_support(rows[index]):
+            rows[index]["financial"].update(
+                resolution="supporting",
+                note="Non-billing evidence is not included in the document total.",
+            )
+        else:
+            billing_candidates.append(index)
 
     numbered: dict[str, list[int]] = defaultdict(list)
     unnumbered: list[int] = []
-    for index in candidates:
+    for index in billing_candidates:
         key = rows[index]["financial"].get("invoice_key")
         (numbered[str(key)] if key else unnumbered).append(index)
 
-    ambiguous = False
+    ambiguous = uncertain_currency
     included: list[int] = []
     for indices in numbered.values():
         by_amount: dict[Decimal, list[int]] = defaultdict(list)
@@ -164,18 +213,6 @@ def reconcile_document_amounts(
         )
         included.append(chosen)
 
-    known_total = sum(
-        (
-            _decimal(rows[index]["financial"].get("amount")) or Decimal("0.00")
-            for index in included
-            if rows[index]["financial"].get("currency") == claim_currency
-        ),
-        Decimal("0.00"),
-    )
-    known_currencies = {
-        rows[index]["financial"].get("currency") for index in included
-    }
-
     if unnumbered:
         if not numbered and len(unnumbered) == 1:
             chosen = unnumbered[0]
@@ -186,19 +223,6 @@ def reconcile_document_amounts(
                 duplicate_note="Not added again because this is the selected document total.",
             )
             included.append(chosen)
-        elif (
-            numbered
-            and known_currencies <= {claim_currency}
-            and known_total.quantize(_CENT) == claimed
-        ):
-            for index in unnumbered:
-                rows[index]["financial"].update(
-                    resolution="supporting",
-                    note=(
-                        "Supporting document amount is not added because the numbered "
-                        "invoices already match the claim."
-                    ),
-                )
         else:
             ambiguous = True
             _mark_ambiguous(
@@ -265,7 +289,11 @@ def amount_breakdown(
     if not extractions:
         return None
     rows = deepcopy(extractions)
-    if not all(isinstance(row.get("financial"), dict) for row in rows):
+    if not all(
+        isinstance(row.get("financial"), dict)
+        and row["financial"].get("reconciliation_version") == _RECONCILIATION_VERSION
+        for row in rows
+    ):
         rows, _ = reconcile_document_amounts(claim, rows)
 
     claimed = _decimal(claim.amount_claimed) or Decimal("0.00")
@@ -278,11 +306,17 @@ def amount_breakdown(
         financial = row.get("financial") or {}
         amount = _decimal(financial.get("amount"))
         included = bool(financial.get("included_in_total"))
-        currency = str(financial.get("currency") or claim_currency).upper()
+        currency_status = str(financial.get("currency_status") or "absent")
+        raw_currency = financial.get("currency")
+        currency = (
+            str(raw_currency).upper()
+            if raw_currency is not None
+            else claim_currency if currency_status == "absent" else None
+        )
         resolution = str(financial.get("resolution") or "no_amount")
         readable = readable or amount is not None
         ambiguous = ambiguous or resolution == "ambiguous"
-        if included and amount is not None:
+        if included and amount is not None and currency is not None:
             totals[currency] += amount
         lines.append(
             {

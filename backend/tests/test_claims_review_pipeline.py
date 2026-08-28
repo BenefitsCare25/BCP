@@ -741,6 +741,187 @@ def test_unnumbered_receipts_are_not_assumed_to_be_duplicates():
     ] == ["ambiguous", "ambiguous"]
 
 
+def test_unnumbered_receipt_is_not_ignored_when_numbered_total_matches_claim():
+    claim_id, review_id = _mk_claim(amount=100.0, docs=2, marker=b"amount-extra-receipt")
+    extracted = [
+        _extract_result(
+            document_type="tax invoice",
+            fields=[
+                {"id": "invoice", "label": "Invoice No", "value": "INV-100",
+                 "field_type": "text", "confidence": 0.99},
+                {"id": "amount", "label": "Amount Payable", "value": "SGD 100.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ],
+        ),
+        _extract_result(
+            document_type="receipt",
+            fields=[
+                {"id": "amount", "label": "Amount Paid", "value": "SGD 50.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ],
+        ),
+    ]
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        side_effect=extracted,
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    assert review.extractions[1]["financial"]["resolution"] == "ambiguous"
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "fail"
+
+
+def test_known_non_billing_evidence_can_be_excluded_without_hiding_a_receipt():
+    claim_id, review_id = _mk_claim(amount=100.0, docs=2, marker=b"amount-supporting")
+    extracted = [
+        _extract_result(
+            document_type="tax invoice",
+            fields=[
+                {"id": "invoice", "label": "Invoice No", "value": "INV-100",
+                 "field_type": "text", "confidence": 0.99},
+                {"id": "amount", "label": "Amount Payable", "value": "SGD 100.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ],
+        ),
+        _extract_result(
+            document_type="discharge_summary",
+            fields=[
+                {"id": "amount", "label": "Episode Total", "value": "SGD 50.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ],
+        ),
+    ]
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        side_effect=extracted,
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_VERIFIED
+    assert review.extractions[1]["financial"]["resolution"] == "supporting"
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "pass"
+
+
+@pytest.mark.parametrize(
+    ("printed_amount", "expected_currency"),
+    [("S$100.00", "SGD"), ("RM100.00", "MYR"), ("€100.00", "EUR")],
+)
+def test_printed_currency_symbol_is_not_rewritten_as_claim_currency(
+    printed_amount: str,
+    expected_currency: str,
+):
+    claim_id, review_id = _mk_claim(
+        amount=100.0,
+        currency="USD",
+        marker=f"symbol-{expected_currency}".encode(),
+    )
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(
+            fields=[
+                {"id": "amount", "label": "Amount Paid", "value": printed_amount,
+                 "field_type": "currency", "confidence": 0.98},
+            ]
+        ),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    assert review.extractions[0]["financial"]["currency"] == expected_currency
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "fail"
+
+
+def test_ambiguous_dollar_symbol_forces_manual_review():
+    claim_id, review_id = _mk_claim(
+        amount=100.0,
+        currency="USD",
+        marker=b"ambiguous-dollar",
+    )
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(
+            fields=[
+                {"id": "amount", "label": "Amount Paid", "value": "$100.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ]
+        ),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    financial = review.extractions[0]["financial"]
+    assert financial["currency"] is None
+    assert financial["resolution"] == "ambiguous"
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "fail"
+
+
+@pytest.mark.parametrize("printed_amount", ["1.234,56 EUR", "1234,56 EUR"])
+def test_decimal_comma_document_amount_reconciles_exactly(printed_amount: str):
+    claim_id, review_id = _mk_claim(
+        amount=1234.56,
+        currency="EUR",
+        marker=f"decimal-comma-{printed_amount}".encode(),
+    )
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(
+            fields=[
+                {"id": "amount", "label": "Amount Paid", "value": printed_amount,
+                 "field_type": "currency", "confidence": 0.98},
+            ]
+        ),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    _, review = _load(claim_id, review_id)
+    assert review.extractions[0]["financial"]["amount"] == 1234.56
+    assert review.extractions[0]["financial"]["currency"] == "EUR"
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "pass"
+
+
 def test_rerun_from_draft_409(broker: TestClient):
     claim_id, _ = _mk_claim(status="draft", marker=b"draftrerun")
     res = broker.post(f"/api/v1/claims/{claim_id}/rerun-review")

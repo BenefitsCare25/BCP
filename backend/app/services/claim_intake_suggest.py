@@ -64,7 +64,24 @@ _OTHER_PREFIX = "Other: "
 _NAME_THRESHOLD = 0.6
 
 _NRIC_RE = re.compile(r"^[A-Za-z]\d{7}[A-Za-z]$")
-_NUM_RE = re.compile(r"\d[\d,]*\.?\d*")
+_NUM_RE = re.compile(r"\d(?:[\d.,\s\u00a0\u202f']*\d)?")
+_CURRENCY_SYMBOL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?<![A-Z])US\s*\$"), "USD"),
+    (re.compile(r"(?<![A-Z])(?:SG|S)\s*\$"), "SGD"),
+    (re.compile(r"(?<![A-Z])(?:AU|A)\s*\$"), "AUD"),
+    (re.compile(r"(?<![A-Z])HK\s*\$"), "HKD"),
+    (re.compile(r"(?<![A-Z])RM(?=\s*\d)"), "MYR"),
+    (re.compile(r"€"), "EUR"),
+    (re.compile(r"£"), "GBP"),
+    (re.compile(r"₹"), "INR"),
+    (re.compile(r"(?<![A-Z])RP(?=\s*\d)"), "IDR"),
+    (re.compile(r"฿"), "THB"),
+    (re.compile(r"₱"), "PHP"),
+    (re.compile(r"(?:RMB|CN\s*[¥￥])"), "CNY"),
+    (re.compile(r"JP\s*[¥￥]"), "JPY"),
+)
+_QUALIFIED_DOLLAR_RE = re.compile(r"(?<![A-Z])(?:US|SG|S|AU|A|HK)\s*\$")
+_QUALIFIED_YEN_RE = re.compile(r"(?:CN|JP)\s*[¥￥]")
 # Date substring extractors — pull the date out of a value that may carry a
 # trailing time ("27 JUN 2026 03:03 PM") or other noise.
 _MONTHS = {m: i for i, m in enumerate(
@@ -159,8 +176,45 @@ def _num(s: str) -> float | None:
     m = _NUM_RE.search(s)
     if not m:
         return None
+    token = re.sub(r"[\s\u00a0\u202f']", "", m.group(0))
+    comma = token.count(",")
+    dot = token.count(".")
+
+    if comma and dot:
+        # With both separators present, the rightmost one is the decimal mark:
+        # 1,234.56 and 1.234,56 are both unambiguous.
+        decimal_mark = "," if token.rfind(",") > token.rfind(".") else "."
+        grouping_mark = "." if decimal_mark == "," else ","
+        whole, fraction = token.rsplit(decimal_mark, 1)
+        if not fraction or len(fraction) > 2 or decimal_mark in whole:
+            return None
+        token = f"{whole.replace(grouping_mark, '')}.{fraction}"
+    elif comma:
+        if comma == 1:
+            whole, tail = token.split(",")
+            # One or two trailing digits are cents; three are a conventional
+            # thousands group (1,234).
+            token = f"{whole}.{tail}" if 1 <= len(tail) <= 2 else whole + tail
+        else:
+            groups = token.split(",")
+            standard = all(len(group) == 3 for group in groups[1:])
+            indian = (
+                len(groups[-1]) == 3
+                and all(len(group) == 2 for group in groups[1:-1])
+            )
+            if not (standard or indian):
+                return None
+            token = "".join(groups)
+    elif dot > 1:
+        groups = token.split(".")
+        if all(len(group) == 3 for group in groups[1:]):
+            token = "".join(groups)
+        elif len(groups[-1]) <= 2 and all(len(group) == 3 for group in groups[1:-1]):
+            token = f"{''.join(groups[:-1])}.{groups[-1]}"
+        else:
+            return None
     try:
-        return float(m.group(0).replace(",", ""))
+        return float(token)
     except ValueError:
         return None
 
@@ -255,14 +309,34 @@ def _amount(fields: list[dict[str, Any]]) -> tuple[float | None, float]:
     return None, 0.0
 
 
-def _currency(fields: list[dict[str, Any]]) -> str | None:
+def _currency_reading(fields: list[dict[str, Any]]) -> tuple[str | None, str]:
+    currencies: set[str] = set()
+    ambiguous_symbol = False
     for f in fields:
         text = f"{_val(f)} {f.get('raw_text', '')}".upper()
         if _ftype(f) == "currency" or "currency" in _label(f) or _ftype(f) in ("number",):
             for code in ALLOWED_CURRENCIES:
                 if re.search(rf"\b{code}\b", text):
-                    return code
-    return None
+                    currencies.add(code)
+            for pattern, code in _CURRENCY_SYMBOL_PATTERNS:
+                if pattern.search(text):
+                    currencies.add(code)
+            if "$" in text and not _QUALIFIED_DOLLAR_RE.search(text):
+                ambiguous_symbol = True
+            if any(symbol in text for symbol in ("¥", "￥")) and not _QUALIFIED_YEN_RE.search(text):
+                ambiguous_symbol = True
+    if len(currencies) == 1:
+        return next(iter(currencies)), "explicit"
+    if len(currencies) > 1:
+        return None, "conflict"
+    if ambiguous_symbol:
+        return None, "ambiguous"
+    return None, "absent"
+
+
+def _currency(fields: list[dict[str, Any]]) -> str | None:
+    currency, _ = _currency_reading(fields)
+    return currency
 
 
 def _date_field(
@@ -940,11 +1014,13 @@ def document_financial_reading(fields: list[dict[str, Any]]) -> dict[str, Any]:
     """
     invoice_number, invoice_confidence = _invoice_number(fields)
     amount, amount_confidence = _amount(fields)
+    currency, currency_status = _currency_reading(fields)
     return {
         "invoice_number": invoice_number,
         "invoice_key": normalize_invoice_number(invoice_number) or None,
         "amount": amount,
-        "currency": _currency(fields),
+        "currency": currency,
+        "currency_status": currency_status,
         "confidence": amount_confidence,
         "invoice_confidence": invoice_confidence,
     }
