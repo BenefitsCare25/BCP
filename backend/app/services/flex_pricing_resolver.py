@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
+from itertools import pairwise
 from typing import Any, TypeGuard
 
 from sqlalchemy import select
@@ -124,6 +125,83 @@ def validate_pricing_shape(pricing: dict[str, Any]) -> list[str]:
                     errs.append(
                         f"product '{pid}': price for '{key}'/'{label}' must be ≥ 0."
                     )
+        rates = block.get("voluntary_rates")
+        if rates is not None:
+            if not isinstance(rates, list):
+                errs.append(f"product '{pid}': 'voluntary_rates' must be a list.")
+            else:
+                if not rates:
+                    errs.append(
+                        f"product '{pid}': 'voluntary_rates' needs at least one band."
+                    )
+                rate_labels: set[str] = set()
+                valid_ranges: list[tuple[str, int | None, int | None]] = []
+                for rate in rates:
+                    if not isinstance(rate, dict):
+                        errs.append(
+                            f"product '{pid}': each voluntary rate must be an object."
+                        )
+                        continue
+                    label = str(rate.get("label") or "").strip()
+                    amount = rate.get("rate")
+                    lo, hi = rate.get("min"), rate.get("max")
+                    if not label:
+                        errs.append(
+                            f"product '{pid}': each voluntary rate needs a label."
+                        )
+                    elif label in rate_labels:
+                        errs.append(
+                            f"product '{pid}': duplicate voluntary rate '{label}'."
+                        )
+                    rate_labels.add(label)
+                    if (
+                        isinstance(amount, bool)
+                        or not isinstance(amount, (int, float))
+                        or amount < 0
+                    ):
+                        errs.append(
+                            f"product '{pid}': voluntary rate '{label}' must be non-negative."
+                        )
+                    if lo is not None and not _is_age(lo):
+                        errs.append(
+                            f"product '{pid}': voluntary rate '{label}' min is invalid."
+                        )
+                    if hi is not None and not _is_age(hi):
+                        errs.append(
+                            f"product '{pid}': voluntary rate '{label}' max is invalid."
+                        )
+                    if isinstance(lo, int) and isinstance(hi, int) and lo > hi:
+                        errs.append(
+                            f"product '{pid}': voluntary rate '{label}' min > max."
+                        )
+                    if (
+                        (lo is None or _is_age(lo))
+                        and (hi is None or _is_age(hi))
+                        and not (
+                            isinstance(lo, int)
+                            and isinstance(hi, int)
+                            and lo > hi
+                        )
+                    ):
+                        valid_ranges.append((label, lo, hi))
+                valid_ranges.sort(key=lambda band: band[1] if band[1] is not None else -1)
+                for previous, current in pairwise(valid_ranges):
+                    previous_label, _previous_min, previous_max = previous
+                    current_label, current_min, _current_max = current
+                    if (
+                        previous_max is None
+                        or current_min is None
+                        or current_min <= previous_max
+                    ):
+                        errs.append(
+                            f"product '{pid}': voluntary rates '{previous_label}' and "
+                            f"'{current_label}' overlap."
+                        )
+                    elif current_min > previous_max + 1:
+                        errs.append(
+                            f"product '{pid}': voluntary rates leave ages "
+                            f"{previous_max + 1}-{current_min - 1} uncovered."
+                        )
         if "dependant" in block:
             errs.extend(_validate_dependant_block(pid, block["dependant"]))
     return errs
@@ -354,8 +432,8 @@ def _unambiguous_by_plan[ValueT](
     selection paths (config grid picks the cohort's compulsory category; a member
     may be matched to a sibling), so an unambiguous plan_code is still safe to
     price. Ambiguous plan_codes (two tiers, same code, different value) return None
-    rather than guess. Shared by the matrix (``_plan_code_fallback``) and the slip
-    index (``slip_premium_for``) so both resolve a drifted category identically.
+    rather than guess. This fallback is limited to slip-derived and dependant
+    sub-config maps; broker price-tag overrides require an exact category tier.
     """
     plan = _plan_of_key(key)
     if not plan:
@@ -367,23 +445,16 @@ def _unambiguous_by_plan[ValueT](
 def _tier_row[ValueT](
     by_key: dict[str, ValueT] | None, key: str
 ) -> ValueT | None:
-    """A tier's value from a ``{tier_key: value}`` map: the exact key, else the
-    unambiguous plan-code row (mirrors ``price_tag_for``'s fallback so a tier whose
-    category half drifted still resolves). The single lookup shared by every
-    slip/sub-config resolver (premium, family, per_pax, manual sub-dicts)."""
+    """A slip/sub-config value by exact tier, then unambiguous plan code.
+
+    Broker price-tag overrides deliberately do not use this helper because they
+    are category-specific unless explicitly fanned out by the editor.
+    """
     if not isinstance(by_key, dict):
         return None
     if key in by_key:
         return by_key[key]
     return _unambiguous_by_plan(by_key, key)
-
-
-def _plan_code_fallback(
-    tags: dict[str, Any], key: str
-) -> dict[str, Any] | None:
-    """Matrix plan-code fallback: the unambiguous price row for ``key``'s plan."""
-    row = _unambiguous_by_plan(tags, key)
-    return row if isinstance(row, dict) else None
 
 
 def price_tag_for(
@@ -396,9 +467,10 @@ def price_tag_for(
     tags = block.get("price_tags")
     if not isinstance(tags, dict):
         return None
+    # Overrides are deliberately category-specific. A missing exact row must
+    # never borrow a sibling cohort's amount; the editor's explicit Apply action
+    # is the only supported fan-out path.
     row = tags.get(key)
-    if not isinstance(row, dict):
-        row = _plan_code_fallback(tags, key)
     if not isinstance(row, dict):
         return None
     label = age_band_label(block.get("age_bands") or [], age)
@@ -510,11 +582,16 @@ def slip_premium_index_from(tier_sets: dict[str, Any]) -> dict[str, dict[str, An
 
 
 def slip_premium_for(
-    slip_idx: dict[str, Any] | None, product_id: str, key: str, age: int | None = None
+    slip_idx: dict[str, Any] | None,
+    product_id: str,
+    key: str,
+    age: int | None = None,
+    voluntary_rates: list[Any] | None = None,
 ) -> float | None:
-    """The slip premium for a (product, tier) — None when unset. Mirrors
-    ``price_tag_for``'s plan-code fallback so a tier whose category half differs
-    from the configured key still resolves when its plan_code is unambiguous.
+    """The slip premium for a (product, tier) — None when unset.
+
+    Slip-derived data may use an unambiguous plan-code fallback when its category
+    half differs; broker matrix overrides remain exact-tier only.
 
     A voluntary life tier stores an age-banded spec, so its price tag is computed
     from the member's ``age``: ``basis / 1000 x rate[age band]``. When ``age`` is
@@ -529,10 +606,21 @@ def slip_premium_for(
         return float(val)
     if isinstance(val, dict):
         basis = val.get("basis")
-        rate = voluntary_rate_for_age(val.get("voluntary_rates"), age)
+        rate = voluntary_rate_for_age(
+            voluntary_rates if voluntary_rates is not None else val.get("voluntary_rates"),
+            age,
+        )
         if isinstance(basis, (int, float)) and rate is not None:
             return round(basis / 1000.0 * rate, 2)
     return None
+
+
+def configured_voluntary_rates(
+    pricing: dict[str, Any] | None, product_id: str
+) -> list[Any] | None:
+    """A product's saved voluntary-rate override, or None for slip recommendations."""
+    rates = (_product_block(pricing, product_id) or {}).get("voluntary_rates")
+    return rates if isinstance(rates, list) else None
 
 
 def _tier_charge(
@@ -563,7 +651,16 @@ def _tier_charge(
     if override is not None:
         return _gross(override, m)
     if source == FlexPriceSource.slip:
-        return _gross(slip_premium_for(slip_idx, product_id, key, age), m)
+        return _gross(
+            slip_premium_for(
+                slip_idx,
+                product_id,
+                key,
+                age,
+                configured_voluntary_rates(pricing, product_id),
+            ),
+            m,
+        )
     return None
 
 
@@ -1258,17 +1355,26 @@ def _chosen_option_spec(
     return None
 
 
-def option_amount(spec: object, age: int | None) -> float | None:
+def option_amount(
+    spec: object,
+    age: int | None,
+    voluntary_rates: list[Any] | None = None,
+) -> float | None:
     """Price one covered dependant from an option spec: a flat amount, or an
     age-banded ``{basis, voluntary_rates}`` resolved on the DEPENDANT's age
-    (unknown age → None, unpriced — never guess a band)."""
+    (unknown age → None, unpriced — never guess a band). A saved product-level
+    rate table replaces the extracted table for every voluntary employee and
+    dependant option under that product."""
     if isinstance(spec, bool):
         return None
     if isinstance(spec, (int, float)):
         return float(spec)
     if isinstance(spec, dict):
         basis = spec.get("basis")
-        rate = voluntary_rate_for_age(spec.get("voluntary_rates"), age)
+        rate = voluntary_rate_for_age(
+            voluntary_rates if voluntary_rates is not None else spec.get("voluntary_rates"),
+            age,
+        )
         if isinstance(basis, (int, float)) and rate is not None:
             return round(basis / 1000.0 * rate, 2)
     return None
@@ -1372,12 +1478,13 @@ def _dependant_tag_raw(
         )
         if not profiles:
             return 0.0  # Employee-Only — covered, no dependant cost
+        rate_override = configured_voluntary_rates(pricing, product_id)
         total = 0.0
         for role, dep_age in profiles:
             spec = (opts or {}).get(role)
             if spec is None:
                 spec = _chosen_option_spec(choices, role, dep_option_ids)
-            amt = option_amount(spec, dep_age)
+            amt = option_amount(spec, dep_age, rate_override)
             if amt is None:
                 # ANY unpriced dependant → the whole tag is unpriced (surfaced
                 # by the unpriced-election guard), never a silent partial sum.

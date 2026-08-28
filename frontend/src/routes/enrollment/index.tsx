@@ -22,7 +22,6 @@ import { useSession } from "@/stores/session";
 import {
   type EnrollmentWindow,
   type FlexDrawdownRule,
-  type FlexPriceSource,
   useCloseWindow,
   useCreateWindow,
   useDeleteWindow,
@@ -44,6 +43,7 @@ import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Segmented } from "@/components/ui/segmented";
 import { useFlexPricingEditor } from "@/components/enrollment/FlexPricingCard";
 import { FlexProductList } from "@/components/enrollment/FlexProductList";
+import { voluntaryRateIssues } from "@/components/enrollment/LifeVoluntaryPanel";
 import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
 import { useMe } from "@/api/hooks";
 
@@ -53,41 +53,9 @@ const STATUS_VARIANT: Record<string, "primary" | "good" | "outline"> = {
   closed: "good",
 };
 
-/** The per-product price-tag source (slip vs manual matrix) configured for the
- * year. The source is a column on EnrollmentWindow, but it is price-tag setup,
- * so it is edited on the Price Tag tab (which writes it to every still-editable
- * window) and merely CARRIED by the create-window form. Both read it from here:
- * two readings of "what source is configured" would let a new window silently
- * revert what the Price Tag tab shows.
- *
- * It reads the newest window the tab can WRITE to (not `governing_flex_config`'s
- * latest non-draft), because reading a different window than we write to makes a
- * saved source snap straight back: on a year whose only window is still a draft,
- * the save lands on the draft while a governing-window read falls back to
- * "slip" — the toggle flips back, the matrix editor collapses and the Save
- * button disappears, all reporting success. Windows are ordered `opens_at DESC`
- * and a save writes the same map to every editable one, so [0] is both the
- * newest and (after any save through this tab) representative. Everything closed
- * → nothing is writable, so fall back to the governing window for display and
- * the toggle goes read-only. */
-function configuredSourceMap(
-  windows: EnrollmentWindow[] | undefined,
-): Record<string, FlexPriceSource> {
-  return sourceWindow(windows)?.flex_price_source ?? {};
-}
-
 function editableWindowsOf(windows: EnrollmentWindow[] | undefined) {
-  // Price source is part of the reviewed configuration and is frozen on open.
+  // Price tags are reviewed configuration and are frozen once a period opens.
   return (windows ?? []).filter((w) => w.status === "draft");
-}
-
-function sourceWindow(
-  windows: EnrollmentWindow[] | undefined,
-): EnrollmentWindow | undefined {
-  return (
-    editableWindowsOf(windows)[0] ??
-    (windows ?? []).filter((w) => w.status !== "draft")[0]
-  );
 }
 
 function toLocalInput(): { opens: string; closes: string } {
@@ -103,17 +71,12 @@ function toLocalInput(): { opens: string; closes: string } {
 export function EnrollmentDashboardPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: windows, isLoading } = useEnrollmentWindows(policyYearId);
-  // Needed only for the flex product list, which the new window's price-tag
-  // source map is built over. The tags and their source are set on the Price Tag
-  // tab — nothing here renders them.
-  const { data: flexPricing } = useFlexPricing(policyYearId);
   const createWindow = useCreateWindow(policyYearId);
   const openWindow = useOpenWindow();
   const closeWindow = useCloseWindow();
   const deleteWindow = useDeleteWindow();
   const updateWindow = useUpdateWindow();
 
-  const flexProducts = flexPricing?.products ?? [];
   const defaults = toLocalInput();
   const [name, setName] = useState("");
   const [opensAt, setOpensAt] = useState(defaults.opens);
@@ -126,9 +89,7 @@ export function EnrollmentDashboardPage() {
   // Whether benefits selections may draw more flex than the member's wallet
   // holds. Off (recommended), submit/confirm reject an overdrawn enrollment.
   const [allowOverdraft, setAllowOverdraft] = useState(false);
-  // Flex funding config for this window: the company-wide drawdown rule. The
-  // per-product price-tag SOURCE is also a window column, but it is price-tag
-  // setup — it is chosen on the Price Tag tab and only carried here.
+  // Flex funding config for this window: the company-wide drawdown rule.
   const [drawdownRule, setDrawdownRule] = useState<FlexDrawdownRule>("full");
   const [confirmClose, setConfirmClose] = useState<EnrollmentWindow | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<EnrollmentWindow | null>(null);
@@ -168,15 +129,6 @@ export function EnrollmentDashboardPage() {
       toast.error("Both open and close times are required.");
       return;
     }
-    // Carry the year's configured price-tag source onto the new window (it is a
-    // window column). Sending an explicit entry for EVERY product matters: the
-    // resolver skips building the slip premium index when every named product is
-    // priced from the matrix, so a partial map can leave an unnamed slip product
-    // unpriced.
-    const inherited = configuredSourceMap(windows);
-    const sources = Object.fromEntries(
-      flexProducts.map((p) => [p.product_id, inherited[p.product_id] ?? "slip"]),
-    );
     createWindow.mutate(
       {
         name: name.trim(),
@@ -190,7 +142,6 @@ export function EnrollmentDashboardPage() {
         member_self_service: memberSelfService,
         allow_overdraft: allowOverdraft,
         flex_drawdown_rule: drawdownRule,
-        flex_price_source: Object.keys(sources).length ? sources : null,
       },
       {
         onSuccess: () => {
@@ -577,22 +528,9 @@ const isEnrollmentTab = (v: string | undefined): v is EnrollmentTab =>
 // workflow (a window's "Leave trading" switch is what exposes it to members), so
 // it lives here rather than on the company Settings page —
 // /configuration/settings?tab=enrollment redirects to this tab.
-// Everything the flex WALLET pays for, in one place: where each product's price
-// tag comes from (slip vs manual matrix), what each plan and dependant option
-// costs, and the age-banded voluntary rates. It used to live inside the
-// create-window form, which meant the year's prices were unreachable unless you
-// were opening a window — and left the same product list rendered on two tabs.
-//
-// The SOURCE is a column on EnrollmentWindow, so saving it writes the (complete)
-// map to every still-editable window — the OPEN one included, since a broker who
-// mis-set the source has to be able to correct it without closing the period. A
-// closed period keeps the source its enrolment actually ran under.
-//
-// Changing it mid-period does NOT retroactively reprice: each election snapshots
-// its `flex_price_tag` when saved and `enrollment_flex_draft` sums those stored
-// values, so what a member submitted under is what confirm checks. It changes
-// what the benefit statement recomputes and what the NEXT save of a selection
-// prices at.
+// Everything the flex wallet pays for, in one place. Placement-slip values are
+// recommendations; a saved field is an explicit broker override. Election
+// snapshots preserve the price a member submitted under.
 function EnrollmentPriceTagTab() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: flexPricing, isLoading } = useFlexPricing(policyYearId);
@@ -600,16 +538,7 @@ function EnrollmentPriceTagTab() {
   const savePricingConfig = useSaveEnrollmentPricingConfig(policyYearId);
   const { data: windows } = useEnrollmentWindows(policyYearId);
   const [openEditor, setOpenEditor] = useState<Record<string, boolean>>({});
-  // Unsaved source picks, over the saved map.
-  const [sourceEdits, setSourceEdits] = useState<Record<string, FlexPriceSource>>({});
-
-  const savedSources = configuredSourceMap(windows);
-  const sourceFor = (pid: string): FlexPriceSource =>
-    sourceEdits[pid] ?? savedSources[pid] ?? "slip";
   const editableWindows = editableWindowsOf(windows);
-  const sourceDirty = Object.entries(sourceEdits).some(
-    ([pid, v]) => v !== (savedSources[pid] ?? "slip"),
-  );
 
   if (!policyYearId) {
     return (
@@ -620,30 +549,37 @@ function EnrollmentPriceTagTab() {
   }
 
   const products = flexPricing?.products ?? [];
-  const hasOpenWindow = (windows ?? []).some((w) => w.status === "open");
-  const canEditSource = editableWindows.length > 0 && !hasOpenWindow;
+  const openWindow = (windows ?? []).find((w) => w.status === "open");
+  const canEditPricing = editableWindows.length > 0 && !openWindow;
+  // Incomplete recommendations stay visible as attention items, but should not
+  // prevent a broker from saving an unrelated fixed-price correction. Once a
+  // product has an explicit age-band override, that override must be complete.
+  const invalidEditedAgeProducts = products.filter((product) => {
+    return (
+      product.tiers.some((tier) => tier.pricing_mode === "age_banded") &&
+      flexEditor.voluntaryRatesEdited(product) &&
+      voluntaryRateIssues(flexEditor.voluntaryRatesFor(product)).length > 0
+    );
+  });
 
   async function save() {
-    if (!canEditSource) {
+    if (!canEditPricing) {
       toast.error(
         "Price tags can only be changed while a draft period exists and none is open.",
       );
       return;
     }
-    // Write an explicit entry for EVERY product, not just the edited ones —
-    // the resolver skips the slip premium index when every named product is
-    // priced from the matrix, so a partial map can leave an unnamed slip
-    // product unpriced.
-    const map = Object.fromEntries(
-      products.map((p) => [p.product_id, sourceFor(p.product_id)]),
-    ) as Record<string, FlexPriceSource>;
+    if (invalidEditedAgeProducts.length > 0) {
+      toast.error(
+        `Review the age bands for ${invalidEditedAgeProducts.map((product) => product.product_code).join(", ")}.`,
+      );
+      return;
+    }
     try {
       await savePricingConfig.mutateAsync({
         pricing: flexEditor.pricing,
-        flexPriceSource: map,
       });
       flexEditor.markSaved();
-      setSourceEdits({});
       toast.success("Price tags saved");
     } catch (e) {
       toast.error(formatError(e));
@@ -652,23 +588,37 @@ function EnrollmentPriceTagTab() {
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-          <h2 className="text-sm font-semibold text-foreground">Flex price tags</h2>
-          <InfoHint>
-            What each plan draws from the member&apos;s flex wallet — separate
-            from the insurer premium. A blank matrix cell falls back to the
-            placement-slip premium when the product is priced &ldquo;from
-            slip&rdquo;. Buy/sell-leave is priced on the Leave tab.
-          </InfoHint>
+      <div className="sticky top-0 z-20 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
+        <div>
+          <div className="flex items-center gap-1">
+            <h2 className="text-sm font-semibold text-foreground">
+              Recommended price book
+            </h2>
+            <InfoHint>
+              What each plan draws from the member&apos;s flex wallet, separate
+              from the insurer premium. The system recommends values from the
+              placement slip; only fields you change are saved as overrides.
+              Buy/sell-leave is priced on the Leave tab.
+            </InfoHint>
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Review the detected values and correct only the fields that are wrong.
+          </p>
         </div>
-        {(flexEditor.dirty || sourceDirty) && (
+        {flexEditor.dirty && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => void save()}
             disabled={
-              !canEditSource || savePricingConfig.isPending
+              !canEditPricing ||
+              invalidEditedAgeProducts.length > 0 ||
+              savePricingConfig.isPending
+            }
+            title={
+              invalidEditedAgeProducts.length > 0
+                ? "Resolve the highlighted age-band issues before saving"
+                : undefined
             }
           >
             {savePricingConfig.isPending && (
@@ -678,14 +628,20 @@ function EnrollmentPriceTagTab() {
           </Button>
         )}
       </div>
-      {/* The source rides the enrollment window, so with no editable window
-          there is nothing to write it to — say so rather than offering a
-          control that saves nowhere. */}
-      {!canEditSource && products.length > 0 && (
-        <p className="mt-2 text-2xs text-muted-foreground">
-          Price tags are read-only while a period is open. Create or edit a
-          draft period to configure its source and matrix before opening.
-        </p>
+      {!canEditPricing && products.length > 0 && (
+        <div className="mt-3 flex items-start gap-2 rounded-md border border-warn/40 bg-warn-soft/30 px-3 py-2 text-xs text-foreground">
+          <Lock className="mt-0.5 size-3.5 shrink-0 text-warn" />
+          <p>
+            {openWindow ? (
+              <>
+                Pricing is locked while <strong>{openWindow.name}</strong> is open.
+                Close it before changing recommendations or overrides.
+              </>
+            ) : (
+              <>Create a draft enrolment period before changing price tags.</>
+            )}
+          </p>
+        </div>
       )}
       <div className="mt-3">
         {isLoading ? (
@@ -695,23 +651,12 @@ function EnrollmentPriceTagTab() {
         ) : (
           <FlexProductList
             products={products}
-            pricing={flexPricing?.pricing}
+            pricing={flexEditor.pricing}
             editor={flexEditor}
-            sourceFor={sourceFor}
-            onSourceChange={
-              canEditSource
-                ? (pid, v) => setSourceEdits((s) => ({ ...s, [pid]: v }))
-                : undefined
-            }
-            openEditor={canEditSource ? openEditor : undefined}
-            onToggleEditor={
-              canEditSource
-                ? (pid) =>
-                    setOpenEditor((s) => ({
-                      ...s,
-                      [pid]: !(s[pid] ?? sourceFor(pid) === "manual"),
-                    }))
-                : undefined
+            editable={canEditPricing}
+            openEditor={openEditor}
+            onToggleEditor={(pid) =>
+              setOpenEditor((s) => ({ ...s, [pid]: !s[pid] }))
             }
             emptyHint={
               <p className="text-sm text-muted-foreground">

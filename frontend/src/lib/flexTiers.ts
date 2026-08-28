@@ -97,6 +97,22 @@ export function planScalar(
   return vals.length ? vals[0] : null;
 }
 
+export type TierPriceRow = {
+  storedKey: string;
+  row: Record<string, number | null>;
+};
+
+/** Resolver-aligned matrix lookup. Overrides are exact tier/category rows;
+ * cross-category writes happen only through the editor's explicit Apply action. */
+export function priceRowForTier(
+  priceTags: Record<string, Record<string, number | null>> | undefined,
+  tier: FlexPricingTier,
+): TierPriceRow | null {
+  if (!priceTags) return null;
+  const exact = priceTags[tier.key];
+  return exact ? { storedKey: tier.key, row: exact } : null;
+}
+
 /** Deterministic JSON with object keys sorted, so `{a,b}` and `{b,a}` serialise
  *  identically — {@link allEqual} must not split structurally-equal rows just
  *  because their keys were inserted in a different order. */

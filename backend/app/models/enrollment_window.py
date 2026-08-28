@@ -106,8 +106,9 @@ class EnrollmentWindow(Base, TimestampMixin):
     )
     # Which products are in scope. NULL = all confirmed products for the year.
     product_scope: Mapped[list[Any] | None] = mapped_column(JSON(), nullable=True)
-    # Per-product flex price-tag source: {product_id: "slip" | "manual"}. A product
-    # not listed defaults to "manual" (the portal matrix). See ``FlexPriceSource``.
+    # Legacy per-product source retained for historical windows and older clients.
+    # New unified price books leave this NULL: recommendations come from the slip
+    # and any saved matrix field is an explicit override.
     flex_price_source: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)
     # Company-wide flex drawdown rule for this window. See ``FlexDrawdownRule``.
     flex_drawdown_rule: Mapped[str] = mapped_column(

@@ -346,10 +346,15 @@ export interface EnrollmentOptions {
 
 export interface FlexPricingTier {
   key: string;
+  /** Same option across cohorts; distinct when options reuse a plan code. */
+  option_id: string;
   label: string;
   plan_code: string | null;
+  /** Pricing mechanics for this tier; a life product can mix fixed and age-banded tiers. */
+  pricing_mode: FlexPricingMode;
   direction: "upgrade" | "downgrade" | "same" | "unknown";
   is_baseline: boolean;
+  participation: "compulsory" | "voluntary" | null;
   /** Per-member slip premium for this tier (null = none), for the "from slip" preview. */
   slip_premium: number | null;
   /** Per-member sum insured (basis) — drives the life-product live preview. */
@@ -357,6 +362,8 @@ export interface FlexPricingTier {
   /** The tier's own cohort (job-category) name, to disambiguate rows the UI can't
    *  fold (a plan repeating across cohorts that price differently). Null when none. */
   cohort_label?: string | null;
+  /** Stable product-local employee cohort identity; never derive this from labels. */
+  cohort_id: string;
 }
 
 export type FlexPricingMode = "age_banded" | "plan_type";
@@ -370,9 +377,9 @@ export interface DependantAgeLimits {
 export interface FlexPricingProduct {
   product_id: string;
   product_code: string;
-  /** Insurance line — drives the Life/Medical label + age-banded vs tiered layout. */
+  /** Descriptive insurance line used for the product label. */
   line: InsuranceLine;
-  /** Default config shape from the product's insurance line (life → age_banded). */
+  /** Aggregate mechanics: age-banded when at least one tier is age-banded. */
   pricing_mode: FlexPricingMode;
   /** Age-banded voluntary rate table (life products), else null. */
   voluntary_rates: VoluntaryRateBand[] | null;
@@ -409,7 +416,9 @@ export interface FlexAgeBand {
 export interface FlexPricingProductBlock {
   age_bands: FlexAgeBand[];
   price_tags: Record<string, Record<string, number | null>>;
-  /** Per-policy-year override of the product's default pricing_mode. */
+  /** Broker override of parsed voluntary rates; absent means use the recommendation. */
+  voluntary_rates?: VoluntaryRateBand[];
+  /** Deprecated legacy hint; tier pricing_mode is authoritative. */
   mode?: FlexPricingMode;
   /** Dependant pricing config (family-tier amounts or per-pax flat rate). */
   dependant?: DependantConfig;
@@ -651,9 +660,7 @@ export function useCreateWindow(policyYearId: string | undefined) {
   });
 }
 
-/** Partial window edit. Used by the Price Tag tab to write the per-product
- *  price-tag source onto every still-editable window (a closed one is history —
- *  the server 409s it). */
+/** Partial window edit. A closed window is historical and the server rejects it. */
 export function useUpdateWindow() {
   const qc = useQueryClient();
   return useMutation({
@@ -777,16 +784,10 @@ export function useSaveEnrollmentPricingConfig(
 ) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      pricing,
-      flexPriceSource,
-    }: {
-      pricing: FlexPricingBag;
-      flexPriceSource: Record<string, FlexPriceSource>;
-    }) =>
+    mutationFn: ({ pricing }: { pricing: FlexPricingBag }) =>
       api.put<FlexPricing>(
         `/policy-years/${policyYearId}/enrollment-pricing-config`,
-        { pricing, flex_price_source: flexPriceSource },
+        { pricing },
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["flex-pricing"] });

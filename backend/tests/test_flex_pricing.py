@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.api.v1.flex_pricing import _financial_pricing_mode
 from app.models import Dependant, Product
 from app.schemas.api import PlanFinancials, VoluntaryRateBand
 from app.services.flex_pricing_resolver import (
@@ -73,11 +74,9 @@ def test_price_tag_for_missing_returns_none():
     assert price_tag_for(None, "prodA", "cat1::GOLD", 25) is None         # no matrix
 
 
-def test_price_tag_for_plan_code_fallback_when_category_drifts():
-    # The category half of the key can differ across baseline-selection paths;
-    # an UNAMBIGUOUS plan_code still resolves (GOLD/SILVER are each unique here).
-    assert price_tag_for(_PRICING, "prodA", "OTHERCAT::GOLD", 25) == 1000.0
-    assert price_tag_for(_PRICING, "prodA", "None::SILVER", 35) == 900.0
+def test_price_tag_for_requires_the_exact_category_tier():
+    assert price_tag_for(_PRICING, "prodA", "OTHERCAT::GOLD", 25) is None
+    assert price_tag_for(_PRICING, "prodA", "None::SILVER", 35) is None
 
 
 def test_price_tag_for_ambiguous_plan_code_does_not_guess():
@@ -101,6 +100,25 @@ def test_price_tag_for_ambiguous_plan_code_does_not_guess():
 # ── Price-tag source (slip vs manual) + drawdown rule (full vs on_change) ─────
 
 # GTL-style matrix: default plan P300 costs 300, the P400 upgrade costs 400.
+def test_category_price_never_propagates_to_a_sibling_cohort_or_option():
+    pricing = {
+        "products": {
+            "p": {
+                "age_bands": _BANDS,
+                "price_tags": {
+                    "exec-option-1::P": {
+                        "<30": 100,
+                        "30-49": 100,
+                        "50+": 100,
+                    },
+                },
+            }
+        }
+    }
+    assert price_tag_for(pricing, "p", "staff-option-1::P", 25) is None
+    assert price_tag_for(pricing, "p", "exec-option-2::P", 25) is None
+
+
 _DRAW = {
     "products": {
         "gtl": {
@@ -302,6 +320,33 @@ _DEP_MANUAL = {
 }
 # Slip family index: EO baseline rate 1200, ES 3000 → spouse increment 1800, etc.
 _FAM_SLIP = {"ghs": {"catH::P1": {"spouse": 1800.0, "child": 1000.0, "both": 2600.0}}}
+
+
+def test_editor_pricing_mode_follows_tier_financial_mechanics():
+    assert _financial_pricing_mode(None) == "plan_type"
+    assert (
+        _financial_pricing_mode(
+            PlanFinancials(rate_basis="per_1000_si", premium_rate=0.072)
+        )
+        == "plan_type"
+    )
+    # A missing extracted table is still an age-banded data-quality issue when
+    # the tier explicitly declares the age-banded rate basis.
+    assert (
+        _financial_pricing_mode(PlanFinancials(rate_basis="age_banded"))
+        == "age_banded"
+    )
+    assert (
+        _financial_pricing_mode(
+            PlanFinancials(
+                rate_basis="per_1000_si",
+                voluntary_rates=[
+                    VoluntaryRateBand(label="All ages", min=None, max=None, rate=1.0)
+                ],
+            )
+        )
+        == "age_banded"
+    )
 
 
 def test_family_role_from_counts():
@@ -781,6 +826,92 @@ def test_voluntary_rates_round_trip_through_member_financials_no_crash() -> None
     assert slip_premium_for(idx, "p", "a::10", 47) == 825.0
 
 
+def test_saved_voluntary_rates_override_system_recommendation() -> None:
+    slip_idx = {
+        "p": {
+            "a::10": {
+                "basis": 500_000.0,
+                "voluntary_rates": [
+                    {"label": "45-49", "min": 45, "max": 49, "rate": 1.65}
+                ],
+            }
+        }
+    }
+    pricing = {
+        "products": {
+            "p": {
+                "age_bands": [],
+                "price_tags": {},
+                "voluntary_rates": [
+                    {"label": "45-49", "min": 45, "max": 49, "rate": 2.0}
+                ],
+            }
+        }
+    }
+    tag = member_price_tag(
+        source_map=None,
+        rule="full",
+        pricing=pricing,
+        slip_idx=slip_idx,
+        product_id="p",
+        age=47,
+        declined=False,
+        tier_category_id="a",
+        plan_code="10",
+        default_tier_category_id="a",
+        default_plan="10",
+    )
+    assert tag == 1000.0
+
+
+def test_validate_pricing_rejects_bad_voluntary_rate_override() -> None:
+    pricing = {
+        "products": {
+            "p": {
+                "age_bands": [],
+                "price_tags": {},
+                "voluntary_rates": [
+                    {"label": "45-49", "min": 50, "max": 45, "rate": -1}
+                ],
+            }
+        }
+    }
+    errors = validate_pricing_shape(pricing)
+    assert any("non-negative" in error for error in errors)
+    assert any("min > max" in error for error in errors)
+
+
+def test_validate_pricing_rejects_voluntary_rate_gaps_and_overlaps() -> None:
+    def errors_for(rates: list[dict[str, object]]) -> list[str]:
+        return validate_pricing_shape(
+            {
+                "products": {
+                    "p": {
+                        "age_bands": [],
+                        "price_tags": {},
+                        "voluntary_rates": rates,
+                    }
+                }
+            }
+        )
+
+    overlap = errors_for(
+        [
+            {"label": "Under 40", "min": None, "max": 40, "rate": 1.0},
+            {"label": "40+", "min": 40, "max": None, "rate": 2.0},
+        ]
+    )
+    gap = errors_for(
+        [
+            {"label": "Under 40", "min": None, "max": 39, "rate": 1.0},
+            {"label": "45+", "min": 45, "max": None, "rate": 2.0},
+        ]
+    )
+    assert any("overlap" in error for error in overlap)
+    assert any("40-44 uncovered" in error for error in gap)
+    assert any("at least one band" in error for error in errors_for([]))
+
+
 def test_gst_gross_up_on_price_tags() -> None:
     # The __gst__ stamp (product override or scheme default) grosses matrix and
     # slip tags at the output boundary — raw stored amounts stay exclusive.
@@ -913,6 +1044,11 @@ def test_option_amount_flat_and_age_banded():
     ]}
     assert option_amount(spec, 30) == 35.2   # 40k/1000 x 0.88
     assert option_amount(spec, 40) == 52.8   # 40k/1000 x 1.32
+    corrected = [
+        {"label": "34 & below", "min": None, "max": 34, "rate": 1.0},
+        {"label": "35 to 44", "min": 35, "max": 44, "rate": 2.0},
+    ]
+    assert option_amount(spec, 40, corrected) == 80.0
     assert option_amount(spec, None) is None  # unknown age -> unpriced
     assert option_amount(None, 30) is None
 
@@ -941,6 +1077,19 @@ def test_dependant_tag_slip_options_prices_each_covered_dependant():
     assert dependant_tag(
         **common, spouse_count=0, child_count=1, dep_profiles=[("child", None)]
     ) is None
+    corrected = {
+        "products": {
+            "prod-1": {
+                "voluntary_rates": [
+                    {"label": "All ages", "min": None, "max": None, "rate": 2.0}
+                ]
+            }
+        }
+    }
+    assert dependant_tag(
+        **{**common, "pricing": corrected}, spouse_count=0, child_count=1,
+        dep_profiles=[("child", 8)],
+    ) == 60.0
     # An explicit manual mode still wins over the slip options shape.
     manual = {"products": {"prod-1": {"dependant": {"mode": "per_pax",
               "per_pax": {"cat-opt2::16": {"flat": 10.0}}}}}}

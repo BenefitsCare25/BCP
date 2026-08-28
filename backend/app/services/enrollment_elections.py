@@ -80,6 +80,7 @@ from app.services.flex_pricing_resolver import (
     DEFAULT_FLEX_SOURCE,
     FAMILY_SCHEMES,
     DependantMode,
+    configured_voluntary_rates,
     covered_dependant_profiles,
     dependant_age_limits,
     dependant_option_choices,
@@ -551,6 +552,7 @@ def _dependant_pricing_out(
             choices, dep_profiles_by_id or {},
             dependant_age_limits(pricing, ts.product_id),
             gst_multiplier_for(pricing, ts.product_id),
+            configured_voluntary_rates(pricing, ts.product_id),
         ),
     )
 
@@ -560,6 +562,7 @@ def _option_choices_out(
     dep_profiles_by_id: dict[str, tuple[str, int | None]],
     age_limits: dict[str, dict[str, int]],
     gst_mult: float = 1.0,
+    voluntary_rates: list[Any] | None = None,
 ) -> list[DependantOptionRoleOut]:
     """Freestanding dependant option LEVELS as API output, with each level's flex
     amount resolved per the member's own dependants (age-banded levels price on
@@ -590,9 +593,9 @@ def _option_choices_out(
                     category_id=c["category_id"],
                     label=c["label"],
                     sum_insured=c.get("sum_insured"),
-                    amount=_g(option_amount(c.get("spec"), None)),
+                    amount=_g(option_amount(c.get("spec"), None, voluntary_rates)),
                     amounts_by_dependant={
-                        dep_id: _g(option_amount(c.get("spec"), dep_age))
+                        dep_id: _g(option_amount(c.get("spec"), dep_age, voluntary_rates))
                         for dep_id, dep_age in role_deps.items()
                     },
                 )

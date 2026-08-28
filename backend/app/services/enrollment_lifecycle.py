@@ -159,6 +159,17 @@ def open_window(
     db: Session, window: EnrollmentWindow, user: CurrentUser
 ) -> int:
     """Create enrollments for every active employee that lacks one. Returns count."""
+    # Source selection was removed from the unified price book. Normalize an
+    # untouched pre-upgrade draft at the irreversible draft -> open boundary so
+    # legacy ``manual`` entries cannot suppress slip recommendations. Do not
+    # rewrite an already-open window during the idempotent employee-sync path.
+    migrated_legacy_source = (
+        window.status == WindowStatus.draft
+        and isinstance(window.flex_price_source, dict)
+        and bool(window.flex_price_source)
+    )
+    if window.status == WindowStatus.draft:
+        window.flex_price_source = None
     existing = set(
         db.execute(
             select(Enrollment.employee_id).where(Enrollment.window_id == window.id)
@@ -187,7 +198,11 @@ def open_window(
     db.flush()
     write_audit(
         db, user, action="open_enrollment_window", entity_type="enrollment_window",
-        entity_id=window.id, after={"enrollments_created": created},
+        entity_id=window.id,
+        after={
+            "enrollments_created": created,
+            "legacy_price_source_migrated": migrated_legacy_source,
+        },
     )
     return created
 

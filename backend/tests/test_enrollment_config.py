@@ -144,6 +144,40 @@ def test_window_flex_config_rejects_bad_values(client: TestClient) -> None:
     )
 
 
+def test_unified_pricing_save_needs_no_source_choice(client: TestClient) -> None:
+    window = client.post(
+        f"/api/v1/policy-years/{PY_ID}/enrollment-windows",
+        json=_window_body(
+            name="Unified pricing draft",
+            flex_price_source={"legacy-product": "manual"},
+        ),
+    ).json()
+    saved = client.put(
+        f"/api/v1/policy-years/{PY_ID}/enrollment-pricing-config",
+        json={"pricing": {"products": {}}},
+    )
+    assert saved.status_code == 200, saved.text
+    got = client.get(f"/api/v1/enrollment-windows/{window['id']}").json()
+    assert got["flex_price_source"] is None
+
+
+def test_open_migrates_untouched_legacy_source_map(client: TestClient) -> None:
+    window = client.post(
+        f"/api/v1/policy-years/{PY_ID}/enrollment-windows",
+        json=_window_body(
+            name="Legacy pricing draft",
+            flex_price_source={"legacy-product": "manual"},
+        ),
+    ).json()
+
+    opened = client.post(f"/api/v1/enrollment-windows/{window['id']}/open")
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["window"]["flex_price_source"] is None
+
+    closed = client.post(f"/api/v1/enrollment-windows/{window['id']}/close")
+    assert closed.status_code == 200, closed.text
+
+
 def test_create_window_bad_dates_422(client: TestClient) -> None:
     res = client.post(
         f"/api/v1/policy-years/{PY_ID}/enrollment-windows",
