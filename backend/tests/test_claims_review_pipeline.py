@@ -585,6 +585,162 @@ def test_rerun_supersedes_previous_review(broker: TestClient):
     assert body["id"] != review_id
 
 
+def test_review_exposes_ai_extracted_amount_breakdown(broker: TestClient):
+    claim_id, review_id = _mk_claim(marker=b"amount-breakdown")
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    response = broker.get(f"/api/v1/claims/{claim_id}/review")
+    assert response.status_code == 200
+    breakdown = response.json()["amount_breakdown"]
+    assert breakdown["status"] == "match"
+    assert breakdown["claimed_amount"] == 85.0
+    assert breakdown["totals"] == [{"currency": "SGD", "amount": 85.0}]
+    assert breakdown["lines"][0]["file_name"] == "receipt-0.pdf"
+    assert breakdown["lines"][0]["amount"] == 85.0
+    assert breakdown["lines"][0]["included_in_total"] is True
+
+
+def test_document_amount_mismatch_forces_manual_review():
+    claim_id, review_id = _mk_claim(marker=b"amount-mismatch")
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(
+            fields=[
+                {"id": "field_1", "label": "Total Amount", "value": "90.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ]
+        ),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "fail"
+
+
+def test_multiple_ai_extracted_invoice_amounts_are_summed():
+    claim_id, review_id = _mk_claim(amount=125.0, docs=2, marker=b"amount-sum")
+    extracted = [
+        _extract_result(
+            fields=[
+                {"id": "invoice", "label": "Invoice No", "value": "INV-100",
+                 "field_type": "text", "confidence": 0.99},
+                {"id": "amount", "label": "Amount Payable", "value": "50.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ]
+        ),
+        _extract_result(
+            fields=[
+                {"id": "invoice", "label": "Invoice No", "value": "INV-200",
+                 "field_type": "text", "confidence": 0.99},
+                {"id": "amount", "label": "Amount Payable", "value": "75.00",
+                 "field_type": "currency", "confidence": 0.98},
+            ]
+        ),
+    ]
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        side_effect=extracted,
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_VERIFIED
+    included = [
+        extraction["financial"] for extraction in review.extractions
+        if extraction["financial"]["included_in_total"]
+    ]
+    assert [line["amount"] for line in included] == [50.0, 75.0]
+
+
+def test_same_invoice_receipt_is_not_double_counted():
+    claim_id, review_id = _mk_claim(amount=85.0, docs=2, marker=b"amount-dedupe")
+    fields = [
+        {"id": "invoice", "label": "Invoice No", "value": "INV-100",
+         "field_type": "text", "confidence": 0.99},
+        {"id": "amount", "label": "Amount Payable", "value": "85.00",
+         "field_type": "currency", "confidence": 0.98},
+    ]
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(fields=fields),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_VERIFIED
+    resolutions = [
+        extraction["financial"]["resolution"] for extraction in review.extractions
+    ]
+    assert resolutions == ["included", "duplicate"]
+
+
+def test_missing_document_amount_forces_manual_review():
+    claim_id, review_id = _mk_claim(marker=b"amount-missing")
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(
+            fields=[
+                {"id": "provider", "label": "Provider", "value": "Raffles Medical",
+                 "field_type": "text", "confidence": 0.98},
+            ]
+        ),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    amount_rule = next(
+        result for result in review.rule_results
+        if "amounts reconcile" in result["rule"].lower()
+    )
+    assert amount_rule["status"] == "fail"
+
+
+def test_unnumbered_receipts_are_not_assumed_to_be_duplicates():
+    claim_id, review_id = _mk_claim(amount=85.0, docs=2, marker=b"amount-unnumbered")
+    with patch(
+        "app.services.ai_gateway.extract_claim_document",
+        return_value=_extract_result(),
+    ), patch(
+        "app.services.ai_gateway.review_claim",
+        return_value=_review_result([_match("amount_claimed")]),
+    ):
+        run_review(claim_id, review_id, None)
+
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_FLAGGED
+    assert review.verdict == "flagged"
+    assert [
+        extraction["financial"]["resolution"] for extraction in review.extractions
+    ] == ["ambiguous", "ambiguous"]
+
+
 def test_rerun_from_draft_409(broker: TestClient):
     claim_id, _ = _mk_claim(status="draft", marker=b"draftrerun")
     res = broker.post(f"/api/v1/claims/{claim_id}/rerun-review")

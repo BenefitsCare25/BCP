@@ -63,18 +63,24 @@ export interface TypeEntry {
 
 export type ReferralMode = "" | "upload" | "existing";
 
-/** One queued claim in a multi-invoice upload: the invoice document that
- * anchors it plus the fields read off it. `uploadIndex` is the stable id
+/** One queued claim in a multi-invoice upload: all documents assigned to its
+ * invoice plus the fields read off the anchor. `uploadIndex` is the stable id
  * (original upload position) — used as the list key and removal handle so
  * duplicate file names can't collapse two queued claims into one. */
 export interface PendingClaim {
   uploadIndex: number;
   fileName: string;
-  file: File | null;
-  slot: string | null;
-  detectedType: string | null;
+  documents: AutofillDoc[];
   fields: IntakeSuggestFields | null;
   lowConfidence: string[];
+}
+
+export interface SubmittedBatchClaim {
+  id: string;
+  invoiceNumber: string;
+  incurredDate: string;
+  amount: number;
+  currency: string;
 }
 
 /** An autofill upload paired with the required-document slot the AI matched it
@@ -124,30 +130,75 @@ export function planFromSuggestion(
   picked: File[],
 ): { autofillDocs: AutofillDoc[]; pendingClaims: PendingClaim[] } {
   const metaByIdx = new Map((s.documents ?? []).map((d) => [d.upload_index, d]));
-  const anchors = s.multi_claim
-    ? (s.documents ?? [])
-        .filter((d) => d.claim_index != null)
-        .sort((a, b) => (a.claim_index ?? 0) - (b.claim_index ?? 0))
-    : [];
-  const laterAnchors = anchors.slice(1);
-  const laterIdx = new Set(laterAnchors.map((d) => d.upload_index));
+  const grouped = new Map<number, (typeof s.documents)[number][]>();
+  if (s.multi_claim) {
+    for (const document of s.documents ?? []) {
+      if (document.claim_index == null) continue;
+      const group = grouped.get(document.claim_index) ?? [];
+      group.push(document);
+      grouped.set(document.claim_index, group);
+    }
+  }
+  const groupIndexes = [...grouped.keys()].sort((a, b) => a - b);
+  const laterIndexes = groupIndexes.slice(1);
+  const shared = (s.documents ?? []).filter((d) => d.shared_across_claims);
+
+  const asAutofillDoc = (uploadIndex: number): AutofillDoc | null => {
+    const file = picked[uploadIndex];
+    const meta = metaByIdx.get(uploadIndex);
+    return file
+      ? {
+          file,
+          slot: meta?.doc_slot ?? null,
+          detectedType: meta?.detected_doc_type ?? null,
+        }
+      : null;
+  };
+
+  const documentsFor = (claimIndex: number): AutofillDoc[] => {
+    const seen = new Set<number>();
+    return [...(grouped.get(claimIndex) ?? []), ...shared]
+      .filter((document) => {
+        if (seen.has(document.upload_index)) return false;
+        seen.add(document.upload_index);
+        return true;
+      })
+      .map((document) => asAutofillDoc(document.upload_index))
+      .filter((document): document is AutofillDoc => document !== null);
+  };
+
   return {
     autofillDocs: picked
       .map((file, i) => ({ file, i }))
-      .filter(({ i }) => !laterIdx.has(i))
+      .filter(({ i }) => {
+        const meta = metaByIdx.get(i);
+        return (
+          !s.multi_claim ||
+          meta?.shared_across_claims ||
+          meta?.claim_index == null ||
+          meta.claim_index === groupIndexes[0]
+        );
+      })
       .map(({ file, i }) => ({
         file,
         slot: metaByIdx.get(i)?.doc_slot ?? null,
         detectedType: metaByIdx.get(i)?.detected_doc_type ?? null,
       })),
-    pendingClaims: laterAnchors.map((d) => ({
-      uploadIndex: d.upload_index,
-      fileName: d.file_name,
-      file: picked[d.upload_index] ?? null,
-      slot: d.doc_slot ?? null,
-      detectedType: d.detected_doc_type ?? null,
-      fields: d.fields,
-      lowConfidence: d.low_confidence ?? [],
-    })),
+    pendingClaims: laterIndexes.map((claimIndex) => {
+      const group = grouped.get(claimIndex) ?? [];
+      // New responses mark the anchor explicitly. `fields` and then first-in-
+      // group keep the client compatible while backend/frontend deploys roll.
+      const anchor =
+        group.find((document) => document.claim_anchor) ??
+        group.find((document) => document.fields != null) ??
+        group[0];
+      return {
+        uploadIndex: anchor?.upload_index ?? claimIndex,
+        fileName: anchor?.file_name ?? `Invoice ${claimIndex + 1}`,
+        documents: documentsFor(claimIndex),
+        fields: anchor?.fields ?? null,
+        lowConfidence: anchor?.low_confidence ?? [],
+      };
+    }),
   };
 }

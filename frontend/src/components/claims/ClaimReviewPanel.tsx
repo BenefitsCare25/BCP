@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
 import { useClaimReview, type FieldComparison, type RuleResult } from "@/api/claims";
 import { FieldComparisonTable } from "@/components/claims/FieldComparisonTable";
+import { ClaimAmountBreakdown } from "@/components/claims/ClaimAmountBreakdown";
 import {
   compactRuleResults,
   RuleResultsList,
@@ -251,6 +252,9 @@ export function ClaimReviewPanel({
             )}
           </div>
         </div>
+        {review.amount_breakdown && (
+          <ClaimAmountBreakdown breakdown={review.amount_breakdown} />
+        )}
         {systemChecks.length > 0 && (
           <ReviewDetails label="System checks completed before failure">
             <RuleResultsList results={systemChecks} />
@@ -275,6 +279,9 @@ export function ClaimReviewPanel({
   );
   return (
     <div className="space-y-4">
+      {review.amount_breakdown && (
+        <ClaimAmountBreakdown breakdown={review.amount_breakdown} />
+      )}
       <div>
         {issues.length > 0 ? (
           <ol className="space-y-2 rounded-md border border-border bg-card p-3">

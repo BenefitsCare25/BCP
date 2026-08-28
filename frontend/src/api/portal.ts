@@ -676,9 +676,9 @@ export interface IntakeSuggestFields {
   doctor_name: string | null;
 }
 
-/** One uploaded document in the autofill set. `claim_index` is set when the
- * set carries several distinct invoices — this document anchors its own claim
- * (0 = the claim prefilled now); null = supporting document. */
+/** One uploaded document in the autofill set. Documents from the same invoice
+ * share a `claim_index`; `claim_anchor` identifies the one that opens it.
+ * Evidence without a billing identity can be shared across all claims. */
 export interface IntakeSuggestDocument {
   file_name: string;
   /** 0-based position in the original upload — join File objects to documents
@@ -687,6 +687,10 @@ export interface IntakeSuggestDocument {
   detected_doc_type: string | null;
   doc_slot: string | null;
   claim_index: number | null;
+  /** True only for the invoice that opens the indexed claim. */
+  claim_anchor: boolean;
+  /** Evidence without a billing identity that supports every claim in the set. */
+  shared_across_claims: boolean;
   fields: IntakeSuggestFields | null;
   /** Field names of `fields` the AI was unsure about (only when `fields` is
    *  set) — the form flags them when it advances to this claim. */

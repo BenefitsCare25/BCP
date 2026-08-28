@@ -1,88 +1,169 @@
-/** Multi-invoice upload — each distinct invoice is a separate visit and needs
- * its own claim (per-visit limits and duplicate checks adjudicate per invoice).
- * The form walks them one at a time; this states where the member is in that
- * run and lets them drop an invoice they don't want to claim for.
+/** Multi-invoice upload review.
  *
- * A notice, so it carries a strike rather than a fill — the brand on this page
- * belongs to the submit button. */
-import { Files, X } from "lucide-react";
+ * Each distinct invoice remains a separate claim because limits, duplicate
+ * checks and AI adjudication operate per visit. This is the batch-level receipt:
+ * every invoice, its amount, its place in the run, and currency-safe totals.
+ */
+import { Check, Files, X } from "lucide-react";
+import { Money } from "@/components/portal/leaf/Figure";
 import { Strike } from "@/components/portal/leaf/Strike";
-import { Money, currencySymbol } from "@/components/portal/leaf/Figure";
 import { formatDay } from "@/components/portal/leaf/date";
 import type { NewClaimForm } from "./useNewClaimForm";
 
+type BatchRow = {
+  key: string;
+  invoice: string;
+  date: string | null;
+  amount: number | null;
+  currency: string;
+  state: "submitted" | "current" | "pending";
+  uploadIndex?: number;
+};
+
+function positiveAmount(value: string | number | null | undefined): number | null {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function stateLabel(state: BatchRow["state"]): string {
+  if (state === "submitted") return "Submitted";
+  if (state === "current") return "Reviewing now";
+  return "Up next";
+}
+
 export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
-  const { pendingClaims, multiDone, busy } = form;
+  const { pendingClaims, submittedBatchClaims, multiDone, busy } = form;
   if (pendingClaims.length === 0 && multiDone === 0) return null;
-  const total = multiDone + 1 + pendingClaims.length;
+
+  const rows: BatchRow[] = [
+    ...submittedBatchClaims.map((claim) => ({
+      key: claim.id,
+      invoice: claim.invoiceNumber,
+      date: claim.incurredDate,
+      amount: claim.amount,
+      currency: claim.currency.toUpperCase(),
+      state: "submitted" as const,
+    })),
+    {
+      key: "current",
+      invoice: form.invoiceNumber.trim() || "Current invoice",
+      date: form.incurredDate || null,
+      amount: positiveAmount(form.amount),
+      currency: form.effectiveCurrency.toUpperCase(),
+      state: "current",
+    },
+    ...pendingClaims.map((claim) => ({
+      key: `pending-${claim.uploadIndex}`,
+      invoice: claim.fields?.invoice_number ?? claim.fileName,
+      date: claim.fields?.incurred_date ?? null,
+      amount: positiveAmount(claim.fields?.amount),
+      currency: (claim.fields?.currency ?? form.effectiveCurrency).toUpperCase(),
+      state: "pending" as const,
+      uploadIndex: claim.uploadIndex,
+    })),
+  ];
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    if (row.amount == null) continue;
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + row.amount);
+  }
+  const missingAmounts = rows.filter((row) => row.amount == null).length;
+  const totalClaims = rows.length;
 
   return (
-    <div className="space-y-2 rounded-control border border-hairline bg-bar/70 p-3">
-      <div className="flex items-center gap-1.5">
-        <Files className="size-3.5 shrink-0 text-label" aria-hidden />
+    <section
+      className="space-y-3 rounded-control border border-hairline bg-bar/70 p-3"
+      aria-labelledby="claim-batch-heading"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Files className="size-3.5 shrink-0 text-label" aria-hidden />
+          <h2 id="claim-batch-heading" className="text-row font-semibold text-record">
+            Invoices in this submission
+          </h2>
+        </div>
         <Strike tone="pending">
-          Claim {multiDone + 1} of {total}
+          Claim {multiDone + 1} of {totalClaims}
         </Strike>
       </div>
       <p className="text-row text-label">
-        {pendingClaims.length > 0
-          ? "Your upload contains several different invoices. Each invoice is a separate visit and needs its own claim — submit this one and we'll prefill the next automatically."
-          : "This is the last claim from your upload."}
+        Each invoice is submitted and AI-reviewed as its own claim. Check the
+        breakdown and totals as you work through the set.
       </p>
-      {pendingClaims.length > 0 && (
-        <>
-          {/* A HAIRLINE, not a fill. These rows used to be `bg-glass` inside
-              this `bg-bar/70` box, which worked only while the pane was thin
-              enough to be DARKER than the wash around it. With a 95% pane both
-              composite to the same near-white and the rows lose their bounds
-              entirely — and each carries a `-m-3` remove button whose 44px
-              target overhangs its neighbours, so where one row ends has to stay
-              visible. `bg-shade` would draw it but that fill means SELECTED. */}
-          <ul className="space-y-1">
-            {pendingClaims.map((p) => (
-              <li
-                key={p.uploadIndex}
-                className="flex items-center justify-between gap-2 rounded-control border border-hairline px-3 py-1.5 text-row"
+
+      <ol className="divide-y divide-hairline overflow-hidden rounded-control border border-hairline">
+        {rows.map((row) => (
+          <li
+            key={row.key}
+            className="flex min-w-0 items-center gap-3 px-3 py-2 text-row"
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-record">{row.invoice}</span>
+              <span className="block text-label">
+                {row.date ? formatDay(row.date) : "Date not read"} · {stateLabel(row.state)}
+              </span>
+            </span>
+            <Money
+              value={row.amount}
+              currency={row.currency}
+              className="shrink-0 text-row font-medium"
+            />
+            {row.state === "submitted" && (
+              <>
+                <Check className="size-4 shrink-0 text-strike-approved" aria-hidden />
+                <span className="sr-only">Submitted</span>
+              </>
+            )}
+            {row.state === "pending" && row.uploadIndex != null && (
+              <button
+                type="button"
+                disabled={busy}
+                title="Don't submit a claim for this invoice"
+                onClick={() =>
+                  form.setPendingClaims((previous) =>
+                    previous.filter((claim) => claim.uploadIndex !== row.uploadIndex),
+                  )
+                }
+                aria-label={`Remove the invoice ${row.invoice}`}
+                className="leaf-focus -m-3 inline-flex size-11 shrink-0 items-center justify-center text-label disabled:opacity-50"
               >
-                <span className="min-w-0 truncate text-record">
-                  {p.fields?.invoice_number ?? p.fileName}
-                  <span className="text-label">
-                    {p.fields?.incurred_date
-                      ? ` · ${formatDay(p.fields.incurred_date)}`
-                      : ""}
-                    {p.fields?.amount != null ? " · " : ""}
-                  </span>
-                  {p.fields?.amount != null && (
-                    <Money
-                      value={p.fields.amount}
-                      currency={currencySymbol(p.fields.currency)}
-                      className="text-label"
-                    />
-                  )}
-                  <span className="text-label"> · up next</span>
-                </span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  title="Don't submit a claim for this invoice"
-                  onClick={() =>
-                    form.setPendingClaims((prev) =>
-                      prev.filter((q) => q.uploadIndex !== p.uploadIndex),
-                    )
-                  }
-                  aria-label={`Remove the invoice ${p.fields?.invoice_number ?? p.fileName}`}
-                  className="leaf-focus -m-3 inline-flex size-11 shrink-0 items-center justify-center text-label disabled:opacity-50"
-                >
-                  <X className="size-4" aria-hidden />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="text-row text-label">
-            Remove an invoice if you don't want to submit a claim for it.
+                <X className="size-4" aria-hidden />
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 border-t border-hairline pt-3">
+        <div>
+          <p className="text-row font-semibold text-record">
+            {missingAmounts > 0 ? "Known subtotal" : "Batch total"}
           </p>
-        </>
+          {missingAmounts > 0 && (
+            <p className="text-row text-label">
+              {missingAmounts} {missingAmounts === 1 ? "invoice needs" : "invoices need"} an
+              amount before the final total is complete.
+            </p>
+          )}
+        </div>
+        <dl className="space-y-0.5 text-right">
+          {[...totals.entries()].map(([currency, total]) => (
+            <div key={currency} className="flex items-baseline justify-end gap-2">
+              <dt className="text-2xs font-semibold uppercase tracking-label text-label">
+                {currency}
+              </dt>
+              <dd>
+                <Money value={total} currency={currency} emphasis="strong" />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      {pendingClaims.length > 0 && (
+        <p className="text-row text-label">
+          Remove an invoice if you do not want to submit a claim for it.
+        </p>
       )}
-    </div>
+    </section>
   );
 }

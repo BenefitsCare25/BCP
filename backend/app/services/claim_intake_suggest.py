@@ -931,6 +931,25 @@ def _billing_identity(
     return (normalize_invoice_number(number) or None), amount
 
 
+def document_financial_reading(fields: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read one document's billing identity with the same ranking used by intake.
+
+    The review pipeline uses this public boundary so interactive autofill and
+    post-submit reconciliation cannot choose different totals from the same AI
+    extraction. Arithmetic remains deterministic; AI only supplies the fields.
+    """
+    invoice_number, invoice_confidence = _invoice_number(fields)
+    amount, amount_confidence = _amount(fields)
+    return {
+        "invoice_number": invoice_number,
+        "invoice_key": normalize_invoice_number(invoice_number) or None,
+        "amount": amount,
+        "currency": _currency(fields),
+        "confidence": amount_confidence,
+        "invoice_confidence": invoice_confidence,
+    }
+
+
 def _doc_reading(
     fields: list[dict[str, Any]],
     year: PolicyYear,
@@ -1081,12 +1100,10 @@ def build_intake_suggestion(
             anchor_idx.append(i)
     multi = len(anchor_idx) >= 2
 
-    # Attribute every document to a claim by its billing number: a doc whose
-    # number matches an anchor supports THAT anchor's claim; a doc with no
-    # matching number is general material for the first claim. The top-level
-    # suggestion merges only the first claim's documents, so a LATER invoice's
-    # supporting docs (e.g. its itemised bill) can't bleed their amount/date
-    # into the first claim.
+    # Attribute every billed document to a claim by its invoice number. The
+    # top-level suggestion merges the first claim plus shared episode evidence;
+    # a later invoice's own supporting bill cannot bleed its amount/date into
+    # the first claim.
     def _claim_of(key: str | None) -> int:
         return number_to_claim.get(key, 0) if key else 0
 
@@ -1106,8 +1123,10 @@ def build_intake_suggestion(
 
     claim_order = {doc_i: order for order, doc_i in enumerate(anchor_idx)}
     documents: list[IntakeDocument] = []
-    for i, (e, defn, efields, _, _, upload_index) in enumerate(per_doc):
-        idx = claim_order.get(i) if multi else None
+    for i, (e, defn, efields, key, _, upload_index) in enumerate(per_doc):
+        is_anchor = multi and i in claim_order
+        idx = _claim_of(key) if multi and key else None
+        is_shared = multi and key is None
         # Only a LATER anchor prefills its own claim: ship its own reading (with
         # the diagnosis resolved against the inferred claim group) plus the
         # fields the AI was unsure about, so the form can warn on advance. The
@@ -1115,7 +1134,7 @@ def build_intake_suggestion(
         # its (and every supporting doc's) per-doc fields would go unused.
         fields: IntakeFields | None = None
         low: list[str] = []
-        if idx is not None and idx > 0:
+        if is_anchor and idx is not None and idx > 0:
             reading, low = _doc_reading(
                 efields, year, document_type=str(e.get("document_type") or "")
             )
@@ -1129,6 +1148,8 @@ def build_intake_suggestion(
                 detected_doc_type=defn.display if defn else None,
                 doc_slot=defn.slot_key if defn else None,
                 claim_index=idx,
+                claim_anchor=is_anchor,
+                shared_across_claims=is_shared,
                 upload_index=upload_index,
                 fields=fields,
                 low_confidence=low,

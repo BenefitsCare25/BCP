@@ -53,6 +53,7 @@ import {
   type InsuredGroupKey,
   type PendingClaim,
   type ReferralMode,
+  type SubmittedBatchClaim,
   type TypeEntry,
 } from "./claimForm";
 import { useCompany } from "@/components/portal/useCompany";
@@ -121,7 +122,10 @@ export function useNewClaimForm() {
   // Multi-invoice upload: the claims still to submit after this one (one per
   // distinct invoice) and how many were already submitted in this run.
   const [pendingClaims, setPendingClaims] = useState<PendingClaim[]>([]);
-  const [multiDone, setMultiDone] = useState(0);
+  const [submittedBatchClaims, setSubmittedBatchClaims] = useState<
+    SubmittedBatchClaim[]
+  >([]);
+  const multiDone = submittedBatchClaims.length;
   const [lowConfidence, setLowConfidence] = useState<string[]>([]);
   // Autofill files the member has manually removed from a slot — the auto-place
   // effect must not re-add them on a later claim-type change.
@@ -591,7 +595,7 @@ export function useNewClaimForm() {
     const plan = planFromSuggestion(s, picked);
     setAutofillDocs(plan.autofillDocs);
     setPendingClaims(plan.pendingClaims);
-    setMultiDone(0);
+    setSubmittedBatchClaims([]);
     if (!s.available) {
       setLowConfidence([]);
       setAutofillNote(
@@ -656,7 +660,7 @@ export function useNewClaimForm() {
         withinSize.map((file) => ({ file, slot: null, detectedType: null })),
       );
       setPendingClaims([]);
-      setMultiDone(0);
+      setSubmittedBatchClaims([]);
       setLowConfidence([]);
       setAutofillNote(
         "We couldn't read these files for autofill — fill in the claim and they'll still be attached.",
@@ -671,7 +675,6 @@ export function useNewClaimForm() {
   const advanceToNextClaim = () => {
     const [next, ...rest] = pendingClaims;
     if (!next) return;
-    setMultiDone((d) => d + 1);
     setPendingClaims(rest);
     resetTypeFields();
     setFiles([]);
@@ -689,15 +692,11 @@ export function useNewClaimForm() {
     if (f?.currency && effectiveKind === "insured") setCurrency(f.currency);
     setDiagnosis(f?.diagnosis ?? "");
     setDoctorName(f?.doctor_name ?? "");
-    setAutofillDocs(
-      next.file
-        ? [{ file: next.file, slot: next.slot, detectedType: next.detectedType }]
-        : [],
-    );
+    setAutofillDocs(next.documents);
     setAutofillNote(
-      next.file
+      next.documents.length > 0
         ? `We've filled in the next claim from ${next.fileName} — check everything before submitting.`
-        : `We've filled in the next claim from ${next.fileName}, but couldn't reuse the file — attach the invoice below.`,
+        : `We've filled in the next claim from ${next.fileName}, but couldn't reuse its files — attach the documents below.`,
     );
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -870,6 +869,16 @@ export function useNewClaimForm() {
       claimId = claim.id;
       await uploadEvidence(claim.id);
       await submitClaim.mutateAsync(claim.id);
+      setSubmittedBatchClaims((previous) => [
+        ...previous,
+        {
+          id: claim.id,
+          invoiceNumber: invoiceNumber.trim() || claim.id,
+          incurredDate,
+          amount: Number(amount),
+          currency: effectiveCurrency,
+        },
+      ]);
       if (pendingClaims.length > 0) {
         // Mid-queue: stay on the form and load the next invoice. The receipt
         // waits until the last one, so the member isn't bounced out of a run.
@@ -964,7 +973,7 @@ export function useNewClaimForm() {
     files.length > 0 ||
     autofillDocs.length > 0 ||
     referralFile !== null ||
-    pendingClaims.some((claim) => claim.file !== null);
+    pendingClaims.some((claim) => claim.documents.length > 0);
 
   return {
     // queries
@@ -1067,6 +1076,7 @@ export function useNewClaimForm() {
     pendingClaims,
     setPendingClaims,
     multiDone,
+    submittedBatchClaims,
     unplacedAutofill,
     // state
     fieldErrors,

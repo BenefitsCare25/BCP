@@ -484,8 +484,39 @@ class ClaimAIReviewSummary(_Base):
     created_at: datetime
 
 
+class ClaimAmountLineOut(BaseModel):
+    document_id: str
+    file_name: str
+    document_type: str
+    invoice_number: str | None = None
+    amount: float | None = None
+    currency: str | None = None
+    confidence: float | None = None
+    included_in_total: bool = False
+    resolution: Literal["included", "duplicate", "supporting", "ambiguous", "no_amount"]
+    note: str
+
+
+class CurrencyAmountOut(BaseModel):
+    currency: str
+    amount: float
+
+
+class ClaimAmountBreakdownOut(BaseModel):
+    """Deterministic arithmetic over the AI-extracted document readings."""
+
+    status: Literal["match", "mismatch", "needs_review", "not_available"]
+    claimed_amount: float
+    claimed_currency: str
+    totals: list[CurrencyAmountOut] = Field(default_factory=list)
+    difference: float | None = None
+    lines: list[ClaimAmountLineOut] = Field(default_factory=list)
+    note: str
+
+
 class ClaimAIReviewOut(ClaimAIReviewSummary):
     extractions: list[dict[str, Any]] | None = None
+    amount_breakdown: ClaimAmountBreakdownOut | None = None
     field_comparisons: list[dict[str, Any]] | None = None
     rule_results: list[dict[str, Any]] | None = None
     vision_checks: list[dict[str, Any]] | None = None
@@ -1135,10 +1166,15 @@ class IntakeDocument(BaseModel):
     upload_index: int = 0
     detected_doc_type: str | None = None
     doc_slot: str | None = None
-    # Multi-claim uploads: when the set carries several DISTINCT invoices (one
-    # visit each), every invoice document anchors its own claim — this is its
-    # 0-based order (0 = the claim prefilled now). None = supporting document.
+    # Multi-claim uploads: documents carrying the same billing identity share
+    # this 0-based claim order. None means evidence shared across the set.
     claim_index: int | None = None
+    # True only for the invoice that opens this claim; same-invoice supporting
+    # documents carry the same claim_index with this false.
+    claim_anchor: bool = False
+    # A document without a billing identity (for example a discharge summary)
+    # supports every claim produced from the same multi-invoice upload.
+    shared_across_claims: bool = False
     # A LATER anchor's OWN reading, used to prefill its claim when the form
     # advances to it. None for the first claim + supporting docs (they prefill
     # from the top-level merged suggestion, never from here).

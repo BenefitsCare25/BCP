@@ -788,10 +788,41 @@ def test_later_invoice_itemised_bill_does_not_pollute_first_claim():
     by_name = {d.file_name: d for d in out.documents}
     assert by_name["a.pdf"].claim_index == 0
     assert by_name["b.pdf"].claim_index == 1
-    assert by_name["b_itemised.pdf"].claim_index is None  # supports B, not its own
+    assert by_name["a.pdf"].claim_anchor is True
+    assert by_name["b.pdf"].claim_anchor is True
+    assert by_name["b_itemised.pdf"].claim_index == 1
+    assert by_name["b_itemised.pdf"].claim_anchor is False
     # First claim keeps A's own $45 — the later invoice's $8000 must not leak in.
     assert out.fields.amount == 45.0
     assert out.fields.invoice_number == "INV-100"
+
+
+def test_multi_invoice_general_evidence_is_marked_shared():
+    from app.services.claim_intake_suggest import build_intake_suggestion
+
+    discharge = {
+        "file_name": "discharge.pdf",
+        "document_type": "discharge summary",
+        "fields": [
+            {"id": "1", "label": "Diagnosis", "value": "Appendicitis",
+             "field_type": "text", "confidence": 0.95},
+        ],
+    }
+    out = build_intake_suggestion(
+        [
+            _invoice_extraction("a.pdf", "INV-100", "45.00", "2027-03-15"),
+            _invoice_extraction("b.pdf", "INV-200", "50.00", "2027-04-02"),
+            discharge,
+        ],
+        _coverage([_gp_option()]),
+        _employee(),
+        YEAR,
+    )
+
+    by_name = {d.file_name: d for d in out.documents}
+    assert out.multi_claim is True
+    assert by_name["discharge.pdf"].claim_index is None
+    assert by_name["discharge.pdf"].shared_across_claims is True
 
 
 def test_later_claim_carries_its_own_low_confidence_fields():

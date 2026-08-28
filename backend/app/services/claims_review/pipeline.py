@@ -48,6 +48,7 @@ from app.services.claim_review_configs import (
 )
 from app.services.claims import claim_documents
 from app.services.claims_review import (
+    amounts,
     comparison,
     doc_completeness,
     extraction,
@@ -459,8 +460,18 @@ def _extract_stage(
         db, claim, docs, broker_firm_id, checkpoint=extraction_checkpoint
     )
     review_metrics.stage_duration("extraction", time.monotonic() - stage_started)
+    extractions, amount_result = amounts.reconcile_document_amounts(claim, extractions)
+    doc_warnings.append(amount_result)
     doc_warnings += doc_completeness.doc_completeness_results(
         claim, extractions, definitions_for_claim(db, claim)
+    )
+    # Stamp the arithmetic decision before the comparison call. If the provider
+    # fails later, the broker still receives the document-level breakdown that
+    # completed successfully rather than losing it with the downstream stage.
+    review.extractions = extractions
+    review.rule_results = det_results + doc_warnings
+    _checkpoint(
+        db, claim, review, stage="extraction", job_id=job_id, lease_owner=lease_owner
     )
     return docs, extractions, doc_warnings, list(calls)
 

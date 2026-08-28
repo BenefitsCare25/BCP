@@ -88,8 +88,32 @@ export interface VisionCheck {
   explanation: string;
 }
 
+export interface ClaimAmountLine {
+  document_id: string;
+  file_name: string;
+  document_type: string;
+  invoice_number: string | null;
+  amount: number | null;
+  currency: string | null;
+  confidence: number | null;
+  included_in_total: boolean;
+  resolution: "included" | "duplicate" | "supporting" | "ambiguous" | "no_amount";
+  note: string;
+}
+
+export interface ClaimAmountBreakdown {
+  status: "match" | "mismatch" | "needs_review" | "not_available";
+  claimed_amount: number;
+  claimed_currency: string;
+  totals: { currency: string; amount: number }[];
+  difference: number | null;
+  lines: ClaimAmountLine[];
+  note: string;
+}
+
 export interface ClaimAIReview extends ClaimAIReviewSummary {
   extractions: { document_id: string; file_name: string; document_type: string }[] | null;
+  amount_breakdown: ClaimAmountBreakdown | null;
   field_comparisons: FieldComparison[] | null;
   rule_results: RuleResult[] | null;
   vision_checks: VisionCheck[] | null;

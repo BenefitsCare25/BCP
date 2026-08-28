@@ -82,6 +82,7 @@ from app.schemas.claims import (
     BrokerMessageIn,
     ClaimAIReviewOut,
     ClaimAIReviewSummary,
+    ClaimAmountBreakdownOut,
     ClaimAssessmentIn,
     ClaimBrokerAmendIn,
     ClaimCaseTypeIn,
@@ -148,6 +149,7 @@ from app.services.claims import (
     supersede_review_for_amendment,
 )
 from app.services.claims_register import build_claims_register_workbook
+from app.services.claims_review.amounts import amount_breakdown
 from app.services.claims_review.queue import (
     cancel_active_review_job,
     enqueue_amended_claim_review,
@@ -1249,6 +1251,10 @@ def get_claim_review(
     if review is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No AI review for this claim")
     out = ClaimAIReviewOut.model_validate(review)
+    breakdown = amount_breakdown(claim, review.extractions)
+    out.amount_breakdown = (
+        ClaimAmountBreakdownOut.model_validate(breakdown) if breakdown is not None else None
+    )
     write_access_audit(
         db,
         user,

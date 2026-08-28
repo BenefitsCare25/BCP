@@ -480,6 +480,52 @@ test("claim workspace keeps form details readable and documents in context", asy
         review_config_fingerprint: "mock",
         created_at: "2026-06-27T08:01:00",
         extractions: [],
+        amount_breakdown: {
+          status: "match",
+          claimed_amount: 14126.13,
+          claimed_currency: "SGD",
+          totals: [{ currency: "SGD", amount: 14126.13 }],
+          difference: 0,
+          note: "The document total matches the amount claimed.",
+          lines: [
+            {
+              document_id: "mock-document",
+              file_name: "hospital-invoice.png",
+              document_type: "finalised tax invoice",
+              invoice_number: "INV-2026-001",
+              amount: 14126.13,
+              currency: "SGD",
+              confidence: 0.98,
+              included_in_total: true,
+              resolution: "included",
+              note: "Included in the document total.",
+            },
+            {
+              document_id: "mock-document-2",
+              file_name: "hospital-summary.png",
+              document_type: "discharge summary",
+              invoice_number: null,
+              amount: null,
+              currency: null,
+              confidence: 0,
+              included_in_total: false,
+              resolution: "no_amount",
+              note: "No positive invoice or receipt total was read from this document.",
+            },
+            {
+              document_id: "mock-document-3",
+              file_name: "hospital-bill.pdf",
+              document_type: "itemised tax invoice",
+              invoice_number: "INV-2026-001",
+              amount: 14126.13,
+              currency: "SGD",
+              confidence: 0.93,
+              included_in_total: false,
+              resolution: "duplicate",
+              note: "Not added again because another document carries the same invoice number.",
+            },
+          ],
+        },
         field_comparisons: [],
         rule_results: [],
         vision_checks: [],
@@ -548,6 +594,11 @@ test("claim workspace keeps form details readable and documents in context", asy
     workspace.getByText("Admission date", { exact: true }).locator(".."),
   ).toContainText("2026-06-26");
   await expect(workspace.getByText("2026-06-29", { exact: true })).toBeVisible();
+  await expect(
+    workspace.getByRole("heading", { name: "Document amount reconciliation" }),
+  ).toBeVisible();
+  await expect(workspace.getByText("Document total matches", { exact: true })).toBeVisible();
+  await expect(workspace.getByText("SGD 14,126.13", { exact: true }).first()).toBeVisible();
   await expect(workspace.getByText("Taxable", { exact: true })).toHaveCount(0);
   await expect(workspace.getByText("CPF claimable", { exact: true })).toHaveCount(0);
   const invoicePreview = workspace.getByRole("img", {
