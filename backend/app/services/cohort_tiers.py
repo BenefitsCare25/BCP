@@ -204,6 +204,9 @@ class CohortTier:
     direction: str  # 'upgrade'|'downgrade'|'same'|'unknown' (rel. to baseline)
     is_baseline: bool
     financials: PlanFinancials | None
+    # Parsed dependant enrolment for this exact tier. Flex-pricing overrides are
+    # applied later because this module deliberately knows nothing about wallets.
+    dependant_participation: str | None = None
     # The tier the member ACTUALLY HOLDS right now — the cohort default unless a
     # standing ``EmployeePlanOverride`` moved them off it (a prior window's
     # confirmed upgrade). Distinct from ``is_baseline`` on purpose: the baseline
@@ -275,6 +278,11 @@ def _sibling_tiers(
                 financials=member_financials(c.plan_assignments, age, attrs)
                 if isinstance(c.plan_assignments, dict)
                 else None,
+                dependant_participation=(
+                    _detail(c).get("dependant")
+                    if _detail(c).get("dependant") in ("compulsory", "voluntary")
+                    else None
+                ),
             )
         )
     return tiers
@@ -305,6 +313,12 @@ def _unclaimed_plan_tiers(
                 direction=_direction_code(baseline, code),
                 is_baseline=False,
                 financials=None,
+                dependant_participation=(
+                    _detail(baseline).get("dependant")
+                    if _detail(baseline).get("dependant")
+                    in ("compulsory", "voluntary")
+                    else None
+                ),
             )
         )
     return extra
@@ -751,13 +765,35 @@ class ProductTierIndex:
         ambiguous — a plan code can repeat across tiers (GPA "(Option N)"), and
         picking one of two would attach a basis the broker never chose.
         """
+        tier = self.tier_for_plan(baseline_category_id, plan_code)
+        return self.categories.get(tier.tier_category_id) if tier is not None else None
+
+    def tier_for_plan(
+        self, baseline_category_id: str | None, plan_code: str | None
+    ) -> CohortTier | None:
+        """Resolve a bare plan code to one exact tier in the member's cohort.
+
+        Bulk and manual-admin requests do not carry a tier id. A repeated plan
+        code remains ambiguous and must not be guessed.
+        """
         ts = self.sets.get(baseline_category_id or "")
         if ts is None or not plan_code:
             return None
-        hits = {t.tier_category_id for t in ts.tiers if t.plan_code == plan_code}
-        if len(hits) != 1:
+        category_ids = {
+            tier.tier_category_id for tier in ts.tiers if tier.plan_code == plan_code
+        }
+        if len(category_ids) != 1:
             return None
-        return self.categories.get(next(iter(hits)) or "")
+        category_id = next(iter(category_ids))
+        return next(
+            (
+                tier
+                for tier in ts.tiers
+                if tier.plan_code == plan_code
+                and tier.tier_category_id == category_id
+            ),
+            None,
+        )
 
     def can_decline(self, baseline_category_id: str | None) -> bool | None:
         ts = self.sets.get(baseline_category_id or "")

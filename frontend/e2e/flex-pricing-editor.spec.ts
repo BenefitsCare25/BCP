@@ -232,7 +232,7 @@ const pricingResponse = {
   ],
 };
 
-test("price book separates tier mechanics and keeps overrides option-safe", async ({
+test("price book unifies employee and dependant setup per plan", async ({
   page,
   request,
 }, testInfo) => {
@@ -262,44 +262,34 @@ test("price book separates tier mechanics and keeps overrides option-safe", asyn
 
   await page.goto("/client-relations/enrollment?tab=flex");
   await expect(page.getByRole("heading", { name: "Recommended price book" })).toBeVisible();
-  await expect(page.getByText(/Fixed pricing.*6 plan assignments/)).toBeVisible();
-  await expect(page.getByText(/Mixed pricing.*1 fixed assignments.*3 rate bands/)).toBeVisible();
 
   await page.getByRole("button", { name: /GPA/ }).click();
-  const option1Apply = page.getByRole("button", {
-    name: "Copy Option 1 price to 1 other employee category",
-  }).first();
-  await expect(option1Apply).toContainText("Copy to 1 other");
+  const unifiedRegion = page.getByRole("region", {
+    name: "GPA unified price and dependant setup",
+  });
+  await expect(unifiedRegion.getByRole("columnheader", { name: "State" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Copy/ })).toHaveCount(0);
   await page.getByLabel("GPA Executives Option 1 price tag").fill("77");
   await expect(page.getByLabel("GPA Staff Option 1 price tag")).toHaveValue("11");
-  await option1Apply.click();
-  await expect(page.getByLabel("GPA Staff Option 1 price tag")).toHaveValue("77");
   await expect(page.getByLabel("GPA Executives Option 2 price tag")).toHaveValue("20");
   await expect(page.getByLabel("GPA Staff Option 2 price tag")).toHaveValue("21");
-  const dependantRegion = page.getByRole("region", {
-    name: "GPA dependant pricing by employee tier",
-  });
-  await expect(dependantRegion).toContainText("Compulsory");
-  await expect(dependantRegion).toContainText("Voluntary");
-  await expect(dependantRegion).toContainText("Family tier");
-  await expect(dependantRegion).toContainText("Per dependant");
-  await expect(
-    page.getByText("Dependants do not receive flex dollars.", { exact: false }),
-  ).toBeVisible();
+  await expect(page.getByLabel("GPA Executives Option 1 dependant enrolment")).toHaveText(/Compulsory/);
+  await expect(page.getByLabel("GPA Executives Option 1 dependant pricing")).toHaveText(/Family rate/);
+  await expect(page.getByLabel("GPA Executives Option 2 dependant pricing")).toHaveText(/Per dependant/);
+  await page.getByLabel("Remove dependant cover from GPA Staff Option 3").click();
+  await expect(page.getByLabel("Add dependant cover to GPA Staff Option 3")).toBeVisible();
+  await page.getByLabel("GPA Executives Option 2 dependant enrolment").click();
+  await page.getByRole("option", { name: "Compulsory", exact: true }).click();
 
   await page.getByRole("button", { name: /GCI/ }).click();
   await expect(
-    page.getByRole("region", { name: "GCI employee-category price tags" }),
-  ).toContainText("Age-banded rate");
+    page.getByRole("region", { name: "GCI unified price and dependant setup" }),
+  ).toContainText("Age-banded · 3 bands");
   await expect(page.getByLabel("GCI Executives Plan 1 price tag")).toBeVisible();
+  await expect(page.getByLabel("Add dependant cover to GCI Executives Plan 1")).toBeVisible();
   await expect(
     page.getByText("Saved tier overrides take priority over the rate table."),
   ).toBeVisible();
-  const ageBandedRow = page
-    .getByRole("region", { name: "GCI employee-category price tags" })
-    .getByRole("row")
-    .filter({ hasText: "Option 1" });
-  await expect(ageBandedRow).toContainText("Tier override");
   await expect(
     page.getByRole("combobox", { name: "Schedule applies to" }),
   ).toBeVisible();
@@ -336,10 +326,17 @@ test("price book separates tier mechanics and keeps overrides option-safe", asyn
     "26-35": 999,
     "36+": 999,
   });
+  expect(
+    (saved.products["p-gpa"] as {
+      dependant: {
+        participation: Record<string, string>;
+      };
+    }).dependant.participation,
+  ).toMatchObject({
+    "gpa-exec-o2::SHARED": "compulsory",
+    "gpa-staff-o3::SHARED": "none",
+  });
 
-  await expect(
-    page.getByText("Copied to 1 other category. Save price tags to publish."),
-  ).toBeHidden({ timeout: 8_000 });
   await expect(page.getByText("Price tags saved")).toBeHidden({ timeout: 8_000 });
   const reviewDir = resolve("../.impeccable/review");
   mkdirSync(reviewDir, { recursive: true });

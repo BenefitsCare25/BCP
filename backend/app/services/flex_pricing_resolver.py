@@ -58,6 +58,14 @@ class DependantMode:
     slip_options = "slip_options"
 
 
+class DependantParticipation:
+    """Whether a plan offers dependant cover and how dependants enrol."""
+
+    none = "none"
+    compulsory = "compulsory"
+    voluntary = "voluntary"
+
+
 # Canonical, scheme-agnostic family roles. Employee-Only is the absence of a role
 # (no covered dependants) and always costs $0. Two label schemes map onto these,
 # chosen per product; only the display labels differ.
@@ -256,6 +264,25 @@ def _validate_dependant_block(pid: str, dep: object) -> list[str]:
                 errs.append(
                     f"product '{pid}': dependant mode '{tier_mode}' for '{key}' "
                     "is not valid."
+                )
+    participation = dep.get("participation")
+    if participation is not None and not isinstance(participation, dict):
+        errs.append(f"product '{pid}': dependant 'participation' must be an object.")
+    elif isinstance(participation, dict):
+        for key, value in participation.items():
+            if not isinstance(key, str) or not key:
+                errs.append(
+                    f"product '{pid}': dependant participation tier keys must be "
+                    "non-empty strings."
+                )
+            if value not in (
+                DependantParticipation.none,
+                DependantParticipation.compulsory,
+                DependantParticipation.voluntary,
+            ):
+                errs.append(
+                    f"product '{pid}': dependant participation '{value}' for "
+                    f"'{key}' is not valid."
                 )
     scheme = dep.get("scheme")
     if scheme is not None and scheme not in FAMILY_SCHEMES:
@@ -963,6 +990,31 @@ def _dependant_block(
     block = _product_block(pricing, product_id) or {}
     dep = block.get("dependant")
     return dep if isinstance(dep, dict) else {}
+
+
+def effective_dependant_participation(
+    pricing: dict[str, Any] | None,
+    product_id: str,
+    key: str,
+    detected: str | None,
+) -> str | None:
+    """Resolve dependant enrolment for one exact category/plan tier.
+
+    A saved plan-level choice wins over the placement-slip classification.
+    ``none`` is an explicit removal, represented as ``None`` to every enrollment
+    caller. Overrides intentionally require an exact tier key so one employee
+    cohort can never change a sibling cohort by accident.
+    """
+    participation = _dependant_block(pricing, product_id).get("participation")
+    configured = participation.get(key) if isinstance(participation, dict) else None
+    if configured == DependantParticipation.none:
+        return None
+    if configured in (
+        DependantParticipation.compulsory,
+        DependantParticipation.voluntary,
+    ):
+        return str(configured)
+    return detected if detected in ("compulsory", "voluntary") else None
 
 
 def _effective_dependant_mode(
@@ -2048,21 +2100,28 @@ def _member_flex_line(
         dep_option_ids = None
     key = tier_key(cat_id, plan_code)
     age_limits = dependant_age_limits(pricing, product_id)
-    dep_profiles = (
-        active_dependant_profiles(
+    participation = effective_dependant_participation(
+        pricing,
+        product_id,
+        key,
+        "compulsory" if dependants_compulsory else "voluntary",
+    )
+    if participation == "compulsory":
+        dep_profiles = active_dependant_profiles(
             db,
             employee_id,
             age_limits=age_limits,
             ref=ref,
         )
-        if dependants_compulsory
-        else covered_dependant_profiles(
+    elif participation == "voluntary":
+        dep_profiles = covered_dependant_profiles(
             db,
             covered_ids,
             age_limits=age_limits,
             ref=ref,
         )
-    )
+    else:
+        dep_profiles = []
     spouse_count, child_count = profile_counts(dep_profiles)
     emp_tag = member_price_tag(
         source_map=source_map, rule=rule, pricing=pricing, slip_idx=slip_idx,

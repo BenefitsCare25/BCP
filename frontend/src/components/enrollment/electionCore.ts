@@ -336,10 +336,12 @@ export function buildElectionsPayload(
   return Object.values(state).map((s) => {
     const ts = setByCode.get(s.productCode);
     const tier = ts?.tiers.find((t) => t.key === s.tierKey);
-    const depCompulsory = ts?.dependant_participation === "compulsory";
-    const coveredDeps = !allowDeps
+    const participation = ts
+      ? dependantParticipationFor(ts, s.tierKey)
+      : null;
+    const coveredDeps = !allowDeps || participation === null
       ? null
-      : depCompulsory
+      : participation === "compulsory"
         ? dependants.map((d) => d.id)
         : s.dependantIds;
     const offeredRoles = new Set<string>(
@@ -357,7 +359,9 @@ export function buildElectionsPayload(
       tier_category_id: s.declined ? null : tier?.tier_category_id ?? null,
       covered_dependant_ids: coveredDeps,
       dependant_option_ids:
-        s.declined || !Object.keys(depOptions).length ? null : depOptions,
+        s.declined || participation === null || !Object.keys(depOptions).length
+          ? null
+          : depOptions,
     };
   });
 }
@@ -381,6 +385,22 @@ export interface FlexSummary {
    * show what covering them costs once the level above is chosen". Two figures
    * on one screen, disagreeing about whether the price is known. */
   incomplete: boolean;
+}
+
+/** Effective dependant enrolment follows the selected plan, with the legacy
+ * product-level value retained only as a compatibility fallback. */
+export function dependantParticipationFor(
+  ts: ProductTierSet,
+  tierKey: string,
+): "compulsory" | "voluntary" | null {
+  const tier = ts.tiers.find((candidate) => candidate.key === tierKey);
+  // `null` is an explicit server result: this tier offers no dependant cover.
+  // Only an older payload that omits the field entirely uses the product-level
+  // compatibility value.
+  if (tier?.dependant_participation !== undefined) {
+    return tier.dependant_participation;
+  }
+  return ts.dependant_participation as "compulsory" | "voluntary" | null;
 }
 
 /** Below this a negative balance is a rounding residue, not a shortfall.
@@ -417,10 +437,14 @@ export function computeFlex(
     const tier = ts.tiers.find((t) => t.key === ps.tierKey);
     if (tier?.price_tag) total += tier.price_tag;
     if (allowDeps) {
+      const participation = dependantParticipationFor(ts, ps.tierKey);
       const dependantIds =
-        ts.dependant_participation === "compulsory"
+        participation === "compulsory"
           ? dependants.map((dependant) => dependant.id)
-          : ps.dependantIds;
+          : participation === "voluntary"
+            ? ps.dependantIds
+            : [];
+      if (participation === null) continue;
       // `dependantPricing`, not `dependantCost`: the cost alone throws away the
       // one thing this loop has to propagate — that a covered dependant could
       // not be priced, which makes every figure below a lower bound rather than

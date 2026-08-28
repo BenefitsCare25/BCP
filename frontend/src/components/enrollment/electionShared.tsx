@@ -26,6 +26,7 @@ import {
   type FlexSummary,
   type ProductState,
   classifyRel,
+  dependantParticipationFor,
   dependantPricing,
   leaveTrade,
   signedMoney,
@@ -384,7 +385,7 @@ export function ElectionProductCard({
   const isCompulsory = !ts.can_decline;
   const selectedTier = ts.tiers.find((t) => t.key === ps.tierKey);
   const selectedFin = !ps.declined ? selectedTier?.financials ?? null : null;
-  const dependantScope = ts.dependant_participation;
+  const dependantScope = dependantParticipationFor(ts, ps.tierKey);
   // Compulsory dependant cover = automatic (no member choice, no flex);
   // voluntary = opt-in checkboxes that draw flex.
   const depCompulsory = dependantScope === "compulsory";
@@ -470,7 +471,10 @@ export function ElectionProductCard({
         </div>
       )}
       {selectedFin && !ps.declined && <PlanFinancialsRow fin={selectedFin} />}
-      {allowDeps && dependants.length > 0 && !ps.declined && (
+      {allowDeps &&
+        dependants.length > 0 &&
+        !ps.declined &&
+        dependantScope !== null && (
         <div className="mt-2 border-t border-border pt-2">
           {dependantScope && (
             <div className="mb-1 flex items-center gap-1 text-2xs uppercase tracking-wider text-muted-foreground">

@@ -30,6 +30,7 @@ from app.models import Employee, EmployeePlanOverride, Enrollment
 from app.models.employee_plan_override import OverrideSource
 from app.schemas.enrollment import CoverageChangeOut
 from app.services import flex_proration
+from app.services.cohort_tiers import tier_key
 from app.services.coverage_resolver import is_sparse_default, load_overrides
 from app.services.enrollment_lifecycle import _defaults_and_baseline
 from app.services.flex_pricing_resolver import (
@@ -37,6 +38,7 @@ from app.services.flex_pricing_resolver import (
     compulsory_dependant_category_ids,
     covered_dependant_profiles,
     dependant_age_limits,
+    effective_dependant_participation,
     employee_age,
     get_pricing,
     governing_flex_config,
@@ -345,20 +347,35 @@ def revert_to_baseline(
 
         ctx = _price_inputs()
         age_limits = dependant_age_limits(ctx["pricing"], pid)
-        dep_profiles = (
-            active_dependant_profiles(
+        participation = effective_dependant_participation(
+            ctx["pricing"],
+            pid,
+            tier_key(tier or base_tier, plan_code or default_plan),
+            (
+                "compulsory"
+                if base_tier in ctx["compulsory_dep_cats"]
+                else "voluntary"
+            ),
+        )
+        if participation == "compulsory":
+            dep_profiles = active_dependant_profiles(
                 db,
                 employee.id,
                 age_limits=age_limits,
                 ref=ctx["ref"],
             )
-            if base_tier in ctx["compulsory_dep_cats"]
-            else covered_dependant_profiles(
+        elif participation == "voluntary":
+            dep_profiles = covered_dependant_profiles(
                 db,
                 deps,
                 age_limits=age_limits,
                 ref=ctx["ref"],
             )
+        else:
+            dep_profiles = []
+        stored_deps = deps if participation is not None else None
+        stored_dep_option_ids = (
+            dep_option_ids if participation is not None else None
         )
         spouse_count, child_count = profile_counts(dep_profiles)
         price = member_coverage_tag(
@@ -377,7 +394,7 @@ def revert_to_baseline(
             spouse_count=spouse_count,
             child_count=child_count,
             dep_profiles=dep_profiles,
-            dep_option_ids=dep_option_ids,
+            dep_option_ids=stored_dep_option_ids,
             factor=flex_proration.factor_of(employee),
         )
         restore_before = restore_snapshot(ov)
@@ -391,8 +408,8 @@ def revert_to_baseline(
             declined=declined,
             plan_code=plan_code,
             tier_category_id=tier,
-            covered_dependant_ids=deps,
-            dependant_option_ids=dep_option_ids,
+            covered_dependant_ids=stored_deps,
+            dependant_option_ids=stored_dep_option_ids,
             flex_price_tag=price,
             source=OverrideSource.manual_admin,
             source_ref=enrollment.id,

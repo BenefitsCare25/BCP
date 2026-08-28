@@ -218,6 +218,42 @@ def test_revert_to_baseline_nondefault_writes_override(client: TestClient) -> No
         assert ov.source == OverrideSource.manual_admin
 
 
+def test_revert_to_no_cover_baseline_clears_snapshot_dependants(
+    client: TestClient,
+) -> None:
+    from app.models import FlexPricing
+    from app.services.cohort_tiers import tier_key
+
+    target_key = tier_key(CAT_ID, "GOLD")
+    with SessionLocal() as s:
+        s.add(FlexPricing(
+            policy_year_id=PY_ID, client_id=CLIENT_ID,
+            pricing={"products": {PROD_ID: {
+                "dependant": {"participation": {target_key: "none"}},
+            }}},
+        ))
+        s.commit()
+    _add_enrollment({"products": {"MED": {
+        "plan_code": "GOLD", "tier_category_id": CAT_ID, "declined": False,
+        "covered_dependant_ids": ["stale-dependant"],
+        "dependant_option_ids": {"spouse": "stale-level"},
+    }}})
+    try:
+        res = client.post(
+            f"/api/v1/employees/{EMP1}/coverage/revert",
+            json={"target": "baseline"},
+        )
+        assert res.status_code == 200, res.text
+        with SessionLocal() as s:
+            ov = load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)]
+            assert ov.covered_dependant_ids is None
+            assert ov.dependant_option_ids is None
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).delete()
+            s.commit()
+
+
 def test_revert_to_baseline_without_enrollment_409(client: TestClient) -> None:
     _add_override(plan_code="GOLD")
     res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"})

@@ -62,12 +62,13 @@ from app.schemas.enrollment import (
 from app.schemas.member_query import MemberQuery
 from app.services import bulk_warnings as warn
 from app.services import dual_coverage, flex_proration
-from app.services.cohort_tiers import first_category_per_product
+from app.services.cohort_tiers import first_category_per_product, tier_key
 from app.services.coverage_resolver import is_sparse_default, resolve_plan
 from app.services.flex_pricing_resolver import (
     compulsory_dependant_category_ids,
     dependant_age_limits,
     dependant_profiles_of,
+    effective_dependant_participation,
     employee_age,
     get_pricing,
     governing_flex_config,
@@ -367,8 +368,10 @@ class _Plan:
     product: Product
     change: CoverageChange
     ov: EmployeePlanOverride | None
+    tier_category_id: str | None
     dep_ids: list[str] | None
     dep_options: dict[str, Any] | None
+    clear_dependants: bool
     tag: float | None
     sparse: bool
     row: BulkRowOutcome
@@ -560,10 +563,36 @@ def _evaluate_change(
             continue
 
         base_cat = flex.baseline_cat.get((emp.id, product.id))
+        tier_index = wctx.tier_indexes.get(product.id)
+        target_tier = (
+            tier_index.tier_for_plan(base_cat, to_plan)
+            if tier_index is not None and not declined_after
+            else None
+        )
+        target_tier_id = (
+            target_tier.tier_category_id if target_tier is not None else base_cat
+        )
+        tier_set = tier_index.sets.get(base_cat or "") if tier_index is not None else None
+        detected_participation = (
+            target_tier.dependant_participation if target_tier is not None else None
+        ) or (tier_set.dependant_participation if tier_set is not None else None)
+        participation = (
+            None
+            if declined_after
+            else _dependant_participation(
+                flex,
+                product.id,
+                base_cat=base_cat,
+                tier_category_id=target_tier_id,
+                plan_code=to_plan,
+                detected=detected_participation,
+            )
+        )
         # Price against the effective dependant coverage: the new list when the
         # batch sets one, otherwise the override's existing coverage (untouched).
         # A revert drops the override, so it prices with none.
-        if revert:
+        clear_dependants = declined_after or participation is None
+        if revert or clear_dependants:
             covered_for_price: list[str] | None = None
             dep_options: dict[str, Any] | None = None
         else:
@@ -585,7 +614,7 @@ def _evaluate_change(
         sparse = revert or is_sparse_default(
             declined=declined_after,
             plan_code=to_plan,
-            tier_category_id=None,
+            tier_category_id=target_tier_id,
             covered_dependant_ids=covered_for_price,
             default_plan=default_plan,
             base_tier=base_cat,
@@ -596,15 +625,26 @@ def _evaluate_change(
             flex, product.id, emp,
             declined=declined_after,
             base_cat=base_cat,
+            tier_category_id=target_tier_id,
             to_plan=to_plan,
             default_plan=default_plan,
             covered=covered_for_price,
             dependants=deps.by_id,
             dep_options=dep_options,
+            participation=participation,
             age_limits=age_limits,
         )
 
-        if _unchanged(ov, sparse, declined_after, to_plan, covered_for_price, dep_options, tag):
+        if _unchanged(
+            ov,
+            sparse,
+            declined_after,
+            to_plan,
+            target_tier_id,
+            covered_for_price,
+            dep_options,
+            tag,
+        ):
             rows.append(
                 _row(
                     emp, "no_change", "Already on this coverage.",
@@ -696,7 +736,9 @@ def _evaluate_change(
         plans.append(
             _Plan(
                 employee=emp, product=product, change=change, ov=ov,
-                dep_ids=dep_ids, dep_options=dep_options, tag=tag,
+                tier_category_id=target_tier_id,
+                dep_ids=dep_ids, dep_options=dep_options,
+                clear_dependants=clear_dependants, tag=tag,
                 sparse=sparse, row=row, financials_unresolved=unresolved,
             )
         )
@@ -774,16 +816,33 @@ def _flag_overdrafts(
                 ov = idx.overrides.get((emp.id, product_id))
                 if ov is not None and ov.declined:
                     continue
+                base_cat = flex.baseline_cat.get((emp.id, product_id))
+                tier_category_id = (
+                    ov.tier_category_id
+                    if ov is not None and ov.tier_category_id
+                    else base_cat
+                )
+                plan_code = (
+                    (ov.plan_code if ov else None)
+                    or idx.default_plan(emp.id, product_id)
+                )
                 tag = _price_tag(
                     flex, product_id, emp,
                     declined=False,
-                    base_cat=flex.baseline_cat.get((emp.id, product_id)),
-                    to_plan=(ov.plan_code if ov else None)
-                    or idx.default_plan(emp.id, product_id),
+                    base_cat=base_cat,
+                    tier_category_id=tier_category_id,
+                    to_plan=plan_code,
                     default_plan=idx.default_plan(emp.id, product_id),
                     covered=ov.covered_dependant_ids if ov else None,
                     dependants=deps.by_id,
                     dep_options=ov.dependant_option_ids if ov else None,
+                    participation=_dependant_participation(
+                        flex,
+                        product_id,
+                        base_cat=base_cat,
+                        tier_category_id=tier_category_id,
+                        plan_code=plan_code,
+                    ),
                     age_limits=flex.age_limits(product_id),
                 )
             total += tag or 0.0
@@ -839,6 +898,7 @@ def _unchanged(
     sparse: bool,
     declined: bool,
     to_plan: str | None,
+    tier_category_id: str | None,
     covered: list[str] | None,
     dep_options: dict[str, Any] | None,
     tag: float | None,
@@ -863,7 +923,7 @@ def _unchanged(
     target = (
         declined,
         None if declined else to_plan,
-        None,  # tier_category_id — a bulk update never elects a cohort tier
+        None if declined else tier_category_id,
         covered,
         None if declined else dep_options,
         None if declined else tag,
@@ -879,6 +939,24 @@ def _unchanged(
     return target == current
 
 
+def _dependant_participation(
+    flex: _FlexContext,
+    product_id: str,
+    *,
+    base_cat: str | None,
+    tier_category_id: str | None,
+    plan_code: str | None,
+    detected: str | None = None,
+) -> str | None:
+    return effective_dependant_participation(
+        flex.pricing,
+        product_id,
+        tier_key(tier_category_id, plan_code),
+        detected
+        or ("compulsory" if base_cat in flex.compulsory_dep_cats else "voluntary"),
+    )
+
+
 def _price_tag(
     flex: _FlexContext,
     product_id: str,
@@ -886,35 +964,38 @@ def _price_tag(
     *,
     declined: bool,
     base_cat: str | None,
+    tier_category_id: str | None,
     to_plan: str | None,
     default_plan: str | None,
     covered: list[str] | None,
     dependants: dict[str, Dependant],
     dep_options: dict[str, Any] | None,
+    participation: str | None,
     age_limits: dict[str, dict[str, int]] | None,
 ) -> float | None:
     """The flex price tag this coverage draws.
 
-    A bulk update carries no cohort tier, so it prices against the member's
-    baseline category — the same key ``summarize_employee`` resolves to for a
-    tier-less override, so a bulk-applied tag matches the benefit statement's
-    later recompute.
+    The selected plan is first resolved to its cohort tier, including sibling
+    categories.  Pricing and the stored override therefore use the same exact
+    tier key that ``summarize_employee`` will resolve during a later recompute.
 
     Dependants are resolved BY ID out of the batch-wide map, not from the
     member's electable list: the ids being priced come from the override's
     existing coverage as often as from a new dependant action, and the two sets
     are not the same (see ``_Dependants``).
     """
-    if base_cat in flex.compulsory_dep_cats:
+    if participation == "compulsory":
         dep_rows = [
             dep for dep in dependants.values() if dep.employee_id == emp.id
         ]
-    else:
+    elif participation == "voluntary":
         dep_rows = [
             dep
             for dep in (dependants.get(i) for i in (covered or []) if i)
             if dep is not None
         ]
+    else:
+        dep_rows = []
     dep_profiles = dependant_profiles_of(dep_rows, age_limits=age_limits, ref=flex.ref)
     spouse_count, child_count = profile_counts(dep_profiles)
     return member_coverage_tag(
@@ -926,7 +1007,7 @@ def _price_tag(
         product_id=product_id,
         age=employee_age(emp, flex.ref) if flex.ref else None,
         declined=declined,
-        tier_category_id=base_cat,
+        tier_category_id=tier_category_id,
         plan_code=to_plan,
         default_tier_category_id=base_cat,
         default_plan=default_plan,
@@ -1059,8 +1140,8 @@ def _write_override(
     record_id: str | None,
     user: CurrentUser | None,
 ) -> dict[str, Any] | None:
-    # dep_ids is None only when no dependant_action was requested — leave any
-    # existing dependant coverage untouched in that case.
+    # No dependant action normally preserves existing coverage. A target that
+    # offers no dependant cover is the exception: clear both dependant fields.
     row, before = upsert_override(
         db,
         employee_id=emp.id,
@@ -1070,19 +1151,22 @@ def _write_override(
         product_code=planned.product.code,
         declined=planned.change.action == "decline",
         plan_code=planned.change.target_plan_code,
-        # A bulk update sets a plan_code directly, not a specific cohort tier —
-        # clear any stale tier_category_id left by a prior enrollment election
-        # so the override's tier can't contradict its new plan_code. Elected
-        # dependant option LEVELS are tier-independent and carry over (they
-        # priced the tag above). The flex price tag is re-resolved against the
-        # member's baseline category.
-        tier_category_id=None,
+        # A bare plan code is stored with its exact sibling category when that
+        # mapping is unambiguous in this member's cohort. Later recomputation
+        # therefore uses the same category::plan pricing key as this write.
+        tier_category_id=planned.tier_category_id,
         dependant_option_ids=planned.dep_options,
         flex_price_tag=planned.tag,
         source=OverrideSource.bulk_update,
         source_ref=record_id,
         modified_by=user.user_id if user else None,
-        **({"covered_dependant_ids": planned.dep_ids} if planned.dep_ids is not None else {}),
+        **(
+            {"covered_dependant_ids": None}
+            if planned.clear_dependants
+            else {"covered_dependant_ids": planned.dep_ids}
+            if planned.dep_ids is not None
+            else {}
+        ),
     )
     # Per-employee audit row (tagged with employee_id) so a bulk change is visible
     # in the member's coverage-history timeline, not only in the batch record.

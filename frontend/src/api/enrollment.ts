@@ -211,6 +211,8 @@ export interface CohortTier {
   plan_code: string | null;
   label: string;
   participation: string | null;
+  /** Effective dependant enrolment for this exact plan. */
+  dependant_participation: "compulsory" | "voluntary" | null;
   direction: "upgrade" | "downgrade" | "same" | "unknown";
   is_baseline: boolean;
   /** The tier the member HOLDS today — the cohort baseline unless a standing
@@ -256,6 +258,10 @@ export type DependantPricingMode =
   | "family_group"
   | "per_pax"
   | "slip_options";
+export type DependantParticipationMode =
+  | "compulsory"
+  | "voluntary"
+  | "none";
 /** Family-composition label scheme (family_group mode). */
 export type FamilyScheme = "ec_es_ef" | "so_co_sc";
 export type FamilyRole = "spouse" | "child" | "both";
@@ -414,6 +420,11 @@ export interface DependantConfig {
   mode?: DependantPricingMode;
   /** Explicit pricing method override keyed by employee tier. */
   modes?: Record<string, Exclude<DependantPricingMode, "slip_options">>;
+  /** Plan-level dependant enrolment. `none` removes dependant cover. */
+  participation?: Record<
+    string,
+    DependantParticipationMode
+  >;
   scheme?: FamilyScheme;
   family_tags?: Record<string, Partial<Record<FamilyRole, number | null>>>;
   per_pax?: Record<string, { flat?: number | null }>;

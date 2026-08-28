@@ -262,6 +262,9 @@ class CohortTierOut(BaseModel):
     plan_code: str | None
     label: str
     participation: str | None
+    # Effective dependant enrolment for this exact plan. Unlike the legacy
+    # product-level field this can change when a member selects another tier.
+    dependant_participation: str | None = None
     direction: str  # 'upgrade' | 'downgrade' | 'same' | 'unknown'
     is_baseline: bool
     # The tier this member holds TODAY — the cohort default unless a standing

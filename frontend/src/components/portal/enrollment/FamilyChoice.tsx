@@ -12,6 +12,7 @@ import {
   type DependantRef,
   type ProductState,
   classifyRel,
+  dependantParticipationFor,
   dependantPricing,
 } from "@/components/enrollment/electionCore";
 import { Field, leafControl } from "@/components/portal/leaf/Field";
@@ -188,7 +189,9 @@ export function FamilyChoice({
   currency: string | null;
   onChange: (next: ProductState) => void;
 }) {
-  const depCompulsory = ts.dependant_participation === "compulsory";
+  const participation = dependantParticipationFor(ts, ps.tierKey);
+  if (participation === null) return null;
+  const depCompulsory = participation === "compulsory";
   const covered = depCompulsory
     ? dependants
     : dependants.filter((d) => ps.dependantIds.includes(d.id));

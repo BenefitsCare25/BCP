@@ -52,6 +52,7 @@ from app.schemas.enrollment import (
 )
 from app.services import flex_proration
 from app.services.cohort_tiers import (
+    CohortTier,
     ProductTierSet,
     electable_tiers_for_employee,
     tier_key,
@@ -86,6 +87,7 @@ from app.services.flex_pricing_resolver import (
     dependant_option_choices,
     dependant_pricing_breakdown,
     dependant_profiles_by_id,
+    effective_dependant_participation,
     employee_age,
     get_pricing,
     gst_multiplier_for,
@@ -393,13 +395,28 @@ def build_enrollment_options(
                 select(ProductModel).where(ProductModel.id.in_(pids))
             ).all()
         }
+    def tier_dependant_participation(ts: ProductTierSet, tier: CohortTier) -> str | None:
+        return effective_dependant_participation(
+            pricing,
+            ts.product_id,
+            tier_key(tier.tier_category_id, tier.plan_code),
+            tier.dependant_participation or ts.dependant_participation,
+        )
+
     products = [
         ProductTierSetOut(
             product_id=ts.product_id,
             product_code=ts.product_code,
             product_name=product_names.get(ts.product_id),
             employee_participation=ts.employee_participation,
-            dependant_participation=ts.dependant_participation,
+            dependant_participation=next(
+                (
+                    tier_dependant_participation(ts, tier)
+                    for tier in ts.tiers
+                    if tier.is_baseline
+                ),
+                None,
+            ),
             baseline_tier_category_id=ts.baseline_tier_category_id,
             baseline_plan_code=ts.baseline_plan_code,
             allow_plan_change=ts.allow_plan_change,
@@ -411,6 +428,7 @@ def build_enrollment_options(
                     plan_code=t.plan_code,
                     label=t.label,
                     participation=t.participation,
+                    dependant_participation=tier_dependant_participation(ts, t),
                     direction=t.direction,
                     is_baseline=t.is_baseline,
                     is_current=t.is_current,
@@ -689,6 +707,7 @@ def apply_elections(
 
         previous = (baseline_products.get(item.product_code) or {}).get("plan_code")
         tier_set = tier_sets.get(item.product_code)
+        tier: CohortTier | None = None
         elected_plan_code: str | None = None
         elected_tier_id: str | None = None
         if item.declined:
@@ -751,12 +770,23 @@ def apply_elections(
             )
 
         dep_limits = dependant_age_limits(pricing, product.id)
-        dependants_compulsory = bool(
-            not item.declined
-            and tier_set is not None
-            and tier_set.dependant_participation == "compulsory"
+        dependant_participation = (
+            None
+            if item.declined
+            else effective_dependant_participation(
+                pricing,
+                product.id,
+                tier_key(elected_tier_id, elected_plan_code),
+                (
+                    tier.dependant_participation or tier_set.dependant_participation
+                    if tier is not None and tier_set is not None
+                    else tier_set.dependant_participation
+                    if tier_set is not None
+                    else "voluntary"
+                ) or "voluntary",
+            )
         )
-        if dependants_compulsory:
+        if dependant_participation == "compulsory":
             all_profiles = dependant_profiles_by_id(db, employee.id, ref)
             eligible_profiles = {
                 dep_id: profile
@@ -765,7 +795,7 @@ def apply_elections(
             }
             resolved_covered_ids: list[str] | None = sorted(eligible_profiles)
             dep_profiles = list(eligible_profiles.values())
-        else:
+        elif dependant_participation == "voluntary":
             resolved_covered_ids = (
                 None if item.declined else item.covered_dependant_ids
             )
@@ -775,6 +805,9 @@ def apply_elections(
                 age_limits=dep_limits,
                 ref=ref,
             )
+        else:
+            resolved_covered_ids = None
+            dep_profiles = []
 
         existing.previous_plan_code = previous
         existing.elected_plan_code = elected_plan_code
@@ -785,7 +818,9 @@ def apply_elections(
         # dependant charge drawn from the employee's flex wallet.
         existing.covered_dependant_ids = resolved_covered_ids
         existing.dependant_option_ids = (
-            None if item.declined else (item.dependant_option_ids or None)
+            None
+            if item.declined or dependant_participation is None
+            else (item.dependant_option_ids or None)
         )
         # Snapshot the total flex draw-down (employee plan tag + dependant tag) for
         # the resolved tier under the window's config (None when declined). For an

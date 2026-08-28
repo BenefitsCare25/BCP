@@ -12,12 +12,10 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Copy,
   Pencil,
   RotateCcw,
   Search,
 } from "lucide-react";
-import { toast } from "sonner";
 import type {
   FlexPricingBag,
   FlexPricingProduct,
@@ -32,7 +30,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   type FlexPricingEditor,
-  ProductDependantEditor,
+  UnifiedDependantEnrollment,
+  UnifiedDependantPricing,
+  UnifiedDependantSettings,
 } from "@/components/enrollment/FlexPricingCard";
 import {
   LifeVoluntaryPanel,
@@ -43,20 +43,12 @@ import {
 type ProductStats = { total: number; edited: number; missing: number };
 type CohortGroup = { id: string; label: string; tiers: FlexPricingTier[] };
 
-function isAgeBanded(product: FlexPricingProduct): boolean {
-  return product.tiers.some((tier) => tier.pricing_mode === "age_banded");
-}
-
 function fixedTiersFor(product: FlexPricingProduct): FlexPricingTier[] {
   return product.tiers.filter((tier) => tier.pricing_mode === "plan_type");
 }
 
 function ageBandedTiersFor(product: FlexPricingProduct): FlexPricingTier[] {
   return product.tiers.filter((tier) => tier.pricing_mode === "age_banded");
-}
-
-function optionIdentity(tier: FlexPricingTier): string {
-  return tier.option_id;
 }
 
 function sameRateBand(
@@ -161,37 +153,46 @@ function statsFor(
       if (overrideFor(pricing, product, tier) != null) edited += 1;
     }
   }
-  if (product.has_dependants) {
-    const dependant = pricing?.products?.[product.product_id]?.dependant;
-    total += product.tiers.length;
-    for (const tier of product.tiers) {
-      const mode =
-        dependant?.modes?.[tier.key] ??
-        dependant?.mode ??
-        tier.dependant_pricing?.mode ??
-        "none";
-      if (tier.dependant_participation == null) missing += 1;
-      if (
-        mode === "per_pax" &&
-        dependant?.per_pax?.[tier.key]?.flat == null &&
-        tier.dependant_pricing?.per_pax_rate == null
-      ) {
-        missing += 1;
-      }
-      if (
-        mode === "family_group" &&
-        Object.keys(dependant?.family_tags?.[tier.key] ?? {}).length === 0 &&
-        (tier.dependant_pricing?.family ?? []).every((row) => row.amount == null)
-      ) {
-        missing += 1;
-      }
-      if (
-        Object.prototype.hasOwnProperty.call(dependant?.modes ?? {}, tier.key) ||
-        Object.keys(dependant?.family_tags?.[tier.key] ?? {}).length > 0 ||
-        dependant?.per_pax?.[tier.key]?.flat != null
-      ) {
-        edited += 1;
-      }
+  const dependant = pricing?.products?.[product.product_id]?.dependant;
+  for (const tier of product.tiers) {
+    const participationOverride = dependant?.participation?.[tier.key];
+    const participation =
+      participationOverride === "none"
+        ? null
+        : participationOverride ?? tier.dependant_participation;
+    if (participationOverride != null) edited += 1;
+    if (!participation) continue;
+    total += 1;
+    const hasMode =
+      Object.prototype.hasOwnProperty.call(dependant?.modes ?? {}, tier.key) ||
+      dependant?.mode != null ||
+      tier.dependant_pricing?.mode !== "none";
+    const mode =
+      dependant?.modes?.[tier.key] ??
+      dependant?.mode ??
+      tier.dependant_pricing?.mode ??
+      "none";
+    if (!hasMode) missing += 1;
+    if (
+      mode === "per_pax" &&
+      dependant?.per_pax?.[tier.key]?.flat == null &&
+      tier.dependant_pricing?.per_pax_rate == null
+    ) {
+      missing += 1;
+    }
+    if (
+      mode === "family_group" &&
+      Object.keys(dependant?.family_tags?.[tier.key] ?? {}).length === 0 &&
+      (tier.dependant_pricing?.family ?? []).every((row) => row.amount == null)
+    ) {
+      missing += 1;
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(dependant?.modes ?? {}, tier.key) ||
+      Object.keys(dependant?.family_tags?.[tier.key] ?? {}).length > 0 ||
+      dependant?.per_pax?.[tier.key]?.flat != null
+    ) {
+      edited += 1;
     }
   }
   return { total, edited, missing };
@@ -244,7 +245,8 @@ function relationshipLabel(tier: FlexPricingTier): string {
   return tier.participation === "voluntary" ? "Voluntary" : "Alternative";
 }
 
-function CategoryPriceTable({
+/** @deprecated Replaced by the unified employee-and-dependant table. */
+export function CategoryPriceTable({
   product,
   pricing,
   editor,
@@ -258,42 +260,35 @@ function CategoryPriceTable({
   const cohorts = cohortsFor(product);
 
   return (
-    <>
-      <p className="border-t border-border px-4 py-2 text-2xs text-muted-foreground sm:hidden">
-        Swipe horizontally to compare categories, recommendations, and price tags.
-      </p>
-      <div
-        className="overflow-x-auto border-t border-border"
-        role="region"
-        aria-label={`${product.product_code} employee-category price tags`}
-        tabIndex={0}
-      >
-      <table className="w-full min-w-[1240px] text-sm">
+    <div
+      className="overflow-x-auto border-t border-border"
+      role="region"
+      aria-label={`${product.product_code} employee-category price tags`}
+      tabIndex={0}
+    >
+      <table className="w-full min-w-[980px] table-fixed text-sm">
         <thead className="bg-muted/40 text-xs text-muted-foreground">
           <tr className="border-b border-border">
-            <th scope="col" className="sticky left-0 z-10 w-[22%] bg-muted px-4 py-2.5 text-left font-medium">
+            <th scope="col" className="sticky left-0 z-10 w-[24%] bg-muted px-4 py-2 text-left font-medium">
               Employee category
             </th>
-            <th scope="col" className="w-[12%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[14%] px-3 py-2 text-left font-medium">
               Plan or option
             </th>
-            <th scope="col" className="w-[10%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[11%] px-3 py-2 text-left font-medium">
               Participation
             </th>
-            <th scope="col" className="w-[10%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[11%] px-3 py-2 text-left font-medium">
               Relationship
             </th>
-            <th scope="col" className="w-[13%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[13%] px-3 py-2 text-left font-medium">
               Pricing method
             </th>
-            <th scope="col" className="w-[12%] px-3 py-2.5 text-right font-medium">
+            <th scope="col" className="w-[12%] px-3 py-2 text-right font-medium">
               Recommended
             </th>
-            <th scope="col" className="w-[15%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[15%] px-3 py-2 text-left font-medium">
               Price tag
-            </th>
-            <th scope="col" className="px-3 py-2.5 text-left font-medium">
-              State
             </th>
           </tr>
         </thead>
@@ -303,59 +298,29 @@ function CategoryPriceTable({
               const ageBanded = tier.pricing_mode === "age_banded";
               const override = ageBanded ? null : overrideFor(pricing, product, tier);
               const effective = ageBanded ? null : override ?? tier.slip_premium;
-              const identity = optionIdentity(tier);
-              const copyTargets = product.tiers.filter(
-                (candidate) =>
-                  candidate.key !== tier.key &&
-                  candidate.pricing_mode === "plan_type" &&
-                  optionIdentity(candidate) === identity,
-              );
-              const storedAgeRow = ageBanded
-                ? priceRowForTier(
-                    pricing?.products?.[product.product_id]?.price_tags,
-                    tier,
-                  )
-                : null;
-              const hasAgeTierOverride = Boolean(
-                storedAgeRow &&
-                  Object.values(storedAgeRow.row).some(
-                    (amount) => typeof amount === "number" && Number.isFinite(amount),
-                  ),
-              );
               const tierRateBands = ageBanded
                 ? editor.voluntaryRatesFor(product, tier.key)
                 : [];
-              const tierRateIssues = ageBanded
-                ? voluntaryRateIssues(tierRateBands)
-                : [];
-              const tierRatesEdited = ageBanded
-                ? editor.voluntaryRatesEdited(product, tier.key) ||
-                  editor.voluntaryRatesEdited(product)
-                : false;
               return (
                 <tr key={tier.key} className="align-top hover:bg-muted/20">
                   {index === 0 && (
                     <th
                       scope="rowgroup"
                       rowSpan={cohort.tiers.length}
-                      className="sticky left-0 z-[5] bg-card px-4 py-3 text-left font-medium text-foreground"
+                      className="sticky left-0 z-[5] bg-card px-4 py-2 text-left font-medium text-foreground"
                     >
                       <span className="block max-w-md leading-snug">{cohort.label}</span>
-                      <span className="mt-1 block text-2xs font-normal text-muted-foreground">
-                        {cohort.tiers.length} pricing option
-                        {cohort.tiers.length === 1 ? "" : "s"}
-                      </span>
                     </th>
                   )}
-                  <td className="px-3 py-3">
+                  <td className="px-3 py-2">
                     <span className="block font-medium text-foreground">{tier.label}</span>
                     {tier.plan_code && !tier.label.includes(tier.plan_code) && (
                       <span className="text-2xs text-muted-foreground">
-                        Plan code {tier.plan_code}
+                        {tier.plan_code}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-3 py-2">
                     <Badge
                       variant={tier.participation === "compulsory" ? "good" : "info"}
                       className="capitalize"
@@ -363,35 +328,24 @@ function CategoryPriceTable({
                       {tier.participation ?? "Not classified"}
                     </Badge>
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-3 py-2">
                     <span className={cn("text-xs", tier.is_baseline && "font-medium")}>
                       {relationshipLabel(tier)}
                     </span>
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-3 py-2">
                     {ageBanded ? (
-                      <div>
-                        <span className="text-xs font-medium text-foreground">Age-banded rate</span>
-                        <span className="mt-0.5 block text-2xs text-muted-foreground">
-                          Rate × sum assured
-                        </span>
-                      </div>
+                      <span className="text-xs font-medium text-foreground">Age-banded rate</span>
                     ) : (
                       <span className="text-xs text-foreground">Fixed amount</span>
                     )}
                   </td>
-                  <td className="px-3 py-3 text-right tabular-nums">
+                  <td className="px-3 py-2 text-right tabular-nums">
                     {ageBanded ? (
-                      <div>
-                        <span className="font-medium text-foreground">
-                          {tierRateBands.length} age band{tierRateBands.length === 1 ? "" : "s"}
-                        </span>
-                        <span className="mt-0.5 block text-2xs text-muted-foreground">
-                          {tier.sum_insured == null
-                            ? "Sum assured missing"
-                            : `${fmtMoney(tier.sum_insured)} cover`}
-                        </span>
-                      </div>
+                      <span className="font-medium text-foreground">
+                        {tierRateBands.length} band{tierRateBands.length === 1 ? "" : "s"}
+                        {tier.sum_insured == null ? " · Missing sum assured" : ` · ${fmtMoney(tier.sum_insured)}`}
+                      </span>
                     ) : tier.slip_premium == null ? (
                       <span className="text-warn">Not detected</span>
                     ) : (
@@ -408,7 +362,7 @@ function CategoryPriceTable({
                         {editable ? "Edit rate table" : "View rate table"}
                       </a>
                     ) : (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         <Input
                           type="number"
                           min="0"
@@ -423,68 +377,10 @@ function CategoryPriceTable({
                             )
                           }
                           aria-label={`${product.product_code} ${cohort.label} ${tier.label} price tag`}
-                          className="h-8 w-28 tabular-nums"
+                          className="h-8 w-24 tabular-nums"
                           placeholder="Required"
                         />
-                        {editable && copyTargets.length > 0 && effective != null && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 gap-1 px-2 text-2xs"
-                            onClick={() => {
-                              const changed = copyTargets.filter(
-                                (candidate) =>
-                                  effectiveFor(pricing, product, candidate) !== effective,
-                              );
-                              if (!changed.length) {
-                                toast.info("The other categories already use this price.");
-                                return;
-                              }
-                              editor.setPlanPrice(
-                                product.product_id,
-                                changed.map((candidate) => candidate.key),
-                                String(effective),
-                              );
-                              toast.success(
-                                `Copied to ${changed.length} other ${changed.length === 1 ? "category" : "categories"}. Save price tags to publish.`,
-                              );
-                            }}
-                            aria-label={`Copy ${tier.label} price to ${copyTargets.length} other employee ${copyTargets.length === 1 ? "category" : "categories"}`}
-                          >
-                            <Copy className="size-3.5" aria-hidden="true" />
-                            Copy to {copyTargets.length} other
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-3 py-3">
-                    {ageBanded ? (
-                      hasAgeTierOverride ? (
-                        <span className="flex items-center gap-1 text-xs font-medium text-warn">
-                          <AlertTriangle className="size-3" aria-hidden="true" />
-                          Tier override
-                        </span>
-                      ) : tierRateIssues.length > 0 || tier.sum_insured == null ? (
-                        <span className="flex items-center gap-1 text-xs font-medium text-warn">
-                          <AlertTriangle className="size-3" aria-hidden="true" />
-                          Needs rate setup
-                        </span>
-                      ) : tierRatesEdited ? (
-                        <span className="flex items-center gap-1 text-xs font-medium text-info">
-                          <Pencil className="size-3" aria-hidden="true" /> Edited rates
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <CheckCircle2 className="size-3" aria-hidden="true" /> Rate table
-                        </span>
-                      )
-                    ) : override != null ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="flex items-center gap-1 text-xs font-medium text-info">
-                          <Pencil className="size-3" aria-hidden="true" /> Edited
-                        </span>
-                        {editable && (
+                        {editable && override != null && (
                           <Button
                             variant="ghost"
                             size="icon-sm"
@@ -498,16 +394,6 @@ function CategoryPriceTable({
                           </Button>
                         )}
                       </div>
-                    ) : effective != null ? (
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <CheckCircle2 className="size-3" aria-hidden="true" />
-                        Recommended
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1 text-xs font-medium text-warn">
-                        <AlertTriangle className="size-3" aria-hidden="true" />
-                        Needs pricing
-                      </span>
                     )}
                   </td>
                 </tr>
@@ -515,9 +401,182 @@ function CategoryPriceTable({
             })}
           </tbody>
         ))}
-        </table>
-      </div>
-    </>
+      </table>
+    </div>
+  );
+}
+
+function UnifiedCategoryPriceTable({
+  product,
+  pricing,
+  editor,
+  editable,
+}: {
+  product: FlexPricingProduct;
+  pricing: FlexPricingBag | undefined;
+  editor: FlexPricingEditor;
+  editable: boolean;
+}) {
+  const cohorts = cohortsFor(product);
+  return (
+    <div
+      className="overflow-x-auto border-t border-border"
+      role="region"
+      aria-label={`${product.product_code} unified price and dependant setup`}
+      tabIndex={0}
+    >
+      <table className="w-full min-w-[1120px] table-fixed text-sm">
+        <thead className="bg-muted/40 text-xs text-muted-foreground">
+          <tr className="border-b border-border">
+            <th scope="col" className="sticky left-0 z-10 w-[20%] bg-muted px-4 py-2 text-left font-medium">
+              Employee category
+            </th>
+            <th scope="col" className="w-[10%] px-3 py-2 text-left font-medium">
+              Plan or option
+            </th>
+            <th scope="col" className="w-[12%] px-3 py-2 text-left font-medium">
+              Employee cover
+            </th>
+            <th scope="col" className="w-[20%] px-3 py-2 text-left font-medium">
+              Employee price
+            </th>
+            <th scope="col" className="w-[14%] px-3 py-2 text-left font-medium">
+              Dependant enrolment
+            </th>
+            <th scope="col" className="w-[24%] px-3 py-2 text-left font-medium">
+              Dependant pricing
+            </th>
+          </tr>
+        </thead>
+        {cohorts.map((cohort) => (
+          <tbody key={cohort.id} className="border-b border-border last:border-b-0">
+            {cohort.tiers.map((tier, index) => {
+              const ageBanded = tier.pricing_mode === "age_banded";
+              const override = ageBanded ? null : overrideFor(pricing, product, tier);
+              const effective = ageBanded ? null : override ?? tier.slip_premium;
+              const rates = ageBanded
+                ? editor.voluntaryRatesFor(product, tier.key)
+                : [];
+              return (
+                <tr key={tier.key} className="align-top hover:bg-muted/20">
+                  {index === 0 && (
+                    <th
+                      scope="rowgroup"
+                      rowSpan={cohort.tiers.length}
+                      className="sticky left-0 z-[5] bg-card px-4 py-2 text-left font-medium leading-snug text-foreground"
+                    >
+                      {cohort.label}
+                    </th>
+                  )}
+                  <td className="px-3 py-2">
+                    <span className="block font-medium text-foreground">{tier.label}</span>
+                    {tier.plan_code && !tier.label.includes(tier.plan_code) && (
+                      <span className="text-2xs text-muted-foreground">{tier.plan_code}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-col items-start gap-1">
+                      <Badge
+                        variant={tier.participation === "compulsory" ? "good" : "info"}
+                        className="capitalize"
+                      >
+                        {tier.participation ?? "Not classified"}
+                      </Badge>
+                      <span className={cn("text-xs", tier.is_baseline && "font-medium")}>
+                        {relationshipLabel(tier)}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    {ageBanded ? (
+                      <div className="space-y-1">
+                        <span className="block text-2xs font-medium text-muted-foreground">
+                          Age-banded · {rates.length} band{rates.length === 1 ? "" : "s"}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "text-xs tabular-nums",
+                            tier.sum_insured == null ? "text-warn" : "text-foreground",
+                          )}>
+                            {tier.sum_insured == null ? "Missing sum assured" : fmtMoney(tier.sum_insured)}
+                          </span>
+                          <a
+                            href={`#${product.product_id}-age-rates`}
+                            className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-info outline-none hover:bg-info-soft focus-visible:ring-2 focus-visible:ring-ring/50"
+                          >
+                            <ArrowDown className="size-3.5" aria-hidden="true" />
+                            Rates
+                          </a>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <span className="block text-2xs font-medium text-muted-foreground">Fixed</span>
+                        <div className="flex items-center gap-1">
+                          <span className={cn(
+                            "w-[4.75rem] text-right text-xs tabular-nums",
+                            tier.slip_premium == null ? "text-warn" : "text-muted-foreground",
+                          )}>
+                            {tier.slip_premium == null ? "Missing" : fmtMoney(tier.slip_premium)}
+                          </span>
+                          <span className="text-xs text-muted-foreground" aria-hidden="true">→</span>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={effective ?? ""}
+                            disabled={!editable}
+                            onChange={(event) =>
+                              editor.setPlanPrice(
+                                product.product_id,
+                                [tier.key],
+                                event.target.value,
+                              )
+                            }
+                            aria-label={`${product.product_code} ${cohort.label} ${tier.label} price tag`}
+                            className="h-8 w-24 tabular-nums"
+                            placeholder="Required"
+                          />
+                          {editable && override != null && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() =>
+                                editor.setPlanPrice(product.product_id, [tier.key], "")
+                              }
+                              title="Reset to recommendation"
+                              aria-label={`Reset ${tier.label} to its recommendation`}
+                            >
+                              <RotateCcw className="size-3.5" aria-hidden="true" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <UnifiedDependantEnrollment
+                      product={product}
+                      tier={tier}
+                      editor={editor}
+                      editable={editable}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <UnifiedDependantPricing
+                      product={product}
+                      tier={tier}
+                      editor={editor}
+                      editable={editable}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        ))}
+      </table>
+    </div>
   );
 }
 
@@ -553,8 +612,7 @@ export function FlexProductList({
   return (
     <div className="space-y-3">
       <div className="flex flex-col gap-3 rounded-lg bg-muted/35 p-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             <span className="font-medium text-foreground">
               {products.length} product{products.length === 1 ? "" : "s"}
             </span>
@@ -563,11 +621,6 @@ export function FlexProductList({
               {needsAttention} need attention
             </span>
             <span className="text-info">{edited} edited</span>
-          </div>
-          <p className="mt-1 text-2xs text-muted-foreground">
-            Recommendations are populated automatically. Fixed-price edits affect
-            only the category and plan shown; age-band edits affect that product.
-          </p>
         </div>
         <label className="relative block md:w-72">
           <span className="sr-only">Search products, categories, or plans</span>
@@ -592,23 +645,8 @@ export function FlexProductList({
         <div className="space-y-2">
           {visible.map((product) => {
             const stats = statsFor(pricing, product);
-            const cohorts = cohortsFor(product);
             const isOpen = !!openEditor[product.product_id];
             const ageTiers = ageBandedTiersFor(product);
-            const fixedTiers = fixedTiersFor(product);
-            const hasAgeBandedTiers = isAgeBanded(product);
-            const rateBandCount =
-              pricing?.products?.[product.product_id]?.voluntary_rates?.length ??
-              product.voluntary_rates?.length ??
-              0;
-            const pricingSummary = hasAgeBandedTiers
-              ? fixedTiers.length > 0
-                ? `Mixed pricing · ${fixedTiers.length} fixed assignments · ${rateBandCount} rate bands · ${cohorts.length} employee categories`
-                : `Age-banded pricing · ${rateBandCount} rate bands · ${cohorts.length} employee categories`
-              : `Fixed pricing · ${cohorts.length} employee categories · ${fixedTiers.length} plan assignments`;
-            const dependantSummary = product.has_dependants
-              ? "dependant cover"
-              : "no dependant cover";
             return (
               <section
                 key={product.product_id}
@@ -618,7 +656,8 @@ export function FlexProductList({
                   type="button"
                   onClick={() => onToggleEditor(product.product_id)}
                   aria-expanded={isOpen}
-                  className="flex w-full items-start gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+                  aria-label={`${isOpen ? "Collapse" : "Expand"} ${product.product_code}`}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
                 >
                   {isOpen ? (
                     <ChevronDown className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -635,18 +674,12 @@ export function FlexProductList({
                       </Badge>
                       <ProductStatus stats={stats} />
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {pricingSummary} · {dependantSummary}
-                    </p>
                   </div>
-                  <span className="hidden pt-1 text-xs font-medium text-muted-foreground sm:block">
-                    {isOpen ? "Hide details" : editable ? "Review and edit" : "Review details"}
-                  </span>
                 </button>
 
                 {isOpen && (
                   <div>
-                    <CategoryPriceTable
+                    <UnifiedCategoryPriceTable
                       product={product}
                       pricing={pricing}
                       editor={editor}
@@ -661,7 +694,7 @@ export function FlexProductList({
                         />
                       </div>
                     )}
-                    <ProductDependantEditor
+                    <UnifiedDependantSettings
                       product={product}
                       editor={editor}
                       editable={editable}

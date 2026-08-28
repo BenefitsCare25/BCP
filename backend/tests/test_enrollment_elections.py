@@ -191,7 +191,7 @@ def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
         category.participation_model = "compulsory"
         category.participation_detail = {
             "employee": "compulsory",
-            "dependant": "compulsory",
+            "dependant": "voluntary",
             "direction": None,
         }
         s.add(
@@ -213,6 +213,9 @@ def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
                     "products": {
                         PROD_ID: {
                             "dependant": {
+                                "participation": {
+                                    f"{CAT_ID}::SILVER": "compulsory"
+                                },
                                 "modes": {f"{CAT_ID}::SILVER": "per_pax"},
                                 "per_pax": {
                                     f"{CAT_ID}::SILVER": {"flat": 25}
@@ -245,6 +248,83 @@ def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
             category = s.get(Category, CAT_ID)
             assert category is not None
             category.participation_model = previous_model
+            category.participation_detail = previous_detail
+            s.commit()
+
+
+def test_removed_plan_dependant_cover_ignores_submitted_dependants(
+    client: TestClient,
+) -> None:
+    """A plan-level `none` override removes cover even when the source category
+    was compulsory and a stale client still submits dependant IDs."""
+    with SessionLocal() as s:
+        category = s.get(Category, CAT_ID)
+        assert category is not None
+        previous_detail = category.participation_detail
+        category.participation_detail = {
+            "employee": "compulsory",
+            "dependant": "compulsory",
+        }
+        s.add(
+            Dependant(
+                id=DEP1,
+                client_id=CLIENT_ID,
+                policy_year_id=PY_ID,
+                employee_id=EMP1,
+                attribute_values={"relationship": "Spouse"},
+                status="active",
+            )
+        )
+        s.add(
+            FlexPricing(
+                id="removed-dependant-pricing",
+                policy_year_id=PY_ID,
+                client_id=CLIENT_ID,
+                pricing={
+                    "products": {
+                        PROD_ID: {
+                            "dependant": {
+                                "participation": {
+                                    f"{CAT_ID}::SILVER": "none"
+                                },
+                                "modes": {f"{CAT_ID}::SILVER": "per_pax"},
+                                "per_pax": {
+                                    f"{CAT_ID}::SILVER": {"flat": 25}
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        )
+        s.commit()
+
+    try:
+        wid = _make_window(client, allow_dependant_changes=True)
+        eid = _enrollment_id(client, wid, "E-1")
+        response = client.put(
+            f"/api/v1/enrollments/{eid}/elections",
+            json={
+                "elections": [
+                    {
+                        "product_code": "MED",
+                        "plan_code": "SILVER",
+                        "covered_dependant_ids": [DEP1],
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 200, response.text
+        election = response.json()["elections"][0]
+        assert election["covered_dependant_ids"] is None
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).filter(
+                FlexPricing.id == "removed-dependant-pricing"
+            ).delete()
+            s.query(Dependant).filter(Dependant.id == DEP1).delete()
+            category = s.get(Category, CAT_ID)
+            assert category is not None
             category.participation_detail = previous_detail
             s.commit()
 
@@ -453,6 +533,44 @@ def test_covered_dependants_without_elected_level_are_unpriced(
     assert put.json()["elections"][0]["flex_price_tag"] is None
 
 
+def test_no_cover_election_clears_submitted_dependants_and_option_levels(
+    client: TestClient, _dependant_levels
+) -> None:
+    from app.services.cohort_tiers import tier_key
+
+    with SessionLocal() as s:
+        s.add(FlexPricing(
+            id="no-cover-election-pricing",
+            policy_year_id=PY_ID,
+            client_id=CLIENT_ID,
+            pricing={"products": {PROD_ID: {"dependant": {
+                "participation": {tier_key(CAT_ID, "SILVER"): "none"},
+            }}}},
+        ))
+        s.commit()
+    try:
+        wid = _make_window(client, allow_dependant_changes=True)
+        eid = _enrollment_id(client, wid, "E-1")
+        put = client.put(
+            f"/api/v1/enrollments/{eid}/elections",
+            json={"elections": [{
+                "product_code": "MED", "plan_code": "SILVER",
+                "covered_dependant_ids": [DEP1],
+                "dependant_option_ids": {"spouse": OPT_S40},
+            }]},
+        )
+        assert put.status_code == 200, put.text
+        election = put.json()["elections"][0]
+        assert election["covered_dependant_ids"] is None
+        assert election["dependant_option_ids"] is None
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).filter(
+                FlexPricing.id == "no-cover-election-pricing"
+            ).delete()
+            s.commit()
+
+
 def test_invalid_dependant_option_level_422(
     client: TestClient, _dependant_levels
 ) -> None:
@@ -549,4 +667,59 @@ def test_manual_override_sets_validates_and_prices_dependant_levels(
     # Declining clears the level with the rest of the coverage.
     res = client.put(url, json={"declined": True})
     assert res.status_code == 200, res.text
+    assert res.json()["covered_dependant_ids"] is None
     assert res.json()["dependant_option_ids"] is None
+
+
+def test_manual_override_resolves_sibling_no_cover_tier_and_clears_dependants(
+    client: TestClient, _dependant_levels
+) -> None:
+    from app.services.cohort_tiers import tier_key
+
+    sibling = "a-cat-gold-option"
+    target_key = tier_key(sibling, "GOLD")
+    with SessionLocal() as s:
+        s.add(Category(
+            id=sibling, policy_year_id=PY_ID, product_id=PROD_ID, priority=2,
+            display_name="All staff (Option 2)",
+            raw_description="All staff (Option 2)",
+            participation_model="voluntary",
+            participation_detail={"employee": "voluntary", "dependant": "voluntary"},
+            plan_assignments={"plan_code": "GOLD"},
+            source=SourceKind.system_generated.value,
+            status=CategoryStatus.confirmed.value, human_modified=False,
+        ))
+        s.add(FlexPricing(
+            id="manual-no-cover-pricing",
+            policy_year_id=PY_ID,
+            client_id=CLIENT_ID,
+            pricing={"products": {PROD_ID: {"dependant": {
+                "participation": {target_key: "none"},
+            }}}},
+        ))
+        s.commit()
+    url = f"/api/v1/employees/{EMP1}/plan-overrides/MED"
+    try:
+        first = client.put(url, json={
+            "plan_code": "SILVER", "covered_dependant_ids": [DEP1],
+            "dependant_option_ids": {"spouse": OPT_S40},
+        })
+        assert first.status_code == 200, first.text
+        moved = client.put(url, json={
+            "plan_code": "GOLD", "covered_dependant_ids": [DEP1],
+        })
+        assert moved.status_code == 200, moved.text
+        body = moved.json()
+        assert body["covered_dependant_ids"] is None
+        assert body["dependant_option_ids"] is None
+        with SessionLocal() as s:
+            ov = load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)]
+            assert ov.tier_category_id == sibling
+    finally:
+        with SessionLocal() as s:
+            s.query(EmployeePlanOverride).delete()
+            s.query(FlexPricing).filter(
+                FlexPricing.id == "manual-no-cover-pricing"
+            ).delete()
+            s.query(Category).filter(Category.id == sibling).delete()
+            s.commit()

@@ -37,6 +37,7 @@ from app.services.flex_pricing_resolver import (
     dependant_age_limits,
     dependant_option_overlay,
     dependant_pricing_breakdown,
+    effective_dependant_participation,
     family_slip_index_from,
     stamp_pricing,
     validate_pricing_shape,
@@ -321,6 +322,17 @@ def _available_products(
                     and (
                         configured_dependant.get("mode") not in (None, DependantMode.none)
                         or bool(configured_dependant.get("modes"))
+                        or (
+                            isinstance(
+                                configured_dependant.get("participation"), dict
+                            )
+                            and any(
+                                value in ("compulsory", "voluntary")
+                                for value in configured_dependant[
+                                    "participation"
+                                ].values()
+                            )
+                        )
                     )
                 ),
                 pricing_mode=pricing_mode,
@@ -338,10 +350,15 @@ def _available_products(
                         direction=t.direction,
                         is_baseline=t.is_baseline,
                         participation=t.participation,
-                        dependant_participation=_dependant_participation(
-                            category_by_id.get(t.tier_category_id),
-                            dependant_participation_by_product.get(
-                                ts.product_id, set()
+                        dependant_participation=effective_dependant_participation(
+                            pricing,
+                            ts.product_id,
+                            tier_key(t.tier_category_id, t.plan_code),
+                            _dependant_participation(
+                                category_by_id.get(t.tier_category_id),
+                                dependant_participation_by_product.get(
+                                    ts.product_id, set()
+                                ),
                             ),
                         ),
                         dependant_pricing=dependant_pricing_breakdown(

@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
-  CheckCircle2,
-  CircleDollarSign,
+  ChevronDown,
+  ChevronRight,
   Link2,
+  Plus,
   RotateCcw,
+  Trash2,
   Users,
 } from "lucide-react";
 import {
   type DependantConfig,
+  type DependantParticipationMode,
   type DependantPricingMode,
   type FamilyRole,
   type FamilyScheme,
@@ -24,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
+import { InfoHint } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -31,7 +36,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { InfoHint } from "@/components/ui/tooltip";
 import { fmtMoney } from "@/lib/format";
 
 /** The single implicit band a plan-type product is stored under, so the matrix
@@ -40,14 +44,13 @@ const ALL_AGES = { label: ALL_AGES_LABEL, min: null, max: null };
 
 const EMPTY_BLOCK: FlexPricingProductBlock = { age_bands: [], price_tags: {} };
 
-/** Placeholder for a price input: the slip baseline when present, else "0". */
 function slipPlaceholder(value: number | null | undefined): string {
   return value != null ? String(value) : "0";
 }
 
 const DEP_MODE_OPTIONS: { value: Exclude<DependantPricingMode, "slip_options">; label: string }[] = [
-  { value: "none", label: "No additional charge" },
-  { value: "family_group", label: "Family tier" },
+  { value: "none", label: "Included ($0)" },
+  { value: "family_group", label: "Family rate" },
   { value: "per_pax", label: "Per dependant" },
 ];
 
@@ -92,6 +95,12 @@ export type FlexPricingEditor = {
     mode: Exclude<DependantPricingMode, "slip_options">,
   ) => void;
   clearDepMode: (pid: string, tierKeys: string[]) => void;
+  setDepParticipation: (
+    pid: string,
+    tierKey: string,
+    participation: Exclude<DependantParticipationMode, "none">,
+  ) => void;
+  removeDepCoverage: (pid: string, tierKey: string) => void;
   setScheme: (pid: string, scheme: FamilyScheme) => void;
   /** Set a family increment on one or more tier keys at once (fan-out, as above). */
   setFamilyTag: (pid: string, tierKeys: string[], role: FamilyRole, value: string) => void;
@@ -103,6 +112,11 @@ export type FlexPricingEditor = {
     bound: "min" | "max",
     value: string,
   ) => void;
+};
+
+const SCHEME_CODES: Record<FamilyScheme, Record<FamilyRole, string>> = {
+  ec_es_ef: { spouse: "ES", child: "EC", both: "EF" },
+  so_co_sc: { spouse: "SO", child: "CO", both: "SC" },
 };
 
 /**
@@ -250,6 +264,39 @@ export function useFlexPricingEditor(
     setDep(pid, next);
   };
 
+  const setDepParticipation = (
+    pid: string,
+    tierKey: string,
+    participation: Exclude<DependantParticipationMode, "none">,
+  ) => {
+    const dep = depFor(pid);
+    setDep(pid, {
+      ...dep,
+      participation: { ...(dep.participation ?? {}), [tierKey]: participation },
+    });
+  };
+
+  const removeDepCoverage = (pid: string, tierKey: string) => {
+    const dep = depFor(pid);
+    const modes = { ...(dep.modes ?? {}) };
+    const familyTags = { ...(dep.family_tags ?? {}) };
+    const perPax = { ...(dep.per_pax ?? {}) };
+    delete modes[tierKey];
+    delete familyTags[tierKey];
+    delete perPax[tierKey];
+    const next: DependantConfig = {
+      ...dep,
+      participation: { ...(dep.participation ?? {}), [tierKey]: "none" },
+    };
+    if (Object.keys(modes).length) next.modes = modes;
+    else delete next.modes;
+    if (Object.keys(familyTags).length) next.family_tags = familyTags;
+    else delete next.family_tags;
+    if (Object.keys(perPax).length) next.per_pax = perPax;
+    else delete next.per_pax;
+    setDep(pid, next);
+  };
+
   const setScheme = (pid: string, scheme: FamilyScheme) =>
     setDep(pid, { ...depFor(pid), scheme });
 
@@ -310,6 +357,8 @@ export function useFlexPricingEditor(
     setVoluntaryRates,
     setDepMode,
     clearDepMode,
+    setDepParticipation,
+    removeDepCoverage,
     setScheme,
     setFamilyTag,
     setPerPax,
@@ -398,9 +447,6 @@ function DependantPricing({
   const labels = SCHEME_LABELS[scheme];
   const slip = product.slip_family ?? {};
   const slipPerPax = product.slip_per_pax ?? {};
-  const slipHint =
-    " Leave a cell blank to use the recommendation; type to override it.";
-
   // Never fold category rows merely because their current values match. A broker
   // must be able to create a category-specific correction from an equal starting
   // point; silent fan-out made that impossible in the previous editor.
@@ -462,9 +508,6 @@ function DependantPricing({
               </tbody>
             </table>
           </div>
-          <p className="text-2xs text-muted-foreground">
-            Incremental flex over Employee-Only, per plan.{slipHint}
-          </p>
         </div>
       )}
 
@@ -496,10 +539,6 @@ function DependantPricing({
               ))}
             </tbody>
           </table>
-          <p className="text-2xs text-muted-foreground">
-            Rate per covered dependant, drawn per dependant on top of the employee
-            plan tag.{slipHint}
-          </p>
         </div>
       )}
     </div>
@@ -525,62 +564,75 @@ export function ProductDependantEditor({
   const labels = SCHEME_LABELS[scheme];
   const slip = product.slip_family ?? {};
   const slipPerPax = product.slip_per_pax ?? {};
+  const [expanded, setExpanded] = useState(false);
+  const cohorts = dependantCohortsFor(product);
   const hasFamilyRows = product.tiers.some(
     (tier) => effectiveDependantMode(dep, tier) === "family_group",
   );
 
   return (
     <section className="border-t border-border" aria-labelledby={`${pid}-dependants`}>
-      <div className="flex flex-wrap items-start justify-between gap-3 bg-muted/20 px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h4
-              id={`${pid}-dependants`}
-              className="flex items-center gap-1.5 text-sm font-medium text-foreground"
-            >
-              <Users className="size-4 text-muted-foreground" aria-hidden="true" />
-              Dependant coverage and pricing
-            </h4>
-            <DependantProductStatus product={product} />
-          </div>
-          <p className="mt-1 max-w-3xl text-2xs leading-relaxed text-muted-foreground">
-            Dependants do not receive flex dollars. Every configured dependant
-            charge is added to the employee plan price and deducted from that
-            employee&apos;s flex wallet.
-          </p>
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 px-4 py-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h4
+            id={`${pid}-dependants`}
+            className="flex items-center gap-1.5 text-sm font-medium text-foreground"
+          >
+            <Users className="size-4 text-muted-foreground" aria-hidden="true" />
+            Dependants
+          </h4>
+          <DependantProductStatus product={product} />
         </div>
-        {product.has_dependants && hasFamilyRows && (
-          <div className="flex items-center gap-2">
-            <span className="text-2xs font-medium text-muted-foreground">
-              Family labels
-            </span>
-            <Segmented
-              value={scheme}
-              onChange={(value) => editor.setScheme(pid, value)}
-              options={SCHEME_OPTIONS}
-              disabled={!editable}
-            />
+        {!product.has_dependants ? (
+          <Button asChild variant="outline" size="sm">
+            <Link
+              to="/client-relations/company-benefits"
+              search={{
+                tab: product.line,
+              }}
+              aria-label={`Add dependant cover for ${product.product_code}`}
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              Add dependant cover
+            </Link>
+          </Button>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {expanded && hasFamilyRows && (
+              <>
+                <span className="text-2xs font-medium text-muted-foreground">
+                  Family labels
+                </span>
+                <Segmented
+                  value={scheme}
+                  onChange={(value) => editor.setScheme(pid, value)}
+                  options={SCHEME_OPTIONS}
+                  disabled={!editable}
+                />
+              </>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-controls={`${pid}-dependant-pricing`}
+              aria-label={`${expanded ? "Hide" : editable ? "Configure" : "View"} dependants for ${product.product_code}`}
+            >
+              {expanded ? (
+                <ChevronDown className="size-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronRight className="size-3.5" aria-hidden="true" />
+              )}
+              {expanded ? "Hide" : editable ? "Configure" : "View"}
+            </Button>
           </div>
         )}
       </div>
 
-      {product.has_dependants && dep.mode && (
-        <div className="flex flex-wrap items-start justify-between gap-3 border-t border-info/25 bg-info-soft/30 px-4 py-3 text-xs">
-          <div className="flex min-w-0 items-start gap-2">
-            <InfoHint>
-              This draft was configured before dependant pricing methods became
-              category-specific.
-            </InfoHint>
-            <div>
-              <p className="font-medium text-foreground">
-                One legacy pricing method currently applies to every tier.
-              </p>
-              <p className="mt-0.5 text-muted-foreground">
-                You can keep it, edit any tier below, or restore each tier&apos;s
-                detected placement-slip method.
-              </p>
-            </div>
-          </div>
+      {product.has_dependants && expanded && dep.mode && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-info/25 bg-info-soft/30 px-4 py-2 text-xs">
+          <span className="font-medium text-foreground">Legacy pricing method</span>
           {editable && (
             <Button
               variant="outline"
@@ -594,42 +646,27 @@ export function ProductDependantEditor({
         </div>
       )}
 
-      {!product.has_dependants ? (
-        <div className="flex items-start gap-2 px-4 py-4 text-xs text-muted-foreground">
-          <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-          <div>
-            <p className="font-medium text-foreground">Dependants are not offered.</p>
-            <p className="mt-0.5">
-              No dependant selection or charge will appear during enrollment.
-              Change the coverage setup in Company &amp; Benefits if the placement
-              slip should include spouse or child cover.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <>
-          <p className="border-y border-border px-4 py-2 text-2xs text-muted-foreground sm:hidden">
-            Swipe horizontally to review participation, pricing method, and charges.
-          </p>
+      {product.has_dependants && expanded && (
+        <div id={`${pid}-dependant-pricing`}>
           <div
             className="overflow-x-auto"
             role="region"
             aria-label={`${product.product_code} dependant pricing by employee tier`}
             tabIndex={0}
           >
-            <table className="w-full min-w-[1120px] text-sm">
+            <table className="w-full min-w-[860px] table-fixed text-sm">
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr className="border-b border-border">
-                  <th className="w-[22%] px-4 py-2.5 text-left font-medium">Employee category</th>
-                  <th className="w-[12%] px-3 py-2.5 text-left font-medium">Plan or option</th>
-                  <th className="w-[15%] px-3 py-2.5 text-left font-medium">Participation</th>
-                  <th className="w-[17%] px-3 py-2.5 text-left font-medium">Pricing method</th>
-                  <th className="w-[24%] px-3 py-2.5 text-left font-medium">Dependant charge</th>
-                  <th className="w-[10%] px-3 py-2.5 text-left font-medium">State</th>
+                  <th className="w-[24%] px-4 py-2 text-left font-medium">Employee category</th>
+                  <th className="w-[14%] px-3 py-2 text-left font-medium">Plan or option</th>
+                  <th className="w-[14%] px-3 py-2 text-left font-medium">Participation</th>
+                  <th className="w-[20%] px-3 py-2 text-left font-medium">Pricing method</th>
+                  <th className="w-[28%] px-3 py-2 text-left font-medium">Dependant charge</th>
                 </tr>
               </thead>
-              <tbody>
-                {product.tiers.map((tier) => {
+              {cohorts.map((cohort) => (
+                <tbody key={cohort.id} className="border-b border-border last:border-b-0">
+                {cohort.tiers.map((tier, index) => {
                   const mode = effectiveDependantMode(dep, tier);
                   const modeEdited = Object.prototype.hasOwnProperty.call(
                     dep.modes ?? {},
@@ -638,13 +675,19 @@ export function ProductDependantEditor({
                   return (
                     <tr
                       key={tier.key}
-                      className="border-b border-border align-top last:border-0 hover:bg-muted/20"
+                      className="align-top hover:bg-muted/20"
                     >
-                      <td className="px-4 py-3 leading-snug">
-                        {tier.cohort_label || "All eligible employees"}
-                      </td>
-                      <td className="px-3 py-3 font-medium text-foreground">{tier.label}</td>
-                      <td className="px-3 py-3">
+                      {index === 0 && (
+                        <th
+                          scope="rowgroup"
+                          rowSpan={cohort.tiers.length}
+                          className="px-4 py-2 text-left font-medium leading-snug text-foreground"
+                        >
+                          {cohort.label}
+                        </th>
+                      )}
+                      <td className="px-3 py-2 font-medium text-foreground">{tier.label}</td>
+                      <td className="px-3 py-2">
                         <DependantParticipation value={tier.dependant_participation} />
                       </td>
                       <td className="px-3 py-2.5">
@@ -751,25 +794,14 @@ export function ProductDependantEditor({
                         ) : mode === "slip_options" ? (
                           <LinkedOptionSummary tier={tier} />
                         ) : (
-                          <span className="text-xs text-muted-foreground">
-                            No dependant amount is added to the employee price.
-                          </span>
+                          <span className="text-xs text-muted-foreground">—</span>
                         )}
-                      </td>
-                      <td className="px-3 py-3">
-                        <DependantPricingState
-                          tier={tier}
-                          dep={dep}
-                          mode={mode}
-                          modeEdited={modeEdited}
-                          slipFamily={slip[tier.key]}
-                          slipPerPax={slipPerPax[tier.key]}
-                        />
                       </td>
                     </tr>
                   );
                 })}
-              </tbody>
+                </tbody>
+              ))}
             </table>
           </div>
 
@@ -781,10 +813,29 @@ export function ProductDependantEditor({
               editor.setDepAgeLimit(pid, role, bound, value)
             }
           />
-        </>
+        </div>
       )}
     </section>
   );
+}
+
+function dependantCohortsFor(product: FlexPricingProduct) {
+  const groups = new Map<
+    string,
+    { id: string; label: string; tiers: FlexPricingTier[] }
+  >();
+  for (const tier of product.tiers) {
+    const current = groups.get(tier.cohort_id);
+    if (current) current.tiers.push(tier);
+    else {
+      groups.set(tier.cohort_id, {
+        id: tier.cohort_id,
+        label: tier.cohort_label || "All eligible employees",
+        tiers: [tier],
+      });
+    }
+  }
+  return [...groups.values()];
 }
 
 function effectiveDependantMode(
@@ -812,20 +863,10 @@ function DependantParticipation({
   value: FlexPricingTier["dependant_participation"];
 }) {
   if (value === "compulsory") {
-    return (
-      <div>
-        <Badge variant="good">Compulsory</Badge>
-        <p className="mt-1 text-2xs text-muted-foreground">Covered automatically</p>
-      </div>
-    );
+    return <Badge variant="good">Compulsory</Badge>;
   }
   if (value === "voluntary") {
-    return (
-      <div>
-        <Badge variant="info">Voluntary</Badge>
-        <p className="mt-1 text-2xs text-muted-foreground">Employee elects cover</p>
-      </div>
-    );
+    return <Badge variant="info">Voluntary</Badge>;
   }
   return (
     <span className="flex items-start gap-1 text-xs text-warn">
@@ -853,61 +894,12 @@ function LinkedOptionSummary({ tier }: { tier: FlexPricingTier }) {
     }
   }
   return (
-    <div className="flex items-start gap-2 text-xs">
+    <div className="flex items-center gap-2 text-xs">
       <Link2 className="mt-0.5 size-4 shrink-0 text-info" aria-hidden="true" />
-      <div>
-        <p className="font-medium text-foreground">Linked dependant options</p>
-        <p className="mt-0.5 text-muted-foreground">
-          {parts.length ? parts.join(" · ") : "Detected from the placement slip"}
-        </p>
-      </div>
+      <span className="text-foreground">
+        {parts.length ? parts.join(" · ") : "Linked options"}
+      </span>
     </div>
-  );
-}
-
-function DependantPricingState({
-  tier,
-  dep,
-  mode,
-  modeEdited,
-  slipFamily,
-  slipPerPax,
-}: {
-  tier: FlexPricingTier;
-  dep: DependantConfig;
-  mode: DependantPricingMode;
-  modeEdited: boolean;
-  slipFamily?: Partial<Record<FamilyRole, number>>;
-  slipPerPax?: number;
-}) {
-  const familyOverride = Object.keys(dep.family_tags?.[tier.key] ?? {}).length > 0;
-  const perPaxOverride = dep.per_pax?.[tier.key]?.flat != null;
-  const edited = modeEdited || familyOverride || perPaxOverride;
-  const missing =
-    (mode === "per_pax" && dep.per_pax?.[tier.key]?.flat == null && slipPerPax == null) ||
-    (mode === "family_group" &&
-      FAMILY_ROLES.every(
-        (role) =>
-          dep.family_tags?.[tier.key]?.[role] == null && slipFamily?.[role] == null,
-      ));
-  if (missing) {
-    return (
-      <span className="flex items-center gap-1 text-xs font-medium text-warn">
-        <AlertTriangle className="size-3.5" aria-hidden="true" /> Needs pricing
-      </span>
-    );
-  }
-  if (edited || dep.mode != null) {
-    return (
-      <span className="flex items-center gap-1 text-xs font-medium text-info">
-        <CircleDollarSign className="size-3.5" aria-hidden="true" /> Edited
-      </span>
-    );
-  }
-  return (
-    <span className="flex items-center gap-1 text-xs text-muted-foreground">
-      <CheckCircle2 className="size-3.5" aria-hidden="true" /> Detected
-    </span>
   );
 }
 
@@ -983,5 +975,317 @@ function DependantEligibility({
         ))}
       </div>
     </div>
+  );
+}
+
+function effectiveDependantParticipation(
+  dep: DependantConfig,
+  tier: FlexPricingTier,
+): "compulsory" | "voluntary" | null {
+  const configured = dep.participation?.[tier.key];
+  if (configured === "none") return null;
+  if (configured === "compulsory" || configured === "voluntary") {
+    return configured;
+  }
+  return tier.dependant_participation;
+}
+
+export function UnifiedDependantEnrollment({
+  product,
+  tier,
+  editor,
+  editable,
+}: {
+  product: FlexPricingProduct;
+  tier: FlexPricingTier;
+  editor: FlexPricingEditor;
+  editable: boolean;
+}) {
+  const dep = editor.blockFor(product.product_id).dependant ?? {};
+  const participation = effectiveDependantParticipation(dep, tier);
+  const label = `${product.product_code} ${tier.cohort_label ?? "employees"} ${tier.label}`;
+
+  if (!participation) {
+    if (!editable) return <span className="text-xs text-muted-foreground">Not offered</span>;
+    return (
+      <Select
+        value={undefined}
+        onValueChange={(value) =>
+          editor.setDepParticipation(
+            product.product_id,
+            tier.key,
+            value as "compulsory" | "voluntary",
+          )
+        }
+      >
+        <SelectTrigger
+          className="h-8 w-24 border-dashed text-xs"
+          aria-label={`Add dependant cover to ${label}`}
+        >
+          <Plus className="size-3.5" aria-hidden="true" />
+          <SelectValue placeholder="Add" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="compulsory">Compulsory</SelectItem>
+          <SelectItem value="voluntary">Voluntary</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <Select
+        value={participation}
+        disabled={!editable}
+        onValueChange={(value) =>
+          editor.setDepParticipation(
+            product.product_id,
+            tier.key,
+            value as "compulsory" | "voluntary",
+          )
+        }
+      >
+        <SelectTrigger
+          className="h-8 w-32 text-xs"
+          aria-label={`${label} dependant enrolment`}
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="compulsory">Compulsory</SelectItem>
+          <SelectItem value="voluntary">Voluntary</SelectItem>
+        </SelectContent>
+      </Select>
+      {editable && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => editor.removeDepCoverage(product.product_id, tier.key)}
+          aria-label={`Remove dependant cover from ${label}`}
+          title="Remove dependant cover"
+        >
+          <Trash2 className="size-3.5" aria-hidden="true" />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export function UnifiedDependantPricing({
+  product,
+  tier,
+  editor,
+  editable,
+}: {
+  product: FlexPricingProduct;
+  tier: FlexPricingTier;
+  editor: FlexPricingEditor;
+  editable: boolean;
+}) {
+  const pid = product.product_id;
+  const dep = editor.blockFor(pid).dependant ?? {};
+  if (!effectiveDependantParticipation(dep, tier)) {
+    return <span className="text-xs text-muted-foreground">—</span>;
+  }
+
+  const tierOverride = dep.modes?.[tier.key];
+  const legacyOverride = dep.mode && dep.mode !== "slip_options" ? dep.mode : undefined;
+  const recommended = tier.dependant_pricing?.mode ?? "none";
+  const selected = tierOverride ?? legacyOverride ?? (
+    recommended === "none" ? undefined : recommended
+  );
+  const mode = selected ?? "none";
+  const scheme = dep.scheme ?? "ec_es_ef";
+  const codes = SCHEME_CODES[scheme];
+  const label = `${product.product_code} ${tier.cohort_label ?? "employees"} ${tier.label}`;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1">
+        <Select
+          value={selected}
+          disabled={!editable}
+          onValueChange={(value) => {
+            if (value === "slip_options") return;
+            editor.setDepMode(
+              pid,
+              [tier.key],
+              value as Exclude<DependantPricingMode, "slip_options">,
+            );
+          }}
+        >
+          <SelectTrigger
+            className="h-8 w-36 text-xs"
+            aria-label={`${label} dependant pricing`}
+          >
+            <SelectValue placeholder="Required" />
+          </SelectTrigger>
+          <SelectContent>
+            {DEP_MODE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+            <SelectItem value="slip_options" disabled>
+              Option / age-band
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        {editable && tierOverride != null && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => editor.clearDepMode(pid, [tier.key])}
+            aria-label={`Reset ${label} dependant pricing`}
+            title="Reset to recommendation"
+          >
+            <RotateCcw className="size-3.5" aria-hidden="true" />
+          </Button>
+        )}
+      </div>
+
+      {mode === "family_group" && (
+        <div className="grid grid-cols-3 gap-1">
+          {FAMILY_ROLES.map((role) => {
+            const recommendation = product.slip_family?.[tier.key]?.[role];
+            const override = dep.family_tags?.[tier.key]?.[role];
+            return (
+              <label key={role} className="space-y-0.5">
+                <span className="block text-2xs font-medium text-muted-foreground">
+                  {codes[role]}
+                </span>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  disabled={!editable}
+                  value={override ?? recommendation ?? ""}
+                  onChange={(event) =>
+                    editor.setFamilyTag(pid, [tier.key], role, event.target.value)
+                  }
+                  className="h-8 min-w-0 px-2 tabular-nums"
+                  placeholder="Required"
+                  aria-label={`${label} ${SCHEME_LABELS[scheme][role]} dependant charge`}
+                />
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      {mode === "per_pax" && (
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          disabled={!editable}
+          value={
+            dep.per_pax?.[tier.key]?.flat ??
+            product.slip_per_pax?.[tier.key] ??
+            ""
+          }
+          onChange={(event) => editor.setPerPax(pid, [tier.key], event.target.value)}
+          className="h-8 w-28 tabular-nums"
+          placeholder="Required"
+          aria-label={`${label} charge per covered dependant`}
+        />
+      )}
+
+      {mode === "slip_options" && <LinkedOptionSummary tier={tier} />}
+    </div>
+  );
+}
+
+export function UnifiedDependantSettings({
+  product,
+  editor,
+  editable,
+}: {
+  product: FlexPricingProduct;
+  editor: FlexPricingEditor;
+  editable: boolean;
+}) {
+  const pid = product.product_id;
+  const dep = editor.blockFor(pid).dependant ?? {};
+  const [expanded, setExpanded] = useState(false);
+  const coveredTiers = product.tiers.filter((tier) =>
+    effectiveDependantParticipation(dep, tier),
+  );
+  if (!coveredTiers.length) return null;
+  const scheme = dep.scheme ?? "ec_es_ef";
+  const hasFamilyRates = coveredTiers.some(
+    (tier) => effectiveDependantMode(dep, tier) === "family_group",
+  );
+
+  return (
+    <section className="border-t border-border bg-muted/10">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium outline-none hover:bg-muted/25 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
+        aria-expanded={expanded}
+        aria-controls={`${pid}-dependant-settings`}
+      >
+        {expanded ? (
+          <ChevronDown className="size-3.5" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="size-3.5" aria-hidden="true" />
+        )}
+        <Users className="size-3.5 text-muted-foreground" aria-hidden="true" />
+        Dependant settings
+      </button>
+      {expanded && (
+        <div
+          id={`${pid}-dependant-settings`}
+          className="flex flex-wrap items-end gap-x-6 gap-y-3 border-t border-border px-4 py-3"
+        >
+          {hasFamilyRates && (
+            <div className="space-y-1">
+              <span className="block text-2xs font-medium text-muted-foreground">
+                Family labels
+              </span>
+              <Segmented
+                value={scheme}
+                onChange={(value) => editor.setScheme(pid, value)}
+                options={SCHEME_OPTIONS}
+                disabled={!editable}
+              />
+            </div>
+          )}
+          {(["spouse", "child"] as const).map((role) => (
+            <fieldset key={role} className="flex items-center gap-2">
+              <legend className="sr-only">{role} eligible ages</legend>
+              <span className="w-12 text-xs font-medium capitalize">{role}</span>
+              <Input
+                type="number"
+                min="0"
+                value={editedAgeBound(dep, role, "min")}
+                onChange={(event) =>
+                  editor.setDepAgeLimit(pid, role, "min", event.target.value)
+                }
+                disabled={!editable}
+                className="h-8 w-20 tabular-nums"
+                placeholder={effectiveAgeBound(product, role, "min")}
+                aria-label={`${role} minimum eligible age`}
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <Input
+                type="number"
+                min="0"
+                value={editedAgeBound(dep, role, "max")}
+                onChange={(event) =>
+                  editor.setDepAgeLimit(pid, role, "max", event.target.value)
+                }
+                disabled={!editable}
+                className="h-8 w-20 tabular-nums"
+                placeholder={effectiveAgeBound(product, role, "max")}
+                aria-label={`${role} maximum eligible age`}
+              />
+            </fieldset>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

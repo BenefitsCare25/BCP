@@ -28,6 +28,7 @@ import {
   type DependantRef,
   type FlexSummary,
   type ProductState,
+  dependantParticipationFor,
   sameElection,
 } from "@/components/enrollment/electionCore";
 import { Action } from "@/components/portal/leaf/Action";
@@ -110,10 +111,16 @@ export function buildChanges(
   for (const ts of tierSets) {
     const now = state[ts.product_code];
     const was = held[ts.product_code];
+    const dependantParticipation = now
+      ? dependantParticipationFor(ts, now.tierKey)
+      : null;
     const dependantPeopleElectable =
-      allowDeps && ts.dependant_participation !== "compulsory";
+      allowDeps &&
+      dependantParticipation === "voluntary";
     const dependantLevelsElectable =
-      allowDeps && (ts.dependant?.option_choices.length ?? 0) > 0;
+      allowDeps &&
+      dependantParticipation !== null &&
+      (ts.dependant?.option_choices.length ?? 0) > 0;
     if (
       !now ||
       !was ||

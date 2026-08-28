@@ -601,7 +601,73 @@ def test_apply_preserves_elected_dependant_option_levels(client: TestClient) -> 
     assert res.status_code == 200, res.text
     with SessionLocal() as s:
         ov = load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)]
-        assert ov.declined is True and ov.dependant_option_ids is None
+        assert ov.declined is True
+        assert ov.covered_dependant_ids is None
+        assert ov.dependant_option_ids is None
+
+
+def test_plan_level_no_dependant_cover_uses_sibling_tier_and_clears_stale_cover(
+    client: TestClient,
+) -> None:
+    """A bulk plan code resolves to its sibling category before reading exact
+    participation. A no-cover target clears both stored dependant fields."""
+    from app.models import FlexPricing
+    from app.services.cohort_tiers import tier_key
+
+    sibling = "00000000-0000-0000-0000-00000000d0ab"
+    target_key = tier_key(sibling, "GOLD")
+    with SessionLocal() as s:
+        s.add(Category(
+            id=sibling, policy_year_id=PY_ID, product_id=PROD_ID, priority=3,
+            display_name="MED cohort (Option 2)",
+            raw_description="MED cohort (Option 2)",
+            participation_model="voluntary",
+            participation_detail={"employee": "voluntary", "dependant": "voluntary"},
+            plan_assignments={"plan_code": "GOLD"},
+            source=SourceKind.system_generated.value,
+            status=CategoryStatus.confirmed.value, human_modified=False,
+        ))
+        s.add(EmployeePlanOverride(
+            employee_id=EMP1, policy_year_id=PY_ID, client_id=CLIENT_ID,
+            product_id=PROD_ID, product_code="MED", plan_code="SILVER",
+            covered_dependant_ids=[DEP1],
+            dependant_option_ids={"spouse": "stale-level"},
+            source="manual",
+        ))
+        s.add(FlexPricing(
+            policy_year_id=PY_ID, client_id=CLIENT_ID,
+            pricing={"products": {PROD_ID: {
+                "age_bands": [{"label": "all", "min": 0, "max": 200}],
+                "price_tags": {target_key: {"all": 321}},
+                "dependant": {
+                    "participation": {target_key: "none"},
+                    "modes": {target_key: "per_pax"},
+                    "per_pax": {target_key: {"flat": 99}},
+                },
+            }}},
+        ))
+        s.get(Employee, EMP1).attribute_values = {"date_of_birth": "1980-03-15"}
+        s.commit()
+    try:
+        res = client.post(
+            f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+            json={"product_code": "MED", "action": "set_plan",
+                  "target_plan_code": "GOLD",
+                  "selector": {"employee_ids": [EMP1]}},
+        )
+        assert res.status_code == 200, res.text
+        with SessionLocal() as s:
+            ov = load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)]
+            assert ov.tier_category_id == sibling
+            assert ov.covered_dependant_ids is None
+            assert ov.dependant_option_ids is None
+            assert ov.flex_price_tag == 321.0
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).delete()
+            s.query(Category).filter(Category.id == sibling).delete()
+            s.get(Employee, EMP1).attribute_values = {}
+            s.commit()
 
 
 # ── Phase 3: change sets, revert, warnings + acknowledgement ────────────────

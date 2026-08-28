@@ -55,6 +55,7 @@ import {
   baselineElectionState,
   buildElectionsPayload,
   computeFlex,
+  dependantParticipationFor,
   flexShort,
   heldElectionState,
   leaveTrade,
@@ -114,10 +115,17 @@ function isDecisionful(
 ): boolean {
   const planChoice = ts.allow_plan_change && ts.tiers.length > 1;
   const dependantLevelChoice = (ts.dependant?.option_choices.length ?? 0) > 0;
+  const currentParticipation = dependantParticipationFor(
+    ts,
+    ts.tiers.find((tier) => tier.is_current)?.key ??
+      ts.tiers.find((tier) => tier.is_baseline)?.key ??
+      "",
+  );
   const familyChoice =
     allowDeps &&
     dependantCount > 0 &&
-    (ts.dependant_participation !== "compulsory" || dependantLevelChoice);
+    (currentParticipation === "voluntary" ||
+      (currentParticipation === "compulsory" && dependantLevelChoice));
   return planChoice || ts.can_decline || familyChoice;
 }
 
@@ -404,7 +412,10 @@ export function MemberEnrollmentPanel({
         name: ts.product_name ?? ts.product_code,
         plan: tier?.label ?? null,
         familyNote:
-          ts.dependant_participation === "compulsory" && dependants.length > 0
+          dependantParticipationFor(
+            ts,
+            current[ts.product_code]?.tierKey ?? tier?.key ?? "",
+          ) === "compulsory" && dependants.length > 0
             ? "Your family is covered on this too."
             : null,
       };

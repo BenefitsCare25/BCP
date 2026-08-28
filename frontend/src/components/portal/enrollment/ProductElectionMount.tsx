@@ -10,6 +10,7 @@ import type {
   DependantRef,
   ProductState,
 } from "@/components/enrollment/electionCore";
+import { dependantParticipationFor } from "@/components/enrollment/electionCore";
 import { Mount, MountRule } from "@/components/portal/leaf/Mount";
 import { glossBeside } from "@/components/portal/leaf/glossary";
 import { FamilyChoice } from "./FamilyChoice";
@@ -44,7 +45,11 @@ export function ProductElectionMount({
   // `glossBeside`, not `productGloss`: the heading is already the product's own
   // name, and a gloss that only restates it reads as a rendering fault.
   const gloss = glossBeside(label, ts.product_code, ts.product_name);
-  const showFamily = allowDeps && dependants.length > 0 && !ps.declined;
+  const showFamily =
+    allowDeps &&
+    dependants.length > 0 &&
+    !ps.declined &&
+    dependantParticipationFor(ts, ps.tierKey) !== null;
 
   return (
     <Mount

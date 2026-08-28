@@ -38,7 +38,7 @@ from app.schemas.enrollment import (
 )
 from app.services import flex_proration
 from app.services.bulk_plan_update import baseline_cat_by_product
-from app.services.cohort_tiers import tier_key
+from app.services.cohort_tiers import tier_index_for_product, tier_key
 from app.services.coverage_history import coverage_history
 from app.services.coverage_resolver import batch_category_defaults, find_orphan_overrides
 from app.services.coverage_revert import (
@@ -59,6 +59,7 @@ from app.services.flex_pricing_resolver import (
     covered_dependant_profiles,
     dependant_age_limits,
     dependant_option_choices,
+    effective_dependant_participation,
     employee_age,
     get_pricing,
     governing_flex_config,
@@ -285,39 +286,59 @@ def set_plan_override(
         .get(emp.id, {})
         .get(product.id, (None, None))[1]
     )
+    target_plan = body.plan_code or default_plan
+    tier_index = tier_index_for_product(db, py.id, product.id, product.code)
+    target_tier = tier_index.tier_for_plan(base_cat, target_plan)
+    target_tier_id = (
+        target_tier.tier_category_id if target_tier is not None else base_cat
+    )
+    tier_set = tier_index.sets.get(base_cat or "")
     if options_provided and body.dependant_option_ids:
         assert_valid_dependant_options(
             body.dependant_option_ids,
             dependant_option_choices(
                 family_slip_idx, product.id,
-                tier_key(base_cat, body.plan_code or default_plan),
+                tier_key(target_tier_id, target_plan),
             ),
         )
-    compulsory_deps = base_cat is not None and base_cat in (
+    detected_compulsory = base_cat is not None and base_cat in (
         compulsory_dependant_category_ids(db, {base_cat})
     )
+    participation = effective_dependant_participation(
+        pricing,
+        product.id,
+        tier_key(target_tier_id, target_plan),
+        (
+            target_tier.dependant_participation
+            if target_tier is not None
+            else None
+        )
+        or (tier_set.dependant_participation if tier_set is not None else None)
+        or ("compulsory" if detected_compulsory else "voluntary"),
+    )
     age_limits = dependant_age_limits(pricing, product.id)
-    dep_profiles = (
-        active_dependant_profiles(
+    if participation == "compulsory":
+        dep_profiles = active_dependant_profiles(
             db,
             emp.id,
             age_limits=age_limits,
             ref=ref,
         )
-        if compulsory_deps
-        else covered_dependant_profiles(
+    elif participation == "voluntary":
+        dep_profiles = covered_dependant_profiles(
             db,
             body.covered_dependant_ids,
             age_limits=age_limits,
             ref=ref,
         )
-    )
+    else:
+        dep_profiles = []
     spouse_count, child_count = profile_counts(dep_profiles)
     price = member_coverage_tag(
         source_map=source_map, rule=rule, pricing=pricing, slip_idx=slip_idx,
         family_slip_idx=family_slip_idx, product_id=product.id,
         age=employee_age(emp, ref), declined=body.declined,
-        tier_category_id=base_cat, plan_code=body.plan_code,
+        tier_category_id=target_tier_id, plan_code=target_plan,
         default_tier_category_id=base_cat, default_plan=default_plan,
         spouse_count=spouse_count, child_count=child_count,
         dep_profiles=dep_profiles, dep_option_ids=dep_options,
@@ -333,8 +354,11 @@ def set_plan_override(
         product_code=product.code,
         declined=body.declined,
         plan_code=body.plan_code,
-        covered_dependant_ids=body.covered_dependant_ids,
-        dependant_option_ids=dep_options,
+        tier_category_id=target_tier_id,
+        covered_dependant_ids=(
+            body.covered_dependant_ids if participation is not None else None
+        ),
+        dependant_option_ids=dep_options if participation is not None else None,
         flex_price_tag=price,
         effective_from=body.effective_from,
         source=OverrideSource.manual_admin,

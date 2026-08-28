@@ -20,6 +20,7 @@ from app.services.flex_pricing_resolver import (
     dependant_age_limits,
     dependant_pricing_breakdown,
     dependant_tag,
+    effective_dependant_participation,
     family_role,
     family_slip_incr,
     member_coverage_tag,
@@ -522,6 +523,7 @@ def test_validate_pricing_shape_flags_bad_dependant_block():
                 "price_tags": {},
                 "dependant": {
                     "mode": "bogus",
+                    "participation": {"catX::P1": "sometimes"},
                     "scheme": "nope",
                     "family_tags": {"catX::P1": {"spouse": -5, "cousin": 10}},
                     "per_pax": {"catX::P1": {"flat": -1}},
@@ -531,12 +533,38 @@ def test_validate_pricing_shape_flags_bad_dependant_block():
     }
     errs = validate_pricing_shape(bad)
     assert any("dependant mode 'bogus'" in e for e in errs)
+    assert any("dependant participation 'sometimes'" in e for e in errs)
     assert any("dependant scheme 'nope'" in e for e in errs)
     assert any("family_tags 'catX::P1/spouse' must be ≥ 0" in e for e in errs)
     assert any("family_tags role 'cousin'" in e for e in errs)
     assert any("per_pax 'catX::P1' flat must be ≥ 0" in e for e in errs)
     # A well-formed dependant block passes.
     assert validate_pricing_shape(_DEP_MANUAL) == []
+
+
+def test_tier_scoped_dependant_participation_is_exact_and_removable():
+    pricing = {
+        "products": {
+            "p": {
+                "dependant": {
+                    "participation": {
+                        "executives::P1": "compulsory",
+                        "staff::P1": "none",
+                    }
+                }
+            }
+        }
+    }
+    assert effective_dependant_participation(
+        pricing, "p", "executives::P1", "voluntary"
+    ) == "compulsory"
+    assert effective_dependant_participation(
+        pricing, "p", "staff::P1", "compulsory"
+    ) is None
+    # No plan-code fallback: an edit to executives must not leak to management.
+    assert effective_dependant_participation(
+        pricing, "p", "management::P1", "voluntary"
+    ) == "voluntary"
 
 
 def test_tier_scoped_dependant_mode_overrides_only_that_tier():
