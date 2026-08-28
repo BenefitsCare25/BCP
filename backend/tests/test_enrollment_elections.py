@@ -20,11 +20,13 @@ from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
     Category,
     Client,
+    Dependant,
     Employee,
     EmployeePlanOverride,
     Enrollment,
     EnrollmentElection,
     EnrollmentWindow,
+    FlexPricing,
     LeaveElection,
     LeavePolicy,
     Plan,
@@ -173,6 +175,78 @@ def test_upgrade_leave_submit_confirm(client: TestClient) -> None:
     with SessionLocal() as s:
         ovs = load_overrides(s, PY_ID, [EMP1])
         assert ovs[(EMP1, PROD_ID)].plan_code == "GOLD"
+
+
+def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
+    client: TestClient,
+) -> None:
+    """Compulsory controls selection, not funding. Even when the window does
+    not allow dependant changes and the client sends no IDs, every active
+    eligible dependant is persisted and charged to the employee wallet."""
+    with SessionLocal() as s:
+        category = s.get(Category, CAT_ID)
+        assert category is not None
+        previous_model = category.participation_model
+        previous_detail = category.participation_detail
+        category.participation_model = "compulsory"
+        category.participation_detail = {
+            "employee": "compulsory",
+            "dependant": "compulsory",
+            "direction": None,
+        }
+        s.add(
+            Dependant(
+                id=DEP1,
+                client_id=CLIENT_ID,
+                policy_year_id=PY_ID,
+                employee_id=EMP1,
+                attribute_values={"relationship": "Spouse"},
+                status="active",
+            )
+        )
+        s.add(
+            FlexPricing(
+                id="compulsory-dependant-pricing",
+                policy_year_id=PY_ID,
+                client_id=CLIENT_ID,
+                pricing={
+                    "products": {
+                        PROD_ID: {
+                            "dependant": {
+                                "modes": {f"{CAT_ID}::SILVER": "per_pax"},
+                                "per_pax": {
+                                    f"{CAT_ID}::SILVER": {"flat": 25}
+                                },
+                            }
+                        }
+                    }
+                },
+            )
+        )
+        s.commit()
+
+    try:
+        wid = _make_window(client, allow_dependant_changes=False)
+        eid = _enrollment_id(client, wid, "E-1")
+        response = client.put(
+            f"/api/v1/enrollments/{eid}/elections",
+            json={"elections": [{"product_code": "MED", "plan_code": "SILVER"}]},
+        )
+        assert response.status_code == 200, response.text
+        election = response.json()["elections"][0]
+        assert election["covered_dependant_ids"] == [DEP1]
+        assert election["flex_price_tag"] == 25.0
+    finally:
+        with SessionLocal() as s:
+            s.query(FlexPricing).filter(
+                FlexPricing.id == "compulsory-dependant-pricing"
+            ).delete()
+            s.query(Dependant).filter(Dependant.id == DEP1).delete()
+            category = s.get(Category, CAT_ID)
+            assert category is not None
+            category.participation_model = previous_model
+            category.participation_detail = previous_detail
+            s.commit()
 
 
 def test_reopen_confirmed_enrollment_allows_replan(client: TestClient) -> None:

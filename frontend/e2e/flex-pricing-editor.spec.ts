@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 const API = "/api/v1";
 
@@ -84,20 +86,45 @@ const fixedTier = (
   cohortId: string,
   cohortLabel: string,
   premium: number,
-) => ({
-  key,
-  option_id: `SHARED::${label.toLowerCase()}`,
-  label,
-  plan_code: "SHARED",
-  pricing_mode: "plan_type",
-  direction: "same",
-  is_baseline: label === "Option 1",
-  participation: label === "Option 1" ? "compulsory" : "voluntary",
-  slip_premium: premium,
-  sum_insured: null,
-  cohort_id: cohortId,
-  cohort_label: cohortLabel,
-});
+) => {
+  const dependantMode =
+    label === "Option 1"
+      ? "family_group"
+      : label === "Option 2"
+        ? "per_pax"
+        : "none";
+  return {
+    key,
+    option_id: `SHARED::${label.toLowerCase()}`,
+    label,
+    plan_code: "SHARED",
+    pricing_mode: "plan_type",
+    direction: "same",
+    is_baseline: label === "Option 1",
+    participation: label === "Option 1" ? "compulsory" : "voluntary",
+    dependant_participation:
+      label === "Option 1" ? "compulsory" : "voluntary",
+    dependant_pricing: {
+      mode: dependantMode,
+      scheme: dependantMode === "family_group" ? "ec_es_ef" : null,
+      family:
+        dependantMode === "family_group"
+          ? [
+              { role: "spouse", amount: 5 },
+              { role: "child", amount: 7 },
+              { role: "both", amount: 10 },
+            ]
+          : [],
+      per_pax_rate: dependantMode === "per_pax" ? 3 : null,
+      choices: {},
+    },
+    slip_premium: premium,
+    sum_insured: null,
+    voluntary_rates: null,
+    cohort_id: cohortId,
+    cohort_label: cohortLabel,
+  };
+};
 
 const pricingResponse = {
   policy_year_id: "policy-year",
@@ -120,12 +147,19 @@ const pricingResponse = {
       product_id: "p-gpa",
       product_code: "GPA",
       line: "life",
+      has_dependants: true,
       pricing_mode: "plan_type",
       voluntary_rates: null,
       dependant_age_limits: {},
       dependant_suggested_mode: "none",
-      slip_family: {},
-      slip_per_pax: {},
+      slip_family: {
+        "gpa-exec-o1::SHARED": { spouse: 5, child: 7, both: 10 },
+        "gpa-staff-o1::SHARED": { spouse: 5, child: 7, both: 10 },
+      },
+      slip_per_pax: {
+        "gpa-exec-o2::SHARED": 3,
+        "gpa-staff-o2::SHARED": 3,
+      },
       tiers: [
         fixedTier("gpa-exec-o1::SHARED", "Option 1", "exec", "Executives", 10),
         fixedTier("gpa-exec-o2::SHARED", "Option 2", "exec", "Executives", 20),
@@ -139,6 +173,7 @@ const pricingResponse = {
       product_id: "p-gci",
       product_code: "GCI",
       line: "life",
+      has_dependants: false,
       pricing_mode: "age_banded",
       voluntary_rates: recommendedRates,
       dependant_age_limits: {},
@@ -155,8 +190,17 @@ const pricingResponse = {
           direction: "same",
           is_baseline: true,
           participation: "compulsory",
+          dependant_participation: null,
+          dependant_pricing: {
+            mode: "none",
+            scheme: null,
+            family: [],
+            per_pax_rate: null,
+            choices: {},
+          },
           slip_premium: 144,
           sum_insured: 100_000,
+          voluntary_rates: null,
           cohort_id: "gci-exec",
           cohort_label: "Executives",
         },
@@ -169,8 +213,17 @@ const pricingResponse = {
           direction: "upgrade",
           is_baseline: false,
           participation: "voluntary",
+          dependant_participation: null,
+          dependant_pricing: {
+            mode: "none",
+            scheme: null,
+            family: [],
+            per_pax_rate: null,
+            choices: {},
+          },
           slip_premium: null,
           sum_insured: 100_000,
+          voluntary_rates: recommendedRates,
           cohort_id: "gci-exec",
           cohort_label: "Executives",
         },
@@ -182,7 +235,7 @@ const pricingResponse = {
 test("price book separates tier mechanics and keeps overrides option-safe", async ({
   page,
   request,
-}) => {
+}, testInfo) => {
   const policyYearId = await installCurrentSession(page, request);
   let savedPricing: Record<string, unknown> | null = null;
 
@@ -214,27 +267,42 @@ test("price book separates tier mechanics and keeps overrides option-safe", asyn
 
   await page.getByRole("button", { name: /GPA/ }).click();
   const option1Apply = page.getByRole("button", {
-    name: "Apply Option 1 price to every employee category",
+    name: "Copy Option 1 price to 1 other employee category",
   }).first();
-  await expect(option1Apply).toContainText("Apply to 2");
+  await expect(option1Apply).toContainText("Copy to 1 other");
   await page.getByLabel("GPA Executives Option 1 price tag").fill("77");
   await expect(page.getByLabel("GPA Staff Option 1 price tag")).toHaveValue("11");
   await option1Apply.click();
   await expect(page.getByLabel("GPA Staff Option 1 price tag")).toHaveValue("77");
   await expect(page.getByLabel("GPA Executives Option 2 price tag")).toHaveValue("20");
   await expect(page.getByLabel("GPA Staff Option 2 price tag")).toHaveValue("21");
+  const dependantRegion = page.getByRole("region", {
+    name: "GPA dependant pricing by employee tier",
+  });
+  await expect(dependantRegion).toContainText("Compulsory");
+  await expect(dependantRegion).toContainText("Voluntary");
+  await expect(dependantRegion).toContainText("Family tier");
+  await expect(dependantRegion).toContainText("Per dependant");
+  await expect(
+    page.getByText("Dependants do not receive flex dollars.", { exact: false }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: /GCI/ }).click();
-  await expect(page.getByRole("heading", { name: "Fixed-price tiers" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "GCI employee-category price tags" }),
+  ).toContainText("Age-banded rate");
+  await expect(page.getByLabel("GCI Executives Plan 1 price tag")).toBeVisible();
   await expect(
     page.getByText("Saved tier overrides take priority over the rate table."),
   ).toBeVisible();
-  const calculatedRow = page
-    .getByRole("region", { name: "GCI calculated plan prices" })
+  const ageBandedRow = page
+    .getByRole("region", { name: "GCI employee-category price tags" })
     .getByRole("row")
     .filter({ hasText: "Option 1" });
-  await expect(calculatedRow).toContainText("$999");
-  await expect(calculatedRow).toContainText("Tier override");
+  await expect(ageBandedRow).toContainText("Tier override");
+  await expect(
+    page.getByRole("combobox", { name: "Schedule applies to" }),
+  ).toBeVisible();
 
   await page.getByLabel("Remove 0-25 age band").click();
   const shiftedLabel = page.getByLabel("Age band 1 label");
@@ -267,5 +335,19 @@ test("price book separates tier mechanics and keeps overrides option-safe", asyn
     "0-25": 999,
     "26-35": 999,
     "36+": 999,
+  });
+
+  await expect(
+    page.getByText("Copied to 1 other category. Save price tags to publish."),
+  ).toBeHidden({ timeout: 8_000 });
+  await expect(page.getByText("Price tags saved")).toBeHidden({ timeout: 8_000 });
+  const reviewDir = resolve("../.impeccable/review");
+  mkdirSync(reviewDir, { recursive: true });
+  await page.screenshot({
+    path: join(
+      reviewDir,
+      testInfo.project.name.startsWith("mobile") ? "mobile.png" : "desktop.png",
+    ),
+    fullPage: true,
   });
 });

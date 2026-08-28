@@ -113,10 +113,11 @@ function isDecisionful(
   dependantCount: number,
 ): boolean {
   const planChoice = ts.allow_plan_change && ts.tiers.length > 1;
+  const dependantLevelChoice = (ts.dependant?.option_choices.length ?? 0) > 0;
   const familyChoice =
     allowDeps &&
     dependantCount > 0 &&
-    ts.dependant_participation !== "compulsory";
+    (ts.dependant_participation !== "compulsory" || dependantLevelChoice);
   return planChoice || ts.can_decline || familyChoice;
 }
 

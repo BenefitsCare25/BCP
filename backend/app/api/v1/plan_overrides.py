@@ -54,6 +54,7 @@ from app.services.enrollment_validation import (
     assert_valid_dependant_options,
 )
 from app.services.flex_pricing_resolver import (
+    active_dependant_profiles,
     compulsory_dependant_category_ids,
     covered_dependant_profiles,
     dependant_age_limits,
@@ -292,14 +293,26 @@ def set_plan_override(
                 tier_key(base_cat, body.plan_code or default_plan),
             ),
         )
-    dep_profiles = covered_dependant_profiles(
-        db, body.covered_dependant_ids,
-        age_limits=dependant_age_limits(pricing, product.id), ref=ref,
-    )
-    spouse_count, child_count = profile_counts(dep_profiles)
     compulsory_deps = base_cat is not None and base_cat in (
         compulsory_dependant_category_ids(db, {base_cat})
     )
+    age_limits = dependant_age_limits(pricing, product.id)
+    dep_profiles = (
+        active_dependant_profiles(
+            db,
+            emp.id,
+            age_limits=age_limits,
+            ref=ref,
+        )
+        if compulsory_deps
+        else covered_dependant_profiles(
+            db,
+            body.covered_dependant_ids,
+            age_limits=age_limits,
+            ref=ref,
+        )
+    )
+    spouse_count, child_count = profile_counts(dep_profiles)
     price = member_coverage_tag(
         source_map=source_map, rule=rule, pricing=pricing, slip_idx=slip_idx,
         family_slip_idx=family_slip_idx, product_id=product.id,
@@ -308,7 +321,6 @@ def set_plan_override(
         default_tier_category_id=base_cat, default_plan=default_plan,
         spouse_count=spouse_count, child_count=child_count,
         dep_profiles=dep_profiles, dep_option_ids=dep_options,
-        dependants_compulsory=compulsory_deps,
         factor=flex_proration.factor_of(emp),
     )
 

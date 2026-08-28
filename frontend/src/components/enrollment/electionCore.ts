@@ -109,10 +109,12 @@ export function dependantPricing(
 ): { total: number; unresolved: boolean } {
   const known = (total: number) => ({ total, unresolved: false });
   const unknown = { total: 0, unresolved: true };
-  if (!dep || dep.mode === "none" || !selectedIds.length) return known(0);
+  if (!dep || !selectedIds.length) return known(0);
   const tp = dep.by_tier[tierKey];
   if (!tp) return unknown;
-  if (dep.mode === "per_pax") {
+  const mode = tp.mode ?? dep.mode;
+  if (mode === "none") return known(0);
+  if (mode === "per_pax") {
     return tp.per_pax_rate == null
       ? unknown
       : known(tp.per_pax_rate * selectedIds.length);
@@ -124,7 +126,7 @@ export function dependantPricing(
     if (kind === "spouse") spouse += 1;
     else if (kind === "child") child += 1;
   }
-  if (dep.mode === "slip_options") {
+  if (mode === "slip_options") {
     // Slip dependant option rows stick to the elected employee plan: each
     // covered dependant draws that option's amount. Freestanding option LEVELS
     // (option_choices) instead price from the level elected per role — using
@@ -291,16 +293,26 @@ export function heldElectionState(
 export function sameElection(
   a?: ProductState,
   b?: ProductState,
-  opts?: { ignoreDependants?: boolean },
+  opts?: {
+    /** Compatibility shorthand: ignore covered people and selected levels. */
+    ignoreDependants?: boolean;
+    /** Ignore the covered-person set while still comparing selected levels. */
+    ignoreDependantIds?: boolean;
+    /** Ignore selected dependant cover levels. */
+    ignoreDependantOptions?: boolean;
+  },
 ): boolean {
   if (!a || !b) return a === b;
   if (a.declined !== b.declined) return false;
   if (a.declined) return true;
   if (a.tierKey !== b.tierKey) return false;
   if (opts?.ignoreDependants) return true;
-  if (a.dependantIds.length !== b.dependantIds.length) return false;
-  const ids = new Set(b.dependantIds);
-  if (a.dependantIds.some((id) => !ids.has(id))) return false;
+  if (!opts?.ignoreDependantIds) {
+    if (a.dependantIds.length !== b.dependantIds.length) return false;
+    const ids = new Set(b.dependantIds);
+    if (a.dependantIds.some((id) => !ids.has(id))) return false;
+  }
+  if (opts?.ignoreDependantOptions) return true;
   const keys = new Set([
     ...Object.keys(a.depOptionIds),
     ...Object.keys(b.depOptionIds),
@@ -404,15 +416,17 @@ export function computeFlex(
     if (!ps || ps.declined) continue;
     const tier = ts.tiers.find((t) => t.key === ps.tierKey);
     if (tier?.price_tag) total += tier.price_tag;
-    // Compulsory dependant cover is employer-funded (part of base) — only
-    // a voluntary opt-in draws flex.
-    if (allowDeps && ts.dependant_participation !== "compulsory") {
+    if (allowDeps) {
+      const dependantIds =
+        ts.dependant_participation === "compulsory"
+          ? dependants.map((dependant) => dependant.id)
+          : ps.dependantIds;
       // `dependantPricing`, not `dependantCost`: the cost alone throws away the
       // one thing this loop has to propagate — that a covered dependant could
       // not be priced, which makes every figure below a lower bound rather than
       // an answer.
       const priced = dependantPricing(
-        ts.dependant, ps.tierKey, ps.dependantIds, dependants, ps.depOptionIds,
+        ts.dependant, ps.tierKey, dependantIds, dependants, ps.depOptionIds,
       );
       total += priced.total;
       if (priced.unresolved) incomplete = true;

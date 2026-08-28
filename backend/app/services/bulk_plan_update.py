@@ -251,8 +251,8 @@ def _flex_context(
         slip_idx=slip_idx,
         family_slip_idx=family_slip_idx,
         baseline_cat=baseline_cat,
-        # Baseline categories with compulsory (employer-funded) dependant cover —
-        # their dependants draw no member flex (same exemption as the statement).
+        # Baseline categories with compulsory dependant cover. They auto-include
+        # every active eligible dependant in the employee-wallet price.
         compulsory_dep_cats=compulsory_dependant_category_ids(
             db, set(baseline_cat.values())
         ),
@@ -905,11 +905,16 @@ def _price_tag(
     existing coverage as often as from a new dependant action, and the two sets
     are not the same (see ``_Dependants``).
     """
-    dep_rows = [
-        dep
-        for dep in (dependants.get(i) for i in (covered or []) if i)
-        if dep is not None
-    ]
+    if base_cat in flex.compulsory_dep_cats:
+        dep_rows = [
+            dep for dep in dependants.values() if dep.employee_id == emp.id
+        ]
+    else:
+        dep_rows = [
+            dep
+            for dep in (dependants.get(i) for i in (covered or []) if i)
+            if dep is not None
+        ]
     dep_profiles = dependant_profiles_of(dep_rows, age_limits=age_limits, ref=flex.ref)
     spouse_count, child_count = profile_counts(dep_profiles)
     return member_coverage_tag(
@@ -929,7 +934,6 @@ def _price_tag(
         child_count=child_count,
         dep_profiles=dep_profiles,
         dep_option_ids=dep_options,
-        dependants_compulsory=base_cat in flex.compulsory_dep_cats,
         factor=flex_proration.factor_of(emp),
     )
 

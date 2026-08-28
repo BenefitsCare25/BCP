@@ -269,6 +269,8 @@ export interface DependantRole {
 
 /** One plan/tier's dependant pricing (amounts differ per plan). */
 export interface DependantTierPricing {
+  /** Effective pricing method for this exact category/plan tier. */
+  mode: DependantPricingMode;
   family: DependantRole[];
   per_pax_rate: number | null;
 }
@@ -355,10 +357,17 @@ export interface FlexPricingTier {
   direction: "upgrade" | "downgrade" | "same" | "unknown";
   is_baseline: boolean;
   participation: "compulsory" | "voluntary" | null;
+  /** Whether dependant cover is automatic or elected. This does not identify
+   * the payer: every configured dependant charge draws from employee flex. */
+  dependant_participation: "compulsory" | "voluntary" | null;
+  /** Resolver-backed dependant pricing for this exact employee tier. */
+  dependant_pricing: FlexDependantPricingBreakdown;
   /** Per-member slip premium for this tier (null = none), for the "from slip" preview. */
   slip_premium: number | null;
   /** Per-member sum insured (basis) — drives the life-product live preview. */
   sum_insured: number | null;
+  /** Slip recommendation for this exact age-banded tier. */
+  voluntary_rates: VoluntaryRateBand[] | null;
   /** The tier's own cohort (job-category) name, to disambiguate rows the UI can't
    *  fold (a plan repeating across cohorts that price differently). Null when none. */
   cohort_label?: string | null;
@@ -379,6 +388,9 @@ export interface FlexPricingProduct {
   product_code: string;
   /** Descriptive insurance line used for the product label. */
   line: InsuranceLine;
+  /** Effective dependant applicability from product metadata, participation,
+   * or detected spouse/child pricing. */
+  has_dependants: boolean;
   /** Aggregate mechanics: age-banded when at least one tier is age-banded. */
   pricing_mode: FlexPricingMode;
   /** Age-banded voluntary rate table (life products), else null. */
@@ -398,7 +410,10 @@ export interface FlexPricingProduct {
 /** Saved dependant config for a product, stored in the pricing bag. Family/per-pax
  *  amounts are keyed per tier (tier key) — the dependant tag differs per plan. */
 export interface DependantConfig {
+  /** Legacy product-wide mode. New edits use ``modes`` per tier. */
   mode?: DependantPricingMode;
+  /** Explicit pricing method override keyed by employee tier. */
+  modes?: Record<string, Exclude<DependantPricingMode, "slip_options">>;
   scheme?: FamilyScheme;
   family_tags?: Record<string, Partial<Record<FamilyRole, number | null>>>;
   per_pax?: Record<string, { flat?: number | null }>;
@@ -418,6 +433,8 @@ export interface FlexPricingProductBlock {
   price_tags: Record<string, Record<string, number | null>>;
   /** Broker override of parsed voluntary rates; absent means use the recommendation. */
   voluntary_rates?: VoluntaryRateBand[];
+  /** Category/plan-specific rate overrides. These win over the shared table. */
+  voluntary_rates_by_tier?: Record<string, VoluntaryRateBand[]>;
   /** Deprecated legacy hint; tier pricing_mode is authoritative. */
   mode?: FlexPricingMode;
   /** Dependant pricing config (family-tier amounts or per-pax flat rate). */
@@ -482,6 +499,27 @@ export interface ElectionIn {
    *  — only for products whose options expose `option_choices`. */
   dependant_option_ids?: Record<string, string> | null;
   notes?: string | null;
+}
+
+export interface FlexDependantChoice {
+  category_id: string;
+  label: string;
+  sum_insured: number | null;
+  spec?: {
+    basis?: number | string | null;
+    premium_rate?: number | null;
+    voluntary_rates?: VoluntaryRateBand[] | null;
+  };
+}
+
+/** Effective dependant pricing returned from the same resolver used for member
+ * elections and benefit statements. */
+export interface FlexDependantPricingBreakdown {
+  mode: DependantPricingMode;
+  scheme: FamilyScheme | null;
+  family: Array<{ role: FamilyRole; amount: number | null }>;
+  per_pax_rate: number | null;
+  choices: Partial<Record<"spouse" | "child", FlexDependantChoice[]>>;
 }
 
 export interface EnrollmentSubmitInput {

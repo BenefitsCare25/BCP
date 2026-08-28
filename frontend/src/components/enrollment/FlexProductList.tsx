@@ -8,6 +8,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -16,6 +17,7 @@ import {
   RotateCcw,
   Search,
 } from "lucide-react";
+import { toast } from "sonner";
 import type {
   FlexPricingBag,
   FlexPricingProduct,
@@ -119,30 +121,77 @@ function statsFor(
 
   let total = fixedTiers.length;
   if (ageTiers.length > 0) {
-    const override = pricing?.products?.[product.product_id]?.voluntary_rates;
-    const recommended = product.voluntary_rates ?? [];
-    const rates = override ?? recommended;
-    total += rates.length;
-    if (override) {
+    const block = pricing?.products?.[product.product_id];
+    const countScheduleEdits = (
+      override: VoluntaryRateBand[] | undefined,
+      recommended: VoluntaryRateBand[],
+    ) => {
+      if (!override) return 0;
       const matchedRecommendations = new Set<VoluntaryRateBand>();
       let unmatchedRates = 0;
-      for (const rate of rates) {
+      let changedRates = 0;
+      for (const rate of override) {
         const original = recommendedRateBandFor(recommended, rate);
         if (original && !matchedRecommendations.has(original)) {
           matchedRecommendations.add(original);
-          if (!sameRateBand(original, rate)) edited += 1;
+          if (!sameRateBand(original, rate)) changedRates += 1;
         } else {
           unmatchedRates += 1;
         }
       }
-      edited += Math.max(
+      return changedRates + Math.max(
         unmatchedRates,
         recommended.length - matchedRecommendations.size,
       );
+    };
+
+    if (block?.voluntary_rates) {
+      edited += countScheduleEdits(
+        block.voluntary_rates,
+        product.voluntary_rates ?? [],
+      );
     }
-    missing += voluntaryRateIssues(rates).length;
     for (const tier of ageTiers) {
+      const recommended = tier.voluntary_rates ?? product.voluntary_rates ?? [];
+      const tierOverride = block?.voluntary_rates_by_tier?.[tier.key];
+      const rates = tierOverride ?? block?.voluntary_rates ?? recommended;
+      total += rates.length;
+      missing += voluntaryRateIssues(rates).length;
+      edited += countScheduleEdits(tierOverride, recommended);
       if (overrideFor(pricing, product, tier) != null) edited += 1;
+    }
+  }
+  if (product.has_dependants) {
+    const dependant = pricing?.products?.[product.product_id]?.dependant;
+    total += product.tiers.length;
+    for (const tier of product.tiers) {
+      const mode =
+        dependant?.modes?.[tier.key] ??
+        dependant?.mode ??
+        tier.dependant_pricing?.mode ??
+        "none";
+      if (tier.dependant_participation == null) missing += 1;
+      if (
+        mode === "per_pax" &&
+        dependant?.per_pax?.[tier.key]?.flat == null &&
+        tier.dependant_pricing?.per_pax_rate == null
+      ) {
+        missing += 1;
+      }
+      if (
+        mode === "family_group" &&
+        Object.keys(dependant?.family_tags?.[tier.key] ?? {}).length === 0 &&
+        (tier.dependant_pricing?.family ?? []).every((row) => row.amount == null)
+      ) {
+        missing += 1;
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(dependant?.modes ?? {}, tier.key) ||
+        Object.keys(dependant?.family_tags?.[tier.key] ?? {}).length > 0 ||
+        dependant?.per_pax?.[tier.key]?.flat != null
+      ) {
+        edited += 1;
+      }
     }
   }
   return { total, edited, missing };
@@ -207,11 +256,6 @@ function CategoryPriceTable({
   editable: boolean;
 }) {
   const cohorts = cohortsFor(product);
-  const optionCounts = new Map<string, number>();
-  for (const tier of product.tiers) {
-    const identity = optionIdentity(tier);
-    optionCounts.set(identity, (optionCounts.get(identity) ?? 0) + 1);
-  }
 
   return (
     <>
@@ -224,22 +268,28 @@ function CategoryPriceTable({
         aria-label={`${product.product_code} employee-category price tags`}
         tabIndex={0}
       >
-      <table className="w-full min-w-[860px] text-sm">
+      <table className="w-full min-w-[1240px] text-sm">
         <thead className="bg-muted/40 text-xs text-muted-foreground">
           <tr className="border-b border-border">
-            <th scope="col" className="sticky left-0 z-10 w-[28%] bg-muted px-4 py-2.5 text-left font-medium">
+            <th scope="col" className="sticky left-0 z-10 w-[22%] bg-muted px-4 py-2.5 text-left font-medium">
               Employee category
             </th>
-            <th scope="col" className="w-[17%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[12%] px-3 py-2.5 text-left font-medium">
               Plan or option
             </th>
-            <th scope="col" className="w-[12%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[10%] px-3 py-2.5 text-left font-medium">
+              Participation
+            </th>
+            <th scope="col" className="w-[10%] px-3 py-2.5 text-left font-medium">
               Relationship
             </th>
-            <th scope="col" className="w-[14%] px-3 py-2.5 text-right font-medium">
+            <th scope="col" className="w-[13%] px-3 py-2.5 text-left font-medium">
+              Pricing method
+            </th>
+            <th scope="col" className="w-[12%] px-3 py-2.5 text-right font-medium">
               Recommended
             </th>
-            <th scope="col" className="w-[18%] px-3 py-2.5 text-left font-medium">
+            <th scope="col" className="w-[15%] px-3 py-2.5 text-left font-medium">
               Price tag
             </th>
             <th scope="col" className="px-3 py-2.5 text-left font-medium">
@@ -250,12 +300,38 @@ function CategoryPriceTable({
         {cohorts.map((cohort) => (
           <tbody key={cohort.id} className="border-b border-border last:border-b-0">
             {cohort.tiers.map((tier, index) => {
-              const override = overrideFor(pricing, product, tier);
-              const effective = override ?? tier.slip_premium;
+              const ageBanded = tier.pricing_mode === "age_banded";
+              const override = ageBanded ? null : overrideFor(pricing, product, tier);
+              const effective = ageBanded ? null : override ?? tier.slip_premium;
               const identity = optionIdentity(tier);
-              const sameOptionKeys = product.tiers
-                .filter((candidate) => optionIdentity(candidate) === identity)
-                .map((candidate) => candidate.key);
+              const copyTargets = product.tiers.filter(
+                (candidate) =>
+                  candidate.key !== tier.key &&
+                  candidate.pricing_mode === "plan_type" &&
+                  optionIdentity(candidate) === identity,
+              );
+              const storedAgeRow = ageBanded
+                ? priceRowForTier(
+                    pricing?.products?.[product.product_id]?.price_tags,
+                    tier,
+                  )
+                : null;
+              const hasAgeTierOverride = Boolean(
+                storedAgeRow &&
+                  Object.values(storedAgeRow.row).some(
+                    (amount) => typeof amount === "number" && Number.isFinite(amount),
+                  ),
+              );
+              const tierRateBands = ageBanded
+                ? editor.voluntaryRatesFor(product, tier.key)
+                : [];
+              const tierRateIssues = ageBanded
+                ? voluntaryRateIssues(tierRateBands)
+                : [];
+              const tierRatesEdited = ageBanded
+                ? editor.voluntaryRatesEdited(product, tier.key) ||
+                  editor.voluntaryRatesEdited(product)
+                : false;
               return (
                 <tr key={tier.key} className="align-top hover:bg-muted/20">
                   {index === 0 && (
@@ -280,61 +356,130 @@ function CategoryPriceTable({
                     )}
                   </td>
                   <td className="px-3 py-3">
+                    <Badge
+                      variant={tier.participation === "compulsory" ? "good" : "info"}
+                      className="capitalize"
+                    >
+                      {tier.participation ?? "Not classified"}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-3">
                     <span className={cn("text-xs", tier.is_baseline && "font-medium")}>
                       {relationshipLabel(tier)}
                     </span>
                   </td>
+                  <td className="px-3 py-3">
+                    {ageBanded ? (
+                      <div>
+                        <span className="text-xs font-medium text-foreground">Age-banded rate</span>
+                        <span className="mt-0.5 block text-2xs text-muted-foreground">
+                          Rate × sum assured
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-foreground">Fixed amount</span>
+                    )}
+                  </td>
                   <td className="px-3 py-3 text-right tabular-nums">
-                    {tier.slip_premium == null ? (
+                    {ageBanded ? (
+                      <div>
+                        <span className="font-medium text-foreground">
+                          {tierRateBands.length} age band{tierRateBands.length === 1 ? "" : "s"}
+                        </span>
+                        <span className="mt-0.5 block text-2xs text-muted-foreground">
+                          {tier.sum_insured == null
+                            ? "Sum assured missing"
+                            : `${fmtMoney(tier.sum_insured)} cover`}
+                        </span>
+                      </div>
+                    ) : tier.slip_premium == null ? (
                       <span className="text-warn">Not detected</span>
                     ) : (
                       fmtMoney(tier.slip_premium)
                     )}
                   </td>
                   <td className="px-3 py-2">
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={effective ?? ""}
-                        disabled={!editable}
-                        onChange={(event) =>
-                          editor.setPlanPrice(
-                            product.product_id,
-                            [tier.key],
-                            event.target.value,
-                          )
-                        }
-                        aria-label={`${product.product_code} ${cohort.label} ${tier.label} price tag`}
-                        className="h-8 w-28 tabular-nums"
-                        placeholder="Required"
-                      />
-                      {editable &&
-                        tier.plan_code &&
-                        (optionCounts.get(identity) ?? 0) > 1 &&
-                        effective != null && (
+                    {ageBanded ? (
+                      <a
+                        href={`#${product.product_id}-age-rates`}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-info outline-none hover:bg-info-soft focus-visible:ring-2 focus-visible:ring-ring/50"
+                      >
+                        <ArrowDown className="size-3.5" aria-hidden="true" />
+                        {editable ? "Edit rate table" : "View rate table"}
+                      </a>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={effective ?? ""}
+                          disabled={!editable}
+                          onChange={(event) =>
+                            editor.setPlanPrice(
+                              product.product_id,
+                              [tier.key],
+                              event.target.value,
+                            )
+                          }
+                          aria-label={`${product.product_code} ${cohort.label} ${tier.label} price tag`}
+                          className="h-8 w-28 tabular-nums"
+                          placeholder="Required"
+                        />
+                        {editable && copyTargets.length > 0 && effective != null && (
                           <Button
                             variant="ghost"
                             size="sm"
                             className="h-8 gap-1 px-2 text-2xs"
-                            onClick={() =>
+                            onClick={() => {
+                              const changed = copyTargets.filter(
+                                (candidate) =>
+                                  effectiveFor(pricing, product, candidate) !== effective,
+                              );
+                              if (!changed.length) {
+                                toast.info("The other categories already use this price.");
+                                return;
+                              }
                               editor.setPlanPrice(
                                 product.product_id,
-                                sameOptionKeys,
+                                changed.map((candidate) => candidate.key),
                                 String(effective),
-                              )
-                            }
-                            aria-label={`Apply ${tier.label} price to every employee category`}
+                              );
+                              toast.success(
+                                `Copied to ${changed.length} other ${changed.length === 1 ? "category" : "categories"}. Save price tags to publish.`,
+                              );
+                            }}
+                            aria-label={`Copy ${tier.label} price to ${copyTargets.length} other employee ${copyTargets.length === 1 ? "category" : "categories"}`}
                           >
                             <Copy className="size-3.5" aria-hidden="true" />
-                            Apply to {sameOptionKeys.length}
+                            Copy to {copyTargets.length} other
                           </Button>
                         )}
-                    </div>
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-3">
-                    {override != null ? (
+                    {ageBanded ? (
+                      hasAgeTierOverride ? (
+                        <span className="flex items-center gap-1 text-xs font-medium text-warn">
+                          <AlertTriangle className="size-3" aria-hidden="true" />
+                          Tier override
+                        </span>
+                      ) : tierRateIssues.length > 0 || tier.sum_insured == null ? (
+                        <span className="flex items-center gap-1 text-xs font-medium text-warn">
+                          <AlertTriangle className="size-3" aria-hidden="true" />
+                          Needs rate setup
+                        </span>
+                      ) : tierRatesEdited ? (
+                        <span className="flex items-center gap-1 text-xs font-medium text-info">
+                          <Pencil className="size-3" aria-hidden="true" /> Edited rates
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <CheckCircle2 className="size-3" aria-hidden="true" /> Rate table
+                        </span>
+                      )
+                    ) : override != null ? (
                       <div className="flex items-center gap-1.5">
                         <span className="flex items-center gap-1 text-xs font-medium text-info">
                           <Pencil className="size-3" aria-hidden="true" /> Edited
@@ -456,12 +601,14 @@ export function FlexProductList({
               pricing?.products?.[product.product_id]?.voluntary_rates?.length ??
               product.voluntary_rates?.length ??
               0;
-            const fixedProduct = { ...product, tiers: fixedTiers };
             const pricingSummary = hasAgeBandedTiers
               ? fixedTiers.length > 0
                 ? `Mixed pricing · ${fixedTiers.length} fixed assignments · ${rateBandCount} rate bands · ${cohorts.length} employee categories`
                 : `Age-banded pricing · ${rateBandCount} rate bands · ${cohorts.length} employee categories`
               : `Fixed pricing · ${cohorts.length} employee categories · ${fixedTiers.length} plan assignments`;
+            const dependantSummary = product.has_dependants
+              ? "dependant cover"
+              : "no dependant cover";
             return (
               <section
                 key={product.product_id}
@@ -489,7 +636,7 @@ export function FlexProductList({
                       <ProductStatus stats={stats} />
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {pricingSummary}
+                      {pricingSummary} · {dependantSummary}
                     </p>
                   </div>
                   <span className="hidden pt-1 text-xs font-medium text-muted-foreground sm:block">
@@ -499,50 +646,26 @@ export function FlexProductList({
 
                 {isOpen && (
                   <div>
-                    {hasAgeBandedTiers ? (
-                      <>
-                        {fixedTiers.length > 0 && (
-                          <div>
-                            <div className="border-t border-border bg-muted/25 px-4 py-3">
-                              <h4 className="text-sm font-medium text-foreground">
-                                Fixed-price tiers
-                              </h4>
-                              <p className="mt-0.5 text-2xs text-muted-foreground">
-                                Compulsory and flat tiers use a direct annual price,
-                                independently of the voluntary rates below.
-                              </p>
-                            </div>
-                            <CategoryPriceTable
-                              product={fixedProduct}
-                              pricing={pricing}
-                              editor={editor}
-                              editable={editable}
-                            />
-                          </div>
-                        )}
-                        {ageTiers.length > 0 && (
-                          <LifeVoluntaryPanel
-                            product={product}
-                            editor={editor}
-                            editable={editable}
-                          />
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <CategoryPriceTable
+                    <CategoryPriceTable
+                      product={product}
+                      pricing={pricing}
+                      editor={editor}
+                      editable={editable}
+                    />
+                    {ageTiers.length > 0 && (
+                      <div id={`${product.product_id}-age-rates`}>
+                        <LifeVoluntaryPanel
                           product={product}
-                          pricing={pricing}
                           editor={editor}
                           editable={editable}
                         />
-                        {editable && (
-                          <div className="border-t border-border p-3">
-                            <ProductDependantEditor product={product} editor={editor} />
-                          </div>
-                        )}
-                      </>
+                      </div>
                     )}
+                    <ProductDependantEditor
+                      product={product}
+                      editor={editor}
+                      editable={editable}
+                    />
                   </div>
                 )}
               </section>

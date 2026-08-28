@@ -1,10 +1,10 @@
-"""Employee vs dependant participation split + the compulsory-dependant flex gate.
+"""Employee vs dependant participation split.
 
 A slip Participation cell can scope employees and dependants separately
 ("Compulsory - Employees / Voluntary - Dependents"). The split is preserved in
-``Category.participation_detail`` and drives flex: a **compulsory** dependant is
-auto-covered + employer-funded (no member flex draw), while a **voluntary**
-dependant is an opt-in that draws flex.
+``Category.participation_detail`` and drives selection: a **compulsory** dependant
+is auto-covered, while a **voluntary** dependant is an opt-in. Any configured
+dependant price is drawn from the employee's flex wallet in both cases.
 """
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def testcompulsory_dependant_category_ids_filters_correctly() -> None:
         s.add(_cat("cat-vol", py_id, "voluntary"))
         s.commit()
         got = compulsory_dependant_category_ids(s, {"cat-comp", "cat-vol"})
-    # Only the compulsory-dependant category draws no member flex.
+        # Only the compulsory-dependant category is auto-covered.
     assert got == {"cat-comp"}
 
 

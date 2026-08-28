@@ -93,10 +93,6 @@ function tierLabel(ts: ProductTierSet, ps: ProductState): string {
 
 /** Whether the member can elect who this product covers. Compulsory family
  *  cover is a fact about the plan, not an answer — see `sameElection`. */
-function familyElectable(ts: ProductTierSet, allowDeps: boolean): boolean {
-  return allowDeps && ts.dependant_participation !== "compulsory";
-}
-
 /** Everything that differs from the cover the member holds today.
  *
  * **Exported because the rail's marks and its change count are read off this
@@ -114,8 +110,20 @@ export function buildChanges(
   for (const ts of tierSets) {
     const now = state[ts.product_code];
     const was = held[ts.product_code];
-    const ignoreDependants = !familyElectable(ts, allowDeps);
-    if (!now || !was || sameElection(now, was, { ignoreDependants })) continue;
+    const dependantPeopleElectable =
+      allowDeps && ts.dependant_participation !== "compulsory";
+    const dependantLevelsElectable =
+      allowDeps && (ts.dependant?.option_choices.length ?? 0) > 0;
+    if (
+      !now ||
+      !was ||
+      sameElection(now, was, {
+        ignoreDependantIds: !dependantPeopleElectable,
+        ignoreDependantOptions: !dependantLevelsElectable,
+      })
+    ) {
+      continue;
+    }
     out.push({
       key: ts.product_code,
       product: ts.product_name ?? ts.product_code,
@@ -124,7 +132,7 @@ export function buildChanges(
       // A declined product covers nobody, so who used to be on it is not a
       // change worth reporting beside "Not taking this cover".
       family:
-        now.declined || ignoreDependants
+        now.declined || (!dependantPeopleElectable && !dependantLevelsElectable)
           ? null
           : familyChange(was, now, dependants),
     });

@@ -490,6 +490,30 @@ def test_dependant_pricing_breakdown_shapes_family_and_per_pax():
     assert pax["mode"] == "per_pax" and pax["per_pax_rate"] == 150
 
 
+def test_dependant_override_never_propagates_to_a_sibling_cohort() -> None:
+    pricing = {
+        "products": {
+            "p": {
+                "dependant": {
+                    "mode": "per_pax",
+                    "per_pax": {"executives::P1": {"flat": 150}},
+                }
+            }
+        }
+    }
+    common = dict(
+        source="manual",
+        pricing=pricing,
+        family_slip_idx=None,
+        product_id="p",
+        plan_code="P1",
+        spouse_count=1,
+        child_count=0,
+    )
+    assert dependant_tag(**common, tier_category_id="executives") == 150.0
+    assert dependant_tag(**common, tier_category_id="staff") is None
+
+
 def test_validate_pricing_shape_flags_bad_dependant_block():
     bad = {
         "products": {
@@ -513,6 +537,31 @@ def test_validate_pricing_shape_flags_bad_dependant_block():
     assert any("per_pax 'catX::P1' flat must be ≥ 0" in e for e in errs)
     # A well-formed dependant block passes.
     assert validate_pricing_shape(_DEP_MANUAL) == []
+
+
+def test_tier_scoped_dependant_mode_overrides_only_that_tier():
+    slip = {
+        "p": {
+            "cat-a::1": {"per_pax": 100.0},
+            "cat-b::2": {"spouse": 50.0},
+        }
+    }
+    pricing = {
+        "products": {
+            "p": {
+                "dependant": {
+                    "modes": {"cat-a::1": "none"},
+                }
+            }
+        }
+    }
+    assert validate_pricing_shape(pricing) == []
+    assert _effective_dependant_mode(
+        pricing, "p", "slip", slip, "cat-a::1"
+    ) == "none"
+    assert _effective_dependant_mode(
+        pricing, "p", "slip", slip, "cat-b::2"
+    ) == "family_group"
 
 
 def test_dependant_pricing_out_honors_slip_default():
@@ -539,11 +588,66 @@ def test_dependant_pricing_out_honors_slip_default():
     assert out is not None
     assert out.mode == "family_group"
     by = out.by_tier["catH::P1"]
+    assert by.mode == "family_group"
     amounts = {f.role: f.amount for f in by.family}
     assert amounts["spouse"] == 1800.0 and amounts["both"] == 2600.0
     # A product with no slip family rates and no config → None (nothing to price).
     out_none = _dependant_pricing_out({"products": {}}, {}, {}, ts)
     assert out_none is None
+
+
+def test_dependant_pricing_out_preserves_each_tier_mode() -> None:
+    from app.services.cohort_tiers import CohortTier, ProductTierSet
+    from app.services.enrollment_elections import _dependant_pricing_out
+
+    ts = ProductTierSet(
+        product_id="mixed",
+        product_code="MIXED",
+        employee_participation="compulsory",
+        dependant_participation="voluntary",
+        baseline_tier_category_id="cat",
+        baseline_plan_code="1",
+        allow_plan_change=True,
+        can_decline=False,
+        tiers=[
+            CohortTier(
+                tier_category_id="cat",
+                plan_code=plan,
+                label=f"Plan {plan}",
+                participation="voluntary",
+                direction="same",
+                is_baseline=plan == "1",
+                financials=None,
+            )
+            for plan in ("1", "2", "3")
+        ],
+    )
+    pricing = {
+        "products": {
+            "mixed": {
+                "dependant": {
+                    "modes": {
+                        "cat::1": "family_group",
+                        "cat::2": "per_pax",
+                        "cat::3": "none",
+                    },
+                    "family_tags": {
+                        "cat::1": {"spouse": 10, "child": 8, "both": 15}
+                    },
+                    "per_pax": {"cat::2": {"flat": 5}},
+                }
+            }
+        }
+    }
+    out = _dependant_pricing_out(pricing, None, {}, ts)
+    assert out is not None
+    assert {key: row.mode for key, row in out.by_tier.items()} == {
+        "cat::1": "family_group",
+        "cat::2": "per_pax",
+        "cat::3": "none",
+    }
+    assert out.by_tier["cat::1"].family[0].amount is not None
+    assert out.by_tier["cat::2"].per_pax_rate == 5.0
 
 
 def test_slip_dependant_for_tier_picks_per_pax_vs_family():
@@ -864,6 +968,52 @@ def test_saved_voluntary_rates_override_system_recommendation() -> None:
     assert tag == 1000.0
 
 
+def test_tier_voluntary_rates_override_shared_schedule_only_for_that_tier() -> None:
+    slip_idx = {
+        "p": {
+            key: {
+                "basis": 500_000.0,
+                "voluntary_rates": [
+                    {"label": "45-49", "min": 45, "max": 49, "rate": 1.65}
+                ],
+            }
+            for key in ("a::10", "b::10")
+        }
+    }
+    pricing = {
+        "products": {
+            "p": {
+                "voluntary_rates": [
+                    {"label": "45-49", "min": 45, "max": 49, "rate": 2.0}
+                ],
+                "voluntary_rates_by_tier": {
+                    "a::10": [
+                        {"label": "45-49", "min": 45, "max": 49, "rate": 3.0}
+                    ]
+                },
+            }
+        }
+    }
+
+    def price(category_id: str) -> float | None:
+        return member_price_tag(
+            source_map=None,
+            rule="full",
+            pricing=pricing,
+            slip_idx=slip_idx,
+            product_id="p",
+            age=47,
+            declined=False,
+            tier_category_id=category_id,
+            plan_code="10",
+            default_tier_category_id=category_id,
+            default_plan="10",
+        )
+
+    assert price("a") == 1500.0
+    assert price("b") == 1000.0
+
+
 def test_validate_pricing_rejects_bad_voluntary_rate_override() -> None:
     pricing = {
         "products": {
@@ -877,6 +1027,30 @@ def test_validate_pricing_rejects_bad_voluntary_rate_override() -> None:
         }
     }
     errors = validate_pricing_shape(pricing)
+    assert any("non-negative" in error for error in errors)
+    assert any("min > max" in error for error in errors)
+
+
+def test_validate_pricing_checks_tier_specific_voluntary_rates() -> None:
+    errors = validate_pricing_shape(
+        {
+            "products": {
+                "p": {
+                    "voluntary_rates_by_tier": {
+                        "a::10": [
+                            {
+                                "label": "Invalid",
+                                "min": 50,
+                                "max": 45,
+                                "rate": -1,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    )
+    assert any("tier 'a::10'" in error for error in errors)
     assert any("non-negative" in error for error in errors)
     assert any("min > max" in error for error in errors)
 
@@ -1221,11 +1395,10 @@ def test_breakdown_exposes_option_choices():
     assert all(c["category_id"] for c in levels)
 
 
-def test_member_coverage_tag_compulsory_dependants_never_block():
-    """Employer-funded (compulsory) dependant cover draws no member flex and
-    must never unprice the tag — even when the product's dependant slip data
-    can't price the composition. Mirrors summarize_employee's exemption so the
-    election snapshot and the statement recompute agree."""
+def test_member_coverage_tag_compulsory_dependants_use_employee_flex():
+    """Participation controls selection, not funding. Compulsory dependants are
+    automatic, but their charge still comes from employee flex and therefore
+    remains unpriced when a required coverage level has not been selected."""
     idx = _choices_idx()
     slip_idx = {"prod-1": {"cat-mgr::4": 500.0}}
     common = dict(
@@ -1235,10 +1408,9 @@ def test_member_coverage_tag_compulsory_dependants_never_block():
         default_tier_category_id="cat-mgr", default_plan="4",
         spouse_count=1, child_count=0, dep_profiles=[("spouse", 40)],
     )
-    # Voluntary (default): covered spouse with no elected level -> unpriced.
+    # Covered spouse with no elected level is unpriced regardless of whether
+    # participation is voluntary or compulsory.
     assert member_coverage_tag(**common) is None
-    # Compulsory: same coverage costs the employee tag only, never blocked.
-    assert member_coverage_tag(**common, dependants_compulsory=True) == 500.0
 
 
 # ── Pro-ration scales the COVER, not just the allowance ───────────────────────

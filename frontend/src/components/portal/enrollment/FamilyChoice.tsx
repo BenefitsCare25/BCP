@@ -108,8 +108,8 @@ function optionLabel(
   if (choice.amount != null) {
     parts.push(
       choice.amount > 0
-        ? `costs you ${currencySymbol(currency)}${moneyText(choice.amount)}`
-        : "costs you nothing",
+        ? `deducts ${currencySymbol(currency)}${moneyText(choice.amount)} from your flex wallet`
+        : "no flex deducted",
     );
   } else if (Object.keys(choice.amounts_by_dependant).length) {
     parts.push("price depends on their age");
@@ -192,22 +192,24 @@ export function FamilyChoice({
   const covered = depCompulsory
     ? dependants
     : dependants.filter((d) => ps.dependantIds.includes(d.id));
+  const coveredIds = covered.map((dependant) => dependant.id);
   const pricing = dependantPricing(
-    ts.dependant, ps.tierKey, ps.dependantIds, dependants, ps.depOptionIds,
+    ts.dependant, ps.tierKey, coveredIds, dependants, ps.depOptionIds,
   );
-  // Only the roles the member has actually ticked need a level.
-  const roles = depCompulsory
-    ? []
-    : (ts.dependant?.option_choices ?? []).filter((r) =>
-        ps.dependantIds.some(
+  const tierMode =
+    ts.dependant?.by_tier[ps.tierKey]?.mode ?? ts.dependant?.mode ?? "none";
+  // Only covered roles need a level. Compulsory cover includes every eligible
+  // dependant automatically, but a linked option level can still require an
+  // employee choice before its wallet charge is known.
+  const roles = (ts.dependant?.option_choices ?? []).filter((r) =>
+        coveredIds.some(
           (id) => classifyRel(dependants.find((d) => d.id === id)) === r.role,
         ),
       );
   const showCost =
-    !depCompulsory &&
     !!ts.dependant &&
-    ts.dependant.mode !== "none" &&
-    ps.dependantIds.length > 0;
+    tierMode !== "none" &&
+    coveredIds.length > 0;
 
   return (
     <>
@@ -219,7 +221,7 @@ export function FamilyChoice({
             sentence that says whether ticking is what puts them on the plan. */}
         <p className="text-row text-label">
           {depCompulsory
-            ? "Everyone here is covered on this plan automatically — it costs you nothing extra."
+            ? "Everyone here is covered automatically. Any dependant charge is deducted from your flex dollars."
             : disabled
               ? "The people covered on this plan alongside you."
               : "Tick anyone you'd like covered on this plan. Doing so spends part of your flex dollars."}

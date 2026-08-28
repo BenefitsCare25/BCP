@@ -202,6 +202,22 @@ def validate_pricing_shape(pricing: dict[str, Any]) -> list[str]:
                             f"product '{pid}': voluntary rates leave ages "
                             f"{previous_max + 1}-{current_min - 1} uncovered."
                         )
+        rates_by_tier = block.get("voluntary_rates_by_tier")
+        if rates_by_tier is not None and not isinstance(rates_by_tier, dict):
+            errs.append(
+                f"product '{pid}': 'voluntary_rates_by_tier' must be an object."
+            )
+        elif isinstance(rates_by_tier, dict):
+            for key, tier_rates in rates_by_tier.items():
+                if not isinstance(key, str) or not key:
+                    errs.append(
+                        f"product '{pid}': voluntary rate tier keys must be non-empty strings."
+                    )
+                    continue
+                nested = validate_pricing_shape(
+                    {"products": {pid: {"voluntary_rates": tier_rates}}}
+                )
+                errs.extend(f"{error} (tier '{key}')" for error in nested)
         if "dependant" in block:
             errs.extend(_validate_dependant_block(pid, block["dependant"]))
     return errs
@@ -223,6 +239,24 @@ def _validate_dependant_block(pid: str, dep: object) -> list[str]:
         DependantMode.none, DependantMode.family_group, DependantMode.per_pax
     ):
         errs.append(f"product '{pid}': dependant mode '{mode}' is not valid.")
+    modes = dep.get("modes")
+    if modes is not None and not isinstance(modes, dict):
+        errs.append(f"product '{pid}': dependant 'modes' must be an object.")
+    elif isinstance(modes, dict):
+        for key, tier_mode in modes.items():
+            if not isinstance(key, str) or not key:
+                errs.append(
+                    f"product '{pid}': dependant mode tier keys must be non-empty strings."
+                )
+            if tier_mode not in (
+                DependantMode.none,
+                DependantMode.family_group,
+                DependantMode.per_pax,
+            ):
+                errs.append(
+                    f"product '{pid}': dependant mode '{tier_mode}' for '{key}' "
+                    "is not valid."
+                )
     scheme = dep.get("scheme")
     if scheme is not None and scheme not in FAMILY_SCHEMES:
         errs.append(f"product '{pid}': dependant scheme '{scheme}' is not valid.")
@@ -616,10 +650,18 @@ def slip_premium_for(
 
 
 def configured_voluntary_rates(
-    pricing: dict[str, Any] | None, product_id: str
+    pricing: dict[str, Any] | None,
+    product_id: str,
+    key: str | None = None,
 ) -> list[Any] | None:
-    """A product's saved voluntary-rate override, or None for slip recommendations."""
-    rates = (_product_block(pricing, product_id) or {}).get("voluntary_rates")
+    """A tier-specific or shared saved rate override, else slip recommendations."""
+    block = _product_block(pricing, product_id) or {}
+    rates_by_tier = block.get("voluntary_rates_by_tier")
+    if key is not None and isinstance(rates_by_tier, dict):
+        tier_rates = rates_by_tier.get(key)
+        if isinstance(tier_rates, list):
+            return tier_rates
+    rates = block.get("voluntary_rates")
     return rates if isinstance(rates, list) else None
 
 
@@ -657,7 +699,7 @@ def _tier_charge(
                 product_id,
                 key,
                 age,
-                configured_voluntary_rates(pricing, product_id),
+                configured_voluntary_rates(pricing, product_id, key),
             ),
             m,
         )
@@ -885,6 +927,29 @@ def dependant_profiles_by_id(
     return out
 
 
+def active_dependant_profiles(
+    db: Session,
+    employee_id: str,
+    *,
+    age_limits: dict[str, dict[str, int]] | None = None,
+    ref: date | None = None,
+) -> list[tuple[str, int | None]]:
+    """Eligible profiles for every active dependant of an employee.
+
+    Compulsory dependant participation controls selection (all eligible lives are
+    covered automatically), not funding. These profiles therefore feed the same
+    employee-wallet pricing path as a voluntary dependant selection.
+    """
+    profiles = list(dependant_profiles_by_id(db, employee_id, ref).values())
+    if age_limits is None:
+        return profiles
+    return [
+        profile
+        for profile in profiles
+        if role_age_eligible(profile[0], profile[1], age_limits)
+    ]
+
+
 def profile_counts(profiles: list[tuple[str, int | None]]) -> tuple[int, int]:
     """``(spouse_count, child_count)`` from dependant profiles."""
     spouse = sum(1 for role, _ in profiles if role == "spouse")
@@ -917,7 +982,14 @@ def _effective_dependant_mode(
     mode is tier-scoped, so a product whose tiers mix the two formats prices each
     tier correctly instead of forcing the whole product to one mode. Otherwise
     ``none``."""
-    raw = _dependant_block(pricing, product_id).get("mode")
+    dependant = _dependant_block(pricing, product_id)
+    tier_modes = dependant.get("modes")
+    raw = tier_modes.get(key) if isinstance(tier_modes, dict) else None
+    # ``mode`` is the legacy product-wide setting. Keep it as a fallback so
+    # existing drafts resolve unchanged while new edits can follow the slip's
+    # actual per-tier shape.
+    if raw is None:
+        raw = dependant.get("mode")
     if isinstance(raw, str) and raw in (
         DependantMode.none,
         DependantMode.family_group,
@@ -997,7 +1069,10 @@ def family_slip_index(
     )
 
 
-def family_slip_index_from(tier_sets: dict[str, Any]) -> dict[str, dict[str, dict[str, float]]]:
+def family_slip_index_from(
+    tier_sets: dict[str, Any],
+    overlay: dict[str, dict[str, dict[str, Any]]] | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
     """``family_slip_index`` from already-loaded ``ProductTierSet``s (see
     ``slip_premium_index_from``)."""
     out: dict[str, dict[str, dict[str, float]]] = {}
@@ -1009,7 +1084,7 @@ def family_slip_index_from(tier_sets: dict[str, Any]) -> dict[str, dict[str, dic
                 prod_row[tier_key(t.tier_category_id, t.plan_code)] = dep
         if prod_row:
             out[ts.product_id] = prod_row
-    return out
+    return _merge_family_overlay(out, overlay) if overlay else out
 
 
 # ── Dependant OPTION rows (slip categories that stick to the employee plan) ──
@@ -1281,7 +1356,14 @@ def _tier_subdict(
     ``tier_key`` (the dependant amount differs per plan, like the price tag), so
     resolve the exact key then an unambiguous plan_code — mirroring the matrix +
     slip fallback so a drifted category half still resolves."""
-    row = _tier_row(by_key, tier_key(tier_category_id, plan_code))
+    # Broker overrides are category-specific. Slip recommendations retain the
+    # plan-code fallback in their own lookup helpers; manual changes cross
+    # categories only through the editor's explicit copy action.
+    row = (
+        by_key.get(tier_key(tier_category_id, plan_code))
+        if isinstance(by_key, dict)
+        else None
+    )
     return row if isinstance(row, dict) else None
 
 
@@ -1478,7 +1560,7 @@ def _dependant_tag_raw(
         )
         if not profiles:
             return 0.0  # Employee-Only — covered, no dependant cost
-        rate_override = configured_voluntary_rates(pricing, product_id)
+        rate_override = configured_voluntary_rates(pricing, product_id, key)
         total = 0.0
         for role, dep_age in profiles:
             spec = (opts or {}).get(role)
@@ -1600,7 +1682,6 @@ def member_coverage_tag(
     child_count: int,
     dep_profiles: list[tuple[str, int | None]] | None = None,
     dep_option_ids: dict[str, Any] | None = None,
-    dependants_compulsory: bool = False,
     factor: float = 1.0,
 ) -> float | None:
     """Total flex drawn down for one product = employee plan tag (see
@@ -1611,9 +1692,10 @@ def member_coverage_tag(
     pass it wherever the covered dependants are known so age-banded dependant
     option rows price on each dependant's own age. ``dep_option_ids``
     (``{role: category_id}``) is the elected freestanding option level per role
-    (rule-4 choices). ``dependants_compulsory`` marks employer-funded dependant
-    cover (participation compulsory): the dependants are covered but draw NO
-    member flex, and their unpriceability never blocks the tag.
+    (rule-4 choices). Participation changes selection only: compulsory dependant
+    cover includes every eligible dependant automatically, while voluntary cover
+    uses the employee's selection. In both cases the dependant charge is added to
+    the employee's own flex-wallet drawdown.
 
     ``factor`` is the member's flex pro-ration — pass ``factor_of(employee)``
     from every call site, so a snapshot taken at election time is scaled by the
@@ -1628,8 +1710,6 @@ def member_coverage_tag(
     )
     if declined:
         return emp  # None — no coverage, no flex
-    if dependants_compulsory:
-        return _combine_tags(emp, None, 0, dep_applies=False, factor=factor)
     source = (source_map or {}).get(product_id, DEFAULT_FLEX_SOURCE)
     mode = _effective_dependant_mode(
         pricing, product_id, source, family_slip_idx,
@@ -1886,8 +1966,8 @@ def summarize_employee(
     if pricing is not None or slip_idx or family_slip_idx:
         defaults = employee_category_defaults(db, employee)  # {product_id: (code, plan)}
         baseline_cat = _baseline_category_ids(db, employee)
-        # Categories whose dependant cover is compulsory (auto-included, employer-
-        # funded) — their dependants draw no member flex.
+        # Categories whose dependant cover is compulsory. They auto-include every
+        # active eligible dependant; pricing still draws from employee flex.
         compulsory_dep_cats = compulsory_dependant_category_ids(
             db, set(baseline_cat.values())
         )
@@ -1903,6 +1983,7 @@ def summarize_employee(
                 product_id=product_id, product_code=product_code,
                 default_plan=default_plan, base_cat=base_cat, ov=ov,
                 age=age, ref=ref,
+                employee_id=employee.id,
                 dependants_compulsory=base_cat in compulsory_dep_cats,
                 factor=factor,
             )
@@ -1946,6 +2027,7 @@ def _member_flex_line(
     ov: EmployeePlanOverride | None,
     age: int | None,
     ref: date | None,
+    employee_id: str,
     dependants_compulsory: bool,
     factor: float = 1.0,
 ) -> FlexPriceLine:
@@ -1965,9 +2047,21 @@ def _member_flex_line(
         covered_ids = None  # no override → Employee-Only default
         dep_option_ids = None
     key = tier_key(cat_id, plan_code)
-    dep_profiles = covered_dependant_profiles(
-        db, covered_ids,
-        age_limits=dependant_age_limits(pricing, product_id), ref=ref,
+    age_limits = dependant_age_limits(pricing, product_id)
+    dep_profiles = (
+        active_dependant_profiles(
+            db,
+            employee_id,
+            age_limits=age_limits,
+            ref=ref,
+        )
+        if dependants_compulsory
+        else covered_dependant_profiles(
+            db,
+            covered_ids,
+            age_limits=age_limits,
+            ref=ref,
+        )
     )
     spouse_count, child_count = profile_counts(dep_profiles)
     emp_tag = member_price_tag(
@@ -1977,21 +2071,18 @@ def _member_flex_line(
         default_tier_category_id=base_cat, default_plan=default_plan,
     )
     src = (source_map or {}).get(product_id, DEFAULT_FLEX_SOURCE)
-    # Compulsory dependant cover is part of the base premium → no flex draw,
-    # even though the dependants are covered.
-    if dependants_compulsory:
-        dep_tag, dep_applies = None, False
-    else:
-        mode = _effective_dependant_mode(
-            pricing, product_id, src, family_slip_idx, key
-        )
-        dep_tag = _dependant_tag_for_mode(
-            mode, source=src, pricing=pricing, family_slip_idx=family_slip_idx,
-            product_id=product_id, tier_category_id=cat_id, plan_code=plan_code,
-            spouse_count=spouse_count, child_count=child_count,
-            dep_profiles=dep_profiles, dep_option_ids=dep_option_ids,
-        )
-        dep_applies = mode != DependantMode.none
+    # Participation controls whether the family is automatic or elected. It does
+    # not change the payer: dependant charges always draw employee flex.
+    mode = _effective_dependant_mode(
+        pricing, product_id, src, family_slip_idx, key
+    )
+    dep_tag = _dependant_tag_for_mode(
+        mode, source=src, pricing=pricing, family_slip_idx=family_slip_idx,
+        product_id=product_id, tier_category_id=cat_id, plan_code=plan_code,
+        spouse_count=spouse_count, child_count=child_count,
+        dep_profiles=dep_profiles, dep_option_ids=dep_option_ids,
+    )
+    dep_applies = mode != DependantMode.none
     return FlexPriceLine(
         product_id=product_id,
         product_code=product_code,
@@ -2012,8 +2103,8 @@ def _member_flex_line(
 def compulsory_dependant_category_ids(db: Session, cat_ids: set[str]) -> set[str]:
     """Of the given categories, those whose dependant participation is compulsory.
 
-    A compulsory dependant is auto-covered and employer-funded — it must NOT draw
-    member flex (only a voluntary opt-in does). Mirrors the enrollment UI gate.
+    Compulsory means auto-covered; it does not change the funding source. Any
+    dependant price is still drawn from the employee's flex wallet.
     """
     from app.models.category import Category
 

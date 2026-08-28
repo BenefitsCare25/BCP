@@ -530,6 +530,7 @@ def _dependant_pricing_out(
         scheme = bd["scheme"] or scheme
         labels = FAMILY_SCHEMES.get(bd["scheme"] or "", {})
         by_tier[tier_key(t.tier_category_id, t.plan_code)] = DependantTierPricingOut(
+            mode=bd["mode"],
             per_pax_rate=bd["per_pax_rate"],
             family=[
                 DependantRoleOut(
@@ -749,11 +750,40 @@ def apply_elections(
                 ),
             )
 
+        dep_limits = dependant_age_limits(pricing, product.id)
+        dependants_compulsory = bool(
+            not item.declined
+            and tier_set is not None
+            and tier_set.dependant_participation == "compulsory"
+        )
+        if dependants_compulsory:
+            all_profiles = dependant_profiles_by_id(db, employee.id, ref)
+            eligible_profiles = {
+                dep_id: profile
+                for dep_id, profile in all_profiles.items()
+                if role_age_eligible(profile[0], profile[1], dep_limits)
+            }
+            resolved_covered_ids: list[str] | None = sorted(eligible_profiles)
+            dep_profiles = list(eligible_profiles.values())
+        else:
+            resolved_covered_ids = (
+                None if item.declined else item.covered_dependant_ids
+            )
+            dep_profiles = covered_dependant_profiles(
+                db,
+                resolved_covered_ids,
+                age_limits=dep_limits,
+                ref=ref,
+            )
+
         existing.previous_plan_code = previous
         existing.elected_plan_code = elected_plan_code
         existing.tier_category_id = None if item.declined else elected_tier_id
         existing.action = action
-        existing.covered_dependant_ids = item.covered_dependant_ids
+        # Compulsory means every active eligible dependant is covered
+        # automatically. An omitted or partial client list must not waive the
+        # dependant charge drawn from the employee's flex wallet.
+        existing.covered_dependant_ids = resolved_covered_ids
         existing.dependant_option_ids = (
             None if item.declined else (item.dependant_option_ids or None)
         )
@@ -767,10 +797,6 @@ def apply_elections(
         # own age; counts derive from the same load. The product's eligibility
         # windows apply here exactly as they do on every recompute surface
         # (bulk, revert, benefit statement) so the snapshot can't diverge.
-        dep_profiles = covered_dependant_profiles(
-            db, item.covered_dependant_ids,
-            age_limits=dependant_age_limits(pricing, product.id), ref=ref,
-        )
         spouse_count, child_count = profile_counts(dep_profiles)
         existing.flex_price_tag = member_coverage_tag(
             source_map=source_map,
@@ -789,12 +815,6 @@ def apply_elections(
             child_count=child_count,
             dep_profiles=dep_profiles,
             dep_option_ids=existing.dependant_option_ids,
-            # Compulsory dependant cover is employer-funded: covered, but it
-            # draws no member flex and can't block the tag as "unpriced".
-            dependants_compulsory=(
-                tier_set is not None
-                and tier_set.dependant_participation == "compulsory"
-            ),
             factor=flex_proration.factor_of(employee),
         )
         existing.notes = item.notes

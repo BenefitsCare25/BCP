@@ -301,6 +301,7 @@ class DependantRoleOut(BaseModel):
 class DependantTierPricingOut(BaseModel):
     """One plan/tier's dependant pricing — the amounts differ per plan."""
 
+    mode: str  # 'none' | 'family_group' | 'per_pax' | 'slip_options'
     family: list[DependantRoleOut] = Field(default_factory=list)
     per_pax_rate: float | None = None  # per_pax only: flat amount per dependant
 

@@ -33,6 +33,7 @@ from app.services import flex_proration
 from app.services.coverage_resolver import is_sparse_default, load_overrides
 from app.services.enrollment_lifecycle import _defaults_and_baseline
 from app.services.flex_pricing_resolver import (
+    active_dependant_profiles,
     compulsory_dependant_category_ids,
     covered_dependant_profiles,
     dependant_age_limits,
@@ -273,8 +274,8 @@ def revert_to_baseline(
             _price_ctx["family_slip_idx"] = maybe_family_slip_index(
                 db, employee.policy_year_id, source_map
             )
-            # Baseline categories with compulsory (employer-funded) dependant
-            # cover — same exemption as the statement + election snapshot.
+            # Baseline categories with compulsory dependant cover. Repricing
+            # automatically includes every active eligible dependant.
             _price_ctx["compulsory_dep_cats"] = compulsory_dependant_category_ids(
                 db, {c for c in baseline_cat.values() if c}
             )
@@ -343,9 +344,21 @@ def revert_to_baseline(
             continue
 
         ctx = _price_inputs()
-        dep_profiles = covered_dependant_profiles(
-            db, deps,
-            age_limits=dependant_age_limits(ctx["pricing"], pid), ref=ctx["ref"],
+        age_limits = dependant_age_limits(ctx["pricing"], pid)
+        dep_profiles = (
+            active_dependant_profiles(
+                db,
+                employee.id,
+                age_limits=age_limits,
+                ref=ctx["ref"],
+            )
+            if base_tier in ctx["compulsory_dep_cats"]
+            else covered_dependant_profiles(
+                db,
+                deps,
+                age_limits=age_limits,
+                ref=ctx["ref"],
+            )
         )
         spouse_count, child_count = profile_counts(dep_profiles)
         price = member_coverage_tag(
@@ -365,7 +378,6 @@ def revert_to_baseline(
             child_count=child_count,
             dep_profiles=dep_profiles,
             dep_option_ids=dep_option_ids,
-            dependants_compulsory=base_tier in ctx["compulsory_dep_cats"],
             factor=flex_proration.factor_of(employee),
         )
         restore_before = restore_snapshot(ov)

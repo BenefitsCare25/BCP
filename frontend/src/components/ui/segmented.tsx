@@ -10,11 +10,13 @@ export function Segmented<T extends string>({
   onChange,
   options,
   className,
+  disabled = false,
 }: {
   value: T;
   onChange: (v: T) => void;
   options: { value: T; label: string }[];
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <div
@@ -27,9 +29,10 @@ export function Segmented<T extends string>({
         <button
           key={o.value}
           type="button"
+          disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
-            "px-2.5 py-1 transition-colors",
+            "px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-60",
             i > 0 && "border-l border-border",
             value === o.value
               ? "bg-sidebar-active font-medium text-sidebar-active-foreground"

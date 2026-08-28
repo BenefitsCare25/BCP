@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -18,6 +19,13 @@ import type { FlexPricingEditor } from "./FlexPricingCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { InfoHint } from "@/components/ui/tooltip";
 import { fmtMoney } from "@/lib/format";
 import { priceRowForTier } from "@/lib/flexTiers";
@@ -104,7 +112,7 @@ type TierOverride = {
   cellCount: number;
 };
 
-/** Frontend mirror of the resolver's exact-key then unambiguous-plan fallback. */
+/** Frontend mirror of the resolver's exact category/plan override lookup. */
 function tierOverrideAtAge(
   block: FlexPricingProductBlock,
   tier: FlexPricingTier,
@@ -180,10 +188,6 @@ export function LifeVoluntaryPanel({
   editor: FlexPricingEditor;
   editable: boolean;
 }) {
-  const recommended = product.voluntary_rates ?? [];
-  const bands = editor.voluntaryRatesFor(product);
-  const ratesEdited = editor.voluntaryRatesEdited(product);
-  const rateIssues = voluntaryRateIssues(bands);
   const pid = product.product_id;
   const block = editor.blockFor(pid);
   const editedLimits = block.dependant?.age_limits;
@@ -191,6 +195,16 @@ export function LifeVoluntaryPanel({
   const voluntaryTiers = product.tiers.filter(
     (tier) => tier.pricing_mode === "age_banded",
   );
+  const [scope, setScope] = useState<string>("all");
+  const selectedTier = voluntaryTiers.find((tier) => tier.key === scope);
+  const scopeKey = selectedTier?.key;
+  const recommended = selectedTier?.voluntary_rates ?? product.voluntary_rates ?? [];
+  const bands = editor.voluntaryRatesFor(product, scopeKey);
+  const ratesEdited = editor.voluntaryRatesEdited(product, scopeKey);
+  const rateIssues = voluntaryRateIssues(bands);
+  const recommendationsDiffer = new Set(
+    voluntaryTiers.map((tier) => JSON.stringify(tier.voluntary_rates ?? [])),
+  ).size > 1;
   const legacyOverrideKeys = [
     ...new Set(
       voluntaryTiers
@@ -206,53 +220,80 @@ export function LifeVoluntaryPanel({
       bands.map((band, current) =>
         current === index ? { ...band, ...patch } : band,
       ),
+      scopeKey,
     );
 
   const removeBand = (index: number) =>
     editor.setVoluntaryRates(
       pid,
       bands.filter((_band, current) => current !== index),
+      scopeKey,
     );
 
   const addBand = () => {
     const previousMax = bands.at(-1)?.max;
     const min = previousMax == null ? null : previousMax + 1;
-    editor.setVoluntaryRates(pid, [
-      ...bands,
-      {
-        label: min == null ? `Band ${bands.length + 1}` : `${min}+`,
-        min,
-        max: null,
-        rate: Number.NaN,
-      },
-    ]);
+    editor.setVoluntaryRates(
+      pid,
+      [
+        ...bands,
+        {
+          label: min == null ? `Band ${bands.length + 1}` : `${min}+`,
+          min,
+          max: null,
+          rate: Number.NaN,
+        },
+      ],
+      scopeKey,
+    );
   };
 
   return (
     <div className="border-t border-border">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/25 px-4 py-3">
-        <div>
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border bg-muted/25 px-4 py-3">
+        <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-            Voluntary rates per S$1,000 sum assured
+            Age-banded rates per S$1,000 sum assured
             <InfoHint>
               The system calculates a member&apos;s annual price tag as sum assured
               divided by 1,000, multiplied by the rate for their age band.
             </InfoHint>
           </div>
           <p className="mt-0.5 text-2xs text-muted-foreground">
+            {scopeKey
+              ? `Editing only ${selectedTier?.cohort_label || "All eligible employees"} / ${selectedTier?.label}.`
+              : "The shared schedule is used by tiers without a category-specific schedule."}
+          </p>
+          <p className="hidden">
             Age last birthday · each correction applies to this product&apos;s voluntary tiers.
           </p>
         </div>
+        <label className="grid gap-1 text-2xs font-medium text-muted-foreground">
+          Schedule applies to
+          <Select value={scope} onValueChange={setScope}>
+            <SelectTrigger className="h-8 min-w-72 bg-card text-xs text-foreground">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Shared fallback schedule</SelectItem>
+              {voluntaryTiers.map((tier) => (
+                <SelectItem key={tier.key} value={tier.key}>
+                  {tier.cohort_label || "All eligible employees"} · {tier.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
         {editable && (
           <div className="flex items-center gap-1.5">
             {ratesEdited && (
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => editor.setVoluntaryRates(pid, null)}
+                onClick={() => editor.setVoluntaryRates(pid, null, scopeKey)}
               >
                 <RotateCcw className="size-3.5" aria-hidden="true" />
-                Reset recommendations
+                Reset schedule
               </Button>
             )}
             <Button variant="outline" size="sm" onClick={addBand}>
@@ -261,6 +302,19 @@ export function LifeVoluntaryPanel({
           </div>
         )}
       </div>
+
+      {recommendationsDiffer && !scopeKey && (
+        <div className="flex items-start gap-2 border-b border-info/25 bg-info-soft/30 px-4 py-3 text-xs">
+          <InfoHint>
+            Placement-slip recommendations differ between employee categories or
+            plans. Select a category and plan above to review its exact schedule.
+          </InfoHint>
+          <p className="text-muted-foreground">
+            Recommendations differ by category or plan. This shared schedule only
+            fills tiers that do not have their own schedule.
+          </p>
+        </div>
+      )}
 
       {legacyOverrideKeys.length > 0 && (
         <div
@@ -277,8 +331,8 @@ export function LifeVoluntaryPanel({
                 Saved tier overrides take priority over the rate table.
               </p>
               <p className="mt-0.5 text-muted-foreground">
-                The calculated prices below show which value members actually use.
-                Reset these overrides to price every age-banded tier from its rate.
+                The employee tier table marks these rows as overrides. Reset them
+                to price every age-banded tier from this rate table.
               </p>
             </div>
           </div>
@@ -450,7 +504,7 @@ export function LifeVoluntaryPanel({
         </>
       )}
 
-      {voluntaryTiers.length > 0 && bands.length > 0 && rateIssues.length === 0 && (
+      {false && voluntaryTiers.length > 0 && bands.length > 0 && rateIssues.length === 0 && (
         <div className="border-t border-border">
           <div className="flex items-center justify-between gap-2 px-4 py-2.5">
             <div>
@@ -549,7 +603,7 @@ export function LifeVoluntaryPanel({
         </div>
       )}
 
-      <div className="border-t border-border bg-muted/15 px-4 py-3">
+      {false && <div className="border-t border-border bg-muted/15 px-4 py-3">
         <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
           <Users className="size-3.5 text-muted-foreground" aria-hidden="true" />
           Dependant eligibility
@@ -589,7 +643,7 @@ export function LifeVoluntaryPanel({
             </fieldset>
           ))}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

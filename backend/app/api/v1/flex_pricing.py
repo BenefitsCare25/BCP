@@ -35,6 +35,8 @@ from app.services.flex_pricing_resolver import (
     DependantMode,
     _per_member_slip_premium,
     dependant_age_limits,
+    dependant_option_overlay,
+    dependant_pricing_breakdown,
     family_slip_index_from,
     stamp_pricing,
     validate_pricing_shape,
@@ -54,6 +56,14 @@ class FlexPricingTierOut(BaseModel):
     direction: str
     is_baseline: bool
     participation: str | None = None
+    # Dependant participation is separate from who pays. ``compulsory`` means
+    # eligible dependants are covered automatically; ``voluntary`` means the
+    # employee elects them. Either way, configured charges draw from the
+    # employee's flex wallet.
+    dependant_participation: str | None = None
+    # The resolver's effective dependant shape for THIS tier. A product may mix
+    # family tiers, per-dependant rates and linked dependant options.
+    dependant_pricing: dict[str, Any] = {}
     # Pricing mechanics belong to the tier, not the insurance line. A life
     # product can mix fixed compulsory cover with age-banded voluntary options.
     pricing_mode: Literal["age_banded", "plan_type"]
@@ -64,6 +74,8 @@ class FlexPricingTierOut(BaseModel):
     # Per-member sum insured (basis) — drives the life-product live preview
     # (premium = sum_insured / 1000 x voluntary_rate[member age band]).
     sum_insured: float | None = None
+    # Slip-derived rate recommendation for this exact category/plan tier.
+    voluntary_rates: list[dict[str, Any]] | None = None
     # The tier's own cohort (job-category) name, for disambiguating rows when a
     # plan repeats across cohorts and the UI can't fold them (they price
     # differently). None when unavailable. The "(Job Category: …)" grade-code
@@ -82,6 +94,10 @@ class FlexPricingProductOut(BaseModel):
     # Insurance line — "life" | "medical" | "flex" — for the UI's product label
     # and for choosing the age-banded (life) vs tiered (medical) layout.
     line: str = "medical"
+    # Effective applicability. Parsed dependant pricing/participation wins over
+    # stale product metadata so a real spouse/child option can never disappear
+    # from this editor merely because ``has_dependants`` was not classified.
+    has_dependants: bool = False
     # Aggregate editor shape from the actual tier financials. ``age_banded``
     # means at least one tier uses age-banded rates; individual tier modes tell
     # the UI which fixed rows must remain separately editable.
@@ -158,6 +174,21 @@ def _tier_option_id(plan_code: str | None, label: str) -> str:
     return f"{plan_code or ''}::{normalized_label}"
 
 
+def _dependant_participation(
+    category: Category | None,
+    product_values: set[str],
+) -> str | None:
+    detail = (
+        category.participation_detail
+        if category is not None and isinstance(category.participation_detail, dict)
+        else {}
+    )
+    value = detail.get("dependant")
+    if value in ("compulsory", "voluntary"):
+        return str(value)
+    return next(iter(product_values)) if len(product_values) == 1 else None
+
+
 def _available_products(
     db: Session, policy_year_id: str, pricing: dict[str, Any] | None = None
 ) -> list[FlexPricingProductOut]:
@@ -167,28 +198,60 @@ def _available_products(
     # age-banded rows the UI can't fold — loaded once for every tier category.
     cat_ids = {t.tier_category_id for ts in tier_sets.values() for t in ts.tiers}
     cohort_by_cat: dict[str, tuple[str, str | None]] = {}
-    if cat_ids:
+    category_by_id: dict[str, Category] = {}
+    dependant_participation_by_product: dict[str, set[str]] = {}
+    if pids:
         for category in db.execute(
-            select(Category).where(Category.id.in_(cat_ids))
+            select(Category).where(
+                Category.policy_year_id == policy_year_id,
+                Category.product_id.in_(pids),
+            )
         ).scalars():
+            category_by_id[category.id] = category
+            detail = (
+                category.participation_detail
+                if isinstance(category.participation_detail, dict)
+                else {}
+            )
+            dependant_participation = detail.get("dependant")
+            if dependant_participation in ("compulsory", "voluntary"):
+                dependant_participation_by_product.setdefault(
+                    category.product_id or "", set()
+                ).add(dependant_participation)
+            if category.id not in cat_ids:
+                continue
             insured = "|".join(sorted(category_insured_entities(category)))
             identity = f"{cohort_key(category.raw_description)}::{insured}"
             cohort_by_cat[category.id] = (
                 identity,
                 _cohort_label(category.display_name),
             )
-    line_by_id: dict[str, str] = {}
+    product_by_id: dict[str, Product] = {}
     if pids:
         for p in db.execute(select(Product).where(Product.id.in_(pids))).scalars():
-            line_by_id[p.id] = p.line
+            product_by_id[p.id] = p
     # Slip-derived dependant pricing per tier — either family increments
     # (role → amount over Employee-Only) or a {"per_pax": rate} per-dependant rate.
     # Built from the tier sets already loaded above (no second list_product_tiers).
     # Split into the two prefill shapes the config grid renders, and suggest the
     # matching mode (per_pax when the slip lists a Dependents rate, else family_group).
-    fam_idx = family_slip_index_from(tier_sets)
+    fam_idx = family_slip_index_from(
+        tier_sets,
+        dependant_option_overlay(db, policy_year_id),
+    )
     out: list[FlexPricingProductOut] = []
     for ts in sorted(tier_sets.values(), key=lambda s: s.product_code):
+        product_row = product_by_id.get(ts.product_id)
+        configured_product = (
+            (pricing or {}).get("products", {}).get(ts.product_id, {})
+            if isinstance((pricing or {}).get("products", {}), dict)
+            else {}
+        )
+        configured_dependant = (
+            configured_product.get("dependant", {})
+            if isinstance(configured_product, dict)
+            else {}
+        )
         visible_tiers = [
             tier
             for tier in ts.tiers
@@ -200,17 +263,31 @@ def _available_products(
             if isinstance(v, dict) and "per_pax" in v
         }
         slip_family = {
-            k: v for k, v in rows.items()
-            if isinstance(v, dict) and "per_pax" not in v
+            k: {
+                role: amount
+                for role, amount in v.items()
+                if role in ("spouse", "child", "both")
+                and isinstance(amount, (int, float))
+            }
+            for k, v in rows.items()
+            if isinstance(v, dict)
+            and "per_pax" not in v
+            and any(role in v for role in ("spouse", "child", "both"))
         }
         if slip_per_pax:
             suggested = DependantMode.per_pax
         elif slip_family:
             suggested = DependantMode.family_group
+        elif any(
+            isinstance(row, dict) and ("options" in row or "choices" in row)
+            for row in rows.values()
+        ):
+            suggested = DependantMode.slip_options
         else:
             suggested = DependantMode.none
-        # The voluntary rate table is a product-level property; take it from the
-        # first tier that carries one (voluntary life tiers all share it).
+        # Product-level recommendation is a compatibility fallback. Exact tier
+        # recommendations are emitted below because categories and options can
+        # legitimately use different age-band schedules.
         voluntary_rates = next(
             (
                 [b.model_dump() for b in t.financials.voluntary_rates]
@@ -231,7 +308,21 @@ def _available_products(
             FlexPricingProductOut(
                 product_id=ts.product_id,
                 product_code=ts.product_code,
-                line=line_by_id.get(ts.product_id, "medical"),
+                line=product_row.line if product_row is not None else "medical",
+                has_dependants=(
+                    bool(product_row.has_dependants)
+                    if product_row is not None
+                    else False
+                )
+                or bool(rows)
+                or bool(dependant_participation_by_product.get(ts.product_id))
+                or (
+                    isinstance(configured_dependant, dict)
+                    and (
+                        configured_dependant.get("mode") not in (None, DependantMode.none)
+                        or bool(configured_dependant.get("modes"))
+                    )
+                ),
                 pricing_mode=pricing_mode,
                 voluntary_rates=voluntary_rates,
                 dependant_age_limits=dependant_age_limits(pricing, ts.product_id),
@@ -247,9 +338,28 @@ def _available_products(
                         direction=t.direction,
                         is_baseline=t.is_baseline,
                         participation=t.participation,
+                        dependant_participation=_dependant_participation(
+                            category_by_id.get(t.tier_category_id),
+                            dependant_participation_by_product.get(
+                                ts.product_id, set()
+                            ),
+                        ),
+                        dependant_pricing=dependant_pricing_breakdown(
+                            pricing=pricing,
+                            family_slip_idx=fam_idx,
+                            source="slip",
+                            product_id=ts.product_id,
+                            tier_category_id=t.tier_category_id,
+                            plan_code=t.plan_code,
+                        ),
                         pricing_mode=_financial_pricing_mode(t.financials),
                         slip_premium=_per_member_slip_premium(t.financials),
                         sum_insured=t.financials.sum_insured if t.financials else None,
+                        voluntary_rates=(
+                            [band.model_dump() for band in t.financials.voluntary_rates]
+                            if t.financials is not None and t.financials.voluntary_rates
+                            else None
+                        ),
                         cohort_id=cohort_by_cat.get(
                             t.tier_category_id, (t.tier_category_id, None)
                         )[0],
