@@ -198,7 +198,7 @@ export function ReviewConfigEditor({
               </p>
               <p className="text-xs text-subtle">
                 Copies its effective mappings and rules into this editor.
-                Submission documents remain owned by Claim settings.
+                Submission documents remain owned by Doc settings.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -479,13 +479,13 @@ export function ReviewConfigEditor({
 
           <EditorSection
             title="Submission documents"
-            hint="Required uploads and recognition rules are configured independently for each claim choice under Claim settings. The AI review checks that same snapshotted list."
+            hint="Required uploads and recognition rules are configured independently for each claim choice under Doc settings. The AI review checks that same snapshotted list."
           >
             <a
               href="/claims/review?tab=settings"
               className="inline-flex min-h-8 items-center text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              Manage submission documents in Claim settings
+              Manage submission documents in Doc settings
             </a>
           </EditorSection>
 

@@ -17,6 +17,7 @@ export function ClaimGracePeriodField() {
       noYearPrompt="Select a benefit year to set a claim submission deadline."
       invalidMessage="Grace period must be a whole number from 0 to 3,650 days (or blank)."
       savedMessage="Claim grace period updated"
+      explicitEdit
       hint={
         <>
           Days after the current benefit year&rsquo;s coverage period ends

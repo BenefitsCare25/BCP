@@ -9,14 +9,14 @@
  * blank meaning "clear this setting" rather than zero, and commit-on-blur.
  */
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Pencil, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { usePolicyYears, useUpdatePolicyYear } from "@/api/hooks";
 import type { PolicyYear } from "@/types";
 import { useSession } from "@/stores/session";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { SectionLabel } from "@/components/ui/section-label";
 import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
 import type { ReactNode } from "react";
@@ -42,6 +42,7 @@ export function PolicyYearDaysField({
   noYearPrompt,
   invalidMessage,
   savedMessage,
+  explicitEdit = false,
 }: {
   id: string;
   field: DaysField;
@@ -52,6 +53,8 @@ export function PolicyYearDaysField({
   noYearPrompt: string;
   invalidMessage: string;
   savedMessage: string;
+  /** Keep the persisted value read-only until the user deliberately edits it. */
+  explicitEdit?: boolean;
 }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const yearsQuery = usePolicyYears();
@@ -59,10 +62,14 @@ export function PolicyYearDaysField({
   const update = useUpdatePolicyYear();
   const year = years.find((y) => y.id === policyYearId) ?? null;
   const [draft, setDraft] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   // A draft belongs to one benefit year. Without this reset, switching years
   // could save the previous year's uncommitted value into the new year on blur.
-  useEffect(() => setDraft(null), [year?.id, field]);
+  useEffect(() => {
+    setDraft(null);
+    setEditing(false);
+  }, [year?.id, field]);
 
   if (yearsQuery.isLoading) {
     return <p className="text-sm text-muted-foreground">Loading setting…</p>;
@@ -103,6 +110,7 @@ export function PolicyYearDaysField({
     }
     if (next === current) {
       setDraft(null);
+      setEditing(false);
       return;
     }
     try {
@@ -112,30 +120,96 @@ export function PolicyYearDaysField({
       });
       toast.success(savedMessage);
       setDraft(null);
+      setEditing(false);
     } catch (e) {
       toast.error(formatError(e));
     }
   };
 
   return (
-    <div className="flex flex-col gap-1.5 sm:max-w-md">
+    <div
+      className="flex flex-col gap-1.5 sm:max-w-md"
+      role="group"
+      aria-labelledby={`${id}-label`}
+    >
       <div className="flex items-center gap-1">
-        <Label htmlFor={id}>{label}</Label>
+        <SectionLabel id={`${id}-label`} as="span">
+          {label}
+        </SectionLabel>
         <InfoHint>{hint}</InfoHint>
       </div>
-      <Input
-        id={id}
-        type="number"
-        min={0}
-        max={MAX_WINDOW_DAYS}
-        placeholder={placeholder}
-        className="h-9 w-40"
-        disabled={update.isPending}
-        aria-busy={update.isPending}
-        value={draft ?? (current?.toString() ?? "")}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-      />
+      {explicitEdit && !editing ? (
+        <div className="flex items-center gap-2">
+          <span className="flex h-9 w-40 items-center rounded-md border border-border bg-muted/40 px-3 text-sm text-foreground tabular-nums">
+            {current ?? placeholder}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setDraft(current?.toString() ?? "");
+              setEditing(true);
+            }}
+          >
+            <Pencil className="size-3.5" aria-hidden />
+            Edit
+          </Button>
+        </div>
+      ) : explicitEdit ? (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void commit();
+          }}
+        >
+          <Input
+            id={id}
+            type="number"
+            min={0}
+            max={MAX_WINDOW_DAYS}
+            placeholder={placeholder}
+            className="h-9 w-40"
+            disabled={update.isPending}
+            aria-busy={update.isPending}
+            aria-labelledby={`${id}-label`}
+            value={draft ?? (current?.toString() ?? "")}
+            onChange={(event) => setDraft(event.target.value)}
+            autoFocus
+          />
+          <Button type="submit" size="sm" loading={update.isPending}>
+            Save
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={update.isPending}
+            onClick={() => {
+              setDraft(null);
+              setEditing(false);
+            }}
+          >
+            Cancel
+          </Button>
+        </form>
+      ) : (
+        <Input
+          id={id}
+          type="number"
+          min={0}
+          max={MAX_WINDOW_DAYS}
+          placeholder={placeholder}
+          className="h-9 w-40"
+          disabled={update.isPending}
+          aria-busy={update.isPending}
+          aria-labelledby={`${id}-label`}
+          value={draft ?? (current?.toString() ?? "")}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => void commit()}
+        />
+      )}
     </div>
   );
 }

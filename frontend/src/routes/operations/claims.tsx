@@ -26,9 +26,7 @@ import { SectionLabel } from "@/components/ui/section-label";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
@@ -70,7 +68,6 @@ import {
   hasSettlement,
 } from "@/components/claims/ClaimSettlementFacts";
 import { LogCaseForm } from "@/components/claims/LogCaseForm";
-import { NativeSelect } from "@/components/ui/native-select";
 import { ClaimDocumentSettings } from "@/components/claims/ClaimDocumentSettings";
 import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
 import { ImportRulesDialog } from "@/components/claims/review-rules/ImportRulesDialog";
@@ -120,15 +117,6 @@ function StatusBadge({ status }: { status: string }) {
   const cfg = BROKER_STATUS[status] ?? { label: status, variant: "outline" as const };
   return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
 }
-
-// The case-type axis is coarser than the status rail and changes what the queue
-// is ABOUT, so it reads as a select rather than a second chip rail — the status
-// rail is already eight chips wide and scrolls on a narrow viewport.
-const CASE_TYPE_FILTERS: { value: CaseType | ""; label: string }[] = [
-  { value: "", label: "All cases" },
-  { value: "claim", label: "Claims" },
-  { value: "log", label: "LOG cases" },
-];
 
 function VerdictBadge({ claim }: { claim: BrokerClaim }) {
   const r = claim.ai_review;
@@ -201,9 +189,11 @@ function DetailSection({
 }
 
 function QueueTab({
+  caseType,
   initialClaimId,
   employeeId,
 }: {
+  caseType: CaseType;
   initialClaimId?: string;
   /** `?employee=` — one member's claims (the flex panel's pending link). Unlike
    *  `?claim=` this is NOT read once into state: it is a filter the queue is
@@ -217,7 +207,6 @@ function QueueTab({
   const readOnly = me?.role === "broker_viewer";
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>("");
-  const [caseType, setCaseType] = useState<CaseType | "">("");
   const [searchText, setSearchText] = useState("");
   const search = useDeferredValue(searchText);
   const [page, setPage] = useState(0);
@@ -476,67 +465,39 @@ function QueueTab({
     <div className="space-y-4">
       <Card>
         <CardHeader className="pb-4">
-          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-            <div className="min-w-0 space-y-1">
-              <CardTitle>Claims review queue</CardTitle>
-              <CardDescription>
-                {total.toLocaleString()} case{total === 1 ? "" : "s"}
-                {caseType
-                  ? ` · ${CASE_TYPE_FILTERS.find((f) => f.value === caseType)?.label}`
-                  : ""}
-                {status ? ` · ${STATUS_FILTERS.find((f) => f.value === status)?.label}` : ""}
-              </CardDescription>
+          <div className="-mx-1 overflow-x-auto px-1 py-0.5">
+            <div className="flex min-w-max items-center gap-2">
+              <Input
+                aria-label={caseType === "log" ? "Search LOG cases" : "Search claims"}
+                className="h-8 w-72"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+                placeholder="Search ref, member, invoice"
+              />
               {/* Named and clearable. The member filter arrives from another
-                  page, so unlike the controls opposite there is nothing on
-                  screen showing it is on — and "8 cases" on a 467-member client
-                  reads as the whole queue being nearly empty. */}
+                  page, so the queue must show that it is narrowed. */}
               {employeeId && (
                 <button
                   type="button"
                   onClick={() =>
                     void navigate({
                       to: "/claims/review",
-                      search: { tab: "queue" },
+                      search: { tab: caseType === "log" ? "log" : "queue" },
                       replace: true,
                     })
                   }
-                  className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-2xs text-muted-foreground hover:text-foreground focus-ring"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-full bg-muted px-2.5 text-xs text-muted-foreground hover:text-foreground focus-ring"
                 >
                   {filteredTo ? `Only ${filteredTo}` : "One member only"}
                   <X className="size-3" aria-hidden />
                   <span className="sr-only">Show all members</span>
                 </button>
               )}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                aria-label="Search claims"
-                className="h-8 w-56"
-                value={searchText}
-                onChange={(event) => setSearchText(event.target.value)}
-                placeholder="Search ref, member, invoice"
+              <Segmented
+                value={status}
+                onChange={setStatus}
+                options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
               />
-              <NativeSelect
-                aria-label="Case type"
-                className="h-8"
-                value={caseType}
-                onChange={(e) => setCaseType(e.target.value as CaseType | "")}
-              >
-                {CASE_TYPE_FILTERS.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </NativeSelect>
-              {/* Eight filters overflow a narrow viewport — scroll the rail
-                  rather than reflowing it into a second ragged line. */}
-              <div className="-mx-1 max-w-full overflow-x-auto px-1 py-0.5">
-                <Segmented
-                  value={status}
-                  onChange={setStatus}
-                  options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
-                />
-              </div>
               {!readOnly && (
                 <Button size="sm" onClick={() => setLogFormOpen(true)}>
                   <Plus className="size-4" />
@@ -647,11 +608,6 @@ function QueueTab({
                       <TableCell>
                         <span className="inline-flex flex-wrap items-center gap-1.5">
                           {c.claim_type}
-                          {/* Visible in the default "All cases" view, so the
-                              category reads without switching the filter. */}
-                          {c.case_type === "log" && (
-                            <Badge variant="info">LOG</Badge>
-                          )}
                         </span>
                         <div className="text-2xs text-muted-foreground">
                           {c.claim_kind === "flex"
@@ -1223,13 +1179,17 @@ function QueueTab({
         open={logFormOpen}
         onOpenChange={setLogFormOpen}
         onCreated={(claimId) => {
-          // Show it where it landed rather than leaving the assessor to find
-          // it: the new case is a LOG case, and the queue may be filtered to
-          // claims only.
-          setCaseType("log");
+          // LOG is its own workspace tab. Take the assessor straight to the
+          // case they created. Set selection directly because navigation to
+          // the already-active LOG tab keeps this QueueTab mounted, so its
+          // initialClaimId state initializer will not run again.
           setStatus("");
           setPage(0);
           setSelectedId(claimId);
+          void navigate({
+            to: "/claims/review",
+            search: { tab: "log", claim: claimId },
+          });
         }}
       />}
 
@@ -1315,7 +1275,7 @@ function QueueTab({
 // moved here from Company settings so the whole claims surface lives in one
 // place). Keep the legacy `ai-extraction` tab value so old deep links continue
 // to open the review-rule setup.
-const CLAIMS_TABS = ["queue", "messages", "ai-extraction", "settings"] as const;
+const CLAIMS_TABS = ["queue", "log", "messages", "ai-extraction", "settings"] as const;
 type ClaimsTab = (typeof CLAIMS_TABS)[number];
 const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
   CLAIMS_TABS.includes(v as ClaimsTab);
@@ -1349,6 +1309,7 @@ export function ClaimsQueuePage() {
         <div className="min-w-0 overflow-x-auto">
           <TabsList className="min-w-max">
             <TabsTrigger value="queue">Queue</TabsTrigger>
+            <TabsTrigger value="log">LOG</TabsTrigger>
           {/* The count is the whole point: with no email in prod, this badge is
               the ONLY signal a broker gets that a member has written. It has to
               be visible from the page, not inside the tab. */}
@@ -1374,7 +1335,7 @@ export function ClaimsQueuePage() {
               <TabsTrigger value="ai-extraction">Review rules</TabsTrigger>
             )}
             {canConfigure && (
-              <TabsTrigger value="settings">Claim settings</TabsTrigger>
+              <TabsTrigger value="settings">Doc settings</TabsTrigger>
             )}
           </TabsList>
         </div>
@@ -1393,7 +1354,19 @@ export function ClaimsQueuePage() {
       </PageTabsBar>
 
       <TabsContent value="queue">
-        <QueueTab initialClaimId={search.claim} employeeId={search.employee} />
+        <QueueTab
+          caseType="claim"
+          initialClaimId={search.claim}
+          employeeId={search.employee}
+        />
+      </TabsContent>
+
+      <TabsContent value="log">
+        <QueueTab
+          caseType="log"
+          initialClaimId={search.claim}
+          employeeId={search.employee}
+        />
       </TabsContent>
 
       <TabsContent value="messages">
@@ -1402,9 +1375,6 @@ export function ClaimsQueuePage() {
 
       {canConfigure && (
         <TabsContent value="ai-extraction">
-          <p className="mb-3 text-xs text-muted-foreground">
-            Scope: the live benefit year and its configured claim types.
-          </p>
           <ReviewRuleSettings />
         </TabsContent>
       )}

@@ -333,18 +333,25 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   await page.goto("/claims/review?tab=settings");
 
   await selectYear(page, 2025);
-  const grace = page.getByLabel("Claim submission grace period (days)");
-  await expect(grace).toHaveValue("15");
+  const graceSetting = page.getByRole("group", {
+    name: "Claim submission grace period (days)",
+  });
+  await expect(graceSetting.getByText("15", { exact: true })).toBeVisible();
   await selectYear(page, 2026);
-  await expect(grace).toHaveValue("30");
+  await expect(graceSetting.getByText("30", { exact: true })).toBeVisible();
   await selectYear(page, years.future.year);
+  await expect(graceSetting.getByText("45", { exact: true })).toBeVisible();
+  await graceSetting.getByRole("button", { name: "Edit" }).click();
+  const grace = graceSetting.getByRole("spinbutton", {
+    name: "Claim submission grace period (days)",
+  });
   await expect(grace).toHaveValue("45");
   await grace.fill("46");
-  await grace.blur();
+  await graceSetting.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Claim grace period updated")).toBeVisible();
   await selectYear(page, 2026);
   await selectYear(page, years.future.year);
-  await expect(grace).toHaveValue("46");
+  await expect(graceSetting.getByText("46", { exact: true })).toBeVisible();
 
   const draft =
     testInfo.project.name === "mobile-chromium"

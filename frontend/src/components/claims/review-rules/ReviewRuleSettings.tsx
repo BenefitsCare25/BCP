@@ -507,7 +507,7 @@ export function ReviewRuleSettings() {
           open={reverting !== null}
           onOpenChange={(open) => !open && setReverting(null)}
           title={`Revert "${reverting?.display_label}" to the default rules?`}
-          description="The custom field mappings and business rules are deleted. Reviews then inherit the product setup when one exists, or use the built-in defaults. Submission documents stay unchanged in Claim settings."
+          description="The custom field mappings and business rules are deleted. Reviews then inherit the product setup when one exists, or use the built-in defaults. Submission documents stay unchanged in Doc settings."
           confirmLabel="Revert to defaults"
           loading={del.isPending}
           onConfirm={() => {

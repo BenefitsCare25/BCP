@@ -44,14 +44,28 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await openClaimsReview(page, "queue");
 
   const queue = page.getByRole("tab", { name: "Queue" });
+  const log = page.getByRole("tab", { name: "LOG" });
   const messages = page.getByRole("tab", { name: /Messages/ });
   const reviewRules = page.getByRole("tab", { name: "Review rules" });
-  const claimSettings = page.getByRole("tab", { name: "Claim settings" });
+  const docSettings = page.getByRole("tab", { name: "Doc settings" });
   await expect(queue).toHaveAttribute("aria-selected", "true");
+  await expect(log).toBeVisible();
   await expect(messages).toBeVisible();
   await expect(reviewRules).toBeVisible();
-  await expect(claimSettings).toBeVisible();
-  await expect(page.getByText("Claims review queue")).toBeVisible();
+  await expect(docSettings).toBeVisible();
+  await expect(page.getByLabel("Search claims")).toBeVisible();
+  await expect(page.getByLabel("Case type")).toHaveCount(0);
+  await screenshot(page, testInfo, "claims-queue-compact");
+
+  await log.click();
+  await expect(log).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Search LOG cases")).toBeVisible();
+
+  await page.goto("/claims/review?tab=log&employee=missing-employee");
+  await page.getByRole("button", { name: /Show all members/ }).click();
+  await expect(log).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\/claims\/review\?tab=log$/);
+  await expect(page.getByLabel("Search LOG cases")).toBeVisible();
 
   await messages.click();
   await expect(messages).toHaveAttribute("aria-selected", "true");
@@ -84,7 +98,7 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await screenshot(page, testInfo, "review-rules");
   await assertAccessible(page);
 
-  await claimSettings.click();
+  await docSettings.click();
   await expect(
     page.getByRole("heading", { name: "Required documents by claim type" }),
   ).toBeVisible();
@@ -104,6 +118,190 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await assertAccessible(page);
 
   expect(runtimeErrors).toEqual([]);
+});
+
+test("creating a LOG case from the LOG tab opens the new case", async ({ page }) => {
+  const createdClaim = {
+    id: "mock-log-created",
+    client_id: "00000000-0000-0000-0000-000000000011",
+    policy_year_id: "mock-policy-year",
+    employee_id: "mock-employee",
+    staff_id: "REG-001",
+    employee_name: "Regression Member",
+    claim_kind: "insured",
+    case_type: "log",
+    origin: "broker",
+    received_via: "email",
+    received_on: "2026-08-29",
+    requested_by: null,
+    product_code: "GHS",
+    benefit_key: null,
+    flex_category_name: null,
+    claim_type: "Hospital treatment",
+    sub_type: null,
+    referral_document_id: null,
+    referral_document: null,
+    referral_not_applicable: false,
+    related_claim_id: null,
+    related_claim: null,
+    incurred_date: "2026-08-20",
+    provider_name: null,
+    invoice_number: null,
+    doctor_name: null,
+    diagnosis: null,
+    remarks: null,
+    amount_claimed: 123,
+    currency: "SGD",
+    amount_converted: null,
+    fx_state: "not_required",
+    fx_rate: null,
+    fx_rate_date: null,
+    fx_source: null,
+    fx_stale: false,
+    fx_acknowledged_at: null,
+    policy_currency: "SGD",
+    amount_approved: null,
+    status: "submitted",
+    dependant_id: null,
+    dependant_name: null,
+    submitted_at: "2026-08-29T04:00:00",
+    decided_at: null,
+    decision_notes: null,
+    created_at: "2026-08-29T04:00:00",
+    documents: [],
+    ai_review: null,
+    remaining_limit: 10_000,
+    unread_member_messages: 0,
+    allowed_actions: [],
+    reference_no: "LOG-2026-0001",
+    sent_to_insurer_at: null,
+    insurer_deadline_on: null,
+    paid_on: null,
+    payment_amount: null,
+    hospital_type: null,
+    hospital_type_derived: null,
+    admission_date: null,
+    discharge_date: null,
+    taxable: null,
+    cpf_claimable: null,
+    admin_remarks: null,
+    is_inpatient: true,
+    servicer_days: null,
+    insurer_days: null,
+    days_over_deadline: null,
+    revision: 1,
+    amended_at: null,
+    amended_by: null,
+    member_editable: false,
+    member_edit_block: "Broker-recorded case",
+  };
+
+  await page.route(/\/api\/v1\/claims\?.*/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { total: 0, offset: 0, limit: 10, items: [] },
+    });
+  });
+  await page.route(/\/api\/v1\/employees\/coverage-summary\?/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: {
+        total: 1,
+        items: [
+          {
+            id: "mock-employee",
+            staff_id: "REG-001",
+            employee_name: "Regression Member",
+            product_count: 1,
+            products: [{ product_code: "GHS", product_name: "Hospital" }],
+            left: false,
+          },
+        ],
+      },
+    });
+  });
+  await page.route(
+    /\/api\/v1\/employees\/mock-employee\/benefit-statement$/,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: {
+          employee: {
+            id: "mock-employee",
+            staff_id: "REG-001",
+            employee_name: "Regression Member",
+          },
+          policy_year_id: "mock-policy-year",
+          is_matched: true,
+          attributes: [],
+          coverage: [
+            {
+              product_code: "GHS",
+              product_name: "Hospital",
+              category_id: null,
+              category_display: null,
+              match_method: null,
+              match_confidence: null,
+              rule_human_readable: null,
+              plan_code: "PLAN-A",
+              cover_description: null,
+              annual_policy_limit: "SGD 10,000",
+              benefit_schedule: null,
+              financials: null,
+              covers_dependants: false,
+              covered_dependants: [],
+            },
+          ],
+          dependants: [],
+          flex: null,
+        },
+      });
+    },
+  );
+  await page.route(
+    /\/api\/v1\/employees\/mock-employee\/utilization$/,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: { policy_year_id: "mock-policy-year", insured: [], flex: null },
+      });
+    },
+  );
+  await page.route(
+    /\/api\/v1\/employees\/mock-employee\/log-cases$/,
+    async (route) => {
+      await route.fulfill({ status: 201, json: createdClaim });
+    },
+  );
+  await page.route(/\/api\/v1\/claims\/mock-log-created$/, async (route) => {
+    await route.fulfill({ status: 200, json: createdClaim });
+  });
+  await page.route(
+    /\/api\/v1\/claims\/mock-log-created\/messages$/,
+    async (route) => {
+      await route.fulfill({ status: 200, json: [] });
+    },
+  );
+  await page.route(
+    /\/api\/v1\/claims\/mock-log-created\/review$/,
+    async (route) => {
+      await route.fulfill({ status: 404, json: { detail: "No review" } });
+    },
+  );
+
+  await openClaimsReview(page, "log");
+  await page.getByRole("button", { name: "New LOG case" }).click();
+  const form = page.getByRole("dialog", { name: "New LOG case" });
+  await form.getByPlaceholder("Search name or staff ID").fill("Regression Member");
+  await form.getByRole("button", { name: /Regression Member/ }).click();
+  await expect(form.getByLabel("Coverage")).toHaveValue("GHS");
+  await form.getByLabel("Incurred / admission date").fill("2026-08-20");
+  await form.getByLabel("Amount").fill("123");
+  await form.getByRole("button", { name: "Record LOG case" }).click();
+
+  const workspaceHeader = page.getByTestId("claim-workspace-header");
+  await expect(workspaceHeader.getByText("LOG", { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/tab=log&claim=mock-log-created/);
 });
 
 test("message workbench supports search and empty inboxes", async ({ page }, testInfo) => {
