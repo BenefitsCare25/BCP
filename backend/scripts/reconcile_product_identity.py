@@ -61,6 +61,36 @@ _TERM_FIELDS = (
     "post_hosp_days",
 )
 
+_CATEGORY_BACKUP_FIELDS = (
+    "id",
+    "policy_year_id",
+    "product_id",
+    "priority",
+    "display_name",
+    "raw_description",
+    "matching_rule",
+    "rule_human_readable",
+    "mapping_profile_id",
+    "rule_status",
+    "rule_validation",
+    "participation_model",
+    "participation_detail",
+    "plan_assignments",
+    "source",
+    "source_ref",
+    "confidence",
+    "status",
+    "human_modified",
+    "modified_by",
+    "created_at",
+    "updated_at",
+)
+
+_PLACEMENT_SOURCES = {
+    SourceKind.system_generated.value,
+    SourceKind.ai_extracted.value,
+}
+
 
 def _json_value(value: Any) -> Any:
     if isinstance(value, (date, datetime)):
@@ -70,6 +100,62 @@ def _json_value(value: Any) -> Any:
 
 def _row_backup(row: Any, fields: tuple[str, ...]) -> dict[str, Any]:
     return {field: _json_value(getattr(row, field)) for field in fields}
+
+
+def _normalized_rule(rule: Any) -> Any:
+    """Ignore editor-only singleton ``and`` wrappers, but nothing semantic."""
+    while (
+        isinstance(rule, dict)
+        and set(rule) == {"and"}
+        and isinstance(rule["and"], list)
+        and len(rule["and"]) == 1
+    ):
+        rule = rule["and"][0]
+    return rule
+
+
+def _normalized_text(value: str | None) -> str:
+    return " ".join((value or "").split()).casefold()
+
+
+def _safe_human_duplicate(
+    target: Category, source_categories: list[Category]
+) -> bool:
+    """True only when a human-marked setup row adds no material semantics.
+
+    Guided setup and placement parsing use different provenance, priority,
+    confidence, rate-basis, insured-list, and validation envelopes. Those
+    differences do not define the benefit cohort. A marked row is safe to drop
+    only when exactly one placement row has the same category wording, compiled
+    eligibility logic, participation, plan, premium, and annual premium. The
+    placement row is retained, including any richer profile/dependant pricing.
+    """
+    if not isinstance(target.plan_assignments, dict):
+        return False
+    target_plan = target.plan_assignments
+    matches: list[Category] = []
+    for source in source_categories:
+        if not isinstance(source.plan_assignments, dict):
+            continue
+        source_plan = source.plan_assignments
+        if (
+            _normalized_text(source.display_name)
+            != _normalized_text(target.display_name)
+            or _normalized_text(source.raw_description)
+            != _normalized_text(target.raw_description)
+            or _normalized_rule(source.matching_rule)
+            != _normalized_rule(target.matching_rule)
+            or source.participation_model != target.participation_model
+            or source.participation_detail != target.participation_detail
+            or source.status != target.status
+            or source.rule_status != target.rule_status
+            or source_plan.get("plan_code") != target_plan.get("plan_code")
+            or source_plan.get("premium_rate") != target_plan.get("premium_rate")
+            or source_plan.get("annual_premium") != target_plan.get("annual_premium")
+        ):
+            continue
+        matches.append(source)
+    return len(matches) == 1
 
 
 def _merge_term(
@@ -168,19 +254,28 @@ def reconcile(
             "to infer a different repair."
         )
     if any(
-        category.source != SourceKind.system_generated.value
+        category.source not in _PLACEMENT_SOURCES
         or not str(category.source_ref or "").startswith("placement_slip://")
+        or category.human_modified
         for category in source_categories
     ):
         raise RuntimeError("A source category is not an untouched placement-slip row.")
     if any(
         category.source != SourceKind.manual.value
         or category.source_ref != "product_setup"
-        or category.human_modified
         for category in target_categories
     ):
+        raise RuntimeError("A target category is not a Product Setup duplicate.")
+    unsafe_human_targets = [
+        category
+        for category in target_categories
+        if category.human_modified
+        and not _safe_human_duplicate(category, source_categories)
+    ]
+    if unsafe_human_targets:
         raise RuntimeError(
-            "A duplicate setup category was edited; manual reconciliation is required."
+            "A human-modified setup category is not semantically identical to exactly "
+            "one placement row; manual reconciliation is required."
         )
 
     affected_product_ids = [target.id, *source_ids]
@@ -256,35 +351,11 @@ def reconcile(
         "target_product_id": target.id,
         "source_product_ids": source_ids,
         "source_categories": [
-            _row_backup(
-                category,
-                (
-                    "id",
-                    "product_id",
-                    "status",
-                    "source",
-                    "source_ref",
-                    "matching_rule",
-                    "rule_validation",
-                    "plan_assignments",
-                ),
-            )
+            _row_backup(category, _CATEGORY_BACKUP_FIELDS)
             for category in source_categories
         ],
         "target_categories": [
-            _row_backup(
-                category,
-                (
-                    "id",
-                    "product_id",
-                    "status",
-                    "source",
-                    "source_ref",
-                    "matching_rule",
-                    "rule_validation",
-                    "plan_assignments",
-                ),
-            )
+            _row_backup(category, _CATEGORY_BACKUP_FIELDS)
             for category in target_categories
         ],
         "source_terms": [
@@ -319,6 +390,9 @@ def reconcile(
         "source_product_count": len(source_ids),
         "slip_categories_to_reparent": len(source_categories),
         "setup_categories_to_remove": len(target_categories),
+        "verified_human_duplicates_to_remove": sum(
+            1 for category in target_categories if category.human_modified
+        ),
         "generated_plans_to_remove": len(generated_plans),
         "pricing_to_rekey": bool(source_price_ids),
         "employees_to_rematch": len(employees),
