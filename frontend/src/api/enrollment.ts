@@ -57,6 +57,8 @@ export interface EnrollmentWindow {
   /** Members may see + use this period in the portal. Off = broker-managed:
    *  open for brokers, dark in the portal. */
   member_self_service: boolean;
+  /** Whether insured-cover price tags draw down from assigned Flex wallets. */
+  uses_flex: boolean;
   product_scope: string[] | null;
   flex_price_source: Record<string, FlexPriceSource> | null;
   flex_drawdown_rule: FlexDrawdownRule;
@@ -76,6 +78,7 @@ export interface WindowCreate {
   allow_leave: boolean;
   allow_dependant_changes: boolean;
   member_self_service?: boolean;
+  uses_flex?: boolean;
   product_scope?: string[] | null;
   flex_price_source?: Record<string, FlexPriceSource> | null;
   flex_drawdown_rule?: FlexDrawdownRule;
@@ -91,6 +94,7 @@ export interface WindowPatch {
   allow_leave?: boolean;
   allow_dependant_changes?: boolean;
   member_self_service?: boolean;
+  uses_flex?: boolean;
   product_scope?: string[] | null;
   flex_price_source?: Record<string, FlexPriceSource> | null;
   flex_drawdown_rule?: FlexDrawdownRule;
@@ -510,6 +514,18 @@ export interface ElectionIn {
    *  — only for products whose options expose `option_choices`. */
   dependant_option_ids?: Record<string, string> | null;
   notes?: string | null;
+}
+
+export interface EnrollmentReadinessIssue {
+  code: string;
+  message: string;
+  count?: number;
+  products?: string[];
+}
+
+export interface EnrollmentReadiness {
+  ready: boolean;
+  issues: EnrollmentReadinessIssue[];
 }
 
 export interface FlexDependantChoice {

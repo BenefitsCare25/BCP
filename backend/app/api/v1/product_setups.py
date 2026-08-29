@@ -42,6 +42,7 @@ from app.db.session import get_db
 from app.models import (
     Category,
     Employee,
+    FlexPricing,
     Plan,
     PolicyYear,
     Product,
@@ -876,9 +877,9 @@ def confirm_setup(
     )
     try:
         product = _upsert_product(db, user, client_id, tpl, setup.answers)
-        _sync_term_policy_number(db, product, policy_year_id, setup.answers)
         if setup.origin == ProductSetupOrigin.placement_slip:
-            _supersede_slip_provisional(db, user, product, policy_year_id)
+            _adopt_slip_artifacts(db, user, product, policy_year_id)
+        _sync_term_policy_number(db, product, policy_year_id, setup.answers)
         created, updated, removed = _materialize_plans(
             db, user, product, policy_year_id, setup.answers, selected,
             cover_description, schedules,
@@ -1340,32 +1341,171 @@ def _benefit_schedule(answers: dict[str, Any], plan: dict[str, Any]) -> dict[str
     return {"items": items}
 
 
-def _supersede_slip_provisional(
+_TERM_FIELDS = (
+    "coverage_start",
+    "coverage_end",
+    "gst_included",
+    "gst_rate",
+    "free_cover_limit",
+    "nel_age_limit",
+    "underwriting_required",
+    "policy_number",
+    "pre_hosp_days",
+    "post_hosp_days",
+)
+
+
+def _adoption_conflict(message: str) -> HTTPException:
+    return HTTPException(
+        status.HTTP_409_CONFLICT,
+        {"code": "duplicate_product_configuration", "message": message},
+    )
+
+
+def _adopt_slip_artifacts(
     db: Session, user: CurrentUser, product: Product, policy_year_id: str
 ) -> None:
-    """Drop the provisional system_generated *plans* the slip upload created for
-    this product, so confirming a slip-derived setup leaves one authoritative
-    set of plans rather than duplicating against the parse.
+    """Move same-code slip artifacts onto the company-owned setup product.
 
-    Categories are intentionally left untouched: they are now edited directly in
-    the category cards (PATCH /categories) and must survive a product re-confirm.
-    Only ``system_generated`` plans are dropped; plans from other flows are
-    preserved. The caller re-runs matching afterwards.
+    Placement parsing commonly starts from a global catalog product, while a
+    confirmed guided setup owns a client-specific product. The two IDs must not
+    coexist for one code/year: matching and member summaries are product-ID
+    based. On first materialization we therefore preserve the slip categories,
+    terms, and pricing block by re-parenting them, then remove only provisional
+    generated plans. Competing data on both IDs is ambiguous and fails closed.
     """
+    source_products = list(
+        db.scalars(
+            select(Product).where(
+                Product.id != product.id,
+                tenant_or_global(Product.client_id, product.client_id or ""),
+                func.upper(Product.code) == product.code.upper(),
+            )
+        ).all()
+    )
+    related_ids = [row.id for row in source_products]
+    source_categories = (
+        list(
+            db.scalars(
+                select(Category).where(
+                    Category.policy_year_id == policy_year_id,
+                    Category.product_id.in_(related_ids),
+                )
+            ).all()
+        )
+        if related_ids
+        else []
+    )
+    target_categories = list(
+        db.scalars(
+            select(Category).where(
+                Category.policy_year_id == policy_year_id,
+                Category.product_id == product.id,
+            )
+        ).all()
+    )
+    if source_categories and target_categories:
+        raise _adoption_conflict(
+            f"{product.code} has eligibility categories on two product records. "
+            "Reconcile the duplicate records before confirming."
+        )
+    for category in source_categories:
+        category.product_id = product.id
+
+    source_terms = (
+        list(
+            db.scalars(
+                select(ProductTerm).where(
+                    ProductTerm.policy_year_id == policy_year_id,
+                    ProductTerm.product_id.in_(related_ids),
+                )
+            ).all()
+        )
+        if related_ids
+        else []
+    )
+    if len(source_terms) > 1:
+        raise _adoption_conflict(
+            f"{product.code} has policy terms on multiple source products."
+        )
+    target_term = db.scalar(
+        select(ProductTerm).where(
+            ProductTerm.policy_year_id == policy_year_id,
+            ProductTerm.product_id == product.id,
+        )
+    )
+    if source_terms:
+        source_term = source_terms[0]
+        if target_term is None:
+            source_term.product_id = product.id
+        else:
+            for field in _TERM_FIELDS:
+                source_value = getattr(source_term, field)
+                target_value = getattr(target_term, field)
+                if source_value is None:
+                    continue
+                if target_value is None:
+                    setattr(target_term, field, source_value)
+                elif target_value != source_value:
+                    raise _adoption_conflict(
+                        f"{product.code} has conflicting policy terms on two "
+                        "product records."
+                    )
+            db.delete(source_term)
+
+    pricing = db.scalar(
+        select(FlexPricing).where(FlexPricing.policy_year_id == policy_year_id)
+    )
+    pricing_moved = False
+    if pricing is not None and isinstance(pricing.pricing, dict):
+        bag = dict(pricing.pricing)
+        blocks = bag.get("products")
+        if isinstance(blocks, dict):
+            blocks = dict(blocks)
+            source_blocks = [pid for pid in related_ids if pid in blocks]
+            if len(source_blocks) > 1 or (source_blocks and product.id in blocks):
+                raise _adoption_conflict(
+                    f"{product.code} has pricing on multiple product records."
+                )
+            if source_blocks:
+                blocks[product.id] = blocks.pop(source_blocks[0])
+                bag["products"] = blocks
+                pricing.pricing = bag
+                flag_modified(pricing, "pricing")
+                pricing_moved = True
+
+    provisional_ids = [product.id, *related_ids]
+    plans_removed = 0
     for plan in db.execute(
         select(Plan).where(
-            Plan.product_id == product.id,
+            Plan.product_id.in_(provisional_ids),
             Plan.policy_year_id == policy_year_id,
             Plan.source == SourceKind.system_generated.value,
         )
     ).scalars():
         write_audit(
             db, user, action="delete", entity_type="plan", entity_id=plan.id,
-            before={"code": plan.code, "product_id": product.id,
+            before={"code": plan.code, "product_id": plan.product_id,
                     "superseded_by": "product_setup"},
         )
         db.delete(plan)
+        plans_removed += 1
     db.flush()
+    if source_categories or source_terms or pricing_moved or plans_removed:
+        write_audit(
+            db,
+            user,
+            action="adopt_placement_slip_artifacts",
+            entity_type="product",
+            entity_id=product.id,
+            before={"source_product_ids": related_ids},
+            after={
+                "categories_reparented": len(source_categories),
+                "term_reparented": bool(source_terms),
+                "pricing_rekeyed": pricing_moved,
+                "provisional_plans_removed": plans_removed,
+            },
+        )
 
 
 def _upsert_product(

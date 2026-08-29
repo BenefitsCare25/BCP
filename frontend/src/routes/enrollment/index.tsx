@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { useSession } from "@/stores/session";
 import {
   type EnrollmentWindow,
+  type EnrollmentReadinessIssue,
   type FlexDrawdownRule,
   useCloseWindow,
   useCreateWindow,
@@ -86,6 +87,7 @@ export function EnrollmentDashboardPage() {
   // Members may enrol themselves. Off runs the period broker-managed: open for
   // brokers, dark in the portal.
   const [memberSelfService, setMemberSelfService] = useState(true);
+  const [usesFlex, setUsesFlex] = useState(false);
   // Whether benefits selections may draw more flex than the member's wallet
   // holds. Off (recommended), submit/confirm reject an overdrawn enrollment.
   const [allowOverdraft, setAllowOverdraft] = useState(false);
@@ -93,6 +95,10 @@ export function EnrollmentDashboardPage() {
   const [drawdownRule, setDrawdownRule] = useState<FlexDrawdownRule>("full");
   const [confirmClose, setConfirmClose] = useState<EnrollmentWindow | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<EnrollmentWindow | null>(null);
+  const [openBlockers, setOpenBlockers] = useState<{
+    name: string;
+    issues: EnrollmentReadinessIssue[];
+  } | null>(null);
 
   // Live counts for the close-window dialog — how many members it will affect.
   const closeSubmitted = useEnrollmentRoster(confirmClose?.id, {
@@ -140,7 +146,8 @@ export function EnrollmentDashboardPage() {
         allow_leave: allowLeave,
         allow_dependant_changes: allowDeps,
         member_self_service: memberSelfService,
-        allow_overdraft: allowOverdraft,
+        uses_flex: usesFlex,
+        allow_overdraft: usesFlex && allowOverdraft,
         flex_drawdown_rule: drawdownRule,
       },
       {
@@ -250,12 +257,26 @@ export function EnrollmentDashboardPage() {
               </Link>
             </div>
 
+            <label className="mt-2.5 flex min-h-6 items-center gap-2 text-sm text-foreground">
+              <Switch checked={usesFlex} onCheckedChange={setUsesFlex} />
+              Use Flex wallets for this period
+            </label>
+            <p className="mt-1 text-2xs text-muted-foreground">
+              {usesFlex
+                ? "Opening will require a confirmed scheme, assigned wallets, reviewed eligibility, usable portal access, and complete member prices."
+                : "Price tags and wallet balances stay hidden; insured premiums remain visible as policy information."}
+            </p>
+
             {/* Drawdown rule — segmented so the active choice is unambiguous */}
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <div
+              className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5"
+              aria-disabled={!usesFlex}
+            >
               <span className="text-sm text-foreground">Drawdown rule</span>
               <Segmented
                 value={drawdownRule}
                 onChange={setDrawdownRule}
+                disabled={!usesFlex}
                 options={[
                   { value: "full", label: "Full plan tag" },
                   { value: "on_change", label: "Only on plan change" },
@@ -269,9 +290,16 @@ export function EnrollmentDashboardPage() {
             </div>
 
             {/* Overdraft policy — the server enforces this at submit/confirm */}
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <div
+              className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5"
+              aria-disabled={!usesFlex}
+            >
               <label className="flex items-center gap-2 text-sm text-foreground">
-                <Switch checked={allowOverdraft} onCheckedChange={setAllowOverdraft} />
+                <Switch
+                  checked={allowOverdraft}
+                  disabled={!usesFlex}
+                  onCheckedChange={setAllowOverdraft}
+                />
                 Allow overdraft
               </label>
               <span className="basis-full text-2xs text-muted-foreground sm:basis-auto">
@@ -348,6 +376,33 @@ export function EnrollmentDashboardPage() {
                         : "Broker-managed — hidden from the portal"}
                     </label>
                   )}
+                  {w.status === "draft" && (
+                    <label className="mt-1 flex min-h-6 items-center gap-2 text-2xs text-muted-foreground">
+                      <Switch
+                        checked={w.uses_flex}
+                        disabled={updateWindow.isPending}
+                        onCheckedChange={(value) =>
+                          updateWindow.mutate(
+                            { id: w.id, body: { uses_flex: value } },
+                            {
+                              onSuccess: () =>
+                                toast.success(
+                                  value
+                                    ? "Flex readiness checks enabled for this period."
+                                    : "This period no longer shows or charges Flex wallets.",
+                                ),
+                            },
+                          )
+                        }
+                      />
+                      {w.uses_flex ? "Flex-funded" : "No Flex wallet"}
+                    </label>
+                  )}
+                  {w.status !== "draft" && (
+                    <div className="mt-1 text-2xs text-muted-foreground">
+                      {w.uses_flex ? "Flex-funded" : "No Flex wallet"}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5">
                   {w.status === "open" && (
@@ -369,6 +424,28 @@ export function EnrollmentDashboardPage() {
                             toast.success(
                               `Enrolment period opened — ${r.enrollments_created.toLocaleString()} enrolment(s) created.`,
                             ),
+                          onError: (error) => {
+                            if (
+                              error instanceof ConflictDetailError &&
+                              error.detail.code === "enrollment_not_ready" &&
+                              Array.isArray(error.detail.issues)
+                            ) {
+                              setOpenBlockers({
+                                name: w.name,
+                                issues: error.detail.issues.filter(
+                                  (issue): issue is EnrollmentReadinessIssue =>
+                                    Boolean(
+                                      issue &&
+                                        typeof issue === "object" &&
+                                        "code" in issue &&
+                                        "message" in issue,
+                                    ),
+                                ),
+                              });
+                              return;
+                            }
+                            toast.error(formatError(error));
+                          },
                         })
                       }
                       disabled={openWindow.isPending}
@@ -420,6 +497,36 @@ export function EnrollmentDashboardPage() {
         )}
       </div>
 
+      <AlertDialog
+        open={!!openBlockers}
+        onOpenChange={(open) => !open && setOpenBlockers(null)}
+        title="This enrolment period is not ready"
+        description={
+          <div className="space-y-2">
+            <p>
+              Resolve every blocker before opening {openBlockers?.name ?? "this period"}:
+            </p>
+            <ul className="list-disc space-y-1 pl-5">
+              {openBlockers?.issues.map((issue) => (
+                <li key={issue.code}>
+                  {issue.message}
+                  {typeof issue.count === "number"
+                    ? ` (${issue.count.toLocaleString()})`
+                    : ""}
+                  {issue.products?.length
+                    ? ` Products: ${issue.products.join(", ")}.`
+                    : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        }
+        confirmLabel="Close"
+        cancelLabel={null}
+        confirmVariant="default"
+        tone="info"
+        onConfirm={() => setOpenBlockers(null)}
+      />
       <AlertDialog
         open={!!confirmClose}
         onOpenChange={(o) => !o && setConfirmClose(null)}

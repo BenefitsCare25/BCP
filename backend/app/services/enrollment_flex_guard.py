@@ -82,7 +82,7 @@ def assert_within_wallet(
 ) -> None:
     """409 when the enrollment's elections overdraw the member's flex wallet
     and the window doesn't allow overdrafts. No-op for non-flex members."""
-    if window.allow_overdraft:
+    if not bool(window.uses_flex) or window.allow_overdraft:
         return
     draft = enrollment_flex_draft(db, enr)
     if draft is None or draft.balance >= -_EPSILON:
@@ -124,11 +124,14 @@ def unpriced_election_products(db: Session, enr: Enrollment) -> list[str]:
 
 
 def assert_elections_priced(
-    db: Session, enr: Enrollment, acknowledge: bool
+    db: Session,
+    enr: Enrollment,
+    window: EnrollmentWindow,
+    acknowledge: bool,
 ) -> None:
     """409 when changed elections carry no price tag, unless the broker
     explicitly acknowledged submitting them unpriced."""
-    if acknowledge:
+    if not bool(window.uses_flex) or acknowledge:
         return
     if enrollment_flex_draft(db, enr) is None:
         return  # not a flex member — price tags don't apply

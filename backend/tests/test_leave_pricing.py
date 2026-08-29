@@ -257,7 +257,7 @@ def _setup_db():
             id=WINDOW_ID, policy_year_id=PY_ID, client_id=CLIENT_ID, name="OE",
             opens_at=datetime.now(UTC) - timedelta(days=1),
             closes_at=datetime.now(UTC) + timedelta(days=7),
-            status=WindowStatus.open, allow_leave=True,
+            status=WindowStatus.open, allow_leave=True, uses_flex=True,
         ))
         s.flush()
         s.add(Enrollment(

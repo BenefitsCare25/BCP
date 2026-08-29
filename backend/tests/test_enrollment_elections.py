@@ -126,7 +126,9 @@ def client() -> TestClient:
         app.dependency_overrides.pop(get_current_user, None)
 
 
-def _make_window(client: TestClient, **over) -> str:
+def _make_window(
+    client: TestClient, *, runtime_flex: bool = False, **over
+) -> str:
     body = {
         "name": "OE", "window_type": "open",
         "opens_at": "2020-01-01T00:00:00Z", "closes_at": "2035-01-01T00:00:00Z",
@@ -136,7 +138,18 @@ def _make_window(client: TestClient, **over) -> str:
     wid = client.post(
         f"/api/v1/policy-years/{PY_ID}/enrollment-windows", json=body
     ).json()["id"]
-    client.post(f"/api/v1/enrollment-windows/{wid}/open")
+    opened = client.post(f"/api/v1/enrollment-windows/{wid}/open")
+    assert opened.status_code == 200, opened.text
+    if runtime_flex:
+        # Isolate option/snapshot pricing from the draft-opening readiness gate:
+        # these fixtures predate scheme provisioning and exercise the already-
+        # open election path directly.
+        with SessionLocal() as s:
+            s.get(EnrollmentWindow, wid).uses_flex = True
+            employee = s.get(Employee, EMP1)
+            employee.flex_wallet_amount = 10_000.0
+            employee.flex_currency = "SGD"
+            s.commit()
     return wid
 
 
@@ -229,7 +242,9 @@ def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
         s.commit()
 
     try:
-        wid = _make_window(client, allow_dependant_changes=False)
+        wid = _make_window(
+            client, runtime_flex=True, allow_dependant_changes=False
+        )
         eid = _enrollment_id(client, wid, "E-1")
         response = client.put(
             f"/api/v1/enrollments/{eid}/elections",
@@ -483,7 +498,7 @@ def _dependant_levels():
 def test_options_expose_choices_and_election_stores_priced_level(
     client: TestClient, _dependant_levels
 ) -> None:
-    wid = _make_window(client, allow_dependant_changes=True)
+    wid = _make_window(client, runtime_flex=True, allow_dependant_changes=True)
     eid = _enrollment_id(client, wid, "E-1")
     # Options surface the electable levels with per-dependant amounts.
     opts = client.get(f"/api/v1/enrollments/{eid}/options").json()
@@ -519,7 +534,7 @@ def test_options_expose_choices_and_election_stores_priced_level(
 def test_covered_dependants_without_elected_level_are_unpriced(
     client: TestClient, _dependant_levels
 ) -> None:
-    wid = _make_window(client, allow_dependant_changes=True)
+    wid = _make_window(client, runtime_flex=True, allow_dependant_changes=True)
     eid = _enrollment_id(client, wid, "E-1")
     put = client.put(
         f"/api/v1/enrollments/{eid}/elections",
@@ -549,7 +564,9 @@ def test_no_cover_election_clears_submitted_dependants_and_option_levels(
         ))
         s.commit()
     try:
-        wid = _make_window(client, allow_dependant_changes=True)
+        wid = _make_window(
+            client, runtime_flex=True, allow_dependant_changes=True
+        )
         eid = _enrollment_id(client, wid, "E-1")
         put = client.put(
             f"/api/v1/enrollments/{eid}/elections",
@@ -574,7 +591,7 @@ def test_no_cover_election_clears_submitted_dependants_and_option_levels(
 def test_invalid_dependant_option_level_422(
     client: TestClient, _dependant_levels
 ) -> None:
-    wid = _make_window(client, allow_dependant_changes=True)
+    wid = _make_window(client, runtime_flex=True, allow_dependant_changes=True)
     eid = _enrollment_id(client, wid, "E-1")
     # An employee category id is not a dependant option level.
     res = client.put(
@@ -616,7 +633,9 @@ def test_age_ineligible_dependant_excluded_from_election_pricing(
         ))
         s.commit()
     try:
-        wid = _make_window(client, allow_dependant_changes=True)
+        wid = _make_window(
+            client, runtime_flex=True, allow_dependant_changes=True
+        )
         eid = _enrollment_id(client, wid, "E-1")
         put = client.put(
             f"/api/v1/enrollments/{eid}/elections",

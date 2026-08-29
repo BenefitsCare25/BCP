@@ -371,6 +371,13 @@ def build_enrollment_options(
     # Flex price tags (wallet cost of each tier), priced per the window's config:
     # source per product (slip premium vs portal matrix) + drawdown rule (full plan
     # tag vs only the upgrade/downgrade difference vs the member's default plan).
+    flex_active = bool(
+        window
+        and window.uses_flex
+        and employee
+        and employee.flex_wallet_amount is not None
+        and bool(employee.flex_currency)
+    )
     pricing = get_pricing(db, policy_year_id)
     source_map, rule = window_flex_config(window) if window else ({}, "full")
     slip_idx = maybe_slip_index(db, policy_year_id, source_map)
@@ -446,13 +453,17 @@ def build_enrollment_options(
                         if t.financials is not None
                         else None
                     ),
-                    price_tag=member_price_tag(
-                        source_map=source_map, rule=rule, pricing=pricing,
-                        slip_idx=slip_idx, product_id=ts.product_id, age=age,
-                        declined=False,
-                        tier_category_id=t.tier_category_id, plan_code=t.plan_code,
-                        default_tier_category_id=ts.baseline_tier_category_id,
-                        default_plan=ts.baseline_plan_code,
+                    price_tag=(
+                        member_price_tag(
+                            source_map=source_map, rule=rule, pricing=pricing,
+                            slip_idx=slip_idx, product_id=ts.product_id, age=age,
+                            declined=False,
+                            tier_category_id=t.tier_category_id, plan_code=t.plan_code,
+                            default_tier_category_id=ts.baseline_tier_category_id,
+                            default_plan=ts.baseline_plan_code,
+                        )
+                        if flex_active
+                        else None
                     ),
                     # Entitlement, not premium — member-safe, and the
                     # whole point of the tier list. `_member_safe_options`
@@ -466,7 +477,12 @@ def build_enrollment_options(
                 for t in ts.tiers
             ],
             dependant=_dependant_pricing_out(
-                pricing, family_slip_idx, source_map, ts, dep_profiles_by_id
+                pricing,
+                family_slip_idx,
+                source_map,
+                ts,
+                dep_profiles_by_id,
+                expose_amounts=flex_active,
             ),
         )
         for ts in sorted(tier_sets.values(), key=lambda s: s.product_code)
@@ -477,13 +493,15 @@ def build_enrollment_options(
     return EnrollmentOptionsOut(
         enrollment_id=enrollment_id,
         products=products,
-        flex_wallet=employee.flex_wallet_amount if employee else None,
+        flex_wallet=employee.flex_wallet_amount if flex_active and employee else None,
         flex_proration=(
-            flex_proration.proration_line(employee) if employee else None
+            flex_proration.proration_line(employee) if flex_active and employee else None
         ),
-        flex_currency=employee.flex_currency if employee else None,
+        flex_currency=employee.flex_currency if flex_active and employee else None,
         member_age=age,
-        member_leave_rate=leave_rate_for(leave_policy, employee) if employee else None,
+        member_leave_rate=(
+            leave_rate_for(leave_policy, employee) if flex_active and employee else None
+        ),
         leave=_member_leave_options(leave_policy, employee),
         flex_drawdown_rule=rule,
     )
@@ -523,6 +541,8 @@ def _dependant_pricing_out(
     source_map: dict[str, Any] | None,
     ts: ProductTierSet,
     dep_profiles_by_id: dict[str, tuple[str, int | None]] | None = None,
+    *,
+    expose_amounts: bool = True,
 ) -> DependantPricingOut | None:
     """The product's dependant pricing, priced PER tier (the amount differs per
     plan), with the scheme's display labels. None when dependant pricing doesn't
@@ -549,10 +569,12 @@ def _dependant_pricing_out(
         labels = FAMILY_SCHEMES.get(bd["scheme"] or "", {})
         by_tier[tier_key(t.tier_category_id, t.plan_code)] = DependantTierPricingOut(
             mode=bd["mode"],
-            per_pax_rate=bd["per_pax_rate"],
+            per_pax_rate=bd["per_pax_rate"] if expose_amounts else None,
             family=[
                 DependantRoleOut(
-                    role=f["role"], label=labels.get(f["role"], f["role"]), amount=f["amount"]
+                    role=f["role"],
+                    label=labels.get(f["role"], f["role"]),
+                    amount=f["amount"] if expose_amounts else None,
                 )
                 for f in bd["family"]
             ],
@@ -572,6 +594,7 @@ def _dependant_pricing_out(
             dependant_age_limits(pricing, ts.product_id),
             gst_multiplier_for(pricing, ts.product_id),
             configured_voluntary_rates(pricing, ts.product_id),
+            expose_amounts=expose_amounts,
         ),
     )
 
@@ -582,6 +605,8 @@ def _option_choices_out(
     age_limits: dict[str, dict[str, int]],
     gst_mult: float = 1.0,
     voluntary_rates: list[Any] | None = None,
+    *,
+    expose_amounts: bool = True,
 ) -> list[DependantOptionRoleOut]:
     """Freestanding dependant option LEVELS as API output, with each level's flex
     amount resolved per the member's own dependants (age-banded levels price on
@@ -612,11 +637,19 @@ def _option_choices_out(
                     category_id=c["category_id"],
                     label=c["label"],
                     sum_insured=c.get("sum_insured"),
-                    amount=_g(option_amount(c.get("spec"), None, voluntary_rates)),
-                    amounts_by_dependant={
-                        dep_id: _g(option_amount(c.get("spec"), dep_age, voluntary_rates))
-                        for dep_id, dep_age in role_deps.items()
-                    },
+                    amount=(
+                        _g(option_amount(c.get("spec"), None, voluntary_rates))
+                        if expose_amounts
+                        else None
+                    ),
+                    amounts_by_dependant=(
+                        {
+                            dep_id: _g(option_amount(c.get("spec"), dep_age, voluntary_rates))
+                            for dep_id, dep_age in role_deps.items()
+                        }
+                        if expose_amounts
+                        else {}
+                    ),
                 )
                 for c in rows
             ],
@@ -681,6 +714,11 @@ def apply_elections(
     )
     # Flex price-tag snapshot inputs, resolved once: the matrix, the member's age,
     # and the window's source/rule config (slip vs matrix; full vs on-change).
+    flex_active = bool(
+        window.uses_flex
+        and employee.flex_wallet_amount is not None
+        and employee.flex_currency
+    )
     pricing = get_pricing(db, py.id)
     source_map, drawdown_rule = window_flex_config(window)
     slip_idx = maybe_slip_index(db, py.id, source_map)
@@ -833,24 +871,30 @@ def apply_elections(
         # windows apply here exactly as they do on every recompute surface
         # (bulk, revert, benefit statement) so the snapshot can't diverge.
         spouse_count, child_count = profile_counts(dep_profiles)
-        existing.flex_price_tag = member_coverage_tag(
-            source_map=source_map,
-            rule=drawdown_rule,
-            pricing=pricing,
-            slip_idx=slip_idx,
-            family_slip_idx=family_slip_idx,
-            product_id=product.id,
-            age=member_age,
-            declined=item.declined,
-            tier_category_id=elected_tier_id,
-            plan_code=elected_plan_code,
-            default_tier_category_id=tier_set.baseline_tier_category_id if tier_set else None,
-            default_plan=tier_set.baseline_plan_code if tier_set else None,
-            spouse_count=spouse_count,
-            child_count=child_count,
-            dep_profiles=dep_profiles,
-            dep_option_ids=existing.dependant_option_ids,
-            factor=flex_proration.factor_of(employee),
+        existing.flex_price_tag = (
+            member_coverage_tag(
+                source_map=source_map,
+                rule=drawdown_rule,
+                pricing=pricing,
+                slip_idx=slip_idx,
+                family_slip_idx=family_slip_idx,
+                product_id=product.id,
+                age=member_age,
+                declined=item.declined,
+                tier_category_id=elected_tier_id,
+                plan_code=elected_plan_code,
+                default_tier_category_id=(
+                    tier_set.baseline_tier_category_id if tier_set else None
+                ),
+                default_plan=tier_set.baseline_plan_code if tier_set else None,
+                spouse_count=spouse_count,
+                child_count=child_count,
+                dep_profiles=dep_profiles,
+                dep_option_ids=existing.dependant_option_ids,
+                factor=flex_proration.factor_of(employee),
+            )
+            if flex_active
+            else None
         )
         existing.notes = item.notes
 
@@ -912,7 +956,15 @@ def apply_leave(
     # member's leave rate so the available-balance recompute stays stable if the
     # policy's rates change later.
     rate = leave_rate_for(policy, employee)
-    leave.flex_amount = leave_flex_amount(body.action, body.days, rate)
+    leave.flex_amount = (
+        leave_flex_amount(body.action, body.days, rate)
+        if bool(
+            window.uses_flex
+            and employee.flex_wallet_amount is not None
+            and employee.flex_currency
+        )
+        else None
+    )
     if enr.status == EnrollmentStatus.not_started:
         enr.status = EnrollmentStatus.in_progress
     db.flush()
@@ -971,7 +1023,7 @@ def perform_submit(
     # Flex guards: an overdrawn wallet blocks (unless the window allows
     # overdrafts); changed-but-unpriced elections need explicit acknowledgment.
     assert_within_wallet(db, enr, window)
-    assert_elections_priced(db, enr, acknowledge=acknowledge)
+    assert_elections_priced(db, enr, window, acknowledge=acknowledge)
     enr.status = EnrollmentStatus.submitted
     enr.submitted_at = datetime.now(UTC)
     enr.submitted_by = actor_id

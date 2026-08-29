@@ -101,6 +101,7 @@ def test_window_flex_config_defaults_and_roundtrip(client: TestClient) -> None:
     ).json()
     assert base["flex_drawdown_rule"] == "full"
     assert base["flex_price_source"] is None
+    assert base["uses_flex"] is False
 
     # Created with explicit per-product source + on-change rule → persisted + read.
     res = client.post(
@@ -125,6 +126,32 @@ def test_window_flex_config_defaults_and_roundtrip(client: TestClient) -> None:
     assert patched.status_code == 200, patched.text
     assert patched.json()["flex_drawdown_rule"] == "full"
     assert patched.json()["flex_price_source"] == {"prod-gtl": "manual"}
+
+
+def test_flex_window_fails_closed_when_configuration_is_empty(
+    client: TestClient,
+) -> None:
+    window = client.post(
+        f"/api/v1/policy-years/{PY_ID}/enrollment-windows",
+        json=_window_body(name="Unsafe Flex draft", uses_flex=True),
+    ).json()
+
+    readiness = client.get(
+        f"/api/v1/enrollment-windows/{window['id']}/readiness"
+    )
+    assert readiness.status_code == 200
+    assert readiness.json()["ready"] is False
+    assert {issue["code"] for issue in readiness.json()["issues"]} == {
+        "no_products_in_scope"
+    }
+
+    opened = client.post(f"/api/v1/enrollment-windows/{window['id']}/open")
+    assert opened.status_code == 409
+    detail = opened.json()["detail"]
+    assert detail["code"] == "enrollment_not_ready"
+    assert {issue["code"] for issue in detail["issues"]} == {
+        "no_products_in_scope"
+    }
 
 
 def test_window_flex_config_rejects_bad_values(client: TestClient) -> None:

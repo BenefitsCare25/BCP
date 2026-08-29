@@ -41,6 +41,7 @@ class EnrollmentWindowOut(_Base):
     allow_dependant_changes: bool
     # Members may see + use this period in the portal. Off = broker-managed.
     member_self_service: bool = True
+    uses_flex: bool = False
     product_scope: list[Any] | None
     flex_price_source: dict[str, str] | None = None
     flex_drawdown_rule: str = "full"
@@ -59,6 +60,10 @@ class EnrollmentWindowCreate(BaseModel):
     allow_dependant_changes: bool = True
     # Off runs the period broker-managed: open for brokers, dark in the portal.
     member_self_service: bool = True
+    # On means insured-cover price tags draw down from assigned Flex wallets.
+    # The period cannot open until the scheme, wallets, mappings, and prices pass
+    # the server-side readiness gate.
+    uses_flex: bool = False
     product_scope: list[str] | None = None
     # {product_id: "slip" | "manual"} — products omitted fall back to "manual".
     flex_price_source: dict[str, FlexPriceSourceStr] | None = None
@@ -83,6 +88,11 @@ class WindowOpenResult(BaseModel):
     enrollments_created: int
 
 
+class EnrollmentReadinessOut(BaseModel):
+    ready: bool
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class EnrollmentWindowPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     opens_at: datetime | None = None
@@ -92,6 +102,7 @@ class EnrollmentWindowPatch(BaseModel):
     allow_leave: bool | None = None
     allow_dependant_changes: bool | None = None
     member_self_service: bool | None = None
+    uses_flex: bool | None = None
     product_scope: list[str] | None = None
     flex_price_source: dict[str, FlexPriceSourceStr] | None = None
     flex_drawdown_rule: FlexDrawdownRuleStr | None = None

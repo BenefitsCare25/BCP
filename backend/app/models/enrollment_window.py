@@ -104,6 +104,14 @@ class EnrollmentWindow(Base, TimestampMixin):
     member_self_service: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
+    # Explicitly distinguishes a Flex-funded period from an ordinary benefits
+    # enrollment. Price books may be drafted long before a scheme is approved,
+    # so their mere presence is not a safe signal that member wallets should be
+    # shown or charged. Opening a Flex period runs the readiness gate in
+    # ``services.enrollment_readiness``.
+    uses_flex: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     # Which products are in scope. NULL = all confirmed products for the year.
     product_scope: Mapped[list[Any] | None] = mapped_column(JSON(), nullable=True)
     # Legacy per-product source retained for historical windows and older clients.

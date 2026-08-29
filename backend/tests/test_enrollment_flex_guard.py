@@ -136,7 +136,14 @@ def _make_window(client: TestClient, **over) -> str:
     wid = client.post(
         f"/api/v1/policy-years/{PY_ID}/enrollment-windows", json=body
     ).json()["id"]
-    client.post(f"/api/v1/enrollment-windows/{wid}/open")
+    opened = client.post(f"/api/v1/enrollment-windows/{wid}/open")
+    assert opened.status_code == 200, opened.text
+    # These tests isolate the submit/confirm guard. Mark the already-open period
+    # as Flex-funded directly so the draft-opening readiness gate is tested in
+    # test_enrollment_config instead of requiring a full scheme fixture here.
+    with SessionLocal() as s:
+        s.get(EnrollmentWindow, wid).uses_flex = True
+        s.commit()
     return wid
 
 

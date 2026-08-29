@@ -179,6 +179,63 @@ def test_no_open_window_returns_empty(broker: TestClient) -> None:
     assert me["enrollment_open"] is False
 
 
+def test_non_flex_period_suppresses_a_stale_wallet(broker: TestClient) -> None:
+    with SessionLocal() as s:
+        employee = s.get(Employee, EMP1)
+        employee.flex_wallet_amount = 999.0
+        employee.flex_currency = "SGD"
+        s.commit()
+    try:
+        _make_window(broker)
+        body = broker.get(
+            "/api/v1/portal/enrollment", headers=_member_auth()
+        ).json()
+        assert body["window"]["uses_flex"] is False
+        assert body["options"]["flex_wallet"] is None
+        assert all(
+            tier["price_tag"] is None
+            for product in body["options"]["products"]
+            for tier in product["tiers"]
+        )
+    finally:
+        with SessionLocal() as s:
+            employee = s.get(Employee, EMP1)
+            employee.flex_wallet_amount = None
+            employee.flex_currency = None
+            s.commit()
+
+
+def test_flex_period_suppresses_wallet_without_currency(broker: TestClient) -> None:
+    with SessionLocal() as s:
+        employee = s.get(Employee, EMP1)
+        employee.flex_wallet_amount = 999.0
+        employee.flex_currency = None
+        s.commit()
+    try:
+        window_id = _make_window(broker)
+        # Isolate runtime defense from the draft-opening readiness test: a
+        # currency can be removed after a valid period opens, and that must not
+        # leave an unlabelled wallet amount visible to the member.
+        with SessionLocal() as s:
+            s.get(EnrollmentWindow, window_id).uses_flex = True
+            s.commit()
+        body = broker.get(
+            "/api/v1/portal/enrollment", headers=_member_auth()
+        ).json()
+        assert body["options"]["flex_wallet"] is None
+        assert body["options"]["flex_currency"] is None
+        assert all(
+            tier["price_tag"] is None
+            for product in body["options"]["products"]
+            for tier in product["tiers"]
+        )
+    finally:
+        with SessionLocal() as s:
+            employee = s.get(Employee, EMP1)
+            employee.flex_wallet_amount = None
+            s.commit()
+
+
 def test_member_upgrade_submit_broker_confirm(broker: TestClient) -> None:
     wid = _make_window(broker)
 

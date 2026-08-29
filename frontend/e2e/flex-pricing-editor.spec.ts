@@ -61,6 +61,7 @@ const draftWindow = {
   allow_leave: false,
   allow_dependant_changes: true,
   member_self_service: true,
+  uses_flex: false,
   product_scope: null,
   flex_price_source: { legacy: "manual" },
   flex_drawdown_rule: "full",
@@ -231,6 +232,65 @@ const pricingResponse = {
     },
   ],
 };
+
+test("enrollment periods make Flex explicit and explain opening blockers", async ({
+  page,
+  request,
+}) => {
+  const policyYearId = await installCurrentSession(page, request);
+  await page.route(
+    new RegExp(`/api/v1/policy-years/${policyYearId}/enrollment-windows$`),
+    (route) =>
+      route.fulfill({
+        json: [{ ...draftWindow, policy_year_id: policyYearId }],
+      }),
+  );
+  await page.route(
+    /\/api\/v1\/enrollment-windows\/draft-window\/open$/,
+    (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: {
+            code: "enrollment_not_ready",
+            message: "This enrolment period is not ready to open.",
+            issues: [
+              {
+                code: "flex_wallets_incomplete",
+                message: "Assign a wallet amount and currency to every active employee.",
+                count: 4,
+                products: ["GCI", "GTL"],
+              },
+            ],
+          },
+        }),
+      }),
+  );
+
+  await page.goto("/client-relations/enrollment?tab=windows");
+  const createFlex = page.getByLabel("Use Flex wallets for this period");
+  const drawdown = page.getByRole("button", { name: "Full plan tag" });
+  const overdraft = page.getByLabel("Allow overdraft");
+  await expect(createFlex).not.toBeChecked();
+  await expect(drawdown).toBeDisabled();
+  await expect(overdraft).toBeDisabled();
+
+  await createFlex.click();
+  await expect(drawdown).toBeEnabled();
+  await expect(overdraft).toBeEnabled();
+
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "This enrolment period is not ready",
+  });
+  await expect(dialog).toContainText(
+    "Assign a wallet amount and currency to every active employee. (4)",
+  );
+  await expect(dialog).toContainText("Products: GCI, GTL.");
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toBeHidden();
+});
 
 test("price book unifies employee and dependant setup per plan", async ({
   page,

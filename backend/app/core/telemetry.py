@@ -13,9 +13,13 @@ import logging
 import os
 
 logger = logging.getLogger(__name__)
+_configured = False
 
 
 def configure_telemetry() -> None:
+    global _configured
+    if _configured:
+        return
     conn = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
     if not conn:
         logger.info("APPLICATIONINSIGHTS_CONNECTION_STRING not set; skipping telemetry init")
@@ -35,6 +39,7 @@ def configure_telemetry() -> None:
             connection_string=conn,
             logger_name="app",
         )
+        _configured = True
         logger.info("Azure Monitor telemetry configured")
     except Exception:
         # Non-fatal: an unreachable App Insights endpoint must not crash the

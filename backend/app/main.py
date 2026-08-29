@@ -9,6 +9,13 @@ from dotenv import load_dotenv
 
 load_dotenv()  # loads backend/.env before settings / crypto initialise
 
+# Azure's FastAPI auto-instrumentation must be configured before importing the
+# FastAPI class. Importing FastAPI first leaves dependency spans working while
+# every inbound request is absent from Application Insights.
+from app.core.telemetry import configure_telemetry
+
+configure_telemetry()
+
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -80,7 +87,6 @@ from app.core.rate_limit import RateLimitExceeded, limiter
 from app.core.request_context import RequestIDMiddleware, install_log_filter
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.spa import mount_spa
-from app.core.telemetry import configure_telemetry
 from app.core.tenancy_host import TenantMiddleware
 
 logger = logging.getLogger(__name__)
@@ -137,7 +143,6 @@ def _handle_rate_limit(request: Request, exc: Exception) -> Response:
 
 def create_app() -> FastAPI:
     install_log_filter()
-    configure_telemetry()
     drift_checks.run_all()
     from app.core.settings import get_settings
 

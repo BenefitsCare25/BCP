@@ -25,6 +25,7 @@ from app.db.session import get_db
 from app.models import EnrollmentWindow, PolicyYear
 from app.models.enrollment_window import WindowStatus
 from app.schemas.enrollment import (
+    EnrollmentReadinessOut,
     EnrollmentWindowCreate,
     EnrollmentWindowOut,
     EnrollmentWindowPatch,
@@ -32,6 +33,7 @@ from app.schemas.enrollment import (
     WindowOpenResult,
 )
 from app.services.enrollment_lifecycle import close_window, open_window
+from app.services.enrollment_readiness import enrollment_readiness_issues
 from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollment-windows"])
@@ -118,6 +120,7 @@ def create_window(
         allow_leave=body.allow_leave,
         allow_dependant_changes=body.allow_dependant_changes,
         member_self_service=body.member_self_service,
+        uses_flex=body.uses_flex,
         product_scope=body.product_scope,
         flex_price_source=body.flex_price_source,
         flex_drawdown_rule=body.flex_drawdown_rule,
@@ -145,6 +148,19 @@ def get_window(
     window: EnrollmentWindow = Depends(load_enrollment_window),
 ) -> EnrollmentWindow:
     return window
+
+
+@router.get(
+    "/enrollment-windows/{window_id}/readiness",
+    response_model=EnrollmentReadinessOut,
+)
+def get_window_readiness(
+    window_id: str,
+    window: EnrollmentWindow = Depends(load_enrollment_window),
+    db: Session = Depends(get_db),
+) -> EnrollmentReadinessOut:
+    issues = enrollment_readiness_issues(db, window)
+    return EnrollmentReadinessOut(ready=not issues, issues=issues)
 
 
 @router.patch(
@@ -223,6 +239,20 @@ def open_enrollment_window(
             status.HTTP_409_CONFLICT, "A closed enrolment period cannot be reopened."
         )
     _assert_no_open_overlap(db, window)
+    if window.status == WindowStatus.draft:
+        issues = enrollment_readiness_issues(db, window)
+        if issues:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "code": "enrollment_not_ready",
+                    "message": (
+                        "This enrolment period is not ready to open. Resolve every "
+                        "listed blocker first."
+                    ),
+                    "issues": issues,
+                },
+            )
     created = open_window(db, window, user)
     db.commit()
     db.refresh(window)
