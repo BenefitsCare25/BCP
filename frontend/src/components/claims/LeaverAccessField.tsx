@@ -21,6 +21,7 @@ export function LeaverAccessField() {
       noYearPrompt="Select a benefit year to set how long leavers keep portal access."
       invalidMessage="Leaver access must be a whole number from 0 to 3,650 days (or blank)."
       savedMessage="Leaver portal access updated"
+      explicitEdit
       hint={
         <>
           Days after a member&rsquo;s last day of service that they keep portal

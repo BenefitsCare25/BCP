@@ -93,6 +93,11 @@ const STATUS_FILTERS = [
   { value: "rejected", label: "Rejected" },
 ] as const;
 
+const QUEUE_FILTERS = [
+  ...STATUS_FILTERS,
+  { value: "log", label: "LOG" },
+] as const;
+
 // Brokers see the real machine statuses (members get the sanitized labels in
 // components/portal/leaf/Strike).
 const BROKER_STATUS: Record<
@@ -189,11 +194,11 @@ function DetailSection({
 }
 
 function QueueTab({
-  caseType,
+  initialCaseType,
   initialClaimId,
   employeeId,
 }: {
-  caseType: CaseType;
+  initialCaseType: CaseType;
   initialClaimId?: string;
   /** `?employee=` — one member's claims (the flex panel's pending link). Unlike
    *  `?claim=` this is NOT read once into state: it is a filter the queue is
@@ -206,6 +211,7 @@ function QueueTab({
   const { data: me } = useMe();
   const readOnly = me?.role === "broker_viewer";
   const navigate = useNavigate();
+  const [caseType, setCaseType] = useState<CaseType>(initialCaseType);
   const [status, setStatus] = useState<string>("");
   const [searchText, setSearchText] = useState("");
   const search = useDeferredValue(searchText);
@@ -236,6 +242,11 @@ function QueueTab({
   const [relabelTo, setRelabelTo] = useState<CaseType | null>(null);
   const [relabelReason, setRelabelReason] = useState("");
   const previousPolicyYearId = useRef(policyYearId);
+  useEffect(() => {
+    setCaseType(initialCaseType);
+    if (initialCaseType === "log") setStatus("");
+  }, [initialCaseType]);
+
   useEffect(() => {
     if (previousPolicyYearId.current === policyYearId) return;
     previousPolicyYearId.current = policyYearId;
@@ -482,7 +493,10 @@ function QueueTab({
                   onClick={() =>
                     void navigate({
                       to: "/claims/review",
-                      search: { tab: caseType === "log" ? "log" : "queue" },
+                      search:
+                        caseType === "log"
+                          ? { tab: "queue", view: "log" }
+                          : { tab: "queue" },
                       replace: true,
                     })
                   }
@@ -494,9 +508,23 @@ function QueueTab({
                 </button>
               )}
               <Segmented
-                value={status}
-                onChange={setStatus}
-                options={STATUS_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
+                value={caseType === "log" ? "log" : status}
+                onChange={(value) => {
+                  const nextCaseType: CaseType =
+                    value === "log" ? "log" : "claim";
+                  setCaseType(nextCaseType);
+                  setStatus(nextCaseType === "log" ? "" : value);
+                  setPage(0);
+                  void navigate({
+                    to: "/claims/review",
+                    search:
+                      nextCaseType === "log"
+                        ? { tab: "queue", view: "log" }
+                        : { tab: "queue" },
+                    replace: true,
+                  });
+                }}
+                options={QUEUE_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
               />
               {!readOnly && (
                 <Button size="sm" onClick={() => setLogFormOpen(true)}>
@@ -1179,16 +1207,15 @@ function QueueTab({
         open={logFormOpen}
         onOpenChange={setLogFormOpen}
         onCreated={(claimId) => {
-          // LOG is its own workspace tab. Take the assessor straight to the
-          // case they created. Set selection directly because navigation to
-          // the already-active LOG tab keeps this QueueTab mounted, so its
-          // initialClaimId state initializer will not run again.
+          // LOG is a queue filter. Take the assessor straight to the new case
+          // and select it directly because this QueueTab stays mounted.
+          setCaseType("log");
           setStatus("");
           setPage(0);
           setSelectedId(claimId);
           void navigate({
             to: "/claims/review",
-            search: { tab: "log", claim: claimId },
+            search: { tab: "queue", view: "log", claim: claimId },
           });
         }}
       />}
@@ -1275,7 +1302,7 @@ function QueueTab({
 // moved here from Company settings so the whole claims surface lives in one
 // place). Keep the legacy `ai-extraction` tab value so old deep links continue
 // to open the review-rule setup.
-const CLAIMS_TABS = ["queue", "log", "messages", "ai-extraction", "settings"] as const;
+const CLAIMS_TABS = ["queue", "messages", "ai-extraction", "settings"] as const;
 type ClaimsTab = (typeof CLAIMS_TABS)[number];
 const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
   CLAIMS_TABS.includes(v as ClaimsTab);
@@ -1286,9 +1313,11 @@ export function ClaimsQueuePage() {
   const [reviewRulesImportOpen, setReviewRulesImportOpen] = useState(false);
   const search = useSearch({ strict: false }) as {
     tab?: string;
+    view?: string;
     claim?: string;
     employee?: string;
   };
+  const legacyLogTab = search.tab === "log";
   const requestedTab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
   const canConfigure = me?.role === "broker_admin" || me?.role === "system_admin";
   const tab: ClaimsTab =
@@ -1309,7 +1338,6 @@ export function ClaimsQueuePage() {
         <div className="min-w-0 overflow-x-auto">
           <TabsList className="min-w-max">
             <TabsTrigger value="queue">Queue</TabsTrigger>
-            <TabsTrigger value="log">LOG</TabsTrigger>
           {/* The count is the whole point: with no email in prod, this badge is
               the ONLY signal a broker gets that a member has written. It has to
               be visible from the page, not inside the tab. */}
@@ -1355,15 +1383,9 @@ export function ClaimsQueuePage() {
 
       <TabsContent value="queue">
         <QueueTab
-          caseType="claim"
-          initialClaimId={search.claim}
-          employeeId={search.employee}
-        />
-      </TabsContent>
-
-      <TabsContent value="log">
-        <QueueTab
-          caseType="log"
+          initialCaseType={
+            legacyLogTab || search.view === "log" ? "log" : "claim"
+          }
           initialClaimId={search.claim}
           employeeId={search.employee}
         />

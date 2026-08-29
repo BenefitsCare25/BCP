@@ -30,6 +30,7 @@ export function Segmented<T extends string>({
           key={o.value}
           type="button"
           disabled={disabled}
+          aria-pressed={value === o.value}
           onClick={() => onChange(o.value)}
           className={cn(
             "px-2.5 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-60",

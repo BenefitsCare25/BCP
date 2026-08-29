@@ -44,11 +44,12 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await openClaimsReview(page, "queue");
 
   const queue = page.getByRole("tab", { name: "Queue" });
-  const log = page.getByRole("tab", { name: "LOG" });
+  const log = page.getByRole("button", { name: "LOG", exact: true });
   const messages = page.getByRole("tab", { name: /Messages/ });
   const reviewRules = page.getByRole("tab", { name: "Review rules" });
   const docSettings = page.getByRole("tab", { name: "Doc settings" });
   await expect(queue).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "LOG" })).toHaveCount(0);
   await expect(log).toBeVisible();
   await expect(messages).toBeVisible();
   await expect(reviewRules).toBeVisible();
@@ -58,13 +59,15 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await screenshot(page, testInfo, "claims-queue-compact");
 
   await log.click();
-  await expect(log).toHaveAttribute("aria-selected", "true");
+  await expect(log).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Search LOG cases")).toBeVisible();
 
+  // Keep old LOG deep links functional while canonicalizing them to the queue
+  // filter when the member scope is cleared.
   await page.goto("/claims/review?tab=log&employee=missing-employee");
   await page.getByRole("button", { name: /Show all members/ }).click();
-  await expect(log).toHaveAttribute("aria-selected", "true");
-  await expect(page).toHaveURL(/\/claims\/review\?tab=log$/);
+  await expect(queue).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/\/claims\/review\?tab=queue&view=log$/);
   await expect(page.getByLabel("Search LOG cases")).toBeVisible();
 
   await messages.click();
@@ -102,6 +105,18 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   await expect(
     page.getByRole("heading", { name: "Required documents by claim type" }),
   ).toBeVisible();
+  for (const label of [
+    "Claim submission grace period (days)",
+    "Leaver portal access (days)",
+  ]) {
+    const setting = page.getByRole("group", { name: label });
+    await expect(setting).toBeVisible();
+    await setting.getByRole("button", { name: "Edit" }).click();
+    await expect(setting.getByRole("spinbutton")).toBeVisible();
+    await expect(setting.getByRole("button", { name: "Save" })).toBeVisible();
+    await setting.getByRole("button", { name: "Cancel" }).click();
+    await expect(setting.getByRole("button", { name: "Edit" })).toBeVisible();
+  }
   if (
     await page
       .getByText("Invoice or receipt", { exact: true })
@@ -120,7 +135,7 @@ test("signed-in administrator can use every Claims Review tab", async ({ page },
   expect(runtimeErrors).toEqual([]);
 });
 
-test("creating a LOG case from the LOG tab opens the new case", async ({ page }) => {
+test("creating a LOG case from the queue filter opens the new case", async ({ page }) => {
   const createdClaim = {
     id: "mock-log-created",
     client_id: "00000000-0000-0000-0000-000000000011",
@@ -289,7 +304,8 @@ test("creating a LOG case from the LOG tab opens the new case", async ({ page })
     },
   );
 
-  await openClaimsReview(page, "log");
+  await openClaimsReview(page, "queue");
+  await page.getByRole("button", { name: "LOG", exact: true }).click();
   await page.getByRole("button", { name: "New LOG case" }).click();
   const form = page.getByRole("dialog", { name: "New LOG case" });
   await form.getByPlaceholder("Search name or staff ID").fill("Regression Member");
@@ -301,7 +317,15 @@ test("creating a LOG case from the LOG tab opens the new case", async ({ page })
 
   const workspaceHeader = page.getByTestId("claim-workspace-header");
   await expect(workspaceHeader.getByText("LOG", { exact: true })).toBeVisible();
-  await expect(page).toHaveURL(/tab=log&claim=mock-log-created/);
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("tab"))
+    .toBe("queue");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("view"))
+    .toBe("log");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("claim"))
+    .toBe("mock-log-created");
 });
 
 test("message workbench supports search and empty inboxes", async ({ page }, testInfo) => {
