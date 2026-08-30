@@ -1026,6 +1026,12 @@ class ClaimTypeOption(BaseModel):
     # the coverage endpoint always fills both with the canonical values.
     scope_code: str = "standard"
     scope_key: str = ""
+    # The Schedule-of-Benefits row this member-selectable type is automatically
+    # charged against. Most types draw only on the product roll-up and therefore
+    # carry null; plan-aware GP riders (TCM/Physiotherapy) carry the exact row
+    # name resolved from this member's plan. Served so the claim form can join
+    # the selected type to the same utilization bucket submit/approval use.
+    benefit_key: str | None = None
     # Whether this entry must name the treating doctor (pre-/post-hospitalisation
     # only). SERVED, never mirrored: the frontend would otherwise have to match
     # on the sub-type LABEL, and a relabel there is silent — the field would

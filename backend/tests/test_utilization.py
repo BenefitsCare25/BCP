@@ -133,6 +133,20 @@ def _statement(employee) -> BenefitStatementOut:
                 plan_code="A",
                 annual_policy_limit=None,  # no numeric limit → no guard
             ),
+            CoverageLine(
+                product_code="GCGP",
+                product_name="Group Clinical GP",
+                plan_code="P1",
+                benefit_schedule={
+                    "items": [
+                        {
+                            "number": "1",
+                            "name": "TCM & Chiropractor",
+                            "value": "S$300 per policy year",
+                        },
+                    ]
+                },
+            ),
         ],
         dependants=[],
         flex=FlexCoverageLine(
@@ -234,6 +248,20 @@ def test_zero_baseline():
     assert dental.remaining == 300.0
     assert all(c.name != "Gym" for c in util.flex.categories)  # non-claimable hidden
 
+    # Plan-aware claim choices need a bucket BEFORE the first claim exists; the
+    # submission form cannot show a TCM member what is left if utilization only
+    # creates the row after they have already filed one.
+    tcm = _bucket(util, "GCGP", "TCM & Chiropractor")
+    assert sum(
+        b.product_code == "GCGP" and b.benefit_key == "TCM & Chiropractor"
+        for b in util.insured
+    ) == 1
+    assert (tcm.limit, tcm.approved, tcm.pending, tcm.remaining) == (
+        300.0,
+        0.0,
+        0.0,
+        300.0,
+    )
 
 def test_bucket_math_and_grouping():
     _mk_claim(benefit_key="Dental", amount=100.0, approved=100.0, status="approved")
@@ -250,6 +278,10 @@ def test_bucket_math_and_grouping():
     assert ghs.claim_count == 3
 
     dental = _bucket(util, "GHS", "Dental")
+    assert sum(
+        b.product_code == "GHS" and b.benefit_key == "Dental"
+        for b in util.insured
+    ) == 1
     assert dental.approved == 100.0 and dental.pending == 50.0
     assert dental.limit == 500.0 and dental.remaining == 400.0
 

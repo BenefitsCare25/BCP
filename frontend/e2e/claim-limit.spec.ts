@@ -1,0 +1,230 @@
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
+
+const MEMBER = {
+  id: "member-limit-test",
+  email: "member@example.test",
+  staff_id: "EMP-001",
+  display_name: "Test Member",
+};
+
+function monitorRuntime(page: Page) {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 500) {
+      errors.push(`http ${response.status()}: ${response.url()}`);
+    }
+  });
+  return errors;
+}
+
+async function mockClaimForm(page: Page) {
+  await page.addInitScript((member) => {
+    localStorage.setItem(
+      "inspro-portal-session",
+      JSON.stringify({
+        state: {
+          token: "e2e-member-token",
+          expiresAt: "2100-01-01T00:00:00Z",
+          member,
+        },
+        version: 0,
+      }),
+    );
+  }, MEMBER);
+
+  await page.route(/\/api\/v1\/portal\/me$/, (route) =>
+    route.fulfill({
+      json: {
+        member: MEMBER,
+        access: {
+          state: "active",
+          capabilities: ["record", "claim"],
+          last_day: null,
+          access_ends_on: null,
+        },
+        company: { slug: "demo", name: "Demo", legal_name: "Demo Company" },
+        employee: { id: "employee-limit-test", staff_id: "EMP-001", employee_name: "Test Member" },
+        policy_year: {
+          id: "policy-limit-test",
+          year: 2026,
+          start_date: "2026-01-01",
+          end_date: "2026-12-31",
+        },
+        flex_eligible: false,
+        enrollment_open: false,
+      },
+    }),
+  );
+  await page.route(/\/api\/v1\/portal\/auth\/security-status$/, (route) =>
+    route.fulfill({ json: { mfa_status: "none", mfa_available: false } }),
+  );
+  await page.route(/\/api\/v1\/portal\/conversations/, (route) =>
+    route.fulfill({
+      json: { total: 0, offset: 0, limit: 20, unread_total: 0, items: [] },
+    }),
+  );
+  await page.route(/\/api\/v1\/portal\/claims\/form\/draft$/, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: null });
+      return;
+    }
+    const body = route.request().postDataJSON() as {
+      form_data: Record<string, string>;
+      expected_version: number | null;
+    };
+    await route.fulfill({
+      json: {
+        id: "form-draft-limit-test",
+        form_data: body.form_data,
+        version: (body.expected_version ?? 0) + 1,
+        updated_at: "2026-08-30T00:00:00Z",
+      },
+    });
+  });
+  await page.route(/\/api\/v1\/portal\/coverage-options$/, (route) =>
+    route.fulfill({
+      json: {
+        policy_year_start: "2026-01-01",
+        policy_year_end: "2026-12-31",
+        claimable_from: "2026-01-01",
+        claimable_to: "2026-12-31",
+        insured: [
+          {
+            product_code: "GCGP",
+            product_name: "Group Clinical GP",
+            plan_code: "P1",
+            annual_policy_limit: null,
+            covers_dependants: false,
+            covered_dependant_ids: [],
+            insurer: "Example Insurer",
+            insurer_member_id: "INS-001",
+            sub_types: ["TCM (Traditional Chinese Medicine)"],
+            requires_referral: false,
+            diagnosis_group: "gp",
+            diagnosis_required: true,
+            category: "outpatient",
+            claim_types: [
+              {
+                label: "GP (General Practitioner)",
+                sub_type: null,
+                scope_code: "standard",
+                scope_key: "insured:gcgp:standard",
+                benefit_key: null,
+                requires_doctor_name: false,
+                supports_stay_dates: false,
+                anchor_mode: null,
+                doc_slots: [],
+                doc_slots_by_sector: null,
+              },
+              {
+                label: "TCM (Traditional Chinese Medicine)",
+                sub_type: "TCM (Traditional Chinese Medicine)",
+                scope_code: "gp_tcm",
+                scope_key: "insured:gcgp:gp_tcm",
+                benefit_key: "TCM & Chiropractor",
+                requires_doctor_name: false,
+                supports_stay_dates: false,
+                anchor_mode: null,
+                doc_slots: [],
+                doc_slots_by_sector: null,
+              },
+            ],
+          },
+        ],
+        flex: null,
+        claim_block: null,
+        dependants: [],
+        currencies: ["SGD"],
+        policy_currency: "SGD",
+        hospitals: [],
+      },
+    }),
+  );
+  await page.route(/\/api\/v1\/portal\/utilization$/, (route) =>
+    route.fulfill({
+      json: {
+        policy_year_id: "policy-limit-test",
+        insured: [
+          {
+            product_code: "GCGP",
+            product_name: "Group Clinical GP",
+            benefit_key: null,
+            limit: null,
+            limit_display: null,
+            approved: 100,
+            pending: 50,
+            pending_unconverted: 0,
+            remaining: null,
+            claim_count: 2,
+            pending_claim_ids: ["pending-gp"],
+            orphaned: false,
+            limit_unparsed: false,
+          },
+          {
+            product_code: "GCGP",
+            product_name: "Group Clinical GP",
+            benefit_key: "TCM & Chiropractor",
+            limit: 300,
+            limit_display: "S$300 per policy year",
+            approved: 100,
+            pending: 50,
+            pending_unconverted: 0,
+            remaining: 200,
+            claim_count: 2,
+            pending_claim_ids: ["pending-tcm"],
+            orphaned: false,
+            limit_unparsed: false,
+          },
+        ],
+        flex: null,
+      },
+    }),
+  );
+  await page.route(/\/api\/v1\/portal\/claim-diagnoses/, (route) =>
+    route.fulfill({ json: { group: "gp", items: [] } }),
+  );
+}
+
+test("claim form shows the selected plan balance and warns without blocking a full receipt", async ({
+  page,
+}, testInfo: TestInfo) => {
+  const runtimeErrors = monitorRuntime(page);
+  await mockClaimForm(page);
+  await page.goto("/portal/demo/claims/new");
+
+  await page
+    .getByRole("combobox", { name: "Claim type" })
+    .selectOption({ label: "TCM (Traditional Chinese Medicine)" });
+
+  const limits = page.getByRole("region", { name: "Current claim limit" });
+  await expect(limits).toContainText("TCM & Chiropractor");
+  await expect(limits).toContainText("S$200 left");
+  await expect(limits).toContainText("of S$300");
+  await expect(limits).toContainText("S$50 not settled yet; not deducted");
+  await expect(limits).not.toContainText("Overall plan");
+
+  await page.getByRole("spinbutton", { name: "Incurred amount" }).fill("250");
+  const amountWarning = page.getByText(
+    /Your receipt is above the current balance of S\$200/,
+  );
+  await expect(amountWarning).toBeVisible();
+  await expect(amountWarning).toContainText("Submit the full receipt");
+  await expect(page.getByRole("button", { name: "Submit claim" })).toBeEnabled();
+
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  expect(runtimeErrors).toEqual([]);
+
+  await page.screenshot({
+    path: testInfo.outputPath(`claim-limit-${testInfo.project.name}.png`),
+    fullPage: true,
+    animations: "disabled",
+  });
+});

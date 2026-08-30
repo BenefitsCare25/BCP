@@ -25,6 +25,7 @@ import {
   useDeleteReferralLetter,
   useExtractClaimIntake,
   useFxQuote,
+  usePortalUtilization,
   useReferralLetters,
   useSubmitClaim,
   useUploadClaimDocument,
@@ -61,10 +62,22 @@ import { useClaimDraftSync } from "./useClaimDraftSync";
 
 export type NewClaimForm = ReturnType<typeof useNewClaimForm>;
 
+export interface ClaimLimitRow {
+  key: string;
+  label: string;
+  limit: number | null;
+  limitDisplay: string | null;
+  approved: number;
+  pending: number;
+  pendingUnconverted: number;
+  remaining: number | null;
+}
+
 export function useNewClaimForm() {
   const navigate = useNavigate();
   const company = useCompany();
   const options = useCoverageOptions();
+  const utilization = usePortalUtilization();
   const createClaim = useCreateClaim();
   const uploadDoc = useUploadClaimDocument();
   const uploadReferral = useUploadReferralLetter();
@@ -291,6 +304,140 @@ export function useNewClaimForm() {
   const selectedFlexCategory = flex?.categories.find(
     (category) => category.name === flexCategory,
   );
+
+  // The selected claim type's CURRENT limit position. Coverage choices and
+  // utilization are both server-owned; the client only joins them on the exact
+  // product/benefit keys it was served. In particular, a GP rider never guesses
+  // its Schedule-of-Benefits row from the visible label.
+  const productLimit = utilization.data?.insured.find(
+    (bucket) =>
+      !bucket.orphaned &&
+      bucket.product_code === productCode &&
+      bucket.benefit_key === null,
+  );
+  const benefitKey = selectedClaimType?.benefit_key ?? null;
+  const benefitLimit = benefitKey
+    ? utilization.data?.insured.find(
+        (bucket) =>
+          !bucket.orphaned &&
+          bucket.product_code === productCode &&
+          bucket.benefit_key?.trim().toLowerCase() ===
+            benefitKey.trim().toLowerCase(),
+      )
+    : null;
+  const flexLimit = utilization.data?.flex ?? null;
+  const flexCategoryLimit = flexLimit?.categories.find(
+    (category) => category.name.trim().toLowerCase() === flexCategory.trim().toLowerCase(),
+  );
+
+  const asLimitRow = (
+    key: string,
+    label: string,
+    bucket:
+      | {
+          limit: number | null;
+          limit_display: string | null;
+          approved: number;
+          pending: number;
+          pending_unconverted: number;
+          remaining: number | null;
+        }
+      | undefined,
+  ): ClaimLimitRow | null =>
+    bucket
+      ? {
+          key,
+          label,
+          limit: bucket.limit,
+          limitDisplay: bucket.limit_display,
+          approved: bucket.approved,
+          pending: bucket.pending,
+          pendingUnconverted: bucket.pending_unconverted,
+          remaining: bucket.remaining,
+        }
+      : null;
+
+  const limitRows: ClaimLimitRow[] = [];
+  if (effectiveKind === "insured" && selectedProduct) {
+    const overall = asLimitRow(
+      `insured:${productCode}`,
+      benefitKey ? "Overall plan" : selectedProduct.product_name || productCode,
+      productLimit,
+    );
+    if (benefitKey) {
+      const benefit = asLimitRow(
+        `insured:${productCode}:${benefitKey}`,
+        benefitKey,
+        benefitLimit ?? undefined,
+      );
+      if (benefit) limitRows.push(benefit);
+    }
+    // A rider's product roll-up contains the SAME claim amounts as the rider
+    // row. It belongs here only when it contributes an overall plan limit; a
+    // capless roll-up would repeat the pending figure and look like two claims.
+    if (
+      overall &&
+      (!benefitKey || overall.limit !== null || overall.limitDisplay !== null)
+    ) {
+      limitRows.push(overall);
+    }
+    // A rolling deployment or a transient utilization mismatch must not make a
+    // stated plan limit disappear. It cannot provide a computed balance, but it
+    // can still show the insurer's verbatim limit honestly.
+    if (limitRows.length === 0 && selectedProduct.annual_policy_limit) {
+      limitRows.push({
+        key: `insured:${productCode}:fallback`,
+        label: selectedProduct.product_name || productCode,
+        limit: null,
+        limitDisplay: selectedProduct.annual_policy_limit,
+        approved: 0,
+        pending: 0,
+        pendingUnconverted: 0,
+        remaining: null,
+      });
+    }
+  } else if (effectiveKind === "flex" && flexLimit) {
+    limitRows.push({
+      key: "flex:wallet",
+      label: "Flex wallet",
+      limit:
+        flexLimit.flex_balance === null
+          ? null
+          : Math.max(0, flexLimit.flex_balance),
+      limitDisplay: null,
+      approved: flexLimit.approved,
+      pending: flexLimit.pending,
+      pendingUnconverted: flexLimit.pending_unconverted,
+      remaining: flexLimit.available,
+    });
+    if (flexCategoryLimit?.sub_limit != null) {
+      limitRows.push({
+        key: `flex:${flexCategoryLimit.name}`,
+        label: `${flexCategoryLimit.name} sub-limit`,
+        limit: flexCategoryLimit.sub_limit,
+        limitDisplay: null,
+        approved: flexCategoryLimit.approved,
+        pending: flexCategoryLimit.pending,
+        pendingUnconverted: 0,
+        remaining: flexCategoryLimit.remaining,
+      });
+    }
+  }
+  const knownRemaining = limitRows
+    .map((row) => row.remaining)
+    .filter((value): value is number => value !== null);
+  const limitRemaining =
+    knownRemaining.length > 0 ? Math.max(0, Math.min(...knownRemaining)) : null;
+  const amountInPolicyCurrency =
+    effectiveKind === null
+      ? null
+      : effectiveCurrency === policyCurrency
+        ? amountUsable
+        : convertedAmount;
+  const amountExceedsLimit =
+    limitRemaining !== null &&
+    amountInPolicyCurrency !== null &&
+    amountInPolicyCurrency > limitRemaining;
   const docSlots =
     effectiveKind === "flex"
       ? (selectedFlexCategory?.doc_slots ?? flex?.doc_slots ?? [])
@@ -978,6 +1125,7 @@ export function useNewClaimForm() {
   return {
     // queries
     options,
+    utilization,
     insured,
     flex,
     dependants,
@@ -1007,6 +1155,8 @@ export function useNewClaimForm() {
     selection,
     effectiveKind,
     selectedProduct,
+    selectedClaimType,
+    selectedFlexCategory,
     subType,
     isHospitalisation,
     needsReferral,
@@ -1026,6 +1176,10 @@ export function useNewClaimForm() {
     docSlots,
     effectiveCurrency,
     policyCurrency,
+    limitRows,
+    limitRemaining,
+    amountInPolicyCurrency,
+    amountExceedsLimit,
     // currency conversion
     // Only the quote for the amount on screen is shown. Handing over the raw
     // `data` let the previous amount's conversion sit there looking settled

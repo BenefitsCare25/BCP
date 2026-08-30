@@ -541,6 +541,10 @@ export interface ClaimTypeOption {
   /** Stable configuration identity; the label may change without orphaning it. */
   scope_code: string;
   scope_key: string;
+  /** Exact Schedule-of-Benefits row this plan-specific claim type draws on.
+   * Null means the product-level limit applies. Served by the backend so the
+   * form never guesses from a display label. */
+  benefit_key: string | null;
   /** Pre-/post-hospitalisation consults must name the treating doctor. SERVED
    * by `claim_intake.requires_doctor_name`, never re-derived from the sub-type
    * label here — a relabel there would silently stop the form asking for a

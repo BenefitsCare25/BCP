@@ -17,6 +17,7 @@ import { AutofillCard } from "@/components/portal/claims/AutofillCard";
 import { ClaimTypeFields } from "@/components/portal/claims/ClaimTypeFields";
 import { ClaimSubmissionHeader } from "@/components/portal/claims/ClaimSubmissionHeader";
 import { ClaimLeavePrompt } from "@/components/portal/claims/ClaimLeavePrompt";
+import { ClaimLimitNotice } from "@/components/portal/claims/ClaimLimitNotice";
 import { DocumentFields } from "@/components/portal/claims/DocumentFields";
 import { PendingClaimsNotice } from "@/components/portal/claims/PendingClaimsNotice";
 import { ReferralField } from "@/components/portal/claims/ReferralField";
@@ -154,6 +155,7 @@ export function PortalNewClaimPage() {
           />
           <PendingClaimsNotice form={form} />
           <ClaimTypeFields form={form} />
+          <ClaimLimitNotice form={form} />
           {/* Before the visit details, because it changes what they are
               prefilled with. */}
           <AnchorField form={form} />

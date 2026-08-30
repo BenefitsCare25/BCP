@@ -60,6 +60,7 @@ from app.schemas.claims import (
     UtilizationOut,
 )
 from app.services.claim_fx import policy_amount
+from app.services.claim_intake import GP_SUB_TYPES, benefit_row_for_sub_type
 from app.services.member_statement import build_member_statement
 
 # In-flight claims that may still consume the limit. Defined on the model
@@ -213,12 +214,29 @@ def _insured_buckets(
             for i in items
             if isinstance(i, dict)
         }
-        for (product, key), row in sorted(
-            ((k, v) for k, v in sums.items() if k[0] == line.product_code and k[1]),
-            key=lambda kv: kv[0][1] or "",
-        ):
-            if key is None:
-                continue
+        # A member-selectable plan rider needs a utilization bucket before its
+        # first claim exists; otherwise the submission form has no server-owned
+        # balance to display until after the member has already filed. Ordinary
+        # benefit rows remain activity-driven because attribution for those is a
+        # broker decision, not something the member's claim type determines.
+        claimable_keys = {
+            key
+            for sub_type in GP_SUB_TYPES
+            if (key := benefit_row_for_sub_type(line.benefit_schedule, sub_type))
+        }
+        existing_keys = {
+            key
+            for bucket_product, key in sums
+            if bucket_product == line.product_code and key is not None
+        }
+        for key in sorted(existing_keys | claimable_keys):
+            row = sums.pop((line.product_code, key), None) or {
+                "approved": 0.0,
+                "pending": 0.0,
+                "pending_unconverted": 0,
+                "count": 0,
+                "claim_ids": [],
+            }
             item_limit = _annual_benefit_limit(item_values.get(key.lower()))
             item_display = (
                 str(item_values[key.lower()])
@@ -227,7 +245,7 @@ def _insured_buckets(
             )
             buckets.append(
                 UtilizationBucket(
-                    product_code=product,
+                    product_code=line.product_code,
                     product_name=line.product_name,
                     benefit_key=key,
                     limit=item_limit,
@@ -245,18 +263,17 @@ def _insured_buckets(
                     limit_unparsed=_limit_unparsed(item_limit, item_display),
                 )
             )
-            sums.pop((product, key), None)
 
     # Claims against products no longer on the statement (coverage changed
     # after submission) still surface — the broker needs to see them.
-    for (product, key), row in sorted(
+    for (product_code, key), row in sorted(
         sums.items(), key=lambda kv: (kv[0][0] or "", kv[0][1] or "")
     ):
-        if product in seen_products and key is None:
+        if product_code in seen_products and key is None:
             continue
         buckets.append(
             UtilizationBucket(
-                product_code=product,
+                product_code=product_code,
                 product_name=None,
                 benefit_key=key,
                 limit=None,

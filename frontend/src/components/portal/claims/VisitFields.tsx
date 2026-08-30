@@ -7,6 +7,7 @@ import { Field, leafControl } from "@/components/portal/leaf/Field";
 import { DiagnosisPicker } from "@/components/portal/DiagnosisPicker";
 import { FieldGroup } from "@/components/portal/leaf/Field";
 import { ConversionNotice } from "./ConversionNotice";
+import { Money } from "@/components/portal/leaf/Figure";
 import { FALLBACK_CURRENCIES, OTHER_HOSPITAL } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
 
@@ -187,7 +188,31 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
           )}
         </Field>
 
-        <Field label="Incurred amount" required error={form.fieldErrors.amount}>
+        <Field
+          label="Incurred amount"
+          required
+          error={form.fieldErrors.amount}
+          hint={
+            form.amountExceedsLimit ? (
+              <span className="flex gap-1.5 rounded-control bg-warn-soft px-2.5 py-2 text-record">
+                <AlertTriangle
+                  className="mt-0.5 size-4 shrink-0 text-warn"
+                  aria-hidden
+                />
+                <span>
+                  Your receipt is above the current balance of{" "}
+                  <Money
+                    value={form.limitRemaining}
+                    currency={form.policyCurrency}
+                    emphasis="strong"
+                  />.
+                  Submit the full receipt; the reimbursed amount may be lower after
+                  assessment.
+                </span>
+              </span>
+            ) : undefined
+          }
+        >
           {(p) => (
             <input
               {...p}

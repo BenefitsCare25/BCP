@@ -206,6 +206,11 @@ test("benefit-year selection defaults to today and follows every module", async 
   page,
   request,
 }, testInfo) => {
+  // This scenario intentionally traverses every benefit-year-aware module and
+  // runs two accessibility scans. Keep a bounded allowance for parallel CI
+  // workers without weakening any of its assertions.
+  test.setTimeout(45_000);
+
   const years = await context(
     request,
     testInfo.project.name === "mobile-chromium" ? 2028 : 2027,

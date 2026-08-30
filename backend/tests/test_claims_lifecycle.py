@@ -417,6 +417,8 @@ def test_coverage_options(anon: TestClient):
     assert [t["scope_code"] for t in gp["claim_types"]] == [
         "standard", "gp_tcm"
     ]
+    assert gp["claim_types"][0]["benefit_key"] is None
+    assert gp["claim_types"][1]["benefit_key"] == "TCM & Chiropractor"
     # Document slots: GP is the generic invoice/receipt; the hospitalisation
     # entry defaults to the private set and carries both sector sets for the
     # hospital picker; other inpatient sub-types stay generic.
