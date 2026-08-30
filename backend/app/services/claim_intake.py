@@ -345,6 +345,17 @@ def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
     return _PROFILES.get((product_code or "").strip().upper(), _EMPTY)
 
 
+def supports_gp_riders(product_code: str | None) -> bool:
+    """Whether TCM/physiotherapy are optional riders on this product.
+
+    The legacy row-name fallback has no product context of its own. Callers
+    that scan a whole benefit statement must use this gate or a physiotherapy
+    row on Travel, Specialist or Personal Accident coverage is misclassified
+    as a GP rider.
+    """
+    return claim_profile_for(product_code) is _GP
+
+
 def scope_code_for_sub_type(sub_type: str | None) -> str:
     """Stable scope code for a stored/display sub-type (legacy labels included)."""
     normalized = normalize_sub_type(sub_type)

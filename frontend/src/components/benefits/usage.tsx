@@ -17,6 +17,7 @@
 import type { UtilizationBucket, Utilization } from "@/types";
 import { fmtMoney } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { availableAfterPending } from "@/lib/claimLimits";
 import { AlertTriangle } from "lucide-react";
 
 const PENDING_HATCH = {
@@ -92,8 +93,28 @@ export function ClaimPosition({
   const nothing = <span className={cn("block text-subtle", side)}>—</span>;
   if (!bucket) return nothing;
 
-  const { approved, pending, limit, remaining, limit_display } = bucket;
+  const {
+    approved,
+    pending,
+    pending_unconverted,
+    limit,
+    remaining,
+    limit_display,
+    limit_status,
+    limit_is_enforceable,
+  } = bucket;
   const quiet = !hasActivity(bucket);
+
+  if (limit_status === "needs_review") {
+    return (
+      <div className={cn("flex flex-col gap-0.5", side)}>
+        <span className="text-xs font-medium text-warn">Needs review · not live</span>
+        {limit_display && (
+          <span className="text-2xs text-muted-foreground">{limit_display}</span>
+        )}
+      </div>
+    );
+  }
 
   // Nothing claimed and no stated limit: there is no fact to report.
   if (quiet && limit === null && !limit_display) return nothing;
@@ -102,7 +123,7 @@ export function ClaimPosition({
   // would shrink it to its content width, i.e. to nothing.
   return (
     <div className={cn("flex flex-col gap-0.5", side)}>
-      {limit !== null && remaining !== null ? (
+      {limit !== null && remaining !== null && limit_is_enforceable === true ? (
         <>
           {/* Floored, matching `utilization.py` — a benefit pays UP TO its
             * limit, so "$300 over limit" is not a position anyone is in. The
@@ -110,10 +131,15 @@ export function ClaimPosition({
             * "-$300 left". What was actually approved stays on the claim
             * record and in the reports. */}
           <span className="font-medium tabular-nums text-foreground">
-            {`${fmtMoney(Math.max(0, remaining))} left`}
+            {pending > 0 && pending_unconverted === 0
+              ? `${fmtMoney(
+                  availableAfterPending(remaining, pending) ?? remaining,
+                )} available after pending`
+              : `${fmtMoney(Math.max(0, remaining))} left`}
           </span>
           <span className="text-2xs tabular-nums text-muted-foreground">
             of {fmtMoney(limit)}
+            {pending > 0 && ` · ${fmtMoney(remaining)} confirmed`}
           </span>
           <UtilizationBar
             limit={limit}

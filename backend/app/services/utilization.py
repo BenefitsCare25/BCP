@@ -60,7 +60,11 @@ from app.schemas.claims import (
     UtilizationOut,
 )
 from app.services.claim_fx import policy_amount
-from app.services.claim_intake import GP_SUB_TYPES, benefit_row_for_sub_type
+from app.services.claim_intake import (
+    GP_SUB_TYPES,
+    benefit_row_for_sub_type,
+    supports_gp_riders,
+)
 from app.services.claim_limits import (
     configured_benefit_rows,
     enforceable_policy_year_amount,
@@ -77,11 +81,6 @@ __all__ = ["PENDING_STATUSES", "build_utilization", "parse_limit_amount",
            "remaining_for_claim"]
 
 _AMOUNT_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
-# A benefit-item value only counts as an ANNUAL limit when it's a plain amount
-# or explicitly per-year — "S$650/day", "80% co-pay", "As charged" are not.
-_PER_UNIT_RE = re.compile(
-    r"(/|\bper\b(?!\s+(?:year|annum|policy\s+year)))", re.IGNORECASE
-)
 
 
 def parse_limit_amount(text: str | None) -> float | None:
@@ -97,14 +96,6 @@ def parse_limit_amount(text: str | None) -> float | None:
         return amount if amount >= 0 else None
     except ValueError:
         return None
-
-
-def _annual_benefit_limit(value: str | None) -> float | None:
-    """Parse a Schedule-of-Benefits item value as an annual limit — only when
-    it isn't qualified per-day/per-visit/percentage."""
-    if not value or "%" in value or _PER_UNIT_RE.search(value):
-        return None
-    return parse_limit_amount(value)
 
 
 def _limit_unparsed(limit: float | None, display: str | None) -> bool:
@@ -216,7 +207,7 @@ def _insured_buckets(
         limit = (
             enforceable_policy_year_amount(configured_product)
             if has_product_setting
-            else parse_limit_amount(line.annual_policy_limit)
+            else None
         )
         product_display = (
             setting_display(configured_product, line.annual_policy_limit)
@@ -260,11 +251,16 @@ def _insured_buckets(
         # balance to display until after the member has already filed. Ordinary
         # benefit rows remain activity-driven because attribution for those is a
         # broker decision, not something the member's claim type determines.
-        claimable_keys = configured_benefit_rows(schedule) | {
-            key
-            for sub_type in GP_SUB_TYPES
-            if (key := benefit_row_for_sub_type(line.benefit_schedule, sub_type))
-        }
+        legacy_gp_keys = (
+            {
+                key
+                for sub_type in GP_SUB_TYPES
+                if (key := benefit_row_for_sub_type(line.benefit_schedule, sub_type))
+            }
+            if supports_gp_riders(line.product_code)
+            else set()
+        )
+        claimable_keys = configured_benefit_rows(schedule) | legacy_gp_keys
         existing_keys = {
             key
             for bucket_product, key in sums
@@ -285,7 +281,7 @@ def _insured_buckets(
             item_limit = (
                 enforceable_policy_year_amount(configured_item)
                 if has_item_setting
-                else _annual_benefit_limit(item_value)
+                else None
             )
             item_display = (
                 setting_display(configured_item, item_value)

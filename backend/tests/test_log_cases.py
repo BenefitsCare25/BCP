@@ -89,6 +89,15 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 plan_code="P1",
                 annual_policy_limit="S$100,000",
                 benefit_schedule={
+                    "claim_limit": {
+                        "basis": "policy_year",
+                        "amount": 100000,
+                        "currency": "SGD",
+                        "display": "S$100,000 per policy year",
+                        "claim_scope_codes": [],
+                        "status": "verified",
+                        "source": "manual",
+                    },
                     "items": [
                         {"number": "1", "name": "Room & Board", "value": "S$650/day"}
                     ]

@@ -79,10 +79,22 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",
-                # The number at the heart of the bug this module exists for: a
-                # USD 500 bill is SGD 675, which does NOT fit under 600.
+                # The verified number at the heart of the bug this module
+                # exists for: a USD 500 bill is SGD 675, which does NOT fit
+                # under 600.
                 annual_policy_limit="S$600",
-                benefit_schedule={"items": []},
+                benefit_schedule={
+                    "claim_limit": {
+                        "basis": "policy_year",
+                        "amount": 600,
+                        "currency": "SGD",
+                        "display": "S$600 per policy year",
+                        "claim_scope_codes": [],
+                        "status": "verified",
+                        "source": "manual",
+                    },
+                    "items": [],
+                },
                 covers_dependants=False,
                 covered_dependants=[],
             )

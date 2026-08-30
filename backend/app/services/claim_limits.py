@@ -6,8 +6,10 @@ table that could drift after a broker edits the schedule.  Only a positive
 monetary ``policy_year`` setting is enforceable.  Every other basis is display
 guidance for members and assessors.
 
-Legacy text parsing remains a rollout fallback only.  Once a ``claim_limit``
-key exists on a row, that explicit setting wins -- including ``not_limit``.
+Text parsing creates broker-review suggestions only. It never creates member
+balances or approval authority until a broker verifies the structured setting.
+Once a ``claim_limit`` key exists on a row, that explicit setting wins --
+including ``not_limit``.
 """
 
 from __future__ import annotations
@@ -181,12 +183,17 @@ def normalize_limit_setting(raw: Any, *, fallback_display: Any = None) -> dict[s
 
 
 def enforceable_policy_year_amount(setting: Any) -> float | None:
-    """Numeric approval/balance limit, or ``None`` for informative settings."""
+    """Verified numeric approval/balance limit, or ``None``.
+
+    ``needs_review`` is a broker work item, never policy authority.  Treating a
+    detected suggestion as live made an extraction guess appear to members and
+    participate in the approval guard before anyone had confirmed it.
+    """
     normalized = normalize_limit_setting(setting)
     if (
         normalized is None
         or normalized["basis"] != LIMIT_BASIS_POLICY_YEAR
-        or normalized["status"] == LIMIT_STATUS_NOT_LIMIT
+        or normalized["status"] != LIMIT_STATUS_VERIFIED
     ):
         return None
     amount = normalized.get("amount")
@@ -197,9 +204,19 @@ def setting_display(setting: Any, fallback: Any = None) -> str | None:
     normalized = normalize_limit_setting(setting, fallback_display=fallback)
     if normalized is None:
         return str(fallback).strip() if fallback else None
+    amount = normalized.get("amount")
+    # ``display`` is the extracted source wording. Once a broker edits and
+    # verifies a monetary amount, that stale wording must not outrank the value
+    # they actually approved (for example, showing S$2,000 beside a S$1,500
+    # balance).
+    if (
+        normalized["source"] == "manual"
+        and normalized["basis"] == LIMIT_BASIS_POLICY_YEAR
+        and amount is not None
+    ):
+        return f"SGD {float(amount):,.2f} per policy year"
     if normalized.get("display"):
         return str(normalized["display"])
-    amount = normalized.get("amount")
     if amount is not None:
         numeric_amount = float(amount)
         if normalized["basis"] == LIMIT_BASIS_PERCENTAGE:
@@ -237,7 +254,11 @@ def configured_benefit_row(schedule: dict[str, Any] | None, scope_code: str | No
         if not isinstance(item, dict):
             continue
         setting = item_setting(item)
-        if setting is None:
+        # A detected mapping is only a suggestion in the broker editor. It must
+        # not stamp a member claim with the guessed row before verification.
+        # ``not_limit`` remains authoritative for attribution: the broker has
+        # explicitly said the row carries policy wording but no annual balance.
+        if setting is None or setting["status"] == LIMIT_STATUS_NEEDS_REVIEW:
             continue
         if wanted in setting["claim_scope_codes"]:
             name = str(item.get("name") or "").strip()
@@ -247,7 +268,7 @@ def configured_benefit_row(schedule: dict[str, Any] | None, scope_code: str | No
 
 
 def configured_benefit_rows(schedule: dict[str, Any] | None) -> set[str]:
-    """Mapped rows that need a zero-use utilization bucket before first claim."""
+    """Authoritatively mapped rows that need a bucket before first claim."""
     rows: set[str] = set()
     for item in (schedule or {}).get("items") or []:
         if not isinstance(item, dict):
@@ -257,6 +278,7 @@ def configured_benefit_rows(schedule: dict[str, Any] | None) -> set[str]:
         if (
             name
             and setting is not None
+            and setting["status"] != LIMIT_STATUS_NEEDS_REVIEW
             and setting["claim_scope_codes"]
         ):
             rows.add(name)

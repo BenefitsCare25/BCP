@@ -22,10 +22,15 @@ from app.services.claim_fx import (
     FX_STATE_CONVERTED,
     FX_STATE_NOT_REQUIRED,
     fx_state,
+    policy_amount,
 )
 from app.services.claim_intake import normalize_invoice_number
+from app.services.claim_limits import (
+    enforceable_policy_year_amount,
+    item_setting,
+    product_setting,
+)
 from app.services.fx import POLICY_CURRENCY
-from app.services.utilization import parse_limit_amount
 
 
 def _result(rule: str, status: str, evidence: str) -> dict[str, Any]:
@@ -177,41 +182,72 @@ def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
 
 
 def _check_amount_vs_limit(claim: Claim, statement: BenefitStatementOut) -> dict[str, Any]:
+    claimed = policy_amount(claim)
     if claim.claim_kind == CLAIM_KIND_FLEX:
         rule = "Claimed amount does not exceed the flex balance."
         flex = statement.flex
         balance = flex.flex_balance if flex is not None else None
         if balance is None:
             return _result(rule, "pass", "No flex balance recorded — not enforced.")
-        if claim.amount_claimed > float(balance):
+        if claimed is None:
+            return _result(
+                rule,
+                "pass",
+                "Policy-currency amount is awaiting conversion — not enforced.",
+            )
+        if claimed > float(balance):
             return _result(
                 rule, "fail",
-                f"Claimed {claim.amount_claimed:.2f} exceeds the remaining "
+                f"Claimed {claimed:.2f} exceeds the remaining "
                 f"flex balance of {float(balance):.2f}.",
             )
         return _result(
             rule, "pass",
-            f"Claimed {claim.amount_claimed:.2f} within flex balance {float(balance):.2f}.",
+            f"Claimed {claimed:.2f} within flex balance {float(balance):.2f}.",
         )
 
-    rule = "Claimed amount does not exceed the annual policy limit."
+    rule = "Claimed amount does not exceed the verified annual policy limit."
     line = next(
         (c for c in statement.coverage if c.product_code == claim.product_code), None
     )
-    limit = parse_limit_amount(line.annual_policy_limit if line else None)
-    if limit is None:
-        return _result(rule, "pass", "No numeric annual limit stated — not enforced.")
-    if claim.amount_claimed > limit:
+    schedule = line.benefit_schedule if line is not None else None
+    candidates: list[float] = []
+    if (
+        overall_limit := enforceable_policy_year_amount(product_setting(schedule))
+    ) is not None:
+        candidates.append(overall_limit)
+    wanted = (claim.benefit_key or "").strip().casefold()
+    if wanted:
+        for item in (schedule or {}).get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("name") or "").strip().casefold() != wanted:
+                continue
+            if (
+                item_limit := enforceable_policy_year_amount(item_setting(item))
+            ) is not None:
+                candidates.append(item_limit)
+            break
+    if not candidates:
+        return _result(rule, "pass", "No verified annual limit stated — not enforced.")
+    if claimed is None:
+        return _result(
+            rule,
+            "pass",
+            "Policy-currency amount is awaiting conversion — not enforced.",
+        )
+    limit = min(candidates)
+    if claimed > limit:
         # Warning, not fail: prior approved claims aren't netted here and the
         # broker may still partially approve.
         return _result(
             rule, "warning",
-            f"Claimed {claim.amount_claimed:.2f} exceeds the annual policy "
+            f"Claimed {claimed:.2f} exceeds the verified annual policy "
             f"limit of {limit:.2f} for {claim.product_code}.",
         )
     return _result(
         rule, "pass",
-        f"Claimed {claim.amount_claimed:.2f} within annual limit {limit:.2f}.",
+        f"Claimed {claimed:.2f} within verified annual limit {limit:.2f}.",
     )
 
 

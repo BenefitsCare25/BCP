@@ -2373,6 +2373,51 @@ def test_another_members_identical_invoice_number_is_a_warning_not_a_failure():
     assert theirs in result["evidence"]
 
 
+def test_review_limit_rule_ignores_unverified_extracted_text():
+    claim_id, _ = _mk_claim(amount=1_500, marker=b"unverified-limit")
+    result = _rule(claim_id, "verified annual policy limit")
+    assert result["status"] == "pass"
+    assert "No verified annual limit" in result["evidence"]
+
+
+def test_review_limit_rule_uses_tightest_verified_structured_limit():
+    from app.services.claims_review.rules import _check_amount_vs_limit
+
+    claim_id, _ = _mk_claim(amount=85, marker=b"verified-limit")
+    with SessionLocal() as s:
+        claim = s.get(Claim, claim_id)
+        statement = _statement(s.get(Employee, EMP))
+        statement.coverage[0].benefit_schedule = {
+            "claim_limit": {
+                "basis": "policy_year",
+                "amount": 100,
+                "currency": "SGD",
+                "display": "S$100 per policy year",
+                "claim_scope_codes": [],
+                "status": "verified",
+                "source": "manual",
+            },
+            "items": [
+                {
+                    "name": "Outpatient GP",
+                    "value": "S$50 per policy year",
+                    "claim_limit": {
+                        "basis": "policy_year",
+                        "amount": 50,
+                        "currency": "SGD",
+                        "display": "S$50 per policy year",
+                        "claim_scope_codes": ["standard"],
+                        "status": "verified",
+                        "source": "manual",
+                    },
+                }
+            ],
+        }
+        result = _check_amount_vs_limit(claim, statement)
+    assert result["status"] == "warning"
+    assert "50.00" in result["evidence"]
+
+
 def test_a_claim_with_no_invoice_number_never_matches():
     first, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"blank-a")
     second, _ = _mk_claim(marker=b"blank-b")

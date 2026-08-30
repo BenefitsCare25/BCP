@@ -25,6 +25,7 @@ import {
   columnIdForPlan,
   draftLimitSetting,
   itemLimitForPlan,
+  isLiveAnnualLimit,
   sourceWordingForPlan,
 } from "@/lib/claimLimits";
 
@@ -38,11 +39,13 @@ interface Props {
 type EditTarget = "overall" | string | null;
 
 const statusLabel = (setting: ClaimLimitSetting) =>
-  setting.status === "verified"
-    ? "Verified"
+  isLiveAnnualLimit(setting)
+    ? "Verified · live"
+    : setting.status === "verified"
+      ? "Verified · policy wording"
     : setting.status === "not_limit"
-      ? "Not a limit"
-      : "Needs review";
+      ? "Informational · no balance"
+      : "Needs review · not live";
 
 const statusVariant = (setting: ClaimLimitSetting) =>
   setting.status === "verified"
@@ -199,11 +202,16 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
   const verified = settings.filter((setting) => setting.status === "verified").length;
   const needsReview = settings.filter((setting) => setting.status === "needs_review").length;
 
-  const mappedByScope = new Map<string, SobItemAnswer>();
+  const mappedByScope = new Map<
+    string,
+    { item: SobItemAnswer; setting: ClaimLimitSetting }
+  >();
   for (const item of configured) {
     const setting = itemLimitForPlan(sob, item, activeCode);
     if (!setting) continue;
-    for (const scope of setting.claim_scope_codes) mappedByScope.set(scope, item);
+    for (const scope of setting.claim_scope_codes) {
+      mappedByScope.set(scope, { item, setting });
+    }
   }
 
   const setOverall = (next: ClaimLimitSetting) =>
@@ -283,7 +291,9 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
             Claim limit settings
           </h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            Map claim types to the SoB line they draw from. Only a verified or review-pending policy-year amount affects the member balance and approval guard.
+            Map claim types to the SoB line they draw from. Only a verified
+            policy-year amount is shown to members or enforced during approval;
+            detected values stay offline until you verify them.
           </p>
         </div>
         <div className="w-full sm:w-64">
@@ -329,7 +339,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-foreground">Overall plan limit</p>
               <p className="text-xs text-muted-foreground">
-                Applies across every insured claim type in {activePlan.label || activeCode}.
+                Applies across claims assessed against {activePlan.label || activeCode}.
               </p>
             </div>
             {overall ? (
@@ -428,12 +438,27 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
           <p className="text-xs font-medium text-foreground">Claim type coverage</p>
           <dl className="mt-2 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
             {claimScopes.map((scope) => {
-              const item = mappedByScope.get(scope.code);
+              const mapped = mappedByScope.get(scope.code);
+              const overallState = overall
+                ? isLiveAnnualLimit(overall)
+                  ? "Overall plan · live annual balance"
+                  : overall.status === "needs_review"
+                    ? "No live balance · overall needs review"
+                    : "Overall plan · policy wording only"
+                : "No live balance";
               return (
                 <div key={scope.code} className="flex items-baseline justify-between gap-3">
                   <dt className="text-muted-foreground">{scope.label}</dt>
                   <dd className="text-right font-medium text-foreground">
-                    {item?.name ?? (overall ? "Overall plan only" : "No line balance")}
+                    {mapped
+                      ? `${mapped.item.name} · ${
+                          isLiveAnnualLimit(mapped.setting)
+                            ? "live annual balance"
+                            : mapped.setting.status === "needs_review"
+                              ? "pending review, not live"
+                              : "policy wording only"
+                        }`
+                      : overallState}
                   </dd>
                 </div>
               );

@@ -200,7 +200,8 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                   aria-hidden
                 />
                 <span>
-                  Your receipt is above the current balance of{" "}
+                  Your receipt is above the amount currently available after
+                  submitted claims: {" "}
                   <Money
                     value={form.limitRemaining}
                     currency={form.policyCurrency}

@@ -116,6 +116,28 @@ async function mockClaimForm(page: Page) {
       json: { total: 0, offset: 0, limit: 20, unread_total: 0, items: [] },
     }),
   );
+  await page.route(/\/api\/v1\/portal\/benefit-statement$/, (route) =>
+    route.fulfill({
+      json: {
+        employee: {
+          id: "employee-limit-test",
+          staff_id: "EMP-001",
+          employee_name: "Test Member",
+        },
+        policy_year_id: "policy-limit-test",
+        is_matched: true,
+        attributes: [],
+        coverage: [],
+        dependants: [],
+        flex: null,
+      },
+    }),
+  );
+  await page.route(/\/api\/v1\/portal\/claims(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      json: { total: 0, offset: 0, limit: 20, items: [] },
+    }),
+  );
   await page.route(/\/api\/v1\/portal\/claims\/form\/draft$/, async (route) => {
     if (route.request().method() === "GET") {
       await route.fulfill({ json: null });
@@ -215,7 +237,10 @@ async function mockClaimForm(page: Page) {
             product_name: "Group Clinical GP",
             benefit_key: null,
             limit: null,
-            limit_display: null,
+            limit_display: "S$9,999",
+            limit_basis: "policy_year",
+            limit_status: "needs_review",
+            limit_is_enforceable: false,
             approved: 100,
             pending: 50,
             pending_unconverted: 0,
@@ -284,18 +309,21 @@ test("claim form shows the selected plan balance and warns without blocking a fu
     .getByRole("combobox", { name: "Claim type" })
     .selectOption({ label: "TCM (Traditional Chinese Medicine)" });
 
-  const limits = page.getByRole("region", { name: "Current claim limit" });
+  const limits = page.getByRole("region", { name: "Limit for this claim" });
   await expect(limits).toContainText("TCM & Chiropractor");
-  await expect(limits).toContainText("S$200 left");
+  await expect(limits).toContainText("S$150 available after pending");
   await expect(limits).toContainText("of S$300");
-  await expect(limits).toContainText("S$50 not settled yet; not deducted");
+  await expect(limits).toContainText("S$200 confirmed balance");
+  await expect(limits).toContainText("S$50 submitted and not settled yet");
   await expect(limits).not.toContainText("Overall plan");
+  await expect(limits).not.toContainText("S$9,999");
 
   await page.getByRole("spinbutton", { name: "Incurred amount" }).fill("250");
   const amountWarning = page.getByText(
-    /Your receipt is above the current balance of S\$200/,
+    /Your receipt is above the amount currently available after submitted claims/,
   );
   await expect(amountWarning).toBeVisible();
+  await expect(amountWarning).toContainText("S$150");
   await expect(amountWarning).toContainText("Submit the full receipt");
   await expect(page.getByRole("button", { name: "Submit claim" })).toBeEnabled();
 
@@ -323,7 +351,7 @@ test("per-visit wording is informative and never becomes an annual balance", asy
     .getByRole("combobox", { name: "Claim type" })
     .selectOption({ label: "Physiotherapy" });
 
-  const limits = page.getByRole("region", { name: "Current claim limit" });
+  const limits = page.getByRole("region", { name: "Limit for this claim" });
   await expect(limits).toContainText("Physiotherapy");
   await expect(limits).toContainText("S$80 per visit");
   await expect(limits).toContainText("Per visit condition; this is policy wording");
@@ -338,6 +366,36 @@ test("per-visit wording is informative and never becomes an annual balance", asy
     .analyze();
   expect(accessibility.violations).toEqual([]);
   expect(runtimeErrors).toEqual([]);
+});
+
+test("what's left shows only verified annual balances", async ({
+  page,
+}, testInfo: TestInfo) => {
+  const runtimeErrors = monitorRuntime(page);
+  await mockClaimForm(page);
+  await page.goto("/portal/demo/coverage?tab=usage");
+
+  const main = page.getByRole("main");
+  await expect(main).toContainText("Group Clinical GP");
+  await expect(main).toContainText("TCM & Chiropractor");
+  await expect(main).toContainText("S$150");
+  await expect(main).toContainText("available after pending");
+  await expect(main).toContainText("S$200 confirmed balance");
+  await expect(main).not.toContainText("S$9,999");
+  await expect(main).not.toContainText("Physiotherapy");
+  await expect(main).not.toContainText("As charged");
+
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  expect(runtimeErrors).toEqual([]);
+
+  await page.screenshot({
+    path: testInfo.outputPath(`whats-left-${testInfo.project.name}.png`),
+    fullPage: true,
+    animations: "disabled",
+  });
 });
 
 test("broker can review plan and line mappings from the SoB editor", async ({

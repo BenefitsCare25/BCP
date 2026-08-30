@@ -59,7 +59,8 @@ import {
 } from "./claimForm";
 import { useCompany } from "@/components/portal/useCompany";
 import { useClaimDraftSync } from "./useClaimDraftSync";
-import type { ClaimLimitBasis } from "@/types";
+import type { ClaimLimitBasis, ClaimLimitStatus } from "@/types";
+import { availableAfterPending } from "@/lib/claimLimits";
 
 export type NewClaimForm = ReturnType<typeof useNewClaimForm>;
 
@@ -73,6 +74,7 @@ export interface ClaimLimitRow {
   pendingUnconverted: number;
   remaining: number | null;
   limitBasis: ClaimLimitBasis | null;
+  limitStatus: ClaimLimitStatus | null;
   isEnforceable: boolean;
 }
 
@@ -345,12 +347,23 @@ export function useNewClaimForm() {
           pending_unconverted: number;
           remaining: number | null;
           limit_basis?: ClaimLimitBasis | null;
+          limit_status?: ClaimLimitStatus | null;
           limit_is_enforceable?: boolean;
         }
       | undefined,
-  ): ClaimLimitRow | null =>
-    bucket
-      ? {
+  ): ClaimLimitRow | null => {
+    if (!bucket) return null;
+    const status = bucket.limit_status ?? null;
+    // Suggestions and legacy text are not member policy authority. A verified
+    // nonannual row may still be shown as policy wording, while only an
+    // enforceable annual row participates in the balance warning.
+    if (
+      status === "needs_review" ||
+      (status === null && bucket.limit_is_enforceable !== true)
+    ) {
+      return null;
+    }
+    return {
           key,
           label,
           limit: bucket.limit,
@@ -360,9 +373,10 @@ export function useNewClaimForm() {
           pendingUnconverted: bucket.pending_unconverted,
           remaining: bucket.remaining,
           limitBasis: bucket.limit_basis ?? null,
+          limitStatus: status,
           isEnforceable: bucket.limit_is_enforceable ?? bucket.limit !== null,
-        }
-      : null;
+        };
+  };
 
   const limitRows: ClaimLimitRow[] = [];
   if (effectiveKind === "insured" && selectedProduct) {
@@ -388,23 +402,6 @@ export function useNewClaimForm() {
     ) {
       limitRows.push(overall);
     }
-    // A rolling deployment or a transient utilization mismatch must not make a
-    // stated plan limit disappear. It cannot provide a computed balance, but it
-    // can still show the insurer's verbatim limit honestly.
-    if (limitRows.length === 0 && selectedProduct.annual_policy_limit) {
-      limitRows.push({
-        key: `insured:${productCode}:fallback`,
-        label: selectedProduct.product_name || productCode,
-        limit: null,
-        limitDisplay: selectedProduct.annual_policy_limit,
-        approved: 0,
-        pending: 0,
-        pendingUnconverted: 0,
-        remaining: null,
-        limitBasis: null,
-        isEnforceable: false,
-      });
-    }
   } else if (effectiveKind === "flex" && flexLimit) {
     limitRows.push({
       key: "flex:wallet",
@@ -419,6 +416,7 @@ export function useNewClaimForm() {
       pendingUnconverted: flexLimit.pending_unconverted,
       remaining: flexLimit.available,
       limitBasis: "policy_year",
+      limitStatus: "verified",
       isEnforceable: flexLimit.available !== null,
     });
     if (flexCategoryLimit?.sub_limit != null) {
@@ -432,12 +430,21 @@ export function useNewClaimForm() {
         pendingUnconverted: 0,
         remaining: flexCategoryLimit.remaining,
         limitBasis: "policy_year",
+        limitStatus: "verified",
         isEnforceable: flexCategoryLimit.remaining !== null,
       });
     }
   }
   const knownRemaining = limitRows
-    .map((row) => row.remaining)
+    .filter((row) => row.isEnforceable)
+    .map(
+      (row) =>
+        availableAfterPending(
+          row.remaining,
+          row.pending,
+          row.pendingUnconverted,
+        ) ?? row.remaining,
+    )
     .filter((value): value is number => value !== null);
   const limitRemaining =
     knownRemaining.length > 0 ? Math.max(0, Math.min(...knownRemaining)) : null;

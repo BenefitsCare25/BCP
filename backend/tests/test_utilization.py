@@ -2,7 +2,7 @@
 limit-exceeded approve guard (+ acknowledge), and member isolation.
 
 `build_member_statement` is monkeypatched to a canned statement (GHS with a
-S$1,000 annual limit + a per-year Dental item + a per-day item, and a flex
+verified S$1,000 annual limit + a verified per-year Dental item + a per-day item, and a flex
 wallet with price tags) so the sums are exercised on a known coverage shape.
 """
 
@@ -130,8 +130,30 @@ def _statement(employee) -> BenefitStatementOut:
                 plan_code="P1",
                 annual_policy_limit="S$1,000",
                 benefit_schedule={
+                    "claim_limit": {
+                        "basis": "policy_year",
+                        "amount": 1000,
+                        "currency": "SGD",
+                        "display": "S$1,000",
+                        "claim_scope_codes": [],
+                        "status": "verified",
+                        "source": "manual",
+                    },
                     "items": [
-                        {"number": "1", "name": "Dental", "value": "S$500 per year"},
+                        {
+                            "number": "1",
+                            "name": "Dental",
+                            "value": "S$500 per year",
+                            "claim_limit": {
+                                "basis": "policy_year",
+                                "amount": 500,
+                                "currency": "SGD",
+                                "display": "S$500 per year",
+                                "claim_scope_codes": [],
+                                "status": "verified",
+                                "source": "manual",
+                            },
+                        },
                         {"number": "2", "name": "Room & Board", "value": "S$650/day"},
                         {"number": "3", "name": "Outpatient GP", "value": "As charged"},
                     ]
@@ -153,6 +175,15 @@ def _statement(employee) -> BenefitStatementOut:
                             "number": "1",
                             "name": "TCM & Chiropractor",
                             "value": "S$300 per policy year",
+                            "claim_limit": {
+                                "basis": "policy_year",
+                                "amount": 300,
+                                "currency": "SGD",
+                                "display": "S$300 per policy year",
+                                "claim_scope_codes": ["gp_tcm"],
+                                "status": "verified",
+                                "source": "manual",
+                            },
                         },
                     ]
                 },
@@ -273,6 +304,58 @@ def test_zero_baseline():
         0.0,
         300.0,
     )
+
+
+def test_gp_rider_keywords_do_not_leak_into_unrelated_products(monkeypatch):
+    def statement(_db, employee):
+        value = deepcopy(_statement(employee))
+        for code, name in (
+            ("GBT", "Group Business Travel"),
+            ("SP", "Group Clinical Specialist"),
+            ("GPA", "Group Personal Accident"),
+        ):
+            value.coverage.append(
+                CoverageLine(
+                    product_code=code,
+                    product_name=name,
+                    plan_code="P1",
+                    benefit_schedule={
+                        "items": [
+                            {"name": "Physiotherapy Costs", "value": "S$2,000"},
+                            {"name": "Traditional Chinese Medicine", "value": "S$200"},
+                        ]
+                    },
+                )
+            )
+        return value
+
+    monkeypatch.setattr(utilization_service, "build_member_statement", statement)
+    util = _util()
+    assert not [
+        bucket
+        for bucket in util.insured
+        if bucket.product_code in {"GBT", "SP", "GPA"}
+        and bucket.benefit_key is not None
+    ]
+
+
+def test_legacy_text_is_not_an_authoritative_balance(monkeypatch):
+    def statement(_db, employee):
+        value = deepcopy(_statement(employee))
+        line = value.coverage[0]
+        line.annual_policy_limit = "S$9,999"
+        line.benefit_schedule = {
+            "items": [
+                {"name": "Hospitalisation", "value": "S$2,000 per policy year"}
+            ]
+        }
+        return value
+
+    monkeypatch.setattr(utilization_service, "build_member_statement", statement)
+    util = _util()
+    product = _bucket(util, "GHS")
+    assert product.limit is None
+    assert product.remaining is None
 
 
 def test_structured_policy_year_setting_overrides_free_text(monkeypatch):

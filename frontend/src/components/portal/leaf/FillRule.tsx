@@ -8,9 +8,10 @@
  *
  * Approved is a solid ink and pending is a hatch, so the two are separable by
  * TEXTURE and not by hue alone (WCAG 1.4.1); the figures beneath restate both
- * in words. Pending is shown for awareness and is **never subtracted from what
- * is left** — that is a product rule from `utilization.py`, and drawing it as
- * though it were spent would misreport the member's balance.
+ * in words. The server's `remaining` figure is the confirmed balance after
+ * approved claims. This component subtracts convertible pending submissions
+ * once more to show the conservative amount currently available, while keeping
+ * the confirmed balance visible as a separate secondary figure.
  *
  * **Pending is "not settled yet", never "under review".** The figure is a SUM,
  * and `needs_info` is in it — a claim we have asked the member a question about
@@ -25,6 +26,7 @@
  * and `.leaf-grow` resolves to `scaleX(1)` under reduced motion rather than
  * leaving an invisible bar. */
 import { cn } from "@/lib/cn";
+import { availableAfterPending } from "@/lib/claimLimits";
 import { Money, currencySymbol, moneyText } from "./Figure";
 
 /** What was drawn AGAINST this limit, which can never exceed it.
@@ -43,6 +45,7 @@ function sentence(
   limit: number,
   approved: number,
   pending: number,
+  pendingUnconverted: number,
   remaining: number | null,
   currency: string,
 ): string {
@@ -52,8 +55,19 @@ function sentence(
   ];
   if (pending > 0)
     parts.push(`${currency}${moneyText(pending)} not settled yet`);
-  if (remaining !== null)
+  const available = availableAfterPending(
+    remaining,
+    pending,
+    pendingUnconverted,
+  );
+  if (available !== null && pending > 0) {
+    parts.push(`${currency}${moneyText(available)} available after pending claims`);
+  } else if (remaining !== null) {
     parts.push(`${currency}${moneyText(Math.max(0, remaining))} left`);
+  }
+  if (pendingUnconverted > 0) {
+    parts.push("the after-pending balance is awaiting currency conversion");
+  }
   return `${parts.join(", ")}.`;
 }
 
@@ -61,6 +75,7 @@ export function FillRule({
   limit,
   approved,
   pending,
+  pendingUnconverted = 0,
   remaining,
   currency = "S$",
   compact = false,
@@ -68,6 +83,7 @@ export function FillRule({
   limit: number | null;
   approved: number;
   pending: number;
+  pendingUnconverted?: number;
   remaining: number | null;
   currency?: string | null;
   /** The thinner bar used for secondary limits stacked under the headline one. */
@@ -76,6 +92,11 @@ export function FillRule({
   // Symbolised once here: the accessible sentence below is plain text, so it
   // cannot lean on <Money> to do the conversion.
   const cur = currencySymbol(currency);
+  const available = availableAfterPending(
+    remaining,
+    pending,
+    pendingUnconverted,
+  );
 
   // No parsed limit means there is no fullness to express. Saying so plainly
   // beats drawing an empty track, which would read as "nothing is covered".
@@ -83,8 +104,8 @@ export function FillRule({
   // Approved and pending are stated as SEPARATE lines here, never summed. A
   // combined "claimed so far" figure reads as money already settled, and a
   // member whose claims are all still in review would see the total presented
-  // as though it had been paid — the same mistake as subtracting pending from
-  // a balance, in the one place there is no bar to distinguish them by texture.
+  // as though it had been paid. There is no verified annual balance in this
+  // branch, so there is also no defensible "available after pending" figure.
   if (limit === null || limit <= 0) {
     if (approved <= 0 && pending <= 0) {
       return <p className="text-row text-label">Nothing claimed yet</p>;
@@ -123,7 +144,14 @@ export function FillRule({
           compact ? "h-1.5" : "h-2.5",
         )}
         role="img"
-        aria-label={sentence(limit, approved, pending, remaining, cur)}
+        aria-label={sentence(
+          limit,
+          approved,
+          pending,
+          pendingUnconverted,
+          remaining,
+          cur,
+        )}
       >
         <div
           className="leaf-grow h-full bg-strike-approved"
@@ -163,13 +191,31 @@ export function FillRule({
             // paid the rest. The clamp is repeated here rather than trusted
             // from the payload so one stale caller cannot reintroduce
             // "S$-120 left".
-            <span className="text-row text-label">
+            <span className="ml-auto flex shrink-0 flex-col items-end text-row text-label">
               <Money
-                value={Math.max(0, remaining)}
+                value={
+                  pending > 0 && available !== null
+                    ? available
+                    : Math.max(0, remaining)
+                }
                 currency={cur}
                 emphasis="strong"
-              />{" "}
-              left
+              />
+              <span>
+                {pending > 0 && available !== null
+                  ? "available after pending"
+                  : "left"}
+              </span>
+              {pending > 0 && (
+                <span className="text-2xs">
+                  <Money value={Math.max(0, remaining)} currency={cur} /> confirmed balance
+                </span>
+              )}
+              {pendingUnconverted > 0 && (
+                <span className="max-w-56 text-right text-2xs">
+                  After-pending balance awaits currency conversion
+                </span>
+              )}
             </span>
           )}
         </div>

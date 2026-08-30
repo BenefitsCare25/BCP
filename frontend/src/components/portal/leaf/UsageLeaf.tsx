@@ -25,6 +25,7 @@ import { FillRule, drawnAgainst } from "./FillRule";
 import { prorationReason } from "./FlexProrationNote";
 import { glossBeside } from "./glossary";
 import { formatDay } from "./date";
+import { availableAfterPending } from "@/lib/claimLimits";
 
 /** The amount a claim contributes to a POLICY-CURRENCY bucket, exactly as
  * `claim_fx.policy_amount` computes it.
@@ -181,6 +182,7 @@ function BucketBlock({
         limit={bucket.limit}
         approved={bucket.approved}
         pending={bucket.pending}
+        pendingUnconverted={bucket.pending_unconverted}
         remaining={bucket.remaining}
       />
     </div>
@@ -214,6 +216,11 @@ function drawnFromWallet(
 function FlexBlock({ flex }: { flex: FlexUtilization }) {
   const currency = flex.currency ?? "S$";
   const base = flex.flex_balance ?? flex.wallet_amount;
+  const afterPending = availableAfterPending(
+    flex.available,
+    flex.pending,
+    flex.pending_unconverted,
+  );
   // **There is not always a limit to read the drawn figure against**, and this
   // is the guard `FillRule` used to apply before this card stated its own
   // figures. Two ways it fails: `wallet_amount` can be absent outright, and
@@ -254,14 +261,20 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
                 puts the number at the card's right edge where every other
                 figure on the tab is aligned. */}
             <span className="leaf-label">
-              {flex.available < 0 ? "Short by" : "Left to claim"}
+              {flex.available < 0
+                ? "Short by"
+                : flex.pending > 0 && afterPending !== null
+                  ? "Available after pending"
+                  : flex.pending_unconverted > 0
+                    ? "Confirmed balance"
+                    : "Left to claim"}
             </span>
             {/* A wallet spent past its allowance (an upgrade priced above it)
                 leaves this negative, and "S$-450 left to claim" is not a
                 sentence anyone reads correctly — it is a shortfall, said the
                 same way the coverage tab says it. */}
             <Money
-              value={Math.abs(flex.available)}
+              value={Math.abs(afterPending ?? flex.available)}
               currency={currency}
               emphasis="display"
               className={flex.available < 0 ? "text-strike-pending" : undefined}
@@ -346,10 +359,10 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
                     <>
                       {" · "}
                       <Money
-                        value={Math.max(0, c.remaining)}
+                        value={Math.max(0, c.remaining - c.pending)}
                         currency={currency}
                       />
-                      {" left"}
+                      {c.pending > 0 ? " available after pending" : " left"}
                     </>
                   )}
                 </span>
@@ -378,6 +391,17 @@ export function UsageLeaf({
       (b) => b.product_code === product && b.benefit_key !== null,
     );
 
+  // A balance is a broker-verified policy-year amount. Detected suggestions,
+  // per-visit wording and "As charged" rows remain policy information; putting
+  // them on this tab made guesses and conditions look like spendable money.
+  const isAnnualBalance = (bucket: UtilizationBucket) =>
+    bucket.limit_is_enforceable === true &&
+    bucket.limit_basis === "policy_year" &&
+    bucket.limit !== null &&
+    bucket.remaining !== null;
+  const balanceSubsFor = (product: string | null) =>
+    subsFor(product).filter(isAnnualBalance);
+
   // **A product with no cap, nothing claimed and no sub-limits is not shown.**
   // It has no fullness to draw and nothing to count down, so the only thing it
   // could state is that it has no yearly cap — which is a fact about the policy,
@@ -386,11 +410,7 @@ export function UsageLeaf({
   // mount was still eight rows of "No yearly cap": the largest object on a page
   // about what is left, carrying nothing that is left.
   const active = products.filter(
-    (b) =>
-      b.limit !== null ||
-      b.approved > 0 ||
-      b.pending > 0 ||
-      subsFor(b.product_code).length > 0,
+    (b) => isAnnualBalance(b) || balanceSubsFor(b.product_code).length > 0,
   );
 
   // Gated on what there is to RENDER, not on what exists. With the caps gone, a
@@ -400,15 +420,23 @@ export function UsageLeaf({
     return (
       <Mount label="Nothing to track yet">
         <p className="text-row text-label">
-          Once you've made a claim, you'll see how much of each benefit you've
-          used here.
+          No annual balances have been verified for this plan. Your full cover,
+          including visit, day and treatment conditions, remains under
+          What&rsquo;s covered.
         </p>
       </Mount>
     );
   }
 
   const anyPending =
-    data.insured.some((b) => b.pending > 0) || (data.flex?.pending ?? 0) > 0;
+    active.some(
+      (b) =>
+        b.pending > 0 ||
+        b.pending_unconverted > 0 ||
+        balanceSubsFor(b.product_code).some(
+          (sub) => sub.pending > 0 || sub.pending_unconverted > 0,
+        ),
+    ) || (data.flex?.pending ?? 0) > 0;
   // How many unsettled claims are waiting on the MEMBER. It changes the
   // footnote's verb: "still with us" is a promise we are working on it, and for
   // a claim we have asked a question about it is the opposite of true.
@@ -432,7 +460,7 @@ export function UsageLeaf({
               : null
           }
           aside={
-            b.limit_display ? (
+            isAnnualBalance(b) && b.limit_display ? (
               <span className="text-row text-label">
                 <Limit
                   amount={null}
@@ -443,20 +471,23 @@ export function UsageLeaf({
             ) : undefined
           }
         >
-          <FillRule
-            limit={b.limit}
-            approved={b.approved}
-            pending={b.pending}
-            remaining={b.remaining}
-          />
-          {b.pending > 0 && (
+          {isAnnualBalance(b) && (
+            <FillRule
+              limit={b.limit}
+              approved={b.approved}
+              pending={b.pending}
+              pendingUnconverted={b.pending_unconverted}
+              remaining={b.remaining}
+            />
+          )}
+          {isAnnualBalance(b) && b.pending > 0 && (
             <PendingBreakdown bucket={b} claims={claims} />
           )}
-          {subsFor(b.product_code).length > 0 && (
+          {balanceSubsFor(b.product_code).length > 0 && (
             <>
               <MountRule className="mt-4" />
               <div className="divide-y divide-hairline/75">
-                {subsFor(b.product_code).map((s) => (
+                {balanceSubsFor(b.product_code).map((s) => (
                   <BucketBlock
                     key={`${s.product_code}/${s.benefit_key}`}
                     bucket={s}
@@ -474,8 +505,8 @@ export function UsageLeaf({
       {anyPending && (
         <p className="px-1 text-row text-label">
           Claims that aren&rsquo;t settled yet are shown separately and
-          aren&rsquo;t taken off your remaining balance until they&rsquo;re
-          approved.
+          reserved in the &ldquo;available after pending&rdquo; figure. Your
+          confirmed balance changes only when a claim is approved.
           {waitingOnMember > 0 &&
             (waitingOnMember === 1
               ? " One of them needs something from you — open it under Claims."

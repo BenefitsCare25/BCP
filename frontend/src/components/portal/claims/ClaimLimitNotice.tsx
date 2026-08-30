@@ -6,7 +6,10 @@
  * balance. The server's approval guard remains authoritative and serialized.
  */
 import { Limit, Money } from "@/components/portal/leaf/Figure";
-import { CLAIM_LIMIT_BASIS_LABELS } from "@/lib/claimLimits";
+import {
+  availableAfterPending,
+  CLAIM_LIMIT_BASIS_LABELS,
+} from "@/lib/claimLimits";
 import type { NewClaimForm } from "./useNewClaimForm";
 
 function LimitRow({
@@ -17,6 +20,11 @@ function LimitRow({
   currency: string;
 }) {
   const hasComputedLimit = row.limit !== null && row.remaining !== null;
+  const available = availableAfterPending(
+    row.remaining,
+    row.pending,
+    row.pendingUnconverted,
+  );
   return (
     <div className="border-t border-hairline pt-2 first:border-t-0 first:pt-0">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -24,11 +32,18 @@ function LimitRow({
         {hasComputedLimit ? (
           <span className="text-row text-record">
             <Money
-              value={Math.max(0, row.remaining ?? 0)}
+              value={
+                row.pending > 0 && available !== null
+                  ? available
+                  : Math.max(0, row.remaining ?? 0)
+              }
               currency={currency}
               emphasis="strong"
             />{" "}
-            left <span className="text-label">of </span>
+            {row.pending > 0 && available !== null
+              ? "available after pending "
+              : "left "}
+            <span className="text-label">of </span>
             <Money value={row.limit} currency={currency} />
           </span>
         ) : row.limitDisplay || row.limit !== null ? (
@@ -37,10 +52,17 @@ function LimitRow({
           <span className="text-row text-label">No numeric yearly limit recorded</span>
         )}
       </div>
-      {row.pending > 0 && (
+      {row.pending > 0 && hasComputedLimit && (
         <p className="mt-0.5 text-2xs text-label">
-          <Money value={row.pending} currency={currency} /> not settled yet; not deducted
-          from the balance above.
+          <Money value={row.remaining} currency={currency} /> confirmed balance;{" "}
+          <Money value={row.pending} currency={currency} /> submitted and not
+          settled yet.
+        </p>
+      )}
+      {row.pending > 0 && !hasComputedLimit && (
+        <p className="mt-0.5 text-2xs text-label">
+          <Money value={row.pending} currency={currency} /> submitted and not
+          settled yet; this policy condition has no annual balance.
         </p>
       )}
       {row.pendingUnconverted > 0 && (
@@ -70,10 +92,11 @@ export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
     >
       <div>
         <h2 id="claim-limit-heading" className="leaf-label">
-          Current claim limit
+          Limit for this claim
         </h2>
         <p className="text-row text-label">
-          Based on your selected claim type and current plan usage.
+          Verified annual balances and applicable policy conditions for your
+          selected claim type.
         </p>
       </div>
 
@@ -92,8 +115,8 @@ export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
         </div>
       ) : (
         <p className="text-row text-label">
-          No numeric yearly limit is recorded for this claim type. Any visit,
-          day or treatment conditions in your benefit schedule still apply.
+          No verified annual balance is configured for this claim type. Visit,
+          day and treatment conditions under What&rsquo;s covered still apply.
         </p>
       )}
 

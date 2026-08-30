@@ -20,6 +20,31 @@ export const CLAIM_LIMIT_BASES = Object.keys(
   CLAIM_LIMIT_BASIS_LABELS,
 ) as ClaimLimitBasis[];
 
+export function isLiveAnnualLimit(
+  setting: ClaimLimitSetting | null | undefined,
+): boolean {
+  return Boolean(
+    setting &&
+      setting.status === "verified" &&
+      setting.basis === "policy_year" &&
+      setting.currency === "SGD" &&
+      setting.amount !== null &&
+      setting.amount > 0,
+  );
+}
+
+/** The conservative amount a member can read as available after submissions
+ * already in flight. A foreign pending claim without a policy-currency amount
+ * makes that figure unknowable, so callers must say so instead of guessing. */
+export function availableAfterPending(
+  remaining: number | null,
+  pending: number,
+  pendingUnconverted = 0,
+): number | null {
+  if (remaining === null || pendingUnconverted > 0) return null;
+  return Math.max(0, remaining - pending);
+}
+
 export function inferredLimitBasis(value: string | null): ClaimLimitBasis {
   const text = (value ?? "").trim().toLowerCase();
   if (text.includes("as charged")) return "as_charged";

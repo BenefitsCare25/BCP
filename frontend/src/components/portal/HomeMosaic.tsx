@@ -54,6 +54,7 @@ import {
   type ConversationList,
 } from "@/api/portalMessages";
 import { cn } from "@/lib/cn";
+import { availableAfterPending } from "@/lib/claimLimits";
 import { isNotFoundError } from "@/lib/errors";
 import { holds, type Capability } from "./capabilities";
 import { PortalErrorState } from "./PortalErrorState";
@@ -177,21 +178,24 @@ function Go({
 
 /** The bucket the display figure belongs to.
  *
- * Preference order is deliberate: attention goes to the limit a member is
- * actually spending against, so activity outranks size. Only buckets with a
- * PARSED numeric limit can carry a fill rule — "As charged" and "S$650 per day"
- * have no fullness to express — and an orphaned bucket (claims against coverage
- * no longer on the statement) is never the headline.
+ * Preference order is deliberate: attention goes to the verified annual limit
+ * a member is actually spending against, so activity outranks size. Informative
+ * wording such as "As charged" and "S$650 per day" has no fullness to express,
+ * and an orphaned bucket (claims against coverage no longer on the statement)
+ * is never the headline.
  *
- * **A bucket may only be the headline if it can ANSWER.** A cap answers "how
- * much is left"; failing that, money actually settled this year answers "how
- * much have I had back". A bucket with neither has nothing to say that the
- * claims tile beside it is not already saying — see `heroFigure`. */
+ * **A bucket may only be the headline if it can ANSWER.** A verified annual cap
+ * answers "how much is left". Activity without an authoritative cap belongs in
+ * the claims tile and cannot manufacture a balance — see `heroFigure`. */
 function pickHeadline(buckets: UtilizationBucket[]): UtilizationBucket | null {
-  const live = buckets.filter((b) => !b.orphaned);
-  const withLimit = live.filter((b) => b.limit !== null && b.limit > 0);
-  const pool =
-    withLimit.length > 0 ? withLimit : live.filter((b) => b.approved > 0);
+  const pool = buckets.filter(
+    (b) =>
+      !b.orphaned &&
+      b.limit_is_enforceable === true &&
+      b.limit_basis === "policy_year" &&
+      b.limit !== null &&
+      b.limit > 0,
+  );
   if (pool.length === 0) return null;
   return [...pool].sort(
     (a, b) =>
@@ -204,9 +208,9 @@ function pickHeadline(buckets: UtilizationBucket[]): UtilizationBucket | null {
 /** What the one monumental figure on this screen actually says, or `null` when
  * this bucket has no answer and the tile must not render at all.
  *
- * A capped benefit answers "how much is left". An uncapped one — "as charged",
- * "S$650 per day" — cannot, and printing its remaining figure anyway rendered an
- * em-dash for every member whose benefits carry no annual cap.
+ * A verified annual benefit answers "how much is left". Unverified extraction
+ * suggestions and nonannual wording cannot, so callers filter those buckets
+ * before reaching this function.
  *
  * **There is deliberately no "Under review" fallback.** It used to print the
  * PENDING total when a member had no cap and nothing settled — which put a
@@ -219,15 +223,24 @@ function pickHeadline(buckets: UtilizationBucket[]): UtilizationBucket | null {
  * there is no limit and nothing settled it has nothing to say. */
 function heroFigure(b: UtilizationBucket, cur: string) {
   if (b.limit !== null) {
-    return { label: "Left to claim", value: b.remaining ?? b.limit };
-  }
-  if (b.approved > 0) {
+    const available = availableAfterPending(
+      b.remaining,
+      b.pending,
+      b.pending_unconverted,
+    );
     return {
-      label: "Claimed this year",
-      value: b.approved,
+      label:
+        b.pending > 0 && available !== null
+          ? "Available after pending"
+          : b.pending_unconverted > 0
+            ? "Confirmed balance"
+            : "Left to claim",
+      value: available ?? b.remaining ?? b.limit,
       note:
-        b.pending > 0
-          ? `${cur}${moneyText(b.pending)} not settled yet`
+        b.pending_unconverted > 0
+          ? "After-pending balance awaits currency conversion"
+          : b.pending > 0
+            ? `${cur}${moneyText(b.remaining ?? b.limit)} confirmed balance`
           : undefined,
     };
   }
@@ -325,7 +338,14 @@ export function HomeMosaicView({
   // limits tile moved to single width — counted, so the tile can say how much
   // is behind its link rather than implying the headline is everything.
   const otherCount = headline
-    ? buckets.filter((b) => !b.orphaned && b !== headline).length
+    ? buckets.filter(
+        (b) =>
+          b !== headline &&
+          !b.orphaned &&
+          b.limit_is_enforceable === true &&
+          b.limit_basis === "policy_year" &&
+          b.limit !== null,
+      ).length
     : 0;
 
   const cur = currencySymbol(utilization.data?.flex?.currency);
@@ -553,6 +573,7 @@ export function HomeMosaicView({
               limit={headline.limit}
               approved={headline.approved}
               pending={headline.pending}
+              pendingUnconverted={headline.pending_unconverted}
               remaining={headline.remaining}
               currency={cur}
             />

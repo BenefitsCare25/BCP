@@ -15,6 +15,7 @@ import { selectedMemberCover } from "./setup/memberEligibility";
 import {
   CLAIM_LIMIT_BASIS_LABELS,
   itemLimitForPlan,
+  isLiveAnnualLimit,
 } from "@/lib/claimLimits";
 import {
   groupEmployeeCategories,
@@ -202,11 +203,13 @@ function LimitStatusBadge({ setting }: { setting: ClaimLimitSetting }) {
             : "warn"
       }
     >
-      {setting.status === "verified"
-        ? "Verified"
+      {isLiveAnnualLimit(setting)
+        ? "Verified · live"
+        : setting.status === "verified"
+          ? "Verified · policy wording"
         : setting.status === "not_limit"
-          ? "Not a limit"
-          : "Needs review"}
+          ? "Informational · no balance"
+          : "Needs review · not live"}
     </Badge>
   );
 }
@@ -241,6 +244,10 @@ function ClaimLimitSummary({
   return (
     <section className="space-y-2 border-t border-border pt-4">
       <h4 className="text-sm font-semibold text-foreground">Claim limit settings</h4>
+      <p className="text-xs text-muted-foreground">
+        Only verified policy-year amounts are live in member balances and the
+        approval guard.
+      </p>
       {!hasSettings ? (
         <p className="text-sm text-muted-foreground">
           No explicit claim limits have been reviewed for this product.
