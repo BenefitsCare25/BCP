@@ -2,7 +2,7 @@ import { Fragment, useCallback, useMemo, useState } from "react";
 import { AlertTriangle, ListOrdered, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { PlanAnswer, SobSchedule } from "@/types";
+import type { ClaimLimitScope, PlanAnswer, SobSchedule } from "@/types";
 import {
   addColumn,
   addItem,
@@ -15,6 +15,7 @@ import {
 import { ColumnManager } from "./ColumnManager";
 import { SobRow } from "./SobRow";
 import { SobRowDetail } from "./SobRowDetail";
+import { ClaimLimitEditor } from "./ClaimLimitEditor";
 
 interface Props {
   sob: SobSchedule;
@@ -23,6 +24,7 @@ interface Props {
   // Optional second value axis (dental Panel/Non-Panel). When set, each row
   // carries an axis value PER benefit column rather than a single per-row value.
   columnAxis?: string[];
+  claimScopes?: ClaimLimitScope[];
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }
 
@@ -39,7 +41,13 @@ const FILTER_THRESHOLD = 12;
  * drifted out of alignment with each other) and used three different cell
  * widths depending on the row's kind.
  */
-export function SobEditor({ sob, plans, columnAxis = [], setSob }: Props) {
+export function SobEditor({
+  sob,
+  plans,
+  columnAxis = [],
+  claimScopes = [],
+  setSob,
+}: Props) {
   const [showColumns, setShowColumns] = useState(false);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -171,6 +179,15 @@ export function SobEditor({ sob, plans, columnAxis = [], setSob }: Props) {
           onRemoveColumn={(id) => setSob((s) => removeColumn(s, id))}
           onLabel={(id, label) => setSob((s) => setColumnLabel(s, id, label))}
           onAssign={(code, id) => setSob((s) => assignPlan(s, code, id))}
+        />
+      )}
+
+      {claimScopes.length > 0 && (
+        <ClaimLimitEditor
+          sob={sob}
+          plans={plans}
+          claimScopes={claimScopes}
+          setSob={setSob}
         />
       )}
 

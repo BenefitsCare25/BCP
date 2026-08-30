@@ -59,6 +59,14 @@ from app.services.benefit_key_guard import (
     schedule_benefit_names,
 )
 from app.services.category_factory import build_manual_category
+from app.services.claim_intake import claim_scope_catalog
+from app.services.claim_limits import (
+    enforceable_policy_year_amount,
+    normalize_limit_setting,
+    product_setting,
+    setting_display,
+    validate_schedule_limits,
+)
 from app.services.dynamic_template import (
     generic_starter_template,
     merge_file_overlay,
@@ -422,7 +430,15 @@ def get_setup_template(
             status.HTTP_404_NOT_FOUND,
             f"No template or slip data for product {product_code!r}",
         )
-    return tpl
+    scopes = claim_scope_catalog(tpl.code, tpl.display_name or tpl.code)
+    return tpl.model_copy(
+        update={
+            "claim_scopes": [
+                {"code": scope.code, "label": scope.label, "sub_type": scope.sub_type}
+                for scope in scopes
+            ]
+        }
+    )
 
 
 @router.get(
@@ -856,6 +872,27 @@ def confirm_setup(
         str(plan.get("code") or ""): _benefit_schedule(setup.answers, plan)
         for plan in selected
     }
+    valid_limit_scopes = {
+        scope.code
+        for scope in claim_scope_catalog(tpl.code, tpl.display_name or tpl.code)
+    }
+    limit_errors: list[str] = []
+    for plan_code, schedule in schedules.items():
+        limit_errors.extend(
+            f"{plan_code}: {message}"
+            for message in validate_schedule_limits(
+                schedule, valid_scope_codes=valid_limit_scopes
+            )
+        )
+    if limit_errors:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_claim_limit_settings",
+                "message": "Review the claim-limit settings before confirming.",
+                "errors": limit_errors,
+            },
+        )
     if not body.acknowledge:
         surviving: set[str] = set()
         for schedule in schedules.values():
@@ -1314,7 +1351,16 @@ def _benefit_schedule(answers: dict[str, Any], plan: dict[str, Any]) -> dict[str
             subs_in: list[Any] = (
                 raw_sub_items if isinstance(raw_sub_items, list) else []
             )
-            items.append({
+            raw_claim_limit = it.get("claim_limit")
+            normalized_claim_limit = normalize_limit_setting(
+                raw_claim_limit, fallback_display=it.get("value")
+            )
+            if normalized_claim_limit is not None and _clean_value(it.get("value")):
+                # The editable SoB cell is the member-facing wording. A detected
+                # snapshot must not stay stale after the broker corrects it.
+                normalized_claim_limit["display"] = _clean_value(it.get("value"))
+            projected = {
+                "uid": str(it.get("uid") or ""),
                 "number": str(it.get("number") or ""),
                 "name": str(it.get("name") or ""),
                 "value": _clean_value(it.get("value")),
@@ -1337,8 +1383,23 @@ def _benefit_schedule(answers: dict[str, Any], plan: dict[str, Any]) -> dict[str
                 # Carried so the employee-facing renderer can format the value
                 # by type instead of guessing from its digits.
                 "kind": _clean_value(it.get("kind")),
-            })
-    return {"items": items}
+            }
+            if raw_claim_limit is not None:
+                projected["claim_limit"] = normalized_claim_limit or raw_claim_limit
+            items.append(projected)
+    schedule: dict[str, Any] = {"items": items}
+    if isinstance(sob, dict):
+        raw_plan_limits = sob.get("plan_claim_limits")
+        raw_plan_limit = (
+            raw_plan_limits.get(str(plan.get("code") or "").strip())
+            if isinstance(raw_plan_limits, dict)
+            else None
+        )
+        if raw_plan_limit is not None:
+            schedule["claim_limit"] = (
+                normalize_limit_setting(raw_plan_limit) or raw_plan_limit
+            )
+    return schedule
 
 
 _TERM_FIELDS = (
@@ -1599,6 +1660,12 @@ def _materialize_plans(
         # it for the orphan-key guard), so the two can never disagree.
         code = str(plan.get("code") or "")
         schedule = (schedules or {}).get(code) or _benefit_schedule(answers, plan)
+        configured_overall = product_setting(schedule)
+        configured_annual_display = (
+            setting_display(configured_overall)
+            if enforceable_policy_year_amount(configured_overall) is not None
+            else None
+        )
         label = str(plan.get("label") or f"Plan {code}")[:255]
         row = existing.get(code)
         if row is None:
@@ -1608,6 +1675,7 @@ def _materialize_plans(
                 code=code,
                 display_name=label,
                 benefit_schedule=schedule,
+                annual_policy_limit=configured_annual_display,
                 cover_description=cover_description,
                 source=_MANUAL,
                 source_ref=_SETUP_REF,
@@ -1625,6 +1693,11 @@ def _materialize_plans(
         else:
             row.display_name = label
             row.benefit_schedule = schedule
+            # Presence of an explicit root setting is authoritative, including
+            # "not a limit" and non-annual informational bases. Without one,
+            # preserve a legacy parser-populated annual limit during rollout.
+            if "claim_limit" in schedule:
+                row.annual_policy_limit = configured_annual_display
             row.cover_description = cover_description
             row.source = _MANUAL
             row.source_ref = _SETUP_REF

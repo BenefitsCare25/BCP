@@ -139,6 +139,21 @@ def test_benefit_schedule_projects_from_sob() -> None:
     assert sched2["items"][0]["value"] == "10000"
 
 
+def test_claim_limit_suggestions_and_uids_survive_plan_projection() -> None:
+    plan = _plan("1", "S$500 per policy year")
+    plan["annual_policy_limit"] = "S$2,000 per policy year"
+    sob = sob_from_plan_items([plan], product_code="GHS")
+    item = sob["items"][0]
+    assert item["uid"].startswith("benefit-")
+    assert item["claim_limits"]["col0"]["status"] == "needs_review"
+    assert sob["plan_claim_limits"]["1"]["amount"] == 2000
+
+    schedule = _benefit_schedule({"sob": sob, "plans": [plan]}, {"code": "1"})
+    assert schedule["claim_limit"]["amount"] == 2000
+    assert schedule["items"][0]["uid"] == item["uid"]
+    assert schedule["items"][0]["claim_limit"]["amount"] == 500
+
+
 def test_benefit_schedule_legacy_fallback() -> None:
     # A pre-redesign draft (no `sob`) still projects from plan.benefit_items.
     plan = _plan("1", "7777")

@@ -450,6 +450,7 @@ export interface BenefitSubItem {
 }
 
 export interface BenefitItem {
+  uid?: string;
   number: string;
   name: string;
   value: string | null;
@@ -460,10 +461,12 @@ export interface BenefitItem {
   // Persisted from the editor so read-only renderers format by TYPE instead of
   // guessing from the string (a "6" visit count is not "$6").
   kind?: BenefitKind;
+  claim_limit?: ClaimLimitSetting;
 }
 
 export interface BenefitSchedule {
   items: BenefitItem[];
+  claim_limit?: ClaimLimitSetting;
 }
 
 export interface MatchedPlan {
@@ -952,6 +955,7 @@ export interface ProductTemplate {
   tiers: TemplateTier[];
   benefit_items: TemplateBenefitItem[];
   additional_arrangements: TemplateArrangement[];
+  claim_scopes?: ClaimLimitScope[];
 }
 
 // Free-text suggestions for the setup form, read live from this client's prior
@@ -1074,11 +1078,44 @@ export interface SobItemAnswer {
   // keyed by SobColumn.id → {field → value}.
   column_properties?: Record<string, Record<string, string>>;
   sub_items: SobSubItemAnswer[];
+  // One explicit setting per benefit column. A column can fund several basis-
+  // of-cover plans that share the same SoB values.
+  claim_limits?: Record<string, ClaimLimitSetting>;
 }
 
 export interface SobSchedule {
   columns: SobColumn[];
   items: SobItemAnswer[];
+  // Overall plan allowance is keyed by actual plan code because plans that
+  // share every benefit value can still have different policy-year caps.
+  plan_claim_limits?: Record<string, ClaimLimitSetting>;
+}
+
+export type ClaimLimitBasis =
+  | "policy_year"
+  | "lifetime"
+  | "per_visit"
+  | "per_day"
+  | "percentage"
+  | "as_charged"
+  | "informational";
+
+export type ClaimLimitStatus = "needs_review" | "verified" | "not_limit";
+
+export interface ClaimLimitSetting {
+  basis: ClaimLimitBasis;
+  amount: number | null;
+  currency: string;
+  display: string | null;
+  claim_scope_codes: string[];
+  status: ClaimLimitStatus;
+  source: "detected" | "manual";
+}
+
+export interface ClaimLimitScope {
+  code: string;
+  label: string;
+  sub_type: string | null;
 }
 
 export interface BasisOfCoverRow {
@@ -1461,6 +1498,10 @@ export interface UtilizationBucket {
   limit: number | null;
   /** Verbatim limit text for display ("As charged", "S$650/day"). */
   limit_display: string | null;
+  limit_basis?: ClaimLimitBasis | null;
+  limit_status?: ClaimLimitStatus | null;
+  limit_is_enforceable?: boolean;
+  claim_scope_codes?: string[];
   approved: number;
   /** In-flight claims — shown separately, never subtracted from remaining. */
   pending: number;

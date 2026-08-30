@@ -6,6 +6,7 @@
  * balance. The server's approval guard remains authoritative and serialized.
  */
 import { Limit, Money } from "@/components/portal/leaf/Figure";
+import { CLAIM_LIMIT_BASIS_LABELS } from "@/lib/claimLimits";
 import type { NewClaimForm } from "./useNewClaimForm";
 
 function LimitRow({
@@ -46,6 +47,12 @@ function LimitRow({
         <p className="mt-0.5 text-2xs text-label">
           {row.pendingUnconverted} pending foreign-currency claim
           {row.pendingUnconverted === 1 ? " is" : "s are"} still awaiting conversion.
+        </p>
+      )}
+      {row.limitBasis && row.limitBasis !== "policy_year" && (
+        <p className="mt-0.5 text-2xs text-label">
+          {CLAIM_LIMIT_BASIS_LABELS[row.limitBasis]} condition; this is policy wording,
+          not a yearly balance.
         </p>
       )}
     </div>

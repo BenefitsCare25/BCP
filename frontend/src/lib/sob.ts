@@ -369,7 +369,14 @@ export function reconcileColumns(
   if (orphans.length && columns.length === 1) {
     columns = [{ ...columns[0], plan_codes: [...columns[0].plan_codes, ...orphans] }];
   }
-  return { ...sob, columns };
+  const planClaimLimits = Object.fromEntries(
+    Object.entries(sob.plan_claim_limits ?? {}).filter(([code]) => known.has(code)),
+  );
+  return {
+    ...sob,
+    columns,
+    plan_claim_limits: sob.plan_claim_limits ? planClaimLimits : undefined,
+  };
 }
 
 // ── Pure edit helpers (the editor is controlled via a single setSob) ─────────
@@ -747,17 +754,20 @@ export function removeColumn(sob: SobSchedule, columnId: string): SobSchedule {
     const { [columnId]: _o, ...overrides } = it.overrides;
     const colProps = { ...(it.column_properties ?? {}) };
     delete colProps[columnId];
+    const claimLimits = { ...(it.claim_limits ?? {}) };
+    delete claimLimits[columnId];
     return {
       ...it,
       overrides,
       column_properties: it.column_properties ? colProps : undefined,
+      claim_limits: it.claim_limits ? claimLimits : undefined,
       sub_items: it.sub_items.map((s) => {
         const { [columnId]: _s, ...subOv } = s.overrides;
         return { ...s, overrides: subOv };
       }),
     };
   });
-  return { columns, items };
+  return { ...sob, columns, items };
 }
 
 export function setColumnLabel(

@@ -1,5 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
 const MEMBER = {
   id: "member-limit-test",
@@ -7,6 +13,48 @@ const MEMBER = {
   staff_id: "EMP-001",
   display_name: "Test Member",
 };
+
+async function apiJson<T>(response: Awaited<ReturnType<APIRequestContext["get"]>>) {
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return (await response.json()) as T;
+}
+
+async function brokerContext(request: APIRequestContext) {
+  const me = await apiJson<{ accessible_clients: Array<{ id: string }> }>(
+    await request.get("/api/v1/me"),
+  );
+  const clientId = me.accessible_clients[0]?.id;
+  expect(clientId).toBeTruthy();
+  const headers = { "X-Inspro-Client": clientId };
+  const years = await apiJson<Array<{ id: string; start_date: string; end_date: string }>>(
+    await request.get("/api/v1/policy-years", { headers }),
+  );
+  const today = "2026-08-30";
+  const year = years.find(
+    (candidate) => candidate.start_date <= today && candidate.end_date >= today,
+  );
+  expect(year).toBeDefined();
+  return { clientId, policyYearId: year!.id, headers };
+}
+
+async function installBrokerSession(page: Page, clientId: string, policyYearId: string) {
+  await page.addInitScript(
+    ({ client, year }) => {
+      localStorage.setItem(
+        "inspro-session",
+        JSON.stringify({
+          state: {
+            activeClientId: client,
+            currentPolicyYearId: year,
+            policyYearClientId: client,
+          },
+          version: 0,
+        }),
+      );
+    },
+    { client: clientId, year: policyYearId },
+  );
+}
 
 function monitorRuntime(page: Page) {
   const errors: string[] = [];
@@ -103,7 +151,7 @@ async function mockClaimForm(page: Page) {
             covered_dependant_ids: [],
             insurer: "Example Insurer",
             insurer_member_id: "INS-001",
-            sub_types: ["TCM (Traditional Chinese Medicine)"],
+            sub_types: ["TCM (Traditional Chinese Medicine)", "Physiotherapy"],
             requires_referral: false,
             diagnosis_group: "gp",
             diagnosis_required: true,
@@ -115,6 +163,18 @@ async function mockClaimForm(page: Page) {
                 scope_code: "standard",
                 scope_key: "insured:gcgp:standard",
                 benefit_key: null,
+                requires_doctor_name: false,
+                supports_stay_dates: false,
+                anchor_mode: null,
+                doc_slots: [],
+                doc_slots_by_sector: null,
+              },
+              {
+                label: "Physiotherapy",
+                sub_type: "Physiotherapy",
+                scope_code: "gp_physiotherapy",
+                scope_key: "insured:gcgp:gp_physiotherapy",
+                benefit_key: "Physiotherapy",
                 requires_doctor_name: false,
                 supports_stay_dates: false,
                 anchor_mode: null,
@@ -168,6 +228,25 @@ async function mockClaimForm(page: Page) {
           {
             product_code: "GCGP",
             product_name: "Group Clinical GP",
+            benefit_key: "Physiotherapy",
+            limit: null,
+            limit_display: "S$80 per visit",
+            approved: 0,
+            pending: 0,
+            pending_unconverted: 0,
+            remaining: null,
+            claim_count: 0,
+            pending_claim_ids: [],
+            orphaned: false,
+            limit_unparsed: false,
+            limit_basis: "per_visit",
+            limit_status: "verified",
+            limit_is_enforceable: false,
+            claim_scope_codes: ["gp_physiotherapy"],
+          },
+          {
+            product_code: "GCGP",
+            product_name: "Group Clinical GP",
             benefit_key: "TCM & Chiropractor",
             limit: 300,
             limit_display: "S$300 per policy year",
@@ -179,6 +258,10 @@ async function mockClaimForm(page: Page) {
             pending_claim_ids: ["pending-tcm"],
             orphaned: false,
             limit_unparsed: false,
+            limit_basis: "policy_year",
+            limit_status: "verified",
+            limit_is_enforceable: true,
+            claim_scope_codes: ["gp_tcm"],
           },
         ],
         flex: null,
@@ -224,6 +307,113 @@ test("claim form shows the selected plan balance and warns without blocking a fu
 
   await page.screenshot({
     path: testInfo.outputPath(`claim-limit-${testInfo.project.name}.png`),
+    fullPage: true,
+    animations: "disabled",
+  });
+});
+
+test("per-visit wording is informative and never becomes an annual balance", async ({
+  page,
+}) => {
+  const runtimeErrors = monitorRuntime(page);
+  await mockClaimForm(page);
+  await page.goto("/portal/demo/claims/new");
+
+  await page
+    .getByRole("combobox", { name: "Claim type" })
+    .selectOption({ label: "Physiotherapy" });
+
+  const limits = page.getByRole("region", { name: "Current claim limit" });
+  await expect(limits).toContainText("Physiotherapy");
+  await expect(limits).toContainText("S$80 per visit");
+  await expect(limits).toContainText("Per visit condition; this is policy wording");
+  await expect(limits).not.toContainText("left of");
+
+  await page.getByRole("spinbutton", { name: "Incurred amount" }).fill("500");
+  await expect(page.getByText(/Your receipt is above the current balance/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Submit claim" })).toBeEnabled();
+
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  expect(runtimeErrors).toEqual([]);
+});
+
+test("broker can review plan and line mappings from the SoB editor", async ({
+  page,
+  request,
+}, testInfo) => {
+  const runtimeErrors = monitorRuntime(page);
+  const context = await brokerContext(request);
+  const productCode =
+    testInfo.project.name === "mobile-chromium" ? "GP" : "GHS";
+  const draft = await request.put(
+    `/api/v1/policy-years/${context.policyYearId}/product-setups/${productCode}`,
+    {
+      headers: context.headers,
+      data: { answers: {}, template_version: 1 },
+    },
+  );
+  expect(draft.ok(), await draft.text()).toBeTruthy();
+  await installBrokerSession(page, context.clientId, context.policyYearId);
+  await page.goto("/client-relations/company-benefits");
+
+  const productTab = page.getByRole("tab", {
+    name: new RegExp(`^${productCode}$`),
+  }).first();
+  await expect(productTab).toBeVisible();
+  await productTab.click();
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
+
+  const editor = page.getByRole("region", { name: "Claim limit settings" });
+  await expect(editor).toBeVisible();
+  await expect(editor).toContainText("Claim type coverage");
+  await expect(editor).toContainText(
+    productCode === "GHS"
+      ? "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+      : "Physiotherapy",
+  );
+
+  const overallButton = editor.getByRole("button", { name: /Set limit|Edit/ }).first();
+  await overallButton.click();
+  const amount = editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first();
+  await amount.fill("2500");
+  await editor.getByRole("button", { name: "Verify setting" }).first().click();
+  await expect(editor).toContainText("SGD 2,500");
+  await expect(editor).toContainText("Verified");
+
+  const addLine = editor.getByRole("combobox", { name: "Add a benefit line limit" });
+  if (await addLine.isVisible()) {
+    await addLine.click();
+    const options = page.getByRole("option");
+    await expect.poll(() => options.count()).toBeGreaterThan(0);
+    const firstLabel = (await options.first().textContent())?.trim() ?? "";
+    await options.first().click();
+    await editor.getByRole("button", { name: "Add setting" }).click();
+    await editor.getByRole("checkbox").first().click();
+    const lineBasis = editor.getByRole("combobox", { name: "Limit basis" }).first();
+    await lineBasis.click();
+    await page.getByRole("option", { name: "Per policy year" }).click();
+    const lineAmount = editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first();
+    await lineAmount.fill("750");
+    await editor.getByRole("button", { name: "Verify setting" }).first().click();
+    await expect(editor).toContainText(firstLabel);
+  }
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+  const accessibility = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  expect(runtimeErrors).toEqual([]);
+
+  await page.screenshot({
+    path: testInfo.outputPath(`broker-claim-limits-${testInfo.project.name}.png`),
     fullPage: true,
     animations: "disabled",
   });

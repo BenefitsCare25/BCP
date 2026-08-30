@@ -61,6 +61,13 @@ from app.schemas.claims import (
 )
 from app.services.claim_fx import policy_amount
 from app.services.claim_intake import GP_SUB_TYPES, benefit_row_for_sub_type
+from app.services.claim_limits import (
+    configured_benefit_rows,
+    enforceable_policy_year_amount,
+    item_setting,
+    product_setting,
+    setting_display,
+)
 from app.services.member_statement import build_member_statement
 
 # In-flight claims that may still consume the limit. Defined on the model
@@ -69,7 +76,7 @@ from app.services.member_statement import build_member_statement
 __all__ = ["PENDING_STATUSES", "build_utilization", "parse_limit_amount",
            "remaining_for_claim"]
 
-_AMOUNT_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_AMOUNT_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 # A benefit-item value only counts as an ANNUAL limit when it's a plain amount
 # or explicitly per-year — "S$650/day", "80% co-pay", "As charged" are not.
 _PER_UNIT_RE = re.compile(
@@ -86,7 +93,8 @@ def parse_limit_amount(text: str | None) -> float | None:
     if m is None:
         return None
     try:
-        return float(m.group(0).replace(",", ""))
+        amount = float(m.group(0).replace(",", ""))
+        return amount if amount >= 0 else None
     except ValueError:
         return None
 
@@ -106,6 +114,22 @@ def _limit_unparsed(limit: float | None, display: str | None) -> bool:
     if limit is not None or not display:
         return False
     return any(char.isdigit() for char in display)
+
+
+def _setting_fields(
+    setting: dict[str, Any] | None, *, legacy_limit: float | None = None
+) -> dict[str, Any]:
+    """Response metadata shared by product and benefit buckets."""
+    return {
+        "limit_basis": setting.get("basis") if setting else None,
+        "limit_status": setting.get("status") if setting else None,
+        "limit_is_enforceable": (
+            enforceable_policy_year_amount(setting) is not None
+            if setting is not None
+            else legacy_limit is not None
+        ),
+        "claim_scope_codes": list(setting.get("claim_scope_codes") or []) if setting else [],
+    }
 
 
 # `claim_fx.policy_amount` returns None when a foreign claim's SGD value is not
@@ -186,14 +210,26 @@ def _insured_buckets(
             "approved": 0.0, "pending": 0.0, "pending_unconverted": 0,
             "count": 0, "claim_ids": [],
         }
-        limit = parse_limit_amount(line.annual_policy_limit)
+        schedule = line.benefit_schedule or {}
+        has_product_setting = isinstance(schedule, dict) and "claim_limit" in schedule
+        configured_product = product_setting(schedule)
+        limit = (
+            enforceable_policy_year_amount(configured_product)
+            if has_product_setting
+            else parse_limit_amount(line.annual_policy_limit)
+        )
+        product_display = (
+            setting_display(configured_product, line.annual_policy_limit)
+            if has_product_setting
+            else line.annual_policy_limit
+        )
         buckets.append(
             UtilizationBucket(
                 product_code=line.product_code,
                 product_name=line.product_name,
                 benefit_key=None,
                 limit=limit,
-                limit_display=line.annual_policy_limit,
+                limit_display=product_display,
                 approved=round(float(product_sum["approved"]), 2),
                 pending=round(float(product_sum["pending"]), 2),
                 remaining=(
@@ -204,13 +240,18 @@ def _insured_buckets(
                 pending_unconverted=int(product_sum["pending_unconverted"]),
                 claim_count=int(product_sum["count"]),
                 pending_claim_ids=list(product_sum["claim_ids"]),
-                limit_unparsed=_limit_unparsed(limit, line.annual_policy_limit),
+                limit_unparsed=(
+                    False
+                    if configured_product is not None
+                    else _limit_unparsed(limit, product_display)
+                ),
+                **_setting_fields(configured_product, legacy_limit=limit),
             )
         )
 
-        items = (line.benefit_schedule or {}).get("items") or []
-        item_values = {
-            str(i.get("name", "")).strip().lower(): i.get("value")
+        items = schedule.get("items") or []
+        item_by_name = {
+            str(i.get("name", "")).strip().lower(): i
             for i in items
             if isinstance(i, dict)
         }
@@ -219,7 +260,7 @@ def _insured_buckets(
         # balance to display until after the member has already filed. Ordinary
         # benefit rows remain activity-driven because attribution for those is a
         # broker decision, not something the member's claim type determines.
-        claimable_keys = {
+        claimable_keys = configured_benefit_rows(schedule) | {
             key
             for sub_type in GP_SUB_TYPES
             if (key := benefit_row_for_sub_type(line.benefit_schedule, sub_type))
@@ -237,10 +278,19 @@ def _insured_buckets(
                 "count": 0,
                 "claim_ids": [],
             }
-            item_limit = _annual_benefit_limit(item_values.get(key.lower()))
+            item = item_by_name.get(key.lower()) or {}
+            has_item_setting = "claim_limit" in item
+            configured_item = item_setting(item)
+            item_value = item.get("value")
+            item_limit = (
+                enforceable_policy_year_amount(configured_item)
+                if has_item_setting
+                else _annual_benefit_limit(item_value)
+            )
             item_display = (
-                str(item_values[key.lower()])
-                if key.lower() in item_values and item_values[key.lower()]
+                setting_display(configured_item, item_value)
+                if has_item_setting
+                else str(item_value) if item_value
                 else None
             )
             buckets.append(
@@ -260,7 +310,12 @@ def _insured_buckets(
                     pending_unconverted=int(row["pending_unconverted"]),
                     claim_count=int(row["count"]),
                     pending_claim_ids=list(row["claim_ids"]),
-                    limit_unparsed=_limit_unparsed(item_limit, item_display),
+                    limit_unparsed=(
+                        False
+                        if configured_item is not None
+                        else _limit_unparsed(item_limit, item_display)
+                    ),
+                    **_setting_fields(configured_item, legacy_limit=item_limit),
                 )
             )
 

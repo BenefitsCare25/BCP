@@ -165,6 +165,9 @@ class ProductTemplate(BaseModel):
     tiers: list[TemplateTier] = Field(default_factory=list)
     benefit_items: list[TemplateBenefitItem] = Field(default_factory=list)
     additional_arrangements: list[TemplateArrangement] = Field(default_factory=list)
+    # Server-owned claim-type vocabulary for explicit SoB limit mapping. Filled
+    # by the tenant-scoped template endpoint; static template files omit it.
+    claim_scopes: list[dict[str, str | None]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _fill_profile_defaults(self) -> ProductTemplate:

@@ -26,9 +26,15 @@ keeps the old "" behaviour — see the note at that call site.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any
+
+from app.services.claim_limits import (
+    suggested_limit_setting,
+    suggested_scope_codes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +116,7 @@ def _union_rows(rep_items: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
             if key in seen:
                 # Re-anchor so this column's subsequent new rows land in the
                 # right neighbourhood rather than all at the very end.
-                anchor = next(
-                    (i for i, r in enumerate(out) if _row_key(r) == key), anchor
-                ) + 1
+                anchor = next((i for i, r in enumerate(out) if _row_key(r) == key), anchor) + 1
                 continue
             seen.add(key)
             out.insert(anchor, row)
@@ -195,7 +199,10 @@ def _column_label(members: list[dict[str, Any]], only_column: bool) -> str:
 
 
 def sob_from_plan_items(
-    plans: list[dict[str, Any]], *, blank_inherits: bool = True
+    plans: list[dict[str, Any]],
+    *,
+    blank_inherits: bool = True,
+    product_code: str | None = None,
 ) -> dict[str, Any]:
     """Build a ``{columns, items}`` schedule by de-duplicating per-plan grids.
 
@@ -266,8 +273,7 @@ def sob_from_plan_items(
         # not compare unequal and force a needless per-column split.
         first_props = _varying_props(by_key[0].get(row_key))
         per_column_props = any(
-            _varying_props(by_key[ci].get(row_key)) != first_props
-            for ci in range(1, len(columns))
+            _varying_props(by_key[ci].get(row_key)) != first_props for ci in range(1, len(columns))
         )
         # Three states, and conflating any two of them misreports cover:
         #
@@ -310,8 +316,7 @@ def sob_from_plan_items(
                 overrides[col["id"]] = cells[ci]
             if per_column_props:
                 column_properties[col["id"]] = {
-                    str(k): str(val)
-                    for k, val in ((cell or {}).get("properties") or {}).items()
+                    str(k): str(val) for k, val in ((cell or {}).get("properties") or {}).items()
                 }
 
         sub_items: list[dict[str, Any]] = []
@@ -330,11 +335,7 @@ def sob_from_plan_items(
                     continue
                 cell = by_key[ci].get(row_key) or {}
                 match = next(
-                    (
-                        s
-                        for s in (cell.get("sub_items") or [])
-                        if _sub_key(s) == sub_key
-                    ),
+                    (s for s in (cell.get("sub_items") or []) if _sub_key(s) == sub_key),
                     None,
                 )
                 if match is None:
@@ -365,6 +366,10 @@ def sob_from_plan_items(
 
         items.append(
             {
+                "uid": str(
+                    base.get("uid")
+                    or ("benefit-" + hashlib.sha256(row_key.encode()).hexdigest()[:16])
+                ),
                 "number": base.get("number") or "",
                 "name": base.get("name") or "",
                 "kind": base.get("kind") or "amount",
@@ -378,7 +383,58 @@ def sob_from_plan_items(
             }
         )
 
-    return {"columns": columns, "items": items}
+    sob: dict[str, Any] = {"columns": columns, "items": items}
+    seed_sob_claim_limits(sob, product_code=product_code)
+    plan_claim_limits: dict[str, dict[str, Any]] = {}
+    for plan in plans:
+        code = str(plan.get("code") or "").strip()
+        setting = suggested_limit_setting(plan.get("annual_policy_limit"))
+        if code and setting is not None:
+            plan_claim_limits[code] = setting
+    if plan_claim_limits:
+        sob["plan_claim_limits"] = plan_claim_limits
+    return sob
+
+
+def seed_sob_claim_limits(
+    sob: dict[str, Any], *, product_code: str | None = None
+) -> dict[str, Any]:
+    """Add reviewable suggestions without overwriting broker decisions.
+
+    Claim-scope suggestions are unique per benefit column. If two loose keyword
+    matches compete, the first schedule row wins and the broker sees the second
+    as an unmapped detected limit instead of an invalid duplicate mapping.
+    """
+    columns = [c for c in (sob.get("columns") or []) if isinstance(c, dict)]
+    assigned: dict[str, set[str]] = {str(c.get("id") or ""): set() for c in columns if c.get("id")}
+    for item in sob.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        row_key = _row_key(item)
+        item.setdefault("uid", "benefit-" + hashlib.sha256(row_key.encode()).hexdigest()[:16])
+        existing = item.get("claim_limits")
+        claim_limits = dict(existing) if isinstance(existing, dict) else {}
+        suggested_scopes = suggested_scope_codes(product_code, item.get("name"))
+        for column in columns:
+            column_id = str(column.get("id") or "")
+            if not column_id or column_id in claim_limits:
+                current = claim_limits.get(column_id)
+                if isinstance(current, dict):
+                    assigned[column_id].update(current.get("claim_scope_codes") or [])
+                continue
+            scopes = [
+                scope for scope in suggested_scopes if scope not in assigned.get(column_id, set())
+            ]
+            setting = suggested_limit_setting(
+                _effective(item.get("overrides"), column_id, item.get("base_value")),
+                claim_scope_codes=scopes,
+            )
+            if setting is not None:
+                claim_limits[column_id] = setting
+                assigned.setdefault(column_id, set()).update(scopes)
+        if claim_limits:
+            item["claim_limits"] = claim_limits
+    return sob
 
 
 def _column_id_for_plan(sob: dict[str, Any], plan_code: str) -> str | None:
@@ -434,9 +490,7 @@ def resolve_plan_schedule(
         if not isinstance(it, dict):
             continue
         value = _effective(it.get("overrides"), col_id, it.get("base_value"))
-        properties = {
-            str(k): str(v) for k, v in (it.get("properties") or {}).items()
-        }
+        properties = {str(k): str(v) for k, v in (it.get("properties") or {}).items()}
         col_props = (it.get("column_properties") or {}).get(col_id) if col_id else None
         if isinstance(col_props, dict):
             properties.update({str(k): str(v) for k, v in col_props.items()})
@@ -459,6 +513,7 @@ def resolve_plan_schedule(
             )
         out.append(
             {
+                "uid": it.get("uid"),
                 "number": it.get("number") or "",
                 "name": it.get("name") or "",
                 "value": value,
@@ -467,6 +522,11 @@ def resolve_plan_schedule(
                 "sub_items": subs_out,
                 "properties": properties,
                 "kind": it.get("kind"),
+                "claim_limit": (
+                    (it.get("claim_limits") or {}).get(col_id)
+                    if col_id and isinstance(it.get("claim_limits"), dict)
+                    else None
+                ),
             }
         )
     return out

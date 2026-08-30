@@ -31,6 +31,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.models import Claim, Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
 from app.models.stored_document import DOC_ENTITY_REFERRAL, STORAGE_AVAILABLE
+from app.services.claim_limits import configured_benefit_row
 from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE, hospital_sector
 
 # Currencies a member may incur a bill in — single source of truth, exposed
@@ -195,6 +196,10 @@ def benefit_row_for_sub_type(
     """The schedule row name funding a GP-rider sub-type (TCM/Physio), or None
     when the plan doesn't carry one. Read defensively — `benefit_schedule` is
     untyped JSON server-side."""
+    scope_code = scope_code_for_sub_type(sub_type)
+    configured = configured_benefit_row(benefit_schedule, scope_code)
+    if configured is not None:
+        return configured
     keywords = _SUB_TYPE_ROW_KEYWORDS.get(sub_type or "")
     if not keywords:
         return None
@@ -202,10 +207,27 @@ def benefit_row_for_sub_type(
     for item in items:
         if not isinstance(item, dict):
             continue
+        # An explicit setting on the legacy keyword candidate is authoritative:
+        # no mapping (or "not a limit") means the broker deliberately declined
+        # this row, so do not resurrect the old keyword guess underneath it.
+        if "claim_limit" in item:
+            continue
         name = str(item.get("name", "")).strip()
         if name and any(k in name.lower() for k in keywords):
             return name
     return None
+
+
+def benefit_row_for_scope(
+    benefit_schedule: dict[str, Any] | None,
+    scope_code: str | None,
+    sub_type: str | None = None,
+) -> str | None:
+    """Configured row for any claim type, with GP legacy compatibility."""
+    configured = configured_benefit_row(benefit_schedule, scope_code)
+    if configured is not None:
+        return configured
+    return benefit_row_for_sub_type(benefit_schedule, sub_type)
 
 # Free-text fallback the UI offers when no catalog entry fits. Anything the
 # member types rides behind this prefix so brokers can spot unlisted
@@ -388,13 +410,46 @@ def claim_scope_definitions(
             for label in profile.sub_types
         )
 
-    scopes = [ClaimScopeDefinition(SCOPE_STANDARD, base_label, None)]
+    scopes = [
+        ClaimScopeDefinition(
+            SCOPE_STANDARD, profile.claim_type_label or base_label, None
+        )
+    ]
     if not profile.sub_type_required:
         schedules = benefit_schedules or []
         scopes.extend(
             ClaimScopeDefinition(scope_code_for_sub_type(label), label, label)
             for label in profile.sub_types
             if any(benefit_row_for_sub_type(schedule, label) for schedule in schedules)
+        )
+    return tuple(scopes)
+
+
+def claim_scope_catalog(
+    product_code: str | None, base_label: str
+) -> tuple[ClaimScopeDefinition, ...]:
+    """Every scope a broker may map, including optional plan riders.
+
+    Unlike ``claim_scope_definitions`` this is configuration vocabulary, not a
+    member's current picker, so GP riders are included before a row is mapped.
+    """
+    profile = claim_profile_for(product_code)
+    if not profile.member_claimable:
+        return ()
+    if profile.category == CATEGORY_INPATIENT:
+        return tuple(
+            ClaimScopeDefinition(scope_code_for_sub_type(label), label, label)
+            for label in profile.sub_types
+        )
+    scopes = [
+        ClaimScopeDefinition(
+            SCOPE_STANDARD, profile.claim_type_label or base_label, None
+        )
+    ]
+    if not profile.sub_type_required:
+        scopes.extend(
+            ClaimScopeDefinition(scope_code_for_sub_type(label), label, label)
+            for label in profile.sub_types
         )
     return tuple(scopes)
 

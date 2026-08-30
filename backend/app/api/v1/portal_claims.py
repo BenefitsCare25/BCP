@@ -105,7 +105,7 @@ from app.services.claim_intake import (
     ClaimScopeDefinition,
     anchor_mode_for,
     assert_documents_satisfy_slots,
-    benefit_row_for_sub_type,
+    benefit_row_for_scope,
     claim_profile_for,
     claim_scope_definitions,
     claim_scope_key,
@@ -260,7 +260,9 @@ def _claim_type_option(
         sub_type=scope.sub_type,
         scope_code=scope.code,
         scope_key=claim_scope_key("insured", line.product_code, scope.code),
-        benefit_key=benefit_row_for_sub_type(line.benefit_schedule, scope.sub_type),
+        benefit_key=benefit_row_for_scope(
+            line.benefit_schedule, scope.code, scope.sub_type
+        ),
         requires_doctor_name=requires_doctor_name(line.product_code, scope.sub_type),
         supports_stay_dates=supports_stay_dates(line.product_code, scope.sub_type),
         anchor_mode=anchor_mode_for(line.product_code, scope.sub_type),

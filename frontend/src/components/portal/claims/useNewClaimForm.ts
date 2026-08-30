@@ -59,6 +59,7 @@ import {
 } from "./claimForm";
 import { useCompany } from "@/components/portal/useCompany";
 import { useClaimDraftSync } from "./useClaimDraftSync";
+import type { ClaimLimitBasis } from "@/types";
 
 export type NewClaimForm = ReturnType<typeof useNewClaimForm>;
 
@@ -71,6 +72,8 @@ export interface ClaimLimitRow {
   pending: number;
   pendingUnconverted: number;
   remaining: number | null;
+  limitBasis: ClaimLimitBasis | null;
+  isEnforceable: boolean;
 }
 
 export function useNewClaimForm() {
@@ -341,6 +344,8 @@ export function useNewClaimForm() {
           pending: number;
           pending_unconverted: number;
           remaining: number | null;
+          limit_basis?: ClaimLimitBasis | null;
+          limit_is_enforceable?: boolean;
         }
       | undefined,
   ): ClaimLimitRow | null =>
@@ -354,6 +359,8 @@ export function useNewClaimForm() {
           pending: bucket.pending,
           pendingUnconverted: bucket.pending_unconverted,
           remaining: bucket.remaining,
+          limitBasis: bucket.limit_basis ?? null,
+          isEnforceable: bucket.limit_is_enforceable ?? bucket.limit !== null,
         }
       : null;
 
@@ -394,6 +401,8 @@ export function useNewClaimForm() {
         pending: 0,
         pendingUnconverted: 0,
         remaining: null,
+        limitBasis: null,
+        isEnforceable: false,
       });
     }
   } else if (effectiveKind === "flex" && flexLimit) {
@@ -409,6 +418,8 @@ export function useNewClaimForm() {
       pending: flexLimit.pending,
       pendingUnconverted: flexLimit.pending_unconverted,
       remaining: flexLimit.available,
+      limitBasis: "policy_year",
+      isEnforceable: flexLimit.available !== null,
     });
     if (flexCategoryLimit?.sub_limit != null) {
       limitRows.push({
@@ -420,6 +431,8 @@ export function useNewClaimForm() {
         pending: flexCategoryLimit.pending,
         pendingUnconverted: 0,
         remaining: flexCategoryLimit.remaining,
+        limitBasis: "policy_year",
+        isEnforceable: flexCategoryLimit.remaining !== null,
       });
     }
   }

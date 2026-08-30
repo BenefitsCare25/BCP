@@ -922,6 +922,12 @@ class UtilizationBucket(BaseModel):
     benefit_key: str | None = None  # None = product-level roll-up
     limit: float | None = None  # parsed numeric annual limit, when known
     limit_display: str | None = None  # verbatim limit text for the UI
+    # Explicit structured meaning. Only ``policy_year`` produces a remaining
+    # balance; all other bases are informative.
+    limit_basis: str | None = None
+    limit_status: str | None = None
+    limit_is_enforceable: bool = False
+    claim_scope_codes: list[str] = Field(default_factory=list)
     approved: float = 0.0
     pending: float = 0.0  # in-flight claims — shown separately, never subtracted
     remaining: float | None = None  # limit - approved

@@ -344,6 +344,10 @@ def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any
     referenced = _referenced_plan_codes(slip)
     slip_values = _slip_values_by_plan(slip)
     source_labels = _source_labels_by_plan(slip)
+    annual_limits = {
+        plan.code: plan.annual_policy_limit for plan in slip.plans
+        if plan.annual_policy_limit
+    }
     # Only drive selection from the slip when at least one referenced code
     # actually matches a template plan; otherwise the slip used a different
     # coding scheme and we'd deselect everything, blocking confirm — so fall
@@ -445,6 +449,7 @@ def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any
                 # Verbatim slip header (absent for descriptive layouts and for
                 # manually-built drafts); the SOB column label prefers it.
                 "source_label": source_labels.get(tp.code) or None,
+                "annual_policy_limit": annual_limits.get(tp.code),
                 "benefit_items": items,
             }
         )
@@ -566,7 +571,7 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
     # slip with many sum-insured tiers collapses to one "All plans" column, while
     # GHS keeps its genuinely-distinct columns. Plans are reduced to stubs
     # (selection + label); the grid now lives once in ``sob``.
-    sob = sob_from_plan_items(plans)
+    sob = sob_from_plan_items(plans, product_code=slip.product_code)
     plan_stubs = [
         {
             "code": p["code"],

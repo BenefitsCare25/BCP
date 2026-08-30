@@ -697,6 +697,7 @@ export function ProductSetupForm({
           sob={answers.sob ?? { columns: [], items: [] }}
           plans={selectedPlans}
           columnAxis={template.column_axis}
+          claimScopes={template.claim_scopes ?? []}
           setSob={setSob}
         />
 
@@ -708,6 +709,7 @@ export function ProductSetupForm({
             {template.additional_arrangements.map((a) => (
               <div key={a.id} className="flex items-start gap-3">
                 <Switch
+                  aria-label={a.label}
                   checked={Boolean(answers.arrangements[a.id])}
                   onCheckedChange={() => toggleArrangement(a.id)}
                 />

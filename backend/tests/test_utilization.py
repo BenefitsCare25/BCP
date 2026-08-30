@@ -5,9 +5,11 @@ limit-exceeded approve guard (+ acknowledge), and member isolation.
 S$1,000 annual limit + a per-year Dental item + a per-day item, and a flex
 wallet with price tags) so the sums are exercised on a known coverage shape.
 """
+
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
@@ -76,26 +78,33 @@ def _setup_db():
         ):
             session.add(
                 MemberAccount(
-                    id=acc, client_id=DEMO_CLIENT_ID, email=f"{name.lower()}@ut.test",
-                    staff_id=staff, status="active",
+                    id=acc,
+                    client_id=DEMO_CLIENT_ID,
+                    email=f"{name.lower()}@ut.test",
+                    staff_id=staff,
+                    status="active",
                 )
             )
             session.flush()
             session.add(
                 Employee(
-                    id=emp_id, client_id=DEMO_CLIENT_ID, policy_year_id=PY,
-                    staff_id=staff, employee_name=name, member_account_id=acc,
-                    attribute_values={}, derived_attribute_values={},
-                    source="csv_import", status="active",
+                    id=emp_id,
+                    client_id=DEMO_CLIENT_ID,
+                    policy_year_id=PY,
+                    staff_id=staff,
+                    employee_name=name,
+                    member_account_id=acc,
+                    attribute_values={},
+                    derived_attribute_values={},
+                    source="csv_import",
+                    status="active",
                 )
             )
         session.commit()
     yield
     with SessionLocal() as session:
         session.query(Claim).delete()
-        session.query(MemberAccount).filter(
-            MemberAccount.client_id == DEMO_CLIENT_ID
-        ).delete()
+        session.query(MemberAccount).filter(MemberAccount.client_id == DEMO_CLIENT_ID).delete()
         py = session.get(PolicyYear, PY)
         if py is not None:
             session.delete(py)
@@ -108,7 +117,8 @@ def _setup_db():
 def _statement(employee) -> BenefitStatementOut:
     return BenefitStatementOut(
         employee=StatementEmployee(
-            id=employee.id, staff_id=employee.staff_id,
+            id=employee.id,
+            staff_id=employee.staff_id,
             employee_name=employee.employee_name,
         ),
         policy_year_id=employee.policy_year_id,
@@ -218,8 +228,7 @@ def _util(employee_id: str = EMP_A):
 
 def _bucket(util, product: str, benefit_key: str | None = None):
     return next(
-        b for b in util.insured
-        if b.product_code == product and b.benefit_key == benefit_key
+        b for b in util.insured if b.product_code == product and b.benefit_key == benefit_key
     )
 
 
@@ -252,16 +261,107 @@ def test_zero_baseline():
     # submission form cannot show a TCM member what is left if utilization only
     # creates the row after they have already filed one.
     tcm = _bucket(util, "GCGP", "TCM & Chiropractor")
-    assert sum(
-        b.product_code == "GCGP" and b.benefit_key == "TCM & Chiropractor"
-        for b in util.insured
-    ) == 1
+    assert (
+        sum(
+            b.product_code == "GCGP" and b.benefit_key == "TCM & Chiropractor" for b in util.insured
+        )
+        == 1
+    )
     assert (tcm.limit, tcm.approved, tcm.pending, tcm.remaining) == (
         300.0,
         0.0,
         0.0,
         300.0,
     )
+
+
+def test_structured_policy_year_setting_overrides_free_text(monkeypatch):
+    def statement(_db, employee):
+        value = deepcopy(_statement(employee))
+        line = value.coverage[0]
+        line.annual_policy_limit = "S$9,999"
+        line.benefit_schedule = {
+            "claim_limit": {
+                "basis": "policy_year",
+                "amount": 1200,
+                "currency": "SGD",
+                "display": "S$1,200 per policy year",
+                "claim_scope_codes": [],
+                "status": "verified",
+                "source": "manual",
+            },
+            "items": [
+                {
+                    "number": "1",
+                    "name": "Hospital cash",
+                    "value": "S$80/day",
+                    "claim_limit": {
+                        "basis": "policy_year",
+                        "amount": 900,
+                        "currency": "SGD",
+                        "display": "S$900 per policy year",
+                        "claim_scope_codes": ["ghs_hospitalisation"],
+                        "status": "verified",
+                        "source": "manual",
+                    },
+                }
+            ],
+        }
+        return value
+
+    monkeypatch.setattr(utilization_service, "build_member_statement", statement)
+    util = _util()
+    product = _bucket(util, "GHS")
+    benefit = _bucket(util, "GHS", "Hospital cash")
+    assert (product.limit, product.remaining) == (1200.0, 1200.0)
+    assert (benefit.limit, benefit.remaining) == (900.0, 900.0)
+    assert benefit.claim_scope_codes == ["ghs_hospitalisation"]
+    assert benefit.limit_is_enforceable is True
+
+
+def test_nonannual_and_not_limit_settings_are_informative_only(monkeypatch):
+    def statement(_db, employee):
+        value = deepcopy(_statement(employee))
+        line = value.coverage[0]
+        line.benefit_schedule = {
+            "claim_limit": {
+                "basis": "policy_year",
+                "amount": 9999,
+                "currency": "SGD",
+                "display": "S$9,999",
+                "claim_scope_codes": [],
+                "status": "not_limit",
+                "source": "manual",
+            },
+            "items": [
+                {
+                    "number": "1",
+                    "name": "Specialist visit",
+                    "value": "S$80/visit",
+                    "claim_limit": {
+                        "basis": "per_visit",
+                        "amount": 5000,
+                        "currency": "SGD",
+                        "display": "S$80 per visit",
+                        "claim_scope_codes": ["standard"],
+                        "status": "verified",
+                        "source": "manual",
+                    },
+                }
+            ],
+        }
+        return value
+
+    monkeypatch.setattr(utilization_service, "build_member_statement", statement)
+    util = _util()
+    product = _bucket(util, "GHS")
+    benefit = _bucket(util, "GHS", "Specialist visit")
+    assert product.limit is None and product.remaining is None
+    assert benefit.limit is None and benefit.remaining is None
+    assert benefit.limit_basis == "per_visit"
+    assert benefit.limit_display == "S$80 per visit"
+    assert benefit.limit_is_enforceable is False
+
 
 def test_bucket_math_and_grouping():
     _mk_claim(benefit_key="Dental", amount=100.0, approved=100.0, status="approved")
@@ -278,10 +378,7 @@ def test_bucket_math_and_grouping():
     assert ghs.claim_count == 3
 
     dental = _bucket(util, "GHS", "Dental")
-    assert sum(
-        b.product_code == "GHS" and b.benefit_key == "Dental"
-        for b in util.insured
-    ) == 1
+    assert sum(b.product_code == "GHS" and b.benefit_key == "Dental" for b in util.insured) == 1
     assert dental.approved == 100.0 and dental.pending == 50.0
     assert dental.limit == 500.0 and dental.remaining == 400.0
 
@@ -299,8 +396,7 @@ def test_orphaned_product_bucket():
 
 
 def test_flex_chain():
-    _mk_claim(kind="flex", flex_category="Dental", amount=100.0,
-              approved=100.0, status="approved")
+    _mk_claim(kind="flex", flex_category="Dental", amount=100.0, approved=100.0, status="approved")
     _mk_claim(kind="flex", flex_category="Optical", amount=60.0, status="submitted")
 
     flex = _util().flex
@@ -331,9 +427,7 @@ def test_remaining_for_claim_uses_tightest_bucket():
 def test_remaining_none_when_no_limit():
     claim_id = _mk_claim(product="GTL", amount=100.0, status="submitted")
     with SessionLocal() as s:
-        assert remaining_for_claim(
-            s, s.get(Claim, claim_id), s.get(Employee, EMP_A)
-        ) is None
+        assert remaining_for_claim(s, s.get(Claim, claim_id), s.get(Employee, EMP_A)) is None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -364,8 +458,7 @@ def test_broker_utilization_endpoint(broker: TestClient):
     assert res.status_code == 200, res.text
     body = res.json()
     ghs = next(
-        b for b in body["insured"]
-        if b["product_code"] == "GHS" and b["benefit_key"] is None
+        b for b in body["insured"] if b["product_code"] == "GHS" and b["benefit_key"] is None
     )
     assert ghs["approved"] == 100.0 and ghs["remaining"] == 900.0
 
@@ -377,7 +470,8 @@ def test_portal_utilization_is_member_scoped():
     res_a = anon.get("/api/v1/portal/utilization", headers=_member_headers(ACC_A))
     assert res_a.status_code == 200, res_a.text
     ghs_a = next(
-        b for b in res_a.json()["insured"]
+        b
+        for b in res_a.json()["insured"]
         if b["product_code"] == "GHS" and b["benefit_key"] is None
     )
     assert ghs_a["approved"] == 100.0
@@ -386,7 +480,8 @@ def test_portal_utilization_is_member_scoped():
     res_b = anon.get("/api/v1/portal/utilization", headers=_member_headers(ACC_B))
     assert res_b.status_code == 200
     ghs_b = next(
-        b for b in res_b.json()["insured"]
+        b
+        for b in res_b.json()["insured"]
         if b["product_code"] == "GHS" and b["benefit_key"] is None
     )
     assert ghs_b["approved"] == 0.0 and ghs_b["claim_count"] == 0
@@ -399,9 +494,7 @@ def test_approve_beyond_limit_409_then_acknowledge(broker: TestClient):
     _mk_claim(amount=950.0, approved=950.0, status="approved")
     claim_id = _mk_claim(amount=200.0, status="submitted")  # remaining is 50
 
-    res = broker.post(
-        f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"}
-    )
+    res = broker.post(f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"})
     assert res.status_code == 409, res.text
     detail = res.json()["detail"]
     assert detail["code"] == "limit_exceeded"
@@ -440,13 +533,9 @@ def test_approve_partial_amount_bypasses_guard(broker: TestClient):
 
 
 def test_flex_approve_guard_uses_category_sub_limit(broker: TestClient):
-    claim_id = _mk_claim(
-        kind="flex", flex_category="Dental", amount=350.0, status="submitted"
-    )
+    claim_id = _mk_claim(kind="flex", flex_category="Dental", amount=350.0, status="submitted")
     # Wallet available is 800 but the Dental sub-limit remaining is 300.
-    res = broker.post(
-        f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"}
-    )
+    res = broker.post(f"/api/v1/claims/{claim_id}/decision", json={"action": "approve"})
     assert res.status_code == 409
     assert res.json()["detail"]["remaining"] == 300.0
 
@@ -460,9 +549,7 @@ def test_flex_approve_guard_uses_category_sub_limit(broker: TestClient):
 def test_reject_never_guarded(broker: TestClient):
     _mk_claim(amount=950.0, approved=950.0, status="approved")
     claim_id = _mk_claim(amount=5000.0, status="submitted")
-    res = broker.post(
-        f"/api/v1/claims/{claim_id}/decision", json={"action": "reject"}
-    )
+    res = broker.post(f"/api/v1/claims/{claim_id}/decision", json={"action": "reject"})
     assert res.status_code == 200
     assert res.json()["status"] == "rejected"
 
@@ -474,8 +561,7 @@ def test_claims_can_never_take_the_wallet_below_zero():
     `flex_ledger.MemberFlex.balance` splits identically: one member, one answer
     to "what have I got left". Reachable on paper only because pro-ration binds
     forward — it can shrink an allowance below what was already reimbursed."""
-    _mk_claim(kind="flex", flex_category="Dental", amount=900.0,
-              approved=900.0, status="approved")
+    _mk_claim(kind="flex", flex_category="Dental", amount=900.0, approved=900.0, status="approved")
     flex = _util().flex
     assert flex.flex_balance == 800.0
     assert flex.approved == 900.0
@@ -487,6 +573,7 @@ def test_cover_costing_more_than_the_wallet_stays_signed(monkeypatch):
     `flex_overdraft` warning exist for: the member holds elected cover priced
     above their allowance. Flooring that too would hide it behind a wallet that
     merely looks empty."""
+
     def _overdrawn(db, emp):
         st = _statement(emp)
         st.flex.price_tags_total = 1100.0
@@ -504,8 +591,7 @@ def test_a_category_sub_limit_never_reports_a_negative_remaining():
     left" is not a quantity anyone has. Reachable when a claim is approved past
     the cap (the guard allows an acknowledged override) or when pro-ration
     shrinks an allowance below what was already reimbursed."""
-    _mk_claim(kind="flex", flex_category="Dental", amount=700.0,
-              approved=700.0, status="approved")
+    _mk_claim(kind="flex", flex_category="Dental", amount=700.0, approved=700.0, status="approved")
     dental = next(c for c in _util().flex.categories if c.name == "Dental")
     assert dental.sub_limit == 300.0
     assert dental.approved == 700.0

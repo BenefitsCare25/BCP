@@ -78,12 +78,13 @@ from app.services.claim_intake import (
     assert_doctor_name_valid,
     assert_documents_satisfy_slots,
     assert_intake_valid,
-    benefit_row_for_sub_type,
+    benefit_row_for_scope,
     claim_profile_for,
     normalize_invoice_number,
     normalize_sub_type,
     requires_doctor_name,
     resolve_sp_referral,
+    scope_code_for_sub_type,
     supports_stay_dates,
 )
 from app.services.claim_integrity import lock_duplicate_invoice_scope
@@ -836,10 +837,8 @@ def _apply_gp_rider_benefit_key(
     an assessor naming a bucket in the same patch that moves the sub-type plainly
     means the one they named.
     """
-    is_rider = (
-        claim.claim_kind == CLAIM_KIND_INSURED and claim.sub_type in GP_SUB_TYPES
-    )
-    if not is_rider:
+    is_rider = claim.claim_kind == CLAIM_KIND_INSURED and claim.sub_type in GP_SUB_TYPES
+    if claim.claim_kind != CLAIM_KIND_INSURED:
         if clear_rider_key and not explicit_benefit_key:
             # Also correct for an insured→flex amendment: a flex claim has no
             # business carrying an insured schedule row.
@@ -849,22 +848,28 @@ def _apply_gp_rider_benefit_key(
         (c for c in statement.coverage if c.product_code == claim.product_code),
         None,
     )
-    row = benefit_row_for_sub_type(
-        line.benefit_schedule if line is not None else None, claim.sub_type
+    row = benefit_row_for_scope(
+        line.benefit_schedule if line is not None else None,
+        scope_code_for_sub_type(claim.sub_type),
+        claim.sub_type,
     )
     if row is None:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            f"Your {claim.product_code} plan does not include "
-            f"{claim.sub_type} cover.",
-        )
+        if is_rider:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Your {claim.product_code} plan does not include "
+                f"{claim.sub_type} cover.",
+            )
+        if clear_rider_key and not explicit_benefit_key:
+            claim.benefit_key = None
+        return
     if explicit_benefit_key and (claim.benefit_key or "").strip() != row:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "benefit_key_derived",
                 "message": (
-                    f"A {claim.sub_type} claim always draws on '{row}'. Change "
+                    f"This claim type always draws on '{row}'. Change "
                     "the claim type to move it to a different benefit."
                 ),
             },

@@ -2,13 +2,20 @@ import { Badge } from "@/components/ui/badge";
 import { fmtDay, fmtMoney } from "@/lib/format";
 import type {
   CategoryGroup,
+  ClaimLimitSetting,
+  PlanAnswer,
   ProductSetup,
   ProductTemplate,
   ProductTerm,
   SetupAnswers,
+  SobSchedule,
   TemplateField,
 } from "@/types";
 import { selectedMemberCover } from "./setup/memberEligibility";
+import {
+  CLAIM_LIMIT_BASIS_LABELS,
+  itemLimitForPlan,
+} from "@/lib/claimLimits";
 import {
   groupEmployeeCategories,
   type EmployeeCategoryGroup,
@@ -171,6 +178,124 @@ function DetailStrip({
   );
 }
 
+function LimitValue({ setting }: { setting: ClaimLimitSetting }) {
+  return (
+    <span className="text-xs text-foreground">
+      {setting.status === "not_limit"
+        ? "Not a limit"
+        : CLAIM_LIMIT_BASIS_LABELS[setting.basis]}
+      {setting.amount != null && setting.status !== "not_limit"
+        ? ` · SGD ${setting.amount.toLocaleString()}`
+        : ""}
+    </span>
+  );
+}
+
+function LimitStatusBadge({ setting }: { setting: ClaimLimitSetting }) {
+  return (
+    <Badge
+      variant={
+        setting.status === "verified"
+          ? "good"
+          : setting.status === "not_limit"
+            ? "default"
+            : "warn"
+      }
+    >
+      {setting.status === "verified"
+        ? "Verified"
+        : setting.status === "not_limit"
+          ? "Not a limit"
+          : "Needs review"}
+    </Badge>
+  );
+}
+
+function ClaimLimitSummary({
+  sob,
+  plans,
+  scopes,
+}: {
+  sob: SobSchedule | null | undefined;
+  plans: PlanAnswer[];
+  scopes: ProductTemplate["claim_scopes"];
+}) {
+  if (!sob) return null;
+  const scopeLabels = new Map((scopes ?? []).map((scope) => [scope.code, scope.label]));
+  const configuredPlans = plans
+    .filter((plan) => plan.selected)
+    .map((plan) => ({
+      plan,
+      overall: sob.plan_claim_limits?.[plan.code] ?? null,
+      items: sob.items
+        .map((item) => ({ item, setting: itemLimitForPlan(sob, item, plan.code) }))
+        .filter(
+          (row): row is { item: (typeof sob.items)[number]; setting: ClaimLimitSetting } =>
+            row.setting !== null,
+        ),
+    }));
+  const hasSettings = configuredPlans.some(
+    ({ overall, items }) => overall !== null || items.length > 0,
+  );
+
+  return (
+    <section className="space-y-2 border-t border-border pt-4">
+      <h4 className="text-sm font-semibold text-foreground">Claim limit settings</h4>
+      {!hasSettings ? (
+        <p className="text-sm text-muted-foreground">
+          No explicit claim limits have been reviewed for this product.
+        </p>
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {configuredPlans.map(({ plan, overall, items }) => (
+            <div key={plan.code} className="space-y-2 px-3 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-foreground">
+                  {plan.label || plan.code}
+                </p>
+                {overall && (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Overall</span>
+                    <LimitValue setting={overall} />
+                    <LimitStatusBadge setting={overall} />
+                  </span>
+                )}
+              </div>
+              {items.length > 0 ? (
+                <dl className="divide-y divide-border/70">
+                  {items.map(({ item, setting }) => (
+                    <div
+                      key={item.uid}
+                      className="grid gap-1 py-2 first:pt-0 last:pb-0 sm:grid-cols-[minmax(12rem,1fr)_auto]"
+                    >
+                      <div>
+                        <dt className="text-xs font-medium text-foreground">{item.name}</dt>
+                        <dd className="text-2xs text-muted-foreground">
+                          {setting.claim_scope_codes.length
+                            ? setting.claim_scope_codes
+                                .map((code) => scopeLabels.get(code) ?? code)
+                                .join(" · ")
+                            : "No claim type mapped"}
+                        </dd>
+                      </div>
+                      <div className="flex items-center gap-2 sm:justify-end">
+                        <LimitValue setting={setting} />
+                        <LimitStatusBadge setting={setting} />
+                      </div>
+                    </div>
+                  ))}
+                </dl>
+              ) : (
+                <p className="text-xs text-muted-foreground">No benefit line limits.</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function ProductSetupSummary({ template, draft, group, term }: Props) {
   const answers = draft?.answers ?? null;
   const categoryGroups = groupEmployeeCategories(group?.categories ?? []);
@@ -213,6 +338,12 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
           {textValue(answers?.cover_description)}
         </p>
       </section>
+
+      <ClaimLimitSummary
+        sob={answers?.sob}
+        plans={answers?.plans ?? []}
+        scopes={template.claim_scopes}
+      />
 
       <section className="space-y-2 border-t border-border pt-4">
         <h4 className="text-sm font-semibold text-foreground">
