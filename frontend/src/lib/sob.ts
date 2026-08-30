@@ -409,6 +409,25 @@ const mapItem = (
   items: sob.items.map((it, i) => (i === idx ? fn(it) : it)),
 });
 
+const invalidateClaimLimits = (
+  item: SobItemAnswer,
+  columnIds: string[],
+): SobItemAnswer => {
+  if (!item.claim_limits || columnIds.length === 0) return item;
+  const affected = new Set(columnIds);
+  let changed = false;
+  const claimLimits = Object.fromEntries(
+    Object.entries(item.claim_limits).map(([columnId, setting]) => {
+      if (!affected.has(columnId) || setting.status === "needs_review") {
+        return [columnId, setting];
+      }
+      changed = true;
+      return [columnId, { ...setting, status: "needs_review" as const }];
+    }),
+  );
+  return changed ? { ...item, claim_limits: claimLimits } : item;
+};
+
 export function setItemField(
   sob: SobSchedule,
   idx: number,
@@ -477,16 +496,30 @@ export function setCell(
   value: string,
 ): SobSchedule {
   return mapItem(sob, idx, (it) => {
-    if (columnIndex === 0) return { ...it, base_value: value };
+    if (columnIndex === 0) {
+      if (value === (it.base_value ?? "")) return it;
+      const inheritedColumnIds = sob.columns
+        .filter((col, index) => index === 0 || it.overrides[col.id] == null)
+        .map((col) => col.id);
+      return invalidateClaimLimits(
+        { ...it, base_value: value },
+        inheritedColumnIds,
+      );
+    }
     const col = sob.columns[columnIndex];
     if (!col) return it;
+    const previous = it.overrides[col.id] ?? it.base_value ?? "";
+    if (value === previous) return it;
     // Writing the base value back into a column clears the override rather
     // than storing a redundant copy that would drift if the base changes.
     if (value === (it.base_value ?? "")) {
       const { [col.id]: _drop, ...rest } = it.overrides;
-      return { ...it, overrides: rest };
+      return invalidateClaimLimits({ ...it, overrides: rest }, [col.id]);
     }
-    return { ...it, overrides: { ...it.overrides, [col.id]: value } };
+    return invalidateClaimLimits(
+      { ...it, overrides: { ...it.overrides, [col.id]: value } },
+      [col.id],
+    );
   });
 }
 
@@ -587,7 +620,8 @@ export function renumberItems(sob: SobSchedule): SobSchedule {
     ...sob,
     items: sob.items.map((it) => {
       const current = (it.number ?? "").trim();
-      const isGroup = it.kind === "copay" && /^-?\d+$/.test(current);
+      const isGroup =
+        it.kind === "copay" && (current === "" || /^-?\d+$/.test(current));
       const isSequential = current === "" || /^\d+$/.test(current) || isGroup;
       if (!isSequential) return it;
       n += 1;
@@ -661,13 +695,24 @@ export function setColumnProperty(
   key: string,
   value: string,
 ): SobSchedule {
-  return mapItem(sob, idx, (it) => ({
-    ...it,
-    column_properties: {
-      ...(it.column_properties ?? {}),
-      [columnId]: { ...(it.column_properties?.[columnId] ?? {}), [key]: value },
-    },
-  }));
+  return mapItem(sob, idx, (it) => {
+    const previous =
+      it.column_properties?.[columnId]?.[key] ?? it.properties?.[key] ?? "";
+    if (previous === value) return it;
+    const next = {
+      ...it,
+      column_properties: {
+        ...(it.column_properties ?? {}),
+        [columnId]: {
+          ...(it.column_properties?.[columnId] ?? {}),
+          [key]: value,
+        },
+      },
+    };
+    return key === "per_policy_year"
+      ? invalidateClaimLimits(next, [columnId])
+      : next;
+  });
 }
 
 // ── Copay qualifier fields ───────────────────────────────────────────────────
@@ -746,7 +791,10 @@ export function removeCopayField(
       const { [key]: _drop, ...rest } = props;
       colProps[colId] = rest;
     }
-    return { ...it, column_properties: colProps };
+    const next = { ...it, column_properties: colProps };
+    return key === "per_policy_year"
+      ? invalidateClaimLimits(next, sob.columns.map((column) => column.id))
+      : next;
   });
 }
 

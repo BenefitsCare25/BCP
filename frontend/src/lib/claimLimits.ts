@@ -85,6 +85,27 @@ export function draftLimitSetting(
   };
 }
 
+export interface ClaimLimitSource {
+  wording: string | null;
+  structuredPolicyYear: boolean;
+  monetary: boolean;
+}
+
+export function hasMonetaryContext(value: string | null): boolean {
+  return /\$|\bsgd\b|\bdollars?\b/i.test(value ?? "");
+}
+
+export function draftDetectedLimitSetting(
+  source: ClaimLimitSource,
+  claimScopeCodes: string[] = [],
+): ClaimLimitSetting {
+  const draft = draftLimitSetting(source.wording, claimScopeCodes);
+  if (source.structuredPolicyYear && !source.monetary) {
+    return { ...draft, basis: "informational", amount: null };
+  }
+  return draft;
+}
+
 export function columnIdForPlan(sob: SobSchedule, planCode: string): string | null {
   const direct = sob.columns.find((column) => column.plan_codes.includes(planCode));
   if (direct) return direct.id;
@@ -100,13 +121,15 @@ export function itemLimitForPlan(
   return columnId ? item.claim_limits?.[columnId] ?? null : null;
 }
 
-export function sourceWordingForPlan(
+export function claimLimitSourceForPlan(
   sob: SobSchedule,
   item: SobItemAnswer,
   planCode: string,
-): string | null {
+): ClaimLimitSource {
   const columnId = columnIdForPlan(sob, planCode);
-  if (!columnId) return null;
+  if (!columnId) {
+    return { wording: null, structuredPolicyYear: false, monetary: false };
+  }
   const rawPolicyYear =
     item.column_properties?.[columnId]?.per_policy_year ??
     item.properties?.per_policy_year;
@@ -117,9 +140,27 @@ export function sourceWordingForPlan(
       policyYear.toLowerCase(),
     )
   ) {
-    return /\byear\b/i.test(policyYear)
-      ? policyYear
-      : `${policyYear} per policy year`;
+    return {
+      wording: /\byear\b/i.test(policyYear)
+        ? policyYear
+        : `${policyYear} per policy year`,
+      structuredPolicyYear: true,
+      monetary:
+        hasMonetaryContext(policyYear) || /\bas charged\b/i.test(policyYear),
+    };
   }
-  return cellValue(item, columnId) || null;
+  const wording = cellValue(item, columnId) || null;
+  return {
+    wording,
+    structuredPolicyYear: false,
+    monetary: hasMonetaryContext(wording),
+  };
+}
+
+export function sourceWordingForPlan(
+  sob: SobSchedule,
+  item: SobItemAnswer,
+  planCode: string,
+): string | null {
+  return claimLimitSourceForPlan(sob, item, planCode).wording;
 }

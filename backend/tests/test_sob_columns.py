@@ -13,6 +13,7 @@ from app.api.v1.product_setups import _benefit_schedule
 from app.services.sob_columns import (
     NOT_COVERED,
     resolve_plan_schedule,
+    seed_sob_claim_limits,
     sob_from_plan_items,
 )
 
@@ -179,7 +180,7 @@ def test_copay_properties_resolve_per_column() -> None:
     assert s2[0]["properties"]["per_visit"] == "30"
 
 
-def test_copay_policy_year_property_becomes_a_reviewable_limit() -> None:
+def test_monetary_copay_policy_year_property_becomes_a_reviewable_limit() -> None:
     plans = [
         {
             "code": "1",
@@ -193,7 +194,7 @@ def test_copay_policy_year_property_becomes_a_reviewable_limit() -> None:
                     "value": "",
                     "properties": {
                         "per_visit": "50",
-                        "per_policy_year": "300",
+                        "per_policy_year": "SGD 300",
                     },
                     "sub_items": [],
                 }
@@ -206,7 +207,7 @@ def test_copay_policy_year_property_becomes_a_reviewable_limit() -> None:
         "basis": "policy_year",
         "amount": 300.0,
         "currency": "SGD",
-        "display": "300 per policy year",
+        "display": "SGD 300 per policy year",
         "claim_scope_codes": ["gp_tcm"],
         "status": "needs_review",
         "source": "detected",
@@ -214,6 +215,78 @@ def test_copay_policy_year_property_becomes_a_reviewable_limit() -> None:
 
     schedule = resolve_plan_schedule(sob, "1", 200)
     assert schedule[0]["claim_limit"] == setting
+
+
+def test_copay_annual_count_stays_informational() -> None:
+    plans = [
+        {
+            "code": "1",
+            "label": "P1",
+            "selected": True,
+            "benefit_items": [
+                {
+                    "number": "-4",
+                    "name": "Traditional Chinese Medicine",
+                    "kind": "copay",
+                    "value": "",
+                    "properties": {"per_policy_year": "5 visits"},
+                    "sub_items": [],
+                }
+            ],
+        }
+    ]
+
+    setting = sob_from_plan_items(plans, product_code="GCGP")["items"][0][
+        "claim_limits"
+    ]["col0"]
+    assert setting["basis"] == "informational"
+    assert setting["amount"] is None
+    assert setting["display"] == "5 visits per policy year"
+
+
+def test_claim_limit_seeding_reserves_later_existing_scope_owner() -> None:
+    existing = {
+        "basis": "policy_year",
+        "amount": 500,
+        "currency": "SGD",
+        "display": "SGD 500 per policy year",
+        "claim_scope_codes": ["gp_tcm"],
+        "status": "verified",
+        "source": "manual",
+    }
+    sob = {
+        "columns": [{"id": "col0", "label": "Plan 1", "plan_codes": ["1"]}],
+        "items": [
+            {
+                "uid": "suggestion",
+                "number": "-1",
+                "name": "Traditional Chinese Medicine",
+                "kind": "copay",
+                "base_value": "",
+                "overrides": {},
+                "properties": {},
+                "column_properties": {"col0": {"per_policy_year": "SGD 300"}},
+                "sub_items": [],
+            },
+            {
+                "uid": "existing",
+                "number": "-2",
+                "name": "TCM existing owner",
+                "kind": "copay",
+                "base_value": "",
+                "overrides": {},
+                "properties": {},
+                "column_properties": {},
+                "sub_items": [],
+                "claim_limits": {"col0": existing},
+            },
+        ],
+    }
+
+    seed_sob_claim_limits(sob, product_code="GCGP")
+
+    assert sob["items"][0]["claim_limits"]["col0"]["claim_scope_codes"] == []
+    assert sob["items"][1]["claim_limits"]["col0"] == existing
 
 
 def _grid(code: str, cells: list[dict]) -> dict:

@@ -15,21 +15,18 @@ from app.models.category import CategoryStatus, SourceKind
 from app.models.product_setup import ProductSetupOrigin, ProductSetupStatus
 
 
-def _migration() -> ModuleType:
-    path = (
-        Path(__file__).parents[1]
-        / "alembic"
-        / "versions"
-        / "d6a8c0e2f4b3_seed_copay_claim_limit_suggestions.py"
-    )
-    spec = importlib.util.spec_from_file_location("copay_limit_migration", path)
+def _migration(filename: str, module_name: str) -> ModuleType:
+    path = Path(__file__).parents[1] / "alembic" / "versions" / filename
+    spec = importlib.util.spec_from_file_location(module_name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_migration_seeds_copay_limits_without_overwriting_decisions(monkeypatch) -> None:
+def test_migrations_repair_unsafe_suggestions_without_overwriting_decisions(
+    monkeypatch,
+) -> None:
     verified = {
         "basis": "policy_year",
         "amount": 250,
@@ -73,13 +70,46 @@ def test_migration_seeds_copay_limits_without_overwriting_decisions(monkeypatch)
                             "name": "Traditional Chinese Medicine",
                             "kind": "copay",
                             "value": None,
-                            "properties": {"per_policy_year": "300"},
+                            "properties": {"per_policy_year": "SGD 300"},
                         },
                         {
                             "number": "-5",
+                            "name": "Physiotherapy",
+                            "kind": "copay",
+                            "value": None,
+                            "properties": {"per_policy_year": "5 visits"},
+                        },
+                        {
+                            "number": "-6",
                             "name": "Existing decision",
-                            "properties": {"per_policy_year": "999"},
+                            "value": "SGD 250 per policy year",
                             "claim_limit": verified,
+                        },
+                        {
+                            "number": "-7",
+                            "name": "Previously verified count",
+                            "kind": "copay",
+                            "value": None,
+                            "properties": {"per_policy_year": "5 visits"},
+                            "claim_limit": {
+                                **verified,
+                                "amount": 5,
+                                "display": "5 visits per policy year",
+                                "claim_scope_codes": [],
+                            },
+                        },
+                        {
+                            "number": "-8",
+                            "name": "Stale monetary setting",
+                            "kind": "copay",
+                            "value": None,
+                            "properties": {"per_policy_year": "SGD 500"},
+                            "claim_limit": {
+                                **verified,
+                                "amount": 300,
+                                "display": "SGD 300 per policy year",
+                                "claim_scope_codes": [],
+                            },
                         },
                     ]
                 },
@@ -107,9 +137,76 @@ def test_migration_seeds_copay_limits_without_overwriting_decisions(monkeypatch)
                                 "overrides": {},
                                 "properties": {},
                                 "column_properties": {
-                                    "col0": {"per_policy_year": "300"}
+                                    "col0": {"per_policy_year": "SGD 300"}
                                 },
                                 "sub_items": [],
+                            },
+                            {
+                                "uid": "physio",
+                                "number": "-5",
+                                "name": "Physiotherapy",
+                                "kind": "copay",
+                                "base_value": "",
+                                "overrides": {},
+                                "properties": {},
+                                "column_properties": {
+                                    "col0": {"per_policy_year": "5 visits"}
+                                },
+                                "sub_items": [],
+                            },
+                            {
+                                "uid": "existing",
+                                "number": "-6",
+                                "name": "Existing decision",
+                                "kind": "copay",
+                                "base_value": "SGD 250 per policy year",
+                                "overrides": {},
+                                "properties": {},
+                                "column_properties": {},
+                                "sub_items": [],
+                                "claim_limits": {"col0": verified},
+                            },
+                            {
+                                "uid": "verified-count",
+                                "number": "-7",
+                                "name": "Previously verified count",
+                                "kind": "copay",
+                                "base_value": "",
+                                "overrides": {},
+                                "properties": {},
+                                "column_properties": {
+                                    "col0": {"per_policy_year": "5 visits"}
+                                },
+                                "sub_items": [],
+                                "claim_limits": {
+                                    "col0": {
+                                        **verified,
+                                        "amount": 5,
+                                        "display": "5 visits per policy year",
+                                        "claim_scope_codes": [],
+                                    }
+                                },
+                            },
+                            {
+                                "uid": "stale",
+                                "number": "-8",
+                                "name": "Stale monetary setting",
+                                "kind": "copay",
+                                "base_value": "",
+                                "overrides": {},
+                                "properties": {},
+                                "column_properties": {
+                                    "col0": {"per_policy_year": "SGD 500"}
+                                },
+                                "sub_items": [],
+                                "claim_limits": {
+                                    "col0": {
+                                        **verified,
+                                        "amount": 300,
+                                        "display": "SGD 300 per policy year",
+                                        "claim_scope_codes": [],
+                                    }
+                                },
                             }
                         ],
                     },
@@ -120,14 +217,23 @@ def test_migration_seeds_copay_limits_without_overwriting_decisions(monkeypatch)
         )
         db.commit()
 
-    migration = _migration()
+    seed = _migration(
+        "d6a8c0e2f4b3_seed_copay_claim_limit_suggestions.py",
+        "seed_copay_limit_migration",
+    )
+    repair = _migration(
+        "e8c0d2f4b6a9_repair_copay_claim_limit_suggestions.py",
+        "repair_copay_limit_migration",
+    )
     with engine.begin() as connection:
-        monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
-        migration.upgrade()
+        monkeypatch.setattr(seed.op, "get_bind", lambda: connection)
+        seed.upgrade()
+        monkeypatch.setattr(repair.op, "get_bind", lambda: connection)
+        repair.upgrade()
         first = connection.exec_driver_sql(
             "SELECT answers FROM product_setups WHERE id = 'setup'"
         ).scalar_one()
-        migration.upgrade()
+        repair.upgrade()
         second = connection.exec_driver_sql(
             "SELECT answers FROM product_setups WHERE id = 'setup'"
         ).scalar_one()
@@ -137,14 +243,36 @@ def test_migration_seeds_copay_limits_without_overwriting_decisions(monkeypatch)
         schedule = db.get(Plan, "plan").benefit_schedule
         detected = schedule["items"][0]["claim_limit"]
         assert detected["amount"] == 300
-        assert detected["display"] == "300 per policy year"
-        assert detected["claim_scope_codes"] == ["gp_tcm"]
+        assert detected["display"] == "SGD 300 per policy year"
+        assert detected["claim_scope_codes"] == []
         assert detected["status"] == "needs_review"
-        assert schedule["items"][1]["claim_limit"] == verified
+        count = schedule["items"][1]["claim_limit"]
+        assert count["basis"] == "informational"
+        assert count["amount"] is None
+        assert count["claim_scope_codes"] == ["gp_physiotherapy"]
+        assert schedule["items"][2]["claim_limit"] == verified
+        verified_count = schedule["items"][3]["claim_limit"]
+        assert verified_count["basis"] == "informational"
+        assert verified_count["amount"] is None
+        assert verified_count["status"] == "needs_review"
+        assert schedule["items"][4]["claim_limit"]["status"] == "needs_review"
 
         answers = db.get(ProductSetup, "setup").answers
         setup_limit = answers["sob"]["items"][0]["claim_limits"]["col0"]
         assert setup_limit["amount"] == 300
-        assert setup_limit["claim_scope_codes"] == ["gp_tcm"]
+        assert setup_limit["claim_scope_codes"] == []
         assert setup_limit["status"] == "needs_review"
+        setup_count = answers["sob"]["items"][1]["claim_limits"]["col0"]
+        assert setup_count["basis"] == "informational"
+        assert setup_count["amount"] is None
+        assert setup_count["claim_scope_codes"] == ["gp_physiotherapy"]
+        assert answers["sob"]["items"][2]["claim_limits"]["col0"] == verified
+        setup_verified_count = answers["sob"]["items"][3]["claim_limits"]["col0"]
+        assert setup_verified_count["basis"] == "informational"
+        assert setup_verified_count["amount"] is None
+        assert setup_verified_count["status"] == "needs_review"
+        assert (
+            answers["sob"]["items"][4]["claim_limits"]["col0"]["status"]
+            == "needs_review"
+        )
     engine.dispose()

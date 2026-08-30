@@ -1,5 +1,11 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, CircleDollarSign, Plus } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleDollarSign,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,7 +28,9 @@ import type {
 import {
   CLAIM_LIMIT_BASES,
   CLAIM_LIMIT_BASIS_LABELS,
+  claimLimitSourceForPlan,
   columnIdForPlan,
+  draftDetectedLimitSetting,
   draftLimitSetting,
   itemLimitForPlan,
   isLiveAnnualLimit,
@@ -54,21 +62,40 @@ const statusVariant = (setting: ClaimLimitSetting) =>
       ? "default"
       : "warn";
 
+const normalizeWording = (value: string | null) =>
+  (value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+
+const hasSourceChanged = (setting: ClaimLimitSetting, wording: string | null) =>
+  normalizeWording(setting.display) !== normalizeWording(wording);
+
 function SettingEditor({
   setting,
   wording,
   scopes,
+  sourceChanged = false,
   onChange,
   onScope,
+  onUseSource,
 }: {
   setting: ClaimLimitSetting;
   wording: string | null;
   scopes: ClaimLimitScope[];
+  sourceChanged?: boolean;
   onChange: (next: ClaimLimitSetting) => void;
   onScope?: (scopeCode: string, checked: boolean) => void;
+  onUseSource?: () => void;
 }) {
-  const patch = (values: Partial<ClaimLimitSetting>) =>
-    onChange({ ...setting, ...values, source: "manual", status: "needs_review" });
+  const patch = (
+    values: Partial<ClaimLimitSetting>,
+    acknowledgeSource = false,
+  ) =>
+    onChange({
+      ...setting,
+      ...values,
+      display: acknowledgeSource ? wording?.trim() || null : setting.display,
+      source: "manual",
+      status: "needs_review",
+    });
   const missingRequiredScope = Boolean(
     onScope && scopes.length > 0 && setting.claim_scope_codes.length === 0,
   );
@@ -86,7 +113,7 @@ function SettingEditor({
               patch({
                 basis: basis as ClaimLimitBasis,
                 amount: basis === "policy_year" ? setting.amount : null,
-              })
+              }, true)
             }
           >
             <SelectTrigger aria-label="Limit basis">
@@ -117,7 +144,7 @@ function SettingEditor({
               onChange={(event) =>
                 patch({
                   amount: event.target.value ? Number(event.target.value) : null,
-                })
+                }, true)
               }
               aria-describedby="claim-limit-enforcement-note"
             />
@@ -131,6 +158,24 @@ function SettingEditor({
           <p className="text-xs leading-5 text-muted-foreground">
             SoB wording: <span className="text-foreground">{wording}</span>
           </p>
+        )}
+        {sourceChanged && (
+          <div
+            id="claim-limit-source-changed-note"
+            className="space-y-2 rounded-md border border-warn/30 bg-warn/10 p-3 text-xs leading-5 text-foreground"
+          >
+            <p className="font-medium">The SoB wording changed after this setting was saved.</p>
+            <p>
+              Use the updated value below, or edit the basis or amount to record
+              an intentional override. This setting cannot be verified as-is.
+            </p>
+            {onUseSource && (
+              <Button type="button" size="sm" variant="outline" onClick={onUseSource}>
+                <RefreshCw className="size-3.5" aria-hidden />
+                Use updated SoB value
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -176,10 +221,21 @@ function SettingEditor({
           <Button
             type="button"
             size="sm"
-            onClick={() => onChange({ ...setting, source: "manual", status: "verified" })}
-            disabled={missingAnnualAmount || missingRequiredScope}
+            onClick={() =>
+              onChange({
+                ...setting,
+                display: wording?.trim() || setting.display,
+                source: "manual",
+                status: "verified",
+              })
+            }
+            disabled={missingAnnualAmount || missingRequiredScope || sourceChanged}
             aria-describedby={
-              missingRequiredScope ? "claim-limit-scope-note" : undefined
+              sourceChanged
+                ? "claim-limit-source-changed-note"
+                : missingRequiredScope
+                  ? "claim-limit-scope-note"
+                  : undefined
             }
           >
             <CheckCircle2 className="size-3.5" aria-hidden />
@@ -189,7 +245,15 @@ function SettingEditor({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => onChange({ ...setting, source: "manual", status: "not_limit" })}
+            onClick={() =>
+              onChange({
+                ...setting,
+                amount: null,
+                display: wording?.trim() || setting.display,
+                source: "manual",
+                status: "not_limit",
+              })
+            }
           >
             Mark as not a limit
           </Button>
@@ -217,36 +281,58 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
       sob.items.filter((item) => itemLimitForPlan(sob, item, activeCode) !== null),
     [activeCode, sob],
   );
+  const configuredState = configured.map((item) => {
+    const setting = itemLimitForPlan(sob, item, activeCode)!;
+    const source = claimLimitSourceForPlan(sob, item, activeCode);
+    return {
+      item,
+      setting,
+      source,
+      sourceChanged: hasSourceChanged(setting, source.wording),
+    };
+  });
   const available = sob.items.filter(
     (item) => itemLimitForPlan(sob, item, activeCode) === null,
   );
   const detectedAvailable = available
     .map((item) => {
-      const wording = sourceWordingForPlan(sob, item, activeCode);
-      return { item, wording, setting: draftLimitSetting(wording) };
+      const source = claimLimitSourceForPlan(sob, item, activeCode);
+      return {
+        item,
+        source,
+        wording: source.wording,
+        setting: draftDetectedLimitSetting(source),
+      };
     })
     .filter(
-      ({ wording, setting }) =>
-        Boolean(wording) && setting.basis !== "informational",
+      ({ wording, source, setting }) =>
+        Boolean(wording) &&
+        (source.structuredPolicyYear || setting.basis !== "informational"),
     );
   const detectedUids = new Set(detectedAvailable.map(({ item }) => item.uid));
   const manualAvailable = available.filter((item) => !detectedUids.has(item.uid));
-  const settings = [overall, ...configured.map((item) => itemLimitForPlan(sob, item, activeCode))]
-    .filter((setting): setting is ClaimLimitSetting => Boolean(setting));
-  const verified = settings.filter((setting) => setting.status === "verified").length;
-  const needsReview = settings.filter((setting) => setting.status === "needs_review").length;
+  const verified =
+    Number(overall?.status === "verified") +
+    configuredState.filter(
+      ({ setting, sourceChanged }) =>
+        setting.status === "verified" && !sourceChanged,
+    ).length;
+  const needsReview =
+    Number(overall?.status === "needs_review") +
+    configuredState.filter(
+      ({ setting, sourceChanged }) =>
+        setting.status === "needs_review" || sourceChanged,
+    ).length;
   const totalNeedsReview = needsReview + detectedAvailable.length;
   const scopeLabels = new Map(claimScopes.map((scope) => [scope.code, scope.label]));
 
   const mappedByScope = new Map<
     string,
-    { item: SobItemAnswer; setting: ClaimLimitSetting }
+    { item: SobItemAnswer; setting: ClaimLimitSetting; sourceChanged: boolean }
   >();
-  for (const item of configured) {
-    const setting = itemLimitForPlan(sob, item, activeCode);
-    if (!setting) continue;
+  for (const { item, setting, sourceChanged } of configuredState) {
     for (const scope of setting.claim_scope_codes) {
-      mappedByScope.set(scope, { item, setting });
+      mappedByScope.set(scope, { item, setting, sourceChanged });
     }
   }
 
@@ -311,7 +397,12 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
   const addSelectedLine = () => {
     const item = sob.items.find((row) => row.uid === addLine);
     if (!item || !columnId) return;
-    setItem(item.uid, draftLimitSetting(sourceWordingForPlan(sob, item, activeCode)));
+    setItem(
+      item.uid,
+      draftDetectedLimitSetting(
+        claimLimitSourceForPlan(sob, item, activeCode),
+      ),
+    );
     setEditing(item.uid);
     setAddLine("");
   };
@@ -420,9 +511,8 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
           )}
         </div>
 
-        {configured.map((item) => {
-          const setting = itemLimitForPlan(sob, item, activeCode)!;
-          const wording = sourceWordingForPlan(sob, item, activeCode);
+        {configuredState.map(({ item, setting, source, sourceChanged }) => {
+          const wording = source.wording;
           return (
             <div key={item.uid}>
               <div className="grid items-center gap-2 px-3 py-3 md:grid-cols-[minmax(12rem,1fr)_minmax(11rem,0.7fr)_auto_auto]">
@@ -441,7 +531,9 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                   {CLAIM_LIMIT_BASIS_LABELS[setting.basis]}
                   {setting.amount != null ? ` · SGD ${setting.amount.toLocaleString()}` : ""}
                 </p>
-                <Badge variant={statusVariant(setting)}>{statusLabel(setting)}</Badge>
+                <Badge variant={sourceChanged ? "warn" : statusVariant(setting)}>
+                  {sourceChanged ? "SoB changed · review" : statusLabel(setting)}
+                </Badge>
                 <Button
                   type="button"
                   size="sm"
@@ -458,8 +550,18 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                   setting={setting}
                   wording={wording}
                   scopes={claimScopes}
+                  sourceChanged={sourceChanged}
                   onChange={(next) => setItem(item.uid, next)}
                   onScope={(scope, checked) => assignScope(item.uid, scope, checked)}
+                  onUseSource={() =>
+                    setItem(
+                      item.uid,
+                      draftDetectedLimitSetting(
+                        source,
+                        setting.claim_scope_codes,
+                      ),
+                    )
+                  }
                 />
               )}
             </div>
@@ -554,7 +656,9 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                   <dd className="text-right font-medium text-foreground">
                     {mapped
                       ? `${mapped.item.name} · ${
-                          isLiveAnnualLimit(mapped.setting)
+                          mapped.sourceChanged
+                            ? "pending review, not live"
+                            : isLiveAnnualLimit(mapped.setting)
                             ? "live annual balance"
                             : mapped.setting.status === "needs_review"
                               ? "pending review, not live"

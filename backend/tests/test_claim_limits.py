@@ -8,6 +8,7 @@ from app.services.claim_limits import (
     normalize_limit_setting,
     setting_display,
     suggested_limit_setting,
+    suggested_structured_policy_year_setting,
     validate_schedule_limits,
 )
 
@@ -49,6 +50,18 @@ def test_detected_settings_preserve_basis_without_enforcing_per_unit():
     assert visit and visit["basis"] == "per_visit" and visit["amount"] is None
     assert annual["status"] == visit["status"] == "needs_review"
     assert enforceable_policy_year_amount(annual) is None
+
+
+def test_structured_annual_counts_never_become_sgd_balances():
+    money = suggested_structured_policy_year_setting("SGD 300")
+    visits = suggested_structured_policy_year_setting("5 visits")
+    ambiguous = suggested_structured_policy_year_setting("5")
+
+    assert money and money["basis"] == "policy_year" and money["amount"] == 300
+    assert visits and visits["basis"] == "informational" and visits["amount"] is None
+    assert ambiguous and ambiguous["basis"] == "informational"
+    assert visits["display"] == "5 visits per policy year"
+    assert enforceable_policy_year_amount(visits) is None
 
 
 def test_manual_amount_replaces_stale_detected_display():
@@ -114,6 +127,27 @@ def test_duplicate_or_unknown_scope_mapping_is_rejected():
     errors = validate_schedule_limits(schedule, valid_scope_codes={"standard"})
     assert any("mapped to both" in error for error in errors)
     assert any("unknown claim type" in error for error in errors)
+
+
+def test_verified_setting_is_rejected_after_source_wording_changes():
+    current = setting(scopes=["standard"])
+    current["display"] = "SGD 300 per policy year"
+    schedule = {
+        "items": [
+            {
+                "name": "Outpatient treatment",
+                "value": "",
+                "properties": {"per_policy_year": "SGD 500"},
+                "claim_limit": current,
+            }
+        ]
+    }
+
+    errors = validate_schedule_limits(schedule, valid_scope_codes={"standard"})
+    assert errors == [
+        "Outpatient treatment: Schedule of Benefits wording changed; "
+        "review the claim-limit setting again."
+    ]
 
 
 def test_broker_catalog_includes_optional_gp_riders_before_mapping():

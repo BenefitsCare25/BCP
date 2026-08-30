@@ -34,6 +34,7 @@ from typing import Any
 from app.services.claim_limits import (
     suggested_limit_setting,
     suggested_scope_codes,
+    suggested_structured_policy_year_setting,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,13 +63,8 @@ def _effective(overrides: Any, col_id: str | None, base: Any) -> Any:
     return base if ov is None else ov
 
 
-def _claim_limit_source(item: dict[str, Any], column_id: str) -> Any:
-    """The wording that can seed a reviewable claim-limit setting.
-
-    Ordinary rows state it in the value cell. Outpatient copay groups store the
-    annual amount in a structured ``per_policy_year`` property instead, often
-    as a bare number. The property name supplies the missing basis context.
-    """
+def _structured_policy_year_source(item: dict[str, Any], column_id: str) -> Any:
+    """Return a structured annual qualifier, preserving its value type."""
     column_properties = item.get("column_properties")
     per_column = (
         column_properties.get(column_id)
@@ -81,10 +77,7 @@ def _claim_limit_source(item: dict[str, Any], column_id: str) -> Any:
         raw = per_column.get("per_policy_year")
     if raw is None and isinstance(shared, dict):
         raw = shared.get("per_policy_year")
-    text = " ".join(str(raw or "").split())
-    if text and text.casefold() not in {"na", "n/a", "not applicable", "not covered"}:
-        return text if "year" in text.casefold() else f"{text} per policy year"
-    return _effective(item.get("overrides"), column_id, item.get("base_value"))
+    return raw
 
 
 def benefit_row_key(name: Any, fallback: Any = None) -> str:
@@ -432,6 +425,17 @@ def seed_sob_claim_limits(
     """
     columns = [c for c in (sob.get("columns") or []) if isinstance(c, dict)]
     assigned: dict[str, set[str]] = {str(c.get("id") or ""): set() for c in columns if c.get("id")}
+    # Reserve every existing owner before adding anything. A setting later in
+    # item order must not lose its scope to an earlier generated suggestion.
+    for item in sob.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        existing = item.get("claim_limits")
+        if not isinstance(existing, dict):
+            continue
+        for column_id, setting in existing.items():
+            if column_id in assigned and isinstance(setting, dict):
+                assigned[column_id].update(setting.get("claim_scope_codes") or [])
     for item in sob.get("items") or []:
         if not isinstance(item, dict):
             continue
@@ -443,16 +447,21 @@ def seed_sob_claim_limits(
         for column in columns:
             column_id = str(column.get("id") or "")
             if not column_id or column_id in claim_limits:
-                current = claim_limits.get(column_id)
-                if isinstance(current, dict):
-                    assigned[column_id].update(current.get("claim_scope_codes") or [])
                 continue
             scopes = [
                 scope for scope in suggested_scopes if scope not in assigned.get(column_id, set())
             ]
-            setting = suggested_limit_setting(
-                _claim_limit_source(item, column_id),
-                claim_scope_codes=scopes,
+            structured = _structured_policy_year_source(item, column_id)
+            setting = (
+                suggested_structured_policy_year_setting(
+                    structured,
+                    claim_scope_codes=scopes,
+                )
+                if structured is not None
+                else suggested_limit_setting(
+                    _effective(item.get("overrides"), column_id, item.get("base_value")),
+                    claim_scope_codes=scopes,
+                )
             )
             if setting is not None:
                 claim_limits[column_id] = setting

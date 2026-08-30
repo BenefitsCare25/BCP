@@ -402,6 +402,7 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   page,
   request,
 }, testInfo) => {
+  test.setTimeout(60_000);
   const runtimeErrors = monitorRuntime(page);
   const context = await brokerContext(request);
   const productCode =
@@ -451,16 +452,19 @@ test("broker can review plan and line mappings from the SoB editor", async ({
     await expect(firstGroupNumber).toHaveValue("Group 4");
     await page.getByRole("button", { name: "Renumber" }).click();
     await expect(firstGroupNumber).toHaveValue("Group 1");
+    await firstGroupNumber.clear();
+    await page.getByRole("button", { name: "Renumber" }).click();
+    await expect(firstGroupNumber).toHaveValue("Group 1");
 
     await page
       .getByRole("button", { name: /Expand details for Panel/ })
       .click();
     await page
       .getByRole("textbox", { name: /^Per policy year/i })
-      .fill("300");
+      .fill("SGD 300");
 
     await expect(editor).toContainText("Detected values to review");
-    await expect(editor).toContainText("300 per policy year");
+    await expect(editor).toContainText("SGD 300 per policy year");
     await expect(editor).toContainText("No claim type mapped");
     await editor
       .getByRole("button", { name: "Review & verify" })
@@ -483,6 +487,40 @@ test("broker can review plan and line mappings from the SoB editor", async ({
       .first();
     await expect(panelSetting).toBeVisible();
     await expect(panelSetting).not.toContainText("No claim type mapped");
+
+    await page
+      .getByRole("textbox", { name: /^Per policy year/i })
+      .fill("SGD 500");
+    await expect(editor).toContainText("SoB changed · review");
+    await expect(editor).toContainText(
+      "The SoB wording changed after this setting was saved.",
+    );
+    await expect(verifyDetected).toBeDisabled();
+    await editor
+      .getByRole("button", { name: "Use updated SoB value" })
+      .click();
+    await expect(
+      editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first(),
+    ).toHaveValue("500");
+    await expect(verifyDetected).toBeEnabled();
+    await verifyDetected.click();
+
+    await page
+      .getByRole("textbox", { name: /^Per policy year/i })
+      .fill("5 visits");
+    await expect(verifyDetected).toBeDisabled();
+    await editor
+      .getByRole("button", { name: "Use updated SoB value" })
+      .click();
+    await expect(editor.getByRole("combobox", { name: "Limit basis" })).toContainText(
+      "Other policy wording",
+    );
+    await expect(
+      editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }),
+    ).toHaveCount(0);
+    await verifyDetected.click();
+    await expect(editor).toContainText("Verified · policy wording");
+    await expect(editor).not.toContainText("SGD 5");
   }
 
   const addLine = editor.getByRole("combobox", { name: "Add a benefit line limit" });

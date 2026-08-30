@@ -44,6 +44,7 @@ LIMIT_STATUSES = frozenset(
 )
 
 _AMOUNT_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+_MONETARY_CONTEXT_RE = re.compile(r"\$|\bsgd\b|\bdollars?\b", re.I)
 _PER_VISIT_RE = re.compile(r"(?:/|\bper\s+)(?:visit|consult(?:ation)?)\b", re.I)
 _PER_DAY_RE = re.compile(r"(?:/|\bper\s+)(?:day|night)\b|\bdaily\b", re.I)
 _PER_YEAR_RE = re.compile(r"\bper\s+(?:policy\s+)?year\b|\bper\s+annum\b|/year\b", re.I)
@@ -61,6 +62,12 @@ def parse_limit_amount(value: Any) -> float | None:
     except ValueError:
         return None
     return amount if amount >= 0 else None
+
+
+def has_monetary_context(value: Any) -> bool:
+    """Whether wording explicitly describes money rather than a usage count."""
+    text = " ".join(str(value or "").split())
+    return bool(_MONETARY_CONTEXT_RE.search(text))
 
 
 def infer_limit_basis(value: Any) -> str | None:
@@ -105,6 +112,36 @@ def suggested_limit_setting(
         "amount": (parse_limit_amount(text) if basis == LIMIT_BASIS_POLICY_YEAR else None),
         "currency": "SGD",
         "display": text,
+        "claim_scope_codes": list(dict.fromkeys(claim_scope_codes or [])),
+        "status": LIMIT_STATUS_NEEDS_REVIEW,
+        "source": "detected",
+    }
+
+
+def suggested_structured_policy_year_setting(
+    value: Any,
+    *,
+    claim_scope_codes: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any] | None:
+    """Build a safe suggestion from a structured ``per_policy_year`` value.
+
+    The field can contain either money (``SGD 300``) or a usage condition
+    (``5 visits``).  Its key supplies the annual period, but it does not supply
+    a currency.  Counts and ambiguous bare numbers therefore remain visible to
+    the broker as informational wording and can never become an SGD balance
+    without an explicit broker edit.
+    """
+    text = " ".join(str(value or "").split())
+    if not text or text.casefold() in {"na", "n/a", "not applicable", "not covered"}:
+        return None
+    display = text if _PER_YEAR_RE.search(text) else f"{text} per policy year"
+    if has_monetary_context(text) or "as charged" in text.casefold():
+        return suggested_limit_setting(display, claim_scope_codes=claim_scope_codes)
+    return {
+        "basis": LIMIT_BASIS_INFORMATIONAL,
+        "amount": None,
+        "currency": "SGD",
+        "display": display,
         "claim_scope_codes": list(dict.fromkeys(claim_scope_codes or [])),
         "status": LIMIT_STATUS_NEEDS_REVIEW,
         "source": "detected",
@@ -241,6 +278,28 @@ def item_setting(item: dict[str, Any]) -> dict[str, Any] | None:
     return normalize_limit_setting(item.get("claim_limit"), fallback_display=item.get("value"))
 
 
+def item_source_wording(item: dict[str, Any]) -> str | None:
+    """Current SoB wording that an item-level setting was reviewed against."""
+    properties = item.get("properties")
+    raw_policy_year = (
+        properties.get("per_policy_year") if isinstance(properties, dict) else None
+    )
+    policy_year = " ".join(str(raw_policy_year or "").split())
+    if policy_year and policy_year.casefold() not in {
+        "na",
+        "n/a",
+        "not applicable",
+        "not covered",
+    }:
+        return policy_year if _PER_YEAR_RE.search(policy_year) else f"{policy_year} per policy year"
+    value = " ".join(str(item.get("value") or "").split())
+    return value or None
+
+
+def _normalized_wording(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
 def product_setting(schedule: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(schedule, dict) or "claim_limit" not in schedule:
         return None
@@ -311,6 +370,15 @@ def validate_schedule_limits(
         if setting is None:
             errors.append(f"{name}: invalid claim-limit setting.")
             continue
+        if (
+            setting["status"] in {LIMIT_STATUS_VERIFIED, LIMIT_STATUS_NOT_LIMIT}
+            and _normalized_wording(setting.get("display"))
+            != _normalized_wording(item_source_wording(item))
+        ):
+            errors.append(
+                f"{name}: Schedule of Benefits wording changed; "
+                "review the claim-limit setting again."
+            )
         if (
             setting["basis"] == LIMIT_BASIS_POLICY_YEAR
             and setting["status"] != LIMIT_STATUS_NOT_LIMIT
