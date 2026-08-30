@@ -5,6 +5,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from app.db.base import Base
+from app.db.migration_helpers import sqlite_migration_guard
 from app.db.session import DATABASE_URL, engine
 from app.models import (  # noqa: F401 — register models with metadata
     AISpendLog,
@@ -48,15 +49,16 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     with engine.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            render_as_batch=True,
-            compare_type=True,
-            compare_server_default=True,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        with sqlite_migration_guard(connection):
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                render_as_batch=True,
+                compare_type=True,
+                compare_server_default=True,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
 
 
 if context.is_offline_mode():

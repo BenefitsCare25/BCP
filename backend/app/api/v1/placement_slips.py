@@ -9,6 +9,7 @@ Replaces the spike's ephemeral parse endpoint. Each parse:
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Annotated, Any
 
@@ -26,7 +27,7 @@ from fastapi import (
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.v1.product_setups import seed_draft_from_slip
+from app.api.v1.product_setups import _benefit_schedule, seed_draft_from_slip
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
@@ -82,6 +83,123 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/placement-slips", tags=["placement-slips"])
 
 
+def _normalized_identity(value: object) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _item_identity(item: dict[str, Any]) -> tuple[str, ...] | None:
+    number = _normalized_identity(item.get("number"))
+    name = _normalized_identity(item.get("name"))
+    if number and name:
+        return ("number_name", number, name)
+    if name:
+        return ("name", name)
+    if number:
+        return ("number", number)
+    return None
+
+
+def _sub_item_identity(item: dict[str, Any]) -> tuple[str, ...] | None:
+    key = _normalized_identity(item.get("key"))
+    if key:
+        return ("key", key)
+    name = _normalized_identity(item.get("name"))
+    return ("name", name) if name else None
+
+
+def _limit_identity(item: dict[str, Any]) -> tuple[str, ...] | None:
+    label = _normalized_identity(item.get("label"))
+    return ("label", label) if label else None
+
+
+def _has_projected_value(value: object) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def _merge_schedule_entry(
+    existing: dict[str, Any], projected: dict[str, Any]
+) -> dict[str, Any]:
+    """Prefer populated canonical fields while retaining richer parsed data."""
+    merged = deepcopy(existing)
+    for key, value in projected.items():
+        if key == "limits":
+            merged[key] = _merge_schedule_rows(
+                existing.get(key), value, _limit_identity
+            )
+        elif key == "sub_items":
+            merged[key] = _merge_schedule_rows(
+                existing.get(key), value, _sub_item_identity
+            )
+        elif key == "properties" and isinstance(value, dict):
+            properties = existing.get(key)
+            merged[key] = {
+                **(properties if isinstance(properties, dict) else {}),
+                **value,
+            }
+        elif _has_projected_value(value) or key not in merged:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _merge_schedule_rows(
+    existing: object,
+    projected: object,
+    identity: Any,
+) -> list[Any]:
+    """Merge keyed rows in canonical order, appending unmatched parsed rows."""
+    existing_rows = existing if isinstance(existing, list) else []
+    projected_rows = projected if isinstance(projected, list) else []
+    consumed: set[int] = set()
+    merged: list[Any] = []
+
+    for projected_row in projected_rows:
+        if not isinstance(projected_row, dict):
+            merged.append(deepcopy(projected_row))
+            continue
+        projected_key = identity(projected_row)
+        match_index = next(
+            (
+                index
+                for index, existing_row in enumerate(existing_rows)
+                if index not in consumed
+                and isinstance(existing_row, dict)
+                and projected_key is not None
+                and identity(existing_row) == projected_key
+            ),
+            None,
+        )
+        if match_index is None:
+            merged.append(deepcopy(projected_row))
+            continue
+        consumed.add(match_index)
+        merged.append(
+            _merge_schedule_entry(existing_rows[match_index], projected_row)
+        )
+
+    merged.extend(
+        deepcopy(row)
+        for index, row in enumerate(existing_rows)
+        if index not in consumed
+    )
+    return merged
+
+
+def _merge_benefit_schedules(
+    existing: object, projected: dict[str, Any]
+) -> dict[str, Any]:
+    """Overlay a canonical projection without deleting parser-only benefits."""
+    existing_schedule = existing if isinstance(existing, dict) else {}
+    merged = deepcopy(existing_schedule)
+    for key, value in projected.items():
+        if key == "items":
+            merged[key] = _merge_schedule_rows(
+                existing_schedule.get(key), value, _item_identity
+            )
+        elif _has_projected_value(value) or key not in merged:
+            merged[key] = deepcopy(value)
+    return merged
+
+
 def _category_reconcile_key(
     product_id: str | None,
     plan_code: object,
@@ -125,6 +243,54 @@ def _find_product(
     return None
 
 
+def _sync_provisional_plan_schedules(
+    db: Session,
+    policy_year_id: str,
+    product: Product,
+    answers: dict[str, Any],
+) -> int:
+    """Project the canonical setup SOB onto untouched slip-generated plans.
+
+    The raw parser emits one plan at a time, but workbook cells frequently span
+    several plan columns. ``build_setup_answers`` resolves that layout into the
+    shared-row/column model. Persisting the raw per-plan payload left later plans
+    with qualifier labels but null values, and also missed inherited rows,
+    notes, sub-items, and inferred kinds.
+
+    Confirmed or human-authored plans remain authoritative and are never
+    rewritten by an upload.
+    """
+    raw_plans = answers.get("plans")
+    if not isinstance(raw_plans, list):
+        return 0
+    selected = {
+        str(plan.get("code") or "").strip(): plan
+        for plan in raw_plans
+        if isinstance(plan, dict)
+        and plan.get("selected")
+        and str(plan.get("code") or "").strip()
+    }
+    if not selected:
+        return 0
+
+    rows = db.execute(
+        select(Plan).where(
+            Plan.product_id == product.id,
+            Plan.policy_year_id == policy_year_id,
+            Plan.code.in_(selected),
+            Plan.source == SourceKind.system_generated.value,
+            Plan.status == CategoryStatus.needs_review.value,
+            Plan.human_modified.is_(False),
+        )
+    ).scalars().all()
+    for row in rows:
+        projected = _benefit_schedule(answers, selected[row.code])
+        row.benefit_schedule = _merge_benefit_schedules(
+            row.benefit_schedule, projected
+        )
+    return len(rows)
+
+
 def _prefill_setup_drafts(
     db: Session,
     policy_year_id: str,
@@ -140,13 +306,12 @@ def _prefill_setup_drafts(
     benefit lines — e.g. all 6 GHS plans, not the canned template's 4), with the
     hand-authored template overlaid for presentation (basis/rate models, benefit
     kinds, arrangements). When the slip yielded no structure, the file template is
-    the fallback. Create-only (see ``seed_draft_from_slip``): an existing draft or
-    confirmed setup is never overwritten. Returns the product codes freshly
-    pre-filled.
+    the fallback. A re-upload replaces an unconfirmed slip draft; a confirmed
+    setup is never overwritten. Returns the product codes freshly pre-filled.
     """
     prefilled: list[str] = []
     # Several sheets can map to one product code (e.g. VDL splits GHS into
-    # Locals/Secondees/Dependants). Dedupe in-memory: the create-only DB check in
+    # Locals/Secondees/Dependants). Dedupe in-memory: the DB lookup in
     # seed_draft_from_slip can't see this transaction's own un-committed inserts,
     # so two sheets for the same code would both insert and trip the
     # (policy_year_id, product_code) unique constraint. The synthesized structure
@@ -178,6 +343,16 @@ def _prefill_setup_drafts(
         if seed_draft_from_slip(
             db, policy_year_id, slip_id, tpl.code, answers, tpl.version
         ):
+            synced = _sync_provisional_plan_schedules(
+                db, policy_year_id, product, answers
+            )
+            logger.info(
+                "Projected canonical setup schedules onto %d provisional %s "
+                "plan(s) (slip_id=%s)",
+                synced,
+                tpl.code,
+                slip_id,
+            )
             prefilled.append(tpl.code)
     return prefilled
 
