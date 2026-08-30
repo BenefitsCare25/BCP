@@ -347,7 +347,7 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   const runtimeErrors = monitorRuntime(page);
   const context = await brokerContext(request);
   const productCode =
-    testInfo.project.name === "mobile-chromium" ? "GP" : "GHS";
+    testInfo.project.name === "mobile-chromium" ? "GP" : "SP";
   const draft = await request.put(
     `/api/v1/policy-years/${context.policyYearId}/product-setups/${productCode}`,
     {
@@ -371,8 +371,8 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   await expect(editor).toBeVisible();
   await expect(editor).toContainText("Claim type coverage");
   await expect(editor).toContainText(
-    productCode === "GHS"
-      ? "Hospitalisation/Day Surgery/Other Inpatient Treatment"
+    productCode === "SP"
+      ? "SP (Specialist)"
       : "Physiotherapy",
   );
 
