@@ -69,6 +69,11 @@ function SettingEditor({
 }) {
   const patch = (values: Partial<ClaimLimitSetting>) =>
     onChange({ ...setting, ...values, source: "manual", status: "needs_review" });
+  const missingRequiredScope = Boolean(
+    onScope && scopes.length > 0 && setting.claim_scope_codes.length === 0,
+  );
+  const missingAnnualAmount =
+    setting.basis === "policy_year" && !(setting.amount && setting.amount > 0);
 
   return (
     <div className="grid gap-4 border-t border-border bg-muted/20 px-3 py-4 lg:grid-cols-[minmax(12rem,0.8fr)_minmax(18rem,1.2fr)]">
@@ -133,6 +138,9 @@ function SettingEditor({
         {onScope && scopes.length > 0 && (
           <fieldset className="space-y-2">
             <legend className="text-xs font-medium text-foreground">Applies to claim types</legend>
+            <p className="text-2xs text-muted-foreground">
+              Select every claim type that should draw from this benefit line.
+            </p>
             <div className="grid gap-2 sm:grid-cols-2">
               {scopes.map((scope) => {
                 const id = `claim-limit-${scope.code}`;
@@ -153,6 +161,14 @@ function SettingEditor({
                 );
               })}
             </div>
+            {missingRequiredScope && (
+              <p
+                id="claim-limit-scope-note"
+                className="text-2xs font-medium text-warn"
+              >
+                Choose at least one claim type before verifying this setting.
+              </p>
+            )}
           </fieldset>
         )}
 
@@ -161,7 +177,10 @@ function SettingEditor({
             type="button"
             size="sm"
             onClick={() => onChange({ ...setting, source: "manual", status: "verified" })}
-            disabled={setting.basis === "policy_year" && !(setting.amount && setting.amount > 0)}
+            disabled={missingAnnualAmount || missingRequiredScope}
+            aria-describedby={
+              missingRequiredScope ? "claim-limit-scope-note" : undefined
+            }
           >
             <CheckCircle2 className="size-3.5" aria-hidden />
             Verify setting
@@ -175,6 +194,10 @@ function SettingEditor({
             Mark as not a limit
           </Button>
         </div>
+        <p className="text-2xs leading-5 text-muted-foreground">
+          Verification records the decision in this draft. Select Confirm setup
+          or Update setup at the bottom of the page to publish it to employees.
+        </p>
       </div>
     </div>
   );
@@ -197,10 +220,23 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
   const available = sob.items.filter(
     (item) => itemLimitForPlan(sob, item, activeCode) === null,
   );
+  const detectedAvailable = available
+    .map((item) => {
+      const wording = sourceWordingForPlan(sob, item, activeCode);
+      return { item, wording, setting: draftLimitSetting(wording) };
+    })
+    .filter(
+      ({ wording, setting }) =>
+        Boolean(wording) && setting.basis !== "informational",
+    );
+  const detectedUids = new Set(detectedAvailable.map(({ item }) => item.uid));
+  const manualAvailable = available.filter((item) => !detectedUids.has(item.uid));
   const settings = [overall, ...configured.map((item) => itemLimitForPlan(sob, item, activeCode))]
     .filter((setting): setting is ClaimLimitSetting => Boolean(setting));
   const verified = settings.filter((setting) => setting.status === "verified").length;
   const needsReview = settings.filter((setting) => setting.status === "needs_review").length;
+  const totalNeedsReview = needsReview + detectedAvailable.length;
+  const scopeLabels = new Map(claimScopes.map((scope) => [scope.code, scope.label]));
 
   const mappedByScope = new Map<
     string,
@@ -280,6 +316,14 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
     setAddLine("");
   };
 
+  const reviewDetectedLine = (
+    item: SobItemAnswer,
+    setting: ClaimLimitSetting,
+  ) => {
+    setItem(item.uid, setting);
+    setEditing(item.uid);
+  };
+
   if (!activePlan || !columnId) return null;
 
   return (
@@ -291,9 +335,9 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
             Claim limit settings
           </h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            Map claim types to the SoB line they draw from. Only a verified
-            policy-year amount is shown to members or enforced during approval;
-            detected values stay offline until you verify them.
+            Review each detected amount, map the claim types that draw from it,
+            then select Verify setting. Only verified policy-year amounts are
+            shown to members or enforced during approval.
           </p>
         </div>
         <div className="w-full sm:w-64">
@@ -320,12 +364,16 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-2 border-y border-border px-3 py-2 text-xs">
-        <span className="inline-flex items-center gap-1.5 text-good">
-          <CheckCircle2 className="size-3.5" aria-hidden /> {verified} verified
-        </span>
-        {needsReview > 0 && (
+        {verified > 0 ? (
+          <span className="inline-flex items-center gap-1.5 text-good">
+            <CheckCircle2 className="size-3.5" aria-hidden /> {verified} verified
+          </span>
+        ) : (
+          <span className="text-muted-foreground">No verified limits</span>
+        )}
+        {totalNeedsReview > 0 && (
           <span className="inline-flex items-center gap-1.5 text-warn">
-            <AlertTriangle className="size-3.5" aria-hidden /> {needsReview} need review
+            <AlertTriangle className="size-3.5" aria-hidden /> {totalNeedsReview} need review
           </span>
         )}
         <span className="text-muted-foreground">
@@ -381,6 +429,13 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-foreground" title={item.name}>{item.name}</p>
                   <p className="truncate text-xs text-muted-foreground" title={wording ?? undefined}>{wording || "No value stated"}</p>
+                  <p className="truncate text-2xs text-muted-foreground">
+                    {setting.claim_scope_codes.length > 0
+                      ? setting.claim_scope_codes
+                          .map((code) => scopeLabels.get(code) ?? code)
+                          .join(" · ")
+                      : "No claim type mapped"}
+                  </p>
                 </div>
                 <p className="text-xs text-foreground">
                   {CLAIM_LIMIT_BASIS_LABELS[setting.basis]}
@@ -393,7 +448,9 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                   variant="outline"
                   onClick={() => setEditing(editing === item.uid ? null : item.uid)}
                 >
-                  Edit
+                  {setting.status === "needs_review"
+                    ? "Review & verify"
+                    : "Edit setting"}
                 </Button>
               </div>
               {editing === item.uid && (
@@ -410,7 +467,47 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
         })}
       </div>
 
-      {available.length > 0 && (
+      {detectedAvailable.length > 0 && (
+        <div className="border-t border-border bg-warn/5 px-3 py-3">
+          <div className="mb-2">
+            <p className="text-xs font-medium text-foreground">
+              Detected values to review
+            </p>
+            <p className="text-2xs leading-5 text-muted-foreground">
+              These populated limit or policy-condition fields remain offline
+              until you review their amount and claim-type mapping.
+            </p>
+          </div>
+          <div className="divide-y divide-border/70">
+            {detectedAvailable.map(({ item, wording, setting }) => (
+              <div
+                key={item.uid}
+                className="grid items-center gap-2 py-2 first:pt-0 last:pb-0 sm:grid-cols-[minmax(12rem,1fr)_auto_auto]"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-foreground">
+                    {item.name || `Line ${item.number}`}
+                  </p>
+                  <p className="truncate text-2xs text-muted-foreground">
+                    {wording} · No claim type mapped
+                  </p>
+                </div>
+                <Badge variant="warn">Needs review · not live</Badge>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => reviewDetectedLine(item, setting)}
+                >
+                  Review &amp; verify
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {manualAvailable.length > 0 && (
         <div className="flex flex-col gap-2 border-t border-border bg-muted/20 px-3 py-3 sm:flex-row sm:items-end">
           <div className="min-w-0 flex-1 space-y-1.5">
             <label className="text-xs font-medium text-foreground" htmlFor="claim-limit-line">
@@ -421,8 +518,13 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                 <SelectValue placeholder="Choose a Schedule of Benefits line" />
               </SelectTrigger>
               <SelectContent>
-                {available.map((item) => (
-                  <SelectItem key={item.uid} value={item.uid}>{item.name || `Line ${item.number}`}</SelectItem>
+                {manualAvailable.map((item) => (
+                  <SelectItem key={item.uid} value={item.uid}>
+                    {item.name || `Line ${item.number}`}
+                    {sourceWordingForPlan(sob, item, activeCode)
+                      ? ` · ${sourceWordingForPlan(sob, item, activeCode)}`
+                      : ""}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>

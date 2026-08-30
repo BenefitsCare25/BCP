@@ -179,6 +179,43 @@ def test_copay_properties_resolve_per_column() -> None:
     assert s2[0]["properties"]["per_visit"] == "30"
 
 
+def test_copay_policy_year_property_becomes_a_reviewable_limit() -> None:
+    plans = [
+        {
+            "code": "1",
+            "label": "P1",
+            "selected": True,
+            "benefit_items": [
+                {
+                    "number": "-4",
+                    "name": "Traditional Chinese Medicine",
+                    "kind": "copay",
+                    "value": "",
+                    "properties": {
+                        "per_visit": "50",
+                        "per_policy_year": "300",
+                    },
+                    "sub_items": [],
+                }
+            ],
+        }
+    ]
+    sob = sob_from_plan_items(plans, product_code="GCGP")
+    setting = sob["items"][0]["claim_limits"]["col0"]
+    assert setting == {
+        "basis": "policy_year",
+        "amount": 300.0,
+        "currency": "SGD",
+        "display": "300 per policy year",
+        "claim_scope_codes": ["gp_tcm"],
+        "status": "needs_review",
+        "source": "detected",
+    }
+
+    schedule = resolve_plan_schedule(sob, "1", 200)
+    assert schedule[0]["claim_limit"] == setting
+
+
 def _grid(code: str, cells: list[dict]) -> dict:
     """A plan whose rows carry an explicit value / na / sub_items shape."""
     return {

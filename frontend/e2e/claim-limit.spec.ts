@@ -442,6 +442,49 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   await expect(editor).toContainText("SGD 2,500");
   await expect(editor).toContainText("Verified");
 
+  if (testInfo.project.name === "mobile-chromium") {
+    const firstGroupNumber = page.getByRole("textbox", {
+      name: "Benefit 7 number",
+    });
+    await expect(firstGroupNumber).toHaveValue("Group 1");
+    await firstGroupNumber.fill("Group 4");
+    await expect(firstGroupNumber).toHaveValue("Group 4");
+    await page.getByRole("button", { name: "Renumber" }).click();
+    await expect(firstGroupNumber).toHaveValue("Group 1");
+
+    await page
+      .getByRole("button", { name: /Expand details for Panel/ })
+      .click();
+    await page
+      .getByRole("textbox", { name: /^Per policy year/i })
+      .fill("300");
+
+    await expect(editor).toContainText("Detected values to review");
+    await expect(editor).toContainText("300 per policy year");
+    await expect(editor).toContainText("No claim type mapped");
+    await editor
+      .getByRole("button", { name: "Review & verify" })
+      .click();
+    const verifyDetected = editor
+      .getByRole("button", { name: "Verify setting" })
+      .first();
+    await expect(verifyDetected).toBeDisabled();
+    await expect(editor).toContainText(
+      "Choose at least one claim type before verifying this setting.",
+    );
+    await editor.getByRole("checkbox").first().click();
+    await expect(verifyDetected).toBeEnabled();
+    await verifyDetected.click();
+
+    const panelSetting = editor
+      .locator("div.grid")
+      .filter({ hasText: "Panel" })
+      .filter({ hasText: "SGD 300" })
+      .first();
+    await expect(panelSetting).toBeVisible();
+    await expect(panelSetting).not.toContainText("No claim type mapped");
+  }
+
   const addLine = editor.getByRole("combobox", { name: "Add a benefit line limit" });
   if (await addLine.isVisible()) {
     await addLine.click();

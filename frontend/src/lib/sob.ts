@@ -285,6 +285,25 @@ export function cellValue(item: SobItemAnswer, columnId: string): string {
   return (ov ?? item.base_value ?? "") as string;
 }
 
+/** Human-facing row label. Dash-prefixed outpatient keys are storage identity,
+ * not negative numbers, so brokers see their actual meaning instead. */
+export function benefitNumberLabel(
+  item: Pick<SobItemAnswer, "kind" | "number">,
+): string {
+  const current = (item.number ?? "").trim();
+  const group = item.kind === "copay" ? current.match(/^-?(\d+)$/) : null;
+  return group ? `Group ${group[1]}` : current;
+}
+
+/** Convert an edited human group label back to the parser-safe dash identity. */
+export function storedBenefitNumber(label: string, kind: BenefitKind): string {
+  if (kind === "copay") {
+    const group = label.match(/^\s*(?:group|g)?\s*(\d+)\s*$/i);
+    if (group) return `-${group[1]}`;
+  }
+  return label;
+}
+
 /** Effective value of a sub-item cell for a column. */
 export function subCellValue(sub: SobSubItemAnswer, columnId: string): string {
   const ov = sub.overrides[columnId];
@@ -558,9 +577,9 @@ export function moveItem(
  * blank number, and reordering leaves the old numbering behind. This is the
  * one-click reconciliation.
  *
- * Rows whose number is a non-numeric enumerator (GCGP's letter rows "A".."G",
- * the dash-group "-1" copay headers) are left alone — those aren't a sequence,
- * they're a vocabulary the parser and the slip export both rely on.
+ * Letter enumerators (GCGP's "A".."G") are left alone. Outpatient copay
+ * groups participate in the numeric sequence but retain a dash-prefixed
+ * storage identity so a group label cannot collide with a genuine source row.
  */
 export function renumberItems(sob: SobSchedule): SobSchedule {
   let n = 0;
@@ -568,10 +587,11 @@ export function renumberItems(sob: SobSchedule): SobSchedule {
     ...sob,
     items: sob.items.map((it) => {
       const current = (it.number ?? "").trim();
-      const isSequential = current === "" || /^\d+$/.test(current);
+      const isGroup = it.kind === "copay" && /^-?\d+$/.test(current);
+      const isSequential = current === "" || /^\d+$/.test(current) || isGroup;
       if (!isSequential) return it;
       n += 1;
-      return { ...it, number: String(n) };
+      return { ...it, number: isGroup ? `-${n}` : String(n) };
     }),
   };
 }

@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import type { SobColumn, SobItemAnswer, SobSchedule } from "@/types";
 import {
   axisValue,
+  benefitNumberLabel,
   cellValue,
   isOverridden,
   moveItem,
@@ -21,6 +22,7 @@ import {
   removeItem,
   setCell,
   setItemField,
+  storedBenefitNumber,
 } from "@/lib/sob";
 import { SobCell } from "./SobCell";
 
@@ -92,11 +94,19 @@ export const SobRow = memo(function SobRow({
           </button>
           <Input
             aria-label={`Benefit ${idx + 1} number`}
-            value={item.number}
+            value={benefitNumberLabel(item)}
             onChange={(e) =>
-              setSob((s) => setItemField(s, idx, { number: e.target.value }))
+              setSob((s) =>
+                setItemField(s, idx, {
+                  number: storedBenefitNumber(e.target.value, kind),
+                }),
+              )
             }
-            className="h-7 w-12 shrink-0 px-1.5 text-center text-xs tabular-nums"
+            title={kind === "copay" ? "Outpatient benefit group" : undefined}
+            className={cn(
+              "h-7 shrink-0 px-1.5 text-center text-xs tabular-nums",
+              kind === "copay" ? "w-20" : "w-12",
+            )}
           />
           <Input
             aria-label={`Benefit ${idx + 1} name`}

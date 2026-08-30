@@ -312,7 +312,10 @@ function CopayGrid({
       </div>
       {addable.length > 0 && (
         <Select value="" onValueChange={(key) => setSob((s) => addCopayField(s, idx, key))}>
-          <SelectTrigger className="h-7 w-72 self-start text-2xs text-muted-foreground">
+          <SelectTrigger
+            aria-label={`Add qualifier to ${item.name || `benefit ${idx + 1}`}`}
+            className="h-7 w-72 self-start text-2xs text-muted-foreground"
+          >
             <SelectValue placeholder="+ Add qualifier (per visit / co-payment variant)" />
           </SelectTrigger>
           <SelectContent>

@@ -142,7 +142,7 @@ export function SobEditor({
           size="sm"
           variant="ghost"
           className="ml-auto"
-          title="Renumber rows 1, 2, 3 … in their current order (letter and dash-group enumerators are left alone)"
+          title="Renumber numeric rows and outpatient groups in their current order; letter labels are preserved"
           onClick={() => setSob(renumberItems)}
         >
           <ListOrdered className="size-3.5" /> Renumber

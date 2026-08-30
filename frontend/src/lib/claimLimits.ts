@@ -106,5 +106,20 @@ export function sourceWordingForPlan(
   planCode: string,
 ): string | null {
   const columnId = columnIdForPlan(sob, planCode);
-  return columnId ? cellValue(item, columnId) || null : null;
+  if (!columnId) return null;
+  const rawPolicyYear =
+    item.column_properties?.[columnId]?.per_policy_year ??
+    item.properties?.per_policy_year;
+  const policyYear = String(rawPolicyYear ?? "").trim();
+  if (
+    policyYear &&
+    !["na", "n/a", "not applicable", "not covered"].includes(
+      policyYear.toLowerCase(),
+    )
+  ) {
+    return /\byear\b/i.test(policyYear)
+      ? policyYear
+      : `${policyYear} per policy year`;
+  }
+  return cellValue(item, columnId) || null;
 }

@@ -62,6 +62,31 @@ def _effective(overrides: Any, col_id: str | None, base: Any) -> Any:
     return base if ov is None else ov
 
 
+def _claim_limit_source(item: dict[str, Any], column_id: str) -> Any:
+    """The wording that can seed a reviewable claim-limit setting.
+
+    Ordinary rows state it in the value cell. Outpatient copay groups store the
+    annual amount in a structured ``per_policy_year`` property instead, often
+    as a bare number. The property name supplies the missing basis context.
+    """
+    column_properties = item.get("column_properties")
+    per_column = (
+        column_properties.get(column_id)
+        if isinstance(column_properties, dict)
+        else None
+    )
+    shared = item.get("properties")
+    raw = None
+    if isinstance(per_column, dict):
+        raw = per_column.get("per_policy_year")
+    if raw is None and isinstance(shared, dict):
+        raw = shared.get("per_policy_year")
+    text = " ".join(str(raw or "").split())
+    if text and text.casefold() not in {"na", "n/a", "not applicable", "not covered"}:
+        return text if "year" in text.casefold() else f"{text} per policy year"
+    return _effective(item.get("overrides"), column_id, item.get("base_value"))
+
+
 def benefit_row_key(name: Any, fallback: Any = None) -> str:
     """Identity of a benefit row: its NAME, cased and spaced consistently.
 
@@ -426,7 +451,7 @@ def seed_sob_claim_limits(
                 scope for scope in suggested_scopes if scope not in assigned.get(column_id, set())
             ]
             setting = suggested_limit_setting(
-                _effective(item.get("overrides"), column_id, item.get("base_value")),
+                _claim_limit_source(item, column_id),
                 claim_scope_codes=scopes,
             )
             if setting is not None:
