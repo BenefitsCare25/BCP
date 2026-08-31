@@ -7,6 +7,7 @@ straight back, report nothing to do.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, timedelta
 from io import BytesIO
@@ -817,6 +818,84 @@ def test_the_same_child_twice_under_ONE_employee_is_still_a_repeat(
     body = res.json()
     assert body["added"] == 1, body
     assert any("Repeated in this file" in i["message"] for i in body["issues"])
+
+
+def test_unknown_employee_column_requires_a_reviewed_mapping(
+    client: TestClient,
+) -> None:
+    """A populated unknown column is never silently discarded.
+
+    The broker can map it onto a canonical attribute, re-preview the actual
+    diff, and the confirmed decision is remembered for the same workbook shape.
+    """
+    py = _py(client)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Employees"
+    ws.append([*EMP_COLS, "Business Unit"])
+    ws.append([
+        "MAP-1", "Mapped Member", "S1234567D", "1990-01-01",
+        "Executive", "", "Asia Pacific",
+    ])
+    buf = BytesIO()
+    wb.save(buf)
+    content = buf.getvalue()
+
+    initial = _preview(client, py, content)
+    assert initial.status_code == 200, initial.text
+    mapping = initial.json()["roster_mapping"]
+    unknown = next(
+        column for column in mapping["columns"]
+        if column["source_column"] == "Business Unit"
+    )
+    assert unknown["status"] == "unresolved"
+    assert mapping["unresolved"] is True
+
+    refused = _apply(client, py, content)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == "unresolved_roster_mapping"
+
+    decisions = {str(unknown["index"]): "division"}
+    reviewed = client.post(
+        f"/api/v1/policy-years/{py}/adc/preview",
+        files={"file": ("listing.xlsx", content, XLSX_MIME)},
+        data={"employee_column_mapping": json.dumps(decisions)},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    reviewed_mapping = reviewed.json()["roster_mapping"]
+    assert reviewed_mapping["unresolved"] is False
+
+    applied = client.post(
+        f"/api/v1/policy-years/{py}/adc/apply",
+        files={"file": ("listing.xlsx", content, XLSX_MIME)},
+        data={
+            "terminate_missing": "false",
+            "employee_column_mapping": json.dumps(decisions),
+            "mapping_digest": reviewed_mapping["digest"],
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["mapping_profile_saved"] is True
+    assert (_active("MAP-1").attribute_values or {})["division"] == "Asia Pacific"
+
+    reused = _preview(client, py, content)
+    assert reused.status_code == 200, reused.text
+    assert reused.json()["roster_mapping"]["reused_profile"] is True
+    assert reused.json()["roster_mapping"]["unresolved"] is False
+
+
+def test_roster_readiness_reports_direct_and_derived_coverage(
+    client: TestClient,
+) -> None:
+    py = _py(client)
+    response = client.get(f"/api/v1/policy-years/{py}/roster-readiness")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    by_id = {item["attribute_id"]: item for item in body["attributes"]}
+    assert by_id["division"]["source"] == "listing"
+    assert by_id["division"]["populated_count"] >= 1
+    assert by_id["division"]["usable_for_matching"] is True
+    assert by_id["role"]["source"] == "derived"
 
 
 def test_a_dual_covered_child_round_trips_without_proposing_anything(

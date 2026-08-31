@@ -47,7 +47,7 @@ _ROLE_DERIVATION_RULE = {
 SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
     {
         "attribute_id": "grade",
-        "display_name": "Hay Job Grade",
+        "display_name": "Hay Grade (derived)",
         "data_type": "integer",
         "is_required": False,
         "is_pii": False,
@@ -76,9 +76,7 @@ SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
         "enum_values": ["EP", "SP", "WP", "PR", "CITIZEN"],
         "is_required": False,
         "is_pii": False,
-        "description": "Type of work pass / residency",
-        "derived_from": "pass",
-        "derivation_rule": {"op": "passthrough", "source": "pass"},
+        "description": "Work pass / residency supplied directly by the employee listing",
     },
     {
         "attribute_id": "class",
@@ -140,6 +138,38 @@ SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
         "is_pii": True,
     },
     {
+        "attribute_id": "category",
+        "display_name": "Employee Category (roster)",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Classification supplied directly in the employee listing.",
+    },
+    {
+        "attribute_id": "division",
+        "display_name": "Division",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Organisational division supplied in the employee listing.",
+    },
+    {
+        "attribute_id": "department",
+        "display_name": "Department",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Organisational department supplied in the employee listing.",
+    },
+    {
+        "attribute_id": "cost_centre",
+        "display_name": "Cost Centre",
+        "data_type": "string",
+        "is_required": False,
+        "is_pii": False,
+        "description": "Cost centre supplied in the employee listing.",
+    },
+    {
         "attribute_id": "salary",
         "display_name": "Monthly Salary (SGD)",
         "data_type": "decimal",
@@ -188,7 +218,7 @@ SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
     # New attributes for non-STM placement-slip vocabularies.
     {
         "attribute_id": "role",
-        "display_name": "Executive Role",
+        "display_name": "Executive Role (derived)",
         "data_type": "enum",
         "enum_values": [
             "CEO",
@@ -233,7 +263,7 @@ SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
     },
     {
         "attribute_id": "job_grade",
-        "display_name": "Job Grade",
+        "display_name": "Job Grade (roster)",
         "data_type": "string",
         "is_required": False,
         "is_pii": False,
@@ -241,7 +271,7 @@ SINGAPORE_ATTRIBUTES: list[dict[str, Any]] = [
     },
     {
         "attribute_id": "job_category",
-        "display_name": "Job Category Code",
+        "display_name": "Job Category Code (derived)",
         "data_type": "string",
         "is_required": False,
         "is_pii": False,
@@ -488,12 +518,21 @@ def seed() -> None:
             .all()
         }
         for spec in SINGAPORE_ATTRIBUTES:
+            spec = {
+                **spec,
+                "allow_matching": spec.get("allow_matching", True),
+                "allow_ai_values": spec.get(
+                    "allow_ai_values", not bool(spec.get("is_pii"))
+                ),
+            }
             existing_attribute = existing_attr_rows.get(str(spec["attribute_id"]))
             if existing_attribute is None:
                 db.add(EmployeeAttributeSchema(client_id=None, **spec))
             else:
                 existing_attribute.derived_from = spec.get("derived_from")
                 existing_attribute.derivation_rule = spec.get("derivation_rule")
+                existing_attribute.allow_matching = bool(spec["allow_matching"])
+                existing_attribute.allow_ai_values = bool(spec["allow_ai_values"])
 
         # Product catalog (global — client_id null)
         # Idempotent: missing rows are inserted; existing rows have their

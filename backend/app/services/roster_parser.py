@@ -312,7 +312,10 @@ def has_sheet(path: Path | str, name: str) -> bool:
 _DEPENDANT_ONLY_COLUMNS = ("dependant_name", "dependant_id_no")
 
 
-def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
+def parse_employee_workbook(
+    path: Path | str,
+    column_mapping: dict[int, str | None] | None = None,
+) -> list[EmployeeRecord]:
     sheet = _read_sheet(path, "Employees")
     if sheet is None or not sheet.rows:
         return []
@@ -325,7 +328,11 @@ def parse_employee_workbook(path: Path | str) -> list[EmployeeRecord]:
     dependant_cols = set(_build_column_map(header_row, DEPENDANT_COLUMN_MAP).values())
     if any(c in dependant_cols for c in _DEPENDANT_ONLY_COLUMNS):
         return []
-    col_map = _build_column_map(header_row, EMPLOYEE_COLUMN_MAP)
+    col_map = (
+        {index: attribute_id for index, attribute_id in column_mapping.items() if attribute_id}
+        if column_mapping is not None
+        else _build_column_map(header_row, EMPLOYEE_COLUMN_MAP)
+    )
     member_id_cols = _member_id_columns(header_row)
 
     records: list[EmployeeRecord] = []

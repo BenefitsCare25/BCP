@@ -33,6 +33,7 @@ import { toast } from "sonner";
 interface Props {
   category: Category | null;
   schema: AttributeSchema[];
+  rosterEmployeeCount: number | null;
   onClose: () => void;
 }
 
@@ -150,7 +151,12 @@ function AISuggestionSummary({
   );
 }
 
-export function CategoryEditPanel({ category, schema, onClose }: Props) {
+export function CategoryEditPanel({
+  category,
+  schema,
+  rosterEmployeeCount,
+  onClose,
+}: Props) {
   return (
     <Sheet open={!!category} onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="right" className="sm:max-w-2xl">
@@ -159,6 +165,7 @@ export function CategoryEditPanel({ category, schema, onClose }: Props) {
             key={category.id}
             category={category}
             schema={schema}
+            rosterEmployeeCount={rosterEmployeeCount}
             onClose={onClose}
           />
         )}
@@ -170,10 +177,12 @@ export function CategoryEditPanel({ category, schema, onClose }: Props) {
 function EditForm({
   category,
   schema,
+  rosterEmployeeCount,
   onClose,
 }: {
   category: Category;
   schema: AttributeSchema[];
+  rosterEmployeeCount: number | null;
   onClose: () => void;
 }) {
   const [displayName, setDisplayName] = useState(category.display_name);
@@ -357,8 +366,9 @@ function EditForm({
             <div className="flex items-center gap-1">
               <Label>Employee matching rule</Label>
               <InfoHint>
-                AI and automatic proposals may only use non-PII employee fields
-                and values that exist for this company. Review before confirming.
+                The list shows fields populated for this benefit year's active
+                employees. Personal fields can be matched internally when
+                allowed, but their values are never sent to the AI provider.
               </InfoHint>
             </div>
             <Button
@@ -384,6 +394,14 @@ function EditForm({
                   : "AI not configured"}
             </Button>
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            {rosterEmployeeCount === null
+              ? "Checking employee field availability…"
+              : rosterEmployeeCount === 0
+                ? "No active employee listing yet; showing the matchable schema."
+                : `${schema.length} employee field${schema.length === 1 ? " is" : "s are"} available from ${rosterEmployeeCount.toLocaleString()} active employees.`}
+          </p>
 
           <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2.5">
             <div className="flex items-center gap-1">

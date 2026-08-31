@@ -30,6 +30,10 @@ class AttributeSchemaOut(_Base):
     enum_values: list[str] | None = None
     is_required: bool
     is_pii: bool
+    # Defaults keep internal/programmatic schema construction compatible while
+    # taking the privacy-safe position for external AI value sharing.
+    allow_matching: bool = True
+    allow_ai_values: bool = False
     description: str | None = None
     derived_from: str | None = None
     derivation_rule: dict[str, Any] | None = None
@@ -42,6 +46,8 @@ class AttributeSchemaCreate(BaseModel):
     enum_values: list[str] | None = None
     is_required: bool = False
     is_pii: bool = False
+    allow_matching: bool = True
+    allow_ai_values: bool = False
     description: str | None = None
 
 
@@ -51,6 +57,8 @@ class AttributeSchemaPatch(BaseModel):
     enum_values: list[str] | None = None
     is_required: bool | None = None
     is_pii: bool | None = None
+    allow_matching: bool | None = None
+    allow_ai_values: bool | None = None
     description: str | None = None
     derived_from: str | None = None
     derivation_rule: dict[str, Any] | None = None

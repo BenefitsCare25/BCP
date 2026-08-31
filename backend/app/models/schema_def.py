@@ -30,6 +30,11 @@ class EmployeeAttributeSchema(Base, TimestampMixin):
     enum_values: Mapped[list[str] | None] = mapped_column(JSON(), nullable=True)
     is_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_pii: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # PII classification is a handling label, not an eligibility policy. A
+    # personal field such as nationality can be evaluated inside our database
+    # without ever exposing its values to an external model.
+    allow_matching: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_ai_values: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     derived_from: Mapped[str | None] = mapped_column(String(64), nullable=True)
     derivation_rule: Mapped[dict[str, Any] | None] = mapped_column(JSON(), nullable=True)

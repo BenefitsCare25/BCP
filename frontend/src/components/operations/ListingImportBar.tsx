@@ -45,6 +45,11 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<AdcPreview | null>(null);
   const [terminateMissing, setTerminateMissing] = useState(false);
+  const [columnMapping, setColumnMapping] = useState<Record<
+    string,
+    string | null
+  > | null>(null);
+  const [mappingDirty, setMappingDirty] = useState(false);
   const previewMut = useListingPreview();
   const applyMut = useListingApply();
 
@@ -54,6 +59,22 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
     // Reset the opt-in with the sheet. It must never survive into the NEXT
     // upload, whose missing set is a different group of people.
     setTerminateMissing(false);
+    setColumnMapping(null);
+    setMappingDirty(false);
+  }
+
+  function acceptPreview(next: AdcPreview) {
+    const decisions: Record<string, string | null> = {};
+    for (const column of next.roster_mapping?.columns ?? []) {
+      if (column.status === "mapped" && column.attribute_id) {
+        decisions[String(column.index)] = column.attribute_id;
+      } else if (column.status === "ignored") {
+        decisions[String(column.index)] = null;
+      }
+    }
+    setColumnMapping(decisions);
+    setMappingDirty(false);
+    setPreview(next);
   }
 
   function onPick(picked: File) {
@@ -62,7 +83,26 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
     previewMut.mutate(
       { file: picked, policyYearId },
       {
-        onSuccess: (p) => setPreview(p),
+        onSuccess: acceptPreview,
+        onError: (e) => toast.error(formatError(e)),
+      },
+    );
+  }
+
+  function onMappingChange(index: number, attributeId: string | null) {
+    setColumnMapping((current) => ({
+      ...(current ?? {}),
+      [String(index)]: attributeId,
+    }));
+    setMappingDirty(true);
+  }
+
+  function onRecheckMapping() {
+    if (!file || !columnMapping) return;
+    previewMut.mutate(
+      { file, policyYearId, employeeColumnMapping: columnMapping },
+      {
+        onSuccess: acceptPreview,
         onError: (e) => toast.error(formatError(e)),
       },
     );
@@ -76,6 +116,8 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
         policyYearId,
         terminateMissing,
         missingDigest: preview?.missing_digest ?? null,
+        mappingDigest: preview?.roster_mapping?.digest ?? null,
+        employeeColumnMapping: columnMapping ?? undefined,
       },
       {
         onSuccess: (r) => {
@@ -146,6 +188,11 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
         applying={applyMut.isPending}
         terminateMissing={terminateMissing}
         onTerminateMissingChange={setTerminateMissing}
+        columnMapping={columnMapping ?? {}}
+        onColumnMappingChange={onMappingChange}
+        mappingDirty={mappingDirty}
+        onRecheckMapping={onRecheckMapping}
+        checkingMapping={previewMut.isPending}
       />
     </>
   );

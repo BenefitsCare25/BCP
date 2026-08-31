@@ -49,6 +49,59 @@ class AdcWarning(BaseModel):
     message: str
 
 
+class RosterMappingAttribute(BaseModel):
+    attribute_id: str
+    display_name: str
+    is_pii: bool = False
+    allow_matching: bool = False
+    derived: bool = False
+
+
+class RosterColumnMapping(BaseModel):
+    index: int
+    source_column: str
+    attribute_id: str | None = None
+    display_name: str | None = None
+    status: str
+    source: str
+    non_empty_count: int = 0
+
+
+class RosterMappingPreview(BaseModel):
+    sheet_name: str | None = None
+    fingerprint: str | None = None
+    digest: str | None = None
+    reused_profile: bool = False
+    unresolved: bool = False
+    required_missing: list[str] = Field(default_factory=list)
+    columns: list[RosterColumnMapping] = Field(default_factory=list)
+    available_attributes: list[RosterMappingAttribute] = Field(default_factory=list)
+
+
+class RosterAttributeReadiness(BaseModel):
+    attribute_id: str
+    display_name: str
+    source: str
+    derived_from: str | None = None
+    populated_count: int = 0
+    missing_count: int = 0
+    coverage_percent: float = 0
+    distinct_count: int = 0
+    is_pii: bool = False
+    allow_matching: bool = True
+    allow_ai_values: bool = False
+    usable_for_matching: bool = False
+
+
+class RosterReadiness(BaseModel):
+    policy_year_id: str
+    employee_count: int = 0
+    usable_attributes: int = 0
+    derived_attributes: int = 0
+    unavailable_attributes: int = 0
+    attributes: list[RosterAttributeReadiness] = Field(default_factory=list)
+
+
 class AdcPreview(BaseModel):
     additions: list[AdcOp] = Field(default_factory=list)
     changes: list[AdcOp] = Field(default_factory=list)
@@ -65,6 +118,7 @@ class AdcPreview(BaseModel):
     #: Fingerprint of the `missing` set. The client returns it with apply so a
     #: roster that moved in between can't quietly terminate a different group.
     missing_digest: str | None = None
+    roster_mapping: RosterMappingPreview | None = None
 
 
 class AdcApplyResult(BaseModel):
@@ -78,3 +132,4 @@ class AdcApplyResult(BaseModel):
     rematched: int = 0
     issues: list[AdcIssue] = Field(default_factory=list)
     flex_errors: list[str] = Field(default_factory=list)
+    mapping_profile_saved: bool = False

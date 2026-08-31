@@ -46,6 +46,8 @@ interface Draft {
   enum_values: string;
   is_required: boolean;
   is_pii: boolean;
+  allow_matching: boolean;
+  allow_ai_values: boolean;
   description: string;
 }
 
@@ -56,6 +58,8 @@ const EMPTY_DRAFT: Draft = {
   enum_values: "",
   is_required: false,
   is_pii: false,
+  allow_matching: true,
+  allow_ai_values: false,
   description: "",
 };
 
@@ -67,6 +71,8 @@ function toDraft(attr: AttributeSchema): Draft {
     enum_values: attr.enum_values?.join(", ") ?? "",
     is_required: attr.is_required,
     is_pii: attr.is_pii,
+    allow_matching: attr.allow_matching,
+    allow_ai_values: attr.allow_ai_values,
     description: attr.description ?? "",
   };
 }
@@ -127,6 +133,8 @@ export function SchemaAttributesPage({
             enum_values: enumValues,
             is_required: draft.is_required,
             is_pii: draft.is_pii,
+            allow_matching: draft.allow_matching,
+            allow_ai_values: draft.is_pii ? false : draft.allow_ai_values,
             description: draft.description || null,
           },
         });
@@ -140,6 +148,8 @@ export function SchemaAttributesPage({
             enum_values: enumValues,
             is_required: draft.is_required,
             is_pii: draft.is_pii,
+            allow_matching: draft.allow_matching,
+            allow_ai_values: draft.is_pii ? false : draft.allow_ai_values,
             description: draft.description || null,
           },
           scope,
@@ -252,7 +262,10 @@ export function SchemaAttributesPage({
               <div className="flex items-center justify-between rounded-md border border-border p-3">
                 <div className="flex items-center gap-1">
                   <div className="text-sm font-medium">Required</div>
-                  <InfoHint>Block uploads with missing values.</InfoHint>
+                  <InfoHint>
+                    Marks this as expected data; listing readiness reports its
+                    coverage instead of silently treating an empty field as usable.
+                  </InfoHint>
                 </div>
                 <Switch
                   checked={draft.is_required}
@@ -270,7 +283,44 @@ export function SchemaAttributesPage({
                 </div>
                 <Switch
                   checked={draft.is_pii}
-                  onCheckedChange={(v) => setDraft({ ...draft, is_pii: v })}
+                  onCheckedChange={(v) =>
+                    setDraft({
+                      ...draft,
+                      is_pii: v,
+                      allow_ai_values: v ? false : draft.allow_ai_values,
+                    })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-md border border-border p-3">
+                <div className="flex items-center gap-1">
+                  <div className="text-sm font-medium">Use for eligibility</div>
+                  <InfoHint>
+                    Allows deterministic rules to evaluate this field inside the
+                    platform. This is separate from sharing data with AI.
+                  </InfoHint>
+                </div>
+                <Switch
+                  checked={draft.allow_matching}
+                  onCheckedChange={(v) =>
+                    setDraft({ ...draft, allow_matching: v })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-md border border-border p-3">
+                <div className="flex items-center gap-1">
+                  <div className="text-sm font-medium">Share values with AI</div>
+                  <InfoHint>
+                    Sends only bounded distinct values, never employee rows. Personal
+                    attributes cannot enable this.
+                  </InfoHint>
+                </div>
+                <Switch
+                  checked={draft.allow_ai_values && !draft.is_pii}
+                  disabled={draft.is_pii}
+                  onCheckedChange={(v) =>
+                    setDraft({ ...draft, allow_ai_values: v })
+                  }
                 />
               </div>
             </SheetBody>
@@ -323,10 +373,10 @@ export function SchemaAttributesPage({
       </Card>
 
       <PageGuide
-        purpose="Define the shape of an employee record — each attribute becomes a column in the roster. Global defaults cover standard Singapore fields; add client-specific attributes for custom data."
+        purpose="Define the canonical employee fields this company understands. Listing columns are mapped to these fields during upload; a schema does not create or rename a spreadsheet column by itself."
         connections={[
-          { label: "→ Roster profiling", description: "AI derives attribute values from uploaded roster columns" },
-          { label: "→ Categories", description: "Matching rules reference these attributes to assign employees to benefit categories" },
+          { label: "→ Employee listing", description: "Each upload shows how source columns map to direct fields and which derivations succeed" },
+          { label: "→ Categories", description: "Only populated, eligibility-enabled fields appear in the normal rule builder" },
           { label: "→ Products catalog", description: "Products define what insurance lines exist; attributes define who qualifies" },
         ]}
       />

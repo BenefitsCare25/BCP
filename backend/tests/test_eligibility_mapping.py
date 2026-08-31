@@ -36,6 +36,7 @@ from app.services.eligibility_mapping import (
     AttributeValueCatalog,
     auto_map_policy_year,
     build_ai_eligibility_inputs,
+    build_attribute_catalog,
     category_signature,
     confirm_category_mapping,
     normalize_ai_matching_rule,
@@ -1156,6 +1157,51 @@ def test_ai_context_excludes_pii_and_contains_company_vocabulary() -> None:
         assert "DO-NOT-SEND-STAFF-ID" not in serialized
         assert "Do Not Send Employee Name" not in serialized
         db.rollback()
+
+
+def test_nationality_is_internal_matchable_but_never_ai_context() -> None:
+    """PII classification must not make deterministic Thailand rules inert."""
+    with SessionLocal() as db:
+        employee = Employee(
+            client_id=CLIENT_ID,
+            policy_year_id=PY_2026,
+            staff_id="NATIONALITY-INTERNAL",
+            employee_name="Internal Only",
+            attribute_values={"nationality": "Thai"},
+            derived_attribute_values={},
+        )
+        db.add(employee)
+        db.commit()
+        try:
+            catalog, _, _ = build_attribute_catalog(db, PY_2026, CLIENT_ID)
+            assert "Thai" in catalog.values["nationality"]
+
+            product = db.execute(
+                select(Product).where(Product.code == "WICA")
+            ).scalar_one()
+            category = Category(
+                policy_year_id=PY_2026,
+                product_id=product.id,
+                priority=900,
+                display_name="Thailand employees",
+                raw_description="Employees based in Thailand",
+                plan_assignments={"plan_code": "PLAN-TH"},
+            )
+            db.add(category)
+            db.flush()
+            schemas, context, _ = build_ai_eligibility_inputs(
+                db, category=category, client_id=CLIENT_ID
+            )
+            assert "nationality" not in {schema.attribute_id for schema in schemas}
+            serialized = json.dumps(context)
+            assert '"nationality"' not in serialized
+            assert '"Thai"' not in serialized
+        finally:
+            db.rollback()
+            stored_employee = db.get(Employee, employee.id)
+            if stored_employee is not None:
+                db.delete(stored_employee)
+            db.commit()
 
 
 def test_ai_context_excludes_empty_configured_field_when_listing_exists() -> None:

@@ -70,6 +70,9 @@ from app.schemas.adc import (
     AdcOp,
     AdcPreview,
     AdcWarning,
+    RosterColumnMapping,
+    RosterMappingAttribute,
+    RosterMappingPreview,
 )
 from app.services.derivation_engine import derive
 from app.services.eligibility_mapping import auto_map_policy_year
@@ -88,6 +91,11 @@ from app.services.roster_dedup import (
     dependant_nric,
     employee_candidate_keys,
     employee_nric,
+)
+from app.services.roster_mapping import (
+    EmployeeMapping,
+    inspect_employee_mapping,
+    save_employee_mapping_profile,
 )
 from app.services.roster_parser import (
     DependantRecord,
@@ -185,6 +193,7 @@ class _Plan:
     already_terminated: int = 0
     roster_total: int = 0
     dropped_rows: int = 0
+    employee_mapping: EmployeeMapping | None = None
 
 
 _FLOAT_ARTIFACT = re.compile(r"^(-?\d+)\.0$")
@@ -701,10 +710,21 @@ def _data_rows(path: Path | str, preferred: str) -> int:
 
 
 def evaluate_listing(
-    db: Session, policy_year_id: str, client_id: str, path: Path | str
+    db: Session,
+    policy_year_id: str,
+    client_id: str,
+    path: Path | str,
+    *,
+    employee_column_mapping: dict[str, str | None] | None = None,
 ) -> tuple[_Plan, AdcPreview]:
     """Diff an uploaded member listing against the roster. No mutation."""
-    emp_records = parse_employee_workbook(path)
+    employee_mapping = inspect_employee_mapping(
+        db,
+        client_id=client_id,
+        path=path,
+        override=employee_column_mapping,
+    )
+    emp_records = parse_employee_workbook(path, employee_mapping.parse_columns)
     dep_records = parse_dependant_workbook(path)
 
     # Rows the parsers DROPPED — an employee row with no Staff ID, a dependant
@@ -738,6 +758,7 @@ def evaluate_listing(
     )
 
     plan = _Plan()
+    plan.employee_mapping = employee_mapping
     plan.dropped_rows = dropped
     _plan_employees(plan, emp_records, employees)
     _plan_dependants(plan, dep_records, dependants, employees)
@@ -753,7 +774,38 @@ def evaluate_listing(
         if dep_records
         else 0
     )
-    return plan, _to_preview(plan)
+    preview = _to_preview(plan)
+    preview.roster_mapping = RosterMappingPreview(
+        sheet_name=employee_mapping.sheet_name,
+        fingerprint=employee_mapping.fingerprint,
+        digest=employee_mapping.digest,
+        reused_profile=employee_mapping.reused_profile,
+        unresolved=employee_mapping.unresolved,
+        required_missing=employee_mapping.required_missing,
+        columns=[
+            RosterColumnMapping(
+                index=item.index,
+                source_column=item.source_column,
+                attribute_id=item.attribute_id,
+                display_name=item.display_name,
+                status=item.status,
+                source=item.source,
+                non_empty_count=item.non_empty_count,
+            )
+            for item in employee_mapping.columns
+        ],
+        available_attributes=[
+            RosterMappingAttribute(
+                attribute_id=item.attribute_id,
+                display_name=item.display_name,
+                is_pii=item.is_pii,
+                allow_matching=item.allow_matching,
+                derived=item.derived,
+            )
+            for item in employee_mapping.available_attributes
+        ],
+    )
+    return plan, preview
 
 
 def _dep_name(attrs: dict[str, Any] | None) -> str | None:
@@ -837,9 +889,20 @@ def missing_digest(plan: _Plan) -> str:
 
 
 def preview_listing(
-    db: Session, policy_year_id: str, client_id: str, path: Path | str
+    db: Session,
+    policy_year_id: str,
+    client_id: str,
+    path: Path | str,
+    *,
+    employee_column_mapping: dict[str, str | None] | None = None,
 ) -> AdcPreview:
-    plan, preview = evaluate_listing(db, policy_year_id, client_id, path)
+    plan, preview = evaluate_listing(
+        db,
+        policy_year_id,
+        client_id,
+        path,
+        employee_column_mapping=employee_column_mapping,
+    )
     preview.missing_digest = missing_digest(plan)
     return preview
 
@@ -851,6 +914,14 @@ class StaleListingPreview(Exception):
     """The set of people absent from the file moved between preview and apply."""
 
 
+class StaleRosterMapping(Exception):
+    """The workbook layout/mapping differs from the reviewed preview."""
+
+
+class UnresolvedRosterMapping(Exception):
+    """A populated source column still lacks an explicit decision."""
+
+
 def apply_listing(
     db: Session,
     user: CurrentUser,
@@ -860,6 +931,8 @@ def apply_listing(
     *,
     terminate_missing: bool = False,
     expected_missing_digest: str | None = None,
+    expected_mapping_digest: str | None = None,
+    employee_column_mapping: dict[str, str | None] | None = None,
     source_filename: str | None = None,
 ) -> AdcApplyResult:
     """Re-evaluate then apply the listing atomically, then re-match + re-assign
@@ -874,7 +947,26 @@ def apply_listing(
     it — "which upload terminated these forty people" is otherwise answerable
     only by the timestamp.
     """
-    plan, _ = evaluate_listing(db, policy_year_id, client_id, path)
+    plan, _ = evaluate_listing(
+        db,
+        policy_year_id,
+        client_id,
+        path,
+        employee_column_mapping=employee_column_mapping,
+    )
+    employee_mapping = plan.employee_mapping
+    if employee_mapping is not None and employee_mapping.unresolved:
+        raise UnresolvedRosterMapping(
+            "Review every populated employee-listing column and map or ignore it before applying."
+        )
+    if (
+        expected_mapping_digest is not None
+        and employee_mapping is not None
+        and employee_mapping.digest != expected_mapping_digest
+    ):
+        raise StaleRosterMapping(
+            "The employee column mapping changed since preview. Review the file again."
+        )
 
     # Only the terminations are gated: re-deriving adds and changes against the
     # newest roster is correct and wanted, but ending someone's cover must
@@ -1034,8 +1126,16 @@ def apply_listing(
                # `absent_from_listing`, but reconstructing "was the tick on?"
                # from the absence of a row is not the same as recording that
                # the one control which ends cover was switched on.
-               "terminate_missing": terminate_missing},
+               "terminate_missing": terminate_missing,
+               "mapping_digest": employee_mapping.digest if employee_mapping else None},
     )
+    if employee_mapping is not None:
+        save_employee_mapping_profile(
+            db,
+            client_id=client_id,
+            mapping=employee_mapping,
+            created_by=user.user_id,
+        )
     db.commit()
 
     # Re-match + re-size flex for the (now changed) active roster. Best-effort,
@@ -1083,4 +1183,5 @@ def apply_listing(
         rematched=rematched,
         issues=plan.issues,
         flex_errors=flex_errors,
+        mapping_profile_saved=employee_mapping is not None,
     )

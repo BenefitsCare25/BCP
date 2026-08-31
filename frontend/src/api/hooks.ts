@@ -35,6 +35,7 @@ import type {
   FlexCoverage,
   EntityVocab,
   RosterVocab,
+  RosterReadiness,
   InsuranceLine,
   MatchResults,
   MatchRunResult,
@@ -166,6 +167,18 @@ export function useCategoriesGrouped(policyYearId: string | undefined) {
     queryFn: () =>
       api.get<CategoryGroup[]>(
         `/categories/grouped?policy_year_id=${policyYearId}`,
+      ),
+    enabled: Boolean(policyYearId),
+  });
+}
+
+export function useRosterReadiness(policyYearId: string | undefined) {
+  const cid = useActiveClientId();
+  return useQuery({
+    queryKey: ["roster-readiness", policyYearId, cid],
+    queryFn: () =>
+      api.get<RosterReadiness>(
+        `/policy-years/${policyYearId}/roster-readiness`,
       ),
     enabled: Boolean(policyYearId),
   });
@@ -787,6 +800,8 @@ export interface AttributePayload {
   enum_values?: string[] | null;
   is_required?: boolean;
   is_pii?: boolean;
+  allow_matching?: boolean;
+  allow_ai_values?: boolean;
   description?: string | null;
 }
 

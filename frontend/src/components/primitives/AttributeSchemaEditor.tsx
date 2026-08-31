@@ -35,7 +35,7 @@ export function AttributeSchemaEditor({
           <TableHead>Attribute</TableHead>
           <TableHead>Display name</TableHead>
           <TableHead>Type</TableHead>
-          <TableHead>Constraints</TableHead>
+          <TableHead>Usage</TableHead>
           <TableHead>Scope</TableHead>
           {hasActions && <TableHead className="w-[120px]" />}
         </TableRow>
@@ -89,6 +89,16 @@ export function AttributeSchemaEditor({
                   )}
                   {attr.derived_from && (
                     <Badge variant="outline">Derived from {attr.derived_from}</Badge>
+                  )}
+                  {attr.allow_matching ? (
+                    <Badge variant="good">Eligibility</Badge>
+                  ) : (
+                    <Badge variant="default">Not matchable</Badge>
+                  )}
+                  {attr.allow_ai_values && !attr.is_pii ? (
+                    <Badge variant="info">AI values</Badge>
+                  ) : (
+                    <Badge variant="default">No AI values</Badge>
                   )}
                 </div>
               </TableCell>

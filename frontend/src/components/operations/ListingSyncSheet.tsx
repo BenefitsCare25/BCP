@@ -1,7 +1,14 @@
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Sheet,
   SheetBody,
@@ -10,7 +17,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import type { AdcOp, AdcPreview } from "@/types";
+import type {
+  AdcOp,
+  AdcPreview,
+  RosterMappingAttribute,
+  RosterMappingPreview,
+} from "@/types";
 
 /**
  * What an uploaded member listing would do, before it does it.
@@ -59,6 +71,11 @@ interface Props {
   applying: boolean;
   terminateMissing: boolean;
   onTerminateMissingChange: (value: boolean) => void;
+  columnMapping: Record<string, string | null>;
+  onColumnMappingChange: (index: number, attributeId: string | null) => void;
+  mappingDirty: boolean;
+  onRecheckMapping: () => void;
+  checkingMapping: boolean;
 }
 
 export function ListingSyncSheet({
@@ -68,6 +85,11 @@ export function ListingSyncSheet({
   applying,
   terminateMissing,
   onTerminateMissingChange,
+  columnMapping,
+  onColumnMappingChange,
+  mappingDirty,
+  onRecheckMapping,
+  checkingMapping,
 }: Props) {
   const c = preview?.counts ?? {};
   const missing = preview?.missing ?? [];
@@ -77,6 +99,7 @@ export function ListingSyncSheet({
   const missingRatio = rosterTotal > 0 ? missing.length / rosterTotal : 0;
   const looksPartial = missing.length > 0 && missingRatio >= PARTIAL_FILE_RATIO;
   const unreadable = c.dropped_rows ?? 0;
+  const mappingBlocked = Boolean(preview?.roster_mapping?.unresolved) || mappingDirty;
 
   const applies =
     (c.additions ?? 0) +
@@ -114,6 +137,15 @@ export function ListingSyncSheet({
               <Badge variant="error">{c.issues} issues</Badge>
             )}
           </div>
+
+          {preview?.roster_mapping && (
+            <ColumnMappingReview
+              mapping={preview.roster_mapping}
+              decisions={columnMapping}
+              dirty={mappingDirty}
+              onChange={onColumnMappingChange}
+            />
+          )}
 
           {(c.dropped_rows ?? 0) > 0 && (
             // Rows the parser couldn't read at all — no Staff ID on an employee
@@ -287,7 +319,29 @@ export function ListingSyncSheet({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={onApply} disabled={applying || applies === 0}>
+          {mappingDirty && (
+            <Button
+              variant="outline"
+              onClick={onRecheckMapping}
+              disabled={checkingMapping}
+            >
+              {checkingMapping ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              Recheck changes
+            </Button>
+          )}
+          <Button
+            onClick={onApply}
+            disabled={applying || applies === 0 || mappingBlocked}
+            title={
+              mappingBlocked
+                ? "Resolve the employee column mapping and recheck the changes first."
+                : undefined
+            }
+          >
             {applying && <Loader2 className="size-4 animate-spin" />}
             Apply {applies.toLocaleString()}{" "}
             {applies === 1 ? "change" : "changes"}
@@ -295,6 +349,157 @@ export function ListingSyncSheet({
         </SheetFooter>
       </SheetContent>
     </Sheet>
+  );
+}
+
+const UNRESOLVED = "__unresolved__";
+const IGNORE = "__ignore__";
+
+function ColumnMappingReview({
+  mapping,
+  decisions,
+  dirty,
+  onChange,
+}: {
+  mapping: RosterMappingPreview;
+  decisions: Record<string, string | null>;
+  dirty: boolean;
+  onChange: (index: number, attributeId: string | null) => void;
+}) {
+  const unresolved = mapping.columns.filter(
+    (column) =>
+      column.non_empty_count > 0 && !(String(column.index) in decisions),
+  );
+  const selected = new Set(
+    Object.values(decisions).filter((value): value is string => Boolean(value)),
+  );
+  const missingStaffId = !selected.has("staff_id");
+  const mapped = Object.values(decisions).filter(Boolean).length;
+
+  return (
+    <section className="rounded-lg border border-border">
+      <div className="flex flex-wrap items-start justify-between gap-2 bg-muted px-3 py-2.5">
+        <div>
+          <h3 className="text-sm font-medium text-foreground">
+            Employee column mapping
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {mapped} mapped · {mapping.columns.length - mapped - unresolved.length} ignored
+            {mapping.reused_profile ? " · saved template reused" : ""}
+          </p>
+        </div>
+        <Badge
+          variant={
+            unresolved.length || missingStaffId || dirty ? "warn" : "good"
+          }
+        >
+          {dirty
+            ? "Recheck required"
+            : unresolved.length || missingStaffId
+              ? "Needs mapping"
+              : "Ready"}
+        </Badge>
+      </div>
+
+      {(unresolved.length > 0 || missingStaffId) && (
+        <div className="flex items-start gap-2 border-t border-border bg-warn-soft/40 px-3 py-2.5">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+          <p className="text-xs text-foreground">
+            {missingStaffId
+              ? "Map one column to Staff ID. "
+              : ""}
+            {unresolved.length > 0
+              ? `${unresolved.length} populated column${unresolved.length === 1 ? " has" : "s have"} not been mapped or ignored.`
+              : ""}
+          </p>
+        </div>
+      )}
+
+      {unresolved.map((column) => (
+        <MappingRow
+          key={column.index}
+          column={column}
+          attributes={mapping.available_attributes}
+          decisions={decisions}
+          onChange={onChange}
+        />
+      ))}
+
+      <details className="border-t border-border">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50">
+          Review all {mapping.columns.length} source columns
+        </summary>
+        <div className="border-t border-border">
+          {mapping.columns
+            .filter((column) => !unresolved.some((item) => item.index === column.index))
+            .map((column) => (
+              <MappingRow
+                key={column.index}
+                column={column}
+                attributes={mapping.available_attributes}
+                decisions={decisions}
+                onChange={onChange}
+              />
+            ))}
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function MappingRow({
+  column,
+  attributes,
+  decisions,
+  onChange,
+}: {
+  column: RosterMappingPreview["columns"][number];
+  attributes: RosterMappingAttribute[];
+  decisions: Record<string, string | null>;
+  onChange: (index: number, attributeId: string | null) => void;
+}) {
+  const key = String(column.index);
+  const hasDecision = key in decisions;
+  const current = hasDecision ? decisions[key] : undefined;
+  const value = current === null ? IGNORE : current ?? UNRESOLVED;
+
+  return (
+    <div className="grid gap-2 border-t border-border px-3 py-2.5 first:border-t-0 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] sm:items-center">
+      <div className="min-w-0">
+        <div className="truncate text-sm text-foreground" title={column.source_column}>
+          {column.source_column}
+        </div>
+        <div className="mt-0.5 text-xs text-muted-foreground">
+          {column.non_empty_count.toLocaleString()} populated
+          {column.source === "saved_profile" ? " · remembered" : ""}
+        </div>
+      </div>
+      <Select
+        value={value}
+        onValueChange={(next) =>
+          onChange(column.index, next === IGNORE ? null : next)
+        }
+      >
+        <SelectTrigger aria-label={`Map ${column.source_column}`}>
+          <SelectValue placeholder="Choose an employee field" />
+        </SelectTrigger>
+        <SelectContent>
+          {value === UNRESOLVED && (
+            <SelectItem value={UNRESOLVED} disabled>
+              Choose a field…
+            </SelectItem>
+          )}
+          <SelectItem value={IGNORE}>Ignore this column</SelectItem>
+          {attributes.map((attribute) => (
+            <SelectItem key={attribute.attribute_id} value={attribute.attribute_id}>
+              {attribute.display_name}
+              {attribute.is_pii ? " · personal" : ""}
+              {attribute.allow_matching ? " · eligibility" : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 

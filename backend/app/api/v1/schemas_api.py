@@ -142,6 +142,10 @@ def create_employee_attribute(
             f"Attribute {payload.attribute_id!r} already exists in {where}",
         )
     row = EmployeeAttributeSchema(client_id=client_id, **payload.model_dump())
+    if row.is_pii:
+        # Sensitive values are never opted into an external model as a side
+        # effect of creation. Internal matching is controlled separately.
+        row.allow_ai_values = False
     db.add(row)
     db.flush()
     write_audit(
@@ -174,9 +178,19 @@ def update_employee_attribute(
         "enum_values": row.enum_values,
         "is_required": row.is_required,
         "is_pii": row.is_pii,
+        "allow_matching": row.allow_matching,
+        "allow_ai_values": row.allow_ai_values,
         "description": row.description,
     }
     patch = payload.model_dump(exclude_unset=True)
+    if patch.get("is_pii") is True:
+        patch["allow_ai_values"] = False
+    effective_pii = bool(patch.get("is_pii", row.is_pii))
+    if effective_pii and patch.get("allow_ai_values") is True:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Personal-data values cannot be shared with the AI provider.",
+        )
     for key, value in patch.items():
         setattr(row, key, value)
     db.flush()

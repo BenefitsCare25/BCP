@@ -9,6 +9,8 @@ export interface AttributeSchema {
   enum_values: string[] | null;
   is_required: boolean;
   is_pii: boolean;
+  allow_matching: boolean;
+  allow_ai_values: boolean;
   description: string | null;
   derived_from: string | null;
   derivation_rule: Record<string, unknown> | null;
@@ -788,6 +790,60 @@ export interface AdcPreview {
   /** Fingerprint of `missing`, returned with apply so a roster that moved in
    *  between can't terminate a different set than the one reviewed. */
   missing_digest: string | null;
+  roster_mapping: RosterMappingPreview | null;
+}
+
+export interface RosterMappingAttribute {
+  attribute_id: string;
+  display_name: string;
+  is_pii: boolean;
+  allow_matching: boolean;
+  derived: boolean;
+}
+
+export interface RosterColumnMapping {
+  index: number;
+  source_column: string;
+  attribute_id: string | null;
+  display_name: string | null;
+  status: "mapped" | "ignored" | "unresolved";
+  source: "manual" | "saved_profile" | "known_header" | "attribute_schema" | "empty_column" | "unresolved";
+  non_empty_count: number;
+}
+
+export interface RosterMappingPreview {
+  sheet_name: string | null;
+  fingerprint: string | null;
+  digest: string | null;
+  reused_profile: boolean;
+  unresolved: boolean;
+  required_missing: string[];
+  columns: RosterColumnMapping[];
+  available_attributes: RosterMappingAttribute[];
+}
+
+export interface RosterAttributeReadiness {
+  attribute_id: string;
+  display_name: string;
+  source: "listing" | "derived";
+  derived_from: string | null;
+  populated_count: number;
+  missing_count: number;
+  coverage_percent: number;
+  distinct_count: number;
+  is_pii: boolean;
+  allow_matching: boolean;
+  allow_ai_values: boolean;
+  usable_for_matching: boolean;
+}
+
+export interface RosterReadiness {
+  policy_year_id: string;
+  employee_count: number;
+  usable_attributes: number;
+  derived_attributes: number;
+  unavailable_attributes: number;
+  attributes: RosterAttributeReadiness[];
 }
 
 export interface AdcApplyResult {
@@ -799,6 +855,7 @@ export interface AdcApplyResult {
   rematched: number;
   issues: AdcIssue[];
   flex_errors: string[];
+  mapping_profile_saved: boolean;
 }
 
 // Vertex/Gemini is the sole provider (AWS Bedrock + Anthropic were removed).

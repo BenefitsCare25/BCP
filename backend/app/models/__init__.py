@@ -49,6 +49,7 @@ from app.models.product import PlanAttributeSchema, Product
 from app.models.product_setup import ProductSetup
 from app.models.product_term import ProductTerm
 from app.models.report_version import ReportVersion
+from app.models.roster_mapping_profile import RosterMappingProfile
 from app.models.schema_def import EmployeeAttributeSchema
 from app.models.slip_template_profile import SlipTemplateProfile
 from app.models.stored_document import StoredDocument
@@ -113,6 +114,7 @@ __all__ = [
     "ProductSetup",
     "ProductTerm",
     "ReportVersion",
+    "RosterMappingProfile",
     "SlipTemplateProfile",
     "StoredDocument",
     "UnderwritingCase",

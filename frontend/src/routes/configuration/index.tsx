@@ -4,6 +4,7 @@ import {
   useAuditLog,
   useCategoriesGrouped,
   useEmployeeAttributes,
+  useRosterReadiness,
   useMe,
   usePolicyYears,
   useProductSetups,
@@ -48,6 +49,20 @@ import {
   lineForCode,
 } from "@/lib/insuranceLines";
 
+function referencedAttributes(
+  rule: unknown,
+  known: Set<string>,
+  out = new Set<string>(),
+): Set<string> {
+  if (typeof rule === "string" && known.has(rule)) out.add(rule);
+  if (Array.isArray(rule)) {
+    for (const value of rule) referencedAttributes(value, known, out);
+  } else if (rule && typeof rule === "object") {
+    for (const value of Object.values(rule)) referencedAttributes(value, known, out);
+  }
+  return out;
+}
+
 export function ConfigurationPage() {
   const { data: me } = useMe();
   const { data: policyYears = [], isLoading: yearsLoading } = usePolicyYears();
@@ -72,6 +87,9 @@ export function ConfigurationPage() {
   const { data: setups = [] } = useProductSetups(policyYearId ?? undefined);
   const { data: registry } = useRegistry();
   const { data: schema = [] } = useEmployeeAttributes();
+  const { data: rosterReadiness } = useRosterReadiness(
+    policyYearId ?? undefined,
+  );
   const { data: audit } = useAuditLog();
   // Initial line tab is deep-linkable via ?tab= (e.g. the Reports Center "Flex
   // Coverage" card links to ?tab=flex); unknown values fall back to medical.
@@ -100,6 +118,24 @@ export function ConfigurationPage() {
   // Placement-slip upload state, lifted so the trigger button sits on the tab
   // row while the extraction-result panel renders below the tabs.
   const slip = useSlipUpload(policyYearId ?? "");
+
+  const ruleSchema = useMemo(() => {
+    const known = new Set(schema.map((attribute) => attribute.attribute_id));
+    const referenced = referencedAttributes(selected?.matching_rule, known);
+    const usable = new Set(
+      rosterReadiness?.attributes
+        .filter((attribute) => attribute.usable_for_matching)
+        .map((attribute) => attribute.attribute_id) ?? [],
+    );
+    return schema.filter(
+      (attribute) =>
+        referenced.has(attribute.attribute_id) ||
+        (attribute.allow_matching &&
+          (!rosterReadiness ||
+            rosterReadiness.employee_count === 0 ||
+            usable.has(attribute.attribute_id))),
+    );
+  }, [rosterReadiness, schema, selected?.matching_rule]);
 
   const groupsByLine = useMemo(() => {
     const by: Record<InsuranceLine, typeof groups> = {
@@ -361,7 +397,8 @@ export function ConfigurationPage() {
 
       <CategoryEditPanel
         category={selected}
-        schema={schema}
+        schema={ruleSchema}
+        rosterEmployeeCount={rosterReadiness?.employee_count ?? null}
         onClose={() => setSelected(null)}
       />
       <AlertDialog

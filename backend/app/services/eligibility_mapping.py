@@ -1408,7 +1408,12 @@ def normalize_ai_matching_rule(
 def build_attribute_catalog(
     db: Session, policy_year_id: str, client_id: str
 ) -> tuple[AttributeValueCatalog, list[Employee], list[dict[str, Any]]]:
-    """Build a non-PII, tenant-resolved vocabulary and employee eval views."""
+    """Build the internal, tenant-resolved matching vocabulary and eval views.
+
+    This never leaves our service boundary. ``allow_matching`` controls what
+    rules may evaluate; PII and ``allow_ai_values`` independently control what
+    can be included in an external AI request below.
+    """
 
     schemas = resolve_attribute_schemas(
         db.execute(
@@ -1417,7 +1422,7 @@ def build_attribute_catalog(
             )
         ).scalars()
     )
-    safe_schemas = [schema for schema in schemas if not schema.is_pii]
+    matching_schemas = [schema for schema in schemas if schema.allow_matching]
     employees = list(
         db.execute(
             select(Employee).where(
@@ -1430,7 +1435,7 @@ def build_attribute_catalog(
     views = [
         {
             **(employee.attribute_values or {}),
-            **derive(employee.attribute_values or {}, safe_schemas),
+            **derive(employee.attribute_values or {}, matching_schemas),
         }
         for employee in employees
     ]
@@ -1439,7 +1444,7 @@ def build_attribute_catalog(
     configured_values: dict[str, list[Any]] = {}
     populated: dict[str, int] = {}
     data_types: dict[str, str] = {}
-    for schema in safe_schemas:
+    for schema in matching_schemas:
         attribute_id = schema.attribute_id
         data_types[attribute_id] = schema.data_type
         configured_values[attribute_id] = list(schema.enum_values or [])
@@ -1529,7 +1534,11 @@ def build_ai_eligibility_inputs(
         ).scalars()
     )
     safe_schemas = sorted(
-        (schema for schema in resolved if not schema.is_pii),
+        (
+            schema
+            for schema in resolved
+            if not schema.is_pii and schema.allow_ai_values and schema.allow_matching
+        ),
         key=lambda value: value.attribute_id,
     )
     usable_schemas = _usable_ai_schemas(safe_schemas, catalog)
@@ -1619,6 +1628,15 @@ def build_ai_eligibility_inputs(
         category.raw_description, deterministic.rule, catalog
     )
     deterministic_rule = deterministic.rule if deterministic_validation.valid else None
+    ai_attribute_ids = {schema.attribute_id for schema in usable_schemas}
+    internal_only_candidate = bool(
+        set(deterministic_validation.referenced_attributes) - ai_attribute_ids
+    )
+    if internal_only_candidate:
+        # The deterministic normalizer runs again after the model response, so
+        # internal-only constraints (for example nationality="Thai") need not
+        # and must not ride inside the external prompt as a fallback rule.
+        deterministic_rule = None
     context: dict[str, Any] = {
         "product": (
             {"code": product.code, "display_name": product.display_name}
@@ -1653,13 +1671,19 @@ def build_ai_eligibility_inputs(
         "employee_attributes": employee_attributes,
         "deterministic_candidate": {
             "rule": deterministic_rule,
-            "human_readable": deterministic.human_readable,
-            "unresolved_clauses": list(
-                dict.fromkeys(
-                    [
-                        *deterministic.unresolved_clauses,
-                        *deterministic_validation.errors,
-                    ]
+            "human_readable": (
+                None if internal_only_candidate else deterministic.human_readable
+            ),
+            "unresolved_clauses": (
+                ["An internal-only condition will be restored after AI suggestion."]
+                if internal_only_candidate
+                else list(
+                    dict.fromkeys(
+                        [
+                            *deterministic.unresolved_clauses,
+                            *deterministic_validation.errors,
+                        ]
+                    )
                 )
             ),
         },

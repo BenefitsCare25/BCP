@@ -7,6 +7,7 @@ activation-editable lock, tenant-scoped via the policy year.
 """
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from fastapi import (
@@ -27,10 +28,65 @@ from app.core.deps import assert_policy_year_for_user, require_client_id
 from app.core.rate_limit import limiter
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
-from app.schemas.adc import AdcApplyResult, AdcPreview
-from app.services.adc import StaleListingPreview, apply_listing, preview_listing
+from app.schemas.adc import AdcApplyResult, AdcPreview, RosterReadiness
+from app.services.adc import (
+    StaleListingPreview,
+    StaleRosterMapping,
+    UnresolvedRosterMapping,
+    apply_listing,
+    preview_listing,
+)
+from app.services.roster_mapping import roster_readiness
 
 router = APIRouter(prefix="/policy-years", tags=["adc"])
+
+
+def _column_mapping(raw: str | None) -> dict[str, str | None] | None:
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Employee column mapping must be valid JSON.",
+        ) from exc
+    if not isinstance(value, dict) or len(value) > 256:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Employee column mapping must be an object with at most 256 columns.",
+        )
+    result: dict[str, str | None] = {}
+    for key, target in value.items():
+        key_text = str(key)
+        if (
+            not key_text.isdigit()
+            or len(key_text) > 3
+            or int(key_text) >= 256
+            or key_text != str(int(key_text))
+            or (target is not None and not isinstance(target, str))
+            or (isinstance(target, str) and len(target) > 64)
+        ):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Each employee column mapping must use an index from 0 to 255 "
+                "and an attribute ID of at most 64 characters or null.",
+            )
+        result[key_text] = target.strip() if isinstance(target, str) else None
+    return result
+
+
+@router.get("/{policy_year_id}/roster-readiness", response_model=RosterReadiness)
+def get_roster_readiness(
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> RosterReadiness:
+    client_id = require_client_id(user)
+    assert_policy_year_for_user(policy_year_id, user, db)
+    return roster_readiness(
+        db, client_id=client_id, policy_year_id=policy_year_id
+    )
 
 
 @router.post("/{policy_year_id}/adc/preview", response_model=AdcPreview)
@@ -39,6 +95,7 @@ async def preview_listing_upload(
     request: Request,
     policy_year_id: str,
     file: Annotated[UploadFile, File()],
+    employee_column_mapping: Annotated[str | None, Form()] = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdcPreview:
@@ -47,9 +104,18 @@ async def preview_listing_upload(
     assert_policy_year_for_user(policy_year_id, user, db)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         # Off the event loop — see `apply_listing_upload` below.
-        return await run_in_threadpool(
-            preview_listing, db, policy_year_id, client_id, tmp_path
-        )
+        try:
+            return await run_in_threadpool(
+                lambda: preview_listing(
+                    db,
+                    policy_year_id,
+                    client_id,
+                    tmp_path,
+                    employee_column_mapping=_column_mapping(employee_column_mapping),
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @router.post("/{policy_year_id}/adc/apply", response_model=AdcApplyResult)
@@ -62,6 +128,8 @@ async def apply_listing_upload(
     # forgets the flag can add and change, never end anyone's cover.
     terminate_missing: Annotated[bool, Form()] = False,
     missing_digest: Annotated[str | None, Form()] = None,
+    mapping_digest: Annotated[str | None, Form()] = None,
+    employee_column_mapping: Annotated[str | None, Form()] = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdcApplyResult:
@@ -88,6 +156,8 @@ async def apply_listing_upload(
                     db, user, policy_year_id, client_id, tmp_path,
                     terminate_missing=terminate_missing,
                     expected_missing_digest=missing_digest,
+                    expected_mapping_digest=mapping_digest,
+                    employee_column_mapping=_column_mapping(employee_column_mapping),
                     source_filename=file.filename,
                 )
             )
@@ -95,4 +165,14 @@ async def apply_listing_upload(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 {"code": "stale_listing_preview", "message": str(exc)},
+            ) from exc
+        except StaleRosterMapping as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {"code": "stale_roster_mapping", "message": str(exc)},
+            ) from exc
+        except (UnresolvedRosterMapping, ValueError) as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                {"code": "unresolved_roster_mapping", "message": str(exc)},
             ) from exc
