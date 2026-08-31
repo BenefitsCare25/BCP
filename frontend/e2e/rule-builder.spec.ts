@@ -66,6 +66,22 @@ test("adding a condition extends an existing AND group without nesting it", () =
   });
 });
 
+test("adding a required condition wraps an existing OR group", () => {
+  const current: RuleNode = {
+    or: [
+      { in: ["job_category", ["J1", "J2"]] },
+      { in: ["job_category", ["JA", "JB"]] },
+    ],
+  };
+
+  expect(addRequiredCondition(current, SCHEMA)).toEqual({
+    and: [
+      current,
+      { "=": ["", ""] },
+    ],
+  });
+});
+
 async function apiJson<T>(
   response: Awaited<ReturnType<APIRequestContext["get"]>>,
 ): Promise<T> {
@@ -96,7 +112,7 @@ async function installBrokerSession(
   );
 }
 
-test("a broker can add a second condition to a single-condition category", async ({
+test("a broker can add required conditions to leaf and OR categories", async ({
   page,
   request,
 }, testInfo) => {
@@ -131,7 +147,7 @@ test("a broker can add a second condition to a single-condition category", async
       },
     }),
   );
-  const category = await apiJson<{ id: string; display_name: string }>(
+  const leafCategory = await apiJson<{ id: string; display_name: string }>(
     await request.post("/api/v1/categories", {
       headers,
       data: {
@@ -141,15 +157,43 @@ test("a broker can add a second condition to a single-condition category", async
       },
     }),
   );
-  const patchResponse = await request.patch(`/api/v1/categories/${category.id}`, {
-    headers,
-    data: {
-      matching_rule: {
-        in: ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]],
+  const orCategory = await apiJson<{ id: string; display_name: string }>(
+    await request.post("/api/v1/categories", {
+      headers,
+      data: {
+        policy_year_id: policyYear!.id,
+        product_id: product.id,
+        display_name: "Alternative category for required rule editing",
+      },
+    }),
+  );
+  const leafPatchResponse = await request.patch(
+    `/api/v1/categories/${leafCategory.id}`,
+    {
+      headers,
+      data: {
+        matching_rule: {
+          in: ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]],
+        },
       },
     },
-  });
-  expect(patchResponse.ok(), await patchResponse.text()).toBeTruthy();
+  );
+  expect(leafPatchResponse.ok(), await leafPatchResponse.text()).toBeTruthy();
+  const orPatchResponse = await request.patch(
+    `/api/v1/categories/${orCategory.id}`,
+    {
+      headers,
+      data: {
+        matching_rule: {
+          or: [
+            { in: ["job_category", ["J1", "J2", "J3"]] },
+            { in: ["job_category", ["JA", "JB", "JC"]] },
+          ],
+        },
+      },
+    },
+  );
+  expect(orPatchResponse.ok(), await orPatchResponse.text()).toBeTruthy();
 
   try {
     await installBrokerSession(page, clientId!, policyYear!.id);
@@ -162,16 +206,19 @@ test("a broker can add a second condition to a single-condition category", async
       .getByRole("button", { name: /Employee Category & Plan Type/ })
       .click();
 
-    const categorySection = page
+    const leafCategorySection = page
       .locator("section")
-      .filter({ hasText: category.display_name })
+      .filter({ hasText: leafCategory.display_name })
       .first();
-    await categorySection
+    await leafCategorySection
       .getByRole("button", { name: "Employee category rule" })
       .click();
 
     const editor = page.getByRole("dialog");
-    const addCondition = editor.getByRole("button", { name: "Add condition" });
+    const addCondition = editor.getByRole("button", {
+      name: "Add required condition",
+      exact: true,
+    });
     await expect(addCondition).toBeVisible();
     await addCondition.click();
 
@@ -200,6 +247,54 @@ test("a broker can add a second condition to a single-condition category", async
       .include('[role="dialog"]')
       .analyze();
     expect(accessibility.violations).toEqual([]);
+
+    await editor.getByRole("button", { name: "Cancel" }).click();
+    await expect(editor).toBeHidden();
+
+    const orCategorySection = page
+      .locator("section")
+      .filter({ hasText: orCategory.display_name })
+      .first();
+    await orCategorySection
+      .getByRole("button", { name: "Employee category rule" })
+      .click();
+
+    const orEditor = page.getByRole("dialog");
+    await expect(orEditor.getByText("OR", { exact: true })).toBeVisible();
+    await expect(
+      orEditor.getByRole("button", { name: "Add alternative", exact: true }),
+    ).toBeVisible();
+
+    const addRequiredConditionButton = orEditor.getByRole("button", {
+      name: "Add required condition",
+      exact: true,
+    });
+    await expect(addRequiredConditionButton).toBeVisible();
+    await addRequiredConditionButton.click();
+
+    await expect(orEditor.getByText("AND", { exact: true })).toBeVisible();
+    await expect(orEditor.getByText("OR", { exact: true })).toBeVisible();
+    const orAttributes = orEditor.getByRole("combobox", {
+      name: "Employee attribute",
+    });
+    await expect(orAttributes).toHaveCount(3);
+    await orAttributes.nth(2).click();
+    await page.getByRole("option", { name: "Nationality", exact: true }).click();
+
+    const orOperators = orEditor.getByRole("combobox", {
+      name: "Comparison operator",
+    });
+    await orOperators.nth(2).click();
+    await page.getByRole("option", { name: "in", exact: true }).click();
+    await orEditor
+      .getByRole("textbox", { name: "Nationality values" })
+      .fill("Thai");
+
+    await orEditor.getByText("Technical rule JSON").click();
+    await expect(orEditor.locator("pre")).toContainText('"and"');
+    await expect(orEditor.locator("pre")).toContainText('"or"');
+    await expect(orEditor.locator("pre")).toContainText('"nationality"');
+    await expect(orEditor.locator("pre")).toContainText('"Thai"');
   } finally {
     const cleanup = await request.delete(
       `/api/v1/policy-years/${policyYear!.id}/products/${productCode}`,

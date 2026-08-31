@@ -89,7 +89,7 @@ export function RuleBuilder({ rule, schema, onChange }: Props) {
   return (
     <div className="space-y-3">
       <NodeView node={rule} schema={schema} onChange={onChange} depth={0} />
-      {!isGroupNode(rule) && (
+      {!isAndGroupNode(rule) && (
         <div className="flex flex-wrap items-center justify-between gap-2 px-1">
           <p className="text-xs text-muted-foreground">
             Add another required employee attribute to narrow this category.
@@ -106,7 +106,7 @@ export function RuleBuilder({ rule, schema, onChange }: Props) {
                 : "Add another required condition (AND)"
             }
           >
-            <Plus className="size-3.5" /> Add condition
+            <Plus className="size-3.5" /> Add required condition
           </Button>
         </div>
       )}
@@ -114,10 +114,10 @@ export function RuleBuilder({ rule, schema, onChange }: Props) {
   );
 }
 
-function isGroupNode(node: Node): boolean {
+function isAndGroupNode(node: Node): boolean {
   if (!node) return false;
   const keys = Object.keys(node);
-  return keys.length === 1 && (keys[0] === "and" || keys[0] === "or");
+  return keys.length === 1 && keys[0] === "and";
 }
 
 function NodeView({
@@ -137,6 +137,8 @@ function NodeView({
 
   if (key === "and" || key === "or") {
     const children = (args as Node[]) ?? [];
+    const addConditionLabel =
+      key === "and" ? "Add required condition" : "Add alternative";
     return (
       <div
         className={cn(
@@ -160,7 +162,7 @@ function NodeView({
               }
               disabled={schema.length === 0}
             >
-              <Plus className="size-3.5" /> Add condition
+              <Plus className="size-3.5" /> {addConditionLabel}
             </Button>
             <Button
               size="sm"
