@@ -336,6 +336,95 @@ def test_based_in_country_uses_reviewed_nationality_proxy_as_last_resort() -> No
     ]
 
 
+def test_based_in_thailand_maps_to_thai_roster_nationality() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC", "D1"],
+            nationality=["Singaporean", "Thai"],
+            executive_role=["DIRECTOR", "EMPLOYEE"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"=": ["nationality", "Thai"]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
+    }
+    assert proposal.unresolved_clauses == [
+        "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
+
+
+def test_based_in_multiple_countries_maps_every_exact_nationality_alias() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand and Vietnam (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC", "D1"],
+            nationality=["Singaporean", "Thai", "Vietnamese"],
+            executive_role=["DIRECTOR", "EMPLOYEE"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"in": ["nationality", ["Thai", "Vietnamese"]]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
+    }
+    assert proposal.unresolved_clauses == [
+        "based in Thailand and Vietnam mapped through nationality; "
+        "confirm nationality represents work base"
+    ]
+
+
+def test_unsupported_location_does_not_fuzzy_match_short_nationality_alias() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Myanmar (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC", "D1"],
+            nationality=["Malaysian"],
+            executive_role=["DIRECTOR", "EMPLOYEE"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]
+    }
+    assert proposal.unresolved_clauses == ["based in Myanmar"]
+
+
+def test_mixed_supported_and_unknown_locations_do_not_create_a_partial_rule() -> None:
+    proposal = propose_category_rule(
+        "Officer and All Employees based in Thailand and Myanmar (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)",
+        _catalog(
+            job_category=["J1", "J2", "J3", "JA", "JB", "JC", "D1"],
+            nationality=["Thailand"],
+            executive_role=["DIRECTOR", "EMPLOYEE"],
+        ),
+    )
+
+    assert proposal.rule == {
+        "in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]
+    }
+    assert proposal.unresolved_clauses == ["based in Thailand and Myanmar"]
+
+
 def test_ai_rule_restores_safe_country_branch_when_model_omits_it() -> None:
     description = (
         "Officer and All Employees based in Thailand (except for Director) "
@@ -366,6 +455,88 @@ def test_ai_rule_restores_safe_country_branch_when_model_omits_it() -> None:
     }
     assert review_clauses == [
         "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
+
+
+@pytest.mark.parametrize(
+    "ai_rule",
+    [
+        {"in": ["job_category", ["J2", "J3", "JB", "J1", "JC", "JA"]]},
+        {
+            "or": [
+                {"in": ["job_category", ["J2", "J3", "JB", "J1", "JC", "JA"]]},
+                {
+                    "and": [
+                        {"=": ["nationality", "Thailand"]},
+                        {"not_in": ["executive_role", ["DIRECTOR"]]},
+                    ]
+                },
+            ]
+        },
+    ],
+)
+def test_ai_rule_normalizes_thailand_to_thai_roster_value(ai_rule: dict) -> None:
+    description = (
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)"
+    )
+    catalog = _catalog(
+        job_category=["J2", "J3", "JB", "J1", "JC", "JA", "D1"],
+        nationality=["Singaporean", "Thai"],
+        executive_role=["DIRECTOR", "EMPLOYEE"],
+    )
+
+    normalized, review_clauses = normalize_ai_matching_rule(
+        description, ai_rule, catalog
+    )
+
+    assert normalized == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"=": ["nationality", "Thai"]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
+    }
+    assert review_clauses == [
+        "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
+
+
+def test_ai_rule_restores_every_country_in_multi_country_location() -> None:
+    description = (
+        "Officer and All Employees based in Thailand and Vietnam (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)"
+    )
+    catalog = _catalog(
+        job_category=["J2", "J3", "JB", "J1", "JC", "JA", "D1"],
+        nationality=["Singaporean", "Thai", "Vietnamese"],
+        executive_role=["DIRECTOR", "EMPLOYEE"],
+    )
+
+    normalized, review_clauses = normalize_ai_matching_rule(
+        description,
+        {"in": ["job_category", ["J2", "J3", "JB", "J1", "JC", "JA"]]},
+        catalog,
+    )
+
+    assert normalized == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"in": ["nationality", ["Thai", "Vietnamese"]]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
+    }
+    assert review_clauses == [
+        "based in Thailand and Vietnam mapped through nationality; "
+        "confirm nationality represents work base"
     ]
 
 

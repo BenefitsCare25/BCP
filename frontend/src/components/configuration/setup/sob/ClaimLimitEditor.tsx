@@ -41,6 +41,7 @@ import { copayFields, copayValue } from "@/lib/sob";
 interface Props {
   sob: SobSchedule;
   plans: PlanAnswer[];
+  productCode: string;
   claimScopes: ClaimLimitScope[];
   setSob: (fn: (schedule: SobSchedule) => SobSchedule) => void;
 }
@@ -77,10 +78,146 @@ const isUnavailableWording = (value: string) =>
     value.trim().toLocaleLowerCase(),
   );
 
+const claimScopesForBenefit = (
+  productCode: string,
+  item: SobItemAnswer,
+  setting: ClaimLimitSetting,
+  scopes: ClaimLimitScope[],
+) => {
+  const code = productCode.trim().toLocaleUpperCase();
+  const name = item.name.trim().toLocaleLowerCase();
+  const suggestedCodes: string[] = [];
+  const suggest = (scopeCode: string) => {
+    if (!suggestedCodes.includes(scopeCode)) suggestedCodes.push(scopeCode);
+  };
+
+  if (["GP", "GCGP", "GOGP"].includes(code)) {
+    if (
+      name.includes("tcm") ||
+      name.includes("traditional chinese") ||
+      name.includes("chinese physician")
+    ) {
+      suggest("gp_tcm");
+    }
+    if (name.includes("physio")) suggest("gp_physiotherapy");
+    if (/\bgp\b/.test(name) || name.includes("general practitioner")) {
+      suggest("standard");
+    }
+    if (suggestedCodes.length === 0) suggest("standard");
+  } else if (["SP", "GCSP", "GOSP", "GD", "DENTAL"].includes(code)) {
+    suggest("standard");
+  } else if (["GHS", "GHS2", "IMP"].includes(code)) {
+    if (name.includes("pre") && name.includes("post") && name.includes("hospital")) {
+      suggest("ghs_pre_post");
+    }
+    if (name.includes("dialysis") || name.includes("cancer treatment")) {
+      suggest("ghs_dialysis_cancer");
+    }
+    if (
+      name.includes("emergency") ||
+      name.includes("a&e") ||
+      name.includes("accidental outpatient")
+    ) {
+      suggest("ghs_emergency_outpatient");
+    }
+    if (
+      name.includes("hospitalisation") ||
+      name.includes("hospitalization") ||
+      name.includes("day surgery")
+    ) {
+      suggest("ghs_hospitalisation");
+    }
+  }
+
+  const rank = (scope: ClaimLimitScope) =>
+    suggestedCodes.includes(scope.code)
+      ? 0
+      : setting.claim_scope_codes.includes(scope.code)
+        ? 1
+        : 2;
+  return {
+    scopes: scopes
+      .map((scope, index) => ({ scope, index }))
+      .sort((a, b) => rank(a.scope) - rank(b.scope) || a.index - b.index)
+      .map(({ scope }) => scope),
+    recommendedScopeCodes: suggestedCodes.filter((scopeCode) =>
+      scopes.some((scope) => scope.code === scopeCode),
+    ),
+  };
+};
+
+function ScopePicker({
+  idPrefix,
+  setting,
+  scopes,
+  recommendedScopeCodes,
+  description,
+  onScope,
+}: {
+  idPrefix: string;
+  setting: ClaimLimitSetting;
+  scopes: ClaimLimitScope[];
+  recommendedScopeCodes: string[];
+  description: string;
+  onScope: (scopeCode: string, checked: boolean) => void;
+}) {
+  const [showOtherScopes, setShowOtherScopes] = useState(false);
+  const initiallyVisible = scopes.filter(
+    (scope) =>
+      recommendedScopeCodes.includes(scope.code) ||
+      setting.claim_scope_codes.includes(scope.code),
+  );
+  const compact = initiallyVisible.length > 0 && initiallyVisible.length < scopes.length;
+  const visibleScopes = showOtherScopes || !compact ? scopes : initiallyVisible;
+  const hiddenCount = scopes.length - visibleScopes.length;
+
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-xs font-medium text-foreground">Applies to claim types</legend>
+      <p className="text-2xs leading-5 text-muted-foreground">{description}</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {visibleScopes.map((scope) => {
+          const id = `${idPrefix}-${scope.code}`;
+          const checked = setting.claim_scope_codes.includes(scope.code);
+          return (
+            <label
+              key={scope.code}
+              htmlFor={id}
+              className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-xs text-foreground hover:bg-muted"
+            >
+              <Checkbox
+                id={id}
+                checked={checked}
+                onCheckedChange={(value) => onScope(scope.code, value === true)}
+              />
+              <span className="min-w-0 flex-1">{scope.label}</span>
+              {recommendedScopeCodes.includes(scope.code) && (
+                <span className="text-2xs text-muted-foreground">Suggested</span>
+              )}
+            </label>
+          );
+        })}
+      </div>
+      {hiddenCount > 0 && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => setShowOtherScopes(true)}
+        >
+          <Plus className="size-3.5" aria-hidden />
+          Show {hiddenCount} other claim type{hiddenCount === 1 ? "" : "s"}
+        </Button>
+      )}
+    </fieldset>
+  );
+}
+
 function SettingEditor({
   setting,
   wording,
   scopes,
+  recommendedScopeCodes = [],
   sourceChanged = false,
   onChange,
   onScope,
@@ -89,6 +226,7 @@ function SettingEditor({
   setting: ClaimLimitSetting;
   wording: string | null;
   scopes: ClaimLimitScope[];
+  recommendedScopeCodes?: string[];
   sourceChanged?: boolean;
   onChange: (next: ClaimLimitSetting) => void;
   onScope?: (scopeCode: string, checked: boolean) => void;
@@ -202,31 +340,15 @@ function SettingEditor({
 
       <div className="space-y-3">
         {onScope && scopes.length > 0 && (
-          <fieldset className="space-y-2">
-            <legend className="text-xs font-medium text-foreground">Applies to claim types</legend>
-            <p className="text-2xs text-muted-foreground">
-              Select every claim type that should draw from this benefit line.
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {scopes.map((scope) => {
-                const id = `claim-limit-${scope.code}`;
-                const checked = setting.claim_scope_codes.includes(scope.code);
-                return (
-                  <label
-                    key={scope.code}
-                    htmlFor={id}
-                    className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-xs text-foreground hover:bg-muted"
-                  >
-                    <Checkbox
-                      id={id}
-                      checked={checked}
-                      onCheckedChange={(value) => onScope(scope.code, value === true)}
-                    />
-                    <span>{scope.label}</span>
-                  </label>
-                );
-              })}
-            </div>
+          <div className="space-y-2">
+            <ScopePicker
+              idPrefix="claim-limit"
+              setting={setting}
+              scopes={scopes}
+              recommendedScopeCodes={recommendedScopeCodes}
+              description="Select every claim type that should draw from this annual balance."
+              onScope={onScope}
+            />
             {missingRequiredScope && (
               <p
                 id="claim-limit-scope-note"
@@ -235,7 +357,7 @@ function SettingEditor({
                 Choose at least one claim type before verifying this setting.
               </p>
             )}
-          </fieldset>
+          </div>
         )}
 
         <div className="flex flex-wrap gap-2">
@@ -290,7 +412,103 @@ function SettingEditor({
   );
 }
 
-export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
+function GuidanceRoutingEditor({
+  setting,
+  wording,
+  scopes,
+  recommendedScopeCodes,
+  sourceChanged,
+  onScope,
+  onUseSource,
+  onConfirm,
+  onNoMapping,
+}: {
+  setting: ClaimLimitSetting;
+  wording: string | null;
+  scopes: ClaimLimitScope[];
+  recommendedScopeCodes: string[];
+  sourceChanged: boolean;
+  onScope: (scopeCode: string, checked: boolean) => void;
+  onUseSource: () => void;
+  onConfirm: () => void;
+  onNoMapping: () => void;
+}) {
+  const missingScope = setting.claim_scope_codes.length === 0;
+
+  return (
+    <div className="grid gap-4 border-t border-border bg-muted/20 px-3 py-4 lg:grid-cols-[minmax(12rem,0.8fr)_minmax(18rem,1.2fr)]">
+      <div className="space-y-3">
+        <div>
+          <p className="text-xs font-medium text-foreground">Where this guidance appears</p>
+          <p className="mt-1 text-2xs leading-5 text-muted-foreground">
+            This mapping shows the wording to assessors for the selected claim
+            types. It never creates a balance or blocks approval.
+          </p>
+        </div>
+        {wording && (
+          <p className="text-xs leading-5 text-muted-foreground">
+            SoB wording: <span className="text-foreground">{wording}</span>
+          </p>
+        )}
+        {sourceChanged && (
+          <div
+            id="guidance-source-changed-note"
+            className="space-y-2 rounded-md border border-warn/30 bg-warn/10 p-3 text-xs leading-5 text-foreground"
+          >
+            <p className="font-medium">The SoB wording changed after this mapping was saved.</p>
+            <p>
+              Adopt the updated wording before confirming where this guidance appears.
+            </p>
+            <Button type="button" size="sm" variant="outline" onClick={onUseSource}>
+              <RefreshCw className="size-3.5" aria-hidden />
+              Use updated SoB value
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <ScopePicker
+          idPrefix="claim-guidance"
+          setting={setting}
+          scopes={scopes}
+          recommendedScopeCodes={recommendedScopeCodes}
+          description="Start with the suggested claim type. Add another only when this benefit line is genuinely shared."
+          onScope={onScope}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={onConfirm}
+            disabled={missingScope || sourceChanged}
+            aria-describedby={sourceChanged ? "guidance-source-changed-note" : undefined}
+          >
+            <CheckCircle2 className="size-3.5" aria-hidden />
+            Confirm claim mapping
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={onNoMapping}>
+            No claim type mapping
+          </Button>
+        </div>
+        {missingScope && (
+          <p className="text-2xs leading-5 text-muted-foreground">
+            Select a claim type, or explicitly confirm that this wording does
+            not belong to a member claim type.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ClaimLimitEditor({
+  sob,
+  plans,
+  productCode,
+  claimScopes,
+  setSob,
+}: Props) {
   const [planCode, setPlanCode] = useState(plans[0]?.code ?? "");
   const [editing, setEditing] = useState<EditTarget>(null);
   const [addLine, setAddLine] = useState("");
@@ -415,7 +633,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
     string,
     { item: SobItemAnswer; setting: ClaimLimitSetting; sourceChanged: boolean }
   >();
-  for (const { item, setting, sourceChanged } of configuredState) {
+  for (const { item, setting, sourceChanged } of annualConfiguredState) {
     for (const scope of setting.claim_scope_codes) {
       mappedByScope.set(scope, { item, setting, sourceChanged });
     }
@@ -518,8 +736,9 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
           </h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
             Set only annual SGD balances that employees can track and claim
-            approval can enforce. Visit caps, co-payments and other conditions
-            remain visible as policy wording below.
+            approval can enforce. Per-visit amounts, visit counts, co-payments
+            and as-charged conditions remain assessment guidance below and
+            never block approval.
           </p>
         </div>
         <div className="w-full sm:w-64">
@@ -607,6 +826,12 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
 
         {annualConfiguredState.map(({ item, setting, source, sourceChanged }) => {
           const wording = source.wording;
+          const benefitScopes = claimScopesForBenefit(
+            productCode,
+            item,
+            setting,
+            claimScopes,
+          );
           return (
             <div key={item.uid}>
               <div className="grid items-center gap-2 px-3 py-3 md:grid-cols-[minmax(12rem,1fr)_minmax(11rem,0.7fr)_auto_auto]">
@@ -643,7 +868,8 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                 <SettingEditor
                   setting={setting}
                   wording={wording}
-                  scopes={claimScopes}
+                  scopes={benefitScopes.scopes}
+                  recommendedScopeCodes={benefitScopes.recommendedScopeCodes}
                   sourceChanged={sourceChanged}
                   onChange={(next) => setItem(item.uid, next)}
                   onScope={(scope, checked) => assignScope(item.uid, scope, checked)}
@@ -706,11 +932,11 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
       {policyRows.length > 0 && (
         <div className="border-t border-border">
           <div className="bg-muted/20 px-3 py-3">
-            <p className="text-xs font-medium text-foreground">Policy wording</p>
+            <p className="text-xs font-medium text-foreground">Assessment guidance</p>
             <p className="mt-1 text-2xs leading-5 text-muted-foreground">
-              Visit limits, co-payments and hospital qualifiers appear in the
-              employee Schedule of Benefits, but do not create a remaining
-              balance. Edit their values in the benefit table above.
+              These conditions help assessors review a claim but do not create
+              a remaining balance or block approval. Edit the wording in the
+              benefit table above.
             </p>
           </div>
           <div className="divide-y divide-border">
@@ -719,6 +945,19 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                 configuredEntry && !isAnnualBalance(configuredEntry.setting)
                   ? configuredEntry
                   : null;
+              const benefitScopes = policySetting
+                ? claimScopesForBenefit(
+                    productCode,
+                    item,
+                    policySetting.setting,
+                    claimScopes,
+                  )
+                : null;
+              const mappingNeedsReview = Boolean(
+                policySetting &&
+                  (policySetting.sourceChanged ||
+                    policySetting.setting.status === "needs_review"),
+              );
               return (
                 <div key={item.uid}>
                   <div className="grid gap-2 px-3 py-3 md:grid-cols-[minmax(12rem,0.7fr)_minmax(18rem,1.3fr)_auto_auto] md:items-center">
@@ -732,20 +971,12 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                         </span>
                       ))}
                     </div>
-                    <Badge
-                      variant={
-                        policySetting?.sourceChanged
-                          ? "warn"
-                          : policySetting
-                            ? statusVariant(policySetting.setting)
-                            : "default"
-                      }
-                    >
-                      {policySetting?.sourceChanged
-                        ? "SoB changed · review"
-                        : policySetting
-                          ? statusLabel(policySetting.setting)
-                          : "Shown in SoB · no balance"}
+                    <Badge variant={mappingNeedsReview ? "warn" : "default"}>
+                      {!policySetting
+                        ? "Guidance · non-blocking"
+                        : mappingNeedsReview
+                          ? "Claim mapping needs review"
+                          : "Guidance mapping confirmed"}
                     </Badge>
                     {policySetting ? (
                       <Button
@@ -756,19 +987,21 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                           setEditing(editing === item.uid ? null : item.uid)
                         }
                       >
-                        Review routing
+                        {mappingNeedsReview
+                          ? "Review claim mapping"
+                          : "Edit claim mapping"}
                       </Button>
                     ) : (
                       <span aria-hidden />
                     )}
                   </div>
-                  {policySetting && editing === item.uid && (
-                    <SettingEditor
+                  {policySetting && benefitScopes && editing === item.uid && (
+                    <GuidanceRoutingEditor
                       setting={policySetting.setting}
                       wording={policySetting.source.wording}
-                      scopes={claimScopes}
+                      scopes={benefitScopes.scopes}
+                      recommendedScopeCodes={benefitScopes.recommendedScopeCodes}
                       sourceChanged={policySetting.sourceChanged}
-                      onChange={(next) => setItem(item.uid, next)}
                       onScope={(scope, checked) =>
                         assignScope(item.uid, scope, checked)
                       }
@@ -781,6 +1014,31 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                           ),
                         )
                       }
+                      onConfirm={() => {
+                        setItem(item.uid, {
+                          ...policySetting.setting,
+                          amount: null,
+                          display:
+                            policySetting.source.wording?.trim() ||
+                            policySetting.setting.display,
+                          source: "manual",
+                          status: "not_limit",
+                        });
+                        setEditing(null);
+                      }}
+                      onNoMapping={() => {
+                        setItem(item.uid, {
+                          ...policySetting.setting,
+                          amount: null,
+                          display:
+                            policySetting.source.wording?.trim() ||
+                            policySetting.setting.display,
+                          claim_scope_codes: [],
+                          source: "manual",
+                          status: "not_limit",
+                        });
+                        setEditing(null);
+                      }}
                     />
                   )}
                 </div>

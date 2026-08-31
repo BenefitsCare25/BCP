@@ -249,13 +249,22 @@ def resolve_family_status(
     return None, "none"
 
 
+def nationality_country_exact(nationality: object) -> str | None:
+    """Normalize one exact country/nationality alias, or return ``None``."""
+
+    s = " ".join(str(nationality or "").strip().lower().split())
+    if not s:
+        return None
+    return _NATIONALITY_COUNTRY.get(s)
+
+
 def nationality_country(nationality: object) -> str | None:
     """Normalize a nationality string to a country token, or None."""
     s = str(nationality or "").strip().lower()
     if not s:
         return None
-    if s in _NATIONALITY_COUNTRY:
-        return _NATIONALITY_COUNTRY[s]
+    if exact := nationality_country_exact(s):
+        return exact
     for token, country in _NATIONALITY_COUNTRY.items():
         if token in s:
             return country

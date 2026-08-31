@@ -472,8 +472,9 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   const editor = page.getByRole("region", { name: "Annual balances" });
   await expect(editor).toBeVisible();
   await expect(editor).toContainText(
-    "Visit caps, co-payments and other conditions remain visible as policy wording below.",
+    "Per-visit amounts, visit counts, co-payments and as-charged conditions remain assessment guidance below and never block approval.",
   );
+  await expect(editor.getByRole("button", { name: "Review routing" })).toHaveCount(0);
 
   const overallButton = editor
     .getByRole("button", { name: /Set annual balance|Edit/ })
@@ -557,14 +558,24 @@ test("broker can review plan and line mappings from the SoB editor", async ({
     await editor
       .getByRole("button", { name: "Use updated SoB value" })
       .click();
-    await expect(
-      editor.getByRole("combobox", { name: "How claims use this rule" }),
-    ).toContainText("Other policy wording");
+    await expect(editor).toContainText("Assessment guidance");
+    await expect(editor).toContainText("Claim mapping needs review");
+    await expect(editor).toContainText("5 visits");
+    await expect(editor.getByRole("button", { name: "Review routing" })).toHaveCount(0);
+    if (!(await editor.getByText("Where this guidance appears").isVisible())) {
+      await editor.getByRole("button", { name: "Review claim mapping" }).click();
+    }
+    await expect(editor).toContainText("Where this guidance appears");
+    await expect(editor.getByRole("checkbox")).toHaveCount(1);
+    await expect(editor.getByRole("checkbox").first()).toBeChecked();
     await expect(
       editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }),
     ).toHaveCount(0);
-    await editor.getByRole("button", { name: "Save policy wording" }).click();
-    await expect(editor).toContainText("Verified · policy wording");
+    await expect(
+      editor.getByRole("combobox", { name: "How claims use this rule" }),
+    ).toHaveCount(0);
+    await editor.getByRole("button", { name: "Confirm claim mapping" }).click();
+    await expect(editor).toContainText("Guidance mapping confirmed");
     await expect(editor).not.toContainText("SGD 5");
   }
 
@@ -576,6 +587,18 @@ test("broker can review plan and line mappings from the SoB editor", async ({
     const firstLabel = (await options.first().textContent())?.trim() ?? "";
     await options.first().click();
     await editor.getByRole("button", { name: "Add annual balance" }).click();
+    if (testInfo.project.name === "mobile-chromium") {
+      await expect(editor.getByRole("checkbox")).toHaveCount(1);
+      await expect(editor.getByText("GP (General Practitioner)")).toBeVisible();
+      await expect(editor.getByText("TCM (Traditional Chinese Medicine)")).toHaveCount(0);
+      await expect(editor.getByText("Physiotherapy", { exact: true })).toHaveCount(0);
+      await editor
+        .getByRole("button", { name: "Show 2 other claim types" })
+        .click();
+      await expect(editor.getByRole("checkbox")).toHaveCount(3);
+      await expect(editor.getByText("TCM (Traditional Chinese Medicine)")).toBeVisible();
+      await expect(editor.getByText("Physiotherapy", { exact: true })).toBeVisible();
+    }
     await editor.getByRole("checkbox").first().click();
     const lineBasis = editor
       .getByRole("combobox", { name: "How claims use this rule" })

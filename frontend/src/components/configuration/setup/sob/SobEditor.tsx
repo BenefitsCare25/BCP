@@ -19,6 +19,7 @@ import { ClaimLimitEditor } from "./ClaimLimitEditor";
 
 interface Props {
   sob: SobSchedule;
+  productCode: string;
   // Selected basis-of-cover plans (for the column → plan mapping + labels).
   plans: PlanAnswer[];
   // Optional second value axis (dental Panel/Non-Panel). When set, each row
@@ -43,6 +44,7 @@ const FILTER_THRESHOLD = 12;
  */
 export function SobEditor({
   sob,
+  productCode,
   plans,
   columnAxis = [],
   claimScopes = [],
@@ -186,6 +188,7 @@ export function SobEditor({
         <ClaimLimitEditor
           sob={sob}
           plans={plans}
+          productCode={productCode}
           claimScopes={claimScopes}
           setSob={setSob}
         />

@@ -695,6 +695,7 @@ export function ProductSetupForm({
 
         <ScheduleOfBenefitsSection
           sob={answers.sob ?? { columns: [], items: [] }}
+          productCode={template.code}
           plans={selectedPlans}
           columnAxis={template.column_axis}
           claimScopes={template.claim_scopes ?? []}

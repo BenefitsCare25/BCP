@@ -34,6 +34,7 @@ from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.schemas.api import AttributeSchemaOut
 from app.services.derivation_engine import derive, resolve_attribute_schemas
+from app.services.flex_membership import nationality_country_exact
 from app.services.matching_engine import (
     _entity_allows,
     category_insured_entities,
@@ -70,6 +71,7 @@ _BASED_IN_RE = re.compile(
     r"\bbased\s+in\s+([^()]+?)(?=\s*(?:\(\s*)?(?:excluding|except)\b|\s*\(|$)",
     re.IGNORECASE,
 )
+_LOCATION_ALIAS_SEPARATOR_RE = re.compile(r"\s*(?:,|/|;|&|\band\b)\s*", re.IGNORECASE)
 _ALL_EMPLOYEES_RE = re.compile(r"^all\s+(?:employees?|staff|members?)$", re.IGNORECASE)
 _ALL_OTHER_RE = re.compile(r"^all\s+other\s+(?:employees?|staff|members?)\b", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -391,16 +393,114 @@ def _catalog_attribute(catalog: AttributeValueCatalog, candidates: tuple[str, ..
     )
 
 
+def _location_aliases(country_text: str) -> list[str]:
+    """Return the complete set of explicitly named location clauses."""
+
+    return [
+        piece.strip(" .")
+        for piece in _LOCATION_ALIAS_SEPARATOR_RE.split(country_text.strip())
+        if piece.strip(" .")
+    ]
+
+
+def _complete_location_value_mapping(
+    country_text: str,
+    catalog: AttributeValueCatalog,
+    *,
+    allowed: tuple[str, ...],
+) -> tuple[str | None, list[Any]]:
+    """Map a location only when the entire phrase is represented.
+
+    Generic phrase matching is intentionally unsafe here: it can turn
+    ``Thailand and Myanmar`` into a Thailand-only rule. A location attribute
+    may either contain the complete phrase as one roster value or contain an
+    exact value for every explicitly separated location.
+    """
+
+    whole_tokens = _tokens(country_text)
+    aliases = _location_aliases(country_text)
+    if not whole_tokens or not aliases:
+        return None, []
+
+    candidates: list[tuple[int, str, list[Any]]] = []
+    for order, attribute_id in enumerate(allowed):
+        if catalog.data_types.get(attribute_id) not in {None, "string", "enum"}:
+            continue
+        catalog_values = catalog.values.get(attribute_id, [])
+        whole_matches = [value for value in catalog_values if _tokens(value) == whole_tokens]
+        if whole_matches:
+            candidates.append((order, attribute_id, [whole_matches[0]]))
+            continue
+
+        matched_values: list[Any] = []
+        complete = True
+        for alias in aliases:
+            alias_tokens = _tokens(alias)
+            match = next(
+                (value for value in catalog_values if _tokens(value) == alias_tokens),
+                None,
+            )
+            if match is None:
+                complete = False
+                break
+            if match not in matched_values:
+                matched_values.append(match)
+        if complete and matched_values:
+            candidates.append((order, attribute_id, matched_values))
+
+    if not candidates:
+        return None, []
+    _, attribute_id, values = min(candidates)
+    return attribute_id, values
+
+
+def _exact_location_countries(country_text: str) -> list[str] | None:
+    """Normalize every named location, rejecting partial/ambiguous text."""
+
+    aliases = _location_aliases(country_text)
+    countries = [nationality_country_exact(alias) for alias in aliases]
+    if not aliases or not all(countries):
+        return None
+    return list(dict.fromkeys(country for country in countries if country))
+
+
 def _location_value_mapping(
     country_text: str, catalog: AttributeValueCatalog
 ) -> tuple[str | None, list[Any], bool]:
     """Resolve work location, falling back to a review-only nationality proxy."""
 
-    attribute_id, values = _best_value_mapping(country_text, catalog, allowed=_WORK_LOCATION_ATTRS)
+    attribute_id, values = _complete_location_value_mapping(
+        country_text, catalog, allowed=_WORK_LOCATION_ATTRS
+    )
     if attribute_id and values:
         return attribute_id, values, False
-    attribute_id, values = _best_value_mapping(country_text, catalog, allowed=_NATIONALITY_ATTRS)
-    return attribute_id, values, bool(attribute_id and values)
+    attribute_id, values = _complete_location_value_mapping(
+        country_text, catalog, allowed=_NATIONALITY_ATTRS
+    )
+    if attribute_id and values:
+        return attribute_id, values, True
+
+    # A slip names a country ("Thailand") while employee listings commonly use
+    # the nationality adjective ("Thai").  Match on the normalized country but
+    # keep the exact roster literal in the generated rule so rule evaluation is
+    # deterministic.  The alias solves only the literal mismatch; nationality
+    # remains a review-only proxy for work location.
+    countries = _exact_location_countries(country_text)
+    if countries:
+        wanted = set(countries)
+        for nationality_attr in _NATIONALITY_ATTRS:
+            nationality_values = catalog.values.get(nationality_attr, [])
+            semantic_matches = [
+                value
+                for value in nationality_values
+                if nationality_country_exact(value) in wanted
+            ]
+            matched_countries = {
+                nationality_country_exact(value) for value in semantic_matches
+            }
+            if semantic_matches and matched_countries == wanted:
+                return nationality_attr, semantic_matches, True
+    return None, [], False
 
 
 def _alpha_rank(value: str) -> int:
@@ -1225,6 +1325,37 @@ def normalize_ai_matching_rule(
             location_match.group(1), catalog
         )
         if location_attr and location_values:
+            if location_attr in _NATIONALITY_ATTRS:
+                expected_countries = set(
+                    _exact_location_countries(location_match.group(1)) or []
+                )
+
+                def normalize_nationality_literal(node: Any) -> Any:
+                    if not isinstance(node, dict) or len(node) != 1:
+                        return node
+                    operator, args = next(iter(node.items()))
+                    if operator in {"and", "or"} and isinstance(args, list):
+                        return {
+                            operator: [normalize_nationality_literal(child) for child in args]
+                        }
+                    if operator == "not" and isinstance(args, dict):
+                        return {operator: normalize_nationality_literal(args)}
+                    if (
+                        operator in {"=", "==", "in"}
+                        and isinstance(args, list)
+                        and len(args) == 2
+                        and args[0] == location_attr
+                    ):
+                        raw_values = args[1] if isinstance(args[1], list) else [args[1]]
+                        countries = {
+                            nationality_country_exact(value) for value in raw_values
+                        }
+                        if expected_countries and countries == expected_countries:
+                            return _rule_for_values(location_attr, location_values)
+                    return node
+
+                normalized = normalize_nationality_literal(normalized)
+
             source_allowed = _source_allowed_values(description, catalog)
             current = validate_matching_rule(normalized, catalog, allowed_values=source_allowed)
             if location_attr not in current.referenced_attributes:
