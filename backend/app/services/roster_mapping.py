@@ -197,9 +197,14 @@ def inspect_employee_mapping(
             RosterMappingProfile.fingerprint == fingerprint,
         )
     ).scalar_one_or_none()
-    profile_mapping = profile.column_mapping if profile is not None else {}
+    profile_mapping: dict[str, str | None] = {}
+    if profile is not None:
+        profile_mapping = {
+            str(key): value if isinstance(value, str) else None
+            for key, value in (profile.column_mapping or {}).items()
+        }
     explicit = override is not None
-    selected = override if explicit else profile_mapping
+    selected: dict[str, str | None] = override if override is not None else profile_mapping
     automatic = _build_column_map(sheet.rows[0], EMPLOYEE_COLUMN_MAP)
     dynamic_aliases = _dynamic_aliases(schemas)
     labels = {attribute.attribute_id: attribute.display_name for attribute in attributes}
