@@ -5,6 +5,7 @@ through Gemini, forcing structured output via a tool call. Returns the same
 RuleEnvelope shape that the deterministic generator emits, so downstream
 consumers don't branch.
 """
+
 from __future__ import annotations
 
 import json
@@ -39,6 +40,7 @@ def _dict_list(value: object) -> list[dict[str, Any]]:
         return []
     return [item for item in value if isinstance(item, dict)]
 
+
 _DEPENDANT_CLAUSE_TERMS = frozenset(
     {
         "and",
@@ -66,6 +68,7 @@ def _is_plan_assignment_clause(value: str) -> bool:
     """Return true when an unresolved phrase only describes dependant cover."""
     tokens = set(re.findall(r"[a-z]+", value.lower()))
     return bool(tokens & _DEPENDANT_TERMS) and tokens <= _DEPENDANT_CLAUSE_TERMS
+
 
 SYSTEM_PROMPT = """You are an expert at converting insurance category eligibility \
 descriptions into structured JSONLogic predicates.
@@ -114,18 +117,26 @@ the server converts to JSONLogic after validation:
 - When no safe rule can be derived, return rule=null.
 
 Rules:
-- Use only provided attributes and company values. Never invent a job title,
+- Use only provided attributes and company values, plus exact grade/category
+  codes supplied in `authoritative_source_values`. Never invent a job title,
   grade, enum value, hierarchy, or eligibility condition.
 - When an employee listing is available, every rule field must have populated
-  employee values. A configured-but-empty field is unavailable.
+  employee values. A configured-but-empty field is unavailable. Exact codes in
+  `authoritative_source_values` are the exception: include the complete stated
+  range even when a code currently has no active employee.
+- Preserve the authoritative wording's order for explicit category-code lists
+  and closed ranges.
 - Without an employee listing, configured fields may support an unvalidated
   proposal, but the reasoning must state that employee validation is pending.
 - The authoritative category wording controls. Sibling categories are context,
   not authority for the target.
 - `based in`, `working in`, and office-location wording must use a populated
   work-location attribute (for example country_of_work or location_description),
-  never nationality. Use nationality only when the authoritative wording says
-  nationality, citizenship, national, or citizen.
+  when one exists. If no work-location attribute is available but a populated
+  nationality attribute contains the stated country, use nationality as a
+  review-only proxy and list that proxy assumption in `unresolved_clauses`.
+  Wording that explicitly says nationality, citizenship, national, or citizen
+  uses nationality directly without that proxy warning.
 - Use cost-centre attributes only when the wording explicitly names a cost
   centre/center or one of its provided values. Never assume a cost centre is a
   work location without a configured work-location derivation.
@@ -230,8 +241,7 @@ def _build_ai_client(cfg: AIConfig, *, timeout: float) -> Any:
     """
     if cfg.provider != "vertex":
         raise AINotConfiguredError(
-            f"Unsupported AI provider {cfg.provider!r}; only 'vertex' (Gemini) "
-            "is supported."
+            f"Unsupported AI provider {cfg.provider!r}; only 'vertex' (Gemini) is supported."
         )
     from app.services.vertex_gemini import build_gemini_client
 
@@ -331,7 +341,11 @@ def _condition_to_jsonlogic(condition: Any, data_types: dict[str, str]) -> dict[
     data_type = data_types[attribute]
     if operator in {"in", "not_in"}:
         values = condition.get("values")
-        if not isinstance(values, list) or not values or not all(isinstance(v, str) for v in values):
+        if (
+            not isinstance(values, list)
+            or not values
+            or not all(isinstance(v, str) for v in values)
+        ):
             raise ValueError(f"Operator {operator} requires string values")
         return {operator: [attribute, [_coerce_ai_condition_value(v, data_type) for v in values]]}
     if operator == "between":
@@ -447,9 +461,7 @@ def generate_rule_via_ai(
 
     raw_payload = tool_use.input
     if not isinstance(raw_payload, dict):
-        raise AIParseError(
-            f"AI tool_use payload is not a dict (got {type(raw_payload).__name__})"
-        )
+        raise AIParseError(f"AI tool_use payload is not a dict (got {type(raw_payload).__name__})")
     payload: dict[str, Any] = raw_payload
 
     try:
@@ -486,9 +498,7 @@ def generate_rule_via_ai(
         "output_tokens": getattr(response.usage, "output_tokens", None),
         "reasoning": reasoning[:1024],
         "unresolved_clauses": [
-            value[:512]
-            for value in unresolved
-            if not _is_plan_assignment_clause(value)
+            value[:512] for value in unresolved if not _is_plan_assignment_clause(value)
         ][:20],
     }
     return envelope, metadata
@@ -840,9 +850,7 @@ def recommend_schema_via_ai(
     )
 
     if response.stop_reason == "max_tokens":
-        raise AIParseError(
-            "AI response truncated (max_tokens) — too many categories for one pass."
-        )
+        raise AIParseError("AI response truncated (max_tokens) — too many categories for one pass.")
 
     tool_use = next((b for b in response.content if isinstance(b, ToolUseBlock)), None)
     if tool_use is None:
@@ -940,8 +948,12 @@ SLIP_EXTRACT_TOOL_SCHEMA: dict[str, Any] = {
                         "rate_basis": {
                             "type": "string",
                             "enum": [
-                                "per_1000_si", "per_member", "tiered",
-                                "flat", "annual_flat", "earnings_based",
+                                "per_1000_si",
+                                "per_member",
+                                "tiered",
+                                "flat",
+                                "annual_flat",
+                                "earnings_based",
                             ],
                         },
                         "estimated_annual_earnings": {"type": "number"},
@@ -1344,10 +1356,7 @@ def _build_flex_prompt(text: str) -> str:
         if body
         else "The document content is in the attached image(s).\n\n"
     )
-    return (
-        doc_block
-        + "Call emit_flex_scheme with the normalized Flexible-Benefits scheme."
-    )
+    return doc_block + "Call emit_flex_scheme with the normalized Flexible-Benefits scheme."
 
 
 def extract_flex_scheme_via_ai(

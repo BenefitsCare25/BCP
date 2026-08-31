@@ -2,6 +2,7 @@
 
 PATCH flips `source` to manual and sets `human_modified=true`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,6 +46,7 @@ from app.services.eligibility_mapping import (
     assess_category_rule,
     build_ai_eligibility_inputs,
     confirm_category_mapping,
+    normalize_ai_matching_rule,
     validate_ai_matching_rule,
 )
 
@@ -147,9 +149,7 @@ def create_category(
     the rule editor). New categories land as ``needs_review`` so they surface for
     confirmation, mirroring slip-parsed rows.
     """
-    assert_policy_year_editable(
-        assert_policy_year_for_user(payload.policy_year_id, user, db)
-    )
+    assert_policy_year_editable(assert_policy_year_for_user(payload.policy_year_id, user, db))
     if payload.product_id is not None:
         product = db.execute(
             select(Product).where(
@@ -185,7 +185,11 @@ def create_category(
     db.add(cat)
     db.flush()
     write_audit(
-        db, user, action="create", entity_type="category", entity_id=cat.id,
+        db,
+        user,
+        action="create",
+        entity_type="category",
+        entity_id=cat.id,
         after={"display_name": name[:512], "product_id": payload.product_id},
     )
     db.commit()
@@ -219,9 +223,7 @@ def patch_category(
         # generated rules before it can be confirmed/reused. Detach it from the
         # previous reusable profile so an unconfirmed edit never mutates memory.
         c.mapping_profile_id = None
-        c.rule_status = (
-            "unmapped" if c.matching_rule is None else "needs_review"
-        )
+        c.rule_status = "unmapped" if c.matching_rule is None else "needs_review"
         c.rule_validation = {
             "state": c.rule_status,
             "source": "manual",
@@ -255,9 +257,7 @@ def confirm_category(
     _assert_category_year_editable(db, c)
     before = _to_dict(c)
     try:
-        confirm_category_mapping(
-            db, category=c, client_id=require_client_id(user)
-        )
+        confirm_category_mapping(db, category=c, client_id=require_client_id(user))
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -285,9 +285,7 @@ def bulk_confirm(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    assert_policy_year_editable(
-        assert_policy_year_for_user(policy_year_id, user, db)
-    )
+    assert_policy_year_editable(assert_policy_year_for_user(policy_year_id, user, db))
     rows = (
         db.execute(
             select(Category).where(
@@ -306,9 +304,7 @@ def bulk_confirm(
     for c in rows:
         before = _to_dict(c)
         try:
-            confirm_category_mapping(
-                db, category=c, client_id=require_client_id(user)
-            )
+            confirm_category_mapping(db, category=c, client_id=require_client_id(user))
         except ValueError:
             skipped += 1
             continue
@@ -366,13 +362,9 @@ def bulk_delete_categories(
     Confirmed setups (and their plans) are authoritative and preserved. Writes
     one audit row with the counts — individual `before` snapshots aren't
     recorded (too noisy)."""
-    assert_policy_year_editable(
-        assert_policy_year_for_user(policy_year_id, user, db)
-    )
+    assert_policy_year_editable(assert_policy_year_for_user(policy_year_id, user, db))
     rows = list(
-        db.execute(
-            select(Category).where(Category.policy_year_id == policy_year_id)
-        )
+        db.execute(select(Category).where(Category.policy_year_id == policy_year_id))
         .scalars()
         .all()
     )
@@ -408,9 +400,7 @@ def bulk_delete_categories(
     confirmed_product_ids = (
         {
             p.id
-            for p in db.execute(
-                select(Product).where(Product.code.in_(confirmed_codes))
-            ).scalars()
+            for p in db.execute(select(Product).where(Product.code.in_(confirmed_codes))).scalars()
         }
         if confirmed_codes
         else set()
@@ -466,9 +456,7 @@ def ai_suggest_rule(
     """
     _assert_category_year_editable(db, c)
     client_id = require_client_id(user)
-    schema, context, catalog = build_ai_eligibility_inputs(
-        db, category=c, client_id=client_id
-    )
+    schema, context, catalog = build_ai_eligibility_inputs(db, category=c, client_id=client_id)
 
     try:
         result = generate_rule_for_category(
@@ -494,9 +482,7 @@ def ai_suggest_rule(
     except Exception as exc:
         # Provider messages can echo credentials or prompt data, so record only
         # the exception class and the correlation-scoped category id.
-        logger.error(
-            "AI provider error for category %s (%s)", c.id, type(exc).__name__
-        )
+        logger.error("AI provider error for category %s (%s)", c.id, type(exc).__name__)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
             "AI provider error — see server logs",
@@ -508,7 +494,11 @@ def ai_suggest_rule(
         for value in result.metadata.get("unresolved_clauses", [])
         if isinstance(value, (str, int, float))
     ][:20]
-    validation = validate_ai_matching_rule(c.raw_description, envelope.rule, catalog)
+    matching_rule, normalization_review = normalize_ai_matching_rule(
+        c.raw_description, envelope.rule, catalog
+    )
+    unresolved = list(dict.fromkeys([*unresolved, *normalization_review]))[:20]
+    validation = validate_ai_matching_rule(c.raw_description, matching_rule, catalog)
     if envelope.rule is None:
         reason = str(result.metadata.get("reasoning") or "").strip()
         detail = "No safe suggestion available"
@@ -524,7 +514,7 @@ def ai_suggest_rule(
         )
 
     before = _to_dict(c)
-    c.matching_rule = envelope.rule
+    c.matching_rule = matching_rule
     c.rule_human_readable = envelope.human_readable[:1024]
     c.confidence = envelope.confidence
     c.source = SourceKind.ai_extracted.value
@@ -573,23 +563,18 @@ def coverage_stats(
         select(
             func.count(Category.id),
             func.coalesce(
-                func.sum(
-                    case((Category.status == CategoryStatus.confirmed.value, 1), else_=0)
-                ),
+                func.sum(case((Category.status == CategoryStatus.confirmed.value, 1), else_=0)),
                 0,
             ),
             func.coalesce(
-                func.sum(
-                    case((Category.status == CategoryStatus.needs_review.value, 1), else_=0)
-                ),
+                func.sum(case((Category.status == CategoryStatus.needs_review.value, 1), else_=0)),
                 0,
             ),
             func.coalesce(
                 func.sum(
                     case(
                         (
-                            (Category.confidence.is_not(None))
-                            & (Category.confidence >= 0.85),
+                            (Category.confidence.is_not(None)) & (Category.confidence >= 0.85),
                             1,
                         ),
                         else_=0,

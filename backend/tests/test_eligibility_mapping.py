@@ -38,6 +38,7 @@ from app.services.eligibility_mapping import (
     build_ai_eligibility_inputs,
     category_signature,
     confirm_category_mapping,
+    normalize_ai_matching_rule,
     propose_category_rule,
     validate_ai_matching_rule,
     validate_matching_rule,
@@ -47,6 +48,20 @@ from scripts.seed_demo import seed
 CLIENT_ID = "00000000-0000-0000-0000-00000000e101"
 PY_2026 = "00000000-0000-0000-0000-00000000e126"
 PY_2027 = "00000000-0000-0000-0000-00000000e127"
+GRADE_DESCRIPTION = (
+    "SM and above (Job Category:99, A1 to A9, AA to AG, L1 to L6, E7 to E9, EG to EI, W7 to W9)"
+)
+GRADE_ORDER = [
+    "99",
+    *[f"A{number}" for number in range(1, 10)],
+    *[f"A{letter}" for letter in "ABCDEFG"],
+    *[f"L{number}" for number in range(1, 7)],
+    *[f"E{number}" for number in range(7, 10)],
+    "EG",
+    "EH",
+    "EI",
+    *[f"W{number}" for number in range(7, 10)],
+]
 
 
 def _user() -> CurrentUser:
@@ -294,7 +309,7 @@ def test_based_in_country_uses_work_location_not_nationality() -> None:
     assert proposal.unresolved_clauses == []
 
 
-def test_based_in_country_does_not_fall_back_to_nationality() -> None:
+def test_based_in_country_uses_reviewed_nationality_proxy_as_last_resort() -> None:
     proposal = propose_category_rule(
         "Officer and All Employees based in Thailand (except for Director) "
         "(Job Category: J1 to J3, JA to JC)",
@@ -306,12 +321,160 @@ def test_based_in_country_does_not_fall_back_to_nationality() -> None:
     )
 
     assert proposal.rule == {
-        "in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"=": ["nationality", "Thailand"]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
     }
-    assert "based in Thailand" in proposal.unresolved_clauses
+    assert proposal.unresolved_clauses == [
+        "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
 
 
-def test_location_only_category_never_uses_nationality() -> None:
+def test_ai_rule_restores_safe_country_branch_when_model_omits_it() -> None:
+    description = (
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)"
+    )
+    catalog = _catalog(
+        job_category=["J2", "J3", "JB", "J1", "JC", "JA", "D1"],
+        nationality=["Singapore", "Thailand"],
+        executive_role=["DIRECTOR", "EMPLOYEE"],
+    )
+
+    normalized, review_clauses = normalize_ai_matching_rule(
+        description,
+        {"in": ["job_category", ["J2", "J3", "JB", "J1", "JC", "JA"]]},
+        catalog,
+    )
+
+    assert normalized == {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {
+                "and": [
+                    {"=": ["nationality", "Thailand"]},
+                    {"not_in": ["executive_role", ["DIRECTOR"]]},
+                ]
+            },
+        ]
+    }
+    assert review_clauses == [
+        "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
+
+
+def test_ai_location_merge_preserves_every_existing_constraint() -> None:
+    description = "Permanent female employees based in Thailand"
+    catalog = _catalog(
+        employment_type=["Permanent", "Contract"],
+        gender=["Female", "Male"],
+        nationality=["Singapore", "Thailand"],
+    )
+    ai_rule = {
+        "and": [
+            {"=": ["employment_type", "Permanent"]},
+            {"=": ["gender", "Female"]},
+        ]
+    }
+
+    normalized, review_clauses = normalize_ai_matching_rule(
+        description, ai_rule, catalog
+    )
+
+    assert normalized == {
+        "and": [
+            {"=": ["employment_type", "Permanent"]},
+            {"=": ["gender", "Female"]},
+            {"=": ["nationality", "Thailand"]},
+        ]
+    }
+    assert review_clauses == [
+        "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
+
+
+def test_explicit_job_category_ranges_are_complete_and_source_ordered() -> None:
+    observed = [
+        "A3",
+        "A1",
+        "W9",
+        "E7",
+        "E9",
+        "A4",
+        "EH",
+        "A8",
+        "E8",
+        "L4",
+        "EG",
+        "A7",
+        "L6",
+        "A2",
+        "L2",
+        "W8",
+        "A9",
+        "W7",
+        "A6",
+        "A5",
+        "AA",
+        "99",
+        "L5",
+        "L3",
+        "L1",
+    ]
+    catalog = _catalog(job_category=observed)
+
+    proposal = propose_category_rule(GRADE_DESCRIPTION, catalog)
+
+    assert proposal.rule == {"in": ["job_category", GRADE_ORDER]}
+    assert proposal.unresolved_clauses == []
+    validation = validate_ai_matching_rule(GRADE_DESCRIPTION, proposal.rule, catalog)
+    assert validation.valid is True
+    assert validation.errors == []
+    assert validation.warnings == [
+        f"Configured value {value} has no active employees in job_category"
+        for value in ["AB", "AC", "AD", "AE", "AF", "AG", "EI"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("range_text", "catalog_values"),
+    [
+        ("1 to 201", ["1", "201"]),
+        ("A to GS", ["A", "GS"]),
+    ],
+)
+def test_explicit_job_category_range_over_limit_stays_unresolved(
+    range_text: str, catalog_values: list[str]
+) -> None:
+    proposal = propose_category_rule(
+        f"Employees (Job Category: {range_text})",
+        _catalog(job_category=catalog_values),
+    )
+
+    assert proposal.rule is None
+    assert proposal.unresolved_clauses == [range_text]
+
+
+def test_ai_job_category_rule_is_completed_and_ordered_from_source() -> None:
+    catalog = _catalog(job_category=["A3", "A1", "W9", "EG", "AA", "99"])
+
+    normalized, review_clauses = normalize_ai_matching_rule(
+        GRADE_DESCRIPTION,
+        {"in": ["job_category", ["A3", "A1", "W9", "EG", "AA", "99"]]},
+        catalog,
+    )
+
+    assert normalized == {"in": ["job_category", GRADE_ORDER]}
+    assert review_clauses == []
+
+
+def test_location_only_category_prefers_work_location_then_nationality_proxy() -> None:
     mapped = propose_category_rule(
         "All Employees based in Thailand",
         _catalog(
@@ -326,8 +489,10 @@ def test_location_only_category_never_uses_nationality() -> None:
 
     assert mapped.rule == {"=": ["country_of_work", "Thailand"]}
     assert mapped.unresolved_clauses == []
-    assert unresolved.rule is None
-    assert unresolved.unresolved_clauses == ["based in Thailand"]
+    assert unresolved.rule == {"=": ["nationality", "Thailand"]}
+    assert unresolved.unresolved_clauses == [
+        "based in Thailand mapped through nationality; confirm nationality represents work base"
+    ]
 
 
 def test_explicit_nationality_uses_only_nationality_field() -> None:
@@ -365,9 +530,7 @@ def test_matching_rule_validation_rejects_unknown_or_empty_attributes() -> None:
     assert unknown.valid is False
     assert unknown.errors == ["Unknown employee attribute: job_band"]
     assert empty.valid is False
-    assert empty.errors == [
-        "Employee attribute pass has no values in the employee listing"
-    ]
+    assert empty.errors == ["Employee attribute pass has no values in the employee listing"]
     assert valid.valid is True
     assert valid.errors == []
 
@@ -381,25 +544,17 @@ def test_matching_rule_validation_rejects_hallucinated_company_values() -> None:
 
     catalog = _catalog(designation=["Manager", "Executive"])
 
-    result = validate_matching_rule(
-        {"in": ["designation", ["Manager", "Chief Wizard"]]}, catalog
-    )
+    result = validate_matching_rule({"in": ["designation", ["Manager", "Chief Wizard"]]}, catalog)
 
     assert result.valid is False
-    assert result.errors == [
-        "Unknown company value for designation: Chief Wizard"
-    ]
+    assert result.errors == ["Unknown company value for designation: Chief Wizard"]
 
 
 def test_ai_rule_cannot_silently_expand_specific_wording_to_everyone() -> None:
     catalog = _catalog(designation=["Manager", "Executive"])
 
-    specific = validate_ai_matching_rule(
-        "Managers only", {"and": []}, catalog
-    )
-    explicit = validate_ai_matching_rule(
-        "All employees", {"and": []}, catalog
-    )
+    specific = validate_ai_matching_rule("Managers only", {"and": []}, catalog)
+    explicit = validate_ai_matching_rule("All employees", {"and": []}, catalog)
 
     assert specific.valid is False
     assert "only when the eligibility wording says so" in specific.errors[0]
@@ -411,9 +566,7 @@ def test_matching_rule_validation_bounds_nesting_depth() -> None:
     for _ in range(20):
         rule = {"not": rule}
 
-    result = validate_matching_rule(
-        rule, _catalog(designation=["Manager", "Executive"])
-    )
+    result = validate_matching_rule(rule, _catalog(designation=["Manager", "Executive"]))
 
     assert result.valid is False
     assert any("levels" in error for error in result.errors)
@@ -484,6 +637,42 @@ def test_policy_year_mapping_persists_validated_rule_and_profile() -> None:
         assert profile.status == "confirmed"
         assert category.status == CategoryStatus.confirmed.value
         db.commit()
+
+
+def test_manual_confirmation_accepts_equivalent_grade_attribute() -> None:
+    with SessionLocal() as db:
+        product = db.execute(select(Product).where(Product.code == "WICA")).scalar_one()
+        category = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=202,
+            display_name="Manual alternate grade field",
+            raw_description="Manual alternate grade field (Job Category:A1)",
+            matching_rule={"=": ["job_grade", "A1"]},
+            status=CategoryStatus.needs_review.value,
+            source="manual",
+            human_modified=True,
+            plan_assignments={"plan_code": "MANUAL-ALT-GRADE"},
+        )
+        db.add(category)
+        db.add(
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-MANUAL-ALT-GRADE",
+                employee_name="Manual Alternate Grade",
+                attribute_values={"job_grade": "A1"},
+                derived_attribute_values={},
+            )
+        )
+        db.flush()
+
+        profile = confirm_category_mapping(db, category=category, client_id=CLIENT_ID)
+
+        assert profile.status == "confirmed"
+        assert category.status == CategoryStatus.confirmed.value
+        assert profile.required_attributes == ["job_grade"]
+        db.rollback()
 
 
 def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
@@ -820,9 +1009,7 @@ def test_ai_context_excludes_empty_configured_field_when_listing_exists() -> Non
         )
 
         schema_ids = {schema.attribute_id for schema in schemas}
-        context_ids = {
-            item["attribute_id"] for item in context["employee_attributes"]
-        }
+        context_ids = {item["attribute_id"] for item in context["employee_attributes"]}
         assert "occupation" not in schema_ids
         assert "occupation" not in context_ids
         assert context["employee_listing_available"] is True
@@ -921,9 +1108,16 @@ def test_ai_suggest_receives_company_context_and_persists_validation(
         captured.update(kwargs.get("context") or {})
         return _ai_result({"=": ["employment_type", "MANUAL"]})
 
+    proxy_warning = (
+        "based in Thailand mapped through nationality; "
+        "confirm nationality represents work base"
+    )
     with patch(
         "app.api.v1.categories.generate_rule_for_category",
         side_effect=fake_generate,
+    ), patch(
+        "app.api.v1.categories.normalize_ai_matching_rule",
+        return_value=({"=": ["employment_type", "MANUAL"]}, [proxy_warning]),
     ):
         response = client.post(f"/api/v1/categories/{category_id}/ai-suggest")
 
@@ -931,10 +1125,10 @@ def test_ai_suggest_receives_company_context_and_persists_validation(
     payload = response.json()
     assert payload["source"] == "ai_extracted"
     assert payload["rule_validation"]["ai_prompt_version"] == "rule_generation/v2"
+    assert payload["rule_validation"]["unresolved_clauses"] == [proxy_warning]
     assert captured["employee_attributes"]
     assert any(
-        item["attribute_id"] == "employment_type"
-        and "MANUAL" in item["observed_values"]
+        item["attribute_id"] == "employment_type" and "MANUAL" in item["observed_values"]
         for item in captured["employee_attributes"]
     )
 
@@ -958,14 +1152,18 @@ def test_missing_plan_is_detected_and_ai_category_creation_is_guided(
 
     summary = client.get(f"/api/v1/policy-years/{PY_2027}/eligibility-mappings")
     assert summary.status_code == 200
-    assert any(
-        item["plan_id"] == plan_id
-        for item in summary.json()["missing_category_plans"]
-    )
+    assert any(item["plan_id"] == plan_id for item in summary.json()["missing_category_plans"])
 
+    proxy_warning = (
+        "based in Thailand mapped through nationality; "
+        "confirm nationality represents work base"
+    )
     with patch(
         "app.api.v1.eligibility_mappings.generate_rule_for_category",
         return_value=_ai_result({"=": ["employment_type", "MANUAL"]}),
+    ), patch(
+        "app.api.v1.eligibility_mappings.normalize_ai_matching_rule",
+        return_value=({"=": ["employment_type", "MANUAL"]}, [proxy_warning]),
     ):
         created = client.post(
             f"/api/v1/policy-years/{PY_2027}/eligibility-mappings/ai-create-category",
@@ -983,6 +1181,7 @@ def test_missing_plan_is_detected_and_ai_category_creation_is_guided(
     assert body["matching_rule"] == {"=": ["employment_type", "MANUAL"]}
     assert body["status"] == "needs_review"
     assert body["rule_validation"]["created_for_missing_plan"] is True
+    assert body["rule_validation"]["unresolved_clauses"] == [proxy_warning]
 
     duplicate = client.post(
         f"/api/v1/policy-years/{PY_2027}/eligibility-mappings/ai-create-category",

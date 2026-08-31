@@ -391,6 +391,18 @@ def _catalog_attribute(catalog: AttributeValueCatalog, candidates: tuple[str, ..
     )
 
 
+def _location_value_mapping(
+    country_text: str, catalog: AttributeValueCatalog
+) -> tuple[str | None, list[Any], bool]:
+    """Resolve work location, falling back to a review-only nationality proxy."""
+
+    attribute_id, values = _best_value_mapping(country_text, catalog, allowed=_WORK_LOCATION_ATTRS)
+    if attribute_id and values:
+        return attribute_id, values, False
+    attribute_id, values = _best_value_mapping(country_text, catalog, allowed=_NATIONALITY_ATTRS)
+    return attribute_id, values, bool(attribute_id and values)
+
+
 def _alpha_rank(value: str) -> int:
     rank = 0
     for char in value.upper():
@@ -398,6 +410,16 @@ def _alpha_rank(value: str) -> int:
             return -1
         rank = rank * 26 + ord(char) - ord("A") + 1
     return rank
+
+
+def _alpha_code(rank: int) -> str:
+    """Inverse of :func:`_alpha_rank` for spreadsheet-style letter codes."""
+
+    chars: list[str] = []
+    while rank > 0:
+        rank, remainder = divmod(rank - 1, 26)
+        chars.append(chr(ord("A") + remainder))
+    return "".join(reversed(chars))
 
 
 def _ordered_code(value: Any) -> tuple[str, int] | None:
@@ -411,46 +433,72 @@ def _ordered_code(value: Any) -> tuple[str, int] | None:
     return None
 
 
-def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
-    """Expand only against values that this company actually configures/uses.
+def _expand_finite_grade_piece(piece: str) -> list[str] | None:
+    """Expand one literal code or closed range exactly as written on the slip."""
 
-    This avoids manufacturing grade codes while still understanding the compact
-    range grammar used by CDL/STM slips (``08 to 17``, ``A1 to A9``, ``AA to
-    AG`` and ``18 and above``).
+    text = piece.strip().upper()
+    if not text:
+        return []
+    if single := re.fullmatch(r"[A-Z]*\d+|[A-Z]+", text):
+        return [single.group(0)]
+    match = re.fullmatch(
+        r"([A-Z]*\d+|[A-Z]+)\s*(?:TO|-)\s*([A-Z]*\d+|[A-Z]+)",
+        text,
+    )
+    if match is None:
+        return []
+    start_text, end_text = match.groups()
+    numeric_start = re.fullmatch(r"([A-Z]*)(\d+)", start_text)
+    numeric_end = re.fullmatch(r"([A-Z]*)(\d+)", end_text)
+    if numeric_start and numeric_end and numeric_start.group(1) == numeric_end.group(1):
+        prefix = numeric_start.group(1)
+        lo, hi = int(numeric_start.group(2)), int(numeric_end.group(2))
+        if lo > hi:
+            return []
+        if hi - lo + 1 > _MAX_SET_VALUES:
+            return None
+        width = max(len(numeric_start.group(2)), len(numeric_end.group(2)))
+        padded = numeric_start.group(2).startswith("0") or numeric_end.group(2).startswith("0")
+        return [
+            f"{prefix}{number:0{width}d}" if padded else f"{prefix}{number}"
+            for number in range(lo, hi + 1)
+        ]
+    if re.fullmatch(r"[A-Z]+", start_text) and re.fullmatch(r"[A-Z]+", end_text):
+        lo, hi = _alpha_rank(start_text), _alpha_rank(end_text)
+        if lo <= 0 or lo > hi:
+            return []
+        if hi - lo + 1 > _MAX_SET_VALUES:
+            return None
+        return [_alpha_code(rank) for rank in range(lo, hi + 1)]
+    return []
+
+
+def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
+    """Expand explicit closed ranges, then add roster-backed open ranges.
+
+    Closed ranges are authoritative insurer data, so every stated value is kept
+    even when no active employee currently occupies that grade. Open-ended
+    ranges still expand only over known roster values because the slip supplies
+    no finite upper/lower bound.
     """
 
-    selected_keys: set[str] = {
-        str(value).strip().casefold() for value in _matched_values(clause, values)
-    }
-    range_spans: list[tuple[int, int]] = []
-    for match in re.finditer(
-        r"\b([a-z]*\d+|[a-z]+)\s*(?:to|-)\s*([a-z]*\d+|[a-z]+)\b",
-        clause,
-        re.IGNORECASE,
-    ):
-        start_text, end_text = match.group(1), match.group(2)
-        start = _ordered_code(start_text)
-        end = _ordered_code(end_text)
-        if start is None or end is None or start[0] != end[0]:
-            continue
-        lo, hi = sorted((start[1], end[1]))
-        numeric_width = (
-            max(len(start_text), len(end_text))
-            if start_text.isdigit()
-            and end_text.isdigit()
-            and (start_text.startswith("0") or end_text.startswith("0"))
-            else None
-        )
-        for value in values:
-            ordered = _ordered_code(value)
-            if (
-                ordered is not None
-                and ordered[0] == start[0]
-                and lo <= ordered[1] <= hi
-                and (numeric_width is None or len(str(value).strip()) == numeric_width)
-            ):
-                selected_keys.add(str(value).strip().casefold())
-        range_spans.append(match.span())
+    selected: list[Any] = []
+    selected_keys: set[str] = set()
+
+    def add(value: Any) -> None:
+        key = str(value).strip().casefold()
+        if key and key not in selected_keys:
+            selected_keys.add(key)
+            selected.append(value)
+
+    for piece in re.split(r"\s*[,;/]\s*", clause):
+        expanded = _expand_finite_grade_piece(piece)
+        if expanded is None:
+            return []
+        for value in expanded:
+            add(value)
+    for value in _matched_values(clause, values):
+        add(value)
 
     for match in re.finditer(
         r"\b([a-z]*\d+|[a-z]+)\s+(?:and\s+)?above\b",
@@ -460,13 +508,31 @@ def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
         start = _ordered_code(match.group(1))
         if start is None:
             continue
-        for value in values:
+        for value in sorted(values, key=lambda item: _ordered_code(item) or ("", -1)):
             ordered = _ordered_code(value)
             if ordered is not None and ordered[0] == start[0] and ordered[1] >= start[1]:
-                selected_keys.add(str(value).strip().casefold())
-        range_spans.append(match.span())
+                add(value)
 
-    return [value for value in values if str(value).strip().casefold() in selected_keys]
+    return selected
+
+
+def _oversized_explicit_grade_clauses(text: str) -> list[str]:
+    """Identify source ranges that exceed the safe finite expansion limit."""
+
+    job_category_clauses = [match.group(1) for match in _JOB_CATEGORY_RE.finditer(text)]
+    hay_clauses = [match.group(1) for match in _HAY_GRADE_RE.finditer(text)]
+    grade_clauses = (
+        hay_clauses if hay_clauses else [match.group(1) for match in _GRADE_RE.finditer(text)]
+    )
+    clauses = job_category_clauses or grade_clauses
+    return [
+        clause.strip()
+        for clause in clauses
+        if any(
+            _expand_finite_grade_piece(piece) is None
+            for piece in re.split(r"\s*[,;/]\s*", clause)
+        )
+    ]
 
 
 def _explicit_grade_mapping(
@@ -523,9 +589,11 @@ def _explicit_grade_mapping(
                 if value not in selected:
                     selected.append(value)
         if selected:
-            candidates.append(
-                (-len(clauses) + len(unresolved), order, attribute_id, selected, unresolved)
+            observed_keys = {str(value).strip().casefold() for value in values}
+            observed_matches = sum(
+                str(value).strip().casefold() in observed_keys for value in selected
             )
+            candidates.append((-observed_matches, order, attribute_id, selected, unresolved))
     if not candidates:
         return None, [], [clause.strip() for clause in clauses]
     _, _, attribute_id, selected, unresolved = min(candidates)
@@ -620,8 +688,8 @@ def _location_proposal(
     location_match = _BASED_IN_RE.search(text)
     if not location_match:
         return None
-    location_attr, location_values = _best_value_mapping(
-        location_match.group(1), catalog, allowed=_WORK_LOCATION_ATTRS
+    location_attr, location_values, nationality_proxy = _location_value_mapping(
+        location_match.group(1), catalog
     )
     base_text = _BASED_IN_RE.sub("", without_exclusion).strip(" ()-")
     base_attr, base_values = _best_value_mapping(base_text, catalog)
@@ -636,12 +704,15 @@ def _location_proposal(
     ):
         if attribute_id and values:
             rules.append(_rule_for_values(attribute_id, values))
-            readings.append(
-                f"{attribute_id} is one of {', '.join(map(str, values))}"
-            )
+            readings.append(f"{attribute_id} is one of {', '.join(map(str, values))}")
             referenced.append(attribute_id)
     if not location_attr or not location_values:
         unresolved.append(location_match.group(0).strip())
+    elif nationality_proxy:
+        unresolved.append(
+            f"{location_match.group(0).strip()} mapped through nationality; "
+            "confirm nationality represents work base"
+        )
 
     if exclusion_text:
         ex_attr, excluded = _best_value_mapping(exclusion_text, catalog)
@@ -692,6 +763,16 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     """
 
     text = _intent_text(description)
+    oversized_clauses = _oversized_explicit_grade_clauses(text)
+    if oversized_clauses:
+        return RuleProposal(
+            rule=None,
+            human_readable="Explicit employee range needs review",
+            confidence=0.0,
+            source="unmapped",
+            validation_state="needs_review",
+            unresolved_clauses=oversized_clauses,
+        )
     without_exclusion = _EXCLUSION_RE.sub("", text).strip(" ()")
     relative_remainder = bool(_ALL_OTHER_RE.match(without_exclusion))
 
@@ -787,9 +868,7 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     if semantic_label:
         if semantic_attr and semantic_values:
             parts.append(_rule_for_values(semantic_attr, semantic_values))
-            readings.append(
-                f"{semantic_attr} is one of {', '.join(map(str, semantic_values))}"
-            )
+            readings.append(f"{semantic_attr} is one of {', '.join(map(str, semantic_values))}")
             referenced.append(semantic_attr)
         else:
             unresolved.append(f"{semantic_label} values")
@@ -821,19 +900,20 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     # both the Singapore officers and the non-officer Thailand employees.
     if parts and re.search(r"\band\s+all\s+employees?\s+based\s+in\b", text, re.I):
         location_match = _BASED_IN_RE.search(text)
-        location_attr, location_values = (
-            _best_value_mapping(
-                location_match.group(1),
-                catalog,
-                allowed=_WORK_LOCATION_ATTRS,
-            )
+        location_attr, location_values, nationality_proxy = (
+            _location_value_mapping(location_match.group(1), catalog)
             if location_match
-            else (None, [])
+            else (None, [], False)
         )
         exclusion_attr, exclusion_values = (
             _best_value_mapping(exclusion_text, catalog) if exclusion_text else (None, [])
         )
         if location_attr and location_values and exclusion_attr and exclusion_values:
+            if nationality_proxy and location_match:
+                unresolved.append(
+                    f"{location_match.group(0).strip()} mapped through nationality; "
+                    "confirm nationality represents work base"
+                )
             location_parts = [
                 _rule_for_values(location_attr, location_values),
                 _rule_for_values(exclusion_attr, exclusion_values, negate=True),
@@ -889,9 +969,7 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             referenced_attributes=list(dict.fromkeys(referenced)),
         )
 
-    if location_proposal := _location_proposal(
-        text, without_exclusion, exclusion_text, catalog
-    ):
+    if location_proposal := _location_proposal(text, without_exclusion, exclusion_text, catalog):
         return location_proposal
 
     if semantic_label:
@@ -940,7 +1018,12 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     )
 
 
-def validate_matching_rule(rule: Rule | None, catalog: AttributeValueCatalog) -> RuleValidation:
+def validate_matching_rule(
+    rule: Rule | None,
+    catalog: AttributeValueCatalog,
+    *,
+    allowed_values: dict[str, list[Any]] | None = None,
+) -> RuleValidation:
     """Validate JSONLogic shape and referenced attributes against the company.
 
     Empty-AND is the one rule with no referenced attribute. When a roster is
@@ -956,6 +1039,7 @@ def validate_matching_rule(rule: Rule | None, catalog: AttributeValueCatalog) ->
         allowed = [
             *catalog.values.get(attribute_id, []),
             *catalog.configured_values.get(attribute_id, []),
+            *(allowed_values or {}).get(attribute_id, []),
         ]
         needle = str(candidate).strip().casefold()
         return any(str(value).strip().casefold() == needle for value in allowed)
@@ -1065,22 +1149,129 @@ def validate_matching_rule(rule: Rule | None, catalog: AttributeValueCatalog) ->
     )
 
 
+def _source_allowed_values(
+    description: str, catalog: AttributeValueCatalog
+) -> dict[str, list[Any]] | None:
+    explicit_attr, explicit_values, _ = _explicit_grade_mapping(description, catalog)
+    return {explicit_attr: explicit_values} if explicit_attr and explicit_values else None
+
+
 def validate_ai_matching_rule(
     description: str, rule: Rule | None, catalog: AttributeValueCatalog
 ) -> RuleValidation:
     """Apply structural/company validation plus AI-specific semantic guards."""
 
-    validation = validate_matching_rule(rule, catalog)
+    source_values = _source_allowed_values(description, catalog)
+    validation = validate_matching_rule(
+        rule,
+        catalog,
+        allowed_values=source_values,
+    )
     errors = list(validation.errors)
     text = _intent_text(description)
+    for clause in _oversized_explicit_grade_clauses(text):
+        errors.append(
+            f"Explicit employee range exceeds {_MAX_SET_VALUES} values: {clause}"
+        )
     if rule == {"and": []} and not (_ALL_EMPLOYEES_RE.match(text) or _ALL_OTHER_RE.match(text)):
         errors.append("AI may use an all-employees rule only when the eligibility wording says so")
+    if source_values:
+        source_attribute = next(iter(source_values))
+        if source_attribute not in validation.referenced_attributes:
+            errors.append(f"Matching rule omitted explicit employee attribute: {source_attribute}")
     return RuleValidation(
         valid=not errors,
         errors=list(dict.fromkeys(errors)),
         warnings=validation.warnings,
         referenced_attributes=validation.referenced_attributes,
     )
+
+
+def normalize_ai_matching_rule(
+    description: str, rule: Rule | None, catalog: AttributeValueCatalog
+) -> tuple[Rule | None, list[str]]:
+    """Apply deterministic source facts that the AI may omit or reorder."""
+
+    attribute_id, source_values, _ = _explicit_grade_mapping(description, catalog)
+    if rule is None:
+        return rule, []
+
+    def normalize(node: Any) -> Any:
+        if not isinstance(node, dict) or len(node) != 1:
+            return node
+        operator, args = next(iter(node.items()))
+        if operator in {"and", "or"} and isinstance(args, list):
+            return {operator: [normalize(child) for child in args]}
+        if operator == "not" and isinstance(args, dict):
+            return {operator: normalize(args)}
+        if (
+            operator in {"=", "==", "in"}
+            and isinstance(args, list)
+            and len(args) == 2
+            and args[0] == attribute_id
+        ):
+            if len(source_values) == 1:
+                return {"=": [attribute_id, source_values[0]]}
+            return {"in": [attribute_id, list(source_values)]}
+        return node
+
+    normalized = normalize(rule) if attribute_id and source_values else rule
+
+    text = _intent_text(description)
+    location_match = _BASED_IN_RE.search(text)
+    review_clauses: list[str] = []
+    if location_match:
+        location_attr, location_values, nationality_proxy = _location_value_mapping(
+            location_match.group(1), catalog
+        )
+        if location_attr and location_values:
+            source_allowed = _source_allowed_values(description, catalog)
+            current = validate_matching_rule(normalized, catalog, allowed_values=source_allowed)
+            if location_attr not in current.referenced_attributes:
+                location_rule: Rule | None = _rule_for_values(location_attr, location_values)
+                if exclusion := _EXCLUSION_RE.search(text):
+                    exclusion_attr, exclusion_values = _best_value_mapping(
+                        exclusion.group(1).strip(), catalog
+                    )
+                    if exclusion_attr and exclusion_values:
+                        location_rule = {
+                            "and": [
+                                location_rule,
+                                _rule_for_values(
+                                    exclusion_attr,
+                                    exclusion_values,
+                                    negate=True,
+                                ),
+                            ]
+                        }
+                    else:
+                        location_rule = None
+                if location_rule is not None:
+                    operator = (
+                        "or"
+                        if re.search(r"\band\s+all\s+employees?\s+based\s+in\b", text, re.I)
+                        else "and"
+                    )
+                    existing_children = (
+                        list(normalized[operator])
+                        if isinstance(normalized, dict)
+                        and list(normalized) == [operator]
+                        and isinstance(normalized[operator], list)
+                        else [normalized]
+                    )
+                    normalized = {operator: [*existing_children, location_rule]}
+
+            final_validation = validate_matching_rule(
+                normalized,
+                catalog,
+                allowed_values=source_allowed,
+            )
+            if nationality_proxy and location_attr in final_validation.referenced_attributes:
+                review_clauses.append(
+                    f"{location_match.group(0).strip()} mapped through nationality; "
+                    "confirm nationality represents work base"
+                )
+    return normalized, review_clauses
 
 
 def build_attribute_catalog(
@@ -1172,11 +1363,9 @@ def _usable_ai_schemas(
     """Keep AI attributes aligned with the available employee listing."""
 
     if catalog.roster_present:
-        return [
-            schema
-            for schema in schemas
-            if catalog.populated.get(schema.attribute_id, 0) > 0
-        ][:64]
+        return [schema for schema in schemas if catalog.populated.get(schema.attribute_id, 0) > 0][
+            :64
+        ]
     return [
         schema
         for schema in schemas
@@ -1258,6 +1447,9 @@ def build_ai_eligibility_inputs(
     )
 
     employee_attributes: list[dict[str, Any]] = []
+    source_attribute_id, source_attribute_values, _ = _explicit_grade_mapping(
+        category.raw_description, catalog
+    )
     for schema in sorted(usable_schemas, key=lambda value: value.attribute_id):
         attribute_id = schema.attribute_id
         populated = catalog.populated.get(attribute_id, 0)
@@ -1275,6 +1467,11 @@ def build_ai_eligibility_inputs(
                     else []
                 ),
                 "observed_values_withheld": not include_values,
+                "authoritative_source_values": (
+                    [_prompt_scalar(value) for value in source_attribute_values]
+                    if attribute_id == source_attribute_id
+                    else []
+                ),
                 "configured_values": [
                     _prompt_scalar(value)
                     for value in (
@@ -1498,7 +1695,9 @@ def _candidate_for_category(
                 source="prior_year",
                 validation_state="proposed",
                 referenced_attributes=validate_matching_rule(
-                    prior.matching_rule, catalog
+                    prior.matching_rule,
+                    catalog,
+                    allowed_values=_source_allowed_values(category.raw_description, catalog),
                 ).referenced_attributes,
             ),
             True,
@@ -1599,14 +1798,9 @@ def _rule_messages(
     warnings = list(validation.warnings)
     blockers: list[str] = []
     if not catalog.roster_present and matching_rule is not None:
-        warnings.append(
-            "No active employee listing is available to validate matched employees"
-        )
+        warnings.append("No active employee listing is available to validate matched employees")
     if overlap_count:
-        message = (
-            f"{overlap_count} employees also match an equally specific "
-            "employee cohort"
-        )
+        message = f"{overlap_count} employees also match an equally specific employee cohort"
         warnings.append(message)
         blockers.append(message)
     if expected is not None and matched is not None and expected != matched:
@@ -1653,7 +1847,9 @@ def assess_category_rule(
     """
 
     catalog, employees, views = build_attribute_catalog(db, category.policy_year_id, client_id)
-    validation = validate_matching_rule(category.matching_rule, catalog)
+    validation = validate_ai_matching_rule(
+        category.raw_description, category.matching_rule, catalog
+    )
     categories = list(
         db.execute(
             select(Category)
@@ -1749,7 +1945,11 @@ def auto_map_policy_year(
     for category in categories:
         preserve = bool(category.human_modified and category.matching_rule)
         if preserve:
-            validation = validate_matching_rule(category.matching_rule, catalog)
+            validation = validate_matching_rule(
+                category.matching_rule,
+                catalog,
+                allowed_values=_source_allowed_values(category.raw_description, catalog),
+            )
             proposal = RuleProposal(
                 rule=category.matching_rule,
                 human_readable=category.rule_human_readable or category.display_name,
@@ -1761,7 +1961,7 @@ def auto_map_policy_year(
             reused = False
         else:
             proposal, reused = _candidate_for_category(category, catalog, profiles, previous)
-            validation = validate_matching_rule(proposal.rule, catalog)
+            validation = validate_ai_matching_rule(category.raw_description, proposal.rule, catalog)
             category.matching_rule = proposal.rule
             category.rule_human_readable = proposal.human_readable
             category.confidence = proposal.confidence
@@ -1887,7 +2087,11 @@ def confirm_category_mapping(
     """Validate and persist one broker-confirmed reusable mapping profile."""
 
     catalog, _, _ = build_attribute_catalog(db, category.policy_year_id, client_id)
-    validation = validate_matching_rule(category.matching_rule, catalog)
+    validation = validate_matching_rule(
+        category.matching_rule,
+        catalog,
+        allowed_values=_source_allowed_values(category.raw_description, catalog),
+    )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
     existing = category.rule_validation if isinstance(category.rule_validation, dict) else {}
@@ -2014,6 +2218,7 @@ __all__ = [
     "category_signature",
     "confirm_category_mapping",
     "missing_category_plans",
+    "normalize_ai_matching_rule",
     "propose_category_rule",
     "stored_mapping_summary",
     "validate_ai_matching_rule",

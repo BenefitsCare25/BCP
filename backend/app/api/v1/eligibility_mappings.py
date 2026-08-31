@@ -1,4 +1,5 @@
 """Company-aware category matching proposal and review workflow."""
+
 from __future__ import annotations
 
 import logging
@@ -27,6 +28,7 @@ from app.services.eligibility_mapping import (
     assess_category_rule,
     auto_map_policy_year,
     build_ai_eligibility_inputs,
+    normalize_ai_matching_rule,
     stored_mapping_summary,
     validate_ai_matching_rule,
 )
@@ -218,12 +220,15 @@ def ai_create_missing_category(
         for value in result.metadata.get("unresolved_clauses", [])
         if isinstance(value, (str, int, float))
     ][:20]
-    validation = validate_ai_matching_rule(description, envelope.rule, catalog)
+    matching_rule, normalization_review = normalize_ai_matching_rule(
+        description, envelope.rule, catalog
+    )
+    unresolved = list(dict.fromkeys([*unresolved, *normalization_review]))[:20]
+    validation = validate_ai_matching_rule(description, matching_rule, catalog)
     if envelope.rule is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "No safe suggestion available"
-            + (f": {', '.join(unresolved)}" if unresolved else ""),
+            "No safe suggestion available" + (f": {', '.join(unresolved)}" if unresolved else ""),
         )
     if not validation.valid:
         raise HTTPException(
@@ -231,7 +236,7 @@ def ai_create_missing_category(
             "No safe suggestion available: " + "; ".join(validation.errors),
         )
 
-    category.matching_rule = envelope.rule
+    category.matching_rule = matching_rule
     category.rule_human_readable = envelope.human_readable[:1024]
     category.confidence = envelope.confidence
     db.add(category)
