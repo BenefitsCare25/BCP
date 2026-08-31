@@ -308,8 +308,9 @@ function EditForm({
       </SheetHeader>
       <SheetBody className="space-y-4">
         <div className="flex flex-col gap-1.5">
-          <Label>Display name</Label>
+          <Label htmlFor="category-display-name">Display name</Label>
           <Input
+            id="category-display-name"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
           />

@@ -24,6 +24,36 @@ type ComparisonOp = (typeof COMPARISON_OPS)[number];
 
 type Node = RuleNode;
 
+function blankCondition(): Node {
+  return { "=": ["", ""] };
+}
+
+/**
+ * Add a required condition without replacing the broker's current rule.
+ *
+ * A single comparison cannot contain siblings in the rule AST, so promote it
+ * to an AND group first. Existing AND groups can be extended in place. Keeping
+ * this transformation here makes the UI action deterministic and testable.
+ */
+export function addRequiredCondition(
+  rule: RuleNode,
+  schema: AttributeSchema[],
+): RuleNode {
+  if (schema.length === 0) return rule;
+  const condition = blankCondition();
+  if (!rule) return condition;
+
+  const keys = Object.keys(rule);
+  if (keys.length === 1 && keys[0] === "and") {
+    const children = (rule as Record<string, unknown>).and;
+    if (Array.isArray(children)) {
+      return { and: [...children, condition] };
+    }
+  }
+
+  return { and: [rule, condition] };
+}
+
 export function RuleBuilder({ rule, schema, onChange }: Props) {
   if (!rule) {
     return (
@@ -33,9 +63,8 @@ export function RuleBuilder({ rule, schema, onChange }: Props) {
           <Button
             size="sm"
             variant="outline"
-            onClick={() =>
-              onChange({ "=": [schema[0]?.attribute_id ?? "grade", ""] })
-            }
+            onClick={() => onChange(addRequiredCondition(null, schema))}
+            disabled={schema.length === 0}
           >
             <Plus className="size-3.5" /> Add condition
           </Button>
@@ -60,8 +89,35 @@ export function RuleBuilder({ rule, schema, onChange }: Props) {
   return (
     <div className="space-y-3">
       <NodeView node={rule} schema={schema} onChange={onChange} depth={0} />
+      {!isGroupNode(rule) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+          <p className="text-xs text-muted-foreground">
+            Add another required employee attribute to narrow this category.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => onChange(addRequiredCondition(rule, schema))}
+            disabled={schema.length === 0}
+            title={
+              schema.length === 0
+                ? "No matchable employee fields are available"
+                : "Add another required condition (AND)"
+            }
+          >
+            <Plus className="size-3.5" /> Add condition
+          </Button>
+        </div>
+      )}
     </div>
   );
+}
+
+function isGroupNode(node: Node): boolean {
+  if (!node) return false;
+  const keys = Object.keys(node);
+  return keys.length === 1 && (keys[0] === "and" || keys[0] === "or");
 }
 
 function NodeView({
@@ -98,12 +154,13 @@ function NodeView({
                 onChange({
                   [key]: [
                     ...children,
-                    { "=": [schema[0]?.attribute_id ?? "grade", ""] },
+                    blankCondition(),
                   ],
                 } as Node)
               }
+              disabled={schema.length === 0}
             >
-              <Plus className="size-3.5" /> Condition
+              <Plus className="size-3.5" /> Add condition
             </Button>
             <Button
               size="sm"
@@ -112,7 +169,7 @@ function NodeView({
                 onChange({ [key]: [...children, { and: [] }] } as Node)
               }
             >
-              <Plus className="size-3.5" /> AND group
+              <Plus className="size-3.5" /> Add AND group
             </Button>
             <Button
               size="sm"
@@ -121,7 +178,7 @@ function NodeView({
                 onChange({ [key]: [...children, { or: [] }] } as Node)
               }
             >
-              <Plus className="size-3.5" /> OR group
+              <Plus className="size-3.5" /> Add OR group
             </Button>
           </div>
         </div>
@@ -146,6 +203,8 @@ function NodeView({
               <Button
                 size="icon"
                 variant="ghost"
+                aria-label="Remove condition"
+                title="Remove condition"
                 onClick={() => {
                   const next = children.filter((_, i) => i !== idx);
                   onChange({ [key]: next } as Node);
@@ -211,7 +270,7 @@ function ComparisonRow({
         value={String(attr)}
         onValueChange={(v) => onChange(op, [v, ...rest])}
       >
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="w-[180px]" aria-label="Employee attribute">
           <SelectValue placeholder="Attribute" />
         </SelectTrigger>
         <SelectContent>
@@ -224,7 +283,7 @@ function ComparisonRow({
       </Select>
 
       <Select value={op} onValueChange={(v) => onChange(v as ComparisonOp, args)}>
-        <SelectTrigger className="w-[120px]">
+        <SelectTrigger className="w-[120px]" aria-label="Comparison operator">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -247,6 +306,7 @@ function ComparisonRow({
             value={rest[0]}
             attrSchema={attrSchema}
             placeholder="min"
+            ariaLabel={`${attrSchema?.display_name ?? "Attribute"} minimum`}
             onChange={(v) => onChange(op, [attr, v, rest[1]])}
           />
           <span className="text-muted-foreground text-xs">to</span>
@@ -254,6 +314,7 @@ function ComparisonRow({
             value={rest[1]}
             attrSchema={attrSchema}
             placeholder="max"
+            ariaLabel={`${attrSchema?.display_name ?? "Attribute"} maximum`}
             onChange={(v) => onChange(op, [attr, rest[0], v])}
           />
         </>
@@ -261,6 +322,7 @@ function ComparisonRow({
         <Input
           className="w-[260px]"
           placeholder="comma-separated (e.g. WP, SP)"
+          aria-label={`${attrSchema?.display_name ?? "Attribute"} values`}
           value={
             Array.isArray(rest[0])
               ? (rest[0] as unknown[]).join(", ")
@@ -280,6 +342,7 @@ function ComparisonRow({
         <ValueInput
           value={rest[0]}
           attrSchema={attrSchema}
+          ariaLabel={`${attrSchema?.display_name ?? "Attribute"} value`}
           onChange={(v) => onChange(op, [attr, v])}
         />
       )}
@@ -291,11 +354,13 @@ function ValueInput({
   value,
   attrSchema,
   placeholder,
+  ariaLabel,
   onChange,
 }: {
   value: unknown;
   attrSchema?: AttributeSchema;
   placeholder?: string;
+  ariaLabel: string;
   onChange: (value: unknown) => void;
 }) {
   if (attrSchema?.data_type === "enum" && attrSchema.enum_values) {
@@ -304,7 +369,7 @@ function ValueInput({
         value={typeof value === "string" ? value : ""}
         onValueChange={onChange}
       >
-        <SelectTrigger className="w-[180px]">
+        <SelectTrigger className="w-[180px]" aria-label={ariaLabel}>
           <SelectValue placeholder="Value" />
         </SelectTrigger>
         <SelectContent>
@@ -324,6 +389,7 @@ function ValueInput({
       className="w-[140px]"
       type={isNumeric ? "number" : "text"}
       placeholder={placeholder ?? "value"}
+      aria-label={ariaLabel}
       value={typeof value === "string" || typeof value === "number" ? value : ""}
       onChange={(e) => {
         const v = e.target.value;
