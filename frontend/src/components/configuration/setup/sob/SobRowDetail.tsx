@@ -22,6 +22,7 @@ import {
   addSub,
   axisValue,
   copayFields,
+  copayValue,
   isSubOverridden,
   removeCopayField,
   removeSub,
@@ -295,7 +296,7 @@ function CopayGrid({
                   <td key={col.id} className="px-1 py-0.5">
                     <Input
                       aria-label={`${f.label} — ${col.label}`}
-                      value={item.column_properties?.[col.id]?.[f.key] ?? ""}
+                      value={copayValue(item, col.id, f.key)}
                       onChange={(e) =>
                         setSob((s) =>
                           setColumnProperty(s, idx, col.id, f.key, e.target.value),

@@ -36,6 +36,7 @@ import {
   isLiveAnnualLimit,
   sourceWordingForPlan,
 } from "@/lib/claimLimits";
+import { copayFields, copayValue } from "@/lib/sob";
 
 interface Props {
   sob: SobSchedule;
@@ -68,6 +69,14 @@ const normalizeWording = (value: string | null) =>
 const hasSourceChanged = (setting: ClaimLimitSetting, wording: string | null) =>
   normalizeWording(setting.display) !== normalizeWording(wording);
 
+const isAnnualBalance = (setting: ClaimLimitSetting) =>
+  setting.basis === "policy_year" && setting.status !== "not_limit";
+
+const isUnavailableWording = (value: string) =>
+  ["na", "n/a", "not applicable", "not covered", "-"].includes(
+    value.trim().toLocaleLowerCase(),
+  );
+
 function SettingEditor({
   setting,
   wording,
@@ -97,7 +106,10 @@ function SettingEditor({
       status: "needs_review",
     });
   const missingRequiredScope = Boolean(
-    onScope && scopes.length > 0 && setting.claim_scope_codes.length === 0,
+    setting.basis === "policy_year" &&
+      onScope &&
+      scopes.length > 0 &&
+      setting.claim_scope_codes.length === 0,
   );
   const missingAnnualAmount =
     setting.basis === "policy_year" && !(setting.amount && setting.amount > 0);
@@ -106,7 +118,9 @@ function SettingEditor({
     <div className="grid gap-4 border-t border-border bg-muted/20 px-3 py-4 lg:grid-cols-[minmax(12rem,0.8fr)_minmax(18rem,1.2fr)]">
       <div className="space-y-3">
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-foreground">Limit basis</label>
+          <label className="text-xs font-medium text-foreground">
+            How claims use this rule
+          </label>
           <Select
             value={setting.basis}
             onValueChange={(basis) =>
@@ -116,7 +130,7 @@ function SettingEditor({
               }, true)
             }
           >
-            <SelectTrigger aria-label="Limit basis">
+            <SelectTrigger aria-label="How claims use this rule">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -152,6 +166,13 @@ function SettingEditor({
               This is the only basis that creates a remaining balance and approval guard.
             </p>
           </div>
+        )}
+
+        {setting.basis !== "policy_year" && (
+          <p className="text-2xs leading-5 text-muted-foreground">
+            This stays as policy wording. It does not create a remaining balance
+            or block claim approval.
+          </p>
         )}
 
         {wording && (
@@ -239,7 +260,9 @@ function SettingEditor({
             }
           >
             <CheckCircle2 className="size-3.5" aria-hidden />
-            Verify setting
+            {setting.basis === "policy_year"
+              ? "Activate annual balance"
+              : "Save policy wording"}
           </Button>
           <Button
             type="button"
@@ -255,12 +278,12 @@ function SettingEditor({
               })
             }
           >
-            Mark as not a limit
+            No balance needed
           </Button>
         </div>
         <p className="text-2xs leading-5 text-muted-foreground">
-          Verification records the decision in this draft. Select Confirm setup
-          or Update setup at the bottom of the page to publish it to employees.
+          This saves the decision in the draft. Publish the setup at the bottom
+          of the page when the review is complete.
         </p>
       </div>
     </div>
@@ -291,6 +314,12 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
       sourceChanged: hasSourceChanged(setting, source.wording),
     };
   });
+  const configuredByUid = new Map(
+    configuredState.map((entry) => [entry.item.uid, entry]),
+  );
+  const annualConfiguredState = configuredState.filter(({ setting }) =>
+    isAnnualBalance(setting),
+  );
   const available = sob.items.filter(
     (item) => itemLimitForPlan(sob, item, activeCode) === null,
   );
@@ -309,21 +338,77 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
         Boolean(wording) &&
         (source.structuredPolicyYear || setting.basis !== "informational"),
     );
-  const detectedUids = new Set(detectedAvailable.map(({ item }) => item.uid));
-  const manualAvailable = available.filter((item) => !detectedUids.has(item.uid));
+  const detectedAnnualAvailable = detectedAvailable.filter(
+    ({ setting }) =>
+      setting.basis === "policy_year" &&
+      setting.amount !== null &&
+      setting.amount > 0,
+  );
+  const detectedAnnualUids = new Set(
+    detectedAnnualAvailable.map(({ item }) => item.uid),
+  );
+  const manualAvailable = available.filter(
+    (item) => !detectedAnnualUids.has(item.uid),
+  );
+  const policyRows = sob.items
+    .map((item) => {
+      const configuredEntry = configuredByUid.get(item.uid);
+      const rules =
+        item.kind === "copay"
+          ? copayFields(item)
+              .filter(
+                (field) =>
+                  field.key !== "per_policy_year" ||
+                  (!detectedAnnualUids.has(item.uid) &&
+                    !(
+                      configuredEntry &&
+                      isAnnualBalance(configuredEntry.setting)
+                    )),
+              )
+              .map((field) => ({
+                label: field.label,
+                value: copayValue(item, columnId ?? "", field.key).trim(),
+              }))
+              .filter(({ value }) => Boolean(value))
+          : [];
+      if (
+        rules.length === 0 &&
+        configuredEntry &&
+        !isAnnualBalance(configuredEntry.setting)
+      ) {
+        const value =
+          configuredEntry.source.wording ??
+          configuredEntry.setting.display ??
+          "No balance required";
+        rules.push({ label: "Policy condition", value });
+      }
+      return { item, rules, configuredEntry };
+    })
+    .filter(
+      ({ rules, configuredEntry }) =>
+        rules.length > 0 &&
+        (rules.some(({ value }) => !isUnavailableWording(value)) ||
+          Boolean(
+            configuredEntry && !isAnnualBalance(configuredEntry.setting),
+          )),
+    );
   const verified =
-    Number(overall?.status === "verified") +
-    configuredState.filter(
+    Number(Boolean(overall && isLiveAnnualLimit(overall))) +
+    annualConfiguredState.filter(
       ({ setting, sourceChanged }) =>
-        setting.status === "verified" && !sourceChanged,
+        isLiveAnnualLimit(setting) && !sourceChanged,
     ).length;
   const needsReview =
-    Number(overall?.status === "needs_review") +
-    configuredState.filter(
+    Number(
+      Boolean(
+        overall && isAnnualBalance(overall) && overall.status === "needs_review",
+      ),
+    ) +
+    annualConfiguredState.filter(
       ({ setting, sourceChanged }) =>
         setting.status === "needs_review" || sourceChanged,
     ).length;
-  const totalNeedsReview = needsReview + detectedAvailable.length;
+  const totalNeedsReview = needsReview + detectedAnnualAvailable.length;
   const scopeLabels = new Map(claimScopes.map((scope) => [scope.code, scope.label]));
 
   const mappedByScope = new Map<
@@ -397,11 +482,17 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
   const addSelectedLine = () => {
     const item = sob.items.find((row) => row.uid === addLine);
     if (!item || !columnId) return;
+    const detected = draftDetectedLimitSetting(
+      claimLimitSourceForPlan(sob, item, activeCode),
+    );
     setItem(
       item.uid,
-      draftDetectedLimitSetting(
-        claimLimitSourceForPlan(sob, item, activeCode),
-      ),
+      {
+        ...detected,
+        basis: "policy_year",
+        amount: detected.basis === "policy_year" ? detected.amount : null,
+        status: "needs_review",
+      },
     );
     setEditing(item.uid);
     setAddLine("");
@@ -423,12 +514,12 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
         <div className="min-w-0">
           <h3 id="claim-limits-heading" className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <CircleDollarSign className="size-4 text-primary" aria-hidden />
-            Claim limit settings
+            Annual balances
           </h3>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-            Review each detected amount, map the claim types that draw from it,
-            then select Verify setting. Only verified policy-year amounts are
-            shown to members or enforced during approval.
+            Set only annual SGD balances that employees can track and claim
+            approval can enforce. Visit caps, co-payments and other conditions
+            remain visible as policy wording below.
           </p>
         </div>
         <div className="w-full sm:w-64">
@@ -457,18 +548,21 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
       <div className="flex flex-wrap gap-x-4 gap-y-2 border-y border-border px-3 py-2 text-xs">
         {verified > 0 ? (
           <span className="inline-flex items-center gap-1.5 text-good">
-            <CheckCircle2 className="size-3.5" aria-hidden /> {verified} verified
+            <CheckCircle2 className="size-3.5" aria-hidden /> {verified} annual
+            balance{verified === 1 ? "" : "s"} live
           </span>
         ) : (
-          <span className="text-muted-foreground">No verified limits</span>
+          <span className="text-muted-foreground">No annual balances live</span>
         )}
         {totalNeedsReview > 0 && (
           <span className="inline-flex items-center gap-1.5 text-warn">
-            <AlertTriangle className="size-3.5" aria-hidden /> {totalNeedsReview} need review
+            <AlertTriangle className="size-3.5" aria-hidden /> {totalNeedsReview}
+            annual balance{totalNeedsReview === 1 ? "" : "s"} need review
           </span>
         )}
         <span className="text-muted-foreground">
-          {configured.length} benefit line{configured.length === 1 ? "" : "s"} configured
+          {policyRows.length} benefit line{policyRows.length === 1 ? "" : "s"}
+          with policy wording
         </span>
       </div>
 
@@ -476,7 +570,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
         <div>
           <div className="flex flex-wrap items-center gap-3 px-3 py-3">
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-foreground">Overall plan limit</p>
+              <p className="text-sm font-medium text-foreground">Overall annual balance</p>
               <p className="text-xs text-muted-foreground">
                 Applies across claims assessed against {activePlan.label || activeCode}.
               </p>
@@ -490,7 +584,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                 <Badge variant={statusVariant(overall)}>{statusLabel(overall)}</Badge>
               </>
             ) : (
-              <Badge>No overall limit</Badge>
+              <Badge>No overall annual balance</Badge>
             )}
             <Button
               type="button"
@@ -503,7 +597,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                 setEditing(editing === "overall" ? null : "overall");
               }}
             >
-              {overall ? "Edit" : "Set limit"}
+              {overall ? "Edit" : "Set annual balance"}
             </Button>
           </div>
           {editing === "overall" && overall && (
@@ -511,7 +605,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
           )}
         </div>
 
-        {configuredState.map(({ item, setting, source, sourceChanged }) => {
+        {annualConfiguredState.map(({ item, setting, source, sourceChanged }) => {
           const wording = source.wording;
           return (
             <div key={item.uid}>
@@ -541,8 +635,8 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                   onClick={() => setEditing(editing === item.uid ? null : item.uid)}
                 >
                   {setting.status === "needs_review"
-                    ? "Review & verify"
-                    : "Edit setting"}
+                    ? "Review annual balance"
+                    : "Edit annual balance"}
                 </Button>
               </div>
               {editing === item.uid && (
@@ -569,19 +663,19 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
         })}
       </div>
 
-      {detectedAvailable.length > 0 && (
+      {detectedAnnualAvailable.length > 0 && (
         <div className="border-t border-border bg-warn/5 px-3 py-3">
           <div className="mb-2">
             <p className="text-xs font-medium text-foreground">
-              Detected values to review
+              Annual amounts to review
             </p>
             <p className="text-2xs leading-5 text-muted-foreground">
-              These populated limit or policy-condition fields remain offline
-              until you review their amount and claim-type mapping.
+              These SGD policy-year amounts remain offline until their amount
+              and claim routing are confirmed.
             </p>
           </div>
           <div className="divide-y divide-border/70">
-            {detectedAvailable.map(({ item, wording, setting }) => (
+            {detectedAnnualAvailable.map(({ item, wording, setting }) => (
               <div
                 key={item.uid}
                 className="grid items-center gap-2 py-2 first:pt-0 last:pb-0 sm:grid-cols-[minmax(12rem,1fr)_auto_auto]"
@@ -601,10 +695,97 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                   variant="outline"
                   onClick={() => reviewDetectedLine(item, setting)}
                 >
-                  Review &amp; verify
+                  Review annual balance
                 </Button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {policyRows.length > 0 && (
+        <div className="border-t border-border">
+          <div className="bg-muted/20 px-3 py-3">
+            <p className="text-xs font-medium text-foreground">Policy wording</p>
+            <p className="mt-1 text-2xs leading-5 text-muted-foreground">
+              Visit limits, co-payments and hospital qualifiers appear in the
+              employee Schedule of Benefits, but do not create a remaining
+              balance. Edit their values in the benefit table above.
+            </p>
+          </div>
+          <div className="divide-y divide-border">
+            {policyRows.map(({ item, rules, configuredEntry }) => {
+              const policySetting =
+                configuredEntry && !isAnnualBalance(configuredEntry.setting)
+                  ? configuredEntry
+                  : null;
+              return (
+                <div key={item.uid}>
+                  <div className="grid gap-2 px-3 py-3 md:grid-cols-[minmax(12rem,0.7fr)_minmax(18rem,1.3fr)_auto_auto] md:items-center">
+                    <p className="text-sm font-medium text-foreground">
+                      {item.name || `Line ${item.number}`}
+                    </p>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                      {rules.map((rule) => (
+                        <span key={`${rule.label}-${rule.value}`} className="text-muted-foreground">
+                          {rule.label} · <span className="text-foreground">{rule.value}</span>
+                        </span>
+                      ))}
+                    </div>
+                    <Badge
+                      variant={
+                        policySetting?.sourceChanged
+                          ? "warn"
+                          : policySetting
+                            ? statusVariant(policySetting.setting)
+                            : "default"
+                      }
+                    >
+                      {policySetting?.sourceChanged
+                        ? "SoB changed · review"
+                        : policySetting
+                          ? statusLabel(policySetting.setting)
+                          : "Shown in SoB · no balance"}
+                    </Badge>
+                    {policySetting ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setEditing(editing === item.uid ? null : item.uid)
+                        }
+                      >
+                        Review routing
+                      </Button>
+                    ) : (
+                      <span aria-hidden />
+                    )}
+                  </div>
+                  {policySetting && editing === item.uid && (
+                    <SettingEditor
+                      setting={policySetting.setting}
+                      wording={policySetting.source.wording}
+                      scopes={claimScopes}
+                      sourceChanged={policySetting.sourceChanged}
+                      onChange={(next) => setItem(item.uid, next)}
+                      onScope={(scope, checked) =>
+                        assignScope(item.uid, scope, checked)
+                      }
+                      onUseSource={() =>
+                        setItem(
+                          item.uid,
+                          draftDetectedLimitSetting(
+                            policySetting.source,
+                            policySetting.setting.claim_scope_codes,
+                          ),
+                        )
+                      }
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -613,11 +794,11 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
         <div className="flex flex-col gap-2 border-t border-border bg-muted/20 px-3 py-3 sm:flex-row sm:items-end">
           <div className="min-w-0 flex-1 space-y-1.5">
             <label className="text-xs font-medium text-foreground" htmlFor="claim-limit-line">
-              Add a benefit line limit
+              Add an annual balance
             </label>
             <Select value={addLine} onValueChange={setAddLine}>
               <SelectTrigger id="claim-limit-line">
-                <SelectValue placeholder="Choose a Schedule of Benefits line" />
+                <SelectValue placeholder="Choose a benefit line" />
               </SelectTrigger>
               <SelectContent>
                 {manualAvailable.map((item) => (
@@ -632,24 +813,17 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
             </Select>
           </div>
           <Button type="button" size="sm" variant="outline" disabled={!addLine} onClick={addSelectedLine}>
-            <Plus className="size-3.5" aria-hidden /> Add setting
+            <Plus className="size-3.5" aria-hidden /> Add annual balance
           </Button>
         </div>
       )}
 
-      {claimScopes.length > 0 && (
+      {mappedByScope.size > 0 && (
         <div className="border-t border-border px-3 py-3">
-          <p className="text-xs font-medium text-foreground">Claim type coverage</p>
+          <p className="text-xs font-medium text-foreground">Claim routing</p>
           <dl className="mt-2 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
-            {claimScopes.map((scope) => {
+            {claimScopes.filter((scope) => mappedByScope.has(scope.code)).map((scope) => {
               const mapped = mappedByScope.get(scope.code);
-              const overallState = overall
-                ? isLiveAnnualLimit(overall)
-                  ? "Overall plan · live annual balance"
-                  : overall.status === "needs_review"
-                    ? "No live balance · overall needs review"
-                    : "Overall plan · policy wording only"
-                : "No live balance";
               return (
                 <div key={scope.code} className="flex items-baseline justify-between gap-3">
                   <dt className="text-muted-foreground">{scope.label}</dt>
@@ -664,7 +838,7 @@ export function ClaimLimitEditor({ sob, plans, claimScopes, setSob }: Props) {
                               ? "pending review, not live"
                               : "policy wording only"
                         }`
-                      : overallState}
+                      : "Not mapped"}
                   </dd>
                 </div>
               );

@@ -6,6 +6,8 @@ import {
   type Page,
   type TestInfo,
 } from "@playwright/test";
+import { copayFields, removeCopayField } from "../src/lib/sob";
+import type { SobSchedule } from "../src/types";
 
 const MEMBER = {
   id: "member-limit-test",
@@ -13,6 +15,47 @@ const MEMBER = {
   staff_id: "EMP-001",
   display_name: "Test Member",
 };
+
+test("broker copay editor exposes shared hospital qualifiers", () => {
+  const sob: SobSchedule = {
+    columns: [
+      { id: "col0", label: "Plan 1", plan_codes: ["1"] },
+      { id: "col1", label: "Plan 2", plan_codes: ["2"] },
+    ],
+    items: [
+      {
+        uid: "ae-visit",
+        number: "Group 5",
+        name: "A&E Visit",
+        kind: "copay",
+        base_value: "",
+        overrides: {},
+        properties: {
+          per_visit: "As Charged",
+          per_visit_restructured: "As Charged",
+          per_visit_private: "$120.00",
+          co_payment_restructured: "NA",
+          co_payment_private: "NA",
+          per_policy_year: "NA",
+        },
+        sub_items: [],
+      },
+    ],
+  };
+
+  expect(copayFields(sob.items[0]).map((field) => field.key)).toEqual([
+    "per_visit",
+    "co_payment",
+    "per_policy_year",
+    "per_visit_restructured",
+    "per_visit_private",
+    "co_payment_restructured",
+    "co_payment_private",
+  ]);
+
+  const removed = removeCopayField(sob, 0, "per_visit_private");
+  expect(removed.items[0].properties.per_visit_private).toBeUndefined();
+});
 
 async function apiJson<T>(response: Awaited<ReturnType<APIRequestContext["get"]>>) {
   expect(response.ok(), await response.text()).toBeTruthy();
@@ -426,20 +469,22 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
 
-  const editor = page.getByRole("region", { name: "Claim limit settings" });
+  const editor = page.getByRole("region", { name: "Annual balances" });
   await expect(editor).toBeVisible();
-  await expect(editor).toContainText("Claim type coverage");
   await expect(editor).toContainText(
-    productCode === "GHS2"
-      ? "Hospitalisation/Day Surgery/Other Inpatient Treatment"
-      : "Physiotherapy",
+    "Visit caps, co-payments and other conditions remain visible as policy wording below.",
   );
 
-  const overallButton = editor.getByRole("button", { name: /Set limit|Edit/ }).first();
+  const overallButton = editor
+    .getByRole("button", { name: /Set annual balance|Edit/ })
+    .first();
   await overallButton.click();
   const amount = editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first();
   await amount.fill("2500");
-  await editor.getByRole("button", { name: "Verify setting" }).first().click();
+  await editor
+    .getByRole("button", { name: "Activate annual balance" })
+    .first()
+    .click();
   await expect(editor).toContainText("SGD 2,500");
   await expect(editor).toContainText("Verified");
 
@@ -463,14 +508,14 @@ test("broker can review plan and line mappings from the SoB editor", async ({
       .getByRole("textbox", { name: /^Per policy year/i })
       .fill("SGD 300");
 
-    await expect(editor).toContainText("Detected values to review");
+    await expect(editor).toContainText("Annual amounts to review");
     await expect(editor).toContainText("SGD 300 per policy year");
     await expect(editor).toContainText("No claim type mapped");
     await editor
-      .getByRole("button", { name: "Review & verify" })
+      .getByRole("button", { name: "Review annual balance" })
       .click();
     const verifyDetected = editor
-      .getByRole("button", { name: "Verify setting" })
+      .getByRole("button", { name: "Activate annual balance" })
       .first();
     await expect(verifyDetected).toBeDisabled();
     await expect(editor).toContainText(
@@ -512,32 +557,37 @@ test("broker can review plan and line mappings from the SoB editor", async ({
     await editor
       .getByRole("button", { name: "Use updated SoB value" })
       .click();
-    await expect(editor.getByRole("combobox", { name: "Limit basis" })).toContainText(
-      "Other policy wording",
-    );
+    await expect(
+      editor.getByRole("combobox", { name: "How claims use this rule" }),
+    ).toContainText("Other policy wording");
     await expect(
       editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }),
     ).toHaveCount(0);
-    await verifyDetected.click();
+    await editor.getByRole("button", { name: "Save policy wording" }).click();
     await expect(editor).toContainText("Verified · policy wording");
     await expect(editor).not.toContainText("SGD 5");
   }
 
-  const addLine = editor.getByRole("combobox", { name: "Add a benefit line limit" });
+  const addLine = editor.getByRole("combobox", { name: "Add an annual balance" });
   if (await addLine.isVisible()) {
     await addLine.click();
     const options = page.getByRole("option");
     await expect.poll(() => options.count()).toBeGreaterThan(0);
     const firstLabel = (await options.first().textContent())?.trim() ?? "";
     await options.first().click();
-    await editor.getByRole("button", { name: "Add setting" }).click();
+    await editor.getByRole("button", { name: "Add annual balance" }).click();
     await editor.getByRole("checkbox").first().click();
-    const lineBasis = editor.getByRole("combobox", { name: "Limit basis" }).first();
+    const lineBasis = editor
+      .getByRole("combobox", { name: "How claims use this rule" })
+      .first();
     await lineBasis.click();
     await page.getByRole("option", { name: "Per policy year" }).click();
     const lineAmount = editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first();
     await lineAmount.fill("750");
-    await editor.getByRole("button", { name: "Verify setting" }).first().click();
+    await editor
+      .getByRole("button", { name: "Activate annual balance" })
+      .first()
+      .click();
     await expect(editor).toContainText(firstLabel);
   }
 

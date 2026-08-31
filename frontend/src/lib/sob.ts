@@ -745,21 +745,43 @@ export function propertyLabel(key: string): string {
 
 /**
  * Ordered field list for a copay item: the standard trio, then any extra keys
- * present on any column (first-seen order) — so parser-extracted variants and
- * manually added qualifiers render for every column.
+ * present in shared properties or a column override. Known qualifiers use the
+ * preset order so parser-extracted and manually added fields render consistently.
  */
 export function copayFields(item: SobItemAnswer): { key: string; label: string }[] {
   const seen = new Set(COPAY_FIELDS.map((f) => f.key));
-  const extras: { key: string; label: string }[] = [];
-  for (const props of Object.values(item.column_properties ?? {})) {
+  const extraKeys: string[] = [];
+  for (const props of [
+    item.properties,
+    ...Object.values(item.column_properties ?? {}),
+  ]) {
     for (const key of Object.keys(props)) {
       if (!seen.has(key)) {
         seen.add(key);
-        extras.push({ key, label: propertyLabel(key) });
+        extraKeys.push(key);
       }
     }
   }
+  const presetOrder = new Map(
+    COPAY_FIELD_PRESETS.map((field, index) => [field.key, index]),
+  );
+  const extras = extraKeys
+    .sort(
+      (left, right) =>
+        (presetOrder.get(left) ?? Number.MAX_SAFE_INTEGER) -
+        (presetOrder.get(right) ?? Number.MAX_SAFE_INTEGER),
+    )
+    .map((key) => ({ key, label: propertyLabel(key) }));
   return [...COPAY_FIELDS, ...extras];
+}
+
+/** Effective copay value for one column (column override → shared value). */
+export function copayValue(
+  item: SobItemAnswer,
+  columnId: string,
+  key: string,
+): string {
+  return item.column_properties?.[columnId]?.[key] ?? item.properties?.[key] ?? "";
 }
 
 /** Add a qualifier field to a copay item on every column (blank values). */
@@ -791,7 +813,8 @@ export function removeCopayField(
       const { [key]: _drop, ...rest } = props;
       colProps[colId] = rest;
     }
-    const next = { ...it, column_properties: colProps };
+    const { [key]: _sharedDrop, ...properties } = it.properties ?? {};
+    const next = { ...it, properties, column_properties: colProps };
     return key === "per_policy_year"
       ? invalidateClaimLimits(next, sob.columns.map((column) => column.id))
       : next;
