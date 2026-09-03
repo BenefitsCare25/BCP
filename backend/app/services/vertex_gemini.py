@@ -40,6 +40,15 @@ from anthropic.types import ToolUseBlock
 
 from app.core.ai_config import AIConfig
 
+# Google uses this request header to select the capacity pool.  Keeping the
+# mapping next to client construction ensures every Vertex call (validation,
+# extraction, review, and suggestions) follows the saved capacity mode.
+_CAPACITY_REQUEST_TYPE = {
+    "standard_paygo": "shared",
+    "provisioned_throughput": "dedicated",
+}
+_CAPACITY_HEADER = "X-Vertex-AI-LLM-Request-Type"
+
 # JSON-Schema primitive → Gemini Schema Type enum name.
 _TYPE_MAP = {
     "string": "STRING",
@@ -351,9 +360,10 @@ def build_gemini_client(cfg: AIConfig, *, timeout: float | None = None) -> Gemin
 
     In BYOK mode ``cfg.api_key`` carries the service-account JSON, so explicit
     credentials are built from it. In env mode it's empty and google-genai
-    resolves credentials via the standard ADC chain. ``timeout`` (seconds) is
-    applied as the HTTP request timeout so long vision extractions don't get
-    cut short.
+    resolves credentials via the standard ADC chain. The saved capacity mode
+    is sent on every request (PayGo = ``shared``; provisioned-only =
+    ``dedicated``). ``timeout`` (seconds) is applied as the HTTP request timeout
+    so long vision extractions don't get cut short.
     """
     try:
         from google import genai
@@ -380,10 +390,16 @@ def build_gemini_client(cfg: AIConfig, *, timeout: float | None = None) -> Gemin
         "location": cfg.gcp_location,
         "credentials": credentials,
     }
+    request_type = _CAPACITY_REQUEST_TYPE.get(cfg.capacity_mode)
+    if request_type is None:
+        raise ValueError(f"Unsupported Vertex capacity mode: {cfg.capacity_mode!r}")
+
+    http_options: dict[str, Any] = {
+        "headers": {_CAPACITY_HEADER: request_type},
+    }
     if timeout is not None:
         # google-genai HttpOptions.timeout is in milliseconds.
-        client_kwargs["http_options"] = genai_types.HttpOptions(
-            timeout=int(timeout * 1000)
-        )
+        http_options["timeout"] = int(timeout * 1000)
+    client_kwargs["http_options"] = genai_types.HttpOptions(**http_options)
     client = genai.Client(**client_kwargs)
     return GeminiClient(_client=client, _types=genai_types, _errors=genai_errors)

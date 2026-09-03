@@ -174,7 +174,7 @@ export function VertexKeyDrawer({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <FieldLabel hint="Choose the capacity configured for this exact model in the Google project. Gemini 3.5 Flash in Singapore requires Provisioned Throughput; Standard PayGo will not activate unless the live structured-output probe succeeds.">
+            <FieldLabel hint="Controls Google's request routing. Standard PayGo uses shared capacity. Provisioned Throughput uses dedicated capacity only and returns 429 instead of spilling over when the matching reservation is unavailable or exhausted.">
               Capacity mode
             </FieldLabel>
             <select
@@ -187,8 +187,10 @@ export function VertexKeyDrawer({
               }
               className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground"
             >
-              <option value="standard_paygo">Standard PayGo</option>
-              <option value="provisioned_throughput">Provisioned Throughput</option>
+              <option value="standard_paygo">Standard PayGo (shared)</option>
+              <option value="provisioned_throughput">
+                Provisioned Throughput only (dedicated)
+              </option>
             </select>
           </div>
           <div className="flex flex-col gap-1.5">

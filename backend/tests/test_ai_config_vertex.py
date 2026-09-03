@@ -413,3 +413,53 @@ def test_vertex_from_secret_refuses_non_resident_location_in_prod(monkeypatch):
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("capacity_mode", "request_type"),
+    [
+        ("standard_paygo", "shared"),
+        ("provisioned_throughput", "dedicated"),
+    ],
+)
+def test_build_client_routes_capacity_mode(monkeypatch, capacity_mode, request_type):
+    """The UI setting must reach Google's capacity-routing request header."""
+    from google import genai
+
+    captured = {}
+
+    def _client(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(genai, "Client", _client)
+    cfg = vg.AIConfig(
+        api_key="",
+        model="gemini-3.5-flash",
+        base_url=None,
+        provider="vertex",
+        gcp_project="inspro-ai",
+        gcp_location="asia-southeast1",
+        capacity_mode=capacity_mode,
+    )
+
+    vg.build_gemini_client(cfg, timeout=12.5)
+
+    options = captured["http_options"]
+    assert options.headers[vg._CAPACITY_HEADER] == request_type
+    assert options.timeout == 12_500
+
+
+def test_build_client_rejects_unknown_capacity_mode(monkeypatch):
+    cfg = vg.AIConfig(
+        api_key="",
+        model="gemini-3.5-flash",
+        base_url=None,
+        provider="vertex",
+        gcp_project="inspro-ai",
+        gcp_location="asia-southeast1",
+        capacity_mode="stale-ui-value",
+    )
+
+    with pytest.raises(ValueError, match="Unsupported Vertex capacity mode"):
+        vg.build_gemini_client(cfg)
