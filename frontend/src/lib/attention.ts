@@ -38,6 +38,22 @@ export function daysUntil(iso: string): number {
   return Math.round(ms / 86_400_000);
 }
 
+/** Whole calendar days from the viewer's local date to a date-only policy
+ * value. A policy end date is not an instant, so parsing it as UTC would shift
+ * it onto the previous day for viewers west of UTC. */
+export function calendarDaysUntil(isoDate: string, today = new Date()): number {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return Number.NaN;
+
+  const targetDay = Date.UTC(year, month - 1, day);
+  const viewerDay = Date.UTC(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  );
+  return Math.round((targetDay - viewerDay) / 86_400_000);
+}
+
 /** Ordered by urgency: a missing benefit year first (everything else depends on
  * it), then the operational backlog. */
 export function companyAttention(c: CompanySummary): AttentionItem[] {

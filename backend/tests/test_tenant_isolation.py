@@ -12,7 +12,7 @@ should be recorded in the audit log with `cross_tenant_access=True`.
 from __future__ import annotations
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -2183,6 +2183,33 @@ def test_dashboard_summary_excludes_other_firm(client_as_a: TestClient) -> None:
     assert CLIENT_B_ID in ids
     assert other_client_id not in ids
     assert body["firm"]["company_count"] == len(body["companies"])
+
+
+def test_dashboard_open_enrollment_compares_sqlite_timestamps_in_utc() -> None:
+    """A window closing soon must not disappear during Singapore's UTC+8 day."""
+    from app.api.v1.dashboard import _open_window_close_by_year
+    from app.models.enrollment_window import WindowStatus
+
+    window_id = "00000000-0000-0000-0000-0000000000d8"
+    now_utc = datetime.now(UTC)
+    with SessionLocal() as session:
+        window = EnrollmentWindow(
+            id=window_id,
+            policy_year_id=PY_B,
+            client_id=CLIENT_B_ID,
+            name="UTC comparison regression",
+            opens_at=now_utc - timedelta(hours=1),
+            closes_at=now_utc + timedelta(hours=1),
+            status=WindowStatus.open,
+        )
+        session.add(window)
+        session.commit()
+        try:
+            close_by_year = _open_window_close_by_year(session, [PY_B])
+            assert PY_B in close_by_year
+        finally:
+            session.delete(window)
+            session.commit()
 
 
 # ── Slip / roster ingest write paths (cross-tenant policy_year_id) ──────────

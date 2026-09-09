@@ -93,6 +93,8 @@ export interface CompanyYear {
   id: string;
   year: number;
   status: string;
+  start_date: string;
+  end_date: string;
 }
 
 export interface CompanySummary {
@@ -102,6 +104,12 @@ export interface CompanySummary {
   member_count: number;
   dependant_count: number;
   claims_to_review: number;
+  verification_pending: number;
+  insured_claims_to_review: number;
+  wallet_claims_to_review: number;
+  claims_with_insurer: number;
+  claims_overdue: number;
+  messages_awaiting_reply: number;
   dependants_pending: number;
   employees_unmatched: number;
   matching_stale: boolean;
@@ -115,6 +123,12 @@ export interface FirmTotals {
   member_count: number;
   dependant_count: number;
   claims_to_review: number;
+  verification_pending: number;
+  insured_claims_to_review: number;
+  wallet_claims_to_review: number;
+  claims_with_insurer: number;
+  claims_overdue: number;
+  messages_awaiting_reply: number;
   dependants_pending: number;
   employees_unmatched: number;
   underwriting_pending: number;

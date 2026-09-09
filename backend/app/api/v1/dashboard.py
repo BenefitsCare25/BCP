@@ -17,7 +17,7 @@ a time. On SQLite (single schema) every accessible company is counted.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -33,14 +33,20 @@ from app.db.session import get_db
 from app.models.audit_log import AuditLog
 from app.models.category import Category
 from app.models.claim import (
+    CLAIM_KIND_FLEX,
+    CLAIM_KIND_INSURED,
     CLAIM_STATUS_AI_FLAGGED,
+    CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_AI_VERIFIED,
+    CLAIM_STATUS_SENT_TO_INSURER,
     CLAIM_STATUS_SUBMITTED,
     Claim,
 )
+from app.models.claim_message import AUTHOR_MEMBER, ClaimMessage
 from app.models.dependant import DEPENDANT_STATUS_PENDING, Dependant
 from app.models.employee import Employee
 from app.models.enrollment_window import EnrollmentWindow, WindowStatus
+from app.models.member_enquiry import MemberEnquiry
 from app.models.policy_year import PolicyYear, PolicyYearStatus
 from app.models.underwriting_case import UnderwritingCase, UnderwritingStatus
 
@@ -59,6 +65,8 @@ class CompanyYear(BaseModel):
     id: str
     year: int
     status: str
+    start_date: date
+    end_date: date
 
 
 class CompanySummary(BaseModel):
@@ -68,6 +76,12 @@ class CompanySummary(BaseModel):
     member_count: int
     dependant_count: int
     claims_to_review: int
+    verification_pending: int
+    insured_claims_to_review: int
+    wallet_claims_to_review: int
+    claims_with_insurer: int
+    claims_overdue: int
+    messages_awaiting_reply: int
     dependants_pending: int
     employees_unmatched: int
     matching_stale: bool
@@ -81,6 +95,12 @@ class FirmTotals(BaseModel):
     member_count: int
     dependant_count: int
     claims_to_review: int
+    verification_pending: int
+    insured_claims_to_review: int
+    wallet_claims_to_review: int
+    claims_with_insurer: int
+    claims_overdue: int
+    messages_awaiting_reply: int
     dependants_pending: int
     employees_unmatched: int
     underwriting_pending: int
@@ -104,6 +124,68 @@ def _grouped_count(
         .group_by(column)
     )
     return {row[0]: row[1] for row in db.execute(stmt).all()}
+
+
+def _messages_awaiting_reply_by_year(
+    db: Session, year_ids: list[str]
+) -> dict[str, int]:
+    """Conversations whose latest message is from the member, grouped by year.
+
+    A conversation counts once even when the member sends several consecutive
+    messages. This matches the Claims Messages queue's `awaiting=us` total and
+    includes both claim threads and general member enquiries.
+    """
+    if not year_ids:
+        return {}
+
+    def count_threads(
+        model: type[Any],
+        thread_id_column: Any,
+        year_column: Any,
+        message_owner_column: Any,
+    ) -> dict[str, int]:
+        scoped_ids = select(thread_id_column).where(year_column.in_(year_ids))
+        ranked = (
+            select(
+                message_owner_column.label("thread_id"),
+                ClaimMessage.author_type.label("author_type"),
+                func.row_number()
+                .over(
+                    partition_by=message_owner_column,
+                    order_by=(
+                        ClaimMessage.created_at.desc(),
+                        ClaimMessage.id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .where(message_owner_column.in_(scoped_ids))
+            .subquery()
+        )
+        rows = db.execute(
+            select(year_column, func.count())
+            .select_from(model)
+            .join(ranked, ranked.c.thread_id == thread_id_column)
+            .where(ranked.c.rn == 1, ranked.c.author_type == AUTHOR_MEMBER)
+            .group_by(year_column)
+        ).all()
+        return {year_id: count for year_id, count in rows}
+
+    totals = count_threads(
+        Claim,
+        Claim.id,
+        Claim.policy_year_id,
+        ClaimMessage.claim_id,
+    )
+    enquiries = count_threads(
+        MemberEnquiry,
+        MemberEnquiry.id,
+        MemberEnquiry.policy_year_id,
+        ClaimMessage.enquiry_id,
+    )
+    for year_id, count in enquiries.items():
+        totals[year_id] = totals.get(year_id, 0) + count
+    return totals
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -157,6 +239,46 @@ def get_summary(
     claims = _grouped_count(
         db, Claim.policy_year_id, Claim, year_ids, Claim.status.in_(_CLAIMS_TO_REVIEW)
     )
+    verification_pending = _grouped_count(
+        db,
+        Claim.policy_year_id,
+        Claim,
+        year_ids,
+        Claim.status == CLAIM_STATUS_AI_REVIEW_PENDING,
+    )
+    insured_claims = _grouped_count(
+        db,
+        Claim.policy_year_id,
+        Claim,
+        year_ids,
+        Claim.status.in_(_CLAIMS_TO_REVIEW),
+        Claim.claim_kind == CLAIM_KIND_INSURED,
+    )
+    wallet_claims = _grouped_count(
+        db,
+        Claim.policy_year_id,
+        Claim,
+        year_ids,
+        Claim.status.in_(_CLAIMS_TO_REVIEW),
+        Claim.claim_kind == CLAIM_KIND_FLEX,
+    )
+    claims_with_insurer = _grouped_count(
+        db,
+        Claim.policy_year_id,
+        Claim,
+        year_ids,
+        Claim.status == CLAIM_STATUS_SENT_TO_INSURER,
+    )
+    overdue_claims = _grouped_count(
+        db,
+        Claim.policy_year_id,
+        Claim,
+        year_ids,
+        Claim.status == CLAIM_STATUS_SENT_TO_INSURER,
+        Claim.insurer_deadline_on.is_not(None),
+        Claim.insurer_deadline_on < business_today(),
+    )
+    messages_awaiting_reply = _messages_awaiting_reply_by_year(db, year_ids)
     # Portal self-added dependants awaiting a broker approval decision.
     deps_pending = _grouped_count(
         db, Dependant.policy_year_id, Dependant, year_ids,
@@ -189,6 +311,8 @@ def get_summary(
                         id=current_py.id,
                         year=current_py.year,
                         status=current_py.status.value,
+                        start_date=current_py.start_date,
+                        end_date=current_py.end_date,
                     )
                     if current_py
                     else None
@@ -196,6 +320,14 @@ def get_summary(
                 member_count=members.get(yid, 0) if yid else 0,
                 dependant_count=dependants.get(yid, 0) if yid else 0,
                 claims_to_review=claims.get(yid, 0) if yid else 0,
+                verification_pending=verification_pending.get(yid, 0) if yid else 0,
+                insured_claims_to_review=insured_claims.get(yid, 0) if yid else 0,
+                wallet_claims_to_review=wallet_claims.get(yid, 0) if yid else 0,
+                claims_with_insurer=claims_with_insurer.get(yid, 0) if yid else 0,
+                claims_overdue=overdue_claims.get(yid, 0) if yid else 0,
+                messages_awaiting_reply=(
+                    messages_awaiting_reply.get(yid, 0) if yid else 0
+                ),
                 dependants_pending=deps_pending.get(yid, 0) if yid else 0,
                 employees_unmatched=unmatched.get(yid, 0) if yid else 0,
                 matching_stale=yid in stale_years if yid else False,
@@ -210,6 +342,12 @@ def get_summary(
         member_count=sum(c.member_count for c in companies),
         dependant_count=sum(c.dependant_count for c in companies),
         claims_to_review=sum(c.claims_to_review for c in companies),
+        verification_pending=sum(c.verification_pending for c in companies),
+        insured_claims_to_review=sum(c.insured_claims_to_review for c in companies),
+        wallet_claims_to_review=sum(c.wallet_claims_to_review for c in companies),
+        claims_with_insurer=sum(c.claims_with_insurer for c in companies),
+        claims_overdue=sum(c.claims_overdue for c in companies),
+        messages_awaiting_reply=sum(c.messages_awaiting_reply for c in companies),
         dependants_pending=sum(c.dependants_pending for c in companies),
         employees_unmatched=sum(c.employees_unmatched for c in companies),
         underwriting_pending=sum(c.underwriting_pending for c in companies),
@@ -297,6 +435,10 @@ def _open_window_close_by_year(
         .where(
             EnrollmentWindow.policy_year_id.in_(year_ids),
             EnrollmentWindow.status == WindowStatus.open,
+            # Compare on the database clock. SQLite stores timezone-aware
+            # datetimes without their offset and CURRENT_TIMESTAMP is UTC;
+            # PostgreSQL compares the same expression as an absolute instant.
+            EnrollmentWindow.closes_at >= func.now(),
         )
         .group_by(EnrollmentWindow.policy_year_id)
     ).all()
