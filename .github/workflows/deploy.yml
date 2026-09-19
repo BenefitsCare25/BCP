@@ -499,7 +499,10 @@ jobs:
           wait_for_version() {
             NAME="$1"
             URL="$2"
-            for _ in $(seq 1 24); do
+            # Cold image pulls on Basic tier can take several minutes while
+            # the old container keeps serving. Allow ten minutes, but still
+            # require the exact release SHA and the stable readiness window.
+            for _ in $(seq 1 100); do
               HEADERS=$(curl -fsS --connect-timeout 3 --max-time 5 \
                 -D - -o /dev/null "$URL" 2>/dev/null || true)
               VERSION=$(printf '%s\n' "$HEADERS" | awk \
