@@ -227,7 +227,10 @@ jobs:
 
       - name: Validate Bicep
         if: needs.changes.outputs.infra == 'true'
-        run: az bicep build --file infra/bicep/main.bicep
+        run: |
+          az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+          az bicep build --file infra/bicep/migration-job.bicep --stdout > /dev/null
+          bash -n infra/scripts/run-private-migrations.sh
 
   # ── Build + push the prod container ────────────────────────────────────────
   # The SPA is baked into the image (single-host deployment — see
@@ -326,9 +329,11 @@ jobs:
              [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
             if FILES=$(gh api "repos/${{ github.repository }}/compare/${BEFORE}...${{ github.sha }}" \
                         --paginate --jq '.files[].filename' 2>/dev/null); then
-              # The workflow itself counts as infra: it passes the parameters
-              # that main.bicep is deployed with.
-              echo "$FILES" | grep -qE '^(infra/|\.github/workflows/)' && INFRA=true || INFRA=false
+              # The private migration stack is provisioned independently. Workflow
+              # changes still run every CI gate, but do not restart the live stack.
+              echo "$FILES" | grep '^infra/' | \
+                grep -vE '^infra/(bicep/migration-job\.(bicep|json)|scripts/run-private-migrations\.sh)$' \
+                | grep -q . && INFRA=true || INFRA=false
             fi
           fi
           echo "infra=$INFRA" >> "$GITHUB_OUTPUT"
@@ -392,7 +397,7 @@ jobs:
                git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 && \
                FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
             MIGRATIONS=false
-            echo "$FILES" | grep -qE '^backend/(alembic(/|\.ini$)|app/models/|app/db/(tenancy|migration_helpers)\.py$|scripts/provision_tenants\.py$|app/services/claims_review/recovery\.py$)' \
+            echo "$FILES" | grep -qE '^backend/(alembic(/|\.ini$)|app/models/|app/db/(tenancy|migration_helpers)\.py$|scripts/(provision_tenants|run_private_migrations)\.py$|app/services/claims_review/recovery\.py$)' \
               && MIGRATIONS=true || true
           fi
           echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
@@ -464,105 +469,16 @@ jobs:
             "https://${{ env.PROD_APP }}.azurewebsites.net/health" \
             || echo "::warning::Site not healthy after the Bicep restart; continuing — Smoke-test prod is the gate."
 
-      # NOTE: there is deliberately no firewall-sync step any more. The app now
-      # reaches Postgres over a private endpoint inside the VNet (provisioned by
-      # the Bicep above), so no public IP allowlist has to be maintained. The
-      # old sync enumerated ~44 App Service outbound IPs as individual rules,
-      # which Azure applies one server-update at a time — ~20 minutes per deploy.
-      # Database work runs only when the range from the currently deployed image
-      # contains schema/provisioning changes. The production-SHA comparison above
-      # preserves migrations from any earlier release that failed before rollout.
-      - name: Setup Python (for migrate)
-        if: steps.pending.outputs.migrations == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install uv
-        if: steps.pending.outputs.migrations == 'true'
-        run: pip install --no-cache-dir uv
-
-      # Migrations run from this runner, not from inside the VNet, so the runner
-      # needs its own temporary hole in the otherwise-empty public allowlist.
-      # Removed again in `always()` below so a failed migration can't leave the
-      # DB exposed.
-      #
-      # Applied as an ARM deployment, NOT `az postgres flexible-server
-      # firewall-rule create`: that command's `--name` flag changed meaning
-      # between CLI versions (server name -> rule name, plus a new required
-      # `--server-name`), and when the runner image picked up the newer CLI this
-      # step began failing with "the following arguments are required:
-      # --server-name/-s" — silently skipping migrations AND the image deploy on
-      # every prod release. See modules/ci-firewall-rule.bicep.
-      - name: Allow runner IP on Postgres
-        id: fw
+      # Execute the tested release image inside the private production network.
+      # No database credentials or temporary PostgreSQL firewall rules on GitHub.
+      - name: Run private database migrations
         if: steps.pending.outputs.migrations == 'true'
         run: |
-          IP=$(curl -fsS https://api.ipify.org)
-          echo "::add-mask::$IP"
-          RULE="ci-runner-${{ github.run_id }}"
-          echo "rule=$RULE" >> "$GITHUB_OUTPUT"
-          az deployment group create \
-            --resource-group ${{ env.PROD_RG }} \
-            --name "ci-fw-${{ github.run_id }}" \
-            --template-file infra/bicep/modules/ci-firewall-rule.bicep \
-            --parameters \
-              postgresName="${{ env.PROD_PG }}" \
-              ruleName="$RULE" \
-              allowedIp="$IP" \
-            --query "properties.provisioningState" -o tsv
-
-      - name: Run database migrations + provision tenant schemas
-        if: steps.pending.outputs.migrations == 'true'
-        working-directory: backend
-        env:
-          INSPRO_DATABASE_URL: postgresql+psycopg://${{ secrets.POSTGRES_ADMIN_USER }}:${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}@${{ env.PROD_PG }}.postgres.database.azure.com:5432/inspro?sslmode=require
-        run: |
-          uv sync --frozen
-          uv run alembic upgrade head
-          # alembic only touches `public`; sync each firm schema so additive
-          # tenant-table columns (e.g. enrollment_windows.flex_*) land everywhere.
-          uv run python -m scripts.provision_tenants
-
-      # Sweeps EVERY ci-runner-* rule, not just this run's. A job that is
-      # force-cancelled or times out can skip this step entirely and strand an
-      # allowlisted public IP on a database holding members' health and claims
-      # data. Deleting the whole family is safe because the job-level
-      # concurrency group means only one deploy is ever in flight.
-      #
-      # `az rest` for the same CLI-flag-stability reason as the create above.
-      # It polls: DELETE returns 202 Accepted and Azure drains it in the
-      # background, so the rule stays ENFORCED until that completes — treating
-      # the accept as "closed" would report a hole as sealed while it is open.
-      # Runs on EVERY deploy, including ones that skipped the migration steps
-      # entirely — it costs one GET (~2s) when there is nothing to revoke, and
-      # that makes it the safety net that catches a rule stranded by an earlier
-      # force-cancelled run. Gated on the login rather than on `fw` so a skipped
-      # migration still gets the sweep, but a failed login doesn't false-alarm.
-      - name: Revoke runner IP
-        if: always() && steps.login.outcome == 'success'
-        run: |
-          BASE="https://management.azure.com/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ env.PROD_RG }}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${{ env.PROD_PG }}/firewallRules"
-          for name in $(az rest --method get --url "${BASE}?api-version=2024-08-01" \
-              --query "value[?starts_with(name,'ci-runner-')].name" -o tsv 2>/dev/null | tr -d '\r' || true); do
-            echo "Revoking ${name}"
-            az rest --method delete --url "${BASE}/${name}?api-version=2024-08-01" --only-show-errors || true
-          done
-          LEFT=unknown
-          for _ in $(seq 1 20); do
-            LEFT=$(az rest --method get --url "${BASE}?api-version=2024-08-01" \
-              --query "length(value[?starts_with(name,'ci-runner-')])" -o tsv 2>/dev/null | tr -d '\r' || echo unknown)
-            [ "$LEFT" = "0" ] && break
-            sleep 10
-          done
-          if [ "$LEFT" = "0" ]; then
-            echo "All ci-runner-* rules revoked."
-          else
-            # Loud but non-fatal. Failing here would mislabel an otherwise
-            # successful deploy, but staying silent would leave the production
-            # database reachable from a public IP with nobody told.
-            echo "::error::${LEFT} ci-runner-* firewall rule(s) may still be open on ${{ env.PROD_PG }} — verify and remove manually."
-          fi
+          ACCESS=$(az postgres flexible-server show -g "${{ env.PROD_RG }}" \
+            -n "${{ env.PROD_PG }}" --query network.publicNetworkAccess -o tsv)
+          [ "$ACCESS" = "Disabled" ] || { echo "::error::PostgreSQL must remain private-only"; exit 1; }
+          bash infra/scripts/run-private-migrations.sh "${{ env.PROD_RG }}" \
+            inspro-prod-migrate "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" "${{ github.sha }}"
 
       - name: Deploy image
         run: |
