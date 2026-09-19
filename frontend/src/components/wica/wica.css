@@ -1,0 +1,26 @@
+/* Secondary fields remain in the same expandable row on narrow screens. */
+@media (max-width: 767px) {
+  .wica-documents table, .wica-documents thead, .wica-documents tbody {
+    display: block;
+    width: 100%;
+  }
+  .wica-documents tr:not(:has(td[colspan])) {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr) 3rem;
+    align-items: center;
+  }
+  .wica-documents tr:has(td[colspan]), .wica-documents td[colspan] {
+    display: block;
+    width: 100%;
+  }
+  .wica-documents th:first-child, .wica-documents th:last-child { width: auto; }
+  .wica-documents th:nth-child(3),
+  .wica-documents th:nth-child(4),
+  .wica-documents th:nth-child(5),
+  .wica-documents tr:not(:has(td[colspan])) > td:nth-child(3),
+  .wica-documents tr:not(:has(td[colspan])) > td:nth-child(4),
+  .wica-documents tr:not(:has(td[colspan])) > td:nth-child(5) { display: none; }
+  .wica-documents td { overflow-wrap: anywhere; }
+  .wica-incidents th:nth-child(3), .wica-incidents th:nth-child(4),
+  .wica-incidents td:nth-child(3), .wica-incidents td:nth-child(4) { display: none; }
+}

@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -26,8 +26,17 @@ from app.core.auth import VALID_ROLES, CurrentUser
 from app.core.deps import require_firm_admin, require_system_admin
 from app.core.tenancy_host import SlugError
 from app.db.session import engine, get_db
-from app.db.tenancy import provision_firm_schema
-from app.models import BrokerFirm, Client, PolicyYear, User, UserClientAccess
+from app.db.tenancy import provision_firm_schema, set_search_path
+from app.models import (
+    BrokerFirm,
+    Client,
+    PolicyYear,
+    User,
+    UserClientAccess,
+    WicaIncident,
+    WicaPeriod,
+    WicaSettings,
+)
 from app.models.invitation import (
     INVITE_STATUS_PENDING,
     INVITE_STATUS_REVOKED,
@@ -336,6 +345,18 @@ def delete_client(
     would be orphaned, so require them to be removed first. Per-client user
     grants (``user_client_access``) cascade via the FK on delete."""
     client = _load_firm_client(db, user, client_id)
+    # A system admin may target a company outside the currently selected firm.
+    # Check its operational dependencies in the target firm's schema.
+    set_search_path(db, client.broker_firm_id)
+    # Incident intake takes this same lock. Keep configuration cleanup and
+    # retained-incident checks atomic with respect to a concurrent new incident.
+    db.scalar(select(WicaSettings).where(WicaSettings.client_id == client_id).with_for_update())
+    if db.scalar(select(WicaIncident.id).where(WicaIncident.client_id == client_id).limit(1)):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This company has retained WICA incidents and cannot be deleted. "
+            "Disable WICA in Company settings to stop new intake; existing records are retained.",
+        )
     year_count = db.execute(
         select(func.count())
         .select_from(PolicyYear)
@@ -350,8 +371,20 @@ def delete_client(
     before = {"name": client.name, "broker_firm_id": client.broker_firm_id}
     write_audit(db, user, action="delete", entity_type="client",
                 entity_id=client_id, before=before)
-    db.delete(client)
-    db.commit()
+    try:
+        # Explicitly remove unused configuration, never cascade incident data.
+        # Restrictive model/migration FKs remain the final retention safeguard.
+        db.execute(delete(WicaPeriod).where(WicaPeriod.client_id == client_id))
+        db.execute(delete(WicaSettings).where(WicaSettings.client_id == client_id))
+        db.delete(client)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This company still has linked records or was updated concurrently. "
+            "Refresh and review its records before deleting it.",
+        ) from None
     return Response(status_code=204)
 
 

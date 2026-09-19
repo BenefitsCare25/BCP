@@ -56,6 +56,7 @@ const ClaimsQueuePage = lazyRouteComponent(
   () => import("@/routes/operations/claims"),
   "ClaimsQueuePage",
 );
+const WicaPage = lazyRouteComponent(() => import("@/routes/operations/wica"), "WicaPage");
 const ReportsPage = lazyRouteComponent(
   () => import("@/routes/operations/reports"),
   "ReportsPage",
@@ -687,6 +688,14 @@ const claimsReviewRoute = createRoute({
   path: "/review",
   component: ClaimsQueuePage,
 });
+const claimsWicaRoute = createRoute({
+  getParentRoute: () => claimsLayoutRoute,
+  path: "/wica",
+  validateSearch: (search: Record<string, unknown>) => ({
+    incident: typeof search.incident === "string" ? search.incident : undefined,
+  }),
+  component: WicaPage,
+});
 
 // Reports Center spans every team (Policy Admin / Claims / Flex tabs); it lives
 // under /claims because that is the sidebar group it is listed in.
@@ -804,6 +813,7 @@ const routeTree = rootRoute.addChildren([
     claimsLayoutRoute.addChildren([
       claimsIndexRoute,
       claimsReviewRoute,
+      claimsWicaRoute,
       claimsReportsRoute,
     ]),
     settingsLayoutRoute.addChildren([

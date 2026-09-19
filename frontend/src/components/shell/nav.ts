@@ -99,6 +99,11 @@ export const COMPANY_NAV: NavGroup[] = [
         icon: ReceiptText,
       },
       {
+        label: "WICA",
+        to: "/claims/wica",
+        icon: Scale,
+      },
+      {
         label: "Reports Center",
         to: "/claims/reports",
         icon: BarChart3,

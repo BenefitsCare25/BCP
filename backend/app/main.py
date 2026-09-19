@@ -80,6 +80,7 @@ from app.api.v1 import (
     system,
     underwriting,
     voluntary_rates,
+    wica,
 )
 from app.core import drift_checks
 from app.core.deps import require_write_access
@@ -234,6 +235,7 @@ def create_app() -> FastAPI:
         claim_document_setups.router,
         claim_review_configs.router,
         claims.router,
+        wica.router,
         claims.employee_router,
         conversations.router,
         enquiries.router,

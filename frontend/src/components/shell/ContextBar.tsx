@@ -25,7 +25,9 @@ export function ContextBar() {
   const path = router.location.pathname;
   if (path === "/home") return null; // Home renders its own header
   if (!isCompanyPath(path)) return <FirmBanner />;
-  return <CompanyContext />;
+  const companyOnly = path === "/claims/wica" ||
+    (path === "/settings/company" && (router.location.search as { tab?: string }).tab === "wica");
+  return <CompanyContext companyOnly={companyOnly} />;
 }
 
 function FirmBanner() {
@@ -42,7 +44,7 @@ function FirmBanner() {
   );
 }
 
-function CompanyContext() {
+function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
   const { data: me } = useMe();
   const { data: years = [], isSuccess: yearsLoaded } = usePolicyYears();
   const activeClientId = useSession((s) => s.activeClientId);
@@ -88,7 +90,7 @@ function CompanyContext() {
 
   return (
     <nav
-      aria-label="Company and benefit year"
+      aria-label={companyOnly ? "Company" : "Company and benefit year"}
       data-context-bar="company"
       className="min-w-0 flex-1 overflow-x-auto text-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
@@ -124,7 +126,7 @@ function CompanyContext() {
             <span className="font-medium text-foreground">{activeName}</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        {!companyOnly && <div className="flex items-center gap-2">
           <CalendarRange className="size-4 shrink-0 text-muted-foreground" />
           {years.length > 0 ? (
             <Select
@@ -150,7 +152,7 @@ function CompanyContext() {
               No benefit years
             </span>
           )}
-        </div>
+        </div>}
       </div>
     </nav>
   );

@@ -55,6 +55,7 @@ from app.models.slip_template_profile import SlipTemplateProfile
 from app.models.stored_document import StoredDocument
 from app.models.underwriting_case import UnderwritingCase, UnderwritingReview
 from app.models.user import User, UserClientAccess
+from app.models.wica import WicaDocument, WicaIncident, WicaPack, WicaPeriod, WicaSettings
 
 __all__ = [
     "AISpendLog",
@@ -121,4 +122,9 @@ __all__ = [
     "UnderwritingReview",
     "User",
     "UserClientAccess",
+    "WicaDocument",
+    "WicaIncident",
+    "WicaPack",
+    "WicaPeriod",
+    "WicaSettings",
 ]

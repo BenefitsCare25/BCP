@@ -194,7 +194,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, init: RequestInit = {}) => request<T>(path, init),
   post: <T>(path: string, body: unknown, init: RequestInit = {}) =>
     request<T>(path, {
       ...init,
@@ -207,14 +207,14 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  put: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown, init: RequestInit = {}) =>
+    request<T>(path, { ...init, method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   /** Fetch a binary response (e.g. an .xlsx export) as a Blob. */
-  download: async (path: string): Promise<Blob> => {
+  download: async (path: string, headers: Record<string, string> = {}): Promise<Blob> => {
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { ...auth, ...scopeHeaders() },
+      headers: { ...auth, ...scopeHeaders(), ...headers },
     });
     if (!res.ok) {
       return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
@@ -232,12 +232,12 @@ export const api = {
     }
     return res;
   },
-  upload: async <T>(path: string, formData: FormData): Promise<T> => {
+  upload: async <T>(path: string, formData: FormData, headers: Record<string, string> = {}): Promise<T> => {
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       body: formData,
-      headers: { ...auth, ...scopeHeaders() },
+      headers: { ...auth, ...scopeHeaders(), ...headers },
     });
     if (!res.ok) {
       return fail(res, (text) => uploadError(text, res.statusText, res.status));

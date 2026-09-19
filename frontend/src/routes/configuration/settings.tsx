@@ -11,6 +11,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { HrAdminSettings } from "@/components/settings/HrAdminSettings";
+import { WicaSettings } from "@/components/wica/WicaSettings";
 import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 
 // Standing, company-scoped configuration: entity-matching aliases (moved out
@@ -27,7 +28,7 @@ import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 // was removed with the URL cutover: its only entry point was the old
 // `/configuration/settings?tab=…`, which no longer resolves, so it could never
 // fire for the case it existed to handle.
-const SETTINGS_TABS = ["aliases", "hr"] as const;
+const SETTINGS_TABS = ["aliases", "hr", "wica"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const isTab = (v: string | undefined): v is SettingsTab =>
   SETTINGS_TABS.includes(v as SettingsTab);
@@ -55,6 +56,7 @@ export function CompanySettingsPage() {
         <PageTabsBar className="overflow-x-auto">
           <TabsList className="min-w-max">
             <TabsTrigger value="aliases">Entity aliases</TabsTrigger>
+            <TabsTrigger value="wica">WICA</TabsTrigger>
             {canAdmin && <TabsTrigger value="hr">Authentication</TabsTrigger>}
           </TabsList>
         </PageTabsBar>
@@ -70,6 +72,7 @@ export function CompanySettingsPage() {
             onOpenChange={setAliasAddOpen}
           />
         </TabsContent>
+        <TabsContent value="wica"><WicaSettings /></TabsContent>
 
         {canAdmin && (
           <TabsContent value="hr">
