@@ -202,6 +202,14 @@ def create_log_case(
     # recording the case is the one who will decide it, and there is no claimant
     # in the loop to confirm anything.
     apply_conversion(db, claim)
+    from app.services.flex_submission import assert_flex_submission_allowed
+
+    assert_flex_submission_allowed(
+        db,
+        claim,
+        employee,
+        new_case=True,
+    )
     db.add(claim)
     db.flush()
     # A LOG case lands at `submitted` WITHOUT going through `submit_claim`, so

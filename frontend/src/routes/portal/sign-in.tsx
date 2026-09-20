@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCompany } from "@/components/portal/useCompany";
 import { portalPath } from "@/lib/tenant";
+import { activateNotificationClaimContext, notificationClaimId, notificationClaimYear } from "@/lib/claimNotificationLink";
 
 export function PortalSignInPage() {
   const navigate = useNavigate();
@@ -60,11 +61,18 @@ export function PortalSignInPage() {
   // just typed and `commitCompany` stored. Both are needed: the pathless
   // sign-in is still reachable from an old emailed link, and landing back on it
   // after a successful sign-in would be a loop.
-  const finish = () =>
+  const claimId = notificationClaimId();
+  const finish = () => {
+    if (claimId) {
+      activateNotificationClaimContext();
+      void navigate({ to: "/portal/$company/claims/$claimId", params: { company: routeCompany || company.trim().toLowerCase(), claimId } });
+      return;
+    }
     void navigate({
       to: "/portal/$company/coverage",
       params: { company: routeCompany || company.trim().toLowerCase() },
     });
+  };
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,7 +97,7 @@ export function PortalSignInPage() {
             window.location.assign(
               portalPath(
                 routeCompany || company.trim().toLowerCase(),
-                `/set-password?token=${encodeURIComponent(out.challenge_token)}`,
+                `/set-password?token=${encodeURIComponent(out.challenge_token)}${claimId ? `&claim=${encodeURIComponent(claimId)}` : ""}${notificationClaimYear() ? `&claim_year=${encodeURIComponent(notificationClaimYear()!)}` : ""}`,
               ),
             );
           } else {

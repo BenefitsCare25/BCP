@@ -22,6 +22,7 @@ field moved (no app path writes it any more, and it is no longer editable in
 the catalog UI). Never read it directly — a direct read reintroduces both bugs
 above for any company whose setup carries the current answer.
 """
+
 from __future__ import annotations
 
 import re
@@ -31,7 +32,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import PolicyYear, Product, ProductSetup
+from app.models import Plan, PolicyYear, Product, ProductSetup
 
 
 def _norm(code: str | None) -> str:
@@ -55,9 +56,7 @@ def _captured_values(answers: dict[str, Any] | None) -> list[str]:
         return []
     value = header.get("insurer")
     raw_values = (
-        value
-        if isinstance(value, (list, tuple, set))
-        else re.split(r"[,;\n]+", str(value or ""))
+        value if isinstance(value, (list, tuple, set)) else re.split(r"[,;\n]+", str(value or ""))
     )
     seen: set[str] = set()
     names: list[str] = []
@@ -134,18 +133,14 @@ def _legacy(product: Product | None) -> str:
     return (product.insurer or "").strip()
 
 
-def insurer_from_answers(
-    answers: dict[str, Any] | None, product: Product | None
-) -> str:
+def insurer_from_answers(answers: dict[str, Any] | None, product: Product | None) -> str:
     """THE resolution rule, for callers that already hold a product's setup
     answers (the slip export loads them for the header wording): the captured
     Header & Policy answer, else the legacy company-scoped catalog value."""
     return _captured(answers) or _legacy(product)
 
 
-def insurers_from_answers(
-    answers: dict[str, Any] | None, product: Product | None
-) -> list[str]:
+def insurers_from_answers(answers: dict[str, Any] | None, product: Product | None) -> list[str]:
     """All quotation recipients, falling back to the legacy primary insurer."""
     captured = _captured_values(answers)
     if captured:
@@ -154,9 +149,7 @@ def insurers_from_answers(
     return [legacy] if legacy else []
 
 
-def insurer_map(
-    db: Session, policy_year_id: str, products: Iterable[Product]
-) -> dict[str, str]:
+def insurer_map(db: Session, policy_year_id: str, products: Iterable[Product]) -> dict[str, str]:
     """``{product_id: insurer}`` for this year — the setup answer when this year
     has a setup for the code, else the legacy company-scoped catalog value.
     Products with neither are absent, so callers can treat a missing key as "no
@@ -184,3 +177,33 @@ def insurer_map_for_ids(
     return insurer_map(db, policy_year_id, products)
 
 
+def placement_insurers(db: Session, policy_year_ids: Iterable[str]) -> dict[tuple[str, str], str]:
+    """Bulk operational insurer by (year, normalized product code).
+
+    Callers supply already-authorized years. Resolve drafts even before plan
+    materialization, preserve authoritative blanks, and never publish a shared
+    library product's legacy insurer. Uses the same primary-insurer rules as
+    ``insurer_map`` with two bounded queries rather than a query per year.
+    """
+    year_ids = set(policy_year_ids)
+    if not year_ids:
+        return {}
+    resolved = {
+        (year_id, _norm(code)): _captured(answers)
+        for year_id, code, answers in db.execute(
+            select(
+                ProductSetup.policy_year_id, ProductSetup.product_code, ProductSetup.answers
+            ).where(ProductSetup.policy_year_id.in_(year_ids))
+        )
+    }
+    for year_id, product in db.execute(
+        select(Plan.policy_year_id, Product)
+        .join(Product, Product.id == Plan.product_id)
+        .join(PolicyYear, PolicyYear.id == Plan.policy_year_id)
+        .where(
+            Plan.policy_year_id.in_(year_ids),
+            Product.client_id == PolicyYear.client_id,
+        )
+    ):
+        resolved.setdefault((year_id, _norm(product.code)), _legacy(product))
+    return {key: name for key, name in resolved.items() if name}

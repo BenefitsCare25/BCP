@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from io import BytesIO
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -23,7 +24,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_access_audit, write_audit
@@ -50,6 +51,7 @@ from app.models import (
 )
 from app.models.claim import (
     AMENDED_BY_BROKER,
+    CLAIM_KIND_FLEX,
     CLAIM_STATUS_AI_FLAGGED,
     CLAIM_STATUS_AI_REVIEW_PENDING,
     CLAIM_STATUS_AI_VERIFIED,
@@ -148,6 +150,7 @@ from app.services.claims import (
     stamp_document_amendment,
     supersede_review_for_amendment,
 )
+from app.services.claims_query import claims_conditions
 from app.services.claims_register import build_claims_register_workbook
 from app.services.claims_review.amounts import amount_breakdown
 from app.services.claims_review.queue import (
@@ -157,7 +160,6 @@ from app.services.claims_review.queue import (
 )
 from app.services.fx import POLICY_CURRENCY, reset_breaker
 from app.services.log_cases import (
-    case_type_or_400,
     create_log_case,
     intake_date,
     intake_field,
@@ -274,9 +276,16 @@ def _broker_out(
     unread_messages: dict[str, int] | None = None,
     doc_dates: dict[str, DocumentDates] | None = None,
     reviews: dict[str, ClaimAIReview] | None = None,
+    policy_years: dict[str, PolicyYear] | None = None,
     can_mutate: bool = True,
 ) -> BrokerClaimOut:
     out = BrokerClaimOut.model_validate(claim)
+    year = (
+        policy_years.get(claim.policy_year_id)
+        if policy_years is not None else db.get(PolicyYear, claim.policy_year_id)
+    )
+    if year:
+        out.policy_year_label = f"{year.start_date:%d %b %Y} - {year.end_date:%d %b %Y}"
     # Shared filler (documents, referral letter, claimant name, episode anchor)
     # — keeps the broker payload in lockstep with the member's claim_to_out.
     populate_claim_out(
@@ -332,6 +341,12 @@ def list_claims(
     employee_id: str | None = Query(default=None),
     case_type: str | None = Query(default=None),
     search: str | None = Query(default=None, min_length=1, max_length=100),
+    all_years: bool = Query(default=False),
+    incurred_from: date | None = Query(default=None),
+    incurred_to: date | None = Query(default=None),
+    insurer: str | None = Query(default=None, max_length=128),
+    queue: str | None = Query(default=None, pattern="^(review|insurer|overdue)$"),
+    kind: str | None = Query(default=None, pattern="^(insured|flex)$"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     user: CurrentUser = Depends(get_current_user),
@@ -343,26 +358,12 @@ def list_claims(
     would silently change what every existing caller receives; the queue and the
     employee-level card pass it explicitly.
     """
-    assert_policy_year_for_user(policy_year_id, user, db)
-    conditions = [Claim.policy_year_id == policy_year_id]
-    if status_filter:
-        conditions.append(Claim.status == status_filter)
-    if employee_id:
-        conditions.append(Claim.employee_id == employee_id)
-    wanted_case_type = case_type_or_400(case_type)
-    if wanted_case_type:
-        conditions.append(Claim.case_type == wanted_case_type)
-    if search and search.strip():
-        term = search.strip()
-        conditions.append(
-            or_(
-                Claim.reference_no.icontains(term, autoescape=True),
-                Claim.invoice_number.icontains(term, autoescape=True),
-                Claim.provider_name.icontains(term, autoescape=True),
-                Employee.staff_id.icontains(term, autoescape=True),
-                Employee.employee_name.icontains(term, autoescape=True),
-            )
-        )
+    py = assert_policy_year_for_user(policy_year_id, user, db)
+    conditions = claims_conditions(
+        db, py, all_years=all_years, status_filter=status_filter, employee_id=employee_id,
+        case_type=case_type, search=search, incurred_from=incurred_from,
+        incurred_to=incurred_to, insurer=insurer, queue=queue, kind=kind,
+    )
     total = db.scalar(
         select(func.count(Claim.id))
         .join(Employee, Claim.employee_id == Employee.id)
@@ -372,7 +373,7 @@ def list_claims(
         select(Claim, Employee)
         .join(Employee, Claim.employee_id == Employee.id)
         .where(*conditions)
-        .order_by(Claim.submitted_at.desc().nullslast(), Claim.created_at.desc())
+        .order_by(Claim.submitted_at.desc().nullslast(), Claim.created_at.desc(), Claim.id)
         .offset(offset)
         .limit(limit)
     ).all()
@@ -382,6 +383,9 @@ def list_claims(
     unread = _unread_member_messages(db, [c.id for c, _ in rows])
     doc_dates = document_dates(db, [c.id for c, _ in rows])
     reviews = _latest_reviews(db, [c.id for c, _ in rows])
+    policy_years = {year.id: year for year in db.scalars(
+        select(PolicyYear).where(PolicyYear.id.in_({c.policy_year_id for c, _ in rows}))
+    )}
     return BrokerClaimList(
         total=total,
         offset=offset,
@@ -398,6 +402,7 @@ def list_claims(
                 unread_messages=unread,
                 doc_dates=doc_dates,
                 reviews=reviews,
+                policy_years=policy_years,
                 can_mutate=user.role != "broker_viewer",
             )
             for claim, employee in rows
@@ -410,15 +415,34 @@ def list_claims(
 def download_claims_register(
     request: Request,
     policy_year_id: str,
+    all_years: bool = Query(default=False),
+    status_filter: str | None = Query(default=None, alias="status"),
+    employee_id: str | None = Query(default=None),
+    case_type: str | None = Query(default=None),
+    search: str | None = Query(default=None, min_length=1, max_length=100),
+    incurred_from: date | None = Query(default=None),
+    incurred_to: date | None = Query(default=None),
+    insurer: str | None = Query(default=None, max_length=128),
+    queue: str | None = Query(default=None, pattern="^(review|insurer|overdue)$"),
+    kind: str | None = Query(default=None, pattern="^(insured|flex)$"),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """Claims register (.xlsx) — every claim in the policy year, one per row."""
     py = assert_policy_year_for_user(policy_year_id, user, db)
-    wb = build_claims_register_workbook(db, py)
+    conditions = claims_conditions(
+        db, py, all_years=all_years, status_filter=status_filter, employee_id=employee_id,
+        case_type=case_type, search=search, incurred_from=incurred_from,
+        incurred_to=incurred_to, insurer=insurer, queue=queue, kind=kind,
+    )
+    has_filters = any((
+        all_years, status_filter, employee_id, case_type, search, incurred_from,
+        incurred_to, insurer, queue, kind,
+    ))
+    wb = build_claims_register_workbook(db, py, conditions=conditions if has_filters else None)
     write_audit(
         db, user, action="export", entity_type="claims_register",
-        entity_id=policy_year_id, after={"report": "claims-register"},
+        entity_id=policy_year_id, after={"report": "claims-register", "all_years": all_years},
     )
     db.commit()
     buf = BytesIO()
@@ -436,6 +460,37 @@ def download_claims_register(
             )
         },
     )
+
+
+@router.get("/intake-quality")
+def get_intake_quality(
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.intake_feedback import intake_quality
+
+    year = assert_policy_year_for_user(policy_year_id, user, db)
+    return intake_quality(db, year.client_id, year.id)
+
+
+@router.get("/insurers", response_model=list[str])
+def claims_insurers(
+    policy_year_id: str,
+    all_years: bool = False,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[str]:
+    """Configured insurers in the selected company/year scope, including history."""
+    from app.services.product_insurer import placement_insurers
+
+    year = assert_policy_year_for_user(policy_year_id, user, db)
+    years = list(db.scalars(select(PolicyYear.id).where(
+        PolicyYear.client_id == year.client_id,
+    ))) if all_years else [year.id]
+    names = placement_insurers(db, years).values()
+    labels = {name.casefold(): name for name in names if name}
+    return sorted(labels.values(), key=str.casefold)
 
 
 @router.get("/fx-quote", response_model=FxQuoteOut)
@@ -530,13 +585,16 @@ def decide_claim(
     # it has to fail before the approval, not after it.
     assert_claim_revision(claim, body.expected_revision)
 
+    if claim.claim_kind == CLAIM_KIND_FLEX:
+        lock_claim_utilization_bucket(db, claim)
     before = {
         "status": claim.status,
         "amount_approved": claim.amount_approved,
         "amount_converted": claim.amount_converted,
     }
     if body.action == "approve":
-        lock_claim_utilization_bucket(db, claim)
+        if claim.claim_kind != CLAIM_KIND_FLEX:
+            lock_claim_utilization_bucket(db, claim)
         # An assessor supplying the missing SGD value of a foreign claim. Applied
         # BEFORE the figure is resolved below, so one request can both price the
         # claim and approve it — the assessor is looking at the receipt once.
@@ -850,6 +908,8 @@ def record_claim_payment(
     command = "settlement:payment"
     if is_replayed_claim_command(db, claim, command, idempotency_key):
         return _broker_out(db, claim, db.get(Employee, claim.employee_id))
+    if claim.claim_kind == CLAIM_KIND_FLEX:
+        lock_claim_utilization_bucket(db, claim)
     assert_transition(claim, CLAIM_STATUS_PAID)
     payment = body.amount if body.amount is not None else claim.amount_approved
     if (
@@ -912,6 +972,8 @@ def update_claim_assessment(
     if is_replayed_claim_command(db, claim, command, idempotency_key):
         return _broker_out(db, claim, db.get(Employee, claim.employee_id))
     fields = body.model_fields_set - {"acknowledge_overpayment"}
+    if claim.claim_kind == CLAIM_KIND_FLEX and "payment_amount" in fields:
+        lock_claim_utilization_bucket(db, claim)
     if (
         "payment_amount" in fields
         and body.payment_amount is not None

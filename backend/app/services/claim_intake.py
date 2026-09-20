@@ -345,6 +345,11 @@ def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
     return _PROFILES.get((product_code or "").strip().upper(), _EMPTY)
 
 
+def product_codes_for_claim_category(category: str) -> tuple[str, ...]:
+    """Canonical codes for SQL filters using the same categories as intake."""
+    return tuple(code for code, profile in _PROFILES.items() if profile.category == category)
+
+
 def supports_gp_riders(product_code: str | None) -> bool:
     """Whether TCM/physiotherapy are optional riders on this product.
 

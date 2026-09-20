@@ -1,18 +1,35 @@
 """Audit log read endpoint."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from datetime import date
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
-from app.core.deps import require_client_id
+from app.core.deps import require_claim_access, require_client_id
 from app.core.pagination import MAX_LIMIT
 from app.db.session import get_db
 from app.models import AuditLog, User
 from app.schemas.api import AuditLogEntry, AuditLogPage
 
 router = APIRouter(prefix="/audit-log", tags=["audit-log"])
+
+
+@router.get("/claim-workload", dependencies=[Depends(require_claim_access)])
+def get_claim_workload(
+    from_date: date,
+    to_date: date,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.services.claim_workload import claim_workload
+
+    if to_date < from_date or (to_date - from_date).days > 366:
+        raise HTTPException(422, "Choose an ordered date range of at most 367 days.")
+    return claim_workload(db, require_client_id(user), from_date, to_date)
 
 
 @router.get("", response_model=AuditLogPage)
@@ -23,7 +40,9 @@ def list_audit_log(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AuditLogPage:
-    filters = []
+    # Intake baselines contain medical readings for server-side comparison.
+    # They are internal records, never generic company activity payloads.
+    filters = [AuditLog.action != "claim.intake_suggested"]
     # System admins see everything; everyone else is scoped to their client.
     if user.role != ROLE_SYSTEM_ADMIN:
         filters.append(AuditLog.client_id == require_client_id(user))

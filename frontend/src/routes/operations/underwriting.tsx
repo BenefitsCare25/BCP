@@ -43,6 +43,7 @@ import {
 import { useSession } from "@/stores/session";
 import { formatError } from "@/lib/errors";
 import { fmtCurrency } from "@/lib/format";
+import { UnderwritingReminders } from "@/components/operations/UnderwritingReminders";
 
 const OPEN_STATUSES = new Set([
   "pending_requirements",
@@ -337,6 +338,7 @@ function ReviewDetail({
             </p>
           )}
         </div>
+        <UnderwritingReminders key={review.id} reviewId={review.id} open={OPEN_STATUSES.has(review.status)} />
       </CardContent>
     </Card>
   );

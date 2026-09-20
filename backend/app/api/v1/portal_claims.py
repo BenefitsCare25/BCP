@@ -31,15 +31,20 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
+from app.core.claim_portal_scope import (
+    claim_policy_year,
+)
+from app.core.claim_portal_scope import (
+    get_claims_member as get_current_member,
+)
+from app.core.claim_portal_scope import (
+    resolve_claims_employee as resolve_member_employee,
+)
 from app.core.clock import today as business_today
 from app.core.downloads import attachment_header
 from app.core.pagination import MAX_LIMIT
 from app.core.portal_auth import (
     CurrentMember,
-    active_policy_year,
-    assert_member_capability,
-    get_current_member,
-    resolve_member_employee,
 )
 from app.core.rate_limit import limiter
 from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES, get_storage
@@ -186,7 +191,7 @@ def _own_claim(db: Session, claim_id: str, employee_id: str) -> Claim:
 
 
 def _active_year(db: Session, member: CurrentMember) -> PolicyYear:
-    year = active_policy_year(db, member.client_id)
+    year = claim_policy_year(db, member)
     if year is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No active coverage")
     return year
@@ -581,13 +586,18 @@ async def extract_claim_intake(
 
     statement = build_member_statement(db, employee)
     coverage_opts = build_coverage_options(db, statement, employee, year)
-    return build_intake_suggestion(
+    suggestion = build_intake_suggestion(
         extractions,
         coverage_opts,
         employee,
         year,
         doc_types=configured_definitions(db, employee.client_id),
     )
+    from app.services.intake_feedback import remember_intake
+
+    suggestion.intake_id = remember_intake(db, suggestion, employee, member.member_account_id)
+    db.commit()
+    return suggestion
 
 
 @options_router.get("/claim-diagnoses", response_model=DiagnosisSearchOut)
@@ -888,6 +898,11 @@ def create_my_claim(
     claim = create_claim(
         db, employee, body, submitted_by_member_id=member.member_account_id
     )
+    from app.services.intake_feedback import record_intake_feedback
+
+    record_intake_feedback(
+        db, claim, body.intake_id, body.intake_claim_index, member.member_account_id
+    )
     write_member_audit(
         db, member, "claim.drafted", "claim", claim.id,
         after={"claim_kind": claim.claim_kind, "amount": claim.amount_claimed},
@@ -1000,7 +1015,7 @@ async def upload_my_claim_document(
     # includes `draft`, so RESPOND alone let a `settling` member pile documents
     # onto a stale draft they can neither submit nor delete.
     if claim.status == CLAIM_STATUS_DRAFT:
-        assert_member_capability(db, employee, Capability.CLAIM)
+        resolve_member_employee(db, member, requires=Capability.CLAIM)
     # `assert_member_may_amend`, not a raw status check: `member_editability` is
     # the ONE owner of "may the claimant still change this claim", and the two
     # answers differ — a portal claim reclassified to a LOG case is refused by
@@ -1071,7 +1086,7 @@ def amend_my_claim(
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     if claim.status == CLAIM_STATUS_DRAFT:
-        assert_member_capability(db, employee, Capability.CLAIM)
+        resolve_member_employee(db, member, requires=Capability.CLAIM)
     assert_member_may_amend(claim)
     assert_claim_revision(claim, body.expected_revision)
 
@@ -1121,7 +1136,7 @@ def delete_my_claim_document(
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
     claim = lock_claim_for_mutation(db, _own_claim(db, claim_id, employee.id))
     if claim.status == CLAIM_STATUS_DRAFT:
-        assert_member_capability(db, employee, Capability.CLAIM)
+        resolve_member_employee(db, member, requires=Capability.CLAIM)
     assert_member_may_amend(claim)
 
     doc = db.get(StoredDocument, doc_id)
@@ -1270,7 +1285,7 @@ def submit_my_claim(
     ):
         return claim_to_out(db, claim)
     if claim.status == CLAIM_STATUS_DRAFT:
-        assert_member_capability(db, employee, Capability.CLAIM)
+        resolve_member_employee(db, member, requires=Capability.CLAIM)
     submit_claim(
         db, claim, employee, submitted_by_member_id=member.member_account_id
     )

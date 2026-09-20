@@ -14,12 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
-from app.core.pagination import MAX_LIMIT
-from app.core.portal_auth import (
-    CurrentMember,
-    get_current_member,
-    resolve_member_employee,
+from app.core.claim_portal_scope import (
+    get_claims_member as get_current_member,
 )
+from app.core.claim_portal_scope import (
+    resolve_claims_employee as resolve_member_employee,
+)
+from app.core.pagination import MAX_LIMIT
+from app.core.portal_auth import CurrentMember
 from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import Claim

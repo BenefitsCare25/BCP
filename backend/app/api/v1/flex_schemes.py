@@ -77,6 +77,7 @@ from app.services.flex_membership import (
 from app.services.flex_pricing_resolver import _is_age
 from app.services.flex_proration import proration_errors
 from app.services.flex_reconcile import seed_tier_match_sets
+from app.services.flex_submission import submission_rule_errors
 
 logger = logging.getLogger(__name__)
 
@@ -839,6 +840,7 @@ def save_flex(
     # Fail fast at the write boundary: a malformed section (e.g. a non-list
     # `tiers`) must not persist and break later reads.
     shape_errors = _section_shape_errors(body.scheme)
+    shape_errors.extend(submission_rule_errors(body.scheme))
     # Pro-ration decides money, so a save that carries an unrecognised basis must
     # be refused rather than silently read as "no pro-ration" — a broker would
     # believe it was on. Checked HERE and not in `validate_scheme`, so the error

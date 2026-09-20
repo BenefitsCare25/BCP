@@ -68,6 +68,9 @@ export type ReferralMode = "" | "upload" | "existing";
  * (original upload position) — used as the list key and removal handle so
  * duplicate file names can't collapse two queued claims into one. */
 export interface PendingClaim {
+  intakeId?: string | null;
+  claimIndex?: number;
+  fieldSources?: import("@/api/portal").ClaimIntakeSuggestion["field_sources"];
   uploadIndex: number;
   fileName: string;
   documents: AutofillDoc[];
@@ -194,6 +197,9 @@ export function planFromSuggestion(
         group[0];
       return {
         uploadIndex: anchor?.upload_index ?? claimIndex,
+        intakeId: s.intake_id,
+        claimIndex,
+        fieldSources: anchor?.field_sources,
         fileName: anchor?.file_name ?? `Invoice ${claimIndex + 1}`,
         documents: documentsFor(claimIndex),
         fields: anchor?.fields ?? null,

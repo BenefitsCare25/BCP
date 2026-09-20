@@ -79,8 +79,10 @@ from app.api.v1 import (
     session,
     system,
     underwriting,
+    underwriting_reminders,
     voluntary_rates,
     wica,
+    workflow_notifications,
 )
 from app.core import drift_checks
 from app.core.deps import require_write_access
@@ -197,6 +199,8 @@ def create_app() -> FastAPI:
     api_routers = (
         adc.router,
         dashboard.router,
+        workflow_notifications.router,
+        underwriting_reminders.router,
         policy_years.router,
         recommendations.router,
         schemas_api.router,

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCompany } from "@/components/portal/useCompany";
+import { activateNotificationClaimContext, notificationClaimId } from "@/lib/claimNotificationLink";
 
 const MIN_LENGTH = 12;
 
@@ -46,7 +47,15 @@ export function PortalSetPasswordPage() {
   const match = password.length > 0 && password === confirm;
   const canSubmit = st.ok && match && !!token;
 
-  const finish = () => void navigate({ to: "/portal/$company/coverage", params: { company } });
+  const finish = () => {
+    const claimId = notificationClaimId();
+    if (claimId) {
+      activateNotificationClaimContext();
+      void navigate({ to: "/portal/$company/claims/$claimId", params: { company, claimId } });
+    } else {
+      void navigate({ to: "/portal/$company/coverage", params: { company } });
+    }
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

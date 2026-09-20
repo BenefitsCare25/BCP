@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Any
 
 from openpyxl import Workbook
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -38,6 +38,7 @@ from app.models import (
     Product,
     UnderwritingCase,
     UnderwritingReview,
+    WorkflowNotification,
 )
 from app.models.underwriting_case import (
     DECISION_LABELS,
@@ -70,10 +71,8 @@ from app.services.underwriting import (
     nel_age_limits,
 )
 
-# The firm's spreadsheet layout, then the platform-only columns. "No. of
-# Reminders Sent" is carried for layout parity but left BLANK: chaser emails
-# aren't tracked anywhere in the system, and writing 0 would assert none were
-# sent rather than admitting the platform doesn't know.
+# Reminder counts include confirmed platform deliveries, never queued or failed
+# attempts. Historical off-platform correspondence is not included.
 HEADER = [
     "Entity",
     "Staff ID",
@@ -175,6 +174,20 @@ def build_underwriting_report(
     insurer_by_product = insurer_map(db, py.id, products.values())
     period = policy_period(py)
     renewal = py.start_date
+    reminder_counts: dict[str, int] = dict(
+        db.execute(
+            select(WorkflowNotification.subject_id, func.count(WorkflowNotification.id))
+            .where(
+                WorkflowNotification.client_id == py.client_id,
+                WorkflowNotification.policy_year_id == py.id,
+                WorkflowNotification.kind == "underwriting_reminder",
+                WorkflowNotification.status == "sent",
+            )
+            .group_by(WorkflowNotification.subject_id)
+        )
+        .tuples()
+        .all()
+    )
 
     def _subject(
         employee_id: str | None, dependant_id: str | None
@@ -244,7 +257,7 @@ def build_underwriting_report(
             REVIEW_STATUS_LABELS.get(review.status, review.status) if review else "",
             decision,
             case.decided_on if case else None,
-            "",  # No. of Reminders Sent — not tracked (see HEADER)
+            reminder_counts.get(review.id, 0) if review else 0,
             "Dependant" if is_dependant else "Employee",
             as_date(first_value(life_attrs, DOB_KEYS)),
             anb_from_attrs(life_attrs, renewal) if renewal else None,

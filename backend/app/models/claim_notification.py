@@ -1,4 +1,5 @@
 """Durable, privacy-minimised member claim-email outbox."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -22,6 +23,7 @@ class ClaimNotification(Base, TimestampMixin):
             name="status_valid",
         ),
         Index("ix_claim_notifications_delivery", "status", "available_at"),
+        Index("ix_claim_notifications_digest_key", "digest_key"),
         Index(
             "uq_claim_notifications_source_message",
             "source_message_id",
@@ -36,15 +38,15 @@ class ClaimNotification(Base, TimestampMixin):
     claim_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     source_message_id: Mapped[str] = mapped_column(String(36), nullable=False)
     recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=NOTIFICATION_QUEUED
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=NOTIFICATION_QUEUED)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    available_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Fixed-window, company/member/email-specific grouping. NULL is immediate.
+    digest_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Fences a worker whose lease expired before it reported delivery.
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)

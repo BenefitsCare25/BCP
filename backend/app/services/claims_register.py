@@ -13,6 +13,7 @@ from __future__ import annotations
 from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models import Claim, Employee, PolicyYear
 from app.models.claim import (
@@ -62,6 +63,7 @@ CLAIMS_REGISTER_HEADER = [
     f"Amount Approved ({POLICY_CURRENCY})",
     "Submitted On",
     "Decided On",
+    "Benefit Year",
 ]
 
 
@@ -85,7 +87,10 @@ def _anchor_ref(claim: Claim, anchors: dict[str, Claim]) -> str:
 
 
 def build_claims_register_workbook(
-    db: Session, policy_year: PolicyYear
+    db: Session,
+    policy_year: PolicyYear,
+    *,
+    conditions: list[ColumnElement[bool]] | None = None,
 ) -> Workbook:
     """One row per submitted claim in the year, newest submission first."""
     rows = list(
@@ -93,17 +98,23 @@ def build_claims_register_workbook(
             select(Claim, Employee)
             .join(Employee, Claim.employee_id == Employee.id)
             .where(
-                Claim.policy_year_id == policy_year.id,
-                Claim.status != CLAIM_STATUS_DRAFT,
+                *(conditions if conditions is not None else [
+                    Claim.policy_year_id == policy_year.id,
+                    Claim.status != CLAIM_STATUS_DRAFT,
+                ]),
             )
             .order_by(
                 Claim.submitted_at.desc().nullslast(),
                 Claim.created_at.desc(),
+                Claim.id,
             )
         ).all()
     )
     claims = [c for c, _ in rows]
     _, dep_names, _, anchors = prefetch_claim_relations(db, claims)
+    years = {year.id: year for year in db.scalars(
+        select(PolicyYear).where(PolicyYear.id.in_({claim.policy_year_id for claim in claims}))
+    )}
 
     wb = Workbook()
     ws = wb.active
@@ -145,6 +156,8 @@ def build_claims_register_workbook(
             claim.amount_approved,
             naive(claim.submitted_at),
             naive(claim.decided_at),
+            f"{years[claim.policy_year_id].start_date:%d %b %Y} - "
+            f"{years[claim.policy_year_id].end_date:%d %b %Y}",
         ])
 
     autosize(ws)

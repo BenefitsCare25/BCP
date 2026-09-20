@@ -475,6 +475,8 @@ export interface PortalClaimList {
 }
 
 export interface ClaimCreateInput {
+  intake_id?: string | null;
+  intake_claim_index?: number;
   claim_kind: "insured" | "flex";
   product_code?: string | null;
   flex_category_name?: string | null;
@@ -666,6 +668,13 @@ export function useCoverageOptions() {
 }
 
 /** One document's field reading in an autofill suggestion. */
+export interface IntakeFieldSource {
+  file_name: string;
+  upload_index: number;
+  source_label: string;
+  confidence: number | null;
+}
+
 export interface IntakeSuggestFields {
   provider_name: string | null;
   incurred_date: string | null;
@@ -684,6 +693,7 @@ export interface IntakeSuggestFields {
  * share a `claim_index`; `claim_anchor` identifies the one that opens it.
  * Evidence without a billing identity can be shared across all claims. */
 export interface IntakeSuggestDocument {
+  field_sources?: Record<string, IntakeFieldSource[]>;
   file_name: string;
   /** 0-based position in the original upload — join File objects to documents
    *  on this (robust to duplicate names and to skipped files). */
@@ -704,6 +714,8 @@ export interface IntakeSuggestDocument {
 /** Document-driven autofill: what the AI read off an uploaded receipt, mapped
  * to claim-form fields. Every value is a suggestion the member confirms. */
 export interface ClaimIntakeSuggestion {
+  intake_id?: string | null;
+  field_sources?: Record<string, IntakeFieldSource[]>;
   available: boolean;
   reason: string | null;
   document_type: string | null;

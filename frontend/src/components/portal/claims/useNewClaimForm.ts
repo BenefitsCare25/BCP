@@ -90,6 +90,10 @@ export function useNewClaimForm() {
   const submitClaim = useSubmitClaim();
   const deleteDraft = useDeleteDraftClaim();
   const extractIntake = useExtractClaimIntake();
+  const [intakeId, setIntakeId] = useState<string | null>(null);
+  const [intakeClaimIndex, setIntakeClaimIndex] = useState(0);
+  const [intakeBaseline, setIntakeBaseline] = useState<ClaimIntakeSuggestion["fields"] | null>(null);
+  const [fieldSources, setFieldSources] = useState<NonNullable<ClaimIntakeSuggestion["field_sources"]>>({});
 
   const member = usePortalSession((s) => s.member);
 
@@ -759,6 +763,10 @@ export function useNewClaimForm() {
   // claimant first (it filters the claim-type list), then the type, then the
   // fields. Each uploaded file is paired with the slot the AI matched it to.
   const applySuggestion = (s: ClaimIntakeSuggestion, picked: File[]) => {
+    setIntakeId(s.intake_id ?? null);
+    setIntakeClaimIndex(0);
+    setIntakeBaseline(s.available ? s.fields : null);
+    setFieldSources(s.field_sources ?? {});
     const plan = planFromSuggestion(s, picked);
     setAutofillDocs(plan.autofillDocs);
     setPendingClaims(plan.pendingClaims);
@@ -817,6 +825,9 @@ export function useNewClaimForm() {
       return true;
     });
     if (withinSize.length === 0) return;
+    setIntakeId(null);
+    setIntakeBaseline(null);
+    setFieldSources({});
     clearedFiles.current = new Set(); // a fresh set — allow auto-placement
     try {
       const suggestion = await extractIntake.mutateAsync(withinSize);
@@ -842,6 +853,10 @@ export function useNewClaimForm() {
   const advanceToNextClaim = () => {
     const [next, ...rest] = pendingClaims;
     if (!next) return;
+    setIntakeId(next.intakeId ?? null);
+    setIntakeClaimIndex(next.claimIndex ?? 0);
+    setIntakeBaseline(next.fields);
+    setFieldSources(next.fieldSources ?? {});
     setPendingClaims(rest);
     resetTypeFields();
     setFiles([]);
@@ -999,6 +1014,8 @@ export function useNewClaimForm() {
       }
 
       const claim = await createClaim.mutateAsync({
+        intake_id: intakeId,
+        intake_claim_index: intakeClaimIndex,
         claim_kind: effectiveKind,
         product_code: effectiveKind === "insured" ? productCode : null,
         flex_category_name: effectiveKind === "flex" ? flexCategory : null,
@@ -1245,6 +1262,14 @@ export function useNewClaimForm() {
     files,
     setFiles,
     autofillDocs,
+    fieldSources,
+    intakeBaseline,
+    intakeCurrent: {
+      provider_name: effectiveProvider, incurred_date: incurredDate,
+      admission_date: supportsStayDates ? admissionDate : "", discharge_date: supportsStayDates ? dischargeDate : "",
+      invoice_number: invoiceNumber, amount: amount ? Number(amount) : null,
+      currency: effectiveCurrency, diagnosis, doctor_name: requiresDoctorName ? doctorName : "",
+    } as Record<string, string | number | null>,
     autofillNote,
     lowConfidence,
     pendingClaims,

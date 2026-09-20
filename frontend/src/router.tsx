@@ -18,6 +18,7 @@ import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
 import { currentPortalTenantSlug } from "@/lib/tenant";
+import { activateNotificationClaimContext, notificationClaimId } from "@/lib/claimNotificationLink";
 import { HrShell } from "@/components/hr/HrShell";
 import { hasValidHrSession } from "@/stores/hrSession";
 import { refreshHrSession } from "@/api/hrClient";
@@ -207,6 +208,11 @@ const portalSignInRoute = createRoute({
   beforeLoad: ({ params }) => {
     // Already signed in (and not following a fresh magic link) → straight in.
     if (hasValidPortalSession() && !window.location.search.includes("code=")) {
+      const claimId = notificationClaimId();
+      if (claimId) {
+        activateNotificationClaimContext();
+        throw redirect({ to: "/portal/$company/claims/$claimId", params: { company: params.company, claimId } });
+      }
       throw redirect({
         to: "/portal/$company/coverage",
         params: { company: params.company },

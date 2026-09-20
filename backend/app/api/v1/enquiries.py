@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_client_id
+from app.core.deps import require_claim_access, require_client_id
 from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import MemberEnquiry
@@ -42,7 +42,11 @@ from app.services.member_enquiries import (
     reopen_enquiry,
 )
 
-router = APIRouter(prefix="/enquiries", tags=["enquiries"])
+router = APIRouter(
+    prefix="/enquiries",
+    tags=["enquiries"],
+    dependencies=[Depends(require_claim_access)],
+)
 
 
 def load_client_enquiry(

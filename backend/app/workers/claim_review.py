@@ -54,6 +54,7 @@ from app.services.claims_review.pipeline import (
     ReviewOwnershipLost,
     execute_leased_review,
 )
+from app.services.workflow_delivery import process_one_workflow_notification
 from app.workers.review_scheduler import ReviewScheduler, WorkerLimits
 
 logger = logging.getLogger(__name__)
@@ -472,6 +473,7 @@ def _notification_loop(stopping: threading.Event) -> None:
             target_firms = firm_ids if is_postgres(engine) else [None]
             for firm_id in target_firms:
                 delivered = process_one_claim_notification(firm_id) or delivered
+                delivered = process_one_workflow_notification(firm_id) or delivered
         except Exception:
             logger.exception("Claim notification loop failed")
             stopping.wait(5)

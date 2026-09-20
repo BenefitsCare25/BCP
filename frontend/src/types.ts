@@ -1280,6 +1280,7 @@ export const FAMILY_STATUS_LABELS: Record<FamilyStatusCode, string> = {
 };
 
 export interface FlexMeta {
+  claim_submission_basis?: "off" | "paid" | "approved" | "reserved";
   scheme_name?: string;
   /** Default currency; tiers may override per country. */
   currency?: string;

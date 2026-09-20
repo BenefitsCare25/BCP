@@ -61,12 +61,18 @@ export function CompanyDashboardPage() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Kpi label="Members" value={company.member_count} icon={Users} />
         <Kpi label="Dependants" value={company.dependant_count} icon={UserPlus} />
-        <Kpi
-          label="Claims to review"
-          value={company.claims_to_review}
-          icon={ReceiptText}
-          tone={company.claims_to_review > 0 ? "warn" : "default"}
-        />
+        <Link
+          to="/claims/review"
+          search={{ tab: "queue", queue: "review" }}
+          className="rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Kpi
+            label="Claims to review"
+            value={company.claims_to_review}
+            icon={ReceiptText}
+            tone={company.claims_to_review > 0 ? "warn" : "default"}
+          />
+        </Link>
         <Kpi
           label="Unmatched members"
           value={company.employees_unmatched}

@@ -56,6 +56,8 @@ from app.models.stored_document import StoredDocument
 from app.models.underwriting_case import UnderwritingCase, UnderwritingReview
 from app.models.user import User, UserClientAccess
 from app.models.wica import WicaDocument, WicaIncident, WicaPack, WicaPeriod, WicaSettings
+from app.models.workflow_notification import WorkflowNotification
+from app.models.workflow_notification_settings import WorkflowNotificationSettings
 
 __all__ = [
     "AISpendLog",
@@ -127,4 +129,6 @@ __all__ = [
     "WicaPack",
     "WicaPeriod",
     "WicaSettings",
+    "WorkflowNotification",
+    "WorkflowNotificationSettings",
 ]

@@ -13,6 +13,7 @@ functions, no I/O, so the mapping is unit-testable in isolation.
 """
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from datetime import date
@@ -26,6 +27,7 @@ from app.schemas.claims import (
     InsuredClaimOption,
     IntakeClaimant,
     IntakeFields,
+    IntakeFieldSource,
 )
 from app.services.claim_doc_types import (
     DocTypeDefinition,
@@ -1119,6 +1121,38 @@ def _merge_extractions(
     return {"document_type": primary_type, "fields": all_fields}
 
 
+def intake_field_sources(
+    extractions: list[dict[str, Any]], suggested: IntakeFields,
+    year: PolicyYear, selection: str | None,
+) -> dict[str, list[IntakeFieldSource]]:
+    """Attribute values by rerunning the existing mapper on individual readings.
+
+    All matching sources are shown, rather than inventing one when two pages
+    agree. Missing/invalid model confidence remains unknown. Derived currency
+    has no independent confidence, so it is deliberately not scored.
+    """
+    result: dict[str, list[IntakeFieldSource]] = {}
+    for index, document in enumerate(extractions):
+        for field in _fields(document):
+            mapped, _ = _doc_reading([field], year)
+            mapped.diagnosis = _resolve_diagnosis(mapped.diagnosis, selection)
+            for key, expected in suggested.model_dump().items():
+                if expected is None or getattr(mapped, key) != expected:
+                    continue
+                confidence = field.get("confidence")
+                if (isinstance(confidence, bool) or not isinstance(confidence, (int, float))
+                        or not math.isfinite(confidence) or not 0 <= confidence <= 1
+                        or key == "currency"):
+                    confidence = None
+                result.setdefault(key, []).append(IntakeFieldSource(
+                    file_name=str(document.get("file_name") or "document"),
+                    upload_index=document.get("upload_index", index),
+                    source_label=str(field.get("label") or "Document reading"),
+                    confidence=confidence,
+                ))
+    return result
+
+
 def build_intake_suggestion(
     extractions: list[dict[str, Any]],
     coverage_opts: CoverageOptionsOut,
@@ -1189,6 +1223,9 @@ def build_intake_suggestion(
         merged, coverage_opts, employee, year, doc_types
     )
     suggestion.multi_claim = multi
+    suggestion.field_sources = intake_field_sources(
+        pool, suggestion.fields, year, suggestion.claim_selection
+    )
 
     # Single-claim mode with documents quoting DIFFERENT amounts: the merge
     # picked one of them — surface it via the "double-check" hint.
@@ -1229,6 +1266,8 @@ def build_intake_suggestion(
                 upload_index=upload_index,
                 fields=fields,
                 low_confidence=low,
+                field_sources=(intake_field_sources([e], fields, year, suggestion.claim_selection)
+                               if fields else {}),
             )
         )
     suggestion.documents = documents

@@ -17,6 +17,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Cloud,
+  Camera,
   Loader2,
   Paperclip,
   Sparkles,
@@ -64,6 +65,7 @@ export function AutofillCard({
   leading?: ReactNode;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
   const { autofillDocs, autofillNote, lowConfidence, docSlots, slotFiles } =
     form;
 
@@ -113,6 +115,14 @@ export function AutofillCard({
               bill and discharge summary. Keep every page of a document in one
               file. You can edit everything before submitting.
             </Hint>
+            <input ref={camera} type="file" accept="image/jpeg,image/png" capture="environment" className="hidden" onChange={(event) => {
+              const photo = event.target.files?.[0];
+              event.target.value = "";
+              if (photo) void form.runAutofill([photo]);
+            }} />
+            <Action type="button" disabled={form.extractIntake.isPending} onClick={() => camera.current?.click()} aria-label="Photograph a receipt">
+              <Camera className="size-4" aria-hidden /><span>Take photo</span>
+            </Action>
           </div>
         </div>
       </div>
@@ -162,6 +172,22 @@ export function AutofillCard({
         </div>
       )}
 
+      {form.intakeBaseline && <details className="rounded-control bg-bar/50 p-3 text-row">
+        <summary className="cursor-pointer font-medium">Review document readings and your changes</summary>
+        <p className="mt-2 text-label">Confidence is the model's reading estimate. Check the original document; it does not confirm eligibility or accuracy.</p>
+        <dl className="mt-3 space-y-3">
+          {Object.entries(form.intakeBaseline).filter(([, value]) => value != null).map(([field, original]) => {
+            const current = form.intakeCurrent[field];
+            const changed = String(original).trim() !== String(current ?? "").trim();
+            const sources = form.fieldSources[field] ?? [];
+            return <div key={field}>
+              <dt className="font-medium">{LOW_CONF_LABELS[field] ?? field}{changed ? " · Changed" : ""}</dt>
+              <dd className="break-words">Read: {String(original)}{changed && <> → Now: {String(current || "Not used")}</>}</dd>
+              <dd className="text-label">{sources.length ? sources.map((source) => `${source.file_name} (upload ${source.upload_index + 1}) · ${source.source_label} · ${source.confidence == null ? "Confidence not reported" : `${Math.round(source.confidence * 100)}% model confidence`}`).join("; ") : "Derived suggestion; no direct source reading identified."}</dd>
+            </div>;
+          })}
+        </dl>
+      </details>}
       <MountRule />
     </div>
   );

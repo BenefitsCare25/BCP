@@ -15,13 +15,14 @@ single firm schema (the active client's), so counts for companies in OTHER
 firms are not visible here — consistent with system_admin operating one firm at
 a time. On SQLite (single schema) every accessible company is counted.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -49,6 +50,8 @@ from app.models.enrollment_window import EnrollmentWindow, WindowStatus
 from app.models.member_enquiry import MemberEnquiry
 from app.models.policy_year import PolicyYear, PolicyYearStatus
 from app.models.underwriting_case import UnderwritingCase, UnderwritingStatus
+from app.services.claim_filters import claim_insurer_filter
+from app.services.product_insurer import placement_insurers
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -110,6 +113,7 @@ class FirmTotals(BaseModel):
 class DashboardSummary(BaseModel):
     firm: FirmTotals
     companies: list[CompanySummary]
+    insurers: list[str] = Field(default_factory=list)
 
 
 def _grouped_count(
@@ -118,17 +122,11 @@ def _grouped_count(
     """`{policy_year_id: count}` for `year_ids`, applying extra WHERE filters."""
     if not year_ids:
         return {}
-    stmt = (
-        select(column, func.count())
-        .where(column.in_(year_ids), *filters)
-        .group_by(column)
-    )
+    stmt = select(column, func.count()).where(column.in_(year_ids), *filters).group_by(column)
     return {row[0]: row[1] for row in db.execute(stmt).all()}
 
 
-def _messages_awaiting_reply_by_year(
-    db: Session, year_ids: list[str]
-) -> dict[str, int]:
+def _messages_awaiting_reply_by_year(db: Session, year_ids: list[str]) -> dict[str, int]:
     """Conversations whose latest message is from the member, grouped by year.
 
     A conversation counts once even when the member sends several consecutive
@@ -191,6 +189,7 @@ def _messages_awaiting_reply_by_year(
 @router.get("/summary", response_model=DashboardSummary)
 def get_summary(
     policy_year_id: str | None = Query(default=None),
+    insurer: str | None = Query(default=None, max_length=128),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DashboardSummary:
@@ -207,11 +206,13 @@ def get_summary(
     # explicitly request the globally selected historical year.
     current_year_by_client: dict[str, PolicyYear] = {}
     if client_ids:
-        rows = list(db.execute(
-            select(PolicyYear)
-            .where(PolicyYear.client_id.in_(client_ids))
-            .order_by(PolicyYear.client_id, PolicyYear.start_date.desc())
-        ).scalars())
+        rows = list(
+            db.execute(
+                select(PolicyYear)
+                .where(PolicyYear.client_id.in_(client_ids))
+                .order_by(PolicyYear.client_id, PolicyYear.start_date.desc())
+            ).scalars()
+        )
         today = business_today()
         for py in rows:
             if py.status == PolicyYearStatus.active and py.start_date > today:
@@ -230,6 +231,28 @@ def get_summary(
 
     year_ids = [py.id for py in current_year_by_client.values()]
 
+    # The option vocabulary only comes from accessible companies' selected
+    # years. A name may occur on several products/plans but a company is listed
+    # just once. Retain all options when a filter is selected.
+    insurer_years: dict[str, set[str]] = {}
+    insurer_labels: dict[str, str] = {}
+    placements = placement_insurers(db, year_ids)
+    for (placement_year_id, _code), label in placements.items():
+        key = label.casefold()
+        insurer_labels.setdefault(key, label)
+        insurer_years.setdefault(key, set()).add(placement_year_id)
+    insurer_name = insurer.strip().casefold() if insurer and insurer.strip() else None
+    if insurer_name:
+        matching_years = insurer_years.get(insurer_name, set())
+        clients = [
+            c
+            for c in clients
+            if current_year_by_client.get(c.id)
+            and current_year_by_client[c.id].id in matching_years
+        ]
+        year_ids = [current_year_by_client[c.id].id for c in clients]
+    claim_filters = [claim_insurer_filter(insurer_name, placements)] if insurer_name else []
+
     members = _grouped_count(
         db, Employee.policy_year_id, Employee, year_ids, Employee.status == "active"
     )
@@ -237,7 +260,12 @@ def get_summary(
         db, Dependant.policy_year_id, Dependant, year_ids, Dependant.status == "active"
     )
     claims = _grouped_count(
-        db, Claim.policy_year_id, Claim, year_ids, Claim.status.in_(_CLAIMS_TO_REVIEW)
+        db,
+        Claim.policy_year_id,
+        Claim,
+        year_ids,
+        Claim.status.in_(_CLAIMS_TO_REVIEW),
+        *claim_filters,
     )
     verification_pending = _grouped_count(
         db,
@@ -245,6 +273,7 @@ def get_summary(
         Claim,
         year_ids,
         Claim.status == CLAIM_STATUS_AI_REVIEW_PENDING,
+        *claim_filters,
     )
     insured_claims = _grouped_count(
         db,
@@ -253,6 +282,7 @@ def get_summary(
         year_ids,
         Claim.status.in_(_CLAIMS_TO_REVIEW),
         Claim.claim_kind == CLAIM_KIND_INSURED,
+        *claim_filters,
     )
     wallet_claims = _grouped_count(
         db,
@@ -261,6 +291,7 @@ def get_summary(
         year_ids,
         Claim.status.in_(_CLAIMS_TO_REVIEW),
         Claim.claim_kind == CLAIM_KIND_FLEX,
+        *claim_filters,
     )
     claims_with_insurer = _grouped_count(
         db,
@@ -268,6 +299,7 @@ def get_summary(
         Claim,
         year_ids,
         Claim.status == CLAIM_STATUS_SENT_TO_INSURER,
+        *claim_filters,
     )
     overdue_claims = _grouped_count(
         db,
@@ -277,21 +309,26 @@ def get_summary(
         Claim.status == CLAIM_STATUS_SENT_TO_INSURER,
         Claim.insurer_deadline_on.is_not(None),
         Claim.insurer_deadline_on < business_today(),
+        *claim_filters,
     )
     messages_awaiting_reply = _messages_awaiting_reply_by_year(db, year_ids)
     # Portal self-added dependants awaiting a broker approval decision.
     deps_pending = _grouped_count(
-        db, Dependant.policy_year_id, Dependant, year_ids,
+        db,
+        Dependant.policy_year_id,
+        Dependant,
+        year_ids,
         Dependant.status == DEPENDANT_STATUS_PENDING,
     )
     # Members above a Non-Evidence Limit still awaiting the insurer's decision.
     # `postponed` counts too — the insurer deferred, so the excess is still
     # undecided everywhere else (report_uw_amounts keeps reporting it pending).
     uw_pending = _grouped_count(
-        db, UnderwritingCase.policy_year_id, UnderwritingCase, year_ids,
-        UnderwritingCase.status.in_(
-            [UnderwritingStatus.pending, UnderwritingStatus.postponed]
-        ),
+        db,
+        UnderwritingCase.policy_year_id,
+        UnderwritingCase,
+        year_ids,
+        UnderwritingCase.status.in_([UnderwritingStatus.pending, UnderwritingStatus.postponed]),
     )
 
     unmatched = _unmatched_by_year(db, year_ids)
@@ -325,9 +362,7 @@ def get_summary(
                 wallet_claims_to_review=wallet_claims.get(yid, 0) if yid else 0,
                 claims_with_insurer=claims_with_insurer.get(yid, 0) if yid else 0,
                 claims_overdue=overdue_claims.get(yid, 0) if yid else 0,
-                messages_awaiting_reply=(
-                    messages_awaiting_reply.get(yid, 0) if yid else 0
-                ),
+                messages_awaiting_reply=(messages_awaiting_reply.get(yid, 0) if yid else 0),
                 dependants_pending=deps_pending.get(yid, 0) if yid else 0,
                 employees_unmatched=unmatched.get(yid, 0) if yid else 0,
                 matching_stale=yid in stale_years if yid else False,
@@ -353,7 +388,11 @@ def get_summary(
         underwriting_pending=sum(c.underwriting_pending for c in companies),
         windows_open=sum(1 for c in companies if c.enrollment_open),
     )
-    return DashboardSummary(firm=firm, companies=companies)
+    return DashboardSummary(
+        firm=firm,
+        companies=companies,
+        insurers=sorted(insurer_labels.values(), key=str.casefold),
+    )
 
 
 def _unmatched_by_year(db: Session, year_ids: list[str]) -> dict[str, int]:
@@ -411,15 +450,11 @@ def _stale_matching_years(db: Session, year_ids: list[str]) -> set[str]:
     return {
         yid
         for yid, changed in cat_updated.items()
-        if changed is not None
-        and last_run.get(yid) is not None
-        and changed > last_run[yid]
+        if changed is not None and last_run.get(yid) is not None and changed > last_run[yid]
     }
 
 
-def _open_window_close_by_year(
-    db: Session, year_ids: list[str]
-) -> dict[str, datetime]:
+def _open_window_close_by_year(db: Session, year_ids: list[str]) -> dict[str, datetime]:
     """`{policy_year_id: earliest closes_at}` for years with an OPEN window.
 
     A year can hold several open windows; the nearest close date is the one the

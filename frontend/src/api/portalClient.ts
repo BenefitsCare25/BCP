@@ -7,6 +7,7 @@
 import { errorFromText } from "@/lib/errors";
 import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
+import { claimPeriodHeaders } from "@/lib/claimPeriod";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
@@ -156,6 +157,7 @@ async function request<T>(
       "Content-Type": "application/json",
       ...tenantHeader(),
       ...authHeader(),
+      ...claimPeriodHeaders(path),
       ...init.headers,
     },
   });
@@ -204,7 +206,7 @@ export const portalApi = {
    * the blob into an object URL. */
   blob: async (path: string): Promise<Blob> => {
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { ...tenantHeader(), ...authHeader() },
+      headers: { ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
     });
     if (!res.ok) return failed(res);
     return await res.blob();
@@ -214,7 +216,7 @@ export const portalApi = {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       body: formData,
-      headers: { ...tenantHeader(), ...authHeader() },
+      headers: { ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
     });
     if (!res.ok) return failed(res);
     return (await res.json()) as T;

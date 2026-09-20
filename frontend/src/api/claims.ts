@@ -144,6 +144,7 @@ export interface BrokerClaim {
   id: string;
   client_id: string;
   policy_year_id: string;
+  policy_year_label?: string | null;
   employee_id: string;
   staff_id: string | null;
   employee_name: string | null;
@@ -300,6 +301,35 @@ export interface BrokerConversationList {
   items: BrokerConversation[];
 }
 
+export interface BrokerClaimFilters {
+  allYears?: boolean;
+  incurredFrom?: string;
+  incurredTo?: string;
+  insurer?: string;
+  queue?: string;
+  kind?: string;
+}
+
+export function useClaimInsurers(policyYearId: string | null, allYears: boolean) {
+  const cid = useSession((s) => s.activeClientId);
+  return useQuery({
+    queryKey: ["claim-insurers", cid, policyYearId, allYears],
+    queryFn: () => api.get<string[]>(`/claims/insurers?${new URLSearchParams({ policy_year_id: policyYearId!, all_years: String(allYears) })}`),
+    enabled: !!policyYearId,
+  });
+}
+
+export function claimFilterParams(filters: BrokerClaimFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filters.allYears) params.set("all_years", "true");
+  if (filters.incurredFrom) params.set("incurred_from", filters.incurredFrom);
+  if (filters.incurredTo) params.set("incurred_to", filters.incurredTo);
+  if (filters.insurer) params.set("insurer", filters.insurer);
+  if (filters.queue) params.set("queue", filters.queue);
+  if (filters.kind) params.set("kind", filters.kind);
+  return params;
+}
+
 export function useBrokerClaims(
   policyYearId: string | undefined,
   status: string,
@@ -312,13 +342,14 @@ export function useBrokerClaims(
    *  whole firm's queue. */
   employeeId?: string,
   search = "",
+  filters: BrokerClaimFilters = {},
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
     // caseType and employeeId are part of the key: without them, switching a
     // filter would serve the previous selection's page from cache.
     queryKey: [
-      "claims", cid, policyYearId, status, caseType, employeeId, search, offset, limit,
+      "claims", cid, policyYearId, status, caseType, employeeId, search, offset, limit, filters,
     ],
     queryFn: () => {
       const params = new URLSearchParams({
@@ -330,6 +361,7 @@ export function useBrokerClaims(
       if (caseType) params.set("case_type", caseType);
       if (employeeId) params.set("employee_id", employeeId);
       if (search.trim()) params.set("search", search.trim());
+      claimFilterParams(filters).forEach((value, key) => params.set(key, value));
       return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
     },
     enabled: !!policyYearId,
@@ -348,12 +380,21 @@ export function useBrokerClaims(
  *
  * Shares the `["claims", cid, …]` key prefix, so replying to a member (which
  * invalidates `["claims"]`) refreshes this list without naming it. */
+export interface ConversationFilters {
+  category?: "inpatient" | "outpatient" | "flex" | "other";
+  allYears?: boolean;
+  incurredFrom?: string;
+  incurredTo?: string;
+  status?: string;
+}
+
 export function useBrokerConversations(
   policyYearId: string | undefined,
   awaiting: "us" | "any",
   offset: number,
   limit: number,
   search = "",
+  filters: ConversationFilters = {},
 ) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
@@ -362,6 +403,7 @@ export function useBrokerConversations(
       cid,
       policyYearId,
       "conversations",
+      filters,
       awaiting,
       offset,
       limit,
@@ -375,6 +417,11 @@ export function useBrokerConversations(
         limit: String(limit),
       });
       if (search.trim()) params.set("q", search.trim());
+      if (filters.category) params.set("category", filters.category);
+      if (filters.allYears) params.set("all_years", "true");
+      if (filters.incurredFrom) params.set("incurred_from", filters.incurredFrom);
+      if (filters.incurredTo) params.set("incurred_to", filters.incurredTo);
+      if (filters.status) params.set("status", filters.status);
       return api.get<BrokerConversationList>(
         `/conversations?${params.toString()}`,
       );

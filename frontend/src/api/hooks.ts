@@ -138,6 +138,7 @@ export interface FirmTotals {
 export interface DashboardSummary {
   firm: FirmTotals;
   companies: CompanySummary[];
+  insurers: string[];
 }
 
 /**
@@ -145,14 +146,15 @@ export interface DashboardSummary {
  * accessible clients (same firm boundary as everything else), so it's NOT keyed
  * by the active client — it aggregates across companies regardless of selection.
  */
-export function useDashboardSummary(policyYearId?: string | null) {
+export function useDashboardSummary(policyYearId?: string | null, insurer?: string) {
+  const params = new URLSearchParams();
+  if (policyYearId) params.set("policy_year_id", policyYearId);
+  if (insurer) params.set("insurer", insurer);
   return useQuery({
-    queryKey: ["dashboard-summary", policyYearId ?? null],
+    queryKey: ["dashboard-summary", policyYearId ?? null, insurer ?? ""],
     queryFn: () =>
       api.get<DashboardSummary>(
-        `/dashboard/summary${
-          policyYearId ? `?policy_year_id=${encodeURIComponent(policyYearId)}` : ""
-        }`,
+        `/dashboard/summary?${params}`,
       ),
     staleTime: 30_000,
   });

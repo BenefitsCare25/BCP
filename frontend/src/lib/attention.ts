@@ -78,6 +78,37 @@ export function companyAttention(c: CompanySummary): AttentionItem[] {
       short: `${c.claims_to_review} claim${plural(c.claims_to_review)} to review`,
       tone: "warn",
       to: "/claims/review",
+      search: { tab: "queue", queue: "review" },
+    });
+  }
+  if (c.claims_with_insurer > 0) {
+    out.push({
+      key: "insurer",
+      message: `${c.claims_with_insurer} claim${plural(c.claims_with_insurer)} awaiting insurer response`,
+      short: `${c.claims_with_insurer} pending insurer`,
+      tone: "warn",
+      to: "/claims/review",
+      search: { tab: "queue", queue: "insurer" },
+    });
+  }
+  if (c.claims_overdue > 0) {
+    out.push({
+      key: "overdue",
+      message: `${c.claims_overdue} insurer claim${plural(c.claims_overdue)} overdue`,
+      short: `${c.claims_overdue} overdue`,
+      tone: "error",
+      to: "/claims/review",
+      search: { tab: "queue", queue: "overdue" },
+    });
+  }
+  if (c.messages_awaiting_reply > 0) {
+    out.push({
+      key: "messages",
+      message: `${c.messages_awaiting_reply} conversation${plural(c.messages_awaiting_reply)} awaiting our reply`,
+      short: `${c.messages_awaiting_reply} awaiting reply`,
+      tone: "warn",
+      to: "/claims/review",
+      search: { tab: "messages", awaiting: "us" },
     });
   }
   if (c.employees_unmatched > 0) {

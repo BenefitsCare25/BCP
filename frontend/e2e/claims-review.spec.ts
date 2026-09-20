@@ -661,6 +661,12 @@ test("claim workspace keeps form details readable and documents in context", asy
   };
 
   await page.route(/\/api\/v1\/claims\?.*/, async (route) => {
+    // Match the real selected year: opening a row now restores its original
+    // year, and the context bar correctly rejects unknown fixture year IDs.
+    const policyYearId = new URL(route.request().url()).searchParams.get("policy_year_id");
+    if (!policyYearId) throw new Error("Claims fixture requires an authorized benefit year");
+    insuredClaim = { ...insuredClaim, policy_year_id: policyYearId };
+    flexClaim.policy_year_id = policyYearId;
     await route.fulfill({
       status: 200,
       json: {

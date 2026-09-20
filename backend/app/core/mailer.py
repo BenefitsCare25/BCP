@@ -33,6 +33,10 @@ class Mailer(Protocol):
 
     def send_claim_update(self, email: str, portal_url: str) -> None: ...
 
+    def send_claim_digest(self, email: str, claim_urls: list[str]) -> None: ...
+
+    def send_workflow_notice(self, email: str, subject: str, body: str) -> None: ...
+
 
 def _invite_message(
     email: str, username: str, password: str, sign_in_url: str, sender: str
@@ -93,7 +97,25 @@ def _claim_update_message(email: str, portal_url: str, sender: str) -> EmailMess
     return msg
 
 
+def _claim_digest_message(email: str, claim_urls: list[str], sender: str) -> EmailMessage:
+    """Only authenticated links; no names, diagnoses, amounts or decisions."""
+    msg = EmailMessage()
+    msg["Subject"] = "Your benefits portal claim updates"
+    msg["From"] = sender
+    msg["To"] = email
+    links = "\n".join(f"Claim {index}: {url}" for index, url in enumerate(claim_urls, 1))
+    msg.set_content(
+        f"There are updates for {len(claim_urls)} of your claims.\n\n"
+        f"Sign in to view each conversation:\n{links}\n\n"
+        "For your privacy, claim and medical details are not included in email."
+    )
+    return msg
+
+
 class LogMailer:
+    def send_workflow_notice(self, email: str, subject: str, body: str) -> None:
+        logger.info("Workflow notice accepted by local log mailer")
+
     def send_otp(self, email: str, code: str, magic_link: str) -> None:
         logger.info("Portal OTP for %s: %s (magic link: %s)", email, code, magic_link)
 
@@ -110,6 +132,9 @@ class LogMailer:
 
     def send_claim_update(self, email: str, portal_url: str) -> None:
         logger.info("Claim update email accepted for %s (%s)", email, portal_url)
+
+    def send_claim_digest(self, email: str, claim_urls: list[str]) -> None:
+        logger.info("Claim digest accepted with %s claim links", len(claim_urls))
 
 
 class DisabledMailer:
@@ -128,6 +153,12 @@ class DisabledMailer:
         self._raise()
 
     def send_claim_update(self, email: str, portal_url: str) -> None:
+        self._raise()
+
+    def send_claim_digest(self, email: str, claim_urls: list[str]) -> None:
+        self._raise()
+
+    def send_workflow_notice(self, email: str, subject: str, body: str) -> None:
         self._raise()
 
 
@@ -167,6 +198,15 @@ class SmtpMailer:
     def send_claim_update(self, email: str, portal_url: str) -> None:
         self._send(_claim_update_message(email, portal_url, self.sender))
 
+    def send_claim_digest(self, email: str, claim_urls: list[str]) -> None:
+        self._send(_claim_digest_message(email, claim_urls, self.sender))
+
+    def send_workflow_notice(self, email: str, subject: str, body: str) -> None:
+        msg = EmailMessage()
+        msg["Subject"], msg["From"], msg["To"] = subject, self.sender, email
+        msg.set_content(body)
+        self._send(msg)
+
 
 class AcsMailer:
     def __init__(self) -> None:
@@ -181,6 +221,12 @@ class AcsMailer:
         raise NotImplementedError
 
     def send_claim_update(self, email: str, portal_url: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def send_claim_digest(self, email: str, claim_urls: list[str]) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def send_workflow_notice(self, email: str, subject: str, body: str) -> None:  # pragma: no cover
         raise NotImplementedError
 
 

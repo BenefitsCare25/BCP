@@ -47,6 +47,8 @@ class StoredDocumentOut(_Base):
 
 
 class ClaimCreateIn(BaseModel):
+    intake_id: str | None = Field(default=None, max_length=36)
+    intake_claim_index: int = Field(default=0, ge=0, le=2)
     claim_kind: str = Field(pattern="^(insured|flex)$")
     # insured claims (the Benefit/SOB-item picker was removed from the form —
     # benefit attribution is the broker's call at review time)
@@ -532,6 +534,7 @@ class ClaimAIReviewOut(ClaimAIReviewSummary):
 class BrokerClaimOut(ClaimOut):
     client_id: str
     policy_year_id: str
+    policy_year_label: str | None = None
     employee_id: str
     staff_id: str | None = None
     employee_name: str | None = None
@@ -703,6 +706,10 @@ class ConversationSubjectOut(BaseModel):
 
     kind: str  # claim | enquiry
     id: str
+    reference_no: str | None = None
+    claim_category: str | None = None
+    policy_year_id: str | None = None
+    policy_year_label: str | None = None
     # ── claim ────────────────────────────────────────────────────────────────
     claim_kind: str | None = None
     claim_type: str | None = None
@@ -1167,11 +1174,20 @@ class IntakeFields(BaseModel):
     doctor_name: str | None = None
 
 
+class IntakeFieldSource(BaseModel):
+    file_name: str
+    upload_index: int
+    source_label: str
+    # The extractor's reported confidence, never a calibrated accuracy score.
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
 class IntakeDocument(BaseModel):
     """One uploaded document in an autofill set, with its recognised type and
     the required-document slot it fills (when unambiguous)."""
 
     file_name: str
+    field_sources: dict[str, list[IntakeFieldSource]] = Field(default_factory=dict)
     # 0-based position in the ORIGINAL upload — the form joins its File objects
     # to these documents on this (robust to duplicate file names, and to the
     # endpoint skipping an unreadable file mid-set).
@@ -1202,6 +1218,8 @@ class ClaimIntakeSuggestionOut(BaseModel):
     # False when extraction is unavailable (no AI provider / budget / breaker /
     # parse fault) — the form stays fully manual.
     available: bool = True
+    intake_id: str | None = None
+    field_sources: dict[str, list[IntakeFieldSource]] = Field(default_factory=dict)
     reason: str | None = None
     document_type: str | None = None
     # Broker-recognised document type (claim_doc_types registry display name,

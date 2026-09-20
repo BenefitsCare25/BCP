@@ -308,6 +308,7 @@ def build_company_activity_workbook(
             select(AuditLog)
             .where(
                 AuditLog.client_id == py.client_id,
+                AuditLog.action != "claim.intake_suggested",
                 AuditLog.created_at >= lo,
                 AuditLog.created_at < hi,
             )

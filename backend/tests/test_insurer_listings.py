@@ -16,7 +16,7 @@ import pytest
 TEST_DB = Path(__file__).parent / "_test_insurer_listings.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
-from datetime import date  # noqa: E402
+from datetime import UTC, date, datetime  # noqa: E402
 from io import BytesIO  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -39,6 +39,7 @@ from app.models import (  # noqa: E402
     ProductTerm,
     UnderwritingCase,
     UnderwritingReview,
+    WorkflowNotification,
 )
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 
@@ -1555,6 +1556,24 @@ def test_underwriting_report_rows_and_columns(client: TestClient) -> None:
         json={"status": "approved_substandard", "accepted_si": 90000,
               "decided_on": "2034-03-04", "remarks": "loaded 50%"},
     )
+    sent_at = datetime.now(UTC)
+    with SessionLocal() as session:
+        session.add(
+            WorkflowNotification(
+                id="00000000-0000-0000-0000-0000000i1199",
+                client_id=CLIENT_ID,
+                policy_year_id=PY_ID,
+                kind="underwriting_reminder",
+                subject_id=emp_review["id"],
+                dedup_key="uw:report-count-test",
+                recipient_email="member@test.invalid",
+                status="sent",
+                attempts=1,
+                available_at=sent_at,
+                sent_at=sent_at,
+            )
+        )
+        session.commit()
 
     res = client.get(f"/api/v1/policy-years/{PY_ID}/reports/workbooks/underwriting")
     assert res.status_code == 200, res.text
@@ -1580,9 +1599,7 @@ def test_underwriting_report_rows_and_columns(client: TestClient) -> None:
     assert emp["Requirements"] == "Medical report"
     assert emp["Case Remarks"] == "loaded 50%"
     assert emp["Policy Period"] == "1 Jan 2034 to 31 Dec 2034"
-    # Chaser emails aren't tracked anywhere — the column stays blank rather
-    # than asserting "0 sent".
-    assert emp["No. of Reminders Sent"] in (None, "")
+    assert emp["No. of Reminders Sent"] == 1
 
     # The spouse's own case is its own row, carrying the employee's identity.
     spouse = next(r for r in rows if r["Dependant Name"] == "Spo Use")

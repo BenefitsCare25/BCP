@@ -70,6 +70,7 @@ import {
   useSendBrokerEnquiryMessage,
   useSetEnquiryStatus,
   type BrokerConversation,
+  type ConversationFilters,
 } from "@/api/claims";
 import { useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
@@ -85,6 +86,17 @@ import { fmtDay, fmtMoney, parseServerDate } from "@/lib/format";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 const PAGE_SIZE = 25;
+
+const CATEGORY_LABELS = { inpatient: "Inpatient", outpatient: "Outpatient", flex: "Flex", other: "Other insured" };
+
+function ClaimContext({ conversation }: { conversation: BrokerConversation }) {
+  const subject = conversation.subject.about_claim ?? conversation.subject;
+  return <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+    {subject.claim_category && <Badge variant="outline">{CATEGORY_LABELS[subject.claim_category]}</Badge>}
+    {subject.reference_no && <span className="font-mono">{subject.reference_no}</span>}
+    {conversation.subject.policy_year_label && <span>Benefit year {conversation.subject.policy_year_label}</span>}
+  </div>;
+}
 
 function conversationKey(conversation: BrokerConversation): string {
   return `${conversation.subject.kind}:${conversation.subject.id}`;
@@ -225,6 +237,7 @@ function ConversationRow({
             <p className="mt-2 truncate text-sm font-medium text-foreground">
               {conversationType(conversation)}
             </p>
+            <ClaimContext conversation={conversation} />
           </div>
         </div>
       </button>
@@ -366,6 +379,8 @@ function EnquiryPane({
             {data.topic_urgent && <Badge variant="error">Urgent</Badge>}
             {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
             <Badge variant="outline">{data.topic_label ?? data.topic}</Badge>
+            {data.about_claim?.claim_category && <Badge variant="outline">{CATEGORY_LABELS[data.about_claim.claim_category]}</Badge>}
+            {data.about_claim?.reference_no && <span className="text-xs font-mono">{data.about_claim.reference_no}</span>}
           </>
         }
         action={
@@ -441,6 +456,7 @@ function ClaimPane({
         who={employee?.employee_name ?? "Unknown employee"}
         staffId={employee?.staff_id}
         title={subjectLine(conversation)}
+        badges={<ClaimContext conversation={conversation} />}
         action={
           <Button
             size="sm"
@@ -466,18 +482,26 @@ type View = (typeof VIEWS)[number]["key"];
 
 export function ConversationQueue() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  const setPolicyYear = useSession((s) => s.setPolicyYear);
   const navigate = useNavigate();
   const [view, setView] = useState<View>("us");
   const [page, setPage] = useState(0);
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 300);
+  const [filters, setFilters] = useState<ConversationFilters>({});
+  const updateFilters = (patch: Partial<ConversationFilters>) => {
+    setFilters((current) => ({ ...current, ...patch }));
+    setPage(0);
+    setPickedKey(null);
+  };
   const { data, isLoading, isError, error, refetch } = useBrokerConversations(
     policyYearId ?? undefined,
     view,
     page * PAGE_SIZE,
     PAGE_SIZE,
     debouncedSearch,
+    filters,
   );
 
   // A reply can remove the open thread from Needs reply, including the only
@@ -496,9 +520,10 @@ export function ConversationQueue() {
       pickedKey &&
       !data.items.some((conversation) => conversationKey(conversation) === pickedKey)
     ) {
-      setPickedKey(data.items[0] ? conversationKey(data.items[0]) : null);
+      const next = data.items.find((conversation) => conversation.subject.policy_year_id === policyYearId);
+      setPickedKey(next ? conversationKey(next) : null);
     }
-  }, [data, isLoading, page, pickedKey]);
+  }, [data, isLoading, page, pickedKey, policyYearId]);
 
   if (!policyYearId) return null;
 
@@ -509,8 +534,8 @@ export function ConversationQueue() {
   // "Needs reply" is the person who has waited longest, i.e. the one the tab
   // was opened to answer.
   const selected =
-    items.find((conversation) => conversationKey(conversation) === pickedKey) ??
-    items[0];
+    items.find((conversation) => conversationKey(conversation) === pickedKey && (!conversation.subject.policy_year_id || conversation.subject.policy_year_id === policyYearId)) ??
+    items.find((conversation) => !conversation.subject.policy_year_id || conversation.subject.policy_year_id === policyYearId);
 
   // Adjudication still lives in the Queue tab's claim sheet. Same deep link the
   // employee-level LOG card uses.
@@ -566,6 +591,33 @@ export function ConversationQueue() {
                 </button>
               )}
             </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <label className="text-xs text-muted-foreground">Benefit years
+                <select className="focus-ring mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground" value={filters.allYears ? "all" : "current"} onChange={(event) => updateFilters({ allYears: event.target.value === "all" })}>
+                  <option value="current">Current benefit year</option><option value="all">All benefit years</option>
+                </select>
+              </label>
+              <label className="text-xs text-muted-foreground">Claim category
+                <select className="focus-ring mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground" value={filters.category ?? ""} onChange={(event) => updateFilters({ category: (event.target.value || undefined) as ConversationFilters["category"] })}>
+                  <option value="">All conversations</option>
+                  {Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-muted-foreground">Incurred from
+                <Input type="date" className="mt-1" value={filters.incurredFrom ?? ""} onChange={(event) => updateFilters({ incurredFrom: event.target.value })} />
+              </label>
+              <label className="text-xs text-muted-foreground">Incurred to
+                <Input type="date" className="mt-1" value={filters.incurredTo ?? ""} onChange={(event) => updateFilters({ incurredTo: event.target.value })} />
+              </label>
+              <label className="col-span-2 text-xs text-muted-foreground">Claim status
+                <select className="focus-ring mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground" value={filters.status ?? ""} onChange={(event) => updateFilters({ status: event.target.value })}>
+                  <option value="">All statuses and questions</option>
+                  {["draft", "submitted", "ai_review_pending", "ai_verified", "ai_flagged", "needs_info", "approved", "rejected", "sent_to_insurer", "paid"].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
+                </select>
+              </label>
+            </div>
+            {(filters.category || filters.status || filters.incurredFrom || filters.incurredTo) && <p className="mt-2 text-xs text-muted-foreground">Includes questions linked to matching claims. General questions are excluded.</p>}
 
             <div
               className="mt-3 grid grid-cols-2 rounded-lg bg-muted p-1"
@@ -656,7 +708,10 @@ export function ConversationQueue() {
                   <ConversationRow
                     key={conversationKey(conversation)}
                     conversation={conversation}
-                    onOpen={(picked) => setPickedKey(conversationKey(picked))}
+                    onOpen={(picked) => {
+                      if (picked.subject.policy_year_id && picked.subject.policy_year_id !== policyYearId) setPolicyYear(picked.subject.policy_year_id);
+                      setPickedKey(conversationKey(picked));
+                    }}
                     selected={
                       selected
                         ? conversationKey(selected) === conversationKey(conversation)

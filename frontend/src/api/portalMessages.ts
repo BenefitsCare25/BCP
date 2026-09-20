@@ -39,6 +39,10 @@ export interface ClaimMessage {
 export interface ConversationSubject {
   kind: "claim" | "enquiry";
   id: string;
+  reference_no?: string | null;
+  claim_category?: "inpatient" | "outpatient" | "flex" | "other" | null;
+  policy_year_id?: string | null;
+  policy_year_label?: string | null;
   // ── claim ──────────────────────────────────────────────────────────────────
   claim_kind: "insured" | "flex" | null;
   claim_type: string | null;

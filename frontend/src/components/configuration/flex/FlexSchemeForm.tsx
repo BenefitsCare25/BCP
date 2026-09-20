@@ -407,6 +407,30 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
             </div>
           </div>
 
+          <div className="space-y-2 border-t border-border pt-3">
+            <Label htmlFor="flex-submission-basis">New claims when Flex is fully used</Label>
+            <Select
+              value={meta.claim_submission_basis ?? "off"}
+              onValueChange={(value) => setMeta({
+                claim_submission_basis: value as "off" | "paid" | "approved" | "reserved",
+              })}
+            >
+              <SelectTrigger id="flex-submission-basis" className="max-w-md">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Allow submission for assessment</SelectItem>
+                <SelectItem value="paid">Block when payments use the full wallet</SelectItem>
+                <SelectItem value="approved">Block when approved claims use the full wallet</SelectItem>
+                <SelectItem value="reserved">Block when approved and pending claims use the full wallet</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Uses the wallet after benefit selections. Replies to existing claims remain available.
+              Pending amounts with an unresolved currency conversion require review when included.
+            </p>
+          </div>
+
           {/* Pro-ration. A member is rarely covered for a whole year, and
               companies settle that differently — by months, by days, or not at
               all. Off by default: reducing an allowance on an inference is the

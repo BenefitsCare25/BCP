@@ -135,6 +135,11 @@ def lock_claim_for_mutation(db: Session, claim: Claim) -> Claim:
 
 def lock_claim_utilization_bucket(db: Session, claim: Claim) -> None:
     """Serialize approvals drawing on the same employee benefit bucket."""
+    if claim.claim_kind == CLAIM_KIND_FLEX:
+        from app.services.flex_submission import lock_flex_wallet
+
+        lock_flex_wallet(db, claim)
+        return
     if not is_postgres(db):
         return
     bucket = "|".join(
@@ -1506,6 +1511,19 @@ def submit_claim(
     apply_conversion(db, claim)
     assert_fx_acknowledged(claim)
 
+    from app.services.flex_submission import assert_flex_submission_allowed
+
+    assert_flex_submission_allowed(db, claim, employee)
+    # Initial filing is the measurement boundary: draft edits after creation
+    # must be reflected, while later resubmissions do not rewrite the sample.
+    feedback = (claim.intake_meta or {}).get("autofill")
+    if claim.status == "draft" and isinstance(feedback, dict) and submitted_by_member_id:
+        from app.services.intake_feedback import record_intake_feedback
+
+        record_intake_feedback(
+            db, claim, feedback.get("intake_id"), feedback.get("claim_index", 0),
+            submitted_by_member_id,
+        )
     claim.status = CLAIM_STATUS_SUBMITTED
     claim.submitted_at = datetime.now(UTC)
     if submitted_by_member_id:
@@ -1695,6 +1713,14 @@ def apply_claim_amendment(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "This request changes nothing."
         )
     columns = patch - {_REFERRAL_FLAG}
+    if claim.claim_kind == CLAIM_KIND_FLEX or (
+        "claim_kind" in patch and body.claim_kind == CLAIM_KIND_FLEX
+    ):
+        # Include corrections moving an insured claim into the shared wallet.
+        # Caller holds the row lock; never apply a submission guard to replies.
+        from app.services.flex_submission import lock_flex_wallet
+
+        lock_flex_wallet(db, claim)
 
     # **Snapshot BEFORE anything is written.** Taken after the merge, `before`
     # reads off an already-mutated claim: a correction from 1,200.00 to 120.00

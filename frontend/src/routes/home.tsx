@@ -36,7 +36,7 @@ type QueueKey =
   | "matching"
   | "dependants";
 
-type CompanyDestination = QueueKey | "dashboard";
+type CompanyDestination = QueueKey | "dashboard" | "overdue";
 
 type WorkQueue = {
   key: QueueKey;
@@ -98,8 +98,9 @@ const WORK_QUEUES: WorkQueue[] = [
 ];
 
 export function HomePage() {
+  const [insurer, setInsurer] = useState("");
   const { data, isLoading, isError, error, refetch, isFetching } =
-    useDashboardSummary();
+    useDashboardSummary(undefined, insurer);
   const [queue, setQueue] = useState<QueueKey>("claims_review");
   const [companyQuery, setCompanyQuery] = useState("");
 
@@ -124,6 +125,19 @@ export function HomePage() {
 
   return (
     <div className="space-y-5 pb-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor="portfolio-insurer" className="text-sm font-medium">Insurer</label>
+        <select
+          id="portfolio-insurer"
+          value={insurer}
+          onChange={(event) => setInsurer(event.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="">All insurers</option>
+          {(data.insurers ?? []).map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        {insurer && <p className="text-xs text-muted-foreground">Claims counts match {insurer}. Other work and member counts cover its companies.</p>}
+      </div>
       <section
         aria-label="Portfolio summary"
         className="overflow-hidden rounded-xl border border-border bg-card"
@@ -168,6 +182,7 @@ export function HomePage() {
         queue={queue}
         onQueueChange={setQueue}
         isRefreshing={isFetching}
+        insurer={insurer}
       />
 
       <CompanyDirectory
@@ -221,12 +236,14 @@ function WorkPanel({
   queue,
   onQueueChange,
   isRefreshing,
+  insurer,
 }: {
   companies: CompanySummary[];
   selectedQueue: WorkQueue;
   queue: QueueKey;
   onQueueChange: (queue: QueueKey) => void;
   isRefreshing: boolean;
+  insurer: string;
 }) {
   const rows = useMemo(
     () =>
@@ -357,6 +374,7 @@ function WorkPanel({
                     company={company}
                     queue={queue}
                     count={selectedQueue.count(company)}
+                    insurer={insurer}
                   />
                 ))}
               </tbody>
@@ -372,10 +390,12 @@ function WorkRow({
   company,
   queue,
   count,
+  insurer,
 }: {
   company: CompanySummary;
   queue: QueueKey;
   count: number;
+  insurer: string;
 }) {
   const enter = useCompanyNavigation();
   const priority = queuePriorityLabel(company, queue);
@@ -391,10 +411,18 @@ function WorkRow({
       {isClaimsReview ? (
         <>
           <td className="px-3 py-3 text-right tabular-nums text-foreground">
-            {company.insured_claims_to_review.toLocaleString()}
+            <button type="button" onClick={() => enter(company, queue, insurer, "insured")}
+              className="rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Open insurer claims awaiting review for ${company.name}`}>
+              {company.insured_claims_to_review.toLocaleString()}
+            </button>
           </td>
           <td className="px-3 py-3 text-right tabular-nums text-foreground">
-            {company.wallet_claims_to_review.toLocaleString()}
+            <button type="button" onClick={() => enter(company, queue, insurer, "flex")}
+              className="rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Open Flex claims awaiting review for ${company.name}`}>
+              {company.wallet_claims_to_review.toLocaleString()}
+            </button>
           </td>
         </>
       ) : isEnrollment ? (
@@ -414,14 +442,20 @@ function WorkRow({
               priority.overdue ? "font-medium text-error" : "text-muted-foreground",
             )}
           >
-            {priority.label}
+            {queue === "insurer" && company.claims_overdue > 0 ? (
+              <button type="button" onClick={() => enter(company, "overdue", insurer)}
+                className="rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`Open overdue insurer claims for ${company.name}`}>
+                {priority.label}
+              </button>
+            ) : priority.label}
           </td>
         </>
       )}
       <td className="px-3 py-3 text-right">
         <button
           type="button"
-          onClick={() => enter(company, queue)}
+          onClick={() => enter(company, queue, insurer)}
           className="inline-flex min-h-8 items-center gap-1 rounded-md px-1 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={`Open ${queueLabel(queue)} for ${company.name}`}
         >
@@ -546,7 +580,7 @@ function useCompanyNavigation() {
   const setActiveClient = useSession((state) => state.setActiveClient);
   const setPolicyYear = useSession((state) => state.setPolicyYear);
   const queryClient = useQueryClient();
-  return (company: CompanySummary, destination: CompanyDestination) => {
+  return (company: CompanySummary, destination: CompanyDestination, insurer?: string, kind?: "insured" | "flex") => {
     setActiveClient(company.id);
     setPolicyYear(company.current_year?.id ?? null);
     queryClient.removeQueries();
@@ -561,9 +595,14 @@ function useCompanyNavigation() {
     } else if (destination === "dependants") {
       navigate({ to: "/policy-admin/member-listing", search: { tab: "dependants" } });
     } else if (destination === "messages") {
-      navigate({ to: "/claims/review", search: { tab: "messages" } });
+      navigate({ to: "/claims/review", search: { tab: "messages", awaiting: "us" } });
     } else {
-      navigate({ to: "/claims/review", search: { tab: "queue" } });
+      navigate({ to: "/claims/review", search: {
+        tab: "queue",
+        queue: destination === "claims_review" ? "review" : destination,
+        insurer: insurer || undefined,
+        kind,
+      } });
     }
   };
 }

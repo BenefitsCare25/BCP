@@ -22,7 +22,7 @@ decision that then rolls back.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import and_, case, func, or_, select
@@ -57,6 +57,7 @@ from app.schemas.claims import (
     ConversationSubjectOut,
 )
 from app.services.claim_fx import is_foreign
+from app.services.claim_intake import claim_profile_for, product_codes_for_claim_category
 from app.services.claim_notifications import enqueue_claim_notification
 from app.services.fx import POLICY_CURRENCY
 
@@ -716,6 +717,11 @@ def broker_conversations(
     offset: int,
     limit: int,
     search: str | None = None,
+    policy_year_ids: list[str] | None = None,
+    category: str | None = None,
+    status: str | None = None,
+    incurred_from: date | None = None,
+    incurred_to: date | None = None,
 ) -> tuple[int, int, list[tuple[ConversationRow, Employee]]]:
     """(total, unread_total, [(row, employee)]) — threads in a benefit year.
 
@@ -737,14 +743,33 @@ def broker_conversations(
     us view — a member who cannot see a claim cannot write on it — so the queue
     stays honest either way.
     """
-    scope = [Claim.policy_year_id == policy_year_id]
+    years = policy_year_ids if policy_year_ids is not None else [policy_year_id]
+    scope: list[ColumnElement[bool]] = [Claim.policy_year_id.in_(years)]
+    if category:
+        product = func.upper(func.trim(func.coalesce(Claim.product_code, "")))
+        if category == "flex":
+            scope.append(Claim.claim_kind == "flex")
+        else:
+            scope.append(Claim.claim_kind != "flex")
+            if category == "other":
+                known = (*product_codes_for_claim_category("inpatient"),
+                         *product_codes_for_claim_category("outpatient"))
+                scope.append(product.not_in(known))
+            else:
+                scope.append(product.in_(product_codes_for_claim_category(category)))
+    if status:
+        scope.append(Claim.status == status)
+    if incurred_from:
+        scope.append(Claim.incurred_date >= incurred_from)
+    if incurred_to:
+        scope.append(Claim.incurred_date <= incurred_to)
     if employee_id:
         scope.append(Claim.employee_id == employee_id)
     unread_case = _broker_unread_case()
     agg, latest, last = _thread_parts(
         unread_case, ClaimMessage.claim_id, select(Claim.id).where(*scope)
     )
-    conditions = list(scope)
+    conditions: list[ColumnElement[bool]] = list(scope)
     if awaiting_member:
         conditions.append(last.author_type == AUTHOR_MEMBER)
     query = (search or "").strip().lower()
@@ -758,6 +783,7 @@ def broker_conversations(
                 func.lower(Claim.sub_type).contains(query, autoescape=True),
                 func.lower(Claim.product_code).contains(query, autoescape=True),
                 func.lower(Claim.flex_category_name).contains(query, autoescape=True),
+                func.lower(Claim.reference_no).contains(query, autoescape=True),
             )
         )
     joins = (
@@ -769,7 +795,17 @@ def broker_conversations(
         .where(*conditions)
     )
 
-    q_scope = [MemberEnquiry.policy_year_id == policy_year_id]
+    q_scope: list[ColumnElement[bool]] = [MemberEnquiry.policy_year_id.in_(years)]
+    # A linked enquiry inherits its authorized claim's classification. General
+    # questions have no incurred date or claim category and are excluded.
+    linked_claim: list[ColumnElement[bool]] = [
+        *scope,
+        Claim.id == MemberEnquiry.about_claim_id,
+        Claim.client_id == MemberEnquiry.client_id,
+        Claim.policy_year_id == MemberEnquiry.policy_year_id,
+    ]
+    if category or status or incurred_from or incurred_to:
+        q_scope.append(select(Claim.id).where(*linked_claim).exists())
     if employee_id:
         q_scope.append(MemberEnquiry.employee_id == employee_id)
     q_agg, q_latest, q_last = _thread_parts(
@@ -777,7 +813,7 @@ def broker_conversations(
         ClaimMessage.enquiry_id,
         select(MemberEnquiry.id).where(*q_scope),
     )
-    q_conditions = list(q_scope)
+    q_conditions: list[ColumnElement[bool]] = list(q_scope)
     if awaiting_member:
         q_conditions.append(q_last.author_type == AUTHOR_MEMBER)
     if query:
@@ -788,6 +824,10 @@ def broker_conversations(
                 func.lower(q_last.body).contains(query, autoescape=True),
                 func.lower(MemberEnquiry.subject).contains(query, autoescape=True),
                 func.lower(MemberEnquiry.topic).contains(query, autoescape=True),
+                select(Claim.id).where(
+                    *linked_claim,
+                    func.lower(Claim.reference_no).contains(query, autoescape=True),
+                ).exists(),
             )
         )
     q_joins = (
@@ -895,6 +935,11 @@ def claim_subject(claim: Claim) -> ConversationSubjectOut:
     return ConversationSubjectOut(
         kind="claim",
         id=claim.id,
+        reference_no=claim.reference_no,
+        claim_category=(
+            "flex" if claim.claim_kind == "flex" else claim_profile_for(claim.product_code).category
+        ),
+        policy_year_id=claim.policy_year_id,
         claim_kind=claim.claim_kind,
         claim_type=claim.claim_type,
         sub_type=claim.sub_type,
@@ -919,6 +964,7 @@ def enquiry_subject(enquiry: MemberEnquiry) -> ConversationSubjectOut:
     return ConversationSubjectOut(
         kind="enquiry",
         id=enquiry.id,
+        policy_year_id=enquiry.policy_year_id,
         subject=enquiry.subject,
         topic=enquiry.topic,
         topic_label=topic_label(enquiry.topic),
