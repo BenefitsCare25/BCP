@@ -34,7 +34,6 @@ import {
 } from "@/api/hooks";
 import { ScopeToggle } from "@/components/schema/ScopeToggle";
 import { formatError } from "@/lib/errors";
-import { PageGuide } from "@/components/ui/page-guide";
 import type { AttributeSchema } from "@/types";
 
 const TYPES = ["string", "integer", "decimal", "boolean", "date", "enum"];
@@ -371,15 +370,6 @@ export function SchemaAttributesPage({
           )}
         </CardContent>
       </Card>
-
-      <PageGuide
-        purpose="Define the canonical employee fields this company understands. Listing columns are mapped to these fields during upload; a schema does not create or rename a spreadsheet column by itself."
-        connections={[
-          { label: "→ Employee listing", description: "Each upload shows how source columns map to direct fields and which derivations succeed" },
-          { label: "→ Categories", description: "Only populated, eligibility-enabled fields appear in the normal rule builder" },
-          { label: "→ Products catalog", description: "Products define what insurance lines exist; attributes define who qualifies" },
-        ]}
-      />
 
       <AlertDialog
         open={Boolean(deleting)}

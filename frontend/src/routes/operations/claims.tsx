@@ -77,7 +77,6 @@ import { ClaimDocumentSettings } from "@/components/claims/ClaimDocumentSettings
 import { ReviewRuleSettings } from "@/components/claims/review-rules/ReviewRuleSettings";
 import { ImportRulesDialog } from "@/components/claims/review-rules/ImportRulesDialog";
 import { InfoHint } from "@/components/ui/tooltip";
-import { PageGuide } from "@/components/ui/page-guide";
 import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import { fmtDate } from "@/lib/format";
@@ -1343,14 +1342,6 @@ function QueueTab({
         }}
       />
 
-      <PageGuide
-        purpose="Review member-submitted claims. Each submission runs through an AI pipeline (document extraction → field comparison → rule checks → selective vision verification) that orders this queue; the broker always makes the final decision."
-        connections={[
-          { label: "← Employee portal", description: "Members submit claims with receipts from /portal/claims" },
-          { label: "← Benefit statement", description: "Claims validate against the member's resolved coverage" },
-          { label: "→ AI Provider", description: "Extraction and review calls are budgeted and logged per client" },
-        ]}
-      />
     </div>
   );
 }

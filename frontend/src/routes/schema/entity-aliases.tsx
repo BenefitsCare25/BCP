@@ -33,7 +33,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
-import { PageGuide } from "@/components/ui/page-guide";
 
 interface Draft {
   alias: string;
@@ -281,22 +280,6 @@ export function SchemaEntityAliasesPage({
           )}
         </CardContent>
       </Card>
-
-      <PageGuide
-        purpose="Bridges two spellings of the same legal entity so employee matching treats them as one. Needed when a category's Insured entity (the registered name, taken from the placement slip) differs from the roster's Entity column — an abbreviation, a former name, or a trading name."
-        connections={[
-          {
-            label: "→ Employee matching",
-            description:
-              "A category naming entities only matches employees of those entities; aliases widen that comparison",
-          },
-          {
-            label: "→ Product setup",
-            description:
-              "The Insured picker flags entities that match no roster value — those are the ones needing an alias",
-          },
-        ]}
-      />
 
       <AlertDialog
         open={Boolean(deleting)}

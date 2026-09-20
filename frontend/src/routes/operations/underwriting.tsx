@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, Loader2, RefreshCw, ShieldQuestion } from "lucide-react";
+import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PageGuide } from "@/components/ui/page-guide";
 import {
   Select,
   SelectContent,
@@ -403,17 +402,7 @@ export function UnderwritingPage() {
           </div>
 
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <ShieldQuestion className="size-4 text-muted-foreground" />
-                Underwriting queue
-              </CardTitle>
-              <CardDescription>
-                One case per member per insurer. Select a case to record
-                requirements, workflow status and decisions.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
+            <CardContent className="p-5">
               {isLoading ? (
                 <SkeletonTable rows={4} />
               ) : !data?.items.length ? (
@@ -506,26 +495,6 @@ export function UnderwritingPage() {
         </>
       )}
 
-      <PageGuide
-        purpose="Members (and covered dependants) above a product's Non-Evidence Limit — the free cover limit, or the NEL age — need the insurer's medical underwriting. One case per member per insurer tracks the requirements, workflow status and the per-product decisions. Insurer listings report the excess as Pending U/W until decided."
-        connections={[
-          {
-            label: "Non-Evidence Limits",
-            description:
-              "FCL + NEL age per product on the Configuration page (auto-filled from the placement slip).",
-          },
-          {
-            label: "Enrollment & roster",
-            description:
-              "Cases open automatically when matching, a roster change or a confirmed benefits selection pushes someone over a limit.",
-          },
-          {
-            label: "Reports",
-            description:
-              "Last Accepted / Pending U/W columns on the insurer employee and dependant listings read these cases.",
-          },
-        ]}
-      />
     </div>
   );
 }

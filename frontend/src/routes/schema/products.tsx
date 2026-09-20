@@ -45,7 +45,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
-import { PageGuide } from "@/components/ui/page-guide";
 import type { Product } from "@/types";
 
 const PARTICIPATION_MODELS: ProductPayload["participation_model"][] = [
@@ -389,15 +388,6 @@ export function SchemaProductsPage({
           )}
         </CardContent>
       </Card>
-
-      <PageGuide
-        purpose="The insurance product types available for benefit plans (e.g. GTL, GHS, GPA). Each product defines participation rules and whether dependants are eligible. Adding a new product is admin-only — no code deploy needed."
-        connections={[
-          { label: "→ Categories", description: "Each category is mapped to a product code from this catalog" },
-          { label: "→ Employee attributes", description: "Attributes define employee fields; products define insurance lines they map into" },
-          { label: "→ Placement slips", description: "Uploaded placement slips reference product codes parsed from insurer documents" },
-        ]}
-      />
 
       <AlertDialog
         open={Boolean(deleting)}

@@ -34,7 +34,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
-import { PageGuide } from "@/components/ui/page-guide";
 
 interface Draft {
   name: string;
@@ -251,27 +250,6 @@ export function SchemaInsurersPage({
           )}
         </CardContent>
       </Card>
-
-      <PageGuide
-        purpose="The list of insurers available when setting up a product. Each entry records the short name brokers use, the full licensed entity name, and any other spellings seen on placement slips. Seeded with the Singapore market; add your own for anything missing."
-        connections={[
-          {
-            label: "→ Company & Benefits",
-            description:
-              "The Insurer field on a product's Header & Policy tab is a dropdown of these names",
-          },
-          {
-            label: "→ Reports",
-            description:
-              "Insurer reports group each benefit year's products by the insurer set on them",
-          },
-          {
-            label: "→ Rosters",
-            description:
-              "'<Insurer> Member ID' roster columns are matched by this same name",
-          },
-        ]}
-      />
 
       <AlertDialog
         open={Boolean(deleting)}

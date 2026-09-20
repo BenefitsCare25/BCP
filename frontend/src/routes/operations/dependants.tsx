@@ -31,9 +31,7 @@ import { RosterTabActions } from "./rosterTabActions";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -66,7 +64,6 @@ import {
   livesByDependant,
   useDualCoverage,
 } from "@/api/dualCoverage";
-import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
 import { coerceAttrs } from "@/lib/attrs";
 import { ConflictDetailError, formatError } from "@/lib/errors";
@@ -329,25 +326,20 @@ export function DependantsPage() {
       </RosterTabActions>
 
       <Card>
-        <CardHeader>
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <CardTitle>Dependants</CardTitle>
-              <CardDescription>
-                {dependantsTotal.toLocaleString()} active dependant
-                {dependantsTotal === 1 ? "" : "s"} on file
-              </CardDescription>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!total}
-              onClick={() => setShowDeleteAll(true)}
-              className="text-error hover:text-error shrink-0"
-            >
-              <Trash2 className="size-4" /> Clear all
-            </Button>
-          </div>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+          <p className="text-xs tabular-nums text-muted-foreground">
+            {dependantsTotal.toLocaleString()} active dependant
+            {dependantsTotal === 1 ? "" : "s"} on file
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!total}
+            onClick={() => setShowDeleteAll(true)}
+            className="shrink-0 text-error hover:text-error"
+          >
+            <Trash2 className="size-4" /> Clear all
+          </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           <DependantFilterBar
@@ -685,15 +677,6 @@ export function DependantsPage() {
         </SheetContent>
       </Sheet>
 
-      <PageGuide
-        purpose="Upload and manage the dependant listing. Dependants are automatically linked to employees via staff ID, NRIC, or name matching. Only products flagged 'has dependants' include dependant coverage."
-        connections={[
-          { label: "← Employees", description: "Dependants link to employee records for family plan eligibility" },
-          { label: "← Products catalog", description: "Only products with 'has dependants' enabled support dependant enrolment" },
-          { label: "→ Flexible benefits", description: "A linked spouse + children set each employee's family-status tier and Flexi wallet" },
-          { label: "→ Activation", description: "Dependant data is included in the policy year snapshot on activation" },
-        ]}
-      />
     </div>
   );
 }

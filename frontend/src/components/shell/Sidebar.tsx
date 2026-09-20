@@ -28,8 +28,7 @@ export function Sidebar({
       )}
       <aside
         className={cn(
-          "w-60 shrink-0 border-r border-border flex flex-col",
-          "bg-gradient-to-b from-sidebar via-sidebar to-muted/40",
+          "w-60 shrink-0 border-r border-border bg-sidebar flex flex-col",
           "fixed inset-y-0 left-0 z-50 h-full transition-transform duration-200",
           "lg:static lg:z-auto lg:translate-x-0",
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
@@ -64,10 +63,10 @@ function HomeLink({ active }: { active: boolean }) {
     <Link
       to="/home"
       className={cn(
-        "group/item relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm font-medium tracking-tight transition-all duration-150",
+        "group/item relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm font-medium tracking-tight transition-colors duration-150",
         active
           ? "bg-sidebar-active text-sidebar-active-foreground"
-          : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground motion-safe:hover:translate-x-0.5",
+          : "text-foreground/80 hover:bg-sidebar-hover hover:text-foreground",
       )}
     >
       <Home
@@ -121,10 +120,10 @@ function ItemLink({ item, active }: { item: NavItem; active: boolean }) {
       <Link
         to={item.to}
         className={cn(
-          "group/item relative flex items-center gap-2.5 rounded-lg py-1.5 pl-2.5 pr-2 text-sm transition-all duration-150",
+          "group/item relative flex items-center gap-2.5 rounded-lg py-1.5 pl-2.5 pr-2 text-sm transition-colors duration-150",
           active
             ? "bg-sidebar-active text-sidebar-active-foreground font-semibold"
-            : "text-foreground/75 hover:bg-sidebar-hover hover:text-foreground motion-safe:hover:translate-x-0.5",
+            : "text-foreground/75 hover:bg-sidebar-hover hover:text-foreground",
         )}
       >
         <Icon

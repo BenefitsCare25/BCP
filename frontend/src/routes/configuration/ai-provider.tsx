@@ -38,7 +38,6 @@ import {
   VertexKeyDrawer,
   type VertexKeyDraft,
 } from "@/components/configuration/VertexKeyDrawer";
-import { PageGuide } from "@/components/ui/page-guide";
 
 export function AIProviderPage() {
   const { data: me, isPending: meLoading } = useMe();
@@ -310,15 +309,6 @@ export function AIProviderPage() {
           </div>
         </CardContent>
       </Card>
-
-      <PageGuide
-        purpose="Configure the Google Vertex (Gemini) AI backend for employee claim autofill, claim review, rule suggestion and roster profiling. The platform key (system-admin) is the default for every company; a company can override it with its own Vertex service-account JSON."
-        connections={[
-          { label: "→ Roster profiling", description: "AI profiling uses this provider to analyze roster columns" },
-          { label: "→ Claims review", description: "Autofill and AI review calls use this provider; review criteria are configured on Claims Review → Review rules" },
-          { label: "→ Diagnostics", description: "AI spend and usage are tracked in the audit log" },
-        ]}
-      />
 
       <AlertDialog
         open={confirmClear}

@@ -9,11 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const ROLE_LABEL: Record<string, string> = {
-  client_admin: "HR Administrator",
-  client_hr: "HR Officer",
-};
-
 const MODULES = [
   {
     key: "employees",
@@ -47,21 +42,7 @@ export function HrDashboardPage() {
     !!identity?.mfa_available && identity?.mfa_status !== "confirmed";
 
   return (
-    <div className="space-y-8">
-      <div>
-        <p className="text-sm text-muted-foreground">
-          {identity?.company_name ?? "Your company"}
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
-          Welcome{identity?.display_name ? `, ${identity.display_name}` : ""}
-        </h1>
-        {identity?.role && (
-          <Badge variant="info" className="mt-2">
-            {ROLE_LABEL[identity.role] ?? identity.role}
-          </Badge>
-        )}
-      </div>
-
+    <div className="space-y-5">
       {mfaSuggested && (
         <Card className="border-warn/40 bg-warn/5">
           <CardHeader className="flex-row items-start gap-3 space-y-0">

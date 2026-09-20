@@ -69,9 +69,7 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -102,7 +100,6 @@ import { RosterTabActions } from "./rosterTabActions";
 import { EntityBreakdownCard } from "@/components/configuration/EntityBreakdownCard";
 import { EntityReconciliationPanel } from "@/components/configuration/EntityReconciliationPanel";
 import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
-import { PageGuide } from "@/components/ui/page-guide";
 import { InfoHint } from "@/components/ui/tooltip";
 import { coerceAttrs } from "@/lib/attrs";
 import { ConflictDetailError, formatError } from "@/lib/errors";
@@ -293,24 +290,19 @@ export function EmployeesPage() {
       <OrphanOverridesPanel policyYearId={policyYearId} />
 
       <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <CardTitle>Member listing</CardTitle>
-              <CardDescription>
-                {onFile.toLocaleString()} employee{onFile === 1 ? "" : "s"} on file
-              </CardDescription>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!total}
-              onClick={() => setShowDeleteAll(true)}
-              className="text-error hover:text-error shrink-0"
-            >
-              <Trash2 className="size-4" /> Clear all
-            </Button>
-          </div>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+          <p className="text-xs tabular-nums text-muted-foreground">
+            {onFile.toLocaleString()} employee{onFile === 1 ? "" : "s"} on file
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!total}
+            onClick={() => setShowDeleteAll(true)}
+            className="shrink-0 text-error hover:text-error"
+          >
+            <Trash2 className="size-4" /> Clear all
+          </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           <RosterFilterBar
@@ -866,14 +858,6 @@ export function EmployeesPage() {
         </SheetContent>
       </Sheet>
 
-      <PageGuide
-        purpose="Upload the member listing, then run category matching. Matching uses a tiered approach: exact name → fuzzy Jaccard (≥0.6) → rule evaluation. Click any row to review what it matched to and correct the mapping; cover, premiums and schedules are on Member Coverage."
-        connections={[
-          { label: "← Listing upload", description: "Employees are imported from STM-format Excel files" },
-          { label: "← Product categories", description: "Confirmed categories with rules drive the matching engine" },
-          { label: "→ Dependants", description: "Dependants are linked to employees via staff ID or NRIC" },
-        ]}
-      />
     </div>
   );
 }
