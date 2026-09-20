@@ -41,6 +41,7 @@ import {
 import { useReportReadiness, useReportWorkbooks } from "@/api/reports";
 import { useMe, usePolicyYears } from "@/api/hooks";
 import { useSession } from "@/stores/session";
+import { ServicerActivity } from "@/components/claims/ServicerActivity";
 import type { PolicyYear } from "@/types";
 
 // Reports Center — every downloadable/reviewable report, grouped by the team
@@ -550,6 +551,7 @@ function ClaimsReports({ year }: { year: PolicyYear }) {
       >
         <Workbooks keys={["claims-register"]} year={year} />
       </ReportSection>
+      <ServicerActivity />
       <ReportSection
         title="Live surfaces"
         hint="Reviewed in the app rather than exported."
