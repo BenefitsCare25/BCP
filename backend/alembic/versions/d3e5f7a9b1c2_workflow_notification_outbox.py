@@ -25,8 +25,15 @@ def _schemas(bind: Connection) -> list[str | None]:
     return schemas
 
 
+def _has_table(bind: Connection, table: str, schema: str | None) -> bool:
+    return sa.inspect(bind).has_table(table, schema=schema)
+
+
 def upgrade() -> None:
-    for schema in _schemas(op.get_bind()):
+    bind = op.get_bind()
+    for schema in _schemas(bind):
+        if _has_table(bind, "workflow_notifications", schema):
+            continue
         client = "public.clients.id" if schema else "clients.id"
         op.create_table(
             "workflow_notifications",
@@ -64,9 +71,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default=sa.func.now(),
             ),
-            sa.UniqueConstraint(
-                "client_id", "dedup_key", name="uq_workflow_notifications_dedup"
-            ),
+            sa.UniqueConstraint("client_id", "dedup_key", name="uq_workflow_notifications_dedup"),
             sa.CheckConstraint(
                 "status IN ('queued','sending','sent','dead','cancelled')",
                 name="status_valid",
@@ -88,5 +93,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for schema in reversed(_schemas(op.get_bind())):
-        op.drop_table("workflow_notifications", schema=schema)
+    bind = op.get_bind()
+    for schema in reversed(_schemas(bind)):
+        if _has_table(bind, "workflow_notifications", schema):
+            op.drop_table("workflow_notifications", schema=schema)
