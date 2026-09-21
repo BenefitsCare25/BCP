@@ -27,8 +27,8 @@ import {
 } from "@/api/reports";
 import { parseServerDate } from "@/lib/attention";
 import { formatError } from "@/lib/errors";
-
-const MAX_HISTORY = 50;
+import { usePolicyYears } from "@/api/hooks";
+import { Label } from "@/components/ui/label";
 
 /** Short relative time: "just now", "5m ago", "3h ago", "2d ago", else a date. */
 function relTime(iso: string | null): string {
@@ -281,8 +281,11 @@ function HistorySheet({
   // and orders them by date, since version numbers restart per series.
   const types = [reportType, ...supersededTypes].join(",");
   const versions = useReportVersions(policyYearId, types, scopeKey);
+  const years = usePolicyYears();
+  const year = years.data?.find((entry) => entry.id === policyYearId);
+  const [historyLimit, setHistoryLimit] = useState(10);
   const all = versions.data ?? [];
-  const shown = all.slice(0, MAX_HISTORY);
+  const shown = all.slice(0, historyLimit);
   // A version can only be diffed when its OWN predecessor is still retained.
   // `version_no > 1` is not that test: pruning drops the oldest of a series, so
   // the surviving bottom row has a number above 1 and no baseline — and the
@@ -309,12 +312,33 @@ function HistorySheet({
             Submission history{scopeLabel ? ` — ${scopeLabel}` : ""}
           </SheetTitle>
           <SheetDescription>
-            Every copy of this report that has left the building, newest first.
+            Retained copies of this report, newest first.
             One is filed each time the content differs from the last.
           </SheetDescription>
         </SheetHeader>
         <SheetBody>
-          {shown.length === 0 ? (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {year ? `Benefit period: ${year.start_date} to ${year.end_date}` : "Selected benefit year"}
+            </p>
+            <Label className="flex items-center gap-2">
+              Show
+              <select
+                aria-label="Report history display count"
+                className="rounded-md border border-border bg-background px-2 py-1 text-foreground"
+                value={historyLimit}
+                onChange={(event) => setHistoryLimit(Number(event.target.value))}
+              >
+                <option value={10}>Latest 10</option>
+                <option value={20}>Latest 20</option>
+                <option value={50}>Latest 50</option>
+              </select>
+            </Label>
+          </div>
+          <p className="mb-3 text-xs text-muted-foreground">This changes the display only. Stored report retention is unchanged. Use the Reports benefit-year selector to view another period.</p>
+          {versions.isLoading ? <p role="status">Loading report history…</p> : versions.isError ? (
+            <div role="alert"><p>Report history could not be loaded.</p><Button variant="outline" onClick={() => void versions.refetch()}>Retry</Button></div>
+          ) : shown.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing sent yet. Downloading the report files the first copy.
             </p>
@@ -376,9 +400,9 @@ function HistorySheet({
                   </div>
                 </div>
               ))}
-              {all.length > MAX_HISTORY && (
+              {all.length > historyLimit && (
                 <p className="pt-3 text-xs text-muted-foreground">
-                  Showing the {MAX_HISTORY} most recent of {all.length} copies.
+                  Showing the {historyLimit} most recent of {all.length} retained copies.
                 </p>
               )}
             </div>

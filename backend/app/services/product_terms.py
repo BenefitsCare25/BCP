@@ -89,6 +89,23 @@ def gst_multiplier(included: bool | None, rate: float | None) -> float:
     return 1.0 + effective_rate / 100.0
 
 
+def product_window_for_code(db: Session, year: PolicyYear, code: str) -> tuple[date, date]:
+    """Resolve the claim's original-year product using canonical catalog precedence."""
+    from app.services.enrollment_products import resolve_product_by_code
+
+    product = resolve_product_by_code(db, year, code)
+    term = db.scalar(select(ProductTerm).where(
+        ProductTerm.policy_year_id == year.id,
+        ProductTerm.product_id == product.id,
+    )) if product is not None else None
+    start, end, _ = term_window(
+        term.coverage_start if term else None,
+        term.coverage_end if term else None,
+        year,
+    )
+    return start, end
+
+
 def product_gst_multipliers(db: Session, policy_year_id: str) -> dict[str, float]:
     """``{product_id: gross-up factor}`` for products with an EXPLICIT GST opinion
     (``gst_included`` not None) in this policy year — an explicit "off" is present

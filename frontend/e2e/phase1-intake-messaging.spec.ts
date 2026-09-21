@@ -20,20 +20,12 @@ test.beforeEach(async ({ page, request }) => {
   }, { clientId: me.active_client_id, yearId: years[0].id });
 });
 
-test("Autofill measurements and synthetic messaging render without contacting members", async ({ page }, testInfo) => {
+test("Autofill measurements render for the selected benefit year", async ({ page }, testInfo) => {
   await page.route("**/api/v1/claims/intake-quality?*", async (route) => {
     await route.fulfill({ json: {
       claims: 4, suggested_fields: 20, corrected_fields: 3, correction_rate: 0.15,
       corrections_by_field: { provider_name: 2, amount: 1 },
     } });
-  });
-  // All simulation requests go to the actual local endpoint. No claim/member
-  // messaging or email endpoint is called by this test.
-  const writes: string[] = [];
-  page.on("request", (request) => {
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())) {
-      writes.push(new URL(request.url()).pathname);
-    }
   });
   await page.goto("/claims/review?tab=settings");
   await expect(page.getByRole("tab", { name: "Doc settings" })).toHaveAttribute("aria-selected", "true");
@@ -43,42 +35,9 @@ test("Autofill measurements and synthetic messaging render without contacting me
   await expect(quality).toContainText("15.0%");
   await expect(quality).toContainText("provider name: 2");
   await quality.screenshot({ path: testInfo.outputPath("intake-quality.png") });
-
-  const simulation = page.getByRole("heading", { name: "Test message conversation" }).locator("..").locator("..");
-  await simulation.getByLabel("Claim category").selectOption("inpatient");
-  await simulation.getByLabel("Test message", { exact: true }).fill("Please attach the synthetic itemised bill.");
-  const firstResponse = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/conversations/simulate");
-  await simulation.getByRole("button", { name: "Add test message", exact: true }).click();
-  const response = await firstResponse;
-  expect(response.status()).toBe(200);
-  const responseBody = await response.json();
-  expect(responseBody.simulation).toBe(true);
-  expect(responseBody.recipient).toBe("test.member@example.invalid");
-  expect(responseBody.subject.claim_category).toBe("inpatient");
-  const memberView = simulation.getByRole("region", { name: "Member view", exact: true });
-  const brokerView = simulation.getByRole("region", { name: "Broker view", exact: true });
-  await expect(memberView).toContainText("Claims team");
-  await expect(memberView).not.toContainText("Test adviser");
-  await expect(brokerView).toContainText("Test adviser");
-  await expect(memberView).toContainText("Please attach the synthetic itemised bill.");
-
-  await simulation.getByLabel("Test sender").selectOption("member");
-  await simulation.getByLabel("Test message", { exact: true }).fill("This is the synthetic member response.");
-  await simulation.getByRole("button", { name: "Add test message", exact: true }).click();
-  await expect(memberView.getByRole("listitem")).toHaveCount(2);
-  await expect(memberView).toContainText("Test member");
-  await expect(brokerView).toContainText("This is the synthetic member response.");
-  await simulation.screenshot({ path: testInfo.outputPath("message-simulation.png") });
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await simulation.getByRole("button", { name: "Clear simulation" }).click();
-  await expect(memberView).toHaveCount(0);
-  await expect(brokerView).toHaveCount(0);
-  await expect(simulation.getByLabel("Test message", { exact: true })).toHaveValue("");
-  expect(writes.filter((path) => path.includes("/claims/") && path.endsWith("/messages"))).toEqual([]);
-  expect(writes.filter((path) => /send|notification|reminder|invite|campaign/.test(path))).toEqual([]);
 });
 
-test("Conversation category and all-year scope are sent together and display claim context", async ({ page }, testInfo) => {
+test("Conversation filters follow the policy year selected in the top context", async ({ page }, testInfo) => {
   await page.route("**/api/v1/conversations?*", async (route) => {
     const url = new URL(route.request().url());
     const category = url.searchParams.get("category") ?? "inpatient";
@@ -103,22 +62,22 @@ test("Conversation category and all-year scope are sent together and display cla
   await page.goto("/claims/review?tab=messages");
   const inbox = page.getByRole("complementary", { name: "Conversation inbox" });
   await expect(inbox.getByText("TEST-CONTEXT-1", { exact: true })).toBeVisible();
-  await expect(inbox).toContainText("Benefit year 2025-01-01 to 2025-12-31");
-  const allYears = page.waitForRequest((request) => {
-    const url = new URL(request.url());
-    return url.pathname === "/api/v1/conversations" && url.searchParams.get("all_years") === "true";
-  });
-  await inbox.getByLabel("Benefit years").selectOption("all");
-  const yearRequest = new URL((await allYears).url());
-  expect(yearRequest.searchParams.get("policy_year_id")).toBeTruthy();
+  await expect(inbox.getByLabel("Benefit years")).toHaveCount(0);
+  await expect(inbox.getByLabel("Incurred from")).toHaveCount(0);
+  await expect(inbox.getByLabel("Incurred to")).toHaveCount(0);
+  await page.getByRole("button", { name: "Filters" }).click();
+  const filterPanel = page.getByRole("dialog", { name: "Filter conversations" });
   const filtered = page.waitForRequest((request) => {
     const url = new URL(request.url());
     return url.pathname === "/api/v1/conversations" && url.searchParams.get("category") === "flex";
   });
-  await inbox.getByLabel("Claim category").selectOption("flex");
+  await filterPanel.getByLabel("Claim category").selectOption("flex");
   const filteredUrl = new URL((await filtered).url());
-  expect(filteredUrl.searchParams.get("all_years")).toBe("true");
-  expect(filteredUrl.searchParams.get("policy_year_id")).toBe(yearRequest.searchParams.get("policy_year_id"));
+  expect(filteredUrl.searchParams.get("all_years")).toBeNull();
+  expect(filteredUrl.searchParams.get("incurred_from")).toBeNull();
+  expect(filteredUrl.searchParams.get("incurred_to")).toBeNull();
+  expect(filteredUrl.searchParams.get("policy_year_id")).toBeTruthy();
+  await filterPanel.getByRole("button", { name: "Done" }).click();
   await expect(inbox.locator("span").filter({ hasText: /^Flex$/ })).toBeVisible();
   await inbox.screenshot({ path: testInfo.outputPath("conversation-context.png") });
 });

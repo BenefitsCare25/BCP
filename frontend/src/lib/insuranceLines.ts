@@ -3,8 +3,8 @@ import type { InsuranceLine, RegistryEntry, SetupProductSummary } from "@/types"
 export const INSURANCE_LINES: InsuranceLine[] = [
   "medical",
   "life",
-  "flex",
   "general",
+  "flex",
 ];
 
 export const LINE_LABELS: Record<InsuranceLine, string> = {

@@ -338,6 +338,13 @@ function PaReports({ year }: { year: PolicyYear }) {
 
   return (
     <div className="space-y-6">
+      <ReportSection title="Premium breakdown" hint="Member premiums, GST, covered dependants and Flex charges, grouped by insurer and cost centre. Missing prices are identified explicitly.">
+        <ReportDownloadButton
+          path={`/policy-years/${year.id}/reports/premium-breakdown`}
+          filename={`premium-breakdown-${stamp(year)}.xlsx`}
+          label="Download premium breakdown"
+        />
+      </ReportSection>
       {isError && (
         <div className="flex items-center gap-2 rounded-lg border border-error/40 bg-error-soft/40 px-3 py-2 text-sm text-error">
           <AlertTriangle className="size-4 shrink-0" />

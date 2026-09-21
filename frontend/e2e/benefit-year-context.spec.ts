@@ -267,6 +267,16 @@ test("benefit-year selection defaults to today and follows every module", async 
   for (const path of paths) {
     await expectYearRequest(page, apiRequests, path, years.past.id);
     await expect(yearSelect).toContainText("2025");
+    if (path === "/claims/review?tab=queue") {
+      await expect(page.getByLabel("Benefit year scope")).toHaveCount(0);
+      await expect(page.getByLabel("Incurred from")).toHaveCount(0);
+      await expect(page.getByLabel("Incurred to")).toHaveCount(0);
+      const claimsRequest = apiRequests
+        .map((url) => new URL(url))
+        .find((url) => url.pathname === "/api/v1/claims");
+      expect(claimsRequest?.searchParams.get("policy_year_id")).toBe(years.past.id);
+      expect(claimsRequest?.searchParams.get("all_years")).toBeNull();
+    }
   }
 
   await expect(

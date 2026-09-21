@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@/api/client";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Download, FileText, Loader2, Maximize2, RefreshCw } from "lucide-react";
 import {
   downloadClaimDocument,
@@ -24,10 +27,24 @@ function previewType(doc: StoredDocumentMeta, blob: Blob): string {
 export function ClaimDocumentViewer({
   claimId,
   documents,
+  revision,
+  canManage = false,
 }: {
   claimId: string;
   documents: StoredDocumentMeta[];
+  revision?: number;
+  canManage?: boolean;
 }) {
+  const queryClient = useQueryClient();
+  const replacementInput = useRef<HTMLInputElement>(null);
+  const [confirmRemoval, setConfirmRemoval] = useState(false);
+  const [documentBusy, setDocumentBusy] = useState(false);
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["claims"] }),
+      queryClient.invalidateQueries({ queryKey: ["claim-detail"] }),
+    ]);
+  };
   const [selectedId, setSelectedId] = useState(documents[0]?.id ?? null);
   const [preview, setPreview] = useState<{ url: string; mime: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -152,6 +169,38 @@ export function ClaimDocumentViewer({
         </div>
       </div>
 
+      {selected && <div className="space-y-2 border-b border-border px-4 py-3 text-xs text-muted-foreground">
+        <p>{selected.removal_reason ?? "This attachment may be removed while required evidence remains. To replace it, upload the corrected file first."}</p>
+        {canManage && <div className="flex flex-wrap gap-2">
+          <input ref={replacementInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={async (event) => {
+            const file = event.target.files?.[0]; event.target.value = "";
+            if (!file) return;
+            if (file.size > 15 * 1024 * 1024) { toast.error("Choose a document smaller than 15 MB."); return; }
+            setDocumentBusy(true);
+            try {
+              const form = new FormData(); form.append("file", file);
+              if (selected.doc_type) form.append("doc_type", selected.doc_type);
+              await api.upload(`/claims/${claimId}/documents`, form);
+              await refresh();
+              toast.success("Document added. You can now remove the earlier attachment if permitted.");
+            } catch (error) { toast.error(formatError(error)); }
+            finally { setDocumentBusy(false); }
+          }} />
+          <Button type="button" size="sm" variant="outline" disabled={documentBusy} onClick={() => replacementInput.current?.click()}>Add correction / replacement</Button>
+          <Button type="button" size="sm" variant="outline" disabled={documentBusy || !selected.removal_allowed || revision == null} onClick={() => setConfirmRemoval(true)}>Remove attachment</Button>
+        </div>}
+      </div>}
+      <AlertDialog open={confirmRemoval} onOpenChange={setConfirmRemoval} title="Remove attachment?" description={`Remove ${selected?.file_name ?? "this document"}? The file will be deleted; its removal remains in the audit history.`} confirmLabel="Remove attachment" loading={documentBusy} onConfirm={async () => {
+        if (!selected || revision == null) return;
+        setDocumentBusy(true);
+        try {
+          await api.delete(`/claims/${claimId}/documents/${selected.id}?expected_revision=${revision}`);
+          setConfirmRemoval(false);
+          await refresh();
+          toast.success("Attachment removed. Audit history retained.");
+        } catch (error) { toast.error(formatError(error)); await refresh(); }
+        finally { setDocumentBusy(false); }
+      }} />
       <div
         id="claim-document-preview"
         role="tabpanel"

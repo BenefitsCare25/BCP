@@ -1,30 +1,44 @@
 import { expect, test } from "@playwright/test";
 
-test("company notification settings save digest preferences and explain urgent delivery", async ({ page, request }) => {
-  const me = await (await request.get("/api/v1/me")).json();
-  await page.addInitScript(clientId => {
-    localStorage.setItem("inspro-session", JSON.stringify({ state: { activeClientId: clientId, currentPolicyYearId: null, policyYearClientId: null }, version: 0 }));
-  }, me.active_client_id);
-  let settings = { claim_delivery: "immediate", digest_minutes: 60, revision: 0 };
-  await page.route("**/api/v1/workflow-notifications/settings", async route => {
-    if (route.request().method() === "PUT") {
-      expect(route.request().headers()["x-inspro-client"]).toBe(me.active_client_id);
-      const body = route.request().postDataJSON();
-      expect(body.claim_delivery).toBe("digest");
-      expect(body.digest_minutes).toBe(120);
-      settings = { ...body, revision: 1 };
-    }
-    await route.fulfill({ json: settings });
+test("company settings omits notification preferences and retires old deep links", async ({ page, request }) => {
+  const meResponse = await request.get("/api/v1/me");
+  expect(meResponse.ok()).toBe(true);
+  const me = await meResponse.json();
+  expect(me.active_client_id).toBeTruthy();
+  const yearResponse = await request.get("/api/v1/policy-years", {
+    headers: { "X-Inspro-Client": me.active_client_id },
   });
+  expect(yearResponse.ok()).toBe(true);
+  const years = await yearResponse.json();
+  expect(years.length).toBeGreaterThan(0);
+  await page.addInitScript(({ clientId, yearId }) => {
+    localStorage.setItem("inspro-session", JSON.stringify({
+      state: {
+        activeClientId: clientId,
+        currentPolicyYearId: yearId,
+        policyYearClientId: clientId,
+      },
+      version: 0,
+    }));
+  }, { clientId: me.active_client_id, yearId: years[0].id });
+
+  const settingsRequests: string[] = [];
+  page.on("request", request => {
+    if (request.url().includes("/workflow-notifications/settings")) {
+      settingsRequests.push(request.url());
+    }
+  });
+
   await page.goto("/settings/company?tab=notifications");
-  await page.getByLabel("Delivery", { exact: true }).selectOption("digest");
-  await page.getByLabel("Digest interval (minutes)").fill("120");
-  await expect(page.getByText(/Requests for information are urgent and always sent immediately/)).toBeVisible();
-  await page.getByRole("button", { name: "Save notification settings" }).click();
-  await expect(page.getByText("Notification settings saved.").first()).toBeVisible();
-  await page.reload();
-  await expect(page.getByLabel("Delivery", { exact: true })).toHaveValue("digest");
-  await expect(page.getByLabel("Digest interval (minutes)")).toHaveValue("120");
+
+  await expect(page.getByRole("tab", { name: "Entity aliases" })).toHaveAttribute(
+    "data-state",
+    "active",
+  );
+  await expect(page.getByRole("tab", { name: "WICA" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Authentication" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Notifications" })).toHaveCount(0);
+  expect(settingsRequests).toEqual([]);
 });
 
 test("digest sign-in link preserves the selected claim after authentication", async ({ page }) => {

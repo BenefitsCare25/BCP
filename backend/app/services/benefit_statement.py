@@ -24,6 +24,7 @@ from app.models import (
     Employee,
     EmployeeAttributeSchema,
     FlexScheme,
+    PolicyYear,
     ProductSetup,
 )
 from app.models.category import Category
@@ -177,6 +178,11 @@ def _build_flex_coverage(db: Session, employee: Employee) -> FlexCoverageLine | 
     scheme = scheme_row.scheme or {}
     raw_meta = scheme.get("meta")
     meta: dict[str, Any] = raw_meta if isinstance(raw_meta, dict) else {}
+    from app.services.flex_age import employee_age_eligible
+
+    year = db.get(PolicyYear, employee.policy_year_id)
+    if not employee_age_eligible(employee, meta, year.start_date if year else None):
+        return None
     tier = _find_tier(scheme, employee.flex_tier_name)
 
     categories: list[FlexBenefitCategoryLine] = []

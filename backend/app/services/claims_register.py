@@ -23,6 +23,7 @@ from app.models.claim import (
     LOG_CLAIM_TYPE,
 )
 from app.services.claim_fx import is_foreign, policy_amount
+from app.services.claim_placement import PLACEMENT_COLUMNS, placement_cells
 from app.services.claims import prefetch_claim_relations
 from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_reports import (
@@ -119,7 +120,7 @@ def build_claims_register_workbook(
     wb = Workbook()
     ws = wb.active
     ws.title = "Claims"
-    ws.append(CLAIMS_REGISTER_HEADER)
+    ws.append(CLAIMS_REGISTER_HEADER + PLACEMENT_COLUMNS)
     bold_header(ws)
 
     for claim, employee in rows:
@@ -158,6 +159,7 @@ def build_claims_register_workbook(
             naive(claim.decided_at),
             f"{years[claim.policy_year_id].start_date:%d %b %Y} - "
             f"{years[claim.policy_year_id].end_date:%d %b %Y}",
+            *placement_cells(db, claim),
         ])
 
     autosize(ws)

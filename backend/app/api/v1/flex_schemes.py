@@ -841,6 +841,9 @@ def save_flex(
     # `tiers`) must not persist and break later reads.
     shape_errors = _section_shape_errors(body.scheme)
     shape_errors.extend(submission_rule_errors(body.scheme))
+    from app.services.flex_age import age_rule_errors
+
+    shape_errors.extend(age_rule_errors(body.scheme))
     # Pro-ration decides money, so a save that carries an unrecognised basis must
     # be refused rather than silently read as "no pro-ration" — a broker would
     # believe it was on. Checked HERE and not in `validate_scheme`, so the error

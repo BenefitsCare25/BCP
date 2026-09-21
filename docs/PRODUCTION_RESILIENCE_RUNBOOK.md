@@ -12,7 +12,7 @@ The approved recovery was a latest-point-in-time restore to `inspro-prod-pg-reco
 - Location: Southeast Asia, availability zone 1.
 - SKU: `Standard_B2s`, Burstable; 64 GiB storage.
 - Backup retention: 35 days; geo-redundant backup disabled.
-- Source retirement approved: `inspro-prod-pg` in availability zone 2 is no longer used by the API or worker, but its deletion is pending because Azure PostgreSQL has not detached the failed old private endpoint `inspro-prod-pg-pe`.
+- Source retirement completed: `inspro-prod-pg` in availability zone 2, its server-side private endpoint connection, and the failed old private endpoint `inspro-prod-pg-pe` were deleted after production was verified on the recovered server.
 - Restored server reached `Ready`; `is_db_alive` reported `1`.
 - Private endpoint `inspro-prod-pg-recovery-20260825-pe` was approved and registered as `10.20.2.7` in the Singapore VNet private DNS zone.
 - The claim-review worker returned `200 /readyz` against the restored database before API cutover.
@@ -20,9 +20,9 @@ The approved recovery was a latest-point-in-time restore to `inspro-prod-pg-reco
 - The API returned `200 /readiness` after cutover with PostgreSQL and Redis both healthy.
 - The `Standard_D2ds_v5` and zone-redundant HA upgrade was explicitly deferred. The single-server infrastructure-failure risk remains accepted until that decision changes.
 
-Source deletion received explicit approval on 2026-08-25 after the recovered production path, Key Vault reference, private endpoint, probes and database connectivity were verified. Azure then blocked deletion with `PrivateEndpointServerWithActiveConnectionCannotBeDropped`, while repeated old-endpoint detach operations returned PostgreSQL resource-provider `InternalServerError` tracking IDs including `2bc0d40a-5b7e-4ffd-a3b5-b9aa368b4d3b`, `1e49ce36-df57-49cf-9429-b91afb450896` and `e8865d9f-009e-4fa3-9da0-3c965ac82e15`. The old server continues to incur charges until Microsoft clears that stale connection. Do not delete or modify `inspro-prod-pg-recovery-20260825` or `inspro-prod-pg-recovery-20260825-pe` while resolving this cleanup.
+Source deletion received explicit approval on 2026-08-25 after the recovered production path, Key Vault reference, private endpoint, probes and database connectivity were verified. Azure initially blocked deletion with `PrivateEndpointServerWithActiveConnectionCannotBeDropped`, while repeated old-endpoint detach operations returned PostgreSQL resource-provider `InternalServerError` tracking IDs including `2bc0d40a-5b7e-4ffd-a3b5-b9aa368b4d3b`, `1e49ce36-df57-49cf-9429-b91afb450896` and `e8865d9f-009e-4fa3-9da0-3c965ac82e15`.
 
-After Microsoft clears the stale old connection, verify the exact resource IDs again, delete `inspro-prod-pg-pe`, delete `inspro-prod-pg`, and rerun the production health, readiness, worker, DNS, Key Vault and Singapore synthetic checks. Azure documents that backups for a deleted Flexible Server can remain available for five days, but restore is not guaranteed; the recovered server's independent 35-day automatic backup chain remains the production recovery path.
+Cleanup completed on 2026-08-25 by deleting the exact server-side connection `inspro-prod-pg-pe.4a90f8d5-e0eb-41f6-92f0-5767d66ce3ab`, waiting for the connection list to become empty, deleting `inspro-prod-pg-pe`, and then deleting `inspro-prod-pg`. A final Azure inventory contained only `inspro-prod-pg-recovery-20260825` and its private endpoint/NIC. Key Vault still selected the recovered server, which remained `Ready`; API readiness returned PostgreSQL and Redis healthy, and the review worker returned ready. Azure can retain service-managed backups for a limited dropped-server recovery window after resource deletion; the recovered server's independent 35-day automatic backup chain is the production recovery path.
 
 ## Purpose and service objectives
 

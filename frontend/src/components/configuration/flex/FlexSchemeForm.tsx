@@ -13,7 +13,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FieldLabel } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -286,27 +285,26 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
   return (
     <div className="space-y-4">
       {/* Scheme details (meta) */}
-      <Card>
+      <Card id="flex-scheme-details">
         <CardContent className="p-4 space-y-3">
           <div className="font-medium text-foreground">Scheme details</div>
           <div className="flex flex-wrap items-end gap-x-3 gap-y-4">
             <div className="flex-1 min-w-[12rem] space-y-1">
-              <Label>Scheme name</Label>
+              <Label htmlFor="flex-scheme-name">Scheme name</Label>
               <Input
+                id="flex-scheme-name"
                 value={meta.scheme_name ?? ""}
                 onChange={(e) => setMeta({ scheme_name: e.target.value })}
                 placeholder="e.g. Flexi Benefits"
               />
             </div>
             <div className="w-40 space-y-1">
-              <FieldLabel hint={`Applies to tiers without their own currency. Defaults to ${DEFAULT_CURRENCY}.`}>
-                Default currency
-              </FieldLabel>
+              <Label htmlFor="flex-default-currency">Default currency</Label>
               <Select
                 value={meta.currency || DEFAULT_CURRENCY}
                 onValueChange={(v) => setMeta({ currency: v })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="flex-default-currency">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -319,10 +317,9 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
               </Select>
             </div>
             <div className="w-40 space-y-1">
-              <FieldLabel hint="Blank inherits the policy year period.">
-                Effective start
-              </FieldLabel>
+              <Label htmlFor="flex-effective-start">Effective start</Label>
               <Input
+                id="flex-effective-start"
                 type="date"
                 value={meta.effective_start ?? ""}
                 onChange={(e) =>
@@ -331,8 +328,9 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
               />
             </div>
             <div className="w-40 space-y-1">
-              <Label>Effective end</Label>
+              <Label htmlFor="flex-effective-end">Effective end</Label>
               <Input
+                id="flex-effective-end"
                 type="date"
                 value={meta.effective_end ?? ""}
                 min={meta.effective_start || undefined}
@@ -342,9 +340,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
               />
             </div>
             <div className="space-y-1">
-              <FieldLabel hint="Extracted amounts are GST-exclusive; when on, flex price tags gross up by this rate (default 9%). A product's own GST setting under Configuration takes precedence.">
-                GST
-              </FieldLabel>
+              <Label>GST</Label>
               <div className="flex h-9 items-center gap-3 whitespace-nowrap">
                 <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
                   <Checkbox
@@ -375,118 +371,137 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
             </div>
           </div>
 
-          {/* Scheme-wide dependant age caps — the default eligibility window fed to
-              pricing; a product's Flex-pricing entry can override per product. */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3">
-            <FieldLabel hint="Dependants past these ages (age next-birthday) are not covered and draw no flex. Scheme-wide default; a product's Flex-pricing entry overrides it. Blank inherits the platform default (spouse 70, child 25).">
-              Dependant age limit
-            </FieldLabel>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Spouse max</span>
+          <div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-[minmax(9rem,1fr)_repeat(4,minmax(7rem,9rem))] xl:items-end">
+            <div className="font-medium text-foreground sm:col-span-2 xl:col-span-1 xl:self-center">
+              Eligibility age
+            </div>
+            {(["min", "max"] as const).map((bound) => (
+              <div key={bound} className="space-y-1">
+                <Label htmlFor={`flex-employee-age-${bound}`}>
+                  Employee {bound}
+                </Label>
+                <Input
+                  id={`flex-employee-age-${bound}`}
+                  type="number"
+                  min={0}
+                  max={150}
+                  step={1}
+                  value={meta.employee_age_limits?.[bound] ?? ""}
+                  onChange={(event) =>
+                    setMeta({
+                      employee_age_limits: {
+                        ...meta.employee_age_limits,
+                        [bound]: numOrNull(event.target.value),
+                      },
+                    })
+                  }
+                />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <Label htmlFor="flex-spouse-age-max">Spouse max</Label>
               <Input
+                id="flex-spouse-age-max"
                 type="number"
                 min={0}
-                className="w-20"
+                max={150}
+                step={1}
                 value={depMax("spouse")}
-                onChange={(e) => setDepMax("spouse", e.target.value)}
+                onChange={(event) => setDepMax("spouse", event.target.value)}
                 placeholder="70"
-                aria-label="Spouse maximum age"
               />
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">Child max</span>
+            <div className="space-y-1">
+              <Label htmlFor="flex-child-age-max">Child max</Label>
               <Input
+                id="flex-child-age-max"
                 type="number"
                 min={0}
-                className="w-20"
+                max={150}
+                step={1}
                 value={depMax("child")}
-                onChange={(e) => setDepMax("child", e.target.value)}
+                onChange={(event) => setDepMax("child", event.target.value)}
                 placeholder="25"
-                aria-label="Child maximum age"
               />
             </div>
           </div>
 
-          <div className="space-y-2 border-t border-border pt-3">
-            <Label htmlFor="flex-submission-basis">New claims when Flex is fully used</Label>
-            <Select
-              value={meta.claim_submission_basis ?? "off"}
-              onValueChange={(value) => setMeta({
-                claim_submission_basis: value as "off" | "paid" | "approved" | "reserved",
-              })}
-            >
-              <SelectTrigger id="flex-submission-basis" className="max-w-md">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">Allow submission for assessment</SelectItem>
-                <SelectItem value="paid">Block when payments use the full wallet</SelectItem>
-                <SelectItem value="approved">Block when approved claims use the full wallet</SelectItem>
-                <SelectItem value="reserved">Block when approved and pending claims use the full wallet</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Uses the wallet after benefit selections. Replies to existing claims remain available.
-              Pending amounts with an unresolved currency conversion require review when included.
-            </p>
-          </div>
-
-          {/* Pro-ration. A member is rarely covered for a whole year, and
-              companies settle that differently — by months, by days, or not at
-              all. Off by default: reducing an allowance on an inference is the
-              one error that cannot be walked back with a member. */}
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3">
-            <FieldLabel hint="Scales the annual flex dollars to the period the member was actually covered, and scales the price tags drawn against it by the same factor. Claims already reimbursed never pro-rate. Leave as Full annual when the scheme grants the whole year regardless.">
-              Pro-ration
-            </FieldLabel>
-            <div className="w-56 space-y-1">
+          <div className="grid gap-4 border-t border-border pt-3 xl:grid-cols-[minmax(22rem,1.35fr)_minmax(22rem,1fr)] xl:items-end">
+            <div className="space-y-1">
+              <Label htmlFor="flex-submission-basis">
+                New claims when Flex is fully used
+              </Label>
               <Select
-                value={proration.basis ?? "none"}
-                onValueChange={(v) =>
-                  // Write BOTH fields. The server reads an absent `applies_to`
-                  // as "leavers" (a legacy AI extraction can never have carried
-                  // one), so saving a basis alone would store a rule the form is
-                  // not showing — the select would read "Leavers only" here and
-                  // the wallet would be cut on one end while the broker believed
-                  // they had chosen the other.
-                  setProration({
-                    basis: v as ProrationBasis,
-                    applies_to: proration.applies_to ?? "leavers",
+                value={meta.claim_submission_basis ?? "off"}
+                onValueChange={(value) =>
+                  setMeta({
+                    claim_submission_basis: value as
+                      | "off"
+                      | "paid"
+                      | "approved"
+                      | "reserved",
                   })
                 }
               >
-                <SelectTrigger aria-label="Pro-ration basis">
+                <SelectTrigger id="flex-submission-basis">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Full annual flex dollars</SelectItem>
-                  {/* "By months" already means a part month counts whole — that
-                      is what choosing months over days IS. A member wanting
-                      partial-month precision picks days. */}
-                  <SelectItem value="months_served">By months served</SelectItem>
-                  <SelectItem value="days_served">By days served</SelectItem>
+                  <SelectItem value="off">Allow submission for assessment</SelectItem>
+                  <SelectItem value="paid">Block when payments use the full wallet</SelectItem>
+                  <SelectItem value="approved">Block when approved claims use the full wallet</SelectItem>
+                  <SelectItem value="reserved">Block when approved and pending claims use the full wallet</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {(proration.basis ?? "none") !== "none" && (
-              <div className="w-56 space-y-1">
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div
+                className={`space-y-1 ${
+                  (proration.basis ?? "none") === "none" ? "sm:col-span-2" : ""
+                }`}
+              >
+                <Label htmlFor="flex-proration-basis">Pro-ration</Label>
                 <Select
-                  value={proration.applies_to ?? "leavers"}
-                  onValueChange={(v) =>
-                    setProration({ applies_to: v as ProrationAppliesTo })
+                  value={proration.basis ?? "none"}
+                  onValueChange={(value) =>
+                    setProration({
+                      basis: value as ProrationBasis,
+                      applies_to: proration.applies_to ?? "leavers",
+                    })
                   }
                 >
-                  <SelectTrigger aria-label="Pro-ration applies to">
+                  <SelectTrigger id="flex-proration-basis">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="leavers">Leavers only</SelectItem>
-                    <SelectItem value="both">Joiners and leavers</SelectItem>
-                    <SelectItem value="joiners">Joiners only</SelectItem>
+                    <SelectItem value="none">Full annual flex dollars</SelectItem>
+                    <SelectItem value="months_served">By months served</SelectItem>
+                    <SelectItem value="days_served">By days served</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-            )}
+              {(proration.basis ?? "none") !== "none" && (
+                <div className="space-y-1">
+                  <Label htmlFor="flex-proration-applies-to">Applies to</Label>
+                  <Select
+                    value={proration.applies_to ?? "leavers"}
+                    onValueChange={(value) =>
+                      setProration({ applies_to: value as ProrationAppliesTo })
+                    }
+                  >
+                    <SelectTrigger id="flex-proration-applies-to">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="leavers">Leavers only</SelectItem>
+                      <SelectItem value="both">Joiners and leavers</SelectItem>
+                      <SelectItem value="joiners">Joiners only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>

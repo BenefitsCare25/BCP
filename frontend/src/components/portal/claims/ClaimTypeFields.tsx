@@ -24,6 +24,10 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
 
   return (
     <>
+      {selectedProduct?.claimable_from && <p className="text-sm text-label">
+        Coverage: {selectedProduct.claimable_from} to {selectedProduct.claimable_to}.
+        {selectedProduct.submission_deadline && ` Submit by ${selectedProduct.submission_deadline}.`}
+      </p>}
       {form.hasDependants && (
         <Field label="Who is this claim for?">
           {(p) => (

@@ -51,6 +51,13 @@ export function addRequiredCondition(
     }
   }
 
+  if (keys.length === 1 && keys[0] === "or") {
+    const children = (rule as Record<string, unknown>).or;
+    if (Array.isArray(children) && children.length === 0) {
+      return { or: [condition] };
+    }
+  }
+
   return { and: [rule, condition] };
 }
 
@@ -146,9 +153,9 @@ function NodeView({
           depth > 0 && "bg-muted/30",
         )}
       >
-        <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
           <Badge variant={key === "and" ? "primary" : "warn"}>{key.toUpperCase()}</Badge>
-          <div className="flex gap-1">
+          <div className="ml-auto flex w-full flex-wrap justify-end gap-1 sm:w-auto">
             <Button
               size="sm"
               variant="ghost"

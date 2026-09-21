@@ -346,15 +346,16 @@ export function ConfigurationPage() {
         )}
       </div>
 
-      {/* Renewal management follows the product setup it versions and stays
-          immediately above the audit trail. It remains interactive while a
-          historical product setup is being viewed read-only. */}
-      <BenefitYearPanel
-        years={policyYears}
-        viewingId={policyYearId}
-        onViewYear={setPolicyYear}
-        readOnly={readOnly}
-      />
+      {/* Renewal management belongs to insured products. Flex remains scoped by
+          the shell's policy-year selector without repeating the year cards. */}
+      {tab !== "flex" && (
+        <BenefitYearPanel
+          years={policyYears}
+          viewingId={policyYearId}
+          onViewYear={setPolicyYear}
+          readOnly={readOnly}
+        />
+      )}
 
       {audit && audit.items.length > 0 && (
         <Card>

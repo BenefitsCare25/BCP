@@ -270,7 +270,7 @@ async function mockClaimForm(page: Page) {
       },
     }),
   );
-  await page.route(/\/api\/v1\/portal\/utilization$/, (route) =>
+  await page.route(/\/api\/v1\/portal\/(?:claims\/)?utilization$/, (route) =>
     route.fulfill({
       json: {
         policy_year_id: "policy-limit-test",

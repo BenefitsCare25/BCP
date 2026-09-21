@@ -509,7 +509,7 @@ def test_an_amendment_runs_the_whole_submit_chain(anon: TestClient):
     # Outside the policy year.
     res = _amend(anon, claim["id"], incurred_date="2030-01-01")
     assert res.status_code == 422
-    assert "policy year" in res.json()["detail"]
+    assert "GHS coverage period" in res.json()["detail"]
 
     # Coverage the member doesn't hold.
     assert _amend(anon, claim["id"], product_code="NOPE").status_code == 422

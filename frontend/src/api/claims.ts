@@ -30,6 +30,8 @@ export const RECEIVED_VIA_LABELS: Record<string, string> = {
 };
 
 export interface StoredDocumentMeta {
+  removal_allowed?: boolean;
+  removal_reason?: string | null;
   id: string;
   file_name: string;
   /** Required-document slot this upload fills; null = additional document. */

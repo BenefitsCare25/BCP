@@ -28,7 +28,6 @@ from app.db.session import get_db
 from app.models import PolicyYear
 from app.models.claim import CLAIM_STATUSES
 from app.schemas.claims import ConversationList
-from app.schemas.message_simulation import MessageSimulationIn, MessageSimulationOut
 from app.services.claim_messages import (
     broker_conversation_out,
     broker_conversations,
@@ -39,19 +38,6 @@ router = APIRouter(
     tags=["conversations"],
     dependencies=[Depends(require_claim_access)],
 )
-
-
-@router.post("/simulate", response_model=MessageSimulationOut)
-def message_simulation(
-    body: MessageSimulationIn,
-    policy_year_id: str,
-    user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> MessageSimulationOut:
-    from app.services.message_simulation import simulate_messages
-
-    assert_policy_year_for_user(policy_year_id, user, db)
-    return simulate_messages(body)
 
 
 @router.get("", response_model=ConversationList)

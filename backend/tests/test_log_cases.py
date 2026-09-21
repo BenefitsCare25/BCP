@@ -401,7 +401,7 @@ def test_log_case_for_pending_dependant_422(broker):
 def test_log_case_outside_the_benefit_year_422(broker):
     res = _create_log(broker, incurred_date="2026-01-05")
     assert res.status_code == 422
-    assert "policy year" in res.text
+    assert "GHS coverage period" in res.text
 
 
 def test_log_case_rejects_an_unsupported_currency(broker):

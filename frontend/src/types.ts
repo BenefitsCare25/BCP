@@ -1301,6 +1301,7 @@ export interface FlexMeta {
     spouse?: { min?: number | null; max?: number | null } | null;
     child?: { min?: number | null; max?: number | null } | null;
   } | null;
+  employee_age_limits?: { min?: number | null; max?: number | null } | null;
 }
 
 export interface FlexEmployeeType {

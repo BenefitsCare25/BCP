@@ -661,7 +661,7 @@ def test_a_cover_period_that_ended_before_the_window_says_so():
         with pytest.raises(HTTPException) as exc:
             assert_incurred_in_period(s, year, s.get(Claim, claim_id), emp)
         assert exc.value.status_code == 422
-        assert "before this policy year began" in exc.value.detail
+        assert "before this GHS coverage period began" in exc.value.detail
 
 
 def test_the_batched_map_refuses_an_ambiguous_staff_id_like_the_single_path():

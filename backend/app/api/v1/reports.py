@@ -75,6 +75,26 @@ def _slug(insurer: str) -> str:
 
 router = APIRouter(prefix="/policy-years/{policy_year_id}/reports", tags=["reports"])
 
+
+@router.get("/premium-breakdown")
+@limiter.limit("10/minute")
+def download_premium_breakdown(
+    request: Request,
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    from app.services.premium_breakdown import build_premium_breakdown
+
+    year = assert_policy_year_for_user(policy_year_id, user, db)
+    content = BytesIO()
+    build_premium_breakdown(db, year).save(content)
+    write_audit(db, user, "report.premium_breakdown", "policy_year", year.id)
+    db.commit()
+    return Response(content.getvalue(), media_type=_XLSX_MEDIA_TYPE, headers={
+        "Content-Disposition": f'attachment; filename="premium-breakdown-{year.year}.xlsx"',
+    })
+
 _XLSX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )

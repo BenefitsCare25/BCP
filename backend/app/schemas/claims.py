@@ -29,6 +29,10 @@ class DocSlotOut(BaseModel):
 
 class StoredDocumentOut(_Base):
     id: str
+    removal_allowed: bool = False
+    removal_reason: str | None = (
+        "This evidence is retained. Contact your claims team for corrections."
+    )
     file_name: str
     # Which required-document slot this upload fills (claim_intake.DOC_SLOT
     # keys); None = untagged/additional document.
@@ -1070,6 +1074,9 @@ class ClaimTypeOption(BaseModel):
 
 class InsuredClaimOption(BaseModel):
     product_code: str
+    claimable_from: str | None = None
+    claimable_to: str | None = None
+    submission_deadline: str | None = None
     product_name: str | None = None
     plan_code: str | None = None
     annual_policy_limit: str | None = None
@@ -1102,6 +1109,7 @@ class FlexClaimCategoryOption(BaseModel):
 
 
 class FlexClaimOptions(BaseModel):
+    eligible_dependant_ids: list[str] = Field(default_factory=list)
     currency: str | None = None
     wallet_amount: float | None = None
     flex_balance: float | None = None

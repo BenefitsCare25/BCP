@@ -148,12 +148,17 @@ function RemoveDocument({
   fileName,
   busy,
   onRemove,
+  allowed,
+  reason,
 }: {
   docId: string;
   fileName: string;
   busy?: boolean;
   onRemove?: (docId: string) => void;
+  allowed?: boolean;
+  reason?: string | null;
 }) {
+  if (allowed === false && reason) return <span className="ml-2 block text-2xs text-label">{reason}</span>;
   if (!onRemove) return null;
   return (
     <button
@@ -564,6 +569,8 @@ export function ClaimDetailLeaf({
                               docId={f.id}
                               fileName={f.file_name}
                               busy={removingDocumentId === f.id}
+                              allowed={f.removal_allowed}
+                              reason={f.removal_reason}
                               onRemove={onRemoveDocument}
                             />
                           </span>
@@ -616,6 +623,8 @@ export function ClaimDetailLeaf({
                     fileName={doc.file_name}
                     busy={removingDocumentId === doc.id}
                     onRemove={onRemoveDocument}
+                    allowed={doc.removal_allowed}
+                    reason={doc.removal_reason}
                   />
                 </span>
               </li>

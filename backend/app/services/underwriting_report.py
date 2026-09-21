@@ -55,6 +55,7 @@ from app.services.insurer_reports import (
     naive,
 )
 from app.services.product_insurer import insurer_map
+from app.services.product_terms import resolve_terms
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     DOB_KEYS,
@@ -105,6 +106,8 @@ HEADER = [
     "Case Opened",
     "Last Updated",
     "Policy Period",
+    "Policy Number",
+    "Policy Number Source",
 ]
 
 
@@ -173,6 +176,7 @@ def build_underwriting_report(
     age_by_product = nel_age_limits(db, py.id)
     insurer_by_product = insurer_map(db, py.id, products.values())
     period = policy_period(py)
+    policy_numbers = {term.product_id: term.policy_number for term in resolve_terms(db, py)}
     renewal = py.start_date
     reminder_counts: dict[str, int] = dict(
         db.execute(
@@ -278,6 +282,8 @@ def build_underwriting_report(
                 review.updated_at if review else None,
             ),
             period,
+            policy_numbers.get(case.product_id) if case else None,
+            "Current configuration",
         ]
         # Scan order: the household, then its dependants, then product — the
         # order a broker reads the manual file in.

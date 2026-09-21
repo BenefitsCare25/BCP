@@ -1236,6 +1236,41 @@ async def upload_claim_document(
     return StoredDocumentOut.model_validate(doc)
 
 
+@router.delete("/{claim_id}/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_claim_document(
+    doc_id: str,
+    expected_revision: int = Query(ge=1),
+    claim: Claim = Depends(load_claim),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    from app.services.claims import (
+        claim_document_removal_block,
+        claim_documents,
+        delete_stored_document,
+    )
+
+    claim = lock_claim_for_mutation(db, claim)
+    assert_claim_revision(claim, expected_revision)
+    doc = db.get(StoredDocument, doc_id)
+    if (doc is None or doc.client_id != claim.client_id
+            or doc.entity_type != DOC_ENTITY_CLAIM or doc.entity_id != claim.id):
+        raise HTTPException(404, "Document not found")
+    block = claim_document_removal_block(
+        claim, doc, claim_documents(db, claim),
+        [item.key for item in setup_for_claim(db, claim).documents], for_broker=True,
+    )
+    if block:
+        raise HTTPException(409, {"code": "document_retained", "message": block})
+    before = {"file_name": doc.file_name, "sha256": doc.sha256, "doc_type": doc.doc_type}
+    delete_stored_document(db, doc)
+    stamp_document_amendment(db, claim, actor=AMENDED_BY_BROKER)
+    enqueue_amended_claim_review(db, claim, user.broker_firm_id)
+    write_audit(db, user, "claim.document_removed", "claim", claim.id,
+                before=before, after={"revision": claim.revision}, employee_id=claim.employee_id)
+    db.commit()
+
+
 @router.get("/{claim_id}/messages", response_model=list[ClaimMessageOut])
 def list_claim_messages(
     request: Request,

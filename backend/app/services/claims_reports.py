@@ -38,6 +38,7 @@ from app.models.claim import (
 )
 from app.services.claim_fx import is_foreign, policy_amount
 from app.services.claim_intake import is_inpatient_product
+from app.services.claim_placement import PLACEMENT_COLUMNS, placement_cells
 from app.services.claim_settlement import (
     DocumentDates,
     days_over_deadline,
@@ -245,7 +246,7 @@ def _header(scope: str) -> list[str]:
         "Employee Remark",
         "Admin Remark",
     ]
-    return header
+    return header + PLACEMENT_COLUMNS
 
 
 def _flag(value: bool | None) -> str:
@@ -363,7 +364,7 @@ def build_insurance_claims_workbook(
             claim.remarks or "",
             claim.admin_remarks or "",
         ]
-        append_safe(ws, cells)
+        append_safe(ws, cells + placement_cells(db, claim))
 
     autosize(ws)
     return wb

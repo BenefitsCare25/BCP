@@ -18,6 +18,13 @@ backend/tests/fixtures/rosters/*.xlsx
 !backend/tests/fixtures/placement_slips/.gitkeep
 !backend/tests/fixtures/rosters/.gitkeep
 
+# Ad-hoc real-client Office exports generated at the repository root. Keep the
+# files available for local reconciliation, but never allow them into commits.
+/*.xls
+/*.xlsx
+/*.doc
+/*.docx
+
 # ── Secrets ────────────────────────────────────────────────────────────────
 .env
 .env.local

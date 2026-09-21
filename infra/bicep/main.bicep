@@ -818,7 +818,7 @@ resource portalLivenessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasAl
     Name: 'Production portal liveness (Singapore)'
     Description: 'Checks that the production web process is externally reachable from Singapore.'
     Enabled: true
-    Frequency: 300
+    Frequency: 900
     Timeout: 30
     Kind: 'standard'
     RetryEnabled: true
@@ -850,7 +850,7 @@ resource portalReadinessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasA
     Name: 'Production dependency readiness (Singapore)'
     Description: 'Checks the production portal, PostgreSQL, and Redis path from Singapore.'
     Enabled: true
-    Frequency: 300
+    Frequency: 900
     Timeout: 30
     Kind: 'standard'
     RetryEnabled: true

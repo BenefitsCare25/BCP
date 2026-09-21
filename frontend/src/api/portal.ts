@@ -231,10 +231,10 @@ export function usePortalStatement() {
   });
 }
 
-export function usePortalUtilization() {
+export function usePortalUtilization(claimPeriod = false) {
   return useQuery({
-    queryKey: ["portal", "utilization"],
-    queryFn: () => portalApi.get<Utilization>("/portal/utilization"),
+    queryKey: ["portal", "utilization", claimPeriod ? "claims" : "current"],
+    queryFn: () => portalApi.get<Utilization>(claimPeriod ? "/portal/claims/utilization" : "/portal/utilization"),
     meta: { localErrorHandling: true },
     retry: false,
   });
@@ -347,6 +347,8 @@ export function useSubmitMyEnrollment() {
 // ── Claims ────────────────────────────────────────────────────────────────────
 
 export interface PortalClaimDocument {
+  removal_allowed?: boolean;
+  removal_reason?: string | null;
   id: string;
   file_name: string;
   /** Required-document slot this upload fills; null = additional document. */
@@ -569,6 +571,9 @@ export interface ClaimTypeOption {
 
 export interface InsuredClaimOption {
   product_code: string;
+  claimable_from?: string | null;
+  claimable_to?: string | null;
+  submission_deadline?: string | null;
   product_name: string | null;
   plan_code: string | null;
   annual_policy_limit: string | null;
@@ -605,6 +610,7 @@ export interface CoverageOptions {
   flex: {
     currency: string | null;
     wallet_amount: number | null;
+    eligible_dependant_ids?: string[];
     flex_balance: number | null;
     categories: {
       name: string;

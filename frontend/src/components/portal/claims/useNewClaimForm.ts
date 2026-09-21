@@ -82,7 +82,7 @@ export function useNewClaimForm() {
   const navigate = useNavigate();
   const company = useCompany();
   const options = useCoverageOptions();
-  const utilization = usePortalUtilization();
+  const utilization = usePortalUtilization(true);
   const createClaim = useCreateClaim();
   const uploadDoc = useUploadClaimDocument();
   const uploadReferral = useUploadReferralLetter();
@@ -100,11 +100,13 @@ export function useNewClaimForm() {
   const insured = options.data?.insured ?? [];
   const flex = options.data?.flex ?? null;
   const dependants = options.data?.dependants ?? [];
-  const hasFlex = (flex?.categories.length ?? 0) > 0;
   const walletCurrency = flex?.currency ?? "SGD";
 
   // Claimant ("" = the member themself) and the merged claim-type selection.
   const [dependantId, setDependantId] = useState("");
+  const hasFlex = (flex?.categories.length ?? 0) > 0 &&
+    (!dependantId || flex?.eligible_dependant_ids === undefined ||
+      flex.eligible_dependant_ids.includes(dependantId));
   const [selection, setSelection] = useState("");
   const [incurredDate, setIncurredDate] = useState("");
   const [admissionDate, setAdmissionDateState] = useState("");
@@ -700,11 +702,11 @@ export function useNewClaimForm() {
   // had filled everything in.
   const flexWindow = options.data?.flex;
   const claimableFrom =
-    (effectiveKind === "flex" ? flexWindow?.claimable_from : null) ??
+    (effectiveKind === "flex" ? flexWindow?.claimable_from : selectedProduct?.claimable_from) ??
     options.data?.claimable_from ??
     "";
   const claimableTo =
-    (effectiveKind === "flex" ? flexWindow?.claimable_to : null) ??
+    (effectiveKind === "flex" ? flexWindow?.claimable_to : selectedProduct?.claimable_to) ??
     options.data?.claimable_to ??
     "";
   // Both bounds are NULL together when the server has no claimable window to

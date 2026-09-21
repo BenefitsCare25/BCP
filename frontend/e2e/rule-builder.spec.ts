@@ -82,6 +82,12 @@ test("adding a required condition wraps an existing OR group", () => {
   });
 });
 
+test("adding a required condition fills an empty OR group", () => {
+  expect(addRequiredCondition({ or: [] }, SCHEMA)).toEqual({
+    or: [{ "=": ["", ""] }],
+  });
+});
+
 async function apiJson<T>(
   response: Awaited<ReturnType<APIRequestContext["get"]>>,
 ): Promise<T> {
@@ -264,6 +270,11 @@ test("a broker can add required conditions to leaf and OR categories", async ({
     await expect(
       orEditor.getByRole("button", { name: "Add alternative", exact: true }),
     ).toBeVisible();
+    for (const name of ["Add alternative", "Add AND group", "Add OR group"]) {
+      await expect(
+        orEditor.getByRole("button", { name, exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+    }
 
     const addRequiredConditionButton = orEditor.getByRole("button", {
       name: "Add required condition",

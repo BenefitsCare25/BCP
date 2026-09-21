@@ -652,7 +652,7 @@ def test_incurred_date_outside_policy_year_422(anon: TestClient):
     assert _upload(anon, claim["id"], PDF + b" oob-1").status_code == 200
     res = _submit(anon, claim["id"])
     assert res.status_code == 422
-    assert "policy year" in res.text.lower()
+    assert "ghs coverage period" in res.text.lower()
 
 
 def test_unknown_product_422(anon: TestClient):

@@ -680,6 +680,10 @@ def resolve_employee(
     grade, grade_str, designation = employee_signals(derived, raw_attrs)
     country = nationality_country(raw_attrs.get("nationality"))
     idx = match_tier(grade, country, tiers, designation=designation, grade_str=grade_str)
+    from app.services.flex_age import employee_age_eligible
+
+    if not employee_age_eligible(emp, meta, ref):
+        idx = None
     tier = tiers[idx] if idx is not None else None
 
     overlap: list[str] = []

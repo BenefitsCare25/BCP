@@ -11,6 +11,7 @@ import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
+import { ClaimPeriodPicker } from "@/components/portal/claims/ClaimPeriodPicker";
 
 /** THE primary action of the member portal, and the page's one brand fill —
  * floating, centred, and present at every scroll position.
@@ -82,7 +83,7 @@ export function PortalClaimsPage() {
   // A 404 keeps the confident empty state below; anything else is a fetch
   // failure and must not read as "no claims yet".
   if (claims.isError && !isNotFoundError(claims.error)) {
-    return <PortalErrorState onRetry={() => void claims.refetch()} />;
+    return <><ClaimPeriodPicker /><PortalErrorState onRetry={() => void claims.refetch()} /></>;
   }
 
   const rows = claims.data?.pages.flatMap((page) => page.items) ?? [];
@@ -95,6 +96,7 @@ export function PortalClaimsPage() {
   if (rows.length === 0) {
     return (
       <Mount label="No claims yet" className={MEASURE}>
+        <ClaimPeriodPicker />
         <p className="text-row text-label">
           When you pay for treatment that your benefits cover, send us the
           receipt here and we&rsquo;ll tell you where it&rsquo;s up to.
@@ -130,6 +132,7 @@ export function PortalClaimsPage() {
           either. Measured, not guessed: at `pb-10` the phone left 14px and the
           ledger read as though the pill were resting on it. */}
       <div className={`${MEASURE} pb-14`}>
+        <ClaimPeriodPicker />
         <ClaimList items={rows} total={total} interactive />
         {claims.hasNextPage && (
           <div className="mt-4 flex justify-center">

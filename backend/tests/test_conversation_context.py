@@ -241,24 +241,6 @@ def test_conversation_filters_are_validated(queue, extra):
     )
 
 
-def test_simulation_endpoint_is_scoped_and_does_not_write_threads(queue):
-    client, db = queue
-    before_claims = db.query(Claim).count()
-    before_messages = db.query(ClaimMessage).count()
-    payload = {"category": "inpatient", "messages": [{"author": "broker", "body": "Test"}]}
-    response = client.post("/api/v1/conversations/simulate?policy_year_id=current", json=payload)
-    assert response.status_code == 200, response.text
-    assert response.json()["member_view"][0]["author_name"] == "Claims team"
-    assert db.query(Claim).count() == before_claims
-    assert db.query(ClaimMessage).count() == before_messages
-    assert (
-        client.post(
-            "/api/v1/conversations/simulate?policy_year_id=foreign", json=payload
-        ).status_code
-        == 404
-    )
-
-
 def test_hr_audit_listing_cannot_read_medical_intake_baselines(queue):
     client, db = queue
     db.add(
@@ -293,10 +275,6 @@ def test_hr_audit_listing_cannot_read_medical_intake_baselines(queue):
         ("POST", "/enquiries/question/messages", {"subject": "Test", "body": "Test"}),
         ("POST", "/enquiries/question/messages/read", {}),
         ("POST", "/enquiries/question/status", {"status": "closed"}),
-        (
-            "POST", "/conversations/simulate?policy_year_id=current",
-            {"category": "flex", "messages": [{"author": "broker", "body": "Test"}]},
-        ),
         ("GET", "/audit-log/claim-workload?from_date=2026-01-01&to_date=2026-12-31", None),
     ],
 )

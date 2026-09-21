@@ -338,7 +338,7 @@ test("message workbench supports search and empty inboxes", async ({ page }, tes
   await expect(page.getByText("No matching conversations")).toBeVisible();
   await page.getByRole("button", { name: "Clear search field" }).click();
 
-  await page.getByRole("button", { name: "All", exact: true }).click();
+  await page.getByRole("button", { name: /^All(?:\s+\d+)?$/ }).click();
   const conversationList = page.getByRole("list", { name: "Conversations" });
   const hasConversations = await conversationList.isVisible();
   if (hasConversations) {
@@ -348,9 +348,9 @@ test("message workbench supports search and empty inboxes", async ({ page }, tes
   }
   const scrollOwners = await page.evaluate(() => {
     const main = document.querySelector("main");
-    const inbox = document.querySelector('[aria-label="Conversation inbox"]');
-    if (!main || !inbox) throw new Error("Message workbench shell is missing");
-    const nested = Array.from(inbox.querySelectorAll<HTMLElement>("*")).filter(
+    const messages = document.querySelector('[aria-label="Messages"]');
+    if (!main || !messages) throw new Error("Message workbench shell is missing");
+    const nested = Array.from(messages.querySelectorAll<HTMLElement>("*")).filter(
       (element) => {
         const overflow = getComputedStyle(element).overflowY;
         return (

@@ -21,7 +21,6 @@ import { useMe } from "@/api/hooks";
 import { triggerDownload } from "@/lib/download";
 import { policyAmount } from "@/components/claims/ConversionLine";
 import { IntakeQuality } from "@/components/claims/IntakeQuality";
-import { MessageSimulation } from "@/components/claims/MessageSimulation";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -225,12 +224,12 @@ function QueueTab({
   const [caseType, setCaseType] = useState<CaseType | "">(initialCaseType);
   const [status, setStatus] = useState<string>("");
   const [searchText, setSearchText] = useState("");
-  const [allYears, setAllYears] = useState(false);
-  const [incurredFrom, setIncurredFrom] = useState("");
-  const [incurredTo, setIncurredTo] = useState("");
   const [exporting, setExporting] = useState(false);
-  const { data: insurerOptions } = useClaimInsurers(policyYearId, allYears);
-  const filters = { allYears, incurredFrom, incurredTo, insurer, queue, kind };
+  // The company context bar is the single benefit-year control for this page.
+  // A second scope here could make the header say one period while the queue
+  // silently showed another.
+  const { data: insurerOptions } = useClaimInsurers(policyYearId, false);
+  const filters = { insurer, queue, kind };
   const search = useDeferredValue(searchText);
   const [page, setPage] = useState(0);
   // Deep link (`?claim=`) from the employee-level LOG card. Read once as the
@@ -332,7 +331,7 @@ function QueueTab({
 
   useEffect(() => {
     setPage(0);
-  }, [status, caseType, search, allYears, incurredFrom, incurredTo, insurer, queue, kind, employeeId]);
+  }, [status, caseType, search, insurer, queue, kind, employeeId]);
 
   useEffect(() => {
     setNote("");
@@ -494,29 +493,22 @@ function QueueTab({
     <div className="space-y-4">
       <Card>
         <CardHeader className="pb-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="text-xs text-muted-foreground">Benefit years
-              <select aria-label="Benefit year scope" className="ml-2 h-8 rounded-md border border-border bg-background px-2 text-foreground" value={allYears ? "all" : "current"} onChange={(event) => setAllYears(event.target.value === "all")}>
-                <option value="current">Selected benefit year</option>
-                <option value="all">All benefit years</option>
-              </select>
-            </label>
-            <label className="space-y-1 text-xs text-muted-foreground">Incurred from
-              <Input type="date" value={incurredFrom} onChange={(event) => setIncurredFrom(event.target.value)} />
-            </label>
-            <label className="space-y-1 text-xs text-muted-foreground">Incurred to
-              <Input type="date" value={incurredTo} onChange={(event) => setIncurredTo(event.target.value)} />
-            </label>
-            <label className="text-xs text-muted-foreground">Insurer
-              <select aria-label="Filter claims by insurer" className="ml-2 h-8 rounded-md border border-border bg-background px-2 text-foreground" value={insurer ?? ""} onChange={(event) => void navigate({ to: "/claims/review", search: { tab: "queue", view: caseType === "log" ? "log" : undefined, employee: employeeId, queue, kind, insurer: event.target.value || undefined } })}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              aria-label={caseType === "log" ? "Search LOG cases" : "Search claims"}
+              className="h-9 min-w-64 flex-1 sm:max-w-md"
+              value={searchText}
+              onChange={(event) => setSearchText(event.target.value)}
+              placeholder="Search ref, member, dependant, invoice"
+            />
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Insurer</span>
+              <select aria-label="Filter claims by insurer" className="h-9 min-w-44 rounded-md border border-border bg-background px-2 text-sm text-foreground" value={insurer ?? ""} onChange={(event) => void navigate({ to: "/claims/review", search: { tab: "queue", view: caseType === "log" ? "log" : undefined, employee: employeeId, queue, kind, insurer: event.target.value || undefined } })}>
                 <option value="">All insurers</option>
                 {Array.from(new Set([...(insurerOptions ?? []), ...(insurer ? [insurer] : [])])).map((name) => <option key={name} value={name}>{name}</option>)}
               </select>
             </label>
-            {(queue || kind) && <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/claims/review", search: { tab: "queue", insurer } })}>
-              {queue === "review" ? "Pending review" : queue === "overdue" ? "Overdue with insurer" : queue === "insurer" ? "With insurer" : "Claims"}{kind ? ` · ${kind}` : ""}<X className="size-3" /> Clear
-            </Button>}
-            <Button variant="outline" size="sm" disabled={exporting} onClick={async () => {
+            <Button variant="outline" className="h-9" disabled={exporting} onClick={async () => {
               setExporting(true);
               try {
                 const params = claimFilterParams(filters);
@@ -529,17 +521,15 @@ function QueueTab({
               } catch (error) { toast.error(formatError(error)); }
               finally { setExporting(false); }
             }}>{exporting ? "Exporting…" : "Export filtered claims"}</Button>
+            {!readOnly && (
+              <Button className="h-9" onClick={() => setLogFormOpen(true)}>
+                <Plus className="size-4" />
+                New LOG case
+              </Button>
+            )}
           </div>
-          {allYears && <p className="text-xs text-muted-foreground">All years for this company. Opening a claim selects its original benefit year for review.</p>}
           <div className="-mx-1 overflow-x-auto px-1 py-0.5">
             <div className="flex min-w-max items-center gap-2">
-              <Input
-                aria-label={caseType === "log" ? "Search LOG cases" : "Search claims"}
-                className="h-8 w-72"
-                value={searchText}
-                onChange={(event) => setSearchText(event.target.value)}
-                placeholder="Search ref, member, dependant, invoice"
-              />
               {/* Named and clearable. The member filter arrives from another
                   page, so the queue must show that it is narrowed. */}
               {employeeId && (
@@ -559,6 +549,9 @@ function QueueTab({
                   <span className="sr-only">Show all members</span>
                 </button>
               )}
+              {(queue || kind) && <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/claims/review", search: { tab: "queue", insurer } })}>
+                {queue === "review" ? "Pending review" : queue === "overdue" ? "Overdue with insurer" : queue === "insurer" ? "With insurer" : "Claims"}{kind ? ` · ${kind}` : ""}<X className="size-3" /> Clear
+              </Button>}
               <Segmented
                 value={caseType === "log" ? "log" : status}
                 onChange={(value) => {
@@ -575,12 +568,6 @@ function QueueTab({
                 }}
                 options={QUEUE_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
               />
-              {!readOnly && (
-                <Button size="sm" onClick={() => setLogFormOpen(true)}>
-                  <Plus className="size-4" />
-                  New LOG case
-                </Button>
-              )}
             </div>
           </div>
         </CardHeader>
@@ -609,7 +596,6 @@ function QueueTab({
                 <TableHeader>
                   <TableRow>
                     <TableHead>Member</TableHead>
-                    <TableHead>Benefit year</TableHead>
                     <TableHead>Claim</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Incurred</TableHead>
@@ -643,10 +629,6 @@ function QueueTab({
                       key={c.id}
                       className="cursor-pointer"
                       onClick={() => {
-                        if (c.policy_year_id !== policyYearId) {
-                          previousPolicyYearId.current = c.policy_year_id;
-                          useSession.getState().setPolicyYear(c.policy_year_id);
-                        }
                         setSelectedId(c.id);
                       }}
                     >
@@ -690,7 +672,6 @@ function QueueTab({
                         </div>
                         {c.dependant_name && <div className="text-xs text-muted-foreground">Claimant: {c.dependant_name}</div>}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{c.policy_year_label ?? c.policy_year_id}</TableCell>
                       <TableCell>
                         <span className="inline-flex flex-wrap items-center gap-1.5">
                           {c.claim_type}
@@ -967,6 +948,8 @@ function QueueTab({
                     <ClaimDocumentViewer
                       claimId={selected.id}
                       documents={selectedDocuments}
+                      revision={selected.revision}
+                      canManage={!readOnly}
                     />
                   </div>
                 )}
@@ -1466,7 +1449,6 @@ export function ClaimsQueuePage() {
         </Card>
         <ClaimDocumentSettings />
         <IntakeQuality />
-        <MessageSimulation />
       </TabsContent>}
       <ImportRulesDialog
         open={reviewRulesImportOpen}

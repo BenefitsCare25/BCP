@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from anthropic import RateLimitError
@@ -59,6 +59,7 @@ from app.models.claim import (
     member_visible_claims,
 )
 from app.models.claim_message import EVENT_AMENDED, EVENT_SUBMITTED
+from app.models.policy_year import PolicyYearStatus
 from app.models.stored_document import (
     DOC_ENTITY_CLAIM,
     DOC_ENTITY_REFERRAL,
@@ -87,6 +88,7 @@ from app.schemas.claims import (
     HospitalOut,
     InsuredClaimOption,
     StoredDocumentOut,
+    UtilizationOut,
 )
 from app.services import ai_gateway
 from app.services.ai_breaker import CircuitOpenError
@@ -109,7 +111,6 @@ from app.services.claim_intake import (
     HOSPITALISATION_SLOTS_BY_SECTOR,
     ClaimScopeDefinition,
     anchor_mode_for,
-    assert_documents_satisfy_slots,
     benefit_row_for_scope,
     claim_profile_for,
     claim_scope_definitions,
@@ -209,6 +210,46 @@ def coverage_options(
     )
     statement = build_member_statement(db, employee)
     return build_coverage_options(db, statement, employee, year)
+
+
+@router.get("/utilization", response_model=UtilizationOut)
+def claims_utilization(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> UtilizationOut:
+    """The selected claim period's balances; general portal benefits stay current."""
+    from app.services.utilization import build_utilization
+
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
+    return build_utilization(db, employee)
+
+
+@options_router.get("/claim-periods")
+def claim_periods(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Published periods containing this member's own roster record."""
+    from app.services.member_access import access_of, locate_employee
+    from app.services.product_terms import envelopes_for
+
+    years = list(db.scalars(select(PolicyYear).where(
+        PolicyYear.client_id == member.client_id,
+        PolicyYear.status.in_([PolicyYearStatus.active, PolicyYearStatus.archived]),
+    ).order_by(PolicyYear.start_date.desc())))
+    accessible = []
+    for year in years:
+        employee, ambiguous = locate_employee(
+            db, policy_year_id=year.id, member_account_id=member.member_account_id,
+            staff_id=member.staff_id,
+        )
+        if employee and not ambiguous and access_of(db, employee, year).allows(Capability.RECORD):
+            accessible.append(year)
+    envelopes = envelopes_for(db, accessible)
+    return [{
+        "id": year.id, "start_date": envelopes[year.id][0],
+        "end_date": envelopes[year.id][1], "current": year.status == PolicyYearStatus.active,
+    } for year in accessible]
 
 
 def _slots(documents: Sequence[ClaimSetupDocument]) -> list[DocSlotOut]:
@@ -312,7 +353,22 @@ def build_coverage_options(
     )
     insurers_by_product = insurer_map(db, year.id, products_by_code.values())
     insured = []
-    for line in statement.coverage if insured_open else ():
+    for line in statement.coverage:
+        product_window = claim_period_window(
+            db, year, CLAIM_KIND_INSURED, employee, line.product_code,
+        )
+        if product_window.is_empty:
+            claim_block = claim_block or product_window.empty_note
+            continue
+        deadline = (
+            product_window.period_end + timedelta(days=year.claim_grace_period_days)
+            if year.claim_grace_period_days is not None else None
+        )
+        if deadline is not None and business_today() > deadline:
+            claim_block = claim_block or (
+                f"The submission window for {line.product_code} closed on {deadline.isoformat()}."
+            )
+            continue
         profile = claim_profile_for(line.product_code)
         # Products settled outside the claim form (Major Medical top-up, term
         # life / personal accident / critical illness) never appear in the
@@ -339,6 +395,9 @@ def build_coverage_options(
         insured.append(
             InsuredClaimOption(
                 product_code=line.product_code,
+                claimable_from=product_window.start.isoformat(),
+                claimable_to=product_window.end.isoformat(),
+                submission_deadline=deadline.isoformat() if deadline else None,
                 product_name=line.product_name,
                 plan_code=line.plan_code,
                 annual_policy_limit=line.annual_policy_limit,
@@ -383,7 +442,10 @@ def build_coverage_options(
                 for c in statement.flex.benefit_categories
                 if c.claimable
             ]
+            from app.services.flex_age import eligible_flex_dependant_ids
+
             flex = FlexClaimOptions(
+                eligible_dependant_ids=eligible_flex_dependant_ids(db, employee, year),
                 currency=statement.flex.currency,
                 wallet_amount=statement.flex.wallet_amount,
                 flex_balance=statement.flex.flex_balance,
@@ -408,7 +470,7 @@ def build_coverage_options(
         claimable_to=insured_window.end.isoformat() if insured_open else None,
         insured=insured,
         flex=flex,
-        claim_block=claim_block,
+        claim_block=claim_block if not insured and flex is None else None,
         dependants=[
             {"id": d.id, "name": d.name, "relationship": d.relationship}
             for d in statement.dependants
@@ -1151,28 +1213,14 @@ def delete_my_claim_document(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
 
-    if claim.status != CLAIM_STATUS_DRAFT:
-        remaining = [d for d in claim_documents(db, claim) if d.id != doc.id]
-        try:
-            required = setup_for_claim(db, claim).documents
-            assert_documents_satisfy_slots(
-                [document.key for document in required],
-                remaining,
-                labels={document.key: document.display for document in required},
-            )
-        except HTTPException as exc:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "documents_required",
-                    "message": (
-                        "Removing this would leave the claim without a document "
-                        "it needs. Add the replacement first, then remove this "
-                        "one."
-                    ),
-                    "detail": exc.detail,
-                },
-            ) from exc
+    from app.services.claims import claim_document_removal_block
+
+    block = claim_document_removal_block(
+        claim, doc, claim_documents(db, claim),
+        [document.key for document in setup_for_claim(db, claim).documents],
+    )
+    if block:
+        raise HTTPException(409, {"code": "documents_required", "message": block})
 
     delete_stored_document(db, doc)
     # Evidence IS what a verdict is about, so removing a document invalidates

@@ -18,7 +18,6 @@ from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
-from app.core.portal_auth import active_policy_year
 from app.core.storage import (
     DOCUMENT_SUFFIXES,
     MAX_DOCUMENT_BYTES,
@@ -296,6 +295,35 @@ def member_can_submit(claim: Claim) -> bool:
     return editable and claim.status in MEMBER_SUBMITTABLE_STATUSES
 
 
+def claim_document_removal_block(
+    claim: Claim, doc: StoredDocument, documents: list[StoredDocument],
+    required_keys: list[str], *, for_broker: bool = False,
+) -> str | None:
+    """One removal rule used by response affordances and both write surfaces."""
+    if doc.entity_type != DOC_ENTITY_CLAIM or doc.entity_id != claim.id:
+        return "This shared referral letter is retained while attached to a claim."
+    if doc.storage_state != STORAGE_AVAILABLE:
+        return "This document is not available for removal."
+    if for_broker:
+        if claim.status not in MEMBER_EDITABLE_STATUSES:
+            return "Evidence is retained after a decision. Add a correction as a new document."
+    else:
+        editable, reason = member_editability(claim)
+        if not editable:
+            return reason or "This evidence is retained. Contact your claims team for corrections."
+    if claim.status != CLAIM_STATUS_DRAFT and claim.case_type != CASE_TYPE_LOG:
+        try:
+            assert_documents_satisfy_slots(
+                required_keys, [item for item in documents if item.id != doc.id]
+            )
+        except HTTPException:
+            return (
+                "Add the replacement first, then remove this one; "
+                "required evidence must remain attached."
+            )
+    return None
+
+
 def populate_claim_out(
     db: Session,
     claim: Claim,
@@ -370,6 +398,12 @@ def populate_claim_out(
     # Filled HERE — in the one builder the member payload, the broker payload
     # and the broker's employee-view preview all share — so the three cannot
     # answer "may this member still edit?" differently.
+    for source, result in zip(docs, out.documents, strict=True):
+        result.removal_reason = claim_document_removal_block(
+            claim, source, docs, [slot.key for slot in out.required_doc_slots],
+            for_broker=for_broker,
+        )
+        result.removal_allowed = result.removal_reason is None
     out.member_editable, out.member_edit_block = member_editability(claim)
     out.member_can_submit = member_can_submit(claim)
     # Whether THIS claim must name the treating doctor. Served for the same
@@ -1089,12 +1123,13 @@ class ClaimWindow:
 
 
 def claim_period_window(
-    db: Session, year: PolicyYear, claim_kind: str, employee: Employee
+    db: Session, year: PolicyYear, claim_kind: str, employee: Employee,
+    product_code: str | None = None,
 ) -> ClaimWindow:
     """The window a claim's incurred date must fall inside, and its label.
 
     Flex claims are bounded by the flex scheme's effective window (which
-    defaults to the policy year's span); insured claims by the policy year.
+    defaults to the policy year's span); insured claims by their product term.
     ONE implementation, shared by member submit and broker LOG-case creation —
     two copies would eventually disagree about which dates are claimable.
 
@@ -1116,6 +1151,11 @@ def claim_period_window(
     else:
         start, end = year.start_date, year.end_date
         label = "policy year"
+        if product_code:
+            from app.services.product_terms import product_window_for_code
+
+            start, end = product_window_for_code(db, year, product_code)
+            label = f"{product_code} coverage period"
 
     last_day = cover_end(employee)
     if last_day is not None and last_day < end:
@@ -1131,7 +1171,7 @@ def assert_incurred_in_period(
     Returns the resolved window so a caller applying a deadline anchored to the
     period's end doesn't have to resolve it a second time — for a flex claim
     that repeat costs another `flex_effective_window` read on every submit."""
-    window = claim_period_window(db, year, claim.claim_kind, employee)
+    window = claim_period_window(db, year, claim.claim_kind, employee, claim.product_code)
     if window.is_empty:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, window.empty_note
@@ -1224,7 +1264,7 @@ def validate_claim_facts(
         if recheck_period:
             window = assert_incurred_in_period(db, year, claim, employee)
         else:
-            window = claim_period_window(db, year, claim.claim_kind, employee)
+            window = claim_period_window(db, year, claim.claim_kind, employee, claim.product_code)
 
     # Re-run the intake rules so a draft created before a rule (or profile)
     # change can't slip through with a missing sub-type/referral. A draft
@@ -1427,7 +1467,7 @@ def submit_claim(
 ) -> Claim:
     """Validate + move a claim to `submitted`. Caller commits (after audit).
 
-    Submit = the FILING rules (year active, grace deadline) + the shared
+    Submit = the FILING rules (published year, grace deadline) + the shared
     `validate_claim_facts` chain + the status/reference bookkeeping.
     """
     # **Checked BEFORE `assert_transition`, and not replaced by it.**
@@ -1452,14 +1492,10 @@ def submit_claim(
     assert_transition(claim, CLAIM_STATUS_SUBMITTED)
 
     year = db.get(PolicyYear, claim.policy_year_id)
-    current_year = active_policy_year(db, claim.client_id)
-    if year is None or (
-        year.status != PolicyYearStatus.active
-        and (current_year is None or year.id != current_year.id)
-    ):
+    if year is None or year.status not in {PolicyYearStatus.active, PolicyYearStatus.archived}:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Claims can only be submitted against the benefit year for today's date.",
+            "Claims can only be submitted against an active or previously active benefit year.",
         )
     # Asserted HERE rather than inside the shared chain, and the order is not
     # incidental: the grace deadline below is anchored to this window's
@@ -1470,7 +1506,7 @@ def submit_claim(
 
     # Submission grace period: once configured, claims can only be submitted up
     # to N days after the enforced period ends. Anchored to `period_end` (the
-    # flex effective end for flex claims, the policy-year end otherwise) — NOT
+    # flex effective end for flex claims, the product term end otherwise) — NOT
     # to `window.end`, which for a leaver is their own last day. How long a
     # claim may be sent in for is a property of the YEAR; how long a member was
     # covered is a separate bound with its own control
@@ -1480,7 +1516,7 @@ def submit_claim(
     #
     # **This check is submit-only.** It does not move into
     # `validate_claim_facts` — see that function's docstring.
-    if year.claim_grace_period_days is not None:
+    if year.claim_grace_period_days is not None and claim.status == CLAIM_STATUS_DRAFT:
         deadline = window.period_end + timedelta(days=year.claim_grace_period_days)
         # Business date, not the UTC one: a UTC rollover closes the window at
         # 8am Singapore on its final day, so a member submitting on the last
@@ -1511,9 +1547,15 @@ def submit_claim(
     apply_conversion(db, claim)
     assert_fx_acknowledged(claim)
 
+    from app.services.flex_age import assert_flex_age_eligible
     from app.services.flex_submission import assert_flex_submission_allowed
 
-    assert_flex_submission_allowed(db, claim, employee)
+    assert_flex_submission_allowed(
+        db, claim, employee, eligibility_check=assert_flex_age_eligible
+    )
+    from app.services.claim_placement import capture_claim_placement
+
+    capture_claim_placement(db, claim)
     # Initial filing is the measurement boundary: draft edits after creation
     # must be reflected, while later resubmissions do not rewrite the sample.
     feedback = (claim.intake_meta or {}).get("autofill")
@@ -1606,7 +1648,7 @@ DOCUMENT_SETUP_FIELDS = frozenset(
     }
 )
 
-PERIOD_FIELDS = frozenset({"incurred_date", "claim_kind"})
+PERIOD_FIELDS = frozenset({"incurred_date", "claim_kind", "product_code"})
 
 # States in which correcting a claim is rewriting settled history rather than
 # fixing a live record, and therefore has to say why. `rejected` is in here with
