@@ -1,6 +1,6 @@
 // Private network path from the App Service to Postgres.
 //
-// Replaces the per-IP firewall allowlist (infra/scripts/sync-db-firewall.sh),
+// Replaces the retired per-IP firewall allowlist,
 // which enumerated the App Service's ~44 `possibleOutboundIpAddresses` as
 // individual firewall rules. That design had three problems:
 //   1. Azure Postgres applies each firewall rule as its own server update, so a

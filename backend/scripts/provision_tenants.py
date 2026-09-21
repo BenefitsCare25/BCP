@@ -7,7 +7,8 @@ SQLite this is a no-op.
     cd backend && PYTHONPATH=. uv run python -m scripts.provision_tenants
 
 NOTE: covers new tables + new columns. Drops, renames, type changes, and data
-migrations to tenant tables need a bespoke per-schema step (see DEPLOY_RUNBOOK).
+migrations to tenant tables need a bespoke per-schema step (see the deployment
+operations section in docs/PRODUCTION_RESILIENCE_RUNBOOK.md).
 """
 from __future__ import annotations
 

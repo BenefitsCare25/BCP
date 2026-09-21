@@ -64,6 +64,194 @@ The repository currently defines:
 
 The largest remaining resilience gaps are PostgreSQL HA being disabled, a single App Service Plan instance, in-place releases without deployment slots, and no independently administered immutable PostgreSQL backup vault or rehearsed clean-room restore.
 
+## Production deployment operations
+
+This section is the canonical deployment runbook. Do not recreate the retired
+`rg-inspro-shared` design, enable ACR admin credentials, expose PostgreSQL to a
+hosted runner, or use an older local deployment guide.
+
+### Resource ownership
+
+`rg-inspro-prod` is the application-owned production resource group. It contains
+the portal and review-worker web apps, App Service plan, PostgreSQL server,
+Redis, storage, Key Vault `inspro-prod-kv`, monitoring resources, private
+networking, Container Registry `insproacr`, and the explicitly provisioned
+private-migration resources.
+
+The Azure-managed resource group
+`ME_inspro-prod-migration-env_rg-inspro-prod_southeastasia` is created for the
+Container Apps managed environment. Its load balancer, rules, public IP and
+managed network resources are platform dependencies. Do not move, edit, or
+delete that group manually. Delete the parent managed environment through Azure
+only if the entire private-migration service is intentionally decommissioned.
+
+`rg-inspro-shared` was emptied and deleted on 2026-09-21 after `insproacr` was
+moved successfully into `rg-inspro-prod`. It must not be recreated.
+
+### Identity and access model
+
+- GitHub Actions authenticates with workload identity federation (OIDC); there
+  is no CI client secret.
+- The GitHub deployment identity is scoped to `rg-inspro-prod` with the roles
+  needed to reconcile resources and role assignments.
+- Portal, worker, and migration managed identities each receive `AcrPull`
+  directly on `insproacr`. ACR admin credentials remain disabled.
+- Portal and worker use managed identity to resolve their Key Vault references.
+- The migration identity can read only `database-url` and
+  `ai-key-encryption-key`, and can pull the immutable release image.
+- PostgreSQL remains private-only. Migrations execute in the Container Apps job
+  `inspro-prod-migrate` over the private migration VNet; GitHub-hosted runners
+  never receive database credentials or temporary PostgreSQL firewall access.
+
+If the registry is ever moved, update both `acrResourceGroup` in
+`infra/bicep/parameters.prod.json` and `registryResourceGroup` for
+`infra/bicep/migration-job.bicep`, then verify all three registry-scoped
+`AcrPull` assignments before deploying an image.
+
+### Secret immutability rules
+
+Routine deployment must not create, replace, rotate, or version production
+secrets.
+
+- Keep `bootstrapSecrets` set to `false` in production.
+- Do not pass database, portal JWT, AI-encryption, Redis, or SMTP password values
+  to routine Bicep deployments.
+- Keep App Service settings on versionless Key Vault references so an explicitly
+  approved future rotation can be adopted without editing application config.
+- Do not delete or recreate `inspro-prod-kv` as part of deployment recovery.
+- `bootstrapSecrets=true` is only for initial creation of a brand-new
+  environment. It is not permitted against the existing production environment.
+- Secret rotation is a separate, explicitly approved change. It is not part of
+  the normal deployment, rollback, drift, or cleanup flows in this runbook.
+
+### Normal release flow
+
+The authoritative automation is `.github/workflows/deploy.yml`. A push to
+`main` performs the following sequence:
+
+1. Classify backend, frontend, and infrastructure changes.
+2. Run the applicable backend, frontend, end-to-end, dependency, typing, and
+   Bicep validation gates. Independent gates run in parallel.
+3. Build one container containing the API and SPA, tag it with the full Git SHA,
+   validate it, and push it to `insproacr`.
+4. Serialize the production job through the `deploy-prod` concurrency group so
+   two migrations or rollouts cannot overlap.
+5. Authenticate to Azure with OIDC and verify Key Vault remains reachable from
+   App Service.
+6. Read the image SHA production is actually serving. Compare from that SHA so a
+   previous failed deployment cannot hide pending infrastructure or migrations.
+7. Apply `infra/bicep/main.bicep` only when application infrastructure changed.
+   The apply receives the currently serving image and no production secret
+   values, so infrastructure reconciliation cannot ship code or rotate secrets.
+8. Refresh and verify Key Vault references after an infrastructure apply.
+9. Run `inspro-prod-migrate` only when database-affecting files changed. The job
+   verifies the expected SHA, private DNS/TLS, and advisory lock before applying
+   migrations and tenant provisioning.
+10. Point both portal and worker at the new immutable SHA image.
+11. Require portal `/health`, portal `/readiness`, worker `/readyz`, the expected
+    release SHA, and a stable post-start window before declaring success.
+
+Documentation-only commits still build and deploy an identical SHA-tagged image
+because every push to `main` is currently a release. They skip backend/frontend
+test stacks, Bicep reconciliation, and database migrations when classification
+can prove those scopes are unchanged. Pull requests never deploy.
+
+### Infrastructure and migration changes
+
+Before merging an infrastructure change:
+
+```bash
+az bicep build --file infra/bicep/main.bicep --stdout > /dev/null
+az bicep build --file infra/bicep/migration-job.bicep --stdout > /dev/null
+az deployment group what-if \
+  --resource-group rg-inspro-prod \
+  --template-file infra/bicep/main.bicep \
+  --parameters @infra/bicep/parameters.prod.json
+```
+
+The private migration stack is reconciled independently because changing its
+managed environment can be slow and must not restart the live application. A
+job definition update does not execute the job. Inspect the existing execution
+state before any manual retry; never start a second migration while one is
+running. Database migrations must be backward-compatible using
+expand/migrate/contract because an image rollback does not undo schema changes.
+
+### Release verification
+
+Use these checks after a production run:
+
+```bash
+gh run view <run-id>
+gh run watch <run-id> --exit-status
+
+az acr show --name insproacr --resource-group rg-inspro-prod \
+  --query "{loginServer:loginServer,adminUserEnabled:adminUserEnabled}" -o table
+
+az webapp config show --name inspro-portal --resource-group rg-inspro-prod \
+  --query linuxFxVersion -o tsv
+az webapp config show --name inspro-portal-review-worker --resource-group rg-inspro-prod \
+  --query linuxFxVersion -o tsv
+
+curl --fail-with-body https://inspro-portal.azurewebsites.net/health
+curl --fail-with-body https://inspro-portal.azurewebsites.net/readiness
+curl --fail-with-body https://inspro-portal-review-worker.azurewebsites.net/readyz
+```
+
+The portal and worker must show the same full commit SHA. Readiness must report
+PostgreSQL and Redis healthy. For an infrastructure release, inspect the ARM
+deployment operations and confirm there were no Key Vault secret child-resource
+operations. Verify Key Vault reference status, but never print secret values.
+
+### Failure handling and rollback
+
+Do not rerun a failed deployment blindly. Identify the failed gate first:
+
+- If Bicep validation or apply fails, download the retained diagnostics artifact
+  and inspect the exact ARM operation. The previous image remains the application
+  rollback point.
+- For `AcrPull` or image-start failures, confirm the registry is in
+  `rg-inspro-prod`, ACR admin access is disabled, and portal, worker, and migration
+  identities retain registry-scoped `AcrPull`.
+- For unresolved Key Vault references, verify managed-identity RBAC and network
+  access, then use the App Service reference refresh endpoint. Do not rewrite a
+  secret to force refresh.
+- For a migration failure, inspect the Container Apps job execution and logs.
+  Correct the cause before retrying and confirm no execution is already active.
+- For a bad application release, set portal and worker back to the same known-good
+  SHA image. Roll back only to an image compatible with every migration that has
+  already completed.
+
+An infrastructure deployment can restart App Service more than once. The
+workflow waits for that restart before changing the image, and its final smoke
+test is the release gate. A transient startup event is not deployment success;
+the exact SHA and stable health window are required.
+
+### Cleanup and retention
+
+- Keep Azure deployment history, activity logs, migration execution history, and
+  GitHub Actions logs for their configured audit-retention periods. They are not
+  disposable build artifacts.
+- GitHub Bicep failure artifacts expire after 14 days by workflow policy.
+- Local caches, SQLite test databases, WAL/SHM files, Playwright output, and
+  developer backups are ignored. Remove them only after confirming no local
+  process uses them and that no uncommitted test evidence or data is needed.
+- Before deleting any Azure resource group, list its resources and validate the
+  exact resolved group name. Never recursively delete `rg-inspro-prod`, the
+  Azure-managed migration group, or `inspro-prod-kv` as cleanup.
+- Retired public-runner PostgreSQL firewall modules and one-time allowlist cleanup
+  scripts must not be restored. PostgreSQL public network access remains disabled.
+
+### Verified consolidation record: 2026-09-21
+
+Commit `6e361dc52e95883332f7ab543358ce1691dccb93` completed in GitHub Actions run
+`35577839598`. The run passed all gates and deployed successfully. `insproacr`
+was moved into `rg-inspro-prod`; direct `AcrPull` assignments were verified for
+portal, worker, and migration identities; `rg-inspro-shared` was verified empty
+and deleted. Both apps served the same immutable image, portal readiness reported
+PostgreSQL and Redis healthy, worker readiness passed, all Key Vault references
+resolved, and the release produced no Key Vault secret deployment or activity
+operations. The Azure-managed migration resource group was intentionally retained.
+
 ## Target Singapore-only architecture
 
 ```text

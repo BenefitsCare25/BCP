@@ -274,7 +274,7 @@ resource postgresExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configura
 // The app reaches the database over a private endpoint in our own VNet, NOT
 // over the public internet through a firewall allowlist.
 //
-// This replaced `infra/scripts/sync-db-firewall.sh`, which enumerated the App
+// This replaced the retired public-IP allowlist, which enumerated the App
 // Service's ~44 `possibleOutboundIpAddresses` as individual firewall rules.
 // Azure applies each rule as its own server update, so a full sync took ~20
 // minutes of repeated live-database reconfiguration; the IPs are re-issued on
@@ -282,11 +282,10 @@ resource postgresExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configura
 // are shared App Service infrastructure addresses, so allowlisting them also
 // admitted other tenants on the same scale unit.
 //
-// Public network access stays ENABLED on the server but with an EMPTY allowlist,
-// which denies every public client. It is not disabled outright only because CI
-// runs Alembic from a GitHub runner, which opens a single-IP rule for itself and
-// revokes it in an always() step (see deploy.yml). Closing public access fully
-// requires moving migrations inside the VNet — see docs/DEPLOY_RUNBOOK.md.
+// Public access is disabled. The app uses this private endpoint and migrations
+// run from the peered private Container Apps environment defined in
+// migration-job.bicep. See the deployment operations section in
+// docs/PRODUCTION_RESILIENCE_RUNBOOK.md.
 module privateNetworking 'modules/private-networking.bicep' = {
   name: 'private-networking-${env}'
   params: {

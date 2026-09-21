@@ -291,9 +291,7 @@ jobs:
     environment: prod
     # Serialise deploys. Two pushes in quick succession would otherwise run two
     # `alembic upgrade head` processes against the SAME production database at
-    # once, and would race on the single-IP runner firewall rule — one job's
-    # `always()` revoke deleting the rule the other job is still migrating
-    # through.
+    # once, and would race on the single private Container Apps migration job.
     #
     # Scoped to this job, NOT the workflow: a workflow-level group would also
     # queue every pull request's `test` run behind unrelated deploys.
@@ -308,10 +306,9 @@ jobs:
       - uses: actions/checkout@v4
 
       # Most releases change only application code, yet reconciling all ~20
-      # Azure resources costs ~3m and opening the migration firewall rule costs
-      # another ~1m40s — a full Postgres server update to admit one IP. Skipping
-      # those when nothing relevant changed is the single biggest saving in this
-      # pipeline.
+      # Azure resources costs ~3m, and running the private migration job adds
+      # more startup time. Skipping those when nothing relevant changed is the
+      # single biggest saving in this pipeline.
       #
       # Uses the compare API rather than `git diff` so it works for a push of any
       # number of commits without a full-history checkout (which would cost back
@@ -370,7 +367,8 @@ jobs:
       # Deploys IN PLACE — no slot swap. Deployment slots need Standard tier or
       # higher and this runs on Basic (B2), so a release is a container restart
       # of ~1-2 min. Rollback = re-run `az webapp config container set` with the
-      # previous image tag (see docs/DEPLOY_RUNBOOK.md).
+      # previous image tag (see the production deployment operations section in
+      # docs/PRODUCTION_RESILIENCE_RUNBOOK.md).
       # main.bicep requires `containerImage`, and whatever it is given becomes
       # the running container. Feeding it the CURRENT tag rather than the new one
       # keeps this template from shipping code as a side effect of an

@@ -190,7 +190,8 @@ def sync_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
     SQLite.
 
     Limits: additive only — drops, renames, type changes, and data migrations
-    need a bespoke per-schema step (see DEPLOY_RUNBOOK). A new NOT NULL column
+    need a bespoke per-schema step (see the deployment operations section in
+    docs/PRODUCTION_RESILIENCE_RUNBOOK.md). A new NOT NULL column
     with no default can't be back-filled automatically, so it is added as
     NULLABLE with a warning; the operator must back-fill and SET NOT NULL.
     """
