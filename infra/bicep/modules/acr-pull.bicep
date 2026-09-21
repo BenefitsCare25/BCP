@@ -1,11 +1,6 @@
-// Grant AcrPull on the SHARED registry to an app's managed identity.
-//
-// This exists as a module because the grant must be scoped to the ACR, which
-// lives in a different resource group (rg-inspro-shared) from the environment
-// being deployed. The previous inline role assignment in main.bicep declared no
-// `scope`, so it landed on the environment's own resource group — which
-// contains no registry. With `acrUseManagedIdentityCreds: true` the webapp then
-// had no permission to pull its own image and never started.
+// Grant AcrPull directly on the registry to an app's managed identity. The
+// module remains resource-group scoped so a controlled registry move does not
+// weaken the role assignment to the whole production resource group.
 
 targetScope = 'resourceGroup'
 

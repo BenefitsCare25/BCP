@@ -457,17 +457,14 @@ jobs:
         id: bicep
         if: steps.infra_pending.outputs.infra == 'true'
         env:
-          # Keep secrets out of generated Bash source. Values containing `$`,
-          # quotes or backticks otherwise change before Azure receives them.
+          # Routine infrastructure reconciliation intentionally receives no
+          # application or database secrets. Key Vault values are immutable in
+          # this path and bootstrapSecrets remains false.
           ENTRA_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ENTRA_CLIENT_ID: ${{ secrets.ENTRA_CLIENT_ID_PROD }}
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}
-          PORTAL_JWT_SECRET: ${{ secrets.PORTAL_JWT_SECRET_PROD }}
-          AI_KEY_ENCRYPTION_KEY: ${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           CONTAINER_IMAGE: ${{ steps.img.outputs.image }}
         run: |
           set -euo pipefail
@@ -479,15 +476,11 @@ jobs:
             --parameters
               "entraTenantId=$ENTRA_TENANT_ID"
               "entraClientId=$ENTRA_CLIENT_ID"
-              "postgresAdminPassword=$POSTGRES_ADMIN_PASSWORD"
-              "portalJwtSecret=$PORTAL_JWT_SECRET"
-              "aiKeyEncryptionKey=$AI_KEY_ENCRYPTION_KEY"
               "acrLoginServer=$REGISTRY"
               "containerImage=$CONTAINER_IMAGE"
               "smtpHost=$SMTP_HOST"
               "smtpUser=$SMTP_USER"
               "smtpFrom=$SMTP_FROM"
-              "smtpPassword=$SMTP_PASSWORD"
           )
           az deployment group validate \
             --name "${DEPLOYMENT_NAME}-validate" \

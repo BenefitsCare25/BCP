@@ -133,13 +133,9 @@ jobs:
         env:
           ENTRA_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ENTRA_CLIENT_ID: ${{ secrets.ENTRA_CLIENT_ID_PROD }}
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}
-          PORTAL_JWT_SECRET: ${{ secrets.PORTAL_JWT_SECRET_PROD }}
-          AI_KEY_ENCRYPTION_KEY: ${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
           CONTAINER_IMAGE: ${{ steps.img.outputs.image }}
         run: |
@@ -155,15 +151,11 @@ jobs:
             --parameters
               "entraTenantId=$ENTRA_TENANT_ID"
               "entraClientId=$ENTRA_CLIENT_ID"
-              "postgresAdminPassword=$POSTGRES_ADMIN_PASSWORD"
-              "portalJwtSecret=$PORTAL_JWT_SECRET"
-              "aiKeyEncryptionKey=$AI_KEY_ENCRYPTION_KEY"
               "acrLoginServer=$REGISTRY"
               "containerImage=$CONTAINER_IMAGE"
               "smtpHost=$SMTP_HOST"
               "smtpUser=$SMTP_USER"
               "smtpFrom=$SMTP_FROM"
-              "smtpPassword=$SMTP_PASSWORD"
               "alertEmail=$ALERT_EMAIL"
           )
           az deployment group validate \

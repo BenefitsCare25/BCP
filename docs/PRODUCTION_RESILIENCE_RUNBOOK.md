@@ -1,6 +1,6 @@
 # Inspro production resilience and ransomware-recovery design
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-09-21
 Production region: Azure `southeastasia` (Singapore) only
 
 ## Recovery record: 2026-08-25
@@ -54,6 +54,13 @@ The repository currently defines:
 - Key Vault soft delete and purge protection, managed identities, diagnostics and bounded database connection/pool timeouts.
 - Separate `/health` liveness and `/readiness` dependency probes.
 - Singapore synthetic probes and alerts sent directly to `huien@inspro.com.sg`. Do not also route them through an email alias that forwards to the same address, because that produces duplicate incident notifications.
+- `insproacr` is colocated in `rg-inspro-prod`; portal, worker and private
+  migration identities receive `AcrPull` directly at registry scope.
+- Routine deploy and drift workflows do not receive or write production
+  database, portal JWT, AI-encryption, Redis, or SMTP secret values. Existing
+  versionless Key Vault references remain unchanged. `bootstrapSecrets=false`
+  is the production invariant and may be enabled only when creating a new
+  environment; it is not a secret-rotation mechanism.
 
 The largest remaining resilience gaps are PostgreSQL HA being disabled, a single App Service Plan instance, in-place releases without deployment slots, and no independently administered immutable PostgreSQL backup vault or rehearsed clean-room restore.
 

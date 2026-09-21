@@ -8,7 +8,7 @@ param prefix string = 'inspro-prod'
 param productionVnetName string = 'inspro-prod-vnet'
 param vaultName string = 'inspro-prod-kv'
 param registryName string = 'insproacr'
-param registryResourceGroup string = 'rg-inspro-shared'
+param registryResourceGroup string = 'rg-inspro-prod'
 param workspaceName string = 'inspro-prod-law'
 @description('Existing immutable release image. Creating the manual job does not execute it.')
 param image string

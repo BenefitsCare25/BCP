@@ -1,12 +1,11 @@
 // Inspro — top-level deployment template.
 //
-// Usage (CI runs this with parameter overrides for secrets — see deploy.yml):
+// Usage (routine CI never receives or writes secret values — see deploy.yml):
 //   az deployment group create \
 //     --resource-group rg-inspro-staging \
 //     --template-file main.bicep \
 //     --parameters @parameters.staging.json \
-//     --parameters postgresAdminPassword=<from-kv> \
-//                  entraTenantId=<github-secret> \
+//     --parameters entraTenantId=<github-secret> \
 //                  entraClientId=<github-secret> \
 //                  containerImage=<acr>.azurecr.io/inspro-api:<sha>
 //
@@ -44,8 +43,8 @@ param postgresTier string
 param postgresAdminUser string
 
 @secure()
-@description('Postgres admin password (typically from KV secret, passed via CI --parameters override).')
-param postgresAdminPassword string
+@description('Bootstrap-only Postgres admin password. Leave empty for every routine deployment so the database credential is never rewritten.')
+param postgresAdminPassword string = ''
 
 @description('Postgres backup retention days. Prod overrides to 35.')
 param postgresBackupRetentionDays int = 14
@@ -83,17 +82,20 @@ param containerImage string
 
 @description('Signing secret for employee-portal member JWTs (min 32 chars). The app refuses to boot in prod without one — generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"')
 @secure()
-param portalJwtSecret string
+param portalJwtSecret string = ''
 
 @description('Fernet master key that decrypts per-tenant BYOK AI keys (client_ai_configs). Vertex/Gemini BYOK is the sole AI path in prod, so without this every decrypt fails and AI silently falls closed. Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"')
 @secure()
-param aiKeyEncryptionKey string
+param aiKeyEncryptionKey string = ''
+
+@description('One-time initialization switch for a brand-new environment. Routine and drift deployments must leave this false; it is not a rotation mechanism.')
+param bootstrapSecrets bool = false
 
 @description('ACR registry hostname for the webapp to pull from, e.g. insproacr.azurecr.io.')
 param acrLoginServer string
 
-@description('Resource group holding the shared container registry.')
-param acrResourceGroup string = 'rg-inspro-shared'
+@description('Resource group holding the container registry.')
+param acrResourceGroup string = 'rg-inspro-prod'
 
 @description('Web app / hostname. Defaults to inspro-<env>-api; prod uses inspro-portal so the public URL is inspro-portal.azurewebsites.net.')
 param siteName string = ''
@@ -160,7 +162,7 @@ param smtpUser string = ''
 param smtpFrom string = ''
 
 @secure()
-@description('SMTP password (passed via CI --parameters override).')
+@description('Bootstrap-only SMTP password. Routine deployments leave this empty.')
 param smtpPassword string = ''
 
 var prefix = 'inspro-${env}'
@@ -224,10 +226,9 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
     name: postgresSku
     tier: postgresTier
   }
-  properties: {
+  properties: union({
     version: '16'
     administratorLogin: postgresAdminUser
-    administratorLoginPassword: postgresAdminPassword
     storage: {
       storageSizeGB: postgresStorageGB
       autoGrow: 'Enabled'
@@ -242,7 +243,9 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
     highAvailability: {
       mode: postgresHighAvailability ? 'ZoneRedundant' : 'Disabled'
     }
-  }
+  }, bootstrapSecrets ? {
+    administratorLoginPassword: postgresAdminPassword
+  } : {})
 }
 
 resource postgresDb 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
@@ -332,9 +335,12 @@ resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2025-07-01' = 
 }
 
 // ── Seed secrets into KV ────────────────────────────────────────────────────
-// App settings reference these via @Microsoft.KeyVault(...). Secrets never
-// appear in the App Service "Configuration" blade in plaintext.
-resource kvSecretPgPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+// This block is disabled by default. Existing Key Vault secrets are left
+// untouched by normal releases and drift reconciliation, so those operations
+// cannot create new secret versions or change database/JWT/encryption keys.
+// `bootstrapSecrets=true` is reserved for initializing a brand-new environment
+// with an explicitly reviewed command; it is not used by either CI workflow.
+resource kvSecretPgPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (bootstrapSecrets) {
   parent: kv
   name: 'postgres-admin-password'
   properties: {
@@ -342,7 +348,7 @@ resource kvSecretPgPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-previe
   }
 }
 
-resource kvSecretDatabaseUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+resource kvSecretDatabaseUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (bootstrapSecrets) {
   parent: kv
   name: 'database-url'
   properties: {
@@ -350,7 +356,7 @@ resource kvSecretDatabaseUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-previ
   }
 }
 
-resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (deployRedis) {
+resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (bootstrapSecrets && deployRedis) {
   parent: kv
   name: 'redis-url'
   properties: {
@@ -358,7 +364,7 @@ resource kvSecretRedisUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview'
   }
 }
 
-resource kvSecretPortalJwt 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+resource kvSecretPortalJwt 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (bootstrapSecrets) {
   parent: kv
   name: 'portal-jwt-secret'
   properties: {
@@ -366,7 +372,7 @@ resource kvSecretPortalJwt 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview
   }
 }
 
-resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (bootstrapSecrets) {
   parent: kv
   name: 'ai-key-encryption-key'
   properties: {
@@ -374,7 +380,7 @@ resource kvSecretAiKeyEncryption 'Microsoft.KeyVault/vaults/secrets@2024-04-01-p
   }
 }
 
-resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (mailMode == 'smtp' && !empty(smtpPassword)) {
+resource kvSecretSmtpPassword 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = if (bootstrapSecrets && mailMode == 'smtp' && !empty(smtpPassword)) {
   parent: kv
   name: 'smtp-password'
   properties: {
@@ -458,18 +464,18 @@ var commonAppSettings = [
   // the SPA sends X-Inspro-Tenant-Slug instead — see app/core/tenancy_host.py.
   { name: 'INSPRO_TENANT_MODE', value: tenantMode }
   { name: 'INSPRO_BASE_DOMAIN', value: baseDomain }
-  { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretDatabaseUrl.name})' }
+  { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=database-url)' }
   { name: 'INSPRO_DB_CONNECT_TIMEOUT', value: '5' }
   { name: 'INSPRO_DB_POOL_TIMEOUT', value: '5' }
-  { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretPortalJwt.name})' }
-  { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${kvSecretAiKeyEncryption.name})' }
+  { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=portal-jwt-secret)' }
+  { name: 'INSPRO_AI_KEY_ENCRYPTION_KEY', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=ai-key-encryption-key)' }
   // Mail stays disabled until a complete STARTTLS SMTP sender is configured.
   { name: 'INSPRO_MAIL_MODE', value: mailMode }
   { name: 'INSPRO_SMTP_HOST', value: smtpHost }
   { name: 'INSPRO_SMTP_PORT', value: smtpPort }
   { name: 'INSPRO_SMTP_USER', value: smtpUser }
   { name: 'INSPRO_SMTP_FROM', value: smtpFrom }
-  { name: 'INSPRO_SMTP_PASSWORD', value: mailMode == 'smtp' && !empty(smtpPassword) ? '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=smtp-password)' : '' }
+  { name: 'INSPRO_SMTP_PASSWORD', value: mailMode == 'smtp' ? '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=smtp-password)' : '' }
   { name: 'INSPRO_STORAGE_MODE', value: 'azure' }
   { name: 'INSPRO_STORAGE_ACCOUNT_URL', value: storage.properties.primaryEndpoints.blob }
   { name: 'INSPRO_STORAGE_CONTAINER', value: documentsContainer.name }
@@ -533,7 +539,7 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
   // and App Service CACHES that failure — the container then boots with the
   // literal "@Microsoft.KeyVault(...)" string as its Redis URL and dies in
   // SlowAPI with "unknown storage scheme".
-  dependsOn: deployRedis ? [kvSecretRedisUrl] : []
+  dependsOn: bootstrapSecrets && deployRedis ? [kvSecretRedisUrl] : []
 }
 
 // Dedicated durable claim-review executor. It shares the image and private
@@ -570,7 +576,7 @@ resource reviewWorker 'Microsoft.Web/sites@2024-04-01' = {
       appSettings: workerAppSettings
     }
   }
-  dependsOn: deployRedis ? [kvSecretRedisUrl] : []
+  dependsOn: bootstrapSecrets && deployRedis ? [kvSecretRedisUrl] : []
 }
 
 // NOTE: there is deliberately no deployment slot.
@@ -623,10 +629,9 @@ resource workerStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-
   }
 }
 
-// ACR pull permission, granted ON THE REGISTRY in the shared resource group.
-// Previously this was an inline assignment with no `scope`, so it defaulted to
-// this environment's resource group — which holds no registry. The webapp
-// therefore had no pull rights and the container never started.
+// ACR pull permission, granted directly on the registry. Keeping the registry
+// resource group parameterized also makes the assignment safe during a
+// controlled resource-group move.
 module acrPullGrant 'modules/acr-pull.bicep' = {
   name: 'acr-pull-${env}'
   scope: resourceGroup(acrResourceGroup)
