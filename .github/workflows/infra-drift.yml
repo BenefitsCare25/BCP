@@ -113,29 +113,57 @@ jobs:
 
       - name: Apply or preview
         id: run
+        env:
+          ENTRA_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ENTRA_CLIENT_ID: ${{ secrets.ENTRA_CLIENT_ID_PROD }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}
+          PORTAL_JWT_SECRET: ${{ secrets.PORTAL_JWT_SECRET_PROD }}
+          AI_KEY_ENCRYPTION_KEY: ${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+          CONTAINER_IMAGE: ${{ steps.img.outputs.image }}
         run: |
+          set -euo pipefail
           MODE="${{ steps.mode.outputs.mode }}"
           if [ "$MODE" = "what-if" ]; then VERB="what-if"; else VERB="create"; fi
           echo "Running az deployment group $VERB"
-          set -o pipefail
-          az deployment group $VERB \
-            --resource-group ${{ env.PROD_RG }} \
-            --template-file infra/bicep/main.bicep \
-            --parameters @infra/bicep/parameters.prod.json \
-            --parameters \
-              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
-              entraClientId="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
-              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}" \
-              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
-              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
-              acrLoginServer="${{ env.REGISTRY }}" \
-              containerImage="${{ steps.img.outputs.image }}" \
-              smtpHost="${{ secrets.SMTP_HOST }}" \
-              smtpUser="${{ secrets.SMTP_USER }}" \
-              smtpFrom="${{ secrets.SMTP_FROM }}" \
-              smtpPassword="${{ secrets.SMTP_PASSWORD }}" \
-              alertEmail="${{ secrets.ALERT_EMAIL }}" \
-            | tee /tmp/drift-output.txt
+          DEPLOYMENT_NAME="drift-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          BICEP_ARGS=(
+            --resource-group "$PROD_RG"
+            --template-file infra/bicep/main.bicep
+            --parameters @infra/bicep/parameters.prod.json
+            --parameters
+              "entraTenantId=$ENTRA_TENANT_ID"
+              "entraClientId=$ENTRA_CLIENT_ID"
+              "postgresAdminPassword=$POSTGRES_ADMIN_PASSWORD"
+              "portalJwtSecret=$PORTAL_JWT_SECRET"
+              "aiKeyEncryptionKey=$AI_KEY_ENCRYPTION_KEY"
+              "acrLoginServer=$REGISTRY"
+              "containerImage=$CONTAINER_IMAGE"
+              "smtpHost=$SMTP_HOST"
+              "smtpUser=$SMTP_USER"
+              "smtpFrom=$SMTP_FROM"
+              "smtpPassword=$SMTP_PASSWORD"
+              "alertEmail=$ALERT_EMAIL"
+          )
+          az deployment group validate \
+            --name "${DEPLOYMENT_NAME}-validate" \
+            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/drift-validate.txt
+          az deployment group "$VERB" \
+            --name "$DEPLOYMENT_NAME" \
+            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/drift-output.txt
+
+      - name: Preserve Azure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/drift-*.txt
+          if-no-files-found: warn
+          retention-days: 14
 
       # A green run nobody opens tells nobody anything, so the diff goes where
       # it is visible without digging through logs.

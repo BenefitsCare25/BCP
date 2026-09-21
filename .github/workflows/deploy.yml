@@ -381,6 +381,32 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "Bicep will assert image: $IMAGE"
 
+      # Reconcile from the commit production is actually serving. If an earlier
+      # infra apply failed, an event-only diff would let the next code-only push
+      # skip the still-pending infrastructure change.
+      - name: Detect pending infrastructure changes
+        id: infra_pending
+        env:
+          BASE_SHA: ${{ steps.img.outputs.sha }}
+          EVENT_INFRA: ${{ steps.changed.outputs.infra }}
+        run: |
+          INFRA="$EVENT_INFRA"
+          if [ -z "$BASE_SHA" ]; then
+            INFRA=true
+          elif [ "$BASE_SHA" != "${{ github.sha }}" ]; then
+            if git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 && \
+               FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
+              echo "$FILES" | grep '^infra/' | \
+                grep -vE '^infra/(bicep/migration-job\.(bicep|json)|scripts/run-private-migrations\.sh)$' \
+                | grep -q . && INFRA=true || true
+            else
+              # A compare failure must not hide infrastructure work.
+              INFRA=true
+            fi
+          fi
+          echo "infra=$INFRA" >> "$GITHUB_OUTPUT"
+          echo "production_sha=${BASE_SHA:-unknown}  pending_infra=$INFRA"
+
       # Compare from the image production is actually serving, not merely from
       # the previous push. If an earlier release failed before shipping its
       # image, this range still contains its unapplied migrations. Any failure
@@ -408,24 +434,56 @@ jobs:
       # a code-only release is to re-assert state that is already correct.
       # Drift is caught by the weekly infra-drift.yml run.
       - name: Apply Bicep to prod (idempotent)
-        if: steps.changed.outputs.infra == 'true'
+        id: bicep
+        if: steps.infra_pending.outputs.infra == 'true'
+        env:
+          # Keep secrets out of generated Bash source. Values containing `$`,
+          # quotes or backticks otherwise change before Azure receives them.
+          ENTRA_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ENTRA_CLIENT_ID: ${{ secrets.ENTRA_CLIENT_ID_PROD }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}
+          PORTAL_JWT_SECRET: ${{ secrets.PORTAL_JWT_SECRET_PROD }}
+          AI_KEY_ENCRYPTION_KEY: ${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          CONTAINER_IMAGE: ${{ steps.img.outputs.image }}
         run: |
+          set -euo pipefail
+          DEPLOYMENT_NAME="release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          BICEP_ARGS=(
+            --resource-group "$PROD_RG"
+            --template-file infra/bicep/main.bicep
+            --parameters @infra/bicep/parameters.prod.json
+            --parameters
+              "entraTenantId=$ENTRA_TENANT_ID"
+              "entraClientId=$ENTRA_CLIENT_ID"
+              "postgresAdminPassword=$POSTGRES_ADMIN_PASSWORD"
+              "portalJwtSecret=$PORTAL_JWT_SECRET"
+              "aiKeyEncryptionKey=$AI_KEY_ENCRYPTION_KEY"
+              "acrLoginServer=$REGISTRY"
+              "containerImage=$CONTAINER_IMAGE"
+              "smtpHost=$SMTP_HOST"
+              "smtpUser=$SMTP_USER"
+              "smtpFrom=$SMTP_FROM"
+              "smtpPassword=$SMTP_PASSWORD"
+          )
+          az deployment group validate \
+            --name "${DEPLOYMENT_NAME}-validate" \
+            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/bicep-validate.log
           az deployment group create \
-            --resource-group ${{ env.PROD_RG }} \
-            --template-file infra/bicep/main.bicep \
-            --parameters @infra/bicep/parameters.prod.json \
-            --parameters \
-              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
-              entraClientId="${{ secrets.ENTRA_CLIENT_ID_PROD }}" \
-              postgresAdminPassword="${{ secrets.POSTGRES_ADMIN_PASSWORD_PROD }}" \
-              portalJwtSecret="${{ secrets.PORTAL_JWT_SECRET_PROD }}" \
-              aiKeyEncryptionKey="${{ secrets.AI_KEY_ENCRYPTION_KEY_PROD }}" \
-              acrLoginServer="${{ env.REGISTRY }}" \
-              containerImage="${{ steps.img.outputs.image }}" \
-              smtpHost="${{ secrets.SMTP_HOST }}" \
-              smtpUser="${{ secrets.SMTP_USER }}" \
-              smtpFrom="${{ secrets.SMTP_FROM }}" \
-              smtpPassword="${{ secrets.SMTP_PASSWORD }}"
+            --name "$DEPLOYMENT_NAME" \
+            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/bicep-create.log
+
+      - name: Preserve Bicep failure diagnostics
+        if: failure() && steps.infra_pending.outputs.infra == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bicep-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/bicep-*.log
+          if-no-files-found: warn
+          retention-days: 14
 
       # Applying the template PUTs `Microsoft.Web/sites`, which restarts the app.
       # `Deploy image` below then issues a SECOND restart moments later, and
@@ -461,7 +519,7 @@ jobs:
       # Non-fatal: `Smoke-test prod` at the end is the real gate, and failing
       # here would abort a release whose image has not even shipped yet.
       - name: Let the Bicep restart settle before shipping the image
-        if: steps.changed.outputs.infra == 'true'
+        if: steps.infra_pending.outputs.infra == 'true'
         run: |
           sleep 45
           curl -fsS --connect-timeout 5 --max-time 10 \
