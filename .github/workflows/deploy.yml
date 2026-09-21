@@ -21,6 +21,7 @@ env:
   PROD_APP: inspro-portal
   PROD_WORKER: inspro-portal-review-worker
   PROD_PG: inspro-prod-pg-recovery-20260825
+  PROD_KV: inspro-prod-kv
 
 # There is deliberately no staging environment — prod is the only deployment
 # target. That makes CI and static validation the gates before a release reaches
@@ -347,6 +348,25 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # Key Vault has a deny-by-default network firewall. Its versionless App
+      # Service references are re-resolved whenever Bicep writes a new secret
+      # version, so RBAC alone is not enough: the plan's outbound addresses must
+      # also be allowed before the template touches those secrets. Use the full
+      # possible set so a scale-unit move does not break the next cold start.
+      - name: Keep Key Vault reachable from App Service
+        run: |
+          set -euo pipefail
+          POSSIBLE_IPS=$(az webapp show \
+            --name "$PROD_APP" \
+            --resource-group "$PROD_RG" \
+            --query possibleOutboundIpAddresses -o tsv)
+          [ -n "$POSSIBLE_IPS" ] || { echo "::error::App Service returned no outbound IPs"; exit 1; }
+          IFS=',' read -r -a APP_IPS <<< "$POSSIBLE_IPS"
+          az keyvault network-rule add \
+            --name "$PROD_KV" \
+            --ip-address "${APP_IPS[@]}" \
+            --output none
+
       # Deploys IN PLACE — no slot swap. Deployment slots need Standard tier or
       # higher and this runs on Basic (B2), so a release is a container restart
       # of ~1-2 min. Rollback = re-run `az webapp config container set` with the
@@ -484,6 +504,33 @@ jobs:
           path: /tmp/bicep-*.log
           if-no-files-found: warn
           retention-days: 14
+
+      # App Service may cache a versionless Key Vault reference for up to 24
+      # hours. Force a refresh after Bicep reconciles secret versions, and fail
+      # before the image rollout if any reference still cannot be resolved.
+      - name: Refresh Key Vault references
+        if: steps.infra_pending.outputs.infra == 'true'
+        run: |
+          set -euo pipefail
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          for APP in "$PROD_APP" "$PROD_WORKER"; do
+            BASE="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${PROD_RG}/providers/Microsoft.Web/sites/${APP}/config/configreferences/appsettings"
+            az rest --method post --uri "${BASE}/refresh?api-version=2022-03-01" --output none
+            for ATTEMPT in {1..12}; do
+              UNRESOLVED=$(az rest --method get \
+                --uri "${BASE}?api-version=2022-03-01" \
+                --query "length(value[?properties.status!='Resolved'])" -o tsv)
+              if [ "$UNRESOLVED" = "0" ]; then
+                echo "$APP: all Key Vault references resolved"
+                break
+              fi
+              if [ "$ATTEMPT" = "12" ]; then
+                echo "::error::$APP has $UNRESOLVED unresolved Key Vault reference(s)"
+                exit 1
+              fi
+              sleep 5
+            done
+          done
 
       # Applying the template PUTs `Microsoft.Web/sites`, which restarts the app.
       # `Deploy image` below then issues a SECOND restart moments later, and

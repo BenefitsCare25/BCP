@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "11533697439948662463"
+      "templateHash": "6336566060210254125"
     }
   },
   "parameters": {
@@ -461,7 +461,7 @@
       "apiVersion": "2024-04-01-preview",
       "name": "[format('{0}/{1}', format('{0}-kv', variables('prefix')), 'database-url')]",
       "properties": {
-        "value": "[format('postgresql+psycopg://{0}:{1}@{2}:5432/inspro?sslmode=require', parameters('postgresAdminUser'), parameters('postgresAdminPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName')), '2024-08-01').fullyQualifiedDomainName)]"
+        "value": "[format('postgresql+psycopg://{0}:{1}@{2}:5432/inspro?sslmode=require', parameters('postgresAdminUser'), uriComponent(parameters('postgresAdminPassword')), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('effectivePostgresName')), '2024-08-01').fullyQualifiedDomainName)]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",

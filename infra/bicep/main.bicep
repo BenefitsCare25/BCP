@@ -346,7 +346,7 @@ resource kvSecretDatabaseUrl 'Microsoft.KeyVault/vaults/secrets@2024-04-01-previ
   parent: kv
   name: 'database-url'
   properties: {
-    value: 'postgresql+psycopg://${postgresAdminUser}:${postgresAdminPassword}@${postgres.properties.fullyQualifiedDomainName}:5432/inspro?sslmode=require'
+    value: 'postgresql+psycopg://${postgresAdminUser}:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/inspro?sslmode=require'
   }
 }
 

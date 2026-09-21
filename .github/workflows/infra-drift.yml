@@ -55,6 +55,8 @@ permissions:
 env:
   PROD_RG: rg-inspro-prod
   PROD_APP: inspro-portal
+  PROD_WORKER: inspro-portal-review-worker
+  PROD_KV: inspro-prod-kv
   REGISTRY: insproacr.azurecr.io
 
 # Never let this collide with a real deploy — both run `az deployment group
@@ -111,6 +113,21 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "Mode: $MODE (event: ${{ github.event_name }})"
 
+      - name: Keep Key Vault reachable from App Service
+        if: steps.mode.outputs.mode != 'what-if'
+        run: |
+          set -euo pipefail
+          POSSIBLE_IPS=$(az webapp show \
+            --name "$PROD_APP" \
+            --resource-group "$PROD_RG" \
+            --query possibleOutboundIpAddresses -o tsv)
+          [ -n "$POSSIBLE_IPS" ] || { echo "::error::App Service returned no outbound IPs"; exit 1; }
+          IFS=',' read -r -a APP_IPS <<< "$POSSIBLE_IPS"
+          az keyvault network-rule add \
+            --name "$PROD_KV" \
+            --ip-address "${APP_IPS[@]}" \
+            --output none
+
       - name: Apply or preview
         id: run
         env:
@@ -164,6 +181,30 @@ jobs:
           path: /tmp/drift-*.txt
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Refresh Key Vault references
+        if: steps.mode.outputs.mode != 'what-if'
+        run: |
+          set -euo pipefail
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          for APP in "$PROD_APP" "$PROD_WORKER"; do
+            BASE="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${PROD_RG}/providers/Microsoft.Web/sites/${APP}/config/configreferences/appsettings"
+            az rest --method post --uri "${BASE}/refresh?api-version=2022-03-01" --output none
+            for ATTEMPT in {1..12}; do
+              UNRESOLVED=$(az rest --method get \
+                --uri "${BASE}?api-version=2022-03-01" \
+                --query "length(value[?properties.status!='Resolved'])" -o tsv)
+              if [ "$UNRESOLVED" = "0" ]; then
+                echo "$APP: all Key Vault references resolved"
+                break
+              fi
+              if [ "$ATTEMPT" = "12" ]; then
+                echo "::error::$APP has $UNRESOLVED unresolved Key Vault reference(s)"
+                exit 1
+              fi
+              sleep 5
+            done
+          done
 
       # A green run nobody opens tells nobody anything, so the diff goes where
       # it is visible without digging through logs.
