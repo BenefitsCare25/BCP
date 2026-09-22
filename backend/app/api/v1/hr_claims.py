@@ -27,7 +27,20 @@ from app.core.clock import today as business_today
 from app.core.hr_auth import get_current_hr_user
 from app.core.rate_limit import limiter
 from app.db.session import get_db
-from app.models import Claim, Client, Employee, PolicyYear, StoredDocument, UserClientAccess
+from app.models import (
+    Claim,
+    Client,
+    Employee,
+    PolicyYear,
+    StoredDocument,
+    User,
+    UserClientAccess,
+)
+from app.models.claim import (
+    MEMBER_EDITABLE_STATUSES,
+    MEMBER_SUBMITTABLE_STATUSES,
+    ORIGIN_HR,
+)
 from app.models.claim_message import EVENT_SUBMITTED
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
 from app.schemas.claims import ClaimCreateIn, CoverageOptionsOut
@@ -40,7 +53,6 @@ from app.services.claim_integrity import (
 )
 from app.services.claim_messages import post_system_message
 from app.services.claims import (
-    assert_member_may_amend,
     attach_document,
     claim_documents,
     create_claim,
@@ -112,6 +124,11 @@ def _claim(db: Session, user: CurrentUser, claim_id: str) -> Claim:
     return claim
 
 
+def _assert_evidence_mutable(claim: Claim) -> None:
+    if claim.status not in MEMBER_EDITABLE_STATUSES:
+        raise HTTPException(403, "Evidence is retained after a decision.")
+
+
 def _out(db: Session, claim: Claim) -> dict[str, Any]:
     # Explicit allowlist: no medical narrative, broker notes, AI verdict or
     # member message history. HR sees only work submitted through this flow.
@@ -124,11 +141,18 @@ def _out(db: Session, claim: Claim) -> dict[str, Any]:
         "claim_ref": claim.reference_no,
         "claim_kind": claim.claim_kind,
         "claim_type": claim.claim_type,
+        "provider_name": claim.provider_name,
+        "invoice_number": claim.invoice_number,
         "status": claim.status,
         "incurred_date": claim.incurred_date,
         "amount_claimed": claim.amount_claimed,
         "currency": claim.currency,
         "created_by_user_id": claim.created_by_user_id,
+        "submitted_by_name": _meta_text(claim, "delegated_by_name"),
+        "submitted_by_email": _meta_text(claim, "delegated_by_email"),
+        "submission_channel": "hr",
+        "can_add_evidence": claim.status in MEMBER_EDITABLE_STATUSES,
+        "can_submit": claim.status in MEMBER_SUBMITTABLE_STATUSES,
         "created_at": claim.created_at,
         "submitted_at": claim.submitted_at,
         "doc_slots": [
@@ -140,6 +164,11 @@ def _out(db: Session, claim: Claim) -> dict[str, Any]:
             for d in claim_documents(db, claim)
         ],
     }
+
+
+def _meta_text(claim: Claim, key: str) -> str | None:
+    value = (claim.intake_meta or {}).get(key)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 class DelegatedClaimIn(ClaimCreateIn):
@@ -295,11 +324,16 @@ def draft(
     if replay:
         return _out(db, _claim(db, user, replay.id))
     claim = create_claim(db, employee, body, submitted_by_member_id=None)
+    actor = db.get(User, user.user_id)
+    actor_name = (actor.display_name or "").strip() if actor else ""
     claim.created_by_user_id = user.user_id
+    claim.origin = ORIGIN_HR
     claim.intake_meta = {
         **(claim.intake_meta or {}),
         "submission_channel": "hr",
         "delegated_by_user_id": user.user_id,
+        "delegated_by_name": actor_name or None,
+        "delegated_by_email": user.email,
     }
     write_audit(
         db, user, "hr.claim_drafted", "claim", claim.id, employee_id=employee.id, request=request
@@ -335,7 +369,7 @@ async def upload(
         claim.employee_id,
         Capability.CLAIM if claim.status == "draft" else Capability.RESPOND,
     )
-    assert_member_may_amend(claim)
+    _assert_evidence_mutable(claim)
     if doc_type not in {d.key for d in setup_for_claim(db, claim).documents}:
         raise HTTPException(422, "Unknown evidence type")
     await attach_document(

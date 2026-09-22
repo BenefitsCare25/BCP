@@ -1,8 +1,7 @@
-/** HR admin home — identity + entry points to the HR modules. The modules
- * themselves (employees, claims, policies) are the next build; this shell
- * establishes the authenticated surface and its navigation. */
+/** HR admin home — identity and entry points to operational modules. Claims
+ * are live; the remaining modules stay visibly unavailable until ready. */
 import { Link } from "@tanstack/react-router";
-import { ClipboardList, FileText, ShieldAlert, Users } from "lucide-react";
+import { ArrowRight, ClipboardList, FileText, ShieldAlert, Users } from "lucide-react";
 import { useHrMe } from "@/api/hr";
 import { useHrSession } from "@/stores/hrSession";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +20,7 @@ const MODULES = [
     title: "Claims",
     description: "Track and manage employee claims for your organisation.",
     icon: ClipboardList,
+    href: "/hr/claims" as const,
   },
   {
     key: "policies",
@@ -66,11 +66,34 @@ export function HrDashboardPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {MODULES.map((m) => {
           const Icon = m.icon;
+          if ("href" in m) {
+            return (
+              <Link
+                key={m.key}
+                to={m.href}
+                className="group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <Card className="h-full transition-colors group-hover:bg-muted/50">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <Icon className="size-6 text-primary" aria-hidden />
+                      <ArrowRight
+                        className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+                        aria-hidden
+                      />
+                    </div>
+                    <CardTitle className="mt-3 text-lg">{m.title}</CardTitle>
+                    <CardDescription>{m.description}</CardDescription>
+                  </CardHeader>
+                </Card>
+              </Link>
+            );
+          }
           return (
             <Card key={m.key} className="opacity-70">
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <Icon className="size-6 text-primary" />
+                  <Icon className="size-6 text-primary" aria-hidden />
                   <Badge variant="outline">Coming soon</Badge>
                 </div>
                 <CardTitle className="mt-3 text-lg">{m.title}</CardTitle>

@@ -902,9 +902,22 @@ function QueueTab({
                       <span className="text-muted-foreground">
                         {selected.origin === "broker"
                           ? " · recorded here"
-                          : " · submitted by the member"}
+                          : selected.origin === "hr"
+                            ? " · submitted by HR"
+                            : " · submitted by the member"}
                       </span>
                     </DetailField>
+                    {selected.origin === "hr" && (
+                      <DetailField label="Submitted by">
+                        {selected.submitted_by_name ||
+                          selected.submitted_by_email ||
+                          "Company HR"}
+                        {selected.submitted_by_name &&
+                        selected.submitted_by_email
+                          ? ` · ${selected.submitted_by_email}`
+                          : ""}
+                      </DetailField>
+                    )}
                     {selected.received_via && (
                       <DetailField label="Received via">
                         {RECEIVED_VIA_LABELS[selected.received_via] ??

@@ -87,15 +87,20 @@ async function request<T>(
   init: RequestInit = {},
   retried = false,
 ): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  for (const [name, value] of Object.entries({
+    ...tenantHeader(),
+    ...authHeader(),
+  })) {
+    headers.set(name, value);
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...tenantHeader(),
-      ...authHeader(),
-      ...init.headers,
-    },
+    headers,
   });
   if (res.status === 401) {
     // Never auto-refresh the UNAUTHENTICATED auth endpoints — a 401 there is an
@@ -123,8 +128,20 @@ export const hrApi = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+  postWithHeaders: <T>(
+    path: string,
+    body: unknown,
+    headers: Record<string, string>,
+  ) =>
+    request<T>(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers,
+    }),
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
+  upload: <T>(path: string, body: FormData) =>
+    request<T>(path, { method: "POST", body }),
   /** Public auth call (login / mfa / set-password): a 401/4xx is surfaced to
    * the form inline — no refresh, no redirect. Cookie still included so the
    * server can set the rotating refresh token. */

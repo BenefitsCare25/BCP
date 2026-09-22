@@ -542,6 +542,10 @@ class BrokerClaimOut(ClaimOut):
     employee_id: str
     staff_id: str | None = None
     employee_name: str | None = None
+    # Delegated HR provenance. These are immutable snapshots from intake_meta,
+    # not a live join whose display could change after the submission.
+    submitted_by_name: str | None = None
+    submitted_by_email: str | None = None
     ai_review: ClaimAIReviewSummary | None = None
     # Provenance of a broker-entered case, flattened out of `intake_meta` (which
     # is untyped JSON and is read defensively — see services/log_cases.py).

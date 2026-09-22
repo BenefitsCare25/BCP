@@ -142,6 +142,18 @@ const HrDashboardPage = lazyRouteComponent(
   () => import("@/routes/hr/dashboard"),
   "HrDashboardPage",
 );
+const HrClaimsPage = lazyRouteComponent(
+  () => import("@/routes/hr/claims/index"),
+  "HrClaimsPage",
+);
+const HrNewClaimPage = lazyRouteComponent(
+  () => import("@/routes/hr/claims/new"),
+  "HrNewClaimPage",
+);
+const HrClaimDetailPage = lazyRouteComponent(
+  () => import("@/routes/hr/claims/detail"),
+  "HrClaimDetailPage",
+);
 const HrSecurityPage = lazyRouteComponent(
   () => import("@/routes/hr/security"),
   "HrSecurityPage",
@@ -694,6 +706,24 @@ const claimsReviewRoute = createRoute({
   path: "/review",
   component: ClaimsQueuePage,
 });
+
+const hrClaimsRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/claims",
+  component: HrClaimsPage,
+});
+
+const hrNewClaimRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/claims/new",
+  component: HrNewClaimPage,
+});
+
+const hrClaimDetailRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/claims/$claimId",
+  component: HrClaimDetailPage,
+});
 const claimsWicaRoute = createRoute({
   getParentRoute: () => claimsLayoutRoute,
   path: "/wica",
@@ -778,7 +808,14 @@ const routeTree = rootRoute.addChildren([
   signInRoute,
   hrSignInRoute,
   hrSetPasswordRoute,
-  hrLayoutRoute.addChildren([hrIndexRoute, hrDashboardRoute, hrSecurityRoute]),
+  hrLayoutRoute.addChildren([
+    hrIndexRoute,
+    hrDashboardRoute,
+    hrClaimsRoute,
+    hrNewClaimRoute,
+    hrClaimDetailRoute,
+    hrSecurityRoute,
+  ]),
   portalSignInRoute,
   portalSetPasswordRoute,
   portalRootSignInRoute,

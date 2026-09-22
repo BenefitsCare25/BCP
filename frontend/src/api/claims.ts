@@ -157,7 +157,11 @@ export interface BrokerClaim {
   /** Who filed it. The member portal shows only `portal` rows, so a case an
    *  assessor created is invisible to them while one they submitted stays
    *  visible even after it is reclassified. */
-  origin: "portal" | "broker";
+  origin: "portal" | "broker" | "hr";
+  /** Immutable attribution for a claim filed by company HR on the employee's
+   * behalf. Null for member- and broker-origin cases. */
+  submitted_by_name: string | null;
+  submitted_by_email: string | null;
   /** Provenance of a broker-entered case (all optional). */
   received_via: string | null;
   received_on: string | null;

@@ -289,7 +289,8 @@ AMENDED_BY_BROKER = "broker"
 # hides only the cases they never knew about. See `api/v1/portal_claims.py`.
 ORIGIN_PORTAL = "portal"
 ORIGIN_BROKER = "broker"
-ORIGINS = frozenset({ORIGIN_PORTAL, ORIGIN_BROKER})
+ORIGIN_HR = "hr"
+ORIGINS = frozenset({ORIGIN_PORTAL, ORIGIN_BROKER, ORIGIN_HR})
 
 # States a case may be RECLASSIFIED in. Identical to `DECIDABLE_STATUSES` by
 # construction rather than by coincidence: a case can be reclassified for
@@ -312,7 +313,7 @@ class Claim(Base, TimestampMixin):
             name="case_type_valid",
         ),
         CheckConstraint(
-            "origin IN ('portal', 'broker')",
+            "origin IN ('portal', 'broker', 'hr')",
             name="origin_valid",
         ),
         CheckConstraint(
@@ -398,6 +399,8 @@ class Claim(Base, TimestampMixin):
         server_default=CASE_TYPE_CLAIM,
     )
     # Who created the row — see ORIGIN_* above. The portal's visibility filter.
+    # HR is distinct from portal: the employee is the claimant, but an HR user
+    # acted on their behalf and the broker must see that provenance.
     origin: Mapped[str] = mapped_column(
         String(16), nullable=False, default=ORIGIN_PORTAL,
         server_default=ORIGIN_PORTAL,

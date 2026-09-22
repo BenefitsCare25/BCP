@@ -309,6 +309,8 @@ def _broker_out(
     out.received_via = intake_field(claim, "received_via")
     out.received_on = intake_date(claim, "received_on")
     out.requested_by = intake_field(claim, "requested_by")
+    out.submitted_by_name = intake_field(claim, "delegated_by_name")
+    out.submitted_by_email = intake_field(claim, "delegated_by_email")
     review = reviews.get(claim.id) if reviews is not None else _latest_review(db, claim.id)
     if review is not None:
         out.ai_review = ClaimAIReviewSummary.model_validate(review)

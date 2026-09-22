@@ -38,7 +38,7 @@ function ago(at: number): string {
  * on the existing row) and stays until dismissed, so nothing is missed and
  * nothing blocks a click.
  */
-export function NotificationBell() {
+export function NotificationBell({ largeTarget = false }: { largeTarget?: boolean }) {
   // Mounted in all three shells. On the member portal it is a TOUCH target and
   // its rows must be dismissable without a pointer — see the two uses below.
   const inLeaf = useInLeaf();
@@ -100,7 +100,7 @@ export function NotificationBell() {
           "relative flex items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           // 44×44 on the member surface (The Reach Rule); the broker app is a
           // desktop tool whose top bar is built on a 32px rhythm.
-          inLeaf ? "size-11 rounded-pill" : "size-8",
+          inLeaf || largeTarget ? "size-11 rounded-pill" : "size-8",
           open
             ? "bg-accent text-primary"
             : "text-muted-foreground hover:bg-muted hover:text-foreground",
