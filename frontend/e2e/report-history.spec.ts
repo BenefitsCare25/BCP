@@ -200,6 +200,37 @@ async function syntheticEmployeeRoster(): Promise<Buffer> {
   }
 }
 
+function inspectPremiumWorkbook(filePath: string): {
+  sheetNames: string[];
+  memberRows: number;
+  unpricedRows: number;
+} {
+  const script = [
+    "import json, sys",
+    "from io import BytesIO",
+    "from pathlib import Path",
+    "from openpyxl import load_workbook",
+    "workbook = load_workbook(BytesIO(Path(sys.argv[1]).read_bytes()), read_only=True, data_only=True)",
+    "rows = list(workbook['Member Premiums'].iter_rows(values_only=True))",
+    "status_index = list(rows[0]).index('Data Status')",
+    "print(json.dumps({'sheetNames': workbook.sheetnames, 'memberRows': len(rows) - 1, 'unpricedRows': sum(row[status_index] == 'Per-member premium unavailable' for row in rows[1:])}))",
+  ].join("; ");
+  const inspected = spawnSync("uv", ["run", "python", "-c", script, filePath], {
+    cwd: resolve("../backend"),
+    encoding: "utf8",
+  });
+  if (inspected.status !== 0) {
+    throw new Error(
+      inspected.stderr || inspected.stdout || "Premium workbook inspection failed",
+    );
+  }
+  return JSON.parse(inspected.stdout) as {
+    sheetNames: string[];
+    memberRows: number;
+    unpricedRows: number;
+  };
+}
+
 test("a real demo insurer report is retained and appears in scoped history", async ({
   page,
   request,
@@ -208,6 +239,12 @@ test("a real demo insurer report is retained and appears in scoped history", asy
     testInfo.project.name !== "desktop-chromium",
     "Generate the shared demo workbook once; responsive history states are covered separately.",
   );
+  const failedResponses: string[] = [];
+  page.on("response", (response) => {
+    if (response.status() >= 400) {
+      failedResponses.push(`${response.status()} ${response.url()}`);
+    }
+  });
   const { clientId, year: selectedYear } = await installSession(page, request, {
     isolatedPeriod: {
       startDate: "2035-01-01",
@@ -222,6 +259,9 @@ test("a real demo insurer report is retained and appears in scoped history", asy
     { headers },
   );
   expect([200, 404]).toContain(existingSetup.status());
+  if (existingSetup.status() === 404) {
+    expect(await existingSetup.json()).not.toEqual({ detail: "Policy year not found" });
+  }
   const savedSetup = existingSetup.ok()
     ? ((await existingSetup.json()) as {
         template_version: number;
@@ -287,6 +327,28 @@ test("a real demo insurer report is retained and appears in scoped history", asy
   );
   expect(insurerSubmission?.insurers).toContain(insurer);
 
+  await page.goto("/claims/reports?tab=pa");
+  const premiumRow = page.getByRole("listitem", {
+    name: "Premium Breakdown report",
+  });
+  await expect(premiumRow).toBeVisible();
+  const premiumDownloadStarted = page.waitForEvent("download");
+  await premiumRow.getByRole("button", { name: "Download" }).click();
+  const premiumDownload = await premiumDownloadStarted;
+  expect(premiumDownload.suggestedFilename()).toMatch(/^premium-breakdown-.*\.xlsx$/);
+  await premiumDownload.saveAs(testInfo.outputPath("demo-premium-breakdown.xlsx"));
+  const premiumPath = await premiumDownload.path();
+  expect(premiumPath).toBeTruthy();
+  const premiumInspection = inspectPremiumWorkbook(premiumPath!);
+  expect(premiumInspection.sheetNames).toEqual([
+    "Member Premiums",
+    "Flex Funding",
+    "Premium Summary",
+    "Read Me",
+  ]);
+  expect(premiumInspection.memberRows).toBe(3);
+  expect(premiumInspection.unpricedRows).toBe(3);
+
   const query = new URLSearchParams({
     insurer,
     masked: "false",
@@ -304,7 +366,6 @@ test("a real demo insurer report is retained and appears in scoped history", asy
   expect(workbook.length).toBeGreaterThan(1_000);
   await writeFile(testInfo.outputPath("demo-insurer-submission.xlsx"), workbook);
 
-  await page.goto("/claims/reports?tab=pa");
   await page.getByRole("combobox", { name: "Insurer" }).click();
   await page.getByRole("option", { name: insurer }).click();
   const submissionRecord = page.getByText(/^Last sent/);
@@ -321,6 +382,7 @@ test("a real demo insurer report is retained and appears in scoped history", asy
   await page.screenshot({
     path: testInfo.outputPath("demo-report-history.png"),
   });
+  expect(failedResponses).toEqual([]);
 });
 
 test("report history shows the latest 10 or 20 copies with year context", async ({

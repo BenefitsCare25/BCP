@@ -112,6 +112,7 @@ function ReportTable({
         {rows.map((r) => (
           <li
             key={r.title}
+            aria-label={`${r.title} report`}
             className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3"
           >
             <div className="flex min-w-0 flex-1 items-center gap-3">

@@ -28,7 +28,12 @@ from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
-from app.core.auth import ROLE_BROKER_VIEWER, CurrentUser, get_current_user
+from app.core.auth import (
+    ROLE_BROKER_VIEWER,
+    ROLE_SYSTEM_ADMIN,
+    CurrentUser,
+    get_current_user,
+)
 from app.core.clock import today as business_today
 from app.core.deps import assert_policy_year_for_user
 from app.core.rate_limit import limiter
@@ -75,13 +80,27 @@ def _slug(insurer: str) -> str:
 
 router = APIRouter(prefix="/policy-years/{policy_year_id}/reports", tags=["reports"])
 
+_BROKER_REPORT_ROLES = frozenset({"broker_admin", ROLE_BROKER_VIEWER, ROLE_SYSTEM_ADMIN})
+
+
+def require_broker_report_access(
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Keep company-HR identities out of broker financial/operational reports."""
+    if user.role not in _BROKER_REPORT_ROLES:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Reports access requires a broker role.",
+        )
+    return user
+
 
 @router.get("/premium-breakdown")
 @limiter.limit("10/minute")
 def download_premium_breakdown(
     request: Request,
     policy_year_id: str,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(require_broker_report_access),
     db: Session = Depends(get_db),
 ) -> Response:
     from app.services.premium_breakdown import build_premium_breakdown
@@ -89,7 +108,15 @@ def download_premium_breakdown(
     year = assert_policy_year_for_user(policy_year_id, user, db)
     content = BytesIO()
     build_premium_breakdown(db, year).save(content)
-    write_audit(db, user, "report.premium_breakdown", "policy_year", year.id)
+    write_audit(
+        db,
+        user,
+        "report.premium_breakdown",
+        "policy_year",
+        year.id,
+        after={"report": "premium-breakdown", "format": "xlsx"},
+        request=request,
+    )
     db.commit()
     return Response(content.getvalue(), media_type=_XLSX_MEDIA_TYPE, headers={
         "Content-Disposition": f'attachment; filename="premium-breakdown-{year.year}.xlsx"',
