@@ -23,6 +23,10 @@ interface Me {
 
 interface PanelListing {
   id: string;
+  insurer: string;
+  panel_provider: string;
+  country: string;
+  clinic_type: string;
 }
 
 const API = "/api/v1";
@@ -372,30 +376,68 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
     testInfo.project.name === "mobile-chromium"
       ? { code: "GTL", line: "Life Insurance" }
       : { code: "GHS", line: "Medical Insurance" };
+  const setupPath = `${API}/policy-years/${years.current.id}/product-setups/${draft.code}`;
+  const existingSetup = await request.get(setupPath, { headers: years.headers });
+  expect([200, 404]).toContain(existingSetup.status());
+  const savedSetup = existingSetup.ok()
+    ? ((await existingSetup.json()) as {
+        template_version: number;
+        updated_at: string;
+      })
+    : null;
   const draftResponse = await request.put(
-    `${API}/policy-years/${years.current.id}/product-setups/${draft.code}`,
+    setupPath,
     {
       headers: years.headers,
-      data: { answers: {}, template_version: 1 },
+      data: {
+        answers: {},
+        template_version: savedSetup?.template_version ?? 1,
+        expected_updated_at: savedSetup?.updated_at,
+      },
     },
   );
   expect(draftResponse.ok(), await draftResponse.text()).toBeTruthy();
-  const listingResponse = await request.post(`${API}/panel-listings`, {
-    headers: years.headers,
-    data: {
-      insurer: `E2E-${testInfo.project.name}`,
-      panel_provider: "Release gate",
-      country: "SG",
-      clinic_type: "gp",
-    },
-  });
-  expect(listingResponse.ok(), await listingResponse.text()).toBeTruthy();
-  const listing = (await listingResponse.json()) as PanelListing;
+  const listingInput = {
+    insurer: `E2E-${testInfo.project.name}`,
+    panel_provider: "Release gate",
+    country: "SG",
+    clinic_type: "gp",
+  };
+  const findListing = (listings: PanelListing[]) =>
+    listings.find(
+      (candidate) =>
+        candidate.insurer === listingInput.insurer &&
+        candidate.panel_provider === listingInput.panel_provider &&
+        candidate.country === listingInput.country &&
+        candidate.clinic_type === listingInput.clinic_type,
+    );
+  let listings = await apiJson<PanelListing[]>(
+    await request.get(`${API}/panel-listings`, { headers: years.headers }),
+  );
+  let listing = findListing(listings);
+  if (!listing) {
+    const listingResponse = await request.post(`${API}/panel-listings`, {
+      headers: years.headers,
+      data: listingInput,
+    });
+    if (listingResponse.ok()) {
+      listing = (await listingResponse.json()) as PanelListing;
+    } else {
+      // A concurrent project/retry may have created the shared entry after
+      // our initial read. Re-read it instead of failing on the expected 409.
+      expect(listingResponse.status()).toBe(409);
+      listings = await apiJson<PanelListing[]>(
+        await request.get(`${API}/panel-listings`, { headers: years.headers }),
+      );
+      listing = findListing(listings);
+    }
+  }
+  expect(listing).toBeDefined();
   const panelsResponse = await request.put(
     `${API}/policy-years/${years.current.id}/panels`,
     {
       headers: years.headers,
-      data: { panel_listing_ids: [listing.id] },
+      data: { panel_listing_ids: [listing!.id] },
     },
   );
   expect(panelsResponse.ok(), await panelsResponse.text()).toBeTruthy();

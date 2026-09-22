@@ -16,6 +16,16 @@ interface SessionContext {
   year: PolicyYear;
 }
 
+interface Me {
+  active_client_id: string;
+  accessible_clients: Array<{ id: string; name: string }>;
+}
+
+interface SessionOptions {
+  isolatedPeriod?: { startDate: string; endDate: string };
+  useSecondaryClient?: boolean;
+}
+
 interface ReportVersion {
   id: string;
   report_type: string;
@@ -35,17 +45,54 @@ interface ReportVersion {
 async function installSession(
   page: Page,
   request: APIRequestContext,
+  options: SessionOptions = {},
 ): Promise<SessionContext> {
   const meResponse = await request.get("/api/v1/me");
   expect(meResponse.ok()).toBe(true);
-  const me = await meResponse.json();
+  const me = (await meResponse.json()) as Me;
   expect(me.active_client_id).toBeTruthy();
+  const clientId = options.useSecondaryClient
+    ? me.accessible_clients.find((client) => client.id !== me.active_client_id)?.id
+    : me.active_client_id;
+  expect(clientId).toBeTruthy();
 
-  const yearsResponse = await request.get("/api/v1/policy-years", {
-    headers: { "X-Inspro-Client": me.active_client_id },
-  });
+  const headers = { "X-Inspro-Client": clientId! };
+  const yearsResponse = await request.get("/api/v1/policy-years", { headers });
   expect(yearsResponse.ok()).toBe(true);
-  const [year] = (await yearsResponse.json()) as PolicyYear[];
+  let years = (await yearsResponse.json()) as PolicyYear[];
+  const today = new Date().toISOString().slice(0, 10);
+  let year = options.isolatedPeriod
+    ? years.find(
+        (candidate) =>
+          candidate.start_date === options.isolatedPeriod!.startDate &&
+          candidate.end_date === options.isolatedPeriod!.endDate,
+      )
+    : years.find(
+        (candidate) =>
+          candidate.start_date <= today && candidate.end_date >= today,
+      );
+  if (!year && options.isolatedPeriod) {
+    const created = await request.post("/api/v1/policy-years", {
+      headers,
+      data: {
+        start_date: options.isolatedPeriod.startDate,
+        end_date: options.isolatedPeriod.endDate,
+      },
+    });
+    if (created.ok()) {
+      year = (await created.json()) as PolicyYear;
+    } else {
+      expect(created.status()).toBe(409);
+      const refreshed = await request.get("/api/v1/policy-years", { headers });
+      expect(refreshed.ok(), await refreshed.text()).toBe(true);
+      years = (await refreshed.json()) as PolicyYear[];
+      year = years.find(
+        (candidate) =>
+          candidate.start_date === options.isolatedPeriod!.startDate &&
+          candidate.end_date === options.isolatedPeriod!.endDate,
+      );
+    }
+  }
   expect(year?.id).toBeTruthy();
 
   await page.addInitScript(
@@ -62,10 +109,10 @@ async function installSession(
         }),
       );
     },
-    { clientId: me.active_client_id, yearId: year.id },
+    { clientId, yearId: year.id },
   );
 
-  return { clientId: me.active_client_id, year };
+  return { clientId: clientId!, year };
 }
 
 function versions(count: number): ReportVersion[] {
@@ -161,7 +208,13 @@ test("a real demo insurer report is retained and appears in scoped history", asy
     testInfo.project.name !== "desktop-chromium",
     "Generate the shared demo workbook once; responsive history states are covered separately.",
   );
-  const { clientId, year: selectedYear } = await installSession(page, request);
+  const { clientId, year: selectedYear } = await installSession(page, request, {
+    isolatedPeriod: {
+      startDate: "2035-01-01",
+      endDate: "2035-12-31",
+    },
+    useSecondaryClient: true,
+  });
   const headers = { "X-Inspro-Client": clientId };
   const insurer = "AIA Singapore";
   const existingSetup = await request.get(
