@@ -11,9 +11,10 @@ import type {
   InsuredClaimOption,
   IntakeSuggestFields,
 } from "@/api/portal";
+import { CLAIM_DOCUMENT_MAX_BYTES } from "@/lib/claim-files";
 
 export const ACCEPT = ".pdf,.png,.jpg,.jpeg";
-export const MAX_BYTES = 15 * 1024 * 1024;
+export const MAX_BYTES = CLAIM_DOCUMENT_MAX_BYTES;
 
 /** How many documents the member may upload for AI autofill in one go — the
  * full set for one claim (e.g. tax invoice + itemised bill + discharge

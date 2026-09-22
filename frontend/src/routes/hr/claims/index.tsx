@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, FilePlus2, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useHrClaims } from "@/api/hrClaims";
 import {
   ClaimStatus,
@@ -10,23 +10,26 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatError } from "@/lib/errors";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+
+const PAGE_SIZE = 20;
 
 export function HrClaimsPage() {
   useDocumentTitle("Employee claims");
-  const claims = useHrClaims();
   const [search, setSearch] = useState("");
-  const visible = useMemo(() => {
-    const term = search.trim().toLocaleLowerCase();
-    if (!term) return claims.data?.items ?? [];
-    return (claims.data?.items ?? []).filter((claim) =>
-      [claim.employee_name, claim.claim_ref, claim.claim_type, claim.provider_name]
-        .filter(Boolean)
-        .some((value) => value!.toLocaleLowerCase().includes(term)),
-    );
-  }, [claims.data?.items, search]);
+  const [page, setPage] = useState(0);
+  const debouncedSearch = useDebouncedValue(search, 300);
+  const claims = useHrClaims({
+    query: debouncedSearch,
+    offset: page * PAGE_SIZE,
+    limit: PAGE_SIZE,
+  });
+  const visible = claims.data?.items ?? [];
+  const pages = Math.max(1, Math.ceil((claims.data?.total ?? 0) / PAGE_SIZE));
 
   return (
     <div className="space-y-6">
@@ -65,7 +68,7 @@ export function HrClaimsPage() {
             Try again
           </Button>
         </Card>
-      ) : claims.data?.total === 0 ? (
+      ) : claims.data?.total === 0 && !debouncedSearch.trim() ? (
         <Card className="flex flex-col items-start gap-3 p-6">
           <div className="rounded-lg bg-muted p-2.5">
             <FilePlus2 className="size-5 text-muted-foreground" aria-hidden />
@@ -96,7 +99,10 @@ export function HrClaimsPage() {
               <Input
                 type="search"
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(0);
+                }}
                 placeholder="Employee, reference or provider"
                 className="h-11 pl-9 sm:h-9"
               />
@@ -147,6 +153,7 @@ export function HrClaimsPage() {
               ))}
             </Card>
           )}
+          <PaginationControls page={page} pages={pages} onPageChange={setPage} />
         </section>
       )}
     </div>

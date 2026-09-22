@@ -23,6 +23,7 @@ BACKEND = Path(__file__).parents[1]
 DATABASE_NAME = "inspro_task20_test"
 PREVIOUS_REVISION = "d3e5f7a9b1c2"
 TASK20_REVISION = "e4f6a8c0b2d3"
+REPAIR_REVISION = "f5a7c9e1b3d4"
 CONSTRAINT_NAME = "ck_claims_origin_valid"
 
 
@@ -158,4 +159,43 @@ def test_hr_origin_constraint_round_trip_in_public_and_firm_schemas(
     _alembic(task20_pg_url, "upgrade", TASK20_REVISION)
     with engine.connect() as connection:
         assert all("'hr'" in _constraint(connection, schema) for schema in schemas)
+
+    with engine.begin() as connection:
+        connection.execute(text("SET session_replication_role = replica"))
+        for index, schema in enumerate(schemas):
+            connection.execute(
+                text(
+                    f'INSERT INTO "{schema}".claims '
+                    "(id, client_id, policy_year_id, employee_id, claim_kind, "
+                    "claim_type, incurred_date, amount_claimed, currency, status, "
+                    "origin, intake_meta, created_at, updated_at) VALUES "
+                    "(:id, :client, :year, :employee, 'insured', 'Specialist', "
+                    "DATE '2026-09-20', 25, 'SGD', 'draft', 'portal', "
+                    "CAST(:meta AS json), CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": f"legacy-hr-{index}",
+                    "client": f"legacy-client-{index}",
+                    "year": f"legacy-year-{index}",
+                    "employee": f"legacy-employee-{index}",
+                    "meta": '{"submission_channel":"hr"}',
+                },
+            )
+        connection.execute(text("SET session_replication_role = origin"))
+
+    _alembic(task20_pg_url, "upgrade", REPAIR_REVISION)
+    with engine.connect() as connection:
+        for index, schema in enumerate(schemas):
+            assert connection.scalar(
+                text(f'SELECT origin FROM "{schema}".claims WHERE id = :id'),
+                {"id": f"legacy-hr-{index}"},
+            ) == "hr"
+
+    _alembic(task20_pg_url, "downgrade", TASK20_REVISION)
+    with engine.connect() as connection:
+        for index, schema in enumerate(schemas):
+            assert connection.scalar(
+                text(f'SELECT origin FROM "{schema}".claims WHERE id = :id'),
+                {"id": f"legacy-hr-{index}"},
+            ) == "hr"
     engine.dispose()

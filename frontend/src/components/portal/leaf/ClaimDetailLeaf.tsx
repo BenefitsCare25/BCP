@@ -37,7 +37,7 @@ import { Strike } from "./Strike";
  * would eventually disagree, and the one the member meets first is a silent
  * rejection after the upload. */
 export const CLAIM_DOC_ACCEPT = ".pdf,.png,.jpg,.jpeg";
-export const CLAIM_DOC_MAX_BYTES = 15 * 1024 * 1024;
+export { CLAIM_DOCUMENT_MAX_BYTES as CLAIM_DOC_MAX_BYTES } from "@/lib/claim-files";
 
 // The generic invoice/receipt slot is satisfied by ANY attached document
 // (mirrors the backend `assert_documents_satisfy_slots`); specific slots need

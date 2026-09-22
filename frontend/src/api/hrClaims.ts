@@ -2,7 +2,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { hrApi } from "@/api/hrClient";
-import type { ClaimCreateInput, CoverageOptions, DocSlot } from "@/api/portal";
+import type {
+  ClaimCreateInput,
+  CoverageOptions,
+  DocSlot,
+  FxQuote,
+} from "@/api/portal";
 
 export interface HrEmployee {
   id: string;
@@ -50,8 +55,6 @@ export interface HrClaim {
 
 export type HrClaimCreateInput = ClaimCreateInput & { employee_id: string };
 
-const PAGE_SIZE = 50;
-
 export function useHrEmployees(query: string) {
   return useQuery({
     queryKey: ["hr", "claim-employees", query.trim()],
@@ -65,29 +68,56 @@ export function useHrEmployees(query: string) {
   });
 }
 
-/** Load the whole delegated-claim ledger. The endpoint is capped at 50 rows;
- * silently presenting the first page as the full record would make tracking
- * older submissions impossible. */
-export function useHrClaims() {
+export function useHrClaims({
+  query = "",
+  offset = 0,
+  limit = 20,
+}: {
+  query?: string;
+  offset?: number;
+  limit?: number;
+} = {}) {
+  const term = query.trim();
   return useQuery({
-    queryKey: ["hr", "claims"],
-    queryFn: async () => {
-      const items: HrClaim[] = [];
-      let total = 0;
-      let offset = 0;
-      do {
-        const page = await hrApi.get<{ items: HrClaim[]; total: number }>(
-          `/hr/claims?offset=${offset}`,
-        );
-        total = page.total;
-        items.push(...page.items);
-        offset += page.items.length;
-        if (page.items.length === 0) break;
-      } while (offset < total && offset / PAGE_SIZE < 200);
-      return { items, total } satisfies { items: HrClaim[]; total: number };
+    queryKey: ["hr", "claims", { term, offset, limit }],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        q: term,
+        offset: String(offset),
+        limit: String(limit),
+      });
+      return hrApi.get<{ items: HrClaim[]; total: number }>(
+        `/hr/claims?${params.toString()}`,
+      );
     },
+    placeholderData: (previous) => previous,
     meta: { localErrorHandling: true },
     retry: false,
+  });
+}
+
+export function useHrFxQuote(
+  currency: string,
+  policyCurrency: string,
+  amount: number | null,
+  on: string,
+) {
+  const enabled =
+    Boolean(currency) && currency !== policyCurrency && Boolean(on) && amount !== null;
+  return useQuery({
+    queryKey: ["hr", "fx-quote", currency, amount, on],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        currency,
+        amount: String(amount),
+        on,
+      });
+      return hrApi.get<FxQuote>(`/hr/claims/fx-quote?${params.toString()}`);
+    },
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+    meta: { localErrorHandling: true },
   });
 }
 

@@ -279,6 +279,7 @@ LOG_CLAIM_TYPE = "LOG"
 # me?", and the audit trail already records exactly who did it.
 AMENDED_BY_MEMBER = "member"
 AMENDED_BY_BROKER = "broker"
+AMENDED_BY_HR = "hr"
 
 # ── Origin ───────────────────────────────────────────────────────────────────
 #
@@ -551,12 +552,12 @@ class Claim(Base, TimestampMixin):
     amended_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # WHO made that last amendment — `member` or `broker`.
+    # WHO made that last amendment — `member`, `hr` or `broker`.
     #
     # It exists because the queue's "Amended" chip means one specific thing:
     # this claim moved UNDER the assessor. Three writers stamp `amended_at` —
-    # the member's edit, the member adding or removing a document, and the
-    # broker's own correction — so a chip gated on the timestamp alone flags an
+    # the member's edit, member/HR evidence, and the broker's own correction —
+    # so a chip gated on the timestamp alone flags an
     # assessor's own edit back at them the instant they save it, which is the
     # one reading the badge must never have. Nothing else reads this column;
     # `revision` remains the concurrency guard for every actor alike.

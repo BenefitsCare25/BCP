@@ -37,14 +37,16 @@ from app.models import (
     UserClientAccess,
 )
 from app.models.claim import (
+    AMENDED_BY_HR,
     MEMBER_EDITABLE_STATUSES,
     MEMBER_SUBMITTABLE_STATUSES,
     ORIGIN_HR,
 )
 from app.models.claim_message import EVENT_SUBMITTED
 from app.models.stored_document import DOC_ENTITY_CLAIM, DOC_ENTITY_REFERRAL
-from app.schemas.claims import ClaimCreateIn, CoverageOptionsOut
+from app.schemas.claims import ClaimCreateIn, CoverageOptionsOut, FxQuoteOut
 from app.services.claim_document_setups import setup_for_claim
+from app.services.claim_fx import build_quote
 from app.services.claim_integrity import (
     is_replayed_claim_command,
     lock_claim_command_key,
@@ -272,18 +274,49 @@ async def referral(
 
 @router.get("")
 def list_claims(
+    q: str = Query(default="", max_length=100),
     offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
     user: CurrentUser = Depends(delegated_hr),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    query = select(Claim).where(*_scope(user))
+    conditions = [*_scope(user), Employee.client_id == user.client_id]
+    term = q.strip()
+    if term:
+        conditions.append(
+            or_(
+                Employee.employee_name.icontains(term, autoescape=True),
+                Claim.reference_no.icontains(term, autoescape=True),
+                Claim.claim_type.icontains(term, autoescape=True),
+                Claim.provider_name.icontains(term, autoescape=True),
+                Claim.invoice_number.icontains(term, autoescape=True),
+            )
+        )
+    query = select(Claim).join(Employee, Claim.employee_id == Employee.id).where(*conditions)
     rows = db.scalars(
-        query.order_by(Claim.created_at.desc(), Claim.id).offset(offset).limit(50)
+        query.order_by(Claim.created_at.desc(), Claim.id).offset(offset).limit(limit)
     ).all()
     return {
         "items": [_out(db, c) for c in rows],
         "total": db.scalar(select(func.count()).select_from(query.subquery())) or 0,
     }
+
+
+@router.get("/fx-quote", response_model=FxQuoteOut)
+@limiter.limit("60/minute")
+def hr_fx_quote(
+    request: Request,
+    currency: str = Query(min_length=3, max_length=8),
+    amount: float = Query(gt=0, le=1_000_000),
+    on: date = Query(description="The date on the receipt."),
+    user: CurrentUser = Depends(delegated_hr),
+    db: Session = Depends(get_db),
+) -> FxQuoteOut:
+    """Preview a delegated claim conversion before HR saves the draft."""
+    del user
+    out = build_quote(db, currency=currency, amount=amount, on=on)
+    db.commit()
+    return out
 
 
 @router.post("", status_code=201)
@@ -300,6 +333,15 @@ def draft(
         raise HTTPException(422, "Member intake sessions cannot be used by HR.")
     if body.related_claim_id:
         _claim(db, user, body.related_claim_id)
+    if (
+        body.visit_type == "follow_up"
+        and body.related_claim_id is None
+        and body.referral_document_id is None
+    ):
+        raise HTTPException(
+            422,
+            "Attach the referral for this specialist follow-up or select its prior visit.",
+        )
     if body.referral_document_id:
         doc = db.get(StoredDocument, body.referral_document_id)
         if (
@@ -382,7 +424,7 @@ async def upload(
         uploaded_by_user_id=user.user_id,
         doc_type=doc_type,
     )
-    stamp_document_amendment(db, claim)
+    stamp_document_amendment(db, claim, actor=AMENDED_BY_HR)
     enqueue_amended_claim_review(db, claim, user.broker_firm_id)
     write_audit(
         db,

@@ -1,21 +1,34 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Check, Loader2, Search, UserRound } from "lucide-react";
-import { type FormEvent, type ReactNode, useMemo, useState } from "react";
+import { AlertTriangle, ArrowLeft, Check, Loader2, Search, UserRound } from "lucide-react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   useCreateHrClaim,
   useHrCoverageOptions,
   useHrEmployees,
+  useHrFxQuote,
   useUploadHrReferral,
+  type HrReferral,
   type HrEmployee,
 } from "@/api/hrClaims";
 import type { CoverageOptions } from "@/api/portal";
+import { ConversionNotice } from "@/components/portal/claims/ConversionNotice";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { singaporeTodayISO } from "@/lib/business-date";
+import { CLAIM_DOCUMENT_MAX_BYTES } from "@/lib/claim-files";
 import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 interface ClaimChoice {
@@ -108,10 +121,17 @@ export function HrNewClaimPage() {
   const [doctor, setDoctor] = useState("");
   const [diagnosis, setDiagnosis] = useState("");
   const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("");
   const [remarks, setRemarks] = useState("");
   const [referralFile, setReferralFile] = useState<File | null>(null);
   const [referralIssuedOn, setReferralIssuedOn] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const uploadedReferral = useRef<{
+    employeeId: string;
+    file: File;
+    issuedOn: string | null;
+    result: HrReferral;
+  } | null>(null);
 
   const employees = useHrEmployees(employeeSearch);
   const options = useHrCoverageOptions(employee?.id ?? null);
@@ -120,32 +140,86 @@ export function HrNewClaimPage() {
     [options.data],
   );
   const choice = choices.find((item) => item.id === choiceId) ?? null;
+  const policyCurrency = options.data?.policy_currency ?? "SGD";
+  const effectiveCurrency =
+    choice?.kind === "flex"
+      ? options.data?.flex?.currency ?? policyCurrency
+      : currency || policyCurrency;
+  const amountValue = Number(amount);
+  const amountUsable =
+    Number.isFinite(amountValue) && amountValue > 0 ? amountValue : null;
+  const quotedAmount = useDebouncedValue(amountUsable, 400);
+  const fxQuote = useHrFxQuote(
+    effectiveCurrency,
+    policyCurrency,
+    quotedAmount,
+    incurredDate,
+  );
+  const fxForeign = effectiveCurrency !== policyCurrency;
+  const fxMatchesInput =
+    fxQuote.isSuccess &&
+    fxQuote.data.amount === amountUsable &&
+    fxQuote.data.currency === effectiveCurrency &&
+    fxQuote.data.as_of_date === incurredDate;
+  const fxWaiting =
+    fxForeign &&
+    amountUsable !== null &&
+    Boolean(incurredDate) &&
+    !fxMatchesInput &&
+    !fxQuote.isError;
   const createClaim = useCreateHrClaim();
   const uploadReferral = useUploadHrReferral();
-  const busy = createClaim.isPending || uploadReferral.isPending;
+  const busy = createClaim.isPending || uploadReferral.isPending || fxWaiting;
+
+  useEffect(() => {
+    if (options.data && !currency) setCurrency(options.data.policy_currency);
+  }, [options.data, currency]);
 
   const chooseEmployee = (next: HrEmployee) => {
     setEmployee(next);
     setChoiceId("");
+    setCurrency("");
+    uploadedReferral.current = null;
     setError(null);
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!employee || !choice) return;
-    if (choice.requiresReferral && visitType === "first" && !referralFile) {
-      setError("Attach the referral letter for a specialist first visit.");
+    if (choice.requiresReferral && visitType && !referralFile) {
+      setError("Attach the referral letter for this specialist visit.");
+      return;
+    }
+    if (fxForeign && (!fxQuote.isSuccess || !fxMatchesInput)) {
+      setError("Wait for the currency conversion, or try it again before saving.");
       return;
     }
     setError(null);
     try {
-      const referral = referralFile
-        ? await uploadReferral.mutateAsync({
+      const issuedOn = referralIssuedOn || null;
+      let referral: HrReferral | null = null;
+      if (referralFile) {
+        const cached = uploadedReferral.current;
+        if (
+          cached?.employeeId === employee.id &&
+          cached.file === referralFile &&
+          cached.issuedOn === issuedOn
+        ) {
+          referral = cached.result;
+        } else {
+          referral = await uploadReferral.mutateAsync({
             employeeId: employee.id,
             file: referralFile,
-            issuedOn: referralIssuedOn || null,
-          })
-        : null;
+            issuedOn,
+          });
+          uploadedReferral.current = {
+            employeeId: employee.id,
+            file: referralFile,
+            issuedOn,
+            result: referral,
+          };
+        }
+      }
       const claim = await createClaim.mutateAsync({
         employee_id: employee.id,
         claim_kind: choice.kind,
@@ -162,9 +236,16 @@ export function HrNewClaimPage() {
         doctor_name: choice.requiresDoctor ? doctor.trim() : null,
         diagnosis: diagnosis.trim() || null,
         remarks: remarks.trim() || null,
-        amount_claimed: Number(amount),
-        currency: options.data?.policy_currency ?? "SGD",
+        amount_claimed: amountValue,
+        currency: effectiveCurrency,
         referral_document_id: referral?.id ?? null,
+        related_claim_id: null,
+        fx_acknowledged:
+          fxForeign && fxMatchesInput && Boolean(fxQuote.data.available),
+        fx_quoted_amount:
+          fxForeign && fxMatchesInput && fxQuote.data.available
+            ? fxQuote.data.converted
+            : null,
       });
       await navigate({
         to: "/hr/claims/$claimId",
@@ -297,6 +378,7 @@ export function HrNewClaimPage() {
                     setChoiceId(event.target.value);
                     setVisitType("");
                     setReferralFile(null);
+                    uploadedReferral.current = null;
                   }}
                 >
                   <option value="">Select claim type</option>
@@ -308,7 +390,7 @@ export function HrNewClaimPage() {
 
               {choice && (
                 <>
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-3">
                     <Field label="Date incurred" required>
                       <Input
                         type="date"
@@ -320,7 +402,22 @@ export function HrNewClaimPage() {
                         onChange={(event) => setIncurredDate(event.target.value)}
                       />
                     </Field>
-                    <Field label="Claim amount" required hint={options.data?.policy_currency}>
+                    <Field label="Currency" required>
+                      <NativeSelect
+                        className="h-11 w-full px-3"
+                        value={effectiveCurrency}
+                        disabled={choice.kind === "flex"}
+                        onChange={(event) => setCurrency(event.target.value)}
+                      >
+                        {(options.data?.currencies?.length
+                          ? options.data.currencies
+                          : [policyCurrency]
+                        ).map((code) => (
+                          <option key={code} value={code}>{code}</option>
+                        ))}
+                      </NativeSelect>
+                    </Field>
+                    <Field label="Claim amount" required>
                       <Input
                         type="number"
                         className="h-11 tabular-nums"
@@ -334,6 +431,34 @@ export function HrNewClaimPage() {
                       />
                     </Field>
                   </div>
+
+                  {fxForeign && fxQuote.isError ? (
+                    <div
+                      className="space-y-2 rounded-lg bg-warn-soft/30 p-3 text-sm text-foreground"
+                      role="alert"
+                    >
+                      <p className="flex items-start gap-2">
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
+                        The {policyCurrency} conversion could not be loaded. Try again before
+                        saving this claim.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void fxQuote.refetch()}
+                      >
+                        Try conversion again
+                      </Button>
+                    </div>
+                  ) : (
+                    <ConversionNotice
+                      quote={fxMatchesInput ? fxQuote.data : null}
+                      loading={fxWaiting}
+                      currency={effectiveCurrency}
+                      policyCurrency={policyCurrency}
+                    />
+                  )}
 
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Clinic or provider" required>
@@ -364,18 +489,33 @@ export function HrNewClaimPage() {
                           <option value="follow_up">Follow-up specialist visit</option>
                         </NativeSelect>
                       </Field>
-                      <Field label="Referral letter" required={visitType === "first"} hint="PDF, JPG or PNG">
+                      <Field
+                        label="Referral letter"
+                        required={Boolean(visitType)}
+                        hint="PDF, JPG or PNG · 15 MB maximum"
+                      >
                         <Input
                           type="file"
                           className="h-11 py-2"
                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-                          required={visitType === "first"}
-                          onChange={(event) => setReferralFile(event.target.files?.[0] ?? null)}
+                          required={Boolean(visitType)}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0] ?? null;
+                            if (file && file.size > CLAIM_DOCUMENT_MAX_BYTES) {
+                              event.target.value = "";
+                              setReferralFile(null);
+                              setError("Choose a referral letter no larger than 15 MB.");
+                              return;
+                            }
+                            setReferralFile(file);
+                            uploadedReferral.current = null;
+                            setError(null);
+                          }}
                         />
                       </Field>
                       {referralFile && (
                         <Field label="Referral issued on">
-                          <Input type="date" className="h-11" max={new Date().toISOString().slice(0, 10)} value={referralIssuedOn} onChange={(event) => setReferralIssuedOn(event.target.value)} />
+                          <Input type="date" className="h-11" max={singaporeTodayISO()} value={referralIssuedOn} onChange={(event) => setReferralIssuedOn(event.target.value)} />
                         </Field>
                       )}
                     </div>

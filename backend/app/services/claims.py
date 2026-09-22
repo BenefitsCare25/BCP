@@ -37,6 +37,7 @@ from app.models import (
 from app.models.claim import (
     AI_REVIEW_STATUSES,
     AMENDED_BY_BROKER,
+    AMENDED_BY_HR,
     AMENDED_BY_MEMBER,
     CASE_TYPE_CLAIM,
     CASE_TYPE_LOG,
@@ -2000,9 +2001,9 @@ def stamp_document_amendment(
         return False
     claim.revision += 1
     claim.amended_at = datetime.now(UTC)
-    # Both the portal and broker workspace may change live evidence. Preserve
-    # who made the change so the other party sees the correct amendment marker.
-    if actor not in {AMENDED_BY_MEMBER, AMENDED_BY_BROKER}:
+    # The portal, delegated-HR surface and broker workspace may change live
+    # evidence. Preserve who made the change for accurate provenance.
+    if actor not in {AMENDED_BY_MEMBER, AMENDED_BY_BROKER, AMENDED_BY_HR}:
         raise ValueError(f"Unsupported claim amendment actor: {actor}")
     claim.amended_by = actor
     return supersede_review_for_amendment(db, claim)

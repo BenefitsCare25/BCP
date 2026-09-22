@@ -642,16 +642,16 @@ function QueueTab({
                             {c.unread_member_messages} new
                           </Badge>
                         )}
-                        {/* The MEMBER changed this claim. Its OWN signal, not a
+                        {/* The claimant-side surface changed this claim. Its OWN signal, not a
                             reuse of the unread badge: that one counts
                             MEMBER-AUTHORED messages and would never fire for an
                             automatic amendment notice — so a claim that moved
                             under an assessor would otherwise look untouched
                             until they opened it.
 
-                            Read off `amended_by`, NOT `amended_at`. Three
+                            Read off `amended_by`, NOT `amended_at`. Four
                             writers stamp that timestamp — the member's edit,
-                            the member's document change, and the ASSESSOR'S OWN
+                            member or HR evidence, and the ASSESSOR'S OWN
                             correction — so gated on it this flagged an
                             assessor's own save straight back at them, which is
                             the one thing the badge must never mean.
@@ -662,11 +662,12 @@ function QueueTab({
                             forever, including ones long since decided, and a
                             badge that never goes away stops meaning "look at
                             this" — which is the only thing it is for. */}
-                        {c.amended_by === "member" && can(c, "approve") && (
+                        {(c.amended_by === "member" || c.amended_by === "hr") &&
+                          can(c, "approve") && (
                           <Badge variant="warn" className="ml-2 align-middle">
                             Amended
                           </Badge>
-                        )}
+                          )}
                         <div className="text-2xs text-muted-foreground font-normal">
                           {c.staff_id}
                         </div>

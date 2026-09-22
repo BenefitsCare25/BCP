@@ -22,10 +22,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CLAIM_DOCUMENT_MAX_BYTES } from "@/lib/claim-files";
 import { formatError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
-
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -77,8 +76,8 @@ export function HrClaimDetailPage() {
 
   const uploadFile = async (slot: string, file: File | null) => {
     if (!file) return;
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setError("Choose a file no larger than 10 MB.");
+    if (file.size > CLAIM_DOCUMENT_MAX_BYTES) {
+      setError("Choose a file no larger than 15 MB.");
       return;
     }
     setError(null);

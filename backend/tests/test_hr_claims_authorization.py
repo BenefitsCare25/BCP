@@ -24,8 +24,9 @@ from app.models import (
     User,
     UserClientAccess,
 )
-from app.models.claim import ORIGIN_HR
+from app.models.claim import AMENDED_BY_HR, ORIGIN_HR
 from app.models.policy_year import PolicyYearStatus
+from app.services.claims import stamp_document_amendment
 
 FIRM_ID = "hr-auth-firm"
 CLIENT_A = "hr-auth-client-a"
@@ -228,6 +229,61 @@ def test_client_admin_sees_all_delegated_claims_but_only_within_company(
     assert claims.status_code == 200
     assert {item["id"] for item in claims.json()["items"]} == {CLAIM_A, CLAIM_OTHER}
     assert client.get(f"/api/v1/hr/claims/{CLAIM_B}").status_code == 404
+
+
+def test_claim_ledger_search_and_pagination_stay_within_company(
+    api: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    client, active = api
+    active["user"] = _principal(USER_ADMIN, CLIENT_A, "client_admin")
+
+    first = client.get("/api/v1/hr/claims?limit=1")
+    match = client.get(f"/api/v1/hr/claims?q={CLAIM_A}")
+    foreign = client.get(f"/api/v1/hr/claims?q={CLAIM_B}")
+
+    assert first.status_code == 200
+    assert first.json()["total"] == 2
+    assert len(first.json()["items"]) == 1
+    assert [item["id"] for item in match.json()["items"]] == [CLAIM_A]
+    assert match.json()["total"] == 1
+    assert foreign.json() == {"items": [], "total": 0}
+
+
+def test_specialist_follow_up_requires_an_explicit_episode_or_referral(
+    api: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    client, _ = api
+    response = client.post(
+        "/api/v1/hr/claims",
+        headers={"Idempotency-Key": "follow-up-without-referral"},
+        json={
+            "employee_id": EMPLOYEE_A,
+            "claim_kind": "insured",
+            "product_code": "SP",
+            "claim_type": "Specialist",
+            "visit_type": "follow_up",
+            "incurred_date": "2026-09-20",
+            "provider_name": "Specialist Centre",
+            "invoice_number": "SP-FOLLOW-UP",
+            "amount_claimed": 80,
+            "currency": "SGD",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Attach the referral" in response.json()["detail"]
+
+
+def test_hr_evidence_amendments_keep_hr_provenance(
+    api: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    del api
+    with SessionLocal() as db:
+        claim = db.get(Claim, CLAIM_A)
+        assert claim is not None
+        claim.status = "submitted"
+        stamp_document_amendment(db, claim, actor=AMENDED_BY_HR)
+        assert claim.amended_by == "hr"
 
 
 def test_live_grant_revocation_and_non_hr_roles_fail_closed(

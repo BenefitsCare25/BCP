@@ -1,5 +1,6 @@
 import { cloneElement, useId, type ReactElement, type SelectHTMLAttributes } from "react";
 import { Button } from "@/components/ui/button";
+import { singaporeTodayISO } from "@/lib/business-date";
 
 export function Field({ label, children }: { label: string; children: ReactElement<{ id?: string }> }) {
   const id = useId();
@@ -15,4 +16,4 @@ export function Loading() {
   return <div role="status" aria-label="Loading" className="space-y-3 py-4"><div className="h-9 w-1/3 rounded-md bg-muted" /><div className="h-40 rounded-lg bg-muted" /></div>;
 }
 export const dateLabel = (value: string) => new Intl.DateTimeFormat("en-SG", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value.slice(0, 10) + "T00:00:00"));
-export const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(new Date());
+export const today = singaporeTodayISO;
