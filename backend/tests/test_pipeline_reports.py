@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import select
 
 from app.core.auth import (
     DEMO_BROKER_FIRM_ID,
@@ -18,8 +19,22 @@ from app.core.auth import (
 )
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import AuditLog, BrokerFirm, Claim, Client, PolicyYear
+from app.models import (
+    AuditLog,
+    BrokerFirm,
+    Claim,
+    Client,
+    Employee,
+    Plan,
+    PolicyYear,
+    Product,
+    ProductSetup,
+    ProductTerm,
+    UnderwritingCase,
+    UnderwritingReview,
+)
 from app.services import claim_placement, premium_breakdown
+from app.services.report_workbooks import BuildContext, build_workbook, spec_for
 
 FOREIGN_FIRM_ID = "00000000-0000-0000-0000-0000000f1600"
 FOREIGN_CLIENT_ID = "00000000-0000-0000-0000-0000000f1601"
@@ -115,6 +130,162 @@ def test_legacy_resubmission_does_not_invent_filing_snapshot(monkeypatch):
         claim_placement.placement_cells(None, claim)[-1]
         == "Current configuration; no filing snapshot"
     )
+
+
+def test_operational_workbooks_preserve_claim_snapshot_and_show_current_uw_policy() -> None:
+    claims_spec = spec_for("claims-register")
+    underwriting_spec = spec_for("underwriting")
+    assert claims_spec is not None
+    assert underwriting_spec is not None
+
+    with SessionLocal() as db:
+        year = db.scalar(
+            select(PolicyYear).where(PolicyYear.client_id == DEMO_CLIENT_ID)
+        )
+        assert year is not None
+        product = Product(
+            id="00000000-0000-0000-0000-0000000f1705",
+            client_id=year.client_id,
+            code="TASK17",
+            display_name="Task 17 Current Product",
+            product_metadata={"line": "life"},
+        )
+        plan = Plan(
+            id="00000000-0000-0000-0000-0000000f1706",
+            product_id=product.id,
+            policy_year_id=year.id,
+            code="CORE",
+            display_name="Core",
+        )
+        term = ProductTerm(
+            id="00000000-0000-0000-0000-0000000f1707",
+            policy_year_id=year.id,
+            product_id=product.id,
+            free_cover_limit=100_000,
+            policy_number="CURRENT-POLICY",
+        )
+
+        employee = Employee(
+            id="00000000-0000-0000-0000-0000000f1704",
+            client_id=year.client_id,
+            policy_year_id=year.id,
+            staff_id="TASK17-STAFF",
+            employee_name="Task 17 Employee",
+            attribute_values={"nric": "S1700001A"},
+            derived_attribute_values={},
+        )
+
+        db.add(product)
+        db.flush()
+        db.add_all(
+            [
+                plan,
+                term,
+                employee,
+                ProductSetup(
+                    id="00000000-0000-0000-0000-0000000f1700",
+                    policy_year_id=year.id,
+                    product_code=product.code,
+                    answers={"header": {"insurer": "Current Insurer"}},
+                ),
+            ]
+        )
+        db.flush()
+        claim = Claim(
+            id="00000000-0000-0000-0000-0000000f1701",
+            client_id=year.client_id,
+            policy_year_id=year.id,
+            employee_id=employee.id,
+            claim_kind="insured",
+            case_type="claim",
+            origin="broker",
+            intake_meta={
+                "placement_snapshot": {
+                    "product_code": product.code,
+                    "policy_number": "POLICY-AT-FILING",
+                    "insurer": "Filing Insurer",
+                    "product_name": "Filed Hospital Product",
+                }
+            },
+            product_code=product.code,
+            claim_type="Hospitalisation",
+            incurred_date=date(year.year, 2, 1),
+            amount_claimed=100,
+            currency="SGD",
+            status="submitted",
+            reference_no="TASK17-CLAIM",
+        )
+        review = UnderwritingReview(
+            id="00000000-0000-0000-0000-0000000f1702",
+            client_id=year.client_id,
+            policy_year_id=year.id,
+            insurer="Current Insurer",
+            employee_id=employee.id,
+            status="pending_requirements",
+        )
+        db.add_all([claim, review])
+        db.flush()
+        case = UnderwritingCase(
+            id="00000000-0000-0000-0000-0000000f1703",
+            client_id=year.client_id,
+            policy_year_id=year.id,
+            review_id=review.id,
+            product_id=product.id,
+            employee_id=employee.id,
+            eligible_si=200_000,
+            guaranteed_si=100_000,
+            guaranteed_overridden=False,
+            accepted_si=100_000,
+            status="pending",
+        )
+        db.add(case)
+        db.flush()
+
+        claims_bytes = BytesIO()
+        build_workbook(
+            db,
+            year,
+            claims_spec,
+            BuildContext(masked=True),
+        ).save(claims_bytes)
+        claims_book = load_workbook(BytesIO(claims_bytes.getvalue()), read_only=True)
+        claims_rows = list(claims_book["All Claims"].iter_rows(values_only=True))
+        claims_header = list(claims_rows[0])
+        claim_row = next(
+            row
+            for row in claims_rows[1:]
+            if row[claims_header.index("Reference No.")] == "TASK17-CLAIM"
+        )
+        assert claim_row[claims_header.index("Policy Number")] == "POLICY-AT-FILING"
+        assert claim_row[claims_header.index("Insurer")] == "Filing Insurer"
+        assert claim_row[claims_header.index("Product Name")] == "Filed Hospital Product"
+        assert claim_row[claims_header.index("Placement Source")] == "At filing"
+
+        underwriting_bytes = BytesIO()
+        build_workbook(
+            db,
+            year,
+            underwriting_spec,
+            BuildContext(masked=True),
+        ).save(underwriting_bytes)
+        underwriting_book = load_workbook(
+            BytesIO(underwriting_bytes.getvalue()), read_only=True
+        )
+        uw_rows = list(
+            underwriting_book["Underwriting"].iter_rows(values_only=True)
+        )
+        uw_header = list(uw_rows[0])
+        uw_row = next(
+            row
+            for row in uw_rows[1:]
+            if row[uw_header.index("Product Type")] == product.code
+        )
+        assert uw_row[uw_header.index("Policy Number")] == "CURRENT-POLICY"
+        assert uw_row[uw_header.index("Policy Number Source")] == "Current configuration"
+        assert uw_row[uw_header.index("Name of Insurer")] == "Current Insurer"
+        assert uw_row[uw_header.index("Product Name")] == product.display_name
+
+        db.rollback()
 
 
 def test_premium_breakdown_gst_unknown_prices_and_formula_safety(monkeypatch):
