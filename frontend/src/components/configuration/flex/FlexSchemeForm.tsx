@@ -373,7 +373,10 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
 
           <div className="grid gap-3 border-t border-border pt-3 sm:grid-cols-2 xl:grid-cols-[minmax(9rem,1fr)_repeat(4,minmax(7rem,9rem))] xl:items-end">
             <div className="font-medium text-foreground sm:col-span-2 xl:col-span-1 xl:self-center">
-              Eligibility age
+              <div>Eligibility age</div>
+              <div className="text-xs font-normal text-muted-foreground">
+                Age next birthday · inclusive
+              </div>
             </div>
             {(["min", "max"] as const).map((bound) => (
               <div key={bound} className="space-y-1">
