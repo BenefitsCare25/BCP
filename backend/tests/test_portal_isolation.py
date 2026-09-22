@@ -330,6 +330,7 @@ def test_amending_an_unknown_claim_404(anon: TestClient):
     assert (
         anon.delete(
             f"/api/v1/portal/claims/{ghost}/documents/{ghost}",
+            params={"expected_revision": 0},
             headers=_auth(ACC_ALICE),
         ).status_code
         == 404

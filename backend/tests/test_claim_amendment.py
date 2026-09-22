@@ -43,6 +43,7 @@ from app.models import (  # noqa: E402
     Employee,
     MemberAccount,
     PolicyYear,
+    StoredDocument,
 )
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from app.schemas.api import (  # noqa: E402
@@ -197,6 +198,20 @@ def broker() -> TestClient:
         broker_firm_id=DEMO_BROKER_FIRM_ID,
         client_id=DEMO_CLIENT_ID,
         role="broker_admin",
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture
+def viewer() -> TestClient:
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-000000000009",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=DEMO_CLIENT_ID,
+        role="broker_viewer",
     )
     try:
         yield TestClient(app)
@@ -589,6 +604,7 @@ def test_removing_the_only_receipt_from_a_submitted_claim_is_refused(
 
     res = anon.delete(
         f"/api/v1/portal/claims/{claim['id']}/documents/{doc_id}",
+        params={"expected_revision": claim["revision"]},
         headers=_auth(),
     )
     assert res.status_code == 409
@@ -602,9 +618,11 @@ def test_a_replaced_receipt_can_be_removed(anon: TestClient):
     claim = _submitted(anon, b" doc-swap")
     wrong = _get(anon, claim["id"])["documents"][0]["id"]
     assert _upload(anon, claim["id"], b" doc-swap-2").status_code == 200
+    current = _get(anon, claim["id"])
 
     res = anon.delete(
         f"/api/v1/portal/claims/{claim['id']}/documents/{wrong}",
+        params={"expected_revision": current["revision"]},
         headers=_auth(),
     )
     assert res.status_code == 204, res.text
@@ -621,6 +639,7 @@ def test_a_draft_may_be_emptied(anon: TestClient):
 
     res = anon.delete(
         f"/api/v1/portal/claims/{claim['id']}/documents/{doc_id}",
+        params={"expected_revision": claim["revision"]},
         headers=_auth(),
     )
     assert res.status_code == 204, res.text
@@ -663,8 +682,105 @@ def test_a_referral_letter_cannot_be_deleted_through_a_claim(anon: TestClient):
     claim = _submitted(anon, b" ref-claim")
     assert anon.delete(
         f"/api/v1/portal/claims/{claim['id']}/documents/{referral_id}",
+        params={"expected_revision": claim["revision"]},
         headers=_auth(),
     ).status_code == 404
+
+
+def test_member_document_removal_refuses_a_stale_claim_revision(anon: TestClient):
+    claim = _submitted(anon, b" doc-stale")
+    old = _get(anon, claim["id"])["documents"][0]["id"]
+    assert _upload(anon, claim["id"], b" doc-stale-2").status_code == 200
+
+    res = anon.delete(
+        f"/api/v1/portal/claims/{claim['id']}/documents/{old}",
+        params={"expected_revision": claim["revision"]},
+        headers=_auth(),
+    )
+    assert res.status_code == 409
+    assert _code(res) == "claim_amended"
+    assert len(_get(anon, claim["id"])["documents"]) == 2
+
+
+def test_broker_replacement_removal_retains_audit_after_blob_purge(
+    anon: TestClient, broker: TestClient
+):
+    from app.services.claims import retry_pending_document_deletes
+
+    claim = _submitted(anon, b" broker-replace")
+    first = broker.get(f"/api/v1/claims/{claim['id']}")
+    assert first.status_code == 200, first.text
+    old = first.json()["documents"][0]
+    assert old["removal_allowed"] is False
+    assert "Add the replacement first" in old["removal_reason"]
+
+    added = broker.post(
+        f"/api/v1/claims/{claim['id']}/documents",
+        files={"file": ("corrected.pdf", PDF + b" corrected", "application/pdf")},
+    )
+    assert added.status_code == 201, added.text
+    current = broker.get(f"/api/v1/claims/{claim['id']}").json()
+    old = next(item for item in current["documents"] if item["id"] == old["id"])
+    assert old["removal_allowed"] is True
+
+    removed = broker.delete(
+        f"/api/v1/claims/{claim['id']}/documents/{old['id']}",
+        params={"expected_revision": current["revision"]},
+    )
+    assert removed.status_code == 204, removed.text
+
+    with SessionLocal() as session:
+        stored = session.get(StoredDocument, old["id"])
+        assert stored is not None and stored.storage_state == "delete_pending"
+        audit = (
+            session.query(AuditLog)
+            .filter_by(entity_id=claim["id"], action="claim.document_removed")
+            .order_by(AuditLog.created_at.desc())
+            .first()
+        )
+        assert audit is not None
+        assert audit.before == {
+            "file_name": old["file_name"],
+            "sha256": old["sha256"],
+            "doc_type": old["doc_type"],
+        }
+        assert retry_pending_document_deletes(session) >= 1
+        session.commit()
+        assert session.get(StoredDocument, old["id"]) is None
+        assert session.get(AuditLog, audit.id) is not None
+
+
+def test_post_decision_evidence_is_retained(
+    anon: TestClient, broker: TestClient
+):
+    claim = _submitted(anon, b" broker-retained")
+    assert broker.post(
+        f"/api/v1/claims/{claim['id']}/decision", json={"action": "approve"}
+    ).status_code == 200
+    current = broker.get(f"/api/v1/claims/{claim['id']}").json()
+    document = current["documents"][0]
+    assert document["removal_allowed"] is False
+    assert "retained after a decision" in document["removal_reason"]
+
+    path = f"/api/v1/claims/{claim['id']}/documents/{document['id']}"
+    blocked = broker.delete(
+        path, params={"expected_revision": current["revision"]}
+    )
+    assert blocked.status_code == 409
+    assert _code(blocked) == "document_retained"
+    with SessionLocal() as session:
+        assert session.get(StoredDocument, document["id"]).storage_state == "available"
+
+
+def test_broker_viewer_cannot_remove_claim_evidence(
+    anon: TestClient, viewer: TestClient
+):
+    claim = _submitted(anon, b" viewer-retained")
+    document = _get(anon, claim["id"])["documents"][0]
+    assert viewer.delete(
+        f"/api/v1/claims/{claim['id']}/documents/{document['id']}",
+        params={"expected_revision": claim["revision"]},
+    ).status_code == 403
 
 
 # ── The record ───────────────────────────────────────────────────────────────

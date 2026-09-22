@@ -139,9 +139,9 @@ function AttachControl({
  * is only an invitation to keep clicking at it. The preview loses nothing: it
  * still shows the file.
  *
- * The server refuses a delete that would leave a required slot empty on a sent
- * claim (409 `documents_required`), so this does not try to predict which
- * removals are allowed — one rule, server-side, reported when it fires.
+ * The server computes each document's removal affordance and reason. The
+ * client renders that answer directly, while the delete endpoint repeats the
+ * same rule so a stale screen cannot bypass retained-evidence restrictions.
  */
 function RemoveDocument({
   docId,

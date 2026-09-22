@@ -1128,9 +1128,14 @@ export function useAmendClaim() {
 export function useDeleteClaimDocument() {
   const qc = usePortalQueryInvalidator();
   return useMutation({
-    mutationFn: (input: { claimId: string; docId: string }) =>
+    mutationFn: (input: {
+      claimId: string;
+      docId: string;
+      expectedRevision: number;
+    }) =>
       portalApi.delete<void>(
-        `/portal/claims/${input.claimId}/documents/${input.docId}`,
+        `/portal/claims/${input.claimId}/documents/${input.docId}` +
+          `?expected_revision=${input.expectedRevision}`,
       ),
     onSuccess: qc,
     meta: { localErrorHandling: true },

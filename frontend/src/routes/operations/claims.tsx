@@ -940,19 +940,17 @@ function QueueTab({
                   )}
                 </DetailSection>
                 </div>
-                {selectedDocuments.length > 0 && (
-                  <div
-                    className="flex min-h-0 min-w-0 border-t border-border bg-card md:border-l md:border-t-0"
-                    data-testid="claim-document-pane"
-                  >
-                    <ClaimDocumentViewer
-                      claimId={selected.id}
-                      documents={selectedDocuments}
-                      revision={selected.revision}
-                      canManage={!readOnly}
-                    />
-                  </div>
-                )}
+                <div
+                  className="flex min-h-0 min-w-0 border-t border-border bg-card md:border-l md:border-t-0"
+                  data-testid="claim-document-pane"
+                >
+                  <ClaimDocumentViewer
+                    claimId={selected.id}
+                    documents={selectedDocuments}
+                    revision={selected.revision}
+                    canManage={!readOnly}
+                  />
+                </div>
               </div>
 
               {/* Pinned: deciding is why this sheet is open, but the buttons sat

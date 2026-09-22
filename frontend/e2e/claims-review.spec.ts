@@ -547,6 +547,9 @@ test("claim workspace keeps form details readable and documents in context", asy
     size_bytes: 68,
     sha256: "mock-sha",
     created_at: "2026-06-27T08:00:00",
+    removal_allowed: false,
+    removal_reason:
+      "Add the replacement first, then remove this one; required evidence must remain attached.",
   };
   const secondDocument = {
     ...document,
@@ -554,6 +557,8 @@ test("claim workspace keeps form details readable and documents in context", asy
     file_name: "hospital-summary.png",
     doc_type: "discharge_summary",
     sha256: "mock-sha-2",
+    removal_allowed: true,
+    removal_reason: null,
   };
   const pdfDocument = {
     ...document,
@@ -562,6 +567,8 @@ test("claim workspace keeps form details readable and documents in context", asy
     doc_type: "itemised_tax_invoice",
     mime_type: "application/pdf",
     sha256: "mock-sha-3",
+    removal_allowed: true,
+    removal_reason: null,
   };
   const baseClaim = {
     client_id: "00000000-0000-0000-0000-000000000011",
@@ -789,6 +796,53 @@ test("claim workspace keeps form details readable and documents in context", asy
       });
     },
   );
+  let replacementKeptDocumentType = false;
+  await page.route(
+    /\/api\/v1\/claims\/mock-insured\/documents$/,
+    async (route) => {
+      const body = route.request().postDataBuffer()?.toString("utf8") ?? "";
+      replacementKeptDocumentType = body.includes("finalised_tax_invoice");
+      const replacement = {
+        ...document,
+        id: "mock-replacement",
+        file_name: "corrected-invoice.pdf",
+        mime_type: "application/pdf",
+        sha256: "mock-replacement-sha",
+        removal_allowed: true,
+        removal_reason: null,
+      };
+      insuredClaim = {
+        ...insuredClaim,
+        revision: insuredClaim.revision + 1,
+        documents: [
+          ...insuredClaim.documents.map((item) =>
+            item.id === document.id
+              ? { ...item, removal_allowed: true, removal_reason: null }
+              : item,
+          ),
+          replacement,
+        ],
+      };
+      await route.fulfill({ status: 201, json: replacement });
+    },
+  );
+  let removalRevision: string | null = null;
+  await page.route(
+    /\/api\/v1\/claims\/mock-insured\/documents\/mock-document(?:\?.*)?$/,
+    async (route) => {
+      removalRevision = new URL(route.request().url()).searchParams.get(
+        "expected_revision",
+      );
+      insuredClaim = {
+        ...insuredClaim,
+        revision: insuredClaim.revision + 1,
+        documents: insuredClaim.documents.filter(
+          (item) => item.id !== document.id,
+        ),
+      };
+      await route.fulfill({ status: 204, body: "" });
+    },
+  );
   await page.route(/\/api\/v1\/claims\/mock-insured\/assessment$/, async (route) => {
     const body = route.request().postDataJSON() as { admin_remarks?: string };
     insuredClaim = { ...insuredClaim, admin_remarks: body.admin_remarks ?? null };
@@ -834,6 +888,10 @@ test("claim workspace keeps form details readable and documents in context", asy
   });
   await expect(invoicePreview).toBeVisible();
   await expect(invoicePreview).toHaveCSS("object-fit", "contain");
+  await expect(workspace.getByText(/Add the replacement first/)).toBeVisible();
+  await expect(
+    workspace.getByRole("button", { name: "Remove attachment" }),
+  ).toBeDisabled();
 
   const openInvoice = workspace.getByRole("button", {
     name: "Open hospital-invoice.png full screen",
@@ -904,6 +962,33 @@ test("claim workspace keeps form details readable and documents in context", asy
   );
   await pdfViewer.getByRole("button", { name: "Close full-screen preview" }).click();
   await workspace.getByRole("tab", { name: "hospital-invoice.png" }).click();
+  await workspace.getByLabel("Add correction or replacement").setInputFiles({
+    name: "corrected-invoice.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 corrected\n%%EOF", "utf8"),
+  });
+  await expect.poll(() => replacementKeptDocumentType).toBe(true);
+  await expect(
+    workspace.getByRole("heading", { name: "Documents (4)" }),
+  ).toBeVisible();
+  await expect(
+    workspace.getByRole("button", { name: "Remove attachment" }),
+  ).toBeEnabled();
+  await workspace.getByRole("button", { name: "Remove attachment" }).click();
+  const removalDialog = page.getByRole("dialog", { name: "Remove attachment?" });
+  await expect(removalDialog).toContainText(
+    "The file will be deleted; its removal remains in the audit history.",
+  );
+  await removalDialog
+    .getByRole("button", { name: "Remove attachment" })
+    .click();
+  await expect.poll(() => removalRevision).toBe("2");
+  await expect(
+    workspace.getByRole("tab", { name: "hospital-invoice.png" }),
+  ).toHaveCount(0);
+  await expect(
+    workspace.getByRole("heading", { name: "Documents (3)" }),
+  ).toBeVisible();
   await expect(workspace.getByText("Correct the claim", { exact: true })).toHaveCount(0);
   await expect(workspace.getByText("Assessment", { exact: true })).toHaveCount(0);
 
@@ -932,6 +1017,9 @@ test("claim workspace keeps form details readable and documents in context", asy
   await workspace.getByRole("button", { name: "Close" }).click();
   await page.getByText("Dental", { exact: true }).first().click();
   const flexWorkspace = page.getByRole("dialog", { name: "Dental" });
+  const emptyDocumentPane = flexWorkspace.getByTestId("claim-document-pane");
+  await expect(emptyDocumentPane.getByText("No documents were submitted")).toBeVisible();
+  await expect(emptyDocumentPane.getByRole("button", { name: "Add document" })).toBeVisible();
   await expect(flexWorkspace.getByText("Taxable", { exact: true })).toBeVisible();
   await expect(flexWorkspace.getByText("CPF claimable", { exact: true })).toBeVisible();
   await expect(flexWorkspace.getByText("Admission date", { exact: true })).toHaveCount(0);

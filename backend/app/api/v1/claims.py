@@ -1239,7 +1239,7 @@ async def upload_claim_document(
 @router.delete("/{claim_id}/documents/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_claim_document(
     doc_id: str,
-    expected_revision: int = Query(ge=1),
+    expected_revision: int = Query(ge=0),
     claim: Claim = Depends(load_claim),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),

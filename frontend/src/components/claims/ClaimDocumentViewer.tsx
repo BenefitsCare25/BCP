@@ -58,6 +58,31 @@ export function ClaimDocumentViewer({
     [documents, selectedId],
   );
 
+  const addReplacement = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error("Choose a document smaller than 15 MB.");
+      return;
+    }
+    setDocumentBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      if (selected?.doc_type) form.append("doc_type", selected.doc_type);
+      await api.upload(`/claims/${claimId}/documents`, form);
+      await refresh();
+      toast.success(
+        selected
+          ? "Document added. You can now remove the earlier attachment if permitted."
+          : "Document added.",
+      );
+    } catch (caught) {
+      toast.error(formatError(caught));
+    } finally {
+      setDocumentBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!selectedId || documents.some((document) => document.id === selectedId)) {
       return;
@@ -106,6 +131,32 @@ export function ClaimDocumentViewer({
         <p className="max-w-md text-sm text-muted-foreground">
           No documents were submitted with this claim.
         </p>
+        {canManage && (
+          <>
+            <input
+              ref={replacementInput}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp"
+              className="hidden"
+              aria-label="Add claim document"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                void addReplacement(file);
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={documentBusy}
+              loading={documentBusy}
+              onClick={() => replacementInput.current?.click()}
+            >
+              Add document
+            </Button>
+          </>
+        )}
       </section>
     );
   }
@@ -172,20 +223,18 @@ export function ClaimDocumentViewer({
       {selected && <div className="space-y-2 border-b border-border px-4 py-3 text-xs text-muted-foreground">
         <p>{selected.removal_reason ?? "This attachment may be removed while required evidence remains. To replace it, upload the corrected file first."}</p>
         {canManage && <div className="flex flex-wrap gap-2">
-          <input ref={replacementInput} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={async (event) => {
-            const file = event.target.files?.[0]; event.target.value = "";
-            if (!file) return;
-            if (file.size > 15 * 1024 * 1024) { toast.error("Choose a document smaller than 15 MB."); return; }
-            setDocumentBusy(true);
-            try {
-              const form = new FormData(); form.append("file", file);
-              if (selected.doc_type) form.append("doc_type", selected.doc_type);
-              await api.upload(`/claims/${claimId}/documents`, form);
-              await refresh();
-              toast.success("Document added. You can now remove the earlier attachment if permitted.");
-            } catch (error) { toast.error(formatError(error)); }
-            finally { setDocumentBusy(false); }
-          }} />
+          <input
+            ref={replacementInput}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            className="hidden"
+            aria-label="Add correction or replacement"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              void addReplacement(file);
+            }}
+          />
           <Button type="button" size="sm" variant="outline" disabled={documentBusy} onClick={() => replacementInput.current?.click()}>Add correction / replacement</Button>
           <Button type="button" size="sm" variant="outline" disabled={documentBusy || !selected.removal_allowed || revision == null} onClick={() => setConfirmRemoval(true)}>Remove attachment</Button>
         </div>}

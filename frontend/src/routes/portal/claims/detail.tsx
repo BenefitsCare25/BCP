@@ -202,7 +202,11 @@ export function PortalClaimDetailPage() {
   const removeDocument = async (docId: string) => {
     setRemovingDocId(docId);
     try {
-      await removeDoc.mutateAsync({ claimId: data.id, docId });
+      await removeDoc.mutateAsync({
+        claimId: data.id,
+        docId,
+        expectedRevision: data.revision,
+      });
       await refetchAsSeen();
       toast.success("Removed");
     } catch (err) {

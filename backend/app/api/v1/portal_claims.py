@@ -1181,6 +1181,7 @@ def amend_my_claim(
 def delete_my_claim_document(
     claim_id: str,
     doc_id: str,
+    expected_revision: int = Query(ge=0),
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> None:
@@ -1200,6 +1201,7 @@ def delete_my_claim_document(
     if claim.status == CLAIM_STATUS_DRAFT:
         resolve_member_employee(db, member, requires=Capability.CLAIM)
     assert_member_may_amend(claim)
+    assert_claim_revision(claim, expected_revision)
 
     doc = db.get(StoredDocument, doc_id)
     # This claim's OWN attachments only. The member-level referral letter has
