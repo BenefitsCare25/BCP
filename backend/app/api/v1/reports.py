@@ -502,7 +502,11 @@ def list_report_workbooks(
             # the insurers the download will accept.
             "insurers": insurers if spec.requires_insurer else [],
             "sheets": [
-                {"title": s.title, "description": s.description}
+                {
+                    "title": s.title,
+                    "description": s.description,
+                    "columns": list(s.columns),
+                }
                 for s in spec.sheets
             ],
         }

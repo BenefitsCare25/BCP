@@ -14,17 +14,8 @@ import {
   Wallet,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   PageTabsBar,
   Tabs,
@@ -33,6 +24,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { ReportWorkbookRow } from "@/components/operations/ReportWorkbookRow";
+import { ReportContentsHint } from "@/components/operations/ReportContentsHint";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import {
   ReportVersionActions,
@@ -107,41 +99,47 @@ interface ReportRow {
   action: React.ReactNode;
 }
 
-function ReportTable({ rows }: { rows: ReportRow[] }) {
+function ReportTable({
+  rows,
+  footer,
+}: {
+  rows: ReportRow[];
+  footer?: React.ReactNode;
+}) {
   return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead>Report</TableHead>
-            <TableHead className="w-[120px]">Format</TableHead>
-            <TableHead className="w-[190px] text-right">Action</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.title}>
-              <TableCell>
-                <div className="flex items-start gap-3">
-                  <r.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                  <div className="space-y-0.5">
-                    <div className="font-medium text-foreground">{r.title}</div>
-                    <div className="text-xs leading-relaxed text-muted-foreground">
-                      {r.description}
-                    </div>
-                  </div>
-                </div>
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">{r.format}</Badge>
-              </TableCell>
-              <TableCell className="text-right">
-                <div className="flex justify-end">{r.action}</div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className="overflow-visible rounded-xl border border-border bg-card">
+      <ul className="divide-y divide-border">
+        {rows.map((r) => (
+          <li
+            key={r.title}
+            className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3"
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <r.icon
+                className="size-4 shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="truncate text-sm font-medium text-foreground">
+                  {r.title}
+                </span>
+                <span className="text-2xs uppercase tracking-wide text-subtle">
+                  {r.format}
+                </span>
+                <ReportContentsHint
+                  label={r.title}
+                  format={r.format}
+                  description={r.description}
+                />
+              </div>
+            </div>
+            <div className="flex w-full justify-end sm:w-auto sm:shrink-0">
+              {r.action}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {footer}
     </div>
   );
 }
@@ -223,22 +221,18 @@ function NoYearNotice() {
  *  supports), so a section wrapping them needs none. */
 function ReportSection({
   title,
-  hint,
   controls,
   children,
 }: {
   title: string;
-  hint: string;
+  hint?: string;
   controls?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-          <p className="text-xs text-muted-foreground">{hint}</p>
-        </div>
+        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         {controls}
       </div>
       {children}
@@ -260,7 +254,7 @@ function Workbooks({ keys, year }: { keys: string[]; year: PolicyYear }) {
   const shown = keys.map((k) => byKey.get(k)).filter((w) => w !== undefined);
   if (!shown.length) return null;
   return (
-    <div className="space-y-2">
+    <div className="divide-y divide-border overflow-visible rounded-xl border border-border bg-card">
       {shown.map((wb) => (
         <ReportWorkbookRow
           key={wb.key}
@@ -335,16 +329,27 @@ function PaReports({ year }: { year: PolicyYear }) {
   // two concepts offered by three controls that did not govern each other.
   const insurers = readiness?.insurers ?? [];
   const missingInsurer = readiness?.products_without_insurer ?? [];
-
-  return (
-    <div className="space-y-6">
-      <ReportSection title="Premium breakdown" hint="Member premiums, GST, covered dependants and Flex charges, grouped by insurer and cost centre. Missing prices are identified explicitly.">
+  const premiumRows: ReportRow[] = [
+    {
+      icon: Coins,
+      title: "Premium Breakdown",
+      description:
+        "Member premiums, GST, covered dependants and Flex charges, grouped by insurer and cost centre. Missing prices are identified explicitly.",
+      format: "XLSX",
+      action: (
         <ReportDownloadButton
           path={`/policy-years/${year.id}/reports/premium-breakdown`}
           filename={`premium-breakdown-${stamp(year)}.xlsx`}
-          label="Download premium breakdown"
+          label="Download"
+          size="sm"
         />
-      </ReportSection>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <ReportTable rows={premiumRows} />
       {isError && (
         <div className="flex items-center gap-2 rounded-lg border border-error/40 bg-error-soft/40 px-3 py-2 text-sm text-error">
           <AlertTriangle className="size-4 shrink-0" />
@@ -505,16 +510,16 @@ function FlexReports({
         title="Member benefits selection"
         hint="What members chose, and what it costs their wallet."
       >
-        <div className="rounded-lg border border-border bg-card">
-          <ReportTable rows={electionRows} />
-          <SubmissionRecord
+        <ReportTable
+          rows={electionRows}
+          footer={<SubmissionRecord
             policyYearId={year.id}
             reportType="benefit_selection"
             scopeKey={null}
             hasMovement={false}
             filesOnDownload={nric === "full"}
-          />
-        </div>
+          />}
+        />
       </ReportSection>
       <ReportSection
         title="Wallet utilisation"

@@ -109,6 +109,10 @@ class SheetSpec:
     # is data and not a frontend constant is that a sheet added here must not
     # need a matching edit in TypeScript to be described.
     description: str = ""
+    # Stable, decision-useful columns shown in the Reports Center contents
+    # preview. Dynamic product/insurer columns are named as groups because their
+    # exact headers depend on the selected year and insurer.
+    columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -325,16 +329,30 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Employees",
                 _employee_listing,
                 "Covered employees with member IDs and sums insured.",
+                (
+                    "Staff ID", "Employee Name", "Identification No.",
+                    "Employment details", "Insurer Member ID", "Salary",
+                    "Product plan / cover",
+                ),
             ),
             SheetSpec(
                 "Dependants",
                 _dependant_listing,
                 "Covered spouses and children, with relationship and cover.",
+                (
+                    "Staff ID", "Employee Name", "Dependant Name",
+                    "Identification No.", "Relationship", "Effective dates",
+                    "Product plan / cover",
+                ),
             ),
             SheetSpec(
                 "Benefit Selection",
                 _benefit_selection,
                 "What each member elected, plus buy/sell leave.",
+                (
+                    "Staff ID", "Employee Name", "Status", "Selection",
+                    "Submission", "Buy / Sell Leave", "Price Tag",
+                ),
             ),
         ],
     ),
@@ -351,11 +369,21 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Employees",
                 _built_in_employees,
                 "Everyone on file, with each product's default plan.",
+                (
+                    "Staff ID", "Employee Name", "Identification No.",
+                    "Employment details", "Contact details", "Member IDs",
+                    "Default plans",
+                ),
             ),
             SheetSpec(
                 "Dependants",
                 _built_in_dependants,
                 "Every dependant on file, including those nobody covers yet.",
+                (
+                    "Staff ID", "Employee Name", "Dependant Name",
+                    "Identification No.", "Relationship", "Status",
+                    "Default plans",
+                ),
             ),
             # These two builders take no masking parameter — they always mask.
             # Said in the description because the workbook DOES offer an
@@ -367,11 +395,19 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Employee Coverage",
                 _employee_coverage,
                 "Matched products per employee. Always NRIC-masked.",
+                (
+                    "Staff ID", "Employee Name", "Masked ID", "Category",
+                    "Matched products", "Assigned plans",
+                ),
             ),
             SheetSpec(
                 "Dependant Coverage",
                 _dependant_coverage,
                 "Covered dependants grouped by their employee. Always masked.",
+                (
+                    "Staff ID", "Employee Name", "Dependant Name",
+                    "Relationship", "Masked ID", "Covered products",
+                ),
             ),
         ],
     ),
@@ -387,21 +423,37 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "All Claims",
                 _all_claims,
                 "Every insured claim: reference, SLA dates, insurer and payment.",
+                (
+                    "Claim Reference", "Employee", "Claim Type", "Insurer",
+                    "Status", "Incurred / Approved", "SLA dates", "Payment",
+                ),
             ),
             SheetSpec(
                 "Inpatient",
                 _inpatient_claims,
                 "Hospitalisation and day surgery, with sector and admission.",
+                (
+                    "Claim Reference", "Employee", "Admission / Discharge",
+                    "Hospital", "Sector", "Diagnosis", "Status", "Amounts",
+                ),
             ),
             SheetSpec(
                 "Outpatient",
                 _outpatient_claims,
                 "GP, specialist and dental, with the referral position.",
+                (
+                    "Claim Reference", "Employee", "Visit Date", "Provider",
+                    "Referral", "Claim Type", "Status", "Amounts",
+                ),
             ),
             SheetSpec(
                 "By Employee",
                 _employee_claims,
                 "Insured AND flex together — a member's whole year on one page.",
+                (
+                    "Staff ID", "Employee Name", "Funding", "Claim Type",
+                    "Claim Date", "Status", "Incurred / Approved",
+                ),
             ),
             # NOT redundant with All Claims, and its own row on the Reports page
             # was deleted in the consolidation — which left the endpoint behind
@@ -413,6 +465,10 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Adjudication",
                 _adjudication,
                 "Flat register keyed by claim id and invoice number.",
+                (
+                    "Claim ID", "Invoice Number", "Employee", "Claim Type",
+                    "Service Date", "Status", "Amounts", "Assessment",
+                ),
             ),
         ],
     ),
@@ -427,11 +483,19 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Summary",
                 _wallet_summary,
                 "One row per member: allocated, spent, in flight, left.",
+                (
+                    "Staff ID", "Employee Name", "Opening Allocation",
+                    "Spent", "Pending", "Available", "Closing Balance",
+                ),
             ),
             SheetSpec(
                 "Ledger",
                 _wallet_ledger,
                 "Every dated movement: allocation, price tags, leave, claims.",
+                (
+                    "Date", "Staff ID", "Employee Name", "Movement Type",
+                    "Reference", "Debit", "Credit", "Balance",
+                ),
             ),
         ],
     ),
@@ -447,11 +511,19 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Summary",
                 _leaver_summary,
                 "Cover window and closing wallet position per leaver.",
+                (
+                    "Staff ID", "Employee Name", "Cover Start", "Last Day",
+                    "Wallet Allocation", "Spent", "Pending", "Balance",
+                ),
             ),
             SheetSpec(
                 "Claims",
                 _leaver_details,
                 "Their claims, including anything unsettled at cover end.",
+                (
+                    "Staff ID", "Employee Name", "Claim Reference",
+                    "Claim Type", "Status", "Incurred / Approved", "Outstanding",
+                ),
             ),
         ],
     ),
@@ -467,6 +539,10 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Underwriting",
                 _underwriting,
                 "Cases, decisions and the guaranteed / accepted sums insured.",
+                (
+                    "Employee / Dependant", "Product", "Insurer", "Case Status",
+                    "Guaranteed Sum", "Requested Sum", "Accepted Sum", "Decision",
+                ),
             ),
         ],
     ),
@@ -489,16 +565,28 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                 "Portal Sign-ins",
                 _portal_activity,
                 "Sign-ins across every surface, including failures and lockouts.",
+                (
+                    "Timestamp", "User", "Email", "Surface", "Event",
+                    "Result", "IP Address",
+                ),
             ),
             SheetSpec(
                 "Company Changes",
                 _company_activity,
                 "Configuration and administration changes, and who made them.",
+                (
+                    "Timestamp", "Actor", "Action", "Entity Type", "Entity",
+                    "Before", "After",
+                ),
             ),
             SheetSpec(
                 "Portal Access",
                 _portal_access,
                 "Who is provisioned, unsent, or has never signed in.",
+                (
+                    "Staff ID", "Employee Name", "Email", "Account Status",
+                    "Invite Status", "Last Sign-in", "Access",
+                ),
             ),
         ],
     ),

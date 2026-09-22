@@ -1,4 +1,5 @@
 """FastAPI entry point for the Inspro backend."""
+
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +50,7 @@ from app.api.v1 import (
     flex_schemes,
     hr_admin,
     hr_auth,
+    hr_claims,
     insurers,
     leave_policies,
     matches,
@@ -279,6 +281,7 @@ def create_app() -> FastAPI:
     # HR credential-login surface — public auth, its own tenant + lockout guards
     # (mirrors portal_auth: registered OUTSIDE the broker require_write_access gate).
     app.include_router(hr_auth.router, prefix=api_prefix)
+    app.include_router(hr_claims.router, prefix=api_prefix)
     app.include_router(portal.router, prefix=api_prefix)
     app.include_router(portal_claims.router, prefix=api_prefix)
     app.include_router(portal_claims.options_router, prefix=api_prefix)

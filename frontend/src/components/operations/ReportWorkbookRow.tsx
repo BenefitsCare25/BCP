@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Layers } from "lucide-react";
+import { FileSpreadsheet } from "lucide-react";
+import { ReportContentsHint } from "@/components/operations/ReportContentsHint";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { SubmissionRecord } from "@/components/operations/ReportVersionActions";
 import { Segmented } from "@/components/ui/segmented";
@@ -72,7 +73,6 @@ export function ReportWorkbookRow({
   const [scope, setScope] = useState<"all" | "active">("all");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const [open, setOpen] = useState(false);
   const qc = useQueryClient();
 
   const blocked = workbook.requires_insurer && !insurer;
@@ -106,45 +106,27 @@ export function ReportWorkbookRow({
     : "";
 
   return (
-    <div className="rounded-lg border border-border bg-card">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 px-4 py-3">
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <Layers className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-baseline gap-x-2">
-              <p className="text-sm font-medium text-foreground">
-                {workbook.label}
-              </p>
-              <span className="text-2xs uppercase tracking-wide text-subtle">
-                .xlsx ·{" "}
-                {workbook.sheets.length === 1
-                  ? "1 sheet"
-                  : `${workbook.sheets.length} sheets`}
-              </span>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {workbook.description}
+    <div data-report-workbook={workbook.key}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 px-4 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <FileSpreadsheet
+            className="size-4 shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="truncate text-sm font-medium text-foreground">
+              {workbook.label}
             </p>
-            {/* The sheet names, on the row rather than behind the disclosure:
-                naming the tabs is the entire reason these are workbooks and not
-                zips, so a broker must be able to see them without a click. The
-                disclosure only adds what each one holds. */}
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              aria-expanded={open}
-              className="group flex items-start gap-1 text-left text-xs text-muted-foreground hover:text-foreground"
-            >
-              <ChevronRight
-                className={`mt-0.5 size-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`}
-              />
-              <span>
-                Sheets:{" "}
-                <span className="font-medium text-foreground">
-                  {workbook.sheets.map((s) => s.title).join(" · ")}
-                </span>
-              </span>
-            </button>
+            <span className="text-2xs uppercase tracking-wide text-subtle">
+              XLSX · {workbook.sheets.length}{" "}
+              {workbook.sheets.length === 1 ? "sheet" : "sheets"}
+            </span>
+            <ReportContentsHint
+              label={workbook.label}
+              format="XLSX"
+              description={workbook.description}
+              sheets={workbook.sheets}
+            />
           </div>
         </div>
 
@@ -237,17 +219,6 @@ export function ReportWorkbookRow({
           disabled={blocked}
           filesOnDownload={!workbook.supports_masking || !masked}
         />
-      )}
-
-      {open && (
-        <dl className="space-y-1.5 border-t border-border px-4 py-3 pl-11">
-          {workbook.sheets.map((sheet) => (
-            <div key={sheet.title} className="flex flex-wrap gap-x-2 text-xs">
-              <dt className="font-medium text-foreground">{sheet.title}</dt>
-              <dd className="text-muted-foreground">{sheet.description}</dd>
-            </div>
-          ))}
-        </dl>
       )}
     </div>
   );

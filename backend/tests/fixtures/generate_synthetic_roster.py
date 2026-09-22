@@ -5,7 +5,7 @@ shaped like the STM template instead. Output is two `.xlsx` files matching
 `EMPLOYEE_COLUMN_MAP` and `DEPENDANT_COLUMN_MAP` headers exactly so
 `parse_employee_workbook` / `parse_dependant_workbook` read them unchanged.
 
-Run: `uv run python tests/fixtures/generate_synthetic_roster.py [rows]`
+Run: `uv run python tests/fixtures/generate_synthetic_roster.py [rows] [output-dir]`
 """
 from __future__ import annotations
 
@@ -153,7 +153,8 @@ def generate(rows: int, out_dir: Path = OUTPUT_DIR) -> tuple[Path, Path]:
 
 def main() -> None:
     rows = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_ROWS
-    emp, dep = generate(rows)
+    out_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else OUTPUT_DIR
+    emp, dep = generate(rows, out_dir)
     print(f"Wrote {emp} and {dep}")
 
 

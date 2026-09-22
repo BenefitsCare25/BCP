@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ArrowLeftRight,
   Download,
@@ -27,6 +27,7 @@ import {
 } from "@/api/reports";
 import { parseServerDate } from "@/lib/attention";
 import { formatError } from "@/lib/errors";
+import { formatPolicyRange } from "@/lib/policy-year";
 import { usePolicyYears } from "@/api/hooks";
 import { Label } from "@/components/ui/label";
 
@@ -161,6 +162,7 @@ export function SubmissionRecord({
     !disabled,
   );
   const [historyOpen, setHistoryOpen] = useState(false);
+  const historyTriggerRef = useRef<HTMLButtonElement>(null);
 
   const latest = status.data?.latest ?? null;
   const isStale = status.data?.is_stale ?? false;
@@ -236,11 +238,13 @@ export function SubmissionRecord({
 
       {latest && (
         <button
+          ref={historyTriggerRef}
           type="button"
-          className="ml-auto inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+          className="ml-auto inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={() => setHistoryOpen(true)}
+          aria-label="Open submission history"
         >
-          <History className="size-3" /> History
+          <History className="size-3" aria-hidden="true" /> History
         </button>
       )}
 
@@ -253,6 +257,7 @@ export function SubmissionRecord({
         scopeKey={scopeKey}
         scopeLabel={scopeLabel}
         hasMovement={hasMovement}
+        onReturnFocus={() => historyTriggerRef.current?.focus()}
       />
     </div>
   );
@@ -267,6 +272,7 @@ function HistorySheet({
   scopeKey,
   scopeLabel,
   hasMovement,
+  onReturnFocus,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -276,6 +282,7 @@ function HistorySheet({
   scopeKey: string | null;
   scopeLabel?: string;
   hasMovement: boolean;
+  onReturnFocus: () => void;
 }) {
   // One request for the live series plus the retired ones; the server merges
   // and orders them by date, since version numbers restart per series.
@@ -283,7 +290,7 @@ function HistorySheet({
   const versions = useReportVersions(policyYearId, types, scopeKey);
   const years = usePolicyYears();
   const year = years.data?.find((entry) => entry.id === policyYearId);
-  const [historyLimit, setHistoryLimit] = useState(10);
+  const [historyLimit, setHistoryLimit] = useState<10 | 20>(10);
   const all = versions.data ?? [];
   const shown = all.slice(0, historyLimit);
   // A version can only be diffed when its OWN predecessor is still retained.
@@ -302,11 +309,16 @@ function HistorySheet({
       .map((v) => v.id),
   );
   const linkCls =
-    "inline-flex items-center gap-1 text-foreground hover:underline";
+    "min-h-11 items-center gap-1 text-foreground hover:underline sm:min-h-8";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent>
+      <SheetContent
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          onReturnFocus();
+        }}
+      >
         <SheetHeader>
           <SheetTitle>
             Submission history{scopeLabel ? ` — ${scopeLabel}` : ""}
@@ -317,92 +329,153 @@ function HistorySheet({
           </SheetDescription>
         </SheetHeader>
         <SheetBody>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              {year ? `Benefit period: ${year.start_date} to ${year.end_date}` : "Selected benefit year"}
-            </p>
-            <Label className="flex items-center gap-2">
-              Show
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
+            <div className="min-w-0">
+              <p className="text-xs font-medium uppercase tracking-wide text-subtle">
+                Benefit period
+              </p>
+              <p className="mt-1 text-sm font-medium text-foreground">
+                {year
+                  ? formatPolicyRange(year.start_date, year.end_date)
+                  : "Selected benefit year"}
+              </p>
+            </div>
+            <Label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Display
               <select
                 aria-label="Report history display count"
-                className="rounded-md border border-border bg-background px-2 py-1 text-foreground"
+                className="h-9 rounded-md border border-input bg-card px-3 text-base text-foreground shadow-sm focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40 sm:text-sm"
                 value={historyLimit}
-                onChange={(event) => setHistoryLimit(Number(event.target.value))}
+                onChange={(event) =>
+                  setHistoryLimit(event.target.value === "20" ? 20 : 10)
+                }
               >
                 <option value={10}>Latest 10</option>
                 <option value={20}>Latest 20</option>
-                <option value={50}>Latest 50</option>
               </select>
             </Label>
           </div>
-          <p className="mb-3 text-xs text-muted-foreground">This changes the display only. Stored report retention is unchanged. Use the Reports benefit-year selector to view another period.</p>
-          {versions.isLoading ? <p role="status">Loading report history…</p> : versions.isError ? (
-            <div role="alert"><p>Report history could not be loaded.</p><Button variant="outline" onClick={() => void versions.refetch()}>Retry</Button></div>
+          <p className="mb-4 max-w-prose text-xs leading-relaxed text-muted-foreground">
+            This setting changes only how many copies are shown. It does not
+            change stored-report retention. Use the Reports benefit-year selector
+            to view another period.
+          </p>
+          {versions.isLoading ? (
+            <div
+              role="status"
+              className="flex min-h-24 items-center justify-center gap-2 text-sm text-muted-foreground"
+            >
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              Loading report history…
+            </div>
+          ) : versions.isError ? (
+            <div
+              role="alert"
+              className="rounded-lg border border-error/40 bg-error-soft/40 p-4"
+            >
+              <p className="font-medium text-error">
+                Report history could not be loaded.
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Check your connection, then try again.
+              </p>
+              <Button
+                className="mt-3"
+                variant="outline"
+                onClick={() => void versions.refetch()}
+                loading={versions.isFetching}
+              >
+                Retry
+              </Button>
+            </div>
           ) : shown.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing sent yet. Downloading the report files the first copy.
-            </p>
+            <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center">
+              <p className="font-medium text-foreground">Nothing sent yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Downloading the report files the first retained copy.
+              </p>
+            </div>
           ) : (
-            <div className="divide-y divide-border">
-              {shown.map((v) => (
-                <div
-                  key={v.id}
-                  className="flex items-center justify-between gap-4 py-3"
-                >
-                  <div className="min-w-0">
-                    <div className="font-medium text-foreground">
-                      v{v.version_no}
-                      {v.label ? ` · ${v.label}` : ""}
-                      {/* Named only on rows from a retired series — on the live
-                          one it would be the sheet's own title on every row. */}
-                      {v.report_type !== reportType && (
-                        <span className="ml-2 text-2xs uppercase tracking-wide text-subtle">
-                          {v.report_label}
-                        </span>
-                      )}
+            <div>
+              <p className="mb-1 text-xs text-muted-foreground" aria-live="polite">
+                Showing {shown.length} of {all.length} retained{" "}
+                {all.length === 1 ? "copy" : "copies"}.
+              </p>
+              <ol
+                className="divide-y divide-border"
+                aria-label="Retained report copies"
+              >
+                {shown.map((v) => (
+                  <li
+                    key={v.id}
+                    data-report-version-row
+                    className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="break-words font-medium text-foreground">
+                        v{v.version_no}
+                        {v.label ? ` · ${v.label}` : ""}
+                        {/* Named only on rows from a retired series — on the live
+                            one it would be the sheet's own title on every row. */}
+                        {v.report_type !== reportType && (
+                          <span className="ml-2 text-2xs uppercase tracking-wide text-subtle">
+                            {v.report_label}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 break-words text-xs leading-relaxed text-muted-foreground">
+                        {relTime(v.created_at)}
+                        {v.generated_by ? ` · ${v.generated_by}` : ""}
+                        {v.summary?.member_count != null
+                          ? ` · ${v.summary.member_count} members`
+                          : ""}
+                        {v.summary?.masked === false ? " · unmasked" : ""}
+                      </div>
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      {relTime(v.created_at)}
-                      {v.generated_by ? ` · ${v.generated_by}` : ""}
-                      {v.summary?.member_count != null
-                        ? ` · ${v.summary.member_count} members`
-                        : ""}
-                      {v.summary?.masked === false ? " · unmasked" : ""}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 gap-3 text-xs">
-                    <button
-                      type="button"
-                      className={linkCls}
-                      onClick={() =>
-                        downloadReportVersion(v.id, v.file_name).catch((e) =>
-                          toast.error(formatError(e)),
-                        )
-                      }
-                    >
-                      <Download className="size-3" /> Download
-                    </button>
-                    {hasMovement && diffable.has(v.id) && (
-                      <button
+                    <div className="flex shrink-0 flex-wrap gap-1 sm:justify-end">
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="sm"
                         className={linkCls}
                         onClick={() =>
-                          downloadMovement(
-                            v.id,
-                            `${v.report_type}-v${v.version_no}-changes.xlsx`,
-                          ).catch((e) => toast.error(formatError(e)))
+                          downloadReportVersion(v.id, v.file_name).catch((e) =>
+                            toast.error(formatError(e)),
+                          )
                         }
-                        title={`Changes vs v${v.version_no - 1}`}
                       >
-                        <ArrowLeftRight className="size-3" /> Changes
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                        <Download className="size-3" aria-hidden="true" />
+                        Download
+                      </Button>
+                      {hasMovement && diffable.has(v.id) && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className={linkCls}
+                          onClick={() =>
+                            downloadMovement(
+                              v.id,
+                              `${v.report_type}-v${v.version_no}-changes.xlsx`,
+                            ).catch((e) => toast.error(formatError(e)))
+                          }
+                          title={`Changes vs v${v.version_no - 1}`}
+                        >
+                          <ArrowLeftRight
+                            className="size-3"
+                            aria-hidden="true"
+                          />
+                          Changes
+                        </Button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
               {all.length > historyLimit && (
                 <p className="pt-3 text-xs text-muted-foreground">
-                  Showing the {historyLimit} most recent of {all.length} retained copies.
+                  Older copies remain stored and are not affected by this display
+                  limit.
                 </p>
               )}
             </div>

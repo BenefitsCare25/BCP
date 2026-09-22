@@ -36,6 +36,9 @@ export function useReportReadiness(policyYearId: string | null) {
 export interface ReportSheet {
   title: string;
   description: string;
+  /** Stable key columns. Product- and insurer-specific columns are represented
+   * as named groups because their exact headers vary by benefit year. */
+  columns: string[];
 }
 
 export interface ReportWorkbook {
