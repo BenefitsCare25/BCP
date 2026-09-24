@@ -480,6 +480,18 @@ class CategoryGrouped(BaseModel):
     categories: list[CategoryOut]
 
 
+class CategoryOverlapEmployee(BaseModel):
+    employee_id: str
+    staff_id: str
+    employee_name: str | None
+    other_categories: list[str]
+
+
+class CategoryOverlapOut(BaseModel):
+    category_id: str
+    employees: list[CategoryOverlapEmployee]
+
+
 class EligibilityMappingItemOut(BaseModel):
     category_id: str
     product_code: str | None = None

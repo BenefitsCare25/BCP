@@ -120,9 +120,11 @@ function AISuggestionSummary({
       : null;
   const confirmed = !edited && category.status === "confirmed" && category.rule_status === "validated";
   const savedChecks = mappingChecks(validation);
-  const checks = edited || (confirmed && validation.confirmed === true)
+  const checks = edited
     ? { attention: [], notes: [] }
-    : savedChecks;
+    : confirmed && validation.confirmed === true
+      ? { attention: [], notes: savedChecks.notes }
+      : savedChecks;
 
   return (
     <section className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
@@ -160,11 +162,6 @@ function AISuggestionSummary({
                   expected === null ? "" : ` · ${expected} stated on the slip`
                 }`}
           </dd>
-          {matched !== null && expected !== null && matched !== expected && (
-            <dd className="mt-1 text-xs text-muted-foreground">
-              The slip headcount does not decide rule validity.
-            </dd>
-          )}
         </div>
       </dl>
       <div className={checks.attention.length > 0

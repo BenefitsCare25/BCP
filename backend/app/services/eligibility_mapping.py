@@ -1867,7 +1867,7 @@ def _assignment_counts(
     categories: list[Category],
     employees: list[Employee],
     views: list[dict[str, Any]],
-    confirmation_candidate_id: str | None = None,
+    overlap_details: dict[str, list[dict[str, Any]]] | None = None,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Count matched eligibility cohorts with the live matcher's precedence.
 
@@ -1896,10 +1896,7 @@ def _assignment_counts(
     def rank(category: Category) -> tuple[int, int]:
         status_rank = (
             0
-            if (
-                category.status == CategoryStatus.confirmed.value
-                or category.id == confirmation_candidate_id
-            )
+            if category.status == CategoryStatus.confirmed.value
             else 1
             if category.status == CategoryStatus.needs_review.value
             else 2
@@ -1936,10 +1933,163 @@ def _assignment_counts(
             if len(best_cohorts) > 1:
                 for category in best:
                     overlaps[category.id] += 1
+                    if overlap_details is not None:
+                        other_categories = sorted(
+                            {
+                                other.display_name
+                                for other in best
+                                if cohort_identity(other) != cohort_identity(category)
+                            }
+                        )
+                        overlap_details.setdefault(category.id, []).append(
+                            {
+                                "employee_id": employee.id,
+                                "staff_id": employee.staff_id,
+                                "employee_name": employee.employee_name,
+                                "other_categories": other_categories,
+                            }
+                        )
             for category in matches:
                 if cohort_identity(category) in best_cohorts:
                     counts[category.id] += 1
     return counts, overlaps
+
+
+def current_category_overlaps(
+    db: Session, *, policy_year_id: str, client_id: str
+) -> dict[str, list[dict[str, Any]]]:
+    """Identify active employees tied between distinct top-ranked cohorts."""
+    _, employees, views = build_attribute_catalog(db, policy_year_id, client_id)
+    categories = list(
+        db.execute(
+            select(Category).where(Category.policy_year_id == policy_year_id)
+        ).scalars()
+    )
+    details: dict[str, list[dict[str, Any]]] = {}
+    _assignment_counts(
+        db=db,
+        client_id=client_id,
+        categories=categories,
+        employees=employees,
+        views=views,
+        overlap_details=details,
+    )
+    return details
+
+
+_CohortIdentity = tuple[str, frozenset[str]]
+
+
+class CategoryConfirmationBatch:
+    """Reuse roster matches while confirming several categories in one request.
+
+    Only already-confirmed categories can tie a new confirmed candidate. Rule
+    evaluation is cached per category, and each accepted candidate updates the
+    best confirmed cohort for its matched employees. This preserves the order
+    and result of individual confirmation without rechecking every rule per row.
+    """
+
+    def __init__(
+        self,
+        db: Session,
+        *,
+        policy_year_id: str,
+        client_id: str,
+        candidates: list[Category],
+    ) -> None:
+        self.catalog, self._employees, self._views = build_attribute_catalog(
+            db, policy_year_id, client_id
+        )
+        # Filter in Python so confirmations earlier in the same uncommitted
+        # transaction are included even when the session has not flushed yet.
+        confirmed = [
+            category
+            for category in db.execute(
+                select(Category).where(Category.policy_year_id == policy_year_id)
+            ).scalars()
+            if category.status == CategoryStatus.confirmed.value
+        ]
+        categories = {category.id: category for category in [*confirmed, *candidates]}
+        products = {
+            product.id: product
+            for product in db.execute(
+                select(Product).where(
+                    Product.id.in_(
+                        {c.product_id for c in categories.values() if c.product_id}
+                    )
+                )
+            ).scalars()
+        }
+        aliases = entity_alias_map(db, client_id)
+        self._employee_gates = [
+            employee_entity(employee.attribute_values, aliases)
+            for employee in self._employees
+        ]
+        self._gates = {
+            category.id: product_entities(
+                products.get(category.product_id) if category.product_id else None,
+                aliases,
+            )
+            or category_insured_entities(category, aliases)
+            for category in categories.values()
+        }
+        self._matches: dict[str, list[int]] = {}
+        self._cohorts: dict[str, _CohortIdentity] = {}
+        self._specificities: dict[str, int] = {}
+        self._best: dict[
+            tuple[str | None, int], tuple[int, set[_CohortIdentity]]
+        ] = {}
+        for category in confirmed:
+            self.accept(category)
+
+    def _ensure_matches(self, category: Category) -> list[int]:
+        if category.id not in self._matches:
+            gate = self._gates[category.id]
+            self._matches[category.id] = [
+                index
+                for index, (view, employee_gate) in enumerate(
+                    zip(self._views, self._employee_gates, strict=True)
+                )
+                if category.matching_rule
+                and _entity_allows(gate, employee_gate)
+                and evaluate(category.matching_rule, view)
+            ]
+            self._cohorts[category.id] = (
+                category_signature(category.raw_description),
+                gate,
+            )
+            self._specificities[category.id] = rule_specificity(category.matching_rule)
+        return self._matches[category.id]
+
+    def assessment(self, category: Category) -> tuple[int, int]:
+        matches = self._ensure_matches(category)
+        cohort = self._cohorts[category.id]
+        specificity = self._specificities[category.id]
+        matched = 0
+        overlaps = 0
+        for index in matches:
+            best = self._best.get((category.product_id, index))
+            if best is None or specificity > best[0]:
+                matched += 1
+            elif specificity == best[0]:
+                matched += 1
+                if best[1] - {cohort}:
+                    overlaps += 1
+            elif cohort in best[1]:
+                matched += 1
+        return matched, overlaps
+
+    def accept(self, category: Category) -> None:
+        matches = self._ensure_matches(category)
+        cohort = self._cohorts[category.id]
+        specificity = self._specificities[category.id]
+        for index in matches:
+            key = category.product_id, index
+            best = self._best.get(key)
+            if best is None or specificity > best[0]:
+                self._best[key] = (specificity, {cohort})
+            elif specificity == best[0]:
+                best[1].add(cohort)
 
 
 def _rule_messages(
@@ -2245,11 +2395,21 @@ def auto_map_policy_year(
 
 
 def confirm_category_mapping(
-    db: Session, *, category: Category, client_id: str
+    db: Session,
+    *,
+    category: Category,
+    client_id: str,
+    batch: CategoryConfirmationBatch | None = None,
 ) -> EligibilityMappingProfile:
     """Validate and persist one broker-confirmed reusable mapping profile."""
 
-    catalog, employees, views = build_attribute_catalog(db, category.policy_year_id, client_id)
+    batch = batch or CategoryConfirmationBatch(
+        db,
+        policy_year_id=category.policy_year_id,
+        client_id=client_id,
+        candidates=[category],
+    )
+    catalog = batch.catalog
     validation = validate_matching_rule(
         category.matching_rule,
         catalog,
@@ -2257,22 +2417,7 @@ def confirm_category_mapping(
     )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
-    categories = list(
-        db.execute(
-            select(Category).where(Category.policy_year_id == category.policy_year_id)
-        ).scalars()
-    )
-    if category not in categories:
-        categories.append(category)
-    counts, overlaps = _assignment_counts(
-        db=db,
-        client_id=client_id,
-        categories=categories,
-        employees=employees,
-        views=views,
-        confirmation_candidate_id=category.id,
-    )
-    overlap_count = overlaps.get(category.id, 0)
+    matched_count, overlap_count = batch.assessment(category)
     if overlap_count:
         noun = "employee" if overlap_count == 1 else "employees"
         verb = "matches" if overlap_count == 1 else "match"
@@ -2280,7 +2425,7 @@ def confirm_category_mapping(
     pa = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
     expected_raw = pa.get("num_employees")
     expected = int(expected_raw) if isinstance(expected_raw, (int, float)) else None
-    matched = counts.get(category.id, 0) if catalog.roster_present else None
+    matched = matched_count if catalog.roster_present else None
     warnings, _ = _rule_messages(
         catalog=catalog,
         matching_rule=category.matching_rule,
@@ -2325,6 +2470,7 @@ def confirm_category_mapping(
     category.rule_status = "validated"
     category.rule_validation = payload
     category.status = CategoryStatus.confirmed.value
+    batch.accept(category)
     return profile
 
 
@@ -2406,6 +2552,7 @@ def stored_mapping_summary(db: Session, *, policy_year_id: str) -> MappingSummar
 
 __all__ = [
     "AttributeValueCatalog",
+    "CategoryConfirmationBatch",
     "CategoryRuleAssessment",
     "MappingItem",
     "MappingSummary",
@@ -2418,6 +2565,7 @@ __all__ = [
     "build_attribute_catalog",
     "category_signature",
     "confirm_category_mapping",
+    "current_category_overlaps",
     "missing_category_plans",
     "normalize_ai_matching_rule",
     "propose_category_rule",

@@ -260,6 +260,16 @@ export interface CategoryGroup {
   categories: Category[];
 }
 
+export interface CategoryOverlap {
+  category_id: string;
+  employees: {
+    employee_id: string;
+    staff_id: string;
+    employee_name: string | null;
+    other_categories: string[];
+  }[];
+}
+
 export interface ProductDiagnostic {
   sheet: string;
   product_code: string;

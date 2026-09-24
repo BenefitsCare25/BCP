@@ -34,11 +34,13 @@ from app.schemas.rule import RuleEnvelope
 from app.services.ai_gateway import AICallResult
 from app.services.eligibility_mapping import (
     AttributeValueCatalog,
+    CategoryConfirmationBatch,
     auto_map_policy_year,
     build_ai_eligibility_inputs,
     build_attribute_catalog,
     category_signature,
     confirm_category_mapping,
+    current_category_overlaps,
     normalize_ai_matching_rule,
     propose_category_rule,
     validate_ai_matching_rule,
@@ -902,7 +904,19 @@ def test_confirmation_rechecks_real_cohort_overlap() -> None:
         )
         db.flush()
 
+        overlaps = current_category_overlaps(
+            db, policy_year_id=PY_2026, client_id=CLIENT_ID
+        )
+        assert any(
+            employee["staff_id"] == "E-CONFIRM-OVERLAP"
+            and "Second cohort" in employee["other_categories"]
+            for employee in overlaps[first.id]
+        )
         confirm_category_mapping(db, category=first, client_id=CLIENT_ID)
+        batch = CategoryConfirmationBatch(
+            db, policy_year_id=PY_2026, client_id=CLIENT_ID, candidates=[second]
+        )
+        assert batch.assessment(second)[1] > 0
         with pytest.raises(
             ValueError,
             match=r"\d+ employees? match(?:es)? equally specific employee categories",
@@ -910,6 +924,76 @@ def test_confirmation_rechecks_real_cohort_overlap() -> None:
             confirm_category_mapping(db, category=second, client_id=CLIENT_ID)
         assert second.status == CategoryStatus.needs_review.value
         db.rollback()
+
+
+def test_category_overlap_endpoint_identifies_employee(client: TestClient) -> None:
+    product_id = "00000000-0000-0000-0000-00000000e1c4"
+    with SessionLocal() as db:
+        product = Product(
+            id=product_id,
+            client_id=CLIENT_ID,
+            code="OVERLAP-DETAILS-QA",
+            display_name="Overlap details QA",
+        )
+        first = Category(
+            policy_year_id=PY_2026,
+            product_id=product_id,
+            priority=1,
+            display_name="Details first cohort",
+            raw_description="Details first cohort",
+            matching_rule={"=": ["job_category", "OVERLAP-QA-CODE"]},
+            status=CategoryStatus.needs_review.value,
+            source="manual",
+        )
+        second = Category(
+            policy_year_id=PY_2026,
+            product_id=product_id,
+            priority=2,
+            display_name="Details second cohort",
+            raw_description="Details second cohort",
+            matching_rule={"=": ["job_category", "OVERLAP-QA-CODE"]},
+            status=CategoryStatus.needs_review.value,
+            source="manual",
+        )
+        employee = Employee(
+            client_id=CLIENT_ID,
+            policy_year_id=PY_2026,
+            staff_id="E-OVERLAP-DETAILS",
+            employee_name="Overlap Details Employee",
+            attribute_values={"job_category": "OVERLAP-QA-CODE"},
+            derived_attribute_values={},
+        )
+        db.add(product)
+        db.flush()
+        db.add_all([first, second, employee])
+        db.commit()
+        first_id, second_id, employee_id = first.id, second.id, employee.id
+
+    try:
+        response = client.get(
+            f"/api/v1/categories/overlaps?policy_year_id={PY_2026}"
+        )
+        assert response.status_code == 200
+        items = {item["category_id"]: item["employees"] for item in response.json()}
+        assert items[first_id] == [
+            {
+                "employee_id": employee_id,
+                "staff_id": "E-OVERLAP-DETAILS",
+                "employee_name": "Overlap Details Employee",
+                "other_categories": ["Details second cohort"],
+            }
+        ]
+        assert items[second_id][0]["other_categories"] == ["Details first cohort"]
+    finally:
+        with SessionLocal() as db:
+            for category_id in (first_id, second_id):
+                if category := db.get(Category, category_id):
+                    db.delete(category)
+            if stored_employee := db.get(Employee, employee_id):
+                db.delete(stored_employee)
+            if stored_product := db.get(Product, product_id):
+                db.delete(stored_product)
+            db.commit()
 
 
 def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
@@ -978,8 +1062,19 @@ def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
         assert items[first.id].matched_count == 1
         assert items[second.id].matched_count == 1
         assert all("equally specific" not in " ".join(item.warnings) for item in items.values())
-        confirm_category_mapping(db, category=first, client_id=CLIENT_ID)
-        confirm_category_mapping(db, category=second, client_id=CLIENT_ID)
+        with patch(
+            "app.services.eligibility_mapping.build_attribute_catalog",
+            wraps=build_attribute_catalog,
+        ) as catalog_builder:
+            batch = CategoryConfirmationBatch(
+                db,
+                policy_year_id=PY_2026,
+                client_id=CLIENT_ID,
+                candidates=[first, second],
+            )
+            confirm_category_mapping(db, category=first, client_id=CLIENT_ID, batch=batch)
+            confirm_category_mapping(db, category=second, client_id=CLIENT_ID, batch=batch)
+            assert catalog_builder.call_count == 1
         assert first.rule_validation["overlap_count"] == 0
         assert second.rule_validation["overlap_count"] == 0
         db.rollback()

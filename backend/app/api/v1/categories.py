@@ -36,6 +36,7 @@ from app.schemas.api import (
     CategoryCreate,
     CategoryGrouped,
     CategoryOut,
+    CategoryOverlapOut,
     CategoryPatch,
 )
 from app.services.ai_breaker import CircuitOpenError
@@ -43,9 +44,11 @@ from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError, generate_rule_for_category
 from app.services.category_factory import build_manual_category
 from app.services.eligibility_mapping import (
+    CategoryConfirmationBatch,
     assess_category_rule,
     build_ai_eligibility_inputs,
     confirm_category_mapping,
+    current_category_overlaps,
     normalize_ai_matching_rule,
     validate_ai_matching_rule,
 )
@@ -135,6 +138,24 @@ def list_categories_grouped(
         )
     out.sort(key=lambda g: g.product_code)
     return out
+
+
+@router.get("/overlaps", response_model=list[CategoryOverlapOut])
+def list_category_overlaps(
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CategoryOverlapOut]:
+    assert_policy_year_for_user(policy_year_id, user, db)
+    details = current_category_overlaps(
+        db, policy_year_id=policy_year_id, client_id=require_client_id(user)
+    )
+    return [
+        CategoryOverlapOut.model_validate(
+            {"category_id": category_id, "employees": employees}
+        )
+        for category_id, employees in details.items()
+    ]
 
 
 @router.post("", response_model=CategoryOut, status_code=status.HTTP_201_CREATED)
@@ -301,10 +322,21 @@ def bulk_confirm(
     )
     confirmed = 0
     skipped = 0
+    client_id = require_client_id(user)
+    batch = (
+        CategoryConfirmationBatch(
+            db,
+            policy_year_id=policy_year_id,
+            client_id=client_id,
+            candidates=list(rows),
+        )
+        if rows
+        else None
+    )
     for c in rows:
         before = _to_dict(c)
         try:
-            confirm_category_mapping(db, category=c, client_id=require_client_id(user))
+            confirm_category_mapping(db, category=c, client_id=client_id, batch=batch)
         except ValueError:
             skipped += 1
             continue

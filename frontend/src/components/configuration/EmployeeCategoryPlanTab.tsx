@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  useCategoryOverlaps,
   useCreateCategory,
   useMemberCounts,
   usePlans,
@@ -20,6 +21,7 @@ import { insuredNames } from "@/lib/insured";
 import type {
   BasisModel,
   Category,
+  CategoryOverlap,
   PlanAssignment,
   PlanDetail,
   RateModel,
@@ -48,15 +50,26 @@ interface Props {
 
 export function EmployeeCategoryPlanTab(props: Props) {
   const data = useEmployeeCategoryData(props);
+  const overlapQuery = useCategoryOverlaps(props.policyYearId);
+  const overlapsByCategory = useMemo(
+    () => new Map((overlapQuery.data ?? []).map((item) => [item.category_id, item.employees])),
+    [overlapQuery.data],
+  );
   const createCategory = useCreateCategory();
   const [issuesOnly, setIssuesOnly] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<string | null>(null);
-  const issueCount = data.groups.filter(
-    (group) => group.ruleStatus !== "validated",
-  ).length;
+  const hasIssue = (group: EmployeeCategoryGroup) => {
+    if (groupOverlapEmployees(group, overlapsByCategory).length > 0) return true;
+    if (group.ruleStatus === "validated") return false;
+    if (overlapQuery.isSuccess && (data.employeesTotal ?? 0) > 0 && onlyPastOverlapWarnings(group)) {
+      return false;
+    }
+    return true;
+  };
+  const issueCount = data.groups.filter(hasIssue).length;
   const visibleGroups = issuesOnly
-    ? data.groups.filter((group) => group.ruleStatus !== "validated")
+    ? data.groups.filter(hasIssue)
     : data.groups;
 
   const addCategory = () =>
@@ -101,6 +114,11 @@ export function EmployeeCategoryPlanTab(props: Props) {
         policyYearId={props.policyYearId}
         productId={props.productId}
       />
+      {overlapQuery.isError && (
+        <p role="alert" className="text-xs text-warn">
+          Current overlap details are unavailable. Refresh to check the employee listing again.
+        </p>
+      )}
       {visibleGroups.length === 0 ? (
         <EmptyCategories issuesOnly={issuesOnly} />
       ) : (
@@ -108,6 +126,8 @@ export function EmployeeCategoryPlanTab(props: Props) {
           <EmployeeCategoryRow
             key={group.key}
             group={group}
+            overlapEmployees={groupOverlapEmployees(group, overlapsByCategory)}
+            overlapCheckReady={overlapQuery.isSuccess}
             count={data.counts[group.key]}
             employeesAvailable={(data.employeesTotal ?? 0) > 0}
             hasDependants={props.hasDependants}
@@ -134,6 +154,28 @@ export function EmployeeCategoryPlanTab(props: Props) {
       )}
     </div>
   );
+}
+
+type OverlapEmployee = CategoryOverlap["employees"][number];
+
+function groupOverlapEmployees(
+  group: EmployeeCategoryGroup,
+  byCategory: Map<string, OverlapEmployee[]>,
+): OverlapEmployee[] {
+  const employees = new Map<string, OverlapEmployee>();
+  for (const category of group.categories) {
+    for (const employee of byCategory.get(category.id) ?? []) {
+      const previous = employees.get(employee.employee_id);
+      employees.set(employee.employee_id, {
+        ...employee,
+        other_categories: [...new Set([
+          ...(previous?.other_categories ?? []),
+          ...employee.other_categories,
+        ])],
+      });
+    }
+  }
+  return [...employees.values()].sort((a, b) => a.staff_id.localeCompare(b.staff_id));
 }
 
 function useEmployeeCategoryData(props: Props) {
@@ -286,6 +328,8 @@ function SummaryItem({
 
 function EmployeeCategoryRow({
   group,
+  overlapEmployees,
+  overlapCheckReady,
   count,
   employeesAvailable,
   hasDependants,
@@ -301,6 +345,8 @@ function EmployeeCategoryRow({
   productEntities,
 }: {
   group: EmployeeCategoryGroup;
+  overlapEmployees: OverlapEmployee[];
+  overlapCheckReady: boolean;
   count?: MemberCount;
   employeesAvailable: boolean;
   hasDependants: boolean;
@@ -322,7 +368,14 @@ function EmployeeCategoryRow({
           {expanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="truncate text-sm font-semibold text-foreground">{group.name}</span>
         </button>
-        <RuleStatus group={group} employeesAvailable={employeesAvailable} />
+        <RuleStatus
+          group={group}
+          employeesAvailable={employeesAvailable}
+          overlapEmployees={overlapEmployees}
+          overlapCheckReady={overlapCheckReady}
+          expanded={expanded}
+          onToggle={onToggle}
+        />
         <span className="whitespace-nowrap text-xs text-muted-foreground">
           {group.categories.length} plan assignment{group.categories.length === 1 ? "" : "s"}
           {employeesAvailable && count ? ` · ${count.employees} employees${hasDependants ? ` · ${count.dependants} dependants` : ""}` : ""}
@@ -333,6 +386,20 @@ function EmployeeCategoryRow({
       </div>
       {expanded && (
         <div className="grid gap-2 border-t border-border p-3">
+          {overlapEmployees.length > 0 && (
+            <div id={`overlap-details-${group.representative.id}`} className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs">
+              <p className="font-medium text-foreground">Active employees matching multiple categories</p>
+              <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                {overlapEmployees.map((employee) => (
+                  <li key={employee.employee_id}>
+                    <span className="font-medium">{employee.employee_name || employee.staff_id}</span>
+                    {employee.employee_name && <span> · {employee.staff_id}</span>}
+                    <span> · Also matches: {employee.other_categories.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {group.categories.map((category) => {
             const plan = planFor(category, planOptions);
             const warning = assignmentWarning(category, group);
@@ -374,28 +441,63 @@ function EmployeeCategoryRow({
   );
 }
 
-function RuleStatus({ group, employeesAvailable }: { group: EmployeeCategoryGroup; employeesAvailable: boolean }) {
+function RuleStatus({
+  group,
+  employeesAvailable,
+  overlapEmployees,
+  overlapCheckReady,
+  expanded,
+  onToggle,
+}: {
+  group: EmployeeCategoryGroup;
+  employeesAvailable: boolean;
+  overlapEmployees: OverlapEmployee[];
+  overlapCheckReady: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const status = group.ruleStatus;
+  if (overlapEmployees.length > 0) {
+    const count = overlapEmployees.length;
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-controls={expanded ? `overlap-details-${group.representative.id}` : undefined}
+        aria-label={`${expanded ? "Hide" : "Show"} ${count} overlapping employees`}
+      >
+        <Badge variant="warn">{count} overlapping employee{count === 1 ? "" : "s"}</Badge>
+      </button>
+    );
+  }
   if (status === "validated") return <Badge variant="good">Rule validated</Badge>;
   if (status === "unmapped") return <Badge variant="error">Employee category rule missing</Badge>;
   if (status === "proposed" && !employeesAvailable) {
     return <Badge variant="info">Proposed — awaiting employee listing</Badge>;
   }
-  const count = Math.max(...group.categories.map((category) => {
-    if (category.rule_status !== "needs_review" || category.rule_validation?.confirmed === true) return 0;
-    const validation = category.rule_validation;
-    if (typeof validation?.overlap_count === "number") return validation.overlap_count;
-    const warnings = validation?.warnings;
-    if (!Array.isArray(warnings)) return 0;
-    const overlap = warnings
-      .map((warning) => String(warning).match(/^(\d+) employees? also match(?:es)? an equally specific employee cohort$/))
-      .find((match) => match !== null);
-    return overlap ? Number(overlap[1]) : 0;
-  }));
-  if (count > 0) {
-    return <Badge variant="warn">{count} overlapping employee{count === 1 ? "" : "s"}</Badge>;
+  if (employeesAvailable && overlapCheckReady && onlyPastOverlapWarnings(group)) {
+    return <Badge variant="info" title="The saved overlap warning is no longer present. Reconfirm to refresh the rule status.">No current overlap</Badge>;
   }
   return <Badge variant="warn">Rule needs attention</Badge>;
+}
+
+function onlyPastOverlapWarnings(group: EmployeeCategoryGroup): boolean {
+  const reviewRows = group.categories.filter((category) => category.rule_status === "needs_review");
+  return reviewRows.length > 0 && reviewRows.every((category) => {
+    const validation = category.rule_validation;
+    if (!validation || (Array.isArray(validation.errors) && validation.errors.length > 0)) return false;
+    if (Array.isArray(validation.unresolved_clauses) && validation.unresolved_clauses.length > 0) return false;
+    const warnings = Array.isArray(validation.warnings) ? validation.warnings.map(String) : [];
+    const blockers = warnings.filter((message) =>
+      !/^Configured value .+ has no active employees in /i.test(message) &&
+      !/^Matched \d+ employees; placement slip states \d+$/i.test(message) &&
+      !/^No active employee listing/i.test(message),
+    );
+    return blockers.length > 0 && blockers.every((message) =>
+      message.includes("equally specific employee cohort"),
+    );
+  });
 }
 
 function assignmentSummary(category: Category, rateModel: RateModel, hasDependants: boolean): string {

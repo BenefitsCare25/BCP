@@ -21,6 +21,7 @@ import type {
   BenefitStatement,
   Category,
   CategoryGroup,
+  CategoryOverlap,
   CoverageSummary,
   ConfigRecommendation,
   AutoMatchResult,
@@ -185,6 +186,19 @@ export function useCategoriesGrouped(policyYearId: string | undefined) {
         `/categories/grouped?policy_year_id=${policyYearId}`,
       ),
     enabled: Boolean(policyYearId),
+  });
+}
+
+export function useCategoryOverlaps(policyYearId: string | undefined) {
+  const cid = useActiveClientId();
+  return useQuery({
+    queryKey: ["categories", "overlaps", policyYearId, cid],
+    queryFn: () =>
+      api.get<CategoryOverlap[]>(
+        `/categories/overlaps?policy_year_id=${policyYearId}`,
+      ),
+    enabled: Boolean(policyYearId),
+    staleTime: 30_000,
   });
 }
 

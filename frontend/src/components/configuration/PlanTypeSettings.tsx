@@ -19,48 +19,44 @@ export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
   const selectedPlan = plans.find((plan) => plan.id === selectedPlanId);
   return (
     <section className="rounded-lg border border-border bg-card p-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-foreground">Plan types</h3>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-muted-foreground">
-            {plans.length} plan type{plans.length === 1 ? "" : "s"}
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!productId || adding}
-            onClick={() => {
-              setSelectedPlanId(null);
-              setAdding(true);
-            }}
-          >
-            <Plus className="size-3.5" /> Add plan type
-          </Button>
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="mr-1 text-sm font-semibold text-foreground">Plan types:</h3>
+        {plans.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Plan types">
+            {plans.map((plan) => (
+              <Button
+                key={plan.id}
+                size="sm"
+                variant={selectedPlanId === plan.id ? "secondary" : "outline"}
+                className="max-w-full rounded-full"
+                aria-expanded={selectedPlanId === plan.id}
+                aria-controls={selectedPlanId === plan.id ? "plan-type-editor" : undefined}
+                title={plan.report_label ? `Insurer report label: ${plan.report_label}` : undefined}
+                onClick={() => {
+                  setAdding(false);
+                  setSelectedPlanId((current) => current === plan.id ? null : plan.id);
+                }}
+              >
+                <span className="truncate">{plan.display_name || plan.code}</span>
+                <Pencil className="size-3 shrink-0" aria-hidden="true" />
+                <span className="sr-only">Edit plan type</span>
+              </Button>
+            ))}
+          </div>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto"
+          disabled={!productId || adding}
+          onClick={() => {
+            setSelectedPlanId(null);
+            setAdding(true);
+          }}
+        >
+          <Plus className="size-3.5" /> Add plan type
+        </Button>
       </div>
-      {plans.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Plan types">
-          {plans.map((plan) => (
-            <Button
-              key={plan.id}
-              size="sm"
-              variant={selectedPlanId === plan.id ? "secondary" : "outline"}
-              className="max-w-full rounded-full"
-              aria-expanded={selectedPlanId === plan.id}
-              aria-controls={selectedPlanId === plan.id ? "plan-type-editor" : undefined}
-              title={plan.report_label ? `Insurer report label: ${plan.report_label}` : undefined}
-              onClick={() => {
-                setAdding(false);
-                setSelectedPlanId((current) => current === plan.id ? null : plan.id);
-              }}
-            >
-              <span className="truncate">{plan.display_name || plan.code}</span>
-              <Pencil className="size-3 shrink-0" aria-hidden="true" />
-              <span className="sr-only">Edit plan type</span>
-            </Button>
-          ))}
-        </div>
-      )}
       {!adding && !selectedPlan && plans.length === 0 && (
         <p className="mt-3 text-sm text-muted-foreground">
           No plan types yet. Add one before assigning employee categories.
