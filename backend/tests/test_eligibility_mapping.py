@@ -335,6 +335,67 @@ def test_ai_rule_rejects_roster_category_proxy_for_explicit_job_codes() -> None:
     assert any("roster category text" in error for error in validation.errors)
 
 
+def test_upload_proposal_prefers_explicit_codes_over_named_roster_cohorts() -> None:
+    description = (
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)"
+    )
+    catalog = _catalog(
+        job_category=["J1", "J2", "J3", "JA", "JB", "JC", "X1"],
+        category=["Officer", "All Employees based in Thailand (except for Director)"],
+    )
+
+    proposal = propose_category_rule(description, catalog)
+
+    assert proposal.rule == {
+        "in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]
+    }
+    assert proposal.unresolved_clauses == ["based in Thailand"]
+
+
+def test_upload_proposal_does_not_replace_unmapped_codes_with_text_cohort() -> None:
+    description = "Officer (Job Category: J1 to J3)"
+    catalog = _catalog(category=["Officer"])
+
+    proposal = propose_category_rule(description, catalog)
+    validation = validate_ai_matching_rule(
+        description, {"=": ["category", "Officer"]}, catalog
+    )
+
+    assert proposal.rule is None
+    assert proposal.unresolved_clauses
+    assert not validation.valid
+    assert any("Could not map explicit employee codes" in error for error in validation.errors)
+
+
+def test_ai_rule_cannot_widen_explicit_codes_to_other_roster_values() -> None:
+    description = "Officer (Job Category: J1 to J3)"
+    catalog = _catalog(job_category=["J1", "J2", "J3", "X1"])
+
+    validation = validate_ai_matching_rule(
+        description,
+        {"in": ["job_category", ["J1", "J2", "J3", "X1"]]},
+        catalog,
+    )
+
+    assert not validation.valid
+    assert any("X1 outside codes stated" in error for error in validation.errors)
+
+
+def test_ai_rule_rejects_text_proxy_when_job_codes_live_in_job_grade() -> None:
+    description = "Officer (Job Category: J1 to J3)"
+    catalog = _catalog(job_grade=["J1", "J2", "J3"], category=["Officer"])
+
+    validation = validate_ai_matching_rule(
+        description,
+        {"or": [{"in": ["job_grade", ["J1", "J2", "J3"]]}, {"=": ["category", "Officer"]}]},
+        catalog,
+    )
+
+    assert not validation.valid
+    assert any("roster category text" in error for error in validation.errors)
+
+
 def test_based_in_country_uses_reviewed_nationality_proxy_as_last_resort() -> None:
     proposal = propose_category_rule(
         "Officer and All Employees based in Thailand (except for Director) "

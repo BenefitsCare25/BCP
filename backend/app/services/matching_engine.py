@@ -34,6 +34,7 @@ from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
 from app.services.derivation_engine import derive
+from app.services.explicit_grade_clauses import has_explicit_grade_clause
 from app.services.rule_evaluator import evaluate
 
 logger = logging.getLogger(__name__)
@@ -349,18 +350,24 @@ def match_one(
         **(employee.attribute_values or {}),
         **(employee.derived_attribute_values or {}),
     }
+    explicit_code_categories = {
+        category.id
+        for category in categories_by_priority
+        if has_explicit_grade_clause(category.raw_description)
+    }
 
     def _allowed(cat: Category) -> bool:
         if not _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entities):
             return False
         if rule_has_validation_errors(cat):
             return False
-        # A roster text label cannot override an explicit job-code rule when
-        # the employee has a resolved code. Apply this gate to every tier.
-        if view.get("job_category") is not None and re.search(
-            r"\bjob\s+category\s*:", cat.raw_description, re.I
-        ):
-            return bool(cat.matching_rule) and evaluate(cat.matching_rule, view)
+        # A roster text label cannot override codes explicitly stated on the
+        # slip, regardless of which employee field holds those codes.
+        if cat.id in explicit_code_categories:
+            if cat.matching_rule:
+                return evaluate(cat.matching_rule, view)
+            if cat.rule_status in {"unmapped", "needs_review"}:
+                return False
         return True
 
     raw_category: str | None = (

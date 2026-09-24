@@ -34,6 +34,11 @@ from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.schemas.api import AttributeSchemaOut
 from app.services.derivation_engine import derive, resolve_attribute_schemas
+from app.services.explicit_grade_clauses import (
+    JOB_CATEGORY_RE,
+    explicit_grade_clauses,
+    has_explicit_grade_clause,
+)
 from app.services.flex_membership import nationality_country_exact
 from app.services.matching_engine import (
     _entity_allows,
@@ -56,18 +61,6 @@ _DEPENDANT_TAIL_RE = re.compile(
 )
 _OPTION_TAIL_RE = re.compile(r"\s*\(option\s+\d+\)\s*$", re.IGNORECASE)
 _EXCLUSION_RE = re.compile(r"\b(?:excluding|except(?:\s+for)?)\s+([^)]*)(?:\)|$)", re.IGNORECASE)
-_JOB_CATEGORY_RE = re.compile(
-    r"\bjob\s+categor(?:y|ies)\s*:\s*([^)]*)",
-    re.IGNORECASE,
-)
-_HAY_GRADE_RE = re.compile(
-    r"\bhay\s+job\s+grade\s+(.+?)(?=(?:\(|/|\bhay\s+job\s+grade\b|$))",
-    re.IGNORECASE,
-)
-_GRADE_RE = re.compile(
-    r"\bgrade\s+([a-z0-9]+(?:\s+(?:to|and|&)\s+[a-z0-9]+)?)",
-    re.IGNORECASE,
-)
 _BASED_IN_RE = re.compile(
     r"\bbased\s+in\s+([^()]+?)(?=\s*(?:\(\s*)?(?:excluding|except)\b|\s*\(|$)",
     re.IGNORECASE,
@@ -620,12 +613,7 @@ def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
 def _oversized_explicit_grade_clauses(text: str) -> list[str]:
     """Identify source ranges that exceed the safe finite expansion limit."""
 
-    job_category_clauses = [match.group(1) for match in _JOB_CATEGORY_RE.finditer(text)]
-    hay_clauses = [match.group(1) for match in _HAY_GRADE_RE.finditer(text)]
-    grade_clauses = (
-        hay_clauses if hay_clauses else [match.group(1) for match in _GRADE_RE.finditer(text)]
-    )
-    clauses = job_category_clauses or grade_clauses
+    clauses = explicit_grade_clauses(text)
     return [
         clause.strip()
         for clause in clauses
@@ -641,12 +629,8 @@ def _explicit_grade_mapping(
 ) -> tuple[str | None, list[Any], list[str]]:
     """Read explicit job-category/grade clauses before vague title wording."""
 
-    job_category_clauses = [match.group(1) for match in _JOB_CATEGORY_RE.finditer(text)]
-    hay_clauses = [match.group(1) for match in _HAY_GRADE_RE.finditer(text)]
-    grade_clauses = (
-        hay_clauses if hay_clauses else [match.group(1) for match in _GRADE_RE.finditer(text)]
-    )
-    clauses = job_category_clauses or grade_clauses
+    job_category_clauses = list(JOB_CATEGORY_RE.finditer(text))
+    clauses = explicit_grade_clauses(text)
     if not clauses:
         return None, [], []
 
@@ -694,6 +678,16 @@ def _explicit_grade_mapping(
             observed_matches = sum(
                 str(value).strip().casefold() in observed_keys for value in selected
             )
+            # Closed ranges may name future hires absent from today's roster.
+            # Trust a dedicated grade/code field in that case, but never infer
+            # unseen codes from a broad text field such as ``category``.
+            if observed_matches == 0 and attribute_id not in {
+                "job_category",
+                "job_grade",
+                "grade",
+                "hay_job_grade",
+            }:
+                continue
             candidates.append((-observed_matches, order, attribute_id, selected, unresolved))
     if not candidates:
         return None, [], [clause.strip() for clause in clauses]
@@ -876,6 +870,19 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
         )
     without_exclusion = _EXCLUSION_RE.sub("", text).strip(" ()")
     relative_remainder = bool(_ALL_OTHER_RE.match(without_exclusion))
+    explicit_codes = has_explicit_grade_clause(without_exclusion)
+    explicit_attr, explicit_values, unresolved = _explicit_grade_mapping(
+        without_exclusion, catalog
+    )
+    if explicit_codes and not explicit_attr:
+        return RuleProposal(
+            rule=None,
+            human_readable="Explicit employee codes need an employee field mapping",
+            confidence=0.0,
+            source="unmapped",
+            validation_state="needs_review",
+            unresolved_clauses=unresolved or explicit_grade_clauses(without_exclusion),
+        )
 
     if _ALL_EMPLOYEES_RE.match(without_exclusion):
         return RuleProposal(
@@ -886,30 +893,30 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             validation_state="proposed",
         )
 
-    # A roster-owned category label is stronger evidence than interpreting its
-    # prose. This covers company-specific labels such as CDL's Thailand cohort
-    # without assuming that every company has a generic location/role schema.
-    exact_attr, exact_values = _exact_value_mapping(text, catalog)
-    if exact_attr and exact_values:
-        return RuleProposal(
-            rule=_rule_for_values(exact_attr, exact_values),
-            human_readable=f"{exact_attr} is {exact_values[0]}",
-            confidence=0.98,
-            source="roster_values",
-            validation_state="proposed",
-            referenced_attributes=[exact_attr],
-        )
+    # A roster-owned text label is useful only when the slip gives no explicit
+    # employee codes. Otherwise its broad wording can mask the code boundary.
+    if not explicit_codes:
+        exact_attr, exact_values = _exact_value_mapping(text, catalog)
+        if exact_attr and exact_values:
+            return RuleProposal(
+                rule=_rule_for_values(exact_attr, exact_values),
+                human_readable=f"{exact_attr} is {exact_values[0]}",
+                confidence=0.98,
+                source="roster_values",
+                validation_state="proposed",
+                referenced_attributes=[exact_attr],
+            )
 
-    named_attr, named_values = _multi_named_cohort_mapping(text, catalog)
-    if named_attr and named_values:
-        return RuleProposal(
-            rule=_rule_for_values(named_attr, named_values),
-            human_readable=(f"{named_attr} is one of {', '.join(map(str, named_values))}"),
-            confidence=0.98,
-            source="roster_values",
-            validation_state="proposed",
-            referenced_attributes=[named_attr],
-        )
+        named_attr, named_values = _multi_named_cohort_mapping(text, catalog)
+        if named_attr and named_values:
+            return RuleProposal(
+                rule=_rule_for_values(named_attr, named_values),
+                human_readable=(f"{named_attr} is one of {', '.join(map(str, named_values))}"),
+                confidence=0.98,
+                source="roster_values",
+                validation_state="proposed",
+                referenced_attributes=[named_attr],
+            )
 
     exclusion_text = ""
     if exclusion := _EXCLUSION_RE.search(text):
@@ -918,7 +925,7 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     # Relative cohorts are compiled after their specific siblings. The matching
     # engine's specificity ordering makes an empty-AND the safe remainder; a
     # stated exclusion is retained when the company vocabulary can express it.
-    if relative_remainder:
+    if relative_remainder and not explicit_codes:
         if not exclusion_text:
             return RuleProposal(
                 rule={"and": []},
@@ -953,7 +960,6 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     # CDL writes the exact job-category codes in parentheses; STM uses ordered
     # Hay Job Grade ranges. Compile those first, and combine them with pass-type
     # requirements instead of returning early and silently dropping the grade.
-    explicit_attr, explicit_values, unresolved = _explicit_grade_mapping(without_exclusion, catalog)
     parts: list[Rule] = []
     readings: list[str] = []
     referenced: list[str] = []
@@ -1257,6 +1263,44 @@ def _source_allowed_values(
     return {explicit_attr: explicit_values} if explicit_attr and explicit_values else None
 
 
+def _explicit_code_rule_errors(
+    rule: Rule | None, attribute_id: str, allowed_values: list[Any]
+) -> list[str]:
+    """Reject AI branches that widen a source code list or negate its field."""
+
+    allowed = {str(value).strip().casefold() for value in allowed_values}
+    errors: list[str] = []
+
+    def walk(node: Any, *, negated: bool = False) -> None:
+        if not isinstance(node, dict) or len(node) != 1:
+            return
+        operator, args = next(iter(node.items()))
+        if operator in {"and", "or"} and isinstance(args, list):
+            for child in args:
+                walk(child, negated=negated)
+            return
+        if operator == "not":
+            walk(args, negated=not negated)
+            return
+        if not isinstance(args, list) or len(args) < 2 or args[0] != attribute_id:
+            return
+        if negated or operator not in {"=", "==", "in"}:
+            errors.append(f"Explicit {attribute_id} codes require positive membership")
+            return
+        candidates = args[1] if operator == "in" else [args[1]]
+        if not isinstance(candidates, list):
+            return
+        for candidate in candidates:
+            if str(candidate).strip().casefold() not in allowed:
+                errors.append(
+                    f"Rule includes {attribute_id} value {candidate} "
+                    "outside codes stated on the slip"
+                )
+
+    walk(rule)
+    return list(dict.fromkeys(errors))
+
+
 def validate_ai_matching_rule(
     description: str, rule: Rule | None, catalog: AttributeValueCatalog
 ) -> RuleValidation:
@@ -1276,14 +1320,18 @@ def validate_ai_matching_rule(
         )
     if rule == {"and": []} and not (_ALL_EMPLOYEES_RE.match(text) or _ALL_OTHER_RE.match(text)):
         errors.append("AI may use an all-employees rule only when the eligibility wording says so")
+    if has_explicit_grade_clause(text) and not source_values:
+        errors.append("Could not map explicit employee codes to a company employee field")
     if source_values:
         source_attribute = next(iter(source_values))
         if source_attribute not in validation.referenced_attributes:
             errors.append(f"Matching rule omitted explicit employee attribute: {source_attribute}")
-        if source_attribute == "job_category" and "category" in validation.referenced_attributes:
+        errors.extend(
+            _explicit_code_rule_errors(rule, source_attribute, source_values[source_attribute])
+        )
+        if source_attribute != "category" and "category" in validation.referenced_attributes:
             errors.append(
-                "AI rule may not use roster category text when the slip specifies "
-                "job category codes"
+                "AI rule may not use roster category text when the slip specifies employee codes"
             )
     return RuleValidation(
         valid=not errors,

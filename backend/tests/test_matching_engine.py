@@ -126,6 +126,39 @@ def test_explicit_job_code_rejects_raw_category_label_match() -> None:
     assert outcome.method == "rule"
 
 
+def test_explicit_codes_in_job_grade_reject_raw_category_label_match() -> None:
+    category = _cat(
+        "officer",
+        "Officer (Job Category: J1 to J3)",
+        rule={"in": ["job_grade", ["J1", "J2", "J3"]]},
+    )
+    employee = _emp(category.display_name, derived={"job_grade": "X1"})
+
+    outcome = match_one(
+        employee,
+        [category],
+        _build_exact_lookup([category]),
+        {category.id: tokenize(category.display_name)},
+    )
+
+    assert outcome.category_id is None
+
+
+def test_unmapped_uploaded_code_rule_cannot_match_by_label() -> None:
+    category = _cat("officer", "Officer (Job Category: J1 to J3)")
+    category.rule_status = "unmapped"
+    employee = _emp(category.display_name, derived={"job_category": "X1"})
+
+    outcome = match_one(
+        employee,
+        [category],
+        _build_exact_lookup([category]),
+        {category.id: tokenize(category.display_name)},
+    )
+
+    assert outcome.category_id is None
+
+
 def test_invalid_ai_rule_cannot_match_by_roster_category_label() -> None:
     category = _cat(
         "thailand",
