@@ -22,9 +22,11 @@ import {
   useAIStatus,
   useAISuggest,
   useConfirmCategory,
+  useCategoryOverlaps,
   useDeleteCategory,
   usePatchCategory,
 } from "@/api/hooks";
+import { hasOnlyPastOverlapWarnings } from "./employeeCategoryGroups";
 import type { AttributeSchema, Category, RuleNode } from "@/types";
 import { confidencePill, sourcePill, statusPill } from "@/lib/badges";
 import { formatError } from "@/lib/errors";
@@ -167,7 +169,7 @@ function AISuggestionSummary({
       <div className={checks.attention.length > 0
         ? "rounded-md border border-warn/40 bg-warn-soft/40 p-2.5 text-xs"
         : "rounded-md border border-border bg-background p-2.5 text-xs"}>
-        <p className="font-medium text-foreground">Mapping checks</p>
+        <p className="font-medium text-foreground">Saved mapping checks</p>
         {checks.attention.length > 0 && <ul className="mt-1 space-y-1 text-warn">
           {checks.attention.map((message) => <li key={message}>• {message}</li>)}
         </ul>}
@@ -234,10 +236,18 @@ function EditForm({
   const confirm = useConfirmCategory();
   const aiSuggest = useAISuggest();
   const deleteCategory = useDeleteCategory();
+  const overlapQuery = useCategoryOverlaps(category.policy_year_id);
   const { data: aiStatus } = useAIStatus();
   const [showDelete, setShowDelete] = useState(false);
   const validation = current.rule_validation ?? {};
   const checks = mappingChecks(validation);
+  const ruleChanged = JSON.stringify(rule) !== JSON.stringify(current.matching_rule);
+  const needsOverlapRecheck =
+    !ruleChanged &&
+    rosterEmployeeCount !== null && rosterEmployeeCount > 0 &&
+    overlapQuery.isSuccess &&
+    hasOnlyPastOverlapWarnings(current) &&
+    !(overlapQuery.data ?? []).some((item) => item.category_id === current.id && item.employees.length > 0);
   const matchedCount =
     typeof validation.matched_count === "number" ? validation.matched_count : null;
   const expectedCount =
@@ -246,7 +256,6 @@ function EditForm({
   const coversAll = isCoversAllRule(rule);
   const toggleCoversAll = (on: boolean) => setRule(on ? { and: [] } : null);
 
-  const ruleChanged = JSON.stringify(rule) !== JSON.stringify(current.matching_rule);
   const nameChanged = displayName.trim() !== current.display_name;
   const pendingPatch = () => ({
     ...(nameChanged ? { display_name: displayName.trim() } : {}),
@@ -364,6 +373,15 @@ function EditForm({
           </div>
         </div>
 
+        {needsOverlapRecheck && (
+          <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-sm text-foreground">
+            <p className="font-medium">Rule needs recheck</p>
+            <p className="mt-1 text-xs">
+              Current employee assignments show no overlap. The warning below is from the saved rule check. Select Confirm mapping to run validation again.
+            </p>
+          </div>
+        )}
+
         {current.source === "ai_extracted" ? (
           <AISuggestionSummary
             category={current}
@@ -396,7 +414,7 @@ function EditForm({
           <div className={checks.attention.length > 0
             ? "rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs"
             : "rounded-md border border-border bg-muted/40 p-3 text-xs"}>
-            <p className="font-medium text-foreground">Mapping checks</p>
+            <p className="font-medium text-foreground">Saved mapping checks</p>
             {checks.attention.length > 0 && <ul className="mt-1 space-y-1 text-warn">
               {checks.attention.map((message) => (
                 <li key={message}>• {message}</li>
@@ -504,7 +522,7 @@ function EditForm({
         <SheetClose asChild>
           <Button variant="outline">Cancel</Button>
         </SheetClose>
-        {current.status !== "confirmed" && (
+        {(current.status !== "confirmed" || current.rule_status !== "validated") && (
           <Button
             variant="secondary"
             onClick={onConfirm}

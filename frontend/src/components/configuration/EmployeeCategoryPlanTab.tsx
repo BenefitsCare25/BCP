@@ -62,11 +62,7 @@ export function EmployeeCategoryPlanTab(props: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const hasIssue = (group: EmployeeCategoryGroup) => {
     if (groupOverlapEmployees(group, overlapsByCategory).length > 0) return true;
-    if (group.ruleStatus === "validated") return false;
-    if (overlapQuery.isSuccess && (data.employeesTotal ?? 0) > 0 && onlyPastOverlapWarnings(group)) {
-      return false;
-    }
-    return true;
+    return group.ruleStatus !== "validated";
   };
   const issueCount = data.groups.filter(hasIssue).length;
   const visibleGroups = issuesOnly
@@ -392,6 +388,11 @@ function EmployeeCategoryRow({
       </div>
       {expanded && (
         <div className="grid gap-2 border-t border-border p-3">
+          {employeesAvailable && overlapCheckReady && overlapEmployees.length === 0 && onlyPastOverlapWarnings(group) && (
+            <p className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs text-foreground">
+              The current employee assignments show no overlap, but the saved rule check still has an overlap warning. Open Edit rule and confirm the mapping to check it again.
+            </p>
+          )}
           {overlapEmployees.length > 0 && (
             <div id={`overlap-details-${group.representative.id}`} className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs">
               <p className="font-medium text-foreground">Active employees matching multiple categories</p>
@@ -497,7 +498,12 @@ function RuleStatus({
     return <Badge variant="info">Proposed — awaiting employee listing</Badge>;
   }
   if (employeesAvailable && overlapCheckReady && onlyPastOverlapWarnings(group)) {
-    return <Badge variant="info" title="The saved overlap warning is no longer present. Reconfirm to refresh the rule status.">No current overlap</Badge>;
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <Badge variant="warn">Recheck rule</Badge>
+        <span className="text-xs text-muted-foreground">No current overlap</span>
+      </div>
+    );
   }
   return <Badge variant="warn">Rule needs attention</Badge>;
 }

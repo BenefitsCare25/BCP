@@ -73,7 +73,7 @@ function categoryStatus(
   group: EmployeeCategoryGroup,
   overlapCount: number | null,
   employeesAvailable: boolean,
-) {
+): { label: string; variant: "warn" | "info" | "good" | "outline" | "error"; detail?: string } {
   if (overlapCount && overlapCount > 0) {
     return {
       label: `${overlapCount} overlapping employee${overlapCount === 1 ? "" : "s"}`,
@@ -81,7 +81,11 @@ function categoryStatus(
     };
   }
   if (overlapCount === 0 && employeesAvailable && onlyPastOverlapWarnings(group)) {
-    return { label: "No current overlap", variant: "info" as const };
+    return {
+      label: "Recheck rule",
+      variant: "warn",
+      detail: "No current overlap; saved warning remains",
+    };
   }
   if (overlapCount === null && onlyPastOverlapWarnings(group)) {
     return { label: "Checking overlap", variant: "outline" as const };
@@ -401,7 +405,12 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
                   <span className="min-w-0 break-words text-sm text-foreground">
                     {categoryGroup.name}
                   </span>
-                  <Badge variant={status.variant}>{status.label}</Badge>
+                  <div className="flex flex-col items-end gap-1 text-right">
+                    <Badge variant={status.variant}>{status.label}</Badge>
+                    {status.detail && (
+                      <span className="text-xs text-muted-foreground">{status.detail}</span>
+                    )}
+                  </div>
                 </div>
               );
             })}

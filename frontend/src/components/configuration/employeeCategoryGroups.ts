@@ -70,18 +70,23 @@ export function employeeCategoryIssueCount(categories: Category[]): number {
 /** A saved review state may outlive the overlap that originally caused it. */
 export function onlyPastOverlapWarnings(group: EmployeeCategoryGroup): boolean {
   const reviewRows = group.categories.filter((category) => category.rule_status === "needs_review");
-  return reviewRows.length > 0 && reviewRows.every((category) => {
-    const validation = category.rule_validation;
-    if (!validation || (Array.isArray(validation.errors) && validation.errors.length > 0)) return false;
-    if (Array.isArray(validation.unresolved_clauses) && validation.unresolved_clauses.length > 0) return false;
-    const warnings = Array.isArray(validation.warnings) ? validation.warnings.map(String) : [];
-    const blockers = warnings.filter((message) =>
-      !/^Configured value .+ has no active employees in /i.test(message) &&
-      !/^Matched \d+ employees; placement slip states \d+$/i.test(message) &&
-      !/^No active employee listing/i.test(message),
-    );
-    return blockers.length > 0 && blockers.every((message) =>
-      message.includes("equally specific employee cohort"),
-    );
-  });
+  return reviewRows.length > 0 && group.categories.every((category) =>
+    category.rule_status === "validated" || hasOnlyPastOverlapWarnings(category),
+  );
+}
+
+export function hasOnlyPastOverlapWarnings(category: Category): boolean {
+  if (category.rule_status !== "needs_review") return false;
+  const validation = category.rule_validation;
+  if (!validation || (Array.isArray(validation.errors) && validation.errors.length > 0)) return false;
+  if (Array.isArray(validation.unresolved_clauses) && validation.unresolved_clauses.length > 0) return false;
+  const warnings = Array.isArray(validation.warnings) ? validation.warnings.map(String) : [];
+  const blockers = warnings.filter((message) =>
+    !/^Configured value .+ has no active employees in /i.test(message) &&
+    !/^Matched \d+ employees; placement slip states \d+$/i.test(message) &&
+    !/^No active employee listing/i.test(message),
+  );
+  return blockers.length > 0 && blockers.every((message) =>
+    message.includes("equally specific employee cohort"),
+  );
 }
