@@ -173,10 +173,20 @@ class CategoryMemberCount(BaseModel):
     dependants: int
 
 
+class UnmatchedEmployeeOut(BaseModel):
+    employee_id: str
+    staff_id: str
+    employee_name: str | None
+    grade: str | None
+
+
 class MemberCountsOut(BaseModel):
     counts: list[CategoryMemberCount]
     employees_total: int
+    employees_in_scope: int
     employees_matched: int
+    unmatched_grades: dict[str, int]
+    unmatched_employees: list[UnmatchedEmployeeOut]
     has_dependants: bool
 
 
@@ -519,7 +529,18 @@ def preview_member_counts(
             for c in result.counts
         ],
         employees_total=result.employees_total,
+        employees_in_scope=result.employees_in_scope,
         employees_matched=result.employees_matched,
+        unmatched_grades=result.unmatched_grades,
+        unmatched_employees=[
+            UnmatchedEmployeeOut(
+                employee_id=employee.employee_id,
+                staff_id=employee.staff_id,
+                employee_name=employee.employee_name,
+                grade=employee.grade,
+            )
+            for employee in result.unmatched_employees
+        ],
         has_dependants=result.has_dependants,
     )
 

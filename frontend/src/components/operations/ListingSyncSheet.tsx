@@ -73,6 +73,7 @@ interface Props {
   onTerminateMissingChange: (value: boolean) => void;
   columnMapping: Record<string, string | null>;
   onColumnMappingChange: (index: number, attributeId: string | null) => void;
+  onIgnoreUnmapped: (indexes: number[]) => void;
   mappingDirty: boolean;
   onRecheckMapping: () => void;
   checkingMapping: boolean;
@@ -87,6 +88,7 @@ export function ListingSyncSheet({
   onTerminateMissingChange,
   columnMapping,
   onColumnMappingChange,
+  onIgnoreUnmapped,
   mappingDirty,
   onRecheckMapping,
   checkingMapping,
@@ -144,6 +146,7 @@ export function ListingSyncSheet({
               decisions={columnMapping}
               dirty={mappingDirty}
               onChange={onColumnMappingChange}
+              onIgnoreUnmapped={onIgnoreUnmapped}
             />
           )}
 
@@ -360,11 +363,13 @@ function ColumnMappingReview({
   decisions,
   dirty,
   onChange,
+  onIgnoreUnmapped,
 }: {
   mapping: RosterMappingPreview;
   decisions: Record<string, string | null>;
   dirty: boolean;
   onChange: (index: number, attributeId: string | null) => void;
+  onIgnoreUnmapped: (indexes: number[]) => void;
 }) {
   const unresolved = mapping.columns.filter(
     (column) =>
@@ -402,16 +407,34 @@ function ColumnMappingReview({
       </div>
 
       {(unresolved.length > 0 || missingStaffId) && (
-        <div className="flex items-start gap-2 border-t border-border bg-warn-soft/40 px-3 py-2.5">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
-          <p className="text-xs text-foreground">
-            {missingStaffId
-              ? "Map one column to Staff ID. "
-              : ""}
-            {unresolved.length > 0
-              ? `${unresolved.length} populated column${unresolved.length === 1 ? " has" : "s have"} not been mapped or ignored.`
-              : ""}
-          </p>
+        <div className="space-y-2 border-t border-border bg-warn-soft/40 px-3 py-2.5">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+            <p className="text-xs text-foreground">
+              {missingStaffId
+                ? "Map one column to Staff ID. "
+                : ""}
+              {unresolved.length > 0
+                ? `${unresolved.length} populated column${unresolved.length === 1 ? " has" : "s have"} not been mapped or ignored.`
+                : ""}
+            </p>
+          </div>
+          {unresolved.length > 0 && (
+            <div className="pl-6">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-left"
+                onClick={() => onIgnoreUnmapped(unresolved.map((column) => column.index))}
+              >
+                Ignore all {unresolved.length} unmapped columns
+              </Button>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Mapped fields stay as they are. Recheck changes before applying.
+              </p>
+            </div>
+          )}
         </div>
       )}
 

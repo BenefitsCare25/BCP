@@ -298,9 +298,7 @@ function SideBlock({
         </p>
       </div>
       <p className="text-2xs text-subtle">
-        {p.dependant_id === null
-          ? "Own employee cover"
-          : `Linked as ${(p.relationship || "dependant").toLowerCase()}`}
+        Linked as {(p.relationship || "dependant").toLowerCase()}
       </p>
 
       {p.unlinked ? (
@@ -372,6 +370,8 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
   // Any OTHER party — a second dependant row, or the person's own employee
   // record — is what makes a link safe to remove.
   const otherSides = c.parties.length - 1;
+  const employeeParty = c.parties.find((party) => party.dependant_id === null);
+  const dependantParties = c.parties.filter((party) => party.dependant_id !== null);
 
   const decide = async (
     decision: Parameters<typeof record.mutateAsync>[0]["decision"],
@@ -416,11 +416,20 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
       </div>
 
       <p className="text-sm text-muted-foreground">{verdict(c)}</p>
+      {employeeParty && (
+        <p className="text-xs text-muted-foreground">
+          This person is also an employee.
+        </p>
+      )}
 
-      {/* Two named sides, not a list of staff numbers. One container split by a
-          rule rather than two bordered boxes — a card inside a card is noise. */}
-      <div className="grid grid-cols-1 divide-y divide-border rounded bg-muted/40 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-        {c.parties.map((p, i) => (
+      {/* The employee record is summarized above; only dependant links need a card. */}
+      <div
+        className={cn(
+          "grid grid-cols-1 divide-y divide-border rounded bg-muted/40",
+          dependantParties.length > 1 && "sm:grid-cols-2 sm:divide-x sm:divide-y-0",
+        )}
+      >
+        {dependantParties.map((p, i) => (
           <SideBlock
             key={`${p.employee_id}-${p.dependant_id}-${i}`}
             p={p}

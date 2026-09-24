@@ -13,7 +13,7 @@ throwaway views, never written back, so calling it can't mutate the roster.
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,10 +26,12 @@ from app.models.category import Category, CategoryStatus
 from app.services.derivation_engine import derive
 from app.services.matching_engine import (
     _build_exact_lookup,
+    _entity_allows,
     _normalize,
     _status_rank,
     canonicalize_category_name,
     category_insured_entities,
+    employee_entity,
     entity_alias_map,
     insured_names,
     match_one,
@@ -61,10 +63,21 @@ class CategoryCount:
 
 
 @dataclass(frozen=True)
+class UnmatchedEmployee:
+    employee_id: str
+    staff_id: str
+    employee_name: str | None
+    grade: str | None
+
+
+@dataclass(frozen=True)
 class MemberCounts:
     counts: list[CategoryCount]
     employees_total: int
+    employees_in_scope: int
     employees_matched: int
+    unmatched_grades: dict[str, int]
+    unmatched_employees: list[UnmatchedEmployee]
     has_dependants: bool
 
 
@@ -198,21 +211,27 @@ def compute_member_counts(
     ``product_id`` (when known) lets the preview reuse the product's persisted
     category rules instead of re-deriving them from text — see
     ``_transient_categories``."""
+    employee_scope = [
+        Employee.policy_year_id == policy_year_id,
+        Employee.status == "active",
+    ]
+    if client_id is not None:
+        employee_scope.append(Employee.client_id == client_id)
     valid = [d for d in drafts if (d.description or "").strip()]
     if not valid:
         total = (
             db.execute(
-                select(func.count(Employee.id)).where(
-                    Employee.policy_year_id == policy_year_id,
-                    Employee.status == "active",
-                )
+                select(func.count(Employee.id)).where(*employee_scope)
             ).scalar()
             or 0
         )
         return MemberCounts(
             counts=[CategoryCount(d.key, 0, 0) for d in drafts],
             employees_total=total,
+            employees_in_scope=0,
             employees_matched=0,
+            unmatched_grades={},
+            unmatched_employees=[],
             has_dependants=has_dependants,
         )
 
@@ -227,21 +246,21 @@ def compute_member_counts(
     )
     employees = list(
         db.execute(
-            select(Employee).where(
-                Employee.policy_year_id == policy_year_id,
-                Employee.status == "active",
-            )
+            select(Employee).where(*employee_scope)
         ).scalars()
     )
     deps_per_employee: dict[str, int] = defaultdict(int)
     if has_dependants:
-        for emp_id, count in db.execute(
+        dependant_query = (
             select(Dependant.employee_id, func.count(Dependant.id))
             .where(Dependant.policy_year_id == policy_year_id)
             .where(Dependant.status == "active")
             .where(Dependant.employee_id.is_not(None))
             .group_by(Dependant.employee_id)
-        ).all():
+        )
+        if client_id is not None:
+            dependant_query = dependant_query.where(Dependant.client_id == client_id)
+        for emp_id, count in db.execute(dependant_query).all():
             deps_per_employee[emp_id] = count
 
     # A placement slip commonly repeats one employee category for every plan
@@ -275,7 +294,17 @@ def compute_member_counts(
     emp_counts: dict[str, int] = defaultdict(int)
     dep_counts: dict[str, int] = defaultdict(int)
     matched = 0
+    in_scope = 0
+    unmatched_grades: Counter[str] = Counter()
+    unmatched_employees: list[UnmatchedEmployee] = []
     for emp in employees:
+        emp_entities = employee_entity(emp.attribute_values, aliases)
+        if not any(
+            _entity_allows(gate, emp_entities)
+            for gate in insured_by_category.values()
+        ):
+            continue
+        in_scope += 1
         view = _EmpView(
             attribute_values=emp.attribute_values or {},
             derived_attribute_values=derive(emp.attribute_values or {}, schemas),
@@ -289,6 +318,21 @@ def compute_member_counts(
             entity_aliases=aliases,
         )
         if outcome.category_id is None:
+            grade = (
+                view.derived_attribute_values.get("job_category")
+                or view.attribute_values.get("job_grade")
+                or view.attribute_values.get("grade")
+            )
+            if grade not in (None, ""):
+                unmatched_grades[str(grade)[:64]] += 1
+            unmatched_employees.append(
+                UnmatchedEmployee(
+                    employee_id=emp.id,
+                    staff_id=emp.staff_id,
+                    employee_name=emp.employee_name,
+                    grade=str(grade)[:64] if grade not in (None, "") else None,
+                )
+            )
             continue
         matched += 1
         emp_counts[outcome.category_id] += 1
@@ -308,6 +352,12 @@ def compute_member_counts(
     return MemberCounts(
         counts=counts,
         employees_total=len(employees),
+        employees_in_scope=in_scope,
         employees_matched=matched,
+        unmatched_grades=dict(unmatched_grades.most_common(10)),
+        unmatched_employees=sorted(
+            unmatched_employees,
+            key=lambda employee: (employee.grade or "", employee.staff_id),
+        )[:100],
         has_dependants=has_dependants,
     )

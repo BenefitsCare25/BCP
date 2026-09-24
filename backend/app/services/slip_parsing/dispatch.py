@@ -122,7 +122,13 @@ def _extract_categories_from_sheet(
     # (and skip that sub-header row during the walk).
     cols = _identify_count_columns(rows, header_idx, cols)
 
-    categories = _walk_data_rows(rows, header_idx, cols, product_code=product_code)
+    categories = _walk_data_rows(
+        rows,
+        header_idx,
+        cols,
+        product_code=product_code,
+        merged_ranges=sheet.merged_ranges,
+    )
 
     # Enrich categories with premium rate data from the Rate section.
     rate_data, tier_labels = extract_rate_section(rows)
@@ -199,7 +205,7 @@ def parse_placement_slip(
     """
     products: list[ProductSlip] = []
     skipped: list[dict[str, Any]] = []
-    with open_workbook(path) as wb:
+    with open_workbook(path, include_merged_ranges=True) as wb:
         sheet_count = len(wb.sheet_names)
         for sheet_name in wb.sheet_names:
             if sheet_name.strip().lower() in NON_PRODUCT_SHEETS:

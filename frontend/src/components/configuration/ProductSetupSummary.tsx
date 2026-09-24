@@ -1,6 +1,8 @@
 import { Badge } from "@/components/ui/badge";
-import { useCategoryOverlaps, useRosterReadiness } from "@/api/hooks";
+import { useCategoryOverlaps, useMemberCounts } from "@/api/hooks";
+import { UnmatchedEmployeeNotice } from "./UnmatchedEmployeeNotice";
 import { fmtDay, fmtMoney } from "@/lib/format";
+import { insuredNames } from "@/lib/insured";
 import type {
   CategoryGroup,
   ClaimLimitSetting,
@@ -20,7 +22,7 @@ import {
 } from "@/lib/claimLimits";
 import {
   groupEmployeeCategories,
-  onlyPastOverlapWarnings,
+  onlySavedOverlapWarnings,
   type EmployeeCategoryGroup,
 } from "./employeeCategoryGroups";
 
@@ -72,26 +74,41 @@ export function ProductSetupStatus({
 function categoryStatus(
   group: EmployeeCategoryGroup,
   overlapCount: number | null,
-  employeesAvailable: boolean,
 ): { label: string; variant: "warn" | "info" | "good" | "outline" | "error"; detail?: string } {
+  const headcountWarning = group.categories
+    .flatMap((category) => {
+      const warnings = category.rule_validation?.warnings;
+      return Array.isArray(warnings) ? warnings.map(String) : [];
+    })
+    .find((message) => /^Matched \d+ employees; placement slip states \d+$/i.test(message));
   if (overlapCount && overlapCount > 0) {
     return {
       label: `${overlapCount} overlapping employee${overlapCount === 1 ? "" : "s"}`,
       variant: "warn" as const,
+      detail: "Open the category mapping to review the conflicting rules",
     };
   }
-  if (overlapCount === 0 && employeesAvailable && onlyPastOverlapWarnings(group)) {
+  if (onlySavedOverlapWarnings(group)) {
     return {
-      label: "Recheck rule",
+      label: "Review overlap warning",
       variant: "warn",
-      detail: "No current overlap; saved warning remains",
+      detail: "Review both category rules before confirming",
     };
-  }
-  if (overlapCount === null && onlyPastOverlapWarnings(group)) {
-    return { label: "Checking overlap", variant: "outline" as const };
   }
   if (group.ruleStatus === "validated") {
-    return { label: "Rule validated", variant: "good" as const };
+    return group.categories.every((category) => category.status === "confirmed")
+      ? {
+          label: "Mapping confirmed",
+          variant: "good" as const,
+          detail: headcountWarning,
+        }
+      : {
+          label: "Rule checks passed",
+          variant: "info" as const,
+          detail: headcountWarning
+            ? `${headcountWarning} · Broker confirmation pending`
+            : "Broker confirmation pending",
+        };
   }
   if (group.ruleStatus === "proposed") {
     return {
@@ -102,7 +119,29 @@ function categoryStatus(
   if (group.ruleStatus === "unmapped") {
     return { label: "Rule not set", variant: "error" as const };
   }
-  return { label: "Rule needs attention", variant: "warn" as const };
+  const issue = group.categories.flatMap((category) => {
+    const validation = category.rule_validation;
+    const errors = Array.isArray(validation?.errors) ? validation.errors.map(String) : [];
+    const unresolved = Array.isArray(validation?.unresolved_clauses)
+      ? validation.unresolved_clauses.map(String)
+      : [];
+    const warnings = Array.isArray(validation?.warnings)
+      ? validation.warnings.map(String)
+      : [];
+    return [
+      ...errors,
+      ...unresolved,
+      ...warnings.filter((message) =>
+        !/^Configured value .+ has no active employees in /i.test(message) &&
+        !/^Matched \d+ employees; placement slip states \d+$/i.test(message),
+      ),
+    ];
+  })[0];
+  return {
+    label: "Rule needs attention",
+    variant: "warn" as const,
+    detail: issue || "Open the category mapping to review the rule",
+  };
 }
 
 function termRows(term: ProductTerm | null): { label: string; value: string }[] {
@@ -330,7 +369,16 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
   const answers = draft?.answers ?? null;
   const categoryGroups = groupEmployeeCategories(group?.categories ?? []);
   const overlapQuery = useCategoryOverlaps(policyYearId);
-  const rosterQuery = useRosterReadiness(policyYearId);
+  const memberCountsQuery = useMemberCounts(
+    policyYearId,
+    template.code,
+    template.has_dependants,
+    categoryGroups.map((categoryGroup) => ({
+      key: categoryGroup.key,
+      description: categoryGroup.representative.raw_description || categoryGroup.name,
+      insured: insuredNames(categoryGroup.representative.plan_assignments?.insured),
+    })),
+  );
   const overlapsByCategory = new Map(
     (overlapQuery.data ?? []).map((item) => [item.category_id, item.employees]),
   );
@@ -384,6 +432,12 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
         <h4 className="text-sm font-semibold text-foreground">
           Employee Category & Plan Type
         </h4>
+        <UnmatchedEmployeeNotice productCode={template.code} counts={memberCountsQuery.data} />
+        {memberCountsQuery.isError && (
+          <p role="alert" className="text-xs text-warn">
+            Employee coverage counts are unavailable. Refresh to check the listing.
+          </p>
+        )}
         {categoryGroups.length ? (
           <div className="divide-y divide-border rounded-lg border border-border">
             {categoryGroups.slice(0, 5).map((categoryGroup) => {
@@ -395,7 +449,6 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
               const status = categoryStatus(
                 categoryGroup,
                 overlapQuery.isSuccess ? overlappingIds.size : null,
-                (rosterQuery.data?.employee_count ?? 0) > 0,
               );
               return (
                 <div

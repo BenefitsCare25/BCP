@@ -64,6 +64,7 @@ export function useListingApply() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["dependants"] });
+      qc.invalidateQueries({ queryKey: ["entity-vocab"] });
       qc.invalidateQueries({ queryKey: ["match-results"] });
       qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
       qc.invalidateQueries({ queryKey: ["roster-readiness"] });

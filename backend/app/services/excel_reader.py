@@ -33,6 +33,8 @@ class Sheet:
     rows: list[list[Cell]]
     # 0-indexed (row, column) -> Excel note/comment metadata.
     comments: dict[tuple[int, int], CellNote] = field(default_factory=dict)
+    # 0-indexed, end-exclusive (first_row, last_row, first_col, last_col).
+    merged_ranges: tuple[tuple[int, int, int, int], ...] = ()
 
 
 class Workbook(Protocol):
@@ -48,7 +50,9 @@ class Workbook(Protocol):
     def __exit__(self, *exc: object) -> None: ...
 
 
-def open_workbook(path: Path | str) -> Workbook:
+def open_workbook(
+    path: Path | str, *, include_merged_ranges: bool = False
+) -> Workbook:
     """Open a workbook. Always use as a context manager so file handles release
     on Windows before the caller tries to delete the source file.
     """
@@ -57,7 +61,7 @@ def open_workbook(path: Path | str) -> Workbook:
     if suffix == ".xls":
         return _XlrdWorkbook(path)
     if suffix in {".xlsx", ".xlsm"}:
-        return _OpenpyxlWorkbook(path)
+        return _OpenpyxlWorkbook(path, include_merged_ranges=include_merged_ranges)
     raise ValueError(f"Unsupported file extension: {suffix}")
 
 
@@ -99,7 +103,7 @@ class _XlrdWorkbook:
         # open time and releases the OS file handle immediately. Critical on
         # Windows where a held handle blocks the caller from deleting the
         # source temp file.
-        self._wb = xlrd.open_workbook(str(path), formatting_info=False, on_demand=False)
+        self._wb = xlrd.open_workbook(str(path), formatting_info=True, on_demand=False)
 
     @property
     def sheet_names(self) -> list[str]:
@@ -127,7 +131,12 @@ class _XlrdWorkbook:
             if text:
                 author = str(getattr(note, "author", "") or "").strip() or None
                 comments[(int(rowx), int(colx))] = CellNote(text=text, author=author)
-        return Sheet(name=name, rows=rows, comments=comments)
+        return Sheet(
+            name=name,
+            rows=rows,
+            comments=comments,
+            merged_ranges=tuple(tuple(region) for region in ws.merged_cells),
+        )
 
     def close(self) -> None:
         # xlrd with on_demand=False already released the handle; nothing to do.
@@ -141,13 +150,20 @@ class _XlrdWorkbook:
 
 
 class _OpenpyxlWorkbook:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, include_merged_ranges: bool = False) -> None:
         from openpyxl import load_workbook
 
+        self._include_merged_ranges = include_merged_ranges
         # read_only=True keeps the underlying zip handle open. Caller must
         # close() / use as a context manager so Windows releases the handle
         # before the source file is deleted.
-        self._wb = load_workbook(filename=str(path), read_only=True, data_only=True)
+        # Placement slips need merge metadata to distinguish a plan-level
+        # headcount from a category count. Other large uploads keep streaming.
+        self._wb = load_workbook(
+            filename=str(path),
+            read_only=not include_merged_ranges,
+            data_only=True,
+        )
 
     @property
     def sheet_names(self) -> list[str]:
@@ -155,6 +171,14 @@ class _OpenpyxlWorkbook:
 
     def sheet(self, name: str) -> Sheet:
         ws = self._wb[name]
+        merged_ranges = (
+            tuple(
+                (region.min_row - 1, region.max_row, region.min_col - 1, region.max_col)
+                for region in ws.merged_cells.ranges
+            )
+            if self._include_merged_ranges
+            else ()
+        )
         # A sheet's size is DECLARED in its XML (`<dimension ref="A1:AK4807"/>`)
         # and `read_only=True` trusts that declaration rather than counting.
         # Several non-Excel writers — Go Excelize, which the incumbent
@@ -169,7 +193,10 @@ class _OpenpyxlWorkbook:
         # so the normal path keeps its phantom-column cap (some workbooks in
         # the wild report ~16k columns) — and a genuinely 1x1 sheet costs one
         # cheap extra pass.
-        if (ws.max_row or 0) <= 1 or (ws.max_column or 0) <= 1:
+        if (
+            ((ws.max_row or 0) <= 1 or (ws.max_column or 0) <= 1)
+            and hasattr(ws, "reset_dimensions")
+        ):
             ws.reset_dimensions()
             # With no declared width, openpyxl sizes each row to its own last
             # populated cell — a blank row comes back empty and a row with
@@ -188,13 +215,19 @@ class _OpenpyxlWorkbook:
                     for r in raw
                 ],
                 comments=comments,
+                merged_ranges=merged_ranges,
             )
         rows: list[list[Cell]] = []
         max_col = min(ws.max_column or MAX_SCAN_COLS, MAX_SCAN_COLS)
         raw_cells = [list(row) for row in ws.iter_rows(max_col=max_col)]
         for row in raw_cells:
             rows.append([_coerce(getattr(cell, "value", None)) for cell in row])
-        return Sheet(name=name, rows=rows, comments=_openpyxl_comments(raw_cells))
+        return Sheet(
+            name=name,
+            rows=rows,
+            comments=_openpyxl_comments(raw_cells),
+            merged_ranges=merged_ranges,
+        )
 
     def close(self) -> None:
         self._wb.close()

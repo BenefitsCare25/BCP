@@ -67,15 +67,15 @@ export function employeeCategoryIssueCount(categories: Category[]): number {
   ).length;
 }
 
-/** A saved review state may outlive the overlap that originally caused it. */
-export function onlyPastOverlapWarnings(group: EmployeeCategoryGroup): boolean {
+/** Identify review states whose only saved blockers are overlap warnings. */
+export function onlySavedOverlapWarnings(group: EmployeeCategoryGroup): boolean {
   const reviewRows = group.categories.filter((category) => category.rule_status === "needs_review");
   return reviewRows.length > 0 && group.categories.every((category) =>
-    category.rule_status === "validated" || hasOnlyPastOverlapWarnings(category),
+    category.rule_status === "validated" || hasOnlySavedOverlapWarnings(category),
   );
 }
 
-export function hasOnlyPastOverlapWarnings(category: Category): boolean {
+export function hasOnlySavedOverlapWarnings(category: Category): boolean {
   if (category.rule_status !== "needs_review") return false;
   const validation = category.rule_validation;
   if (!validation || (Array.isArray(validation.errors) && validation.errors.length > 0)) return false;

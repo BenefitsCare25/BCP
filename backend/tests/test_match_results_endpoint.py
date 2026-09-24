@@ -84,22 +84,32 @@ def _insert_employees(py_id: str) -> list[str]:
     """
     db = SessionLocal()
     try:
-        # Find any seeded category display_name to use as an exact-match probe.
+        # Use a synthetic category without insurer grade codes to exercise the
+        # exact/fuzzy paths. A label copied from a coded placement-slip row is
+        # deliberately insufficient without that row's explicit grade values.
         from app.models import Category  # local import — DB is initialised by fixture
+        from app.models.category import CategoryStatus
 
-        category_names = [
-            (c.id, c.display_name)
+        categories = [
+            c
             for c in db.execute(
                 select(Category).where(Category.policy_year_id == py_id)
             ).scalars().all()
         ]
-        assert category_names, "Expected categories to be seeded by placement slip parse"
-        # Pick one with a parseable shape "<digits> ..." so the derivation also fires.
-        probe = next(
-            ((cid, name) for cid, name in category_names if name and name[:2].strip().isdigit()),
-            category_names[0],
+        assert categories, "Expected categories to be seeded by placement slip parse"
+        probe_name = "Test Coverage Cohort"
+        db.add(
+            Category(
+                policy_year_id=py_id,
+                product_id=categories[0].product_id,
+                display_name=probe_name,
+                raw_description=probe_name,
+                matching_rule={"=": ["category", probe_name]},
+                status=CategoryStatus.confirmed.value,
+                source="manual",
+                plan_assignments={"plan_code": "TEST-COHORT"},
+            )
         )
-        _probe_id, probe_name = probe
 
         emps = [
             Employee(

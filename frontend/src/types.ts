@@ -1227,7 +1227,15 @@ export interface MemberCountRow {
 export interface MemberCounts {
   counts: MemberCountRow[];
   employees_total: number;
+  employees_in_scope: number;
   employees_matched: number;
+  unmatched_grades: Record<string, number>;
+  unmatched_employees: {
+    employee_id: string;
+    staff_id: string;
+    employee_name: string | null;
+    grade: string | null;
+  }[];
   has_dependants: boolean;
 }
 

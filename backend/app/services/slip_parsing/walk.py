@@ -313,6 +313,7 @@ def _walk_data_rows(
     header_idx: int,
     cols: _Columns,
     product_code: str = "",
+    merged_ranges: tuple[tuple[int, int, int, int], ...] = (),
 ) -> tuple[ExtractedCategory, ...]:
     cols = _realign_category_column(rows, header_idx, cols)
     out: list[ExtractedCategory] = []
@@ -485,6 +486,26 @@ def _walk_data_rows(
                 member_scope=member_scope,
             )
         )
+
+    # A headcount cell merged over several distinct category rows belongs to
+    # the plan/block, not to its first category. Keep the category's count
+    # unknown rather than reporting a false cohort-vs-slip discrepancy.
+    count_columns = {column for column, _ in cols.count_tiers}
+    if not count_columns and cols.num_employees >= 0:
+        count_columns.add(cols.num_employees)
+    for first_row, last_row, first_col, last_col in merged_ranges:
+        if last_row - first_row <= 1 or not any(
+            first_col <= column < last_col for column in count_columns
+        ):
+            continue
+        covered = [
+            index for index, category in enumerate(out)
+            if first_row < category.source_row <= last_row
+        ]
+        if len({out[index].category for index in covered}) < 2:
+            continue
+        for index in covered:
+            out[index] = replace(out[index], num_employees=None, tier_counts=None)
 
     # Some sum-assured layouts (GPA) carry no Plan column and no inline "Plan N:"
     # — each category IS its own sum-insured tier. When the whole sheet yielded no

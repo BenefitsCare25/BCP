@@ -673,6 +673,26 @@ def test_dependant_roster_never_imports_as_employees(tmp_path: Path) -> None:
     assert parse_employee_workbook(book) == []
 
 
+def test_dependant_only_listing_has_no_employee_mapping_or_false_dropped_rows(
+    client: TestClient,
+) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Listing"
+    ws.append(DEP_COLS)
+    ws.append(["A-1", "Anna Lim", "Kid One", "", "Child", "2015-01-01", ""])
+    buf = BytesIO()
+    wb.save(buf)
+
+    response = _preview(client, _py(client), buf.getvalue())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["roster_mapping"] is None
+    assert body["counts"]["dropped_rows"] == 0
+    assert body["counts"]["additions"] == 1
+    assert body["additions"][0]["record_type"] == "dependant"
+
+
 def test_apply_refuses_a_stale_termination_set(client: TestClient) -> None:
     """`terminate_missing` is confirmed against a list the broker READ, but
     apply re-runs the diff. Someone joining in between (a portal dependant

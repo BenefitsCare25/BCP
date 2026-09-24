@@ -10,7 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
 
+from app.services.excel_reader import open_workbook
 from app.services.placement_slip_parser import (
     Cell,
     _age_from_birthday,
@@ -96,6 +98,43 @@ def test_basis_carries_plan_code_across_merged_block() -> None:
     assert [c.plan_code for c in cats] == ["1", "1", "1", ""]
     # Participation also carries onto the continuation rows.
     assert cats[1].participation == "Compulsory - Employees"
+
+
+def test_merged_plan_headcount_is_not_assigned_to_first_category() -> None:
+    cols = _Columns(insured=1, category=3, participation=6, plan=9, num_employees=10)
+    rows: list[list[Cell]] = [
+        ["", "Insured", "", "Category", "", "", "Participation", "", "", "Plan", "Number"],
+        ["", "CDL", "", "Senior (Job category: A1)", "", "", "Compulsory", "", "", "1", 494],
+        ["", "", "", "Manager (Job category: E1)", "", "", "", "", "", "", ""],
+        ["", "", "", "Officer (Job category: J1)", "", "", "", "", "", "", ""],
+    ]
+
+    categories = _walk_data_rows(
+        rows, 0, cols, merged_ranges=((1, 4, 10, 11),)
+    )
+
+    assert [category.plan_code for category in categories] == ["1", "1", "1"]
+    assert [category.num_employees for category in categories] == [None, None, None]
+
+
+def test_xlsx_placement_reader_preserves_merged_headcount_range(tmp_path: Path) -> None:
+    path = tmp_path / "merged.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "GHS"
+    sheet.append(["Category", "Employees"])
+    sheet.append(["Senior", 494])
+    sheet.append(["Manager"])
+    sheet.append(["Officer"])
+    sheet.merge_cells("B2:B4")
+    workbook.save(path)
+    workbook.close()
+
+    with open_workbook(path, include_merged_ranges=True) as reader:
+        parsed = reader.sheet("GHS")
+
+    assert parsed.merged_ranges == ((1, 4, 1, 2),)
+    assert parsed.rows[1][1] == 494
 
 
 def test_basis_autonumbers_when_no_plan_column() -> None:

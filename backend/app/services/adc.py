@@ -732,12 +732,15 @@ def evaluate_listing(
     # whose file loses rows has to be told: silently importing 8 of 10 rows and
     # reporting success is how a roster goes quietly wrong.
     #
-    # Gated on the sheet EXISTING, not on it having parsed rows — otherwise the
-    # worst case reports zero: a Dependants sheet whose header is unrecognised
-    # (or whose every row fails the dependant-column guard) yields no records,
-    # and the whole sheet would vanish under "matches the roster exactly".
-    dropped = max(0, _data_rows(path, "Employees") - len(emp_records))
-    if has_sheet(path, "Dependants"):
+    # A single-sheet dependant listing is the fallback for both parsers. Count
+    # its rows once as dependants, even when none can be parsed.
+    has_employee_sheet = employee_mapping.sheet_name is not None
+    dropped = (
+        max(0, _data_rows(path, "Employees") - len(emp_records))
+        if has_employee_sheet
+        else 0
+    )
+    if has_sheet(path, "Dependants") or not has_employee_sheet:
         dropped += max(0, _data_rows(path, "Dependants") - len(dep_records))
 
     employees = list(
@@ -758,7 +761,7 @@ def evaluate_listing(
     )
 
     plan = _Plan()
-    plan.employee_mapping = employee_mapping
+    plan.employee_mapping = employee_mapping if has_employee_sheet else None
     plan.dropped_rows = dropped
     _plan_employees(plan, emp_records, employees)
     _plan_dependants(plan, dep_records, dependants, employees)
@@ -775,36 +778,37 @@ def evaluate_listing(
         else 0
     )
     preview = _to_preview(plan)
-    preview.roster_mapping = RosterMappingPreview(
-        sheet_name=employee_mapping.sheet_name,
-        fingerprint=employee_mapping.fingerprint,
-        digest=employee_mapping.digest,
-        reused_profile=employee_mapping.reused_profile,
-        unresolved=employee_mapping.unresolved,
-        required_missing=employee_mapping.required_missing,
-        columns=[
-            RosterColumnMapping(
-                index=item.index,
-                source_column=item.source_column,
-                attribute_id=item.attribute_id,
-                display_name=item.display_name,
-                status=item.status,
-                source=item.source,
-                non_empty_count=item.non_empty_count,
-            )
-            for item in employee_mapping.columns
-        ],
-        available_attributes=[
-            RosterMappingAttribute(
-                attribute_id=item.attribute_id,
-                display_name=item.display_name,
-                is_pii=item.is_pii,
-                allow_matching=item.allow_matching,
-                derived=item.derived,
-            )
-            for item in employee_mapping.available_attributes
-        ],
-    )
+    if has_employee_sheet:
+        preview.roster_mapping = RosterMappingPreview(
+            sheet_name=employee_mapping.sheet_name,
+            fingerprint=employee_mapping.fingerprint,
+            digest=employee_mapping.digest,
+            reused_profile=employee_mapping.reused_profile,
+            unresolved=employee_mapping.unresolved,
+            required_missing=employee_mapping.required_missing,
+            columns=[
+                RosterColumnMapping(
+                    index=item.index,
+                    source_column=item.source_column,
+                    attribute_id=item.attribute_id,
+                    display_name=item.display_name,
+                    status=item.status,
+                    source=item.source,
+                    non_empty_count=item.non_empty_count,
+                )
+                for item in employee_mapping.columns
+            ],
+            available_attributes=[
+                RosterMappingAttribute(
+                    attribute_id=item.attribute_id,
+                    display_name=item.display_name,
+                    is_pii=item.is_pii,
+                    allow_matching=item.allow_matching,
+                    derived=item.derived,
+                )
+                for item in employee_mapping.available_attributes
+            ],
+        )
     return plan, preview
 
 

@@ -22,11 +22,10 @@ import {
   useAIStatus,
   useAISuggest,
   useConfirmCategory,
-  useCategoryOverlaps,
   useDeleteCategory,
   usePatchCategory,
 } from "@/api/hooks";
-import { hasOnlyPastOverlapWarnings } from "./employeeCategoryGroups";
+import { hasOnlySavedOverlapWarnings } from "./employeeCategoryGroups";
 import type { AttributeSchema, Category, RuleNode } from "@/types";
 import { confidencePill, sourcePill, statusPill } from "@/lib/badges";
 import { formatError } from "@/lib/errors";
@@ -236,18 +235,22 @@ function EditForm({
   const confirm = useConfirmCategory();
   const aiSuggest = useAISuggest();
   const deleteCategory = useDeleteCategory();
-  const overlapQuery = useCategoryOverlaps(category.policy_year_id);
   const { data: aiStatus } = useAIStatus();
   const [showDelete, setShowDelete] = useState(false);
   const validation = current.rule_validation ?? {};
   const checks = mappingChecks(validation);
   const ruleChanged = JSON.stringify(rule) !== JSON.stringify(current.matching_rule);
-  const needsOverlapRecheck =
-    !ruleChanged &&
-    rosterEmployeeCount !== null && rosterEmployeeCount > 0 &&
-    overlapQuery.isSuccess &&
-    hasOnlyPastOverlapWarnings(current) &&
-    !(overlapQuery.data ?? []).some((item) => item.category_id === current.id && item.employees.length > 0);
+  const hasSavedOverlapWarning = !ruleChanged && hasOnlySavedOverlapWarnings(current);
+  const ruleCheckLabel =
+    current.rule_status === "validated"
+      ? current.status === "confirmed" ? "Mapping confirmed" : "Rule checks passed"
+      : current.rule_status === "needs_review"
+        ? "Rule needs attention"
+        : current.rule_status?.replaceAll("_", " ");
+  const ruleCheckVariant =
+    current.rule_status === "validated"
+      ? current.status === "confirmed" ? "good" : "info"
+      : current.rule_status === "unmapped" ? "error" : "warn";
   const matchedCount =
     typeof validation.matched_count === "number" ? validation.matched_count : null;
   const expectedCount =
@@ -336,17 +339,7 @@ function EditForm({
           {statusPill(current.status)}
           {confidencePill(current.confidence)}
           {current.rule_status && (
-            <Badge
-              variant={
-                current.rule_status === "validated"
-                  ? "good"
-                  : current.rule_status === "unmapped"
-                    ? "error"
-                    : "warn"
-              }
-            >
-              {current.rule_status.replaceAll("_", " ")}
-            </Badge>
+            <Badge variant={ruleCheckVariant}>{ruleCheckLabel}</Badge>
           )}
         </div>
         <SheetTitle>{category.display_name}</SheetTitle>
@@ -373,11 +366,11 @@ function EditForm({
           </div>
         </div>
 
-        {needsOverlapRecheck && (
+        {hasSavedOverlapWarning && (
           <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-sm text-foreground">
-            <p className="font-medium">Rule needs recheck</p>
+            <p className="font-medium">Review overlap warning</p>
             <p className="mt-1 text-xs">
-              Current employee assignments show no overlap. The warning below is from the saved rule check. Select Confirm mapping to run validation again.
+              The saved check found an employee who also matched another category. Review both category rules before confirming. Confirm mapping checks again and may still find a conflict.
             </p>
           </div>
         )}

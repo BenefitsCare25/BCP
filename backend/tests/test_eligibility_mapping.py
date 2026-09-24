@@ -36,6 +36,9 @@ from app.services.eligibility_mapping import (
     AttributeValueCatalog,
     CategoryConfirmationBatch,
     _assignment_counts,
+    _exclude_separate_location_cohorts,
+    _rule_without_product_location_context,
+    _separate_location_cohorts,
     auto_map_policy_year,
     build_ai_eligibility_inputs,
     build_attribute_catalog,
@@ -47,6 +50,7 @@ from app.services.eligibility_mapping import (
     validate_ai_matching_rule,
     validate_matching_rule,
 )
+from app.services.rule_evaluator import evaluate
 from scripts.seed_demo import seed
 
 CLIENT_ID = "00000000-0000-0000-0000-00000000e101"
@@ -335,7 +339,7 @@ def test_ai_rule_rejects_roster_category_proxy_for_explicit_job_codes() -> None:
     assert any("roster category text" in error for error in validation.errors)
 
 
-def test_upload_proposal_prefers_explicit_codes_over_named_roster_cohorts() -> None:
+def test_upload_proposal_joins_explicit_officer_codes_to_exact_location_cohort() -> None:
     description = (
         "Officer and All Employees based in Thailand (except for Director) "
         "(Job Category: J1 to J3, JA to JC)"
@@ -347,10 +351,94 @@ def test_upload_proposal_prefers_explicit_codes_over_named_roster_cohorts() -> N
 
     proposal = propose_category_rule(description, catalog)
 
-    assert proposal.rule == {
-        "in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]
-    }
-    assert proposal.unresolved_clauses == ["based in Thailand"]
+    assert proposal.rule == {"or": [
+        {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+        {"=": ["category", "All Employees based in Thailand (except for Director)"]},
+    ]}
+    assert proposal.unresolved_clauses == []
+    assert validate_ai_matching_rule(description, proposal.rule, catalog).valid
+
+
+def test_location_cohort_requires_same_exclusion_as_slip() -> None:
+    description = (
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3)"
+    )
+    catalog = _catalog(
+        job_category=["J1", "J2", "J3"],
+        category=["All Employees based in Thailand"],
+    )
+
+    proposal = propose_category_rule(description, catalog)
+
+    assert proposal.unresolved_clauses
+    assert not validate_ai_matching_rule(
+        description,
+        {"or": [
+            {"in": ["job_category", ["J1", "J2", "J3"]]},
+            {"=": ["category", "All Employees based in Thailand"]},
+        ]},
+        catalog,
+    ).valid
+
+
+def test_explicit_grades_cannot_be_bypassed_by_or_branch() -> None:
+    catalog = _catalog(
+        job_category=["A1", "E10"],
+        category=["SM to SVP", "All Employees based in Thailand"],
+    )
+    description = "SM to SVP (Job Category: A1)"
+
+    for extra in (
+        {"not_in": ["category", ["All Employees based in Thailand"]]},
+        {"=": ["category", "All Employees based in Thailand"]},
+    ):
+        validation = validate_ai_matching_rule(
+            description,
+            {"or": [{"=": ["job_category", "A1"]}, extra]},
+            catalog,
+        )
+        assert not validation.valid
+        assert any("outside the slip" in error for error in validation.errors)
+
+
+def test_separately_priced_location_cohort_is_excluded_from_grade_bands() -> None:
+    location = "All Employees based in Thailand (except for Director)"
+    catalog = _catalog(
+        job_category=["A1", "X1", "J1"],
+        category=["SM to SVP", "Executive", location],
+    )
+    product_id = "life-product"
+    thailand = Category(
+        product_id=product_id,
+        display_name=location,
+        raw_description=location,
+    )
+    senior = Category(
+        product_id=product_id,
+        display_name="SM to SVP (Job category: A1)",
+        raw_description="SM to SVP (Job category: A1)",
+    )
+    cohorts = _separate_location_cohorts([thailand, senior], catalog)
+    proposal = propose_category_rule(senior.raw_description, catalog)
+    narrowed = _exclude_separate_location_cohorts(proposal, senior, cohorts)
+
+    assert narrowed.rule == {"and": [
+        {"=": ["job_category", "A1"]},
+        {"not_in": ["category", [location]]},
+    ]}
+    assert validate_ai_matching_rule(
+        senior.raw_description,
+        narrowed.rule,
+        catalog,
+        location_exclusions=cohorts[product_id],
+    ).valid
+    assert evaluate(narrowed.rule, {"job_category": "A1", "category": "SM to SVP"})
+    assert not evaluate(narrowed.rule, {"job_category": "A1", "category": location})
+    assert _exclude_separate_location_cohorts(narrowed, senior, cohorts).rule == narrowed.rule
+    assert _rule_without_product_location_context(
+        narrowed.rule, {"product_location_exclusions": cohorts[product_id]}
+    ) == proposal.rule
 
 
 def test_upload_proposal_does_not_replace_unmapped_codes_with_text_cohort() -> None:
@@ -939,6 +1027,102 @@ def test_manual_confirmation_accepts_equivalent_grade_attribute() -> None:
 
         assert profile.status == "confirmed"
         assert category.status == CategoryStatus.confirmed.value
+        assert profile.required_attributes == ["job_grade"]
+        db.rollback()
+
+
+def test_confirmation_rejects_rule_that_bypasses_slip_grade_codes() -> None:
+    with SessionLocal() as db:
+        product = db.execute(select(Product).where(Product.code == "WICA")).scalar_one()
+        category = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            display_name="Grade A1",
+            raw_description="Grade A1 (Job Category: A1)",
+            matching_rule={"or": [
+                {"=": ["job_grade", "A1"]},
+                {"!=": ["employment_type", "MANUAL"]},
+            ]},
+            status=CategoryStatus.needs_review.value,
+            source="manual",
+            human_modified=True,
+            plan_assignments={"plan_code": "GRADE-SOURCE-GUARD"},
+        )
+        db.add(category)
+        db.add(Employee(
+            client_id=CLIENT_ID,
+            policy_year_id=PY_2026,
+            staff_id="E-GRADE-SOURCE-GUARD",
+            attribute_values={"job_grade": "A1", "employment_type": "MANUAL"},
+            derived_attribute_values={},
+        ))
+        db.flush()
+
+        with pytest.raises(ValueError, match="outside the slip's explicit codes"):
+            confirm_category_mapping(db, category=category, client_id=CLIENT_ID)
+
+        assert category.status == CategoryStatus.needs_review.value
+        db.rollback()
+
+
+def test_confirmed_profile_drops_product_location_guard() -> None:
+    location = "All Employees based in Thailand (except for Director)"
+    guard = {"category": [location]}
+    with SessionLocal() as db:
+        product = Product(
+            client_id=CLIENT_ID,
+            code="LOCATION-PROFILE-QA",
+            display_name="Location profile QA",
+        )
+        db.add(product)
+        db.flush()
+        db.add(Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            display_name=location,
+            raw_description=location,
+            matching_rule={"=": ["category", location]},
+            status=CategoryStatus.needs_review.value,
+            plan_assignments={"plan_code": "LOCATION"},
+        ))
+        senior = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            display_name="Senior profile guard",
+            raw_description="Senior profile guard (Job Category: A1)",
+            matching_rule={"and": [
+                {"=": ["job_grade", "A1"]},
+                {"not_in": ["category", [location]]},
+            ]},
+            rule_validation={"product_location_exclusions": guard},
+            status=CategoryStatus.needs_review.value,
+            plan_assignments={"plan_code": "SENIOR"},
+        )
+        db.add(senior)
+        db.add_all([
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-LOCATION-PROFILE-SENIOR",
+                attribute_values={"job_grade": "A1", "category": "Senior profile guard"},
+            ),
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-LOCATION-PROFILE-THAILAND",
+                attribute_values={"job_grade": "A1", "category": location},
+            ),
+        ])
+        db.flush()
+
+        profile = confirm_category_mapping(db, category=senior, client_id=CLIENT_ID)
+
+        assert senior.status == CategoryStatus.confirmed.value
+        assert senior.matching_rule == {"and": [
+            {"=": ["job_grade", "A1"]},
+            {"not_in": ["category", [location]]},
+        ]}
+        assert profile.matching_rule == {"=": ["job_grade", "A1"]}
         assert profile.required_attributes == ["job_grade"]
         db.rollback()
 

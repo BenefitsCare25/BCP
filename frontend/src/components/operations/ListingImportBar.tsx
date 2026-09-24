@@ -97,6 +97,15 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
     setMappingDirty(true);
   }
 
+  function onIgnoreUnmapped(indexes: number[]) {
+    setColumnMapping((current) => {
+      const next = { ...(current ?? {}) };
+      for (const index of indexes) next[String(index)] = null;
+      return next;
+    });
+    setMappingDirty(true);
+  }
+
   function onRecheckMapping() {
     if (!file || !columnMapping) return;
     previewMut.mutate(
@@ -190,6 +199,7 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
         onTerminateMissingChange={setTerminateMissing}
         columnMapping={columnMapping ?? {}}
         onColumnMappingChange={onMappingChange}
+        onIgnoreUnmapped={onIgnoreUnmapped}
         mappingDirty={mappingDirty}
         onRecheckMapping={onRecheckMapping}
         checkingMapping={previewMut.isPending}

@@ -785,21 +785,23 @@ export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
             setDuplicateOf(null);
           }
         }}
-        title="Replace previous upload?"
+        title="Upload this file again?"
         description={
           duplicateOf && (
             <span>
               <span className="font-medium text-foreground">
                 {duplicateOf.filename}
               </span>{" "}
-              was already uploaded on {fmtDate(duplicateOf.created_at)} (
-              {duplicateOf.total_categories} categories). Re-uploading replaces
-              this year's unreviewed auto-generated categories. Confirmed and
-              manually-edited categories are kept.
+              was uploaded on {fmtDate(duplicateOf.created_at)}, when{" "}
+              {duplicateOf.total_categories} categories were extracted. This is
+              upload history; those categories may have since been removed.
+              Uploading again replaces any unreviewed auto-generated categories
+              still in this benefit year. Confirmed and manually-edited
+              categories are kept.
             </span>
           )
         }
-        confirmLabel="Replace & re-upload"
+        confirmLabel="Upload again"
         confirmVariant="destructive"
         onConfirm={confirmReplace}
         loading={upload.isPending}

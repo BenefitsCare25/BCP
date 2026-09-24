@@ -31,11 +31,12 @@ import type {
 import { CategoryCard, isAgeBanded, type MemberCount } from "./CategoryCard";
 import {
   groupEmployeeCategories,
-  onlyPastOverlapWarnings,
+  onlySavedOverlapWarnings,
   type EmployeeCategoryGroup,
 } from "./employeeCategoryGroups";
 import { PlanTypeSettings } from "./PlanTypeSettings";
 import { VoluntaryAgeBandConfig } from "./VoluntaryAgeBandConfig";
+import { UnmatchedEmployeeNotice } from "./UnmatchedEmployeeNotice";
 
 interface Props {
   policyYearId: string;
@@ -94,9 +95,13 @@ export function EmployeeCategoryPlanTab(props: Props) {
   return (
     <div className="flex flex-col gap-3">
       <CategorySummary
+        productCode={props.productCode}
         groups={data.groups}
         counts={data.counts}
         employeesTotal={data.employeesTotal}
+        employeesInScope={data.employeesInScope}
+        employeesMatched={data.employeesMatched}
+        memberCounts={data.memberCounts}
         countsError={data.countsError}
         hasDependants={props.hasDependants}
         issueCount={issueCount}
@@ -124,7 +129,6 @@ export function EmployeeCategoryPlanTab(props: Props) {
             key={group.key}
             group={group}
             overlapEmployees={groupOverlapEmployees(group, overlapsByCategory)}
-            overlapCheckReady={overlapQuery.isSuccess}
             count={data.counts[group.key]}
             employeesAvailable={(data.employeesTotal ?? 0) > 0}
             hasDependants={props.hasDependants}
@@ -231,15 +235,22 @@ function useEmployeeCategoryData(props: Props) {
     planOptions,
     productEntities,
     employeesTotal: query.data?.employees_total ?? null,
+    employeesInScope: query.data?.employees_in_scope ?? null,
+    employeesMatched: query.data?.employees_matched ?? null,
+    memberCounts: query.data,
     countsError: query.isError,
     voluntary: getVoluntaryRates(props.categories),
   };
 }
 
 function CategorySummary({
+  productCode,
   groups,
   counts,
   employeesTotal,
+  employeesInScope,
+  employeesMatched,
+  memberCounts,
   countsError,
   hasDependants,
   issueCount,
@@ -249,9 +260,13 @@ function CategorySummary({
   canAdd,
   adding,
 }: {
+  productCode: string;
   groups: EmployeeCategoryGroup[];
   counts: Record<string, MemberCount>;
   employeesTotal: number | null;
+  employeesInScope: number | null;
+  employeesMatched: number | null;
+  memberCounts: import("@/types").MemberCounts | undefined;
   countsError: boolean;
   hasDependants: boolean;
   issueCount: number;
@@ -264,11 +279,15 @@ function CategorySummary({
   const validated = groups.length - issueCount;
   const employees = Object.values(counts).reduce((total, row) => total + row.employees, 0);
   const dependants = Object.values(counts).reduce((total, row) => total + row.dependants, 0);
+  const unmatched =
+    employeesInScope !== null && employeesMatched !== null
+      ? Math.max(0, employeesInScope - employeesMatched)
+      : 0;
   return (
     <div className="overflow-x-auto rounded-lg border border-border bg-card">
       <div className="flex min-w-max items-center gap-2 px-3 py-2">
         <Badge variant={issueCount === 0 ? "good" : "warn"}>
-          {validated}/{groups.length} Employee Category Validated
+          {validated}/{groups.length} category rules pass checks
         </Badge>
         {countsError ? (
           <Badge variant="error">Eligibility count unavailable</Badge>
@@ -279,6 +298,7 @@ function CategorySummary({
         ) : (
           <>
             <SummaryItem value={employees} label="Eligible Employees" />
+            {unmatched > 0 && <SummaryItem value={unmatched} label="Employees without a category" tone="warn" />}
             {hasDependants && <SummaryItem value={dependants} label="Eligible Dependants" />}
           </>
         )}
@@ -307,6 +327,11 @@ function CategorySummary({
           </Button>
         </div>
       </div>
+      {unmatched > 0 && (
+        <div className="border-t border-warn/30 p-2">
+          <UnmatchedEmployeeNotice productCode={productCode} counts={memberCounts} />
+        </div>
+      )}
     </div>
   );
 }
@@ -331,7 +356,6 @@ function SummaryItem({
 function EmployeeCategoryRow({
   group,
   overlapEmployees,
-  overlapCheckReady,
   count,
   employeesAvailable,
   hasDependants,
@@ -348,7 +372,6 @@ function EmployeeCategoryRow({
 }: {
   group: EmployeeCategoryGroup;
   overlapEmployees: OverlapEmployee[];
-  overlapCheckReady: boolean;
   count?: MemberCount;
   employeesAvailable: boolean;
   hasDependants: boolean;
@@ -374,7 +397,6 @@ function EmployeeCategoryRow({
           group={group}
           employeesAvailable={employeesAvailable}
           overlapEmployees={overlapEmployees}
-          overlapCheckReady={overlapCheckReady}
           expanded={expanded}
           onToggle={onToggle}
         />
@@ -388,9 +410,9 @@ function EmployeeCategoryRow({
       </div>
       {expanded && (
         <div className="grid gap-2 border-t border-border p-3">
-          {employeesAvailable && overlapCheckReady && overlapEmployees.length === 0 && onlyPastOverlapWarnings(group) && (
+          {overlapEmployees.length === 0 && onlySavedOverlapWarnings(group) && (
             <p className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs text-foreground">
-              The current employee assignments show no overlap, but the saved rule check still has an overlap warning. Open Edit rule and confirm the mapping to check it again.
+              The saved rule check found an employee who also matched another category. Review both category rules before confirming. Confirmation checks again and may still find a conflict.
             </p>
           )}
           {overlapEmployees.length > 0 && (
@@ -466,14 +488,12 @@ function RuleStatus({
   group,
   employeesAvailable,
   overlapEmployees,
-  overlapCheckReady,
   expanded,
   onToggle,
 }: {
   group: EmployeeCategoryGroup;
   employeesAvailable: boolean;
   overlapEmployees: OverlapEmployee[];
-  overlapCheckReady: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -492,18 +512,17 @@ function RuleStatus({
       </button>
     );
   }
-  if (status === "validated") return <Badge variant="good">Rule validated</Badge>;
+  if (status === "validated") {
+    return group.categories.every((category) => category.status === "confirmed")
+      ? <Badge variant="good">Mapping confirmed</Badge>
+      : <Badge variant="info">Rule checks passed · confirm mapping</Badge>;
+  }
   if (status === "unmapped") return <Badge variant="error">Employee category rule missing</Badge>;
   if (status === "proposed" && !employeesAvailable) {
     return <Badge variant="info">Proposed — awaiting employee listing</Badge>;
   }
-  if (employeesAvailable && overlapCheckReady && onlyPastOverlapWarnings(group)) {
-    return (
-      <div className="flex flex-col items-start gap-1">
-        <Badge variant="warn">Recheck rule</Badge>
-        <span className="text-xs text-muted-foreground">No current overlap</span>
-      </div>
-    );
+  if (onlySavedOverlapWarnings(group)) {
+    return <Badge variant="warn">Review overlap warning</Badge>;
   }
   return <Badge variant="warn">Rule needs attention</Badge>;
 }

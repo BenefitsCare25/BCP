@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy import select
@@ -495,6 +495,34 @@ def _location_value_mapping(
             if semantic_matches and matched_countries == wanted:
                 return nationality_attr, semantic_matches, True
     return None, [], False
+
+
+def _location_cohort_label(
+    text: str, catalog: AttributeValueCatalog
+) -> tuple[str | None, Any | None]:
+    """Use one unambiguous roster label with the same location and exception."""
+    location = _BASED_IN_RE.search(text)
+    if location is None:
+        return None, None
+    words = _tokens(text)
+    excluded = _EXCLUSION_RE.search(text)
+    excluded_words = _tokens(excluded.group(1)) if excluded else []
+    candidates: list[tuple[str, Any]] = []
+    for attribute_id in ("category", "employee_category"):
+        for value in catalog.values.get(attribute_id, []):
+            label = str(value)
+            label_location = _BASED_IN_RE.search(label)
+            label_excluded = _EXCLUSION_RE.search(label)
+            if (
+                label_location
+                and _tokens(label_location.group(1)) == _tokens(location.group(1))
+                and (_tokens(label_excluded.group(1)) if label_excluded else []) == excluded_words
+                and _sequence_spans(words, _tokens(label))
+            ):
+                candidates.append((attribute_id, value))
+    if len(candidates) == 1:
+        return candidates[0]
+    return None, None
 
 
 def _alpha_rank(value: str) -> int:
@@ -1006,6 +1034,18 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     # every Thailand employee except Directors. Keeping it as an AND would drop
     # both the Singapore officers and the non-officer Thailand employees.
     if parts and re.search(r"\band\s+all\s+employees?\s+based\s+in\b", text, re.I):
+        cohort_attr, cohort_value = _location_cohort_label(text, catalog)
+        if cohort_attr and cohort_value is not None:
+            primary = parts[0] if len(parts) == 1 else {"and": parts}
+            return RuleProposal(
+                rule={"or": [primary, {"=": [cohort_attr, cohort_value]}]},
+                human_readable=f"{' and '.join(readings)}, or {cohort_attr} is {cohort_value}",
+                confidence=0.95 if not unresolved else 0.7,
+                source="roster_values",
+                validation_state="proposed" if not unresolved else "needs_review",
+                unresolved_clauses=unresolved,
+                referenced_attributes=list(dict.fromkeys([*referenced, cohort_attr])),
+            )
         location_match = _BASED_IN_RE.search(text)
         location_attr, location_values, nationality_proxy = (
             _location_value_mapping(location_match.group(1), catalog)
@@ -1301,8 +1341,110 @@ def _explicit_code_rule_errors(
     return list(dict.fromkeys(errors))
 
 
+def _category_only_for_location_cohort(
+    rule: Rule | None,
+    description: str,
+    catalog: AttributeValueCatalog,
+    location_exclusions: dict[str, list[Any]] | None = None,
+) -> bool:
+    """Allow roster category only for a source location or product exclusion."""
+    location_attr, location_value = _location_cohort_label(description, catalog)
+    exclusions = location_exclusions or {}
+
+    def walk(node: Any) -> bool:
+        if not isinstance(node, dict) or len(node) != 1:
+            return False
+        op, args = next(iter(node.items()))
+        if op in {"and", "or"} and isinstance(args, list):
+            return all(walk(child) for child in args)
+        if op == "not":
+            return not _references_category(args) and walk(args)
+        if (
+            not isinstance(args, list)
+            or len(args) < 2
+            or args[0] not in {"category", "employee_category"}
+        ):
+            return True
+        attribute_id = args[0]
+        values = args[1] if isinstance(args[1], list) else [args[1]]
+        if not values:
+            return False
+        if op in {"not_in", "!="}:
+            return set(map(str, values)) == set(map(str, exclusions.get(attribute_id, [])))
+        return (
+            op in {"in", "=", "=="}
+            and location_attr == attribute_id
+            and all(value == location_value for value in values)
+        )
+
+    def _references_category(node: Any) -> bool:
+        if not isinstance(node, dict):
+            return False
+        return any(
+            (isinstance(args, list) and bool(args) and args[0] in {"category", "employee_category"})
+            or (
+                isinstance(args, list)
+                and any(_references_category(child) for child in args)
+            )
+            or (isinstance(args, dict) and _references_category(args))
+            for args in node.values()
+        )
+
+    return walk(rule)
+
+
+def _explicit_rule_stays_within_source(
+    rule: Rule | None,
+    description: str,
+    catalog: AttributeValueCatalog,
+    attribute_id: str,
+    allowed_values: list[Any],
+) -> bool:
+    """Every satisfying branch must require a slip code or an explicit union."""
+    allowed = {str(value).strip().casefold() for value in allowed_values}
+    proposal = propose_category_rule(description, catalog)
+    exceptions: list[Rule] = []
+    if not proposal.unresolved_clauses and isinstance(proposal.rule, dict):
+        children = proposal.rule.get("or")
+        if isinstance(children, list):
+            exceptions = [child for child in children if isinstance(child, dict)]
+
+    def requires_code(node: Any) -> bool:
+        if not isinstance(node, dict) or len(node) != 1:
+            return False
+        operator, args = next(iter(node.items()))
+        if operator == "and" and isinstance(args, list):
+            return any(requires_code(child) for child in args)
+        if operator == "or" and isinstance(args, list):
+            return bool(args) and all(requires_code(child) for child in args)
+        if operator not in {"=", "==", "in"} or not isinstance(args, list) or len(args) != 2:
+            return False
+        if args[0] != attribute_id:
+            return False
+        values = args[1] if operator == "in" else [args[1]]
+        return bool(values) and all(str(value).strip().casefold() in allowed for value in values)
+
+    def covered(node: Any) -> bool:
+        if requires_code(node) or node in exceptions:
+            return True
+        if not isinstance(node, dict) or len(node) != 1:
+            return False
+        operator, args = next(iter(node.items()))
+        if operator == "and" and isinstance(args, list):
+            return any(covered(child) for child in args)
+        if operator == "or" and isinstance(args, list):
+            return bool(args) and all(covered(child) for child in args)
+        return False
+
+    return covered(rule)
+
+
 def validate_ai_matching_rule(
-    description: str, rule: Rule | None, catalog: AttributeValueCatalog
+    description: str,
+    rule: Rule | None,
+    catalog: AttributeValueCatalog,
+    *,
+    location_exclusions: dict[str, list[Any]] | None = None,
 ) -> RuleValidation:
     """Apply structural/company validation plus AI-specific semantic guards."""
 
@@ -1325,11 +1467,44 @@ def validate_ai_matching_rule(
     if source_values:
         source_attribute = next(iter(source_values))
         if source_attribute not in validation.referenced_attributes:
+            clauses = explicit_grade_clauses(text)
+            for alternate in ("job_category", "job_grade", "grade"):
+                if (
+                    alternate not in validation.referenced_attributes
+                    or alternate == source_attribute
+                ):
+                    continue
+                alternate_values = list(dict.fromkeys(
+                    value
+                    for clause in clauses
+                    for value in _values_from_grade_clause(
+                        clause, catalog.values.get(alternate, [])
+                    )
+                ))
+                if {
+                    str(value).casefold() for value in alternate_values
+                } == {
+                    str(value).casefold() for value in source_values[source_attribute]
+                }:
+                    source_attribute = alternate
+                    source_values = {alternate: alternate_values}
+                    break
+        if source_attribute not in validation.referenced_attributes:
             errors.append(f"Matching rule omitted explicit employee attribute: {source_attribute}")
         errors.extend(
             _explicit_code_rule_errors(rule, source_attribute, source_values[source_attribute])
         )
-        if source_attribute != "category" and "category" in validation.referenced_attributes:
+        if not _explicit_rule_stays_within_source(
+            rule, description, catalog, source_attribute, source_values[source_attribute]
+        ):
+            errors.append("Rule can cover employees outside the slip's explicit codes")
+        if (
+            source_attribute not in {"category", "employee_category"}
+            and {"category", "employee_category"} & set(validation.referenced_attributes)
+            and not _category_only_for_location_cohort(
+                rule, description, catalog, location_exclusions
+            )
+        ):
             errors.append(
                 "AI rule may not use roster category text when the slip specifies employee codes"
             )
@@ -1914,6 +2089,77 @@ def _candidate_for_category(
     return propose_category_rule(category.raw_description, catalog), False
 
 
+def _separate_location_cohorts(
+    categories: list[Category], catalog: AttributeValueCatalog
+) -> dict[str | None, dict[str, list[Any]]]:
+    """Find location cohorts the slip prices separately from grade cohorts."""
+    by_product: dict[str | None, dict[str, list[Any]]] = defaultdict(dict)
+    for category in categories:
+        text = _intent_text(category.raw_description)
+        if has_explicit_grade_clause(text):
+            continue
+        attribute_id, value = _location_cohort_label(text, catalog)
+        if attribute_id and value is not None:
+            values = by_product[category.product_id].setdefault(attribute_id, [])
+            if value not in values:
+                values.append(value)
+    return by_product
+
+
+def _exclude_separate_location_cohorts(
+    proposal: RuleProposal,
+    category: Category,
+    cohorts: dict[str | None, dict[str, list[Any]]],
+) -> RuleProposal:
+    """Keep grade-only rows from swallowing a separately priced location cohort."""
+    if (
+        proposal.rule is None
+        or not has_explicit_grade_clause(category.raw_description)
+        or _BASED_IN_RE.search(category.raw_description)
+    ):
+        return proposal
+    exclusions = cohorts.get(category.product_id, {})
+    if not exclusions:
+        return proposal
+    guards = [
+        _rule_for_values(attribute_id, values, negate=True)
+        for attribute_id, values in exclusions.items()
+    ]
+    if (
+        isinstance(proposal.rule, dict)
+        and isinstance(proposal.rule.get("and"), list)
+        and proposal.rule["and"][-len(guards):] == guards
+    ):
+        return proposal
+    return replace(
+        proposal,
+        rule={"and": [proposal.rule, *guards]},
+        human_readable=f"{proposal.human_readable}; excluding separately priced location cohort",
+        referenced_attributes=list(
+            dict.fromkeys([*proposal.referenced_attributes, *exclusions])
+        ),
+    )
+
+
+def _rule_without_product_location_context(
+    rule: Rule | None, validation: dict[str, Any]
+) -> Rule | None:
+    """Store a reusable cohort rule without exclusions required by one product."""
+    exclusions = validation.get("product_location_exclusions")
+    if not isinstance(exclusions, dict) or not isinstance(rule, dict):
+        return rule
+    guards = [
+        _rule_for_values(attribute_id, values, negate=True)
+        for attribute_id, values in exclusions.items()
+        if isinstance(attribute_id, str) and isinstance(values, list) and values
+    ]
+    parts = rule.get("and")
+    if not guards or not isinstance(parts, list) or parts[-len(guards):] != guards:
+        return rule
+    base = parts[:-len(guards)]
+    return base[0] if len(base) == 1 else {"and": base} if base else rule
+
+
 def _assignment_counts(
     *,
     db: Session,
@@ -2069,11 +2315,23 @@ class CategoryConfirmationBatch:
         )
         # Filter in Python so confirmations earlier in the same uncommitted
         # transaction are included even when the session has not flushed yet.
+        policy_categories = list(db.execute(
+            select(Category).where(Category.policy_year_id == policy_year_id)
+        ).scalars())
+        self.location_cohorts = _separate_location_cohorts(
+            [
+                category
+                for category in [
+                    *policy_categories,
+                    *(candidate for candidate in candidates if candidate not in policy_categories),
+                ]
+                if _is_employee_mapping_category(category)
+            ],
+            self.catalog,
+        )
         confirmed = [
             category
-            for category in db.execute(
-                select(Category).where(Category.policy_year_id == policy_year_id)
-            ).scalars()
+            for category in policy_categories
             if category.status == CategoryStatus.confirmed.value
         ]
         categories = {category.id: category for category in [*confirmed, *candidates]}
@@ -2225,9 +2483,6 @@ def assess_category_rule(
     """
 
     catalog, employees, views = build_attribute_catalog(db, category.policy_year_id, client_id)
-    validation = validate_ai_matching_rule(
-        category.raw_description, category.matching_rule, catalog
-    )
     categories = list(
         db.execute(
             select(Category)
@@ -2237,6 +2492,15 @@ def assess_category_rule(
     )
     if category not in categories:
         categories.append(category)
+    location_cohorts = _separate_location_cohorts(
+        [item for item in categories if _is_employee_mapping_category(item)], catalog
+    )
+    validation = validate_ai_matching_rule(
+        category.raw_description,
+        category.matching_rule,
+        catalog,
+        location_exclusions=location_cohorts.get(category.product_id),
+    )
     counts, overlaps = _assignment_counts(
         db=db,
         client_id=client_id,
@@ -2321,15 +2585,18 @@ def auto_map_policy_year(
         ).scalars()
     }
     previous = _previous_confirmed_rules(db, policy_year_id, client_id)
+    location_cohorts = _separate_location_cohorts(categories, catalog)
     proposal_meta: dict[str, tuple[RuleProposal, bool, RuleValidation]] = {}
+    profile_proposals: dict[str, RuleProposal] = {}
 
     for category in categories:
         preserve = bool(category.human_modified and category.matching_rule)
         if preserve:
-            validation = validate_matching_rule(
+            validation = validate_ai_matching_rule(
+                category.raw_description,
                 category.matching_rule,
                 catalog,
-                allowed_values=_source_allowed_values(category.raw_description, catalog),
+                location_exclusions=location_cohorts.get(category.product_id),
             )
             proposal = RuleProposal(
                 rule=category.matching_rule,
@@ -2342,7 +2609,16 @@ def auto_map_policy_year(
             reused = False
         else:
             proposal, reused = _candidate_for_category(category, catalog, profiles, previous)
-            validation = validate_ai_matching_rule(category.raw_description, proposal.rule, catalog)
+            profile_proposals[category.id] = proposal
+            proposal = _exclude_separate_location_cohorts(
+                proposal, category, location_cohorts
+            )
+            validation = validate_ai_matching_rule(
+                category.raw_description,
+                proposal.rule,
+                catalog,
+                location_exclusions=location_cohorts.get(category.product_id),
+            )
             category.matching_rule = proposal.rule
             category.rule_human_readable = proposal.human_readable
             category.confidence = proposal.confidence
@@ -2421,6 +2697,11 @@ def auto_map_policy_year(
             "relative_remainder": proposal.relative_remainder,
             "reused": reused,
         }
+        if (
+            category.id in profile_proposals
+            and proposal.rule != profile_proposals[category.id].rule
+        ):
+            payload["product_location_exclusions"] = location_cohorts[category.product_id]
         category.rule_validation = payload
         if persist_profiles and proposal.rule is not None:
             profile = _upsert_profile(
@@ -2428,7 +2709,7 @@ def auto_map_policy_year(
                 client_id=client_id,
                 policy_year_id=policy_year_id,
                 category=category,
-                proposal=proposal,
+                proposal=profile_proposals.get(category.id, proposal),
                 status="proposed",
                 validation=payload,
             )
@@ -2489,10 +2770,11 @@ def confirm_category_mapping(
         candidates=[category],
     )
     catalog = batch.catalog
-    validation = validate_matching_rule(
+    validation = validate_ai_matching_rule(
+        category.raw_description,
         category.matching_rule,
         catalog,
-        allowed_values=_source_allowed_values(category.raw_description, catalog),
+        location_exclusions=batch.location_cohorts.get(category.product_id),
     )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
@@ -2515,13 +2797,23 @@ def confirm_category_mapping(
         unresolved=[],
     )
     existing = category.rule_validation if isinstance(category.rule_validation, dict) else {}
+    profile_rule = _rule_without_product_location_context(category.matching_rule, existing)
+    profile_validation = validate_matching_rule(
+        profile_rule,
+        catalog,
+        allowed_values=_source_allowed_values(category.raw_description, catalog),
+    )
     proposal = RuleProposal(
-        rule=category.matching_rule,
-        human_readable=category.rule_human_readable or category.display_name,
+        rule=profile_rule,
+        human_readable=(
+            category.display_name
+            if profile_rule != category.matching_rule
+            else category.rule_human_readable or category.display_name
+        ),
         confidence=float(category.confidence or 0.85),
         source="manual" if category.human_modified else str(existing.get("source") or "confirmed"),
         validation_state="validated",
-        referenced_attributes=validation.referenced_attributes,
+        referenced_attributes=profile_validation.referenced_attributes,
         relative_remainder=bool(existing.get("relative_remainder")),
     )
     payload = {
@@ -2543,7 +2835,11 @@ def confirm_category_mapping(
         category=category,
         proposal=proposal,
         status="confirmed",
-        validation=payload,
+        validation={
+            key: value
+            for key, value in payload.items()
+            if key != "product_location_exclusions"
+        },
     )
     category.mapping_profile_id = profile.id
     category.rule_status = "validated"
