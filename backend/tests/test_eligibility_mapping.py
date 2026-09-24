@@ -421,11 +421,11 @@ def test_separately_priced_location_cohort_is_excluded_from_grade_bands() -> Non
     )
     cohorts = _separate_location_cohorts([thailand, senior], catalog)
     proposal = propose_category_rule(senior.raw_description, catalog)
-    narrowed = _exclude_separate_location_cohorts(proposal, senior, cohorts)
+    narrowed = _exclude_separate_location_cohorts(proposal, senior, cohorts[product_id])
 
     assert narrowed.rule == {"and": [
         {"=": ["job_category", "A1"]},
-        {"not_in": ["category", [location]]},
+        {"not": {"in": ["category", [location]]}},
     ]}
     assert validate_ai_matching_rule(
         senior.raw_description,
@@ -434,11 +434,55 @@ def test_separately_priced_location_cohort_is_excluded_from_grade_bands() -> Non
         location_exclusions=cohorts[product_id],
     ).valid
     assert evaluate(narrowed.rule, {"job_category": "A1", "category": "SM to SVP"})
+    assert evaluate(narrowed.rule, {"job_category": "A1"})
     assert not evaluate(narrowed.rule, {"job_category": "A1", "category": location})
-    assert _exclude_separate_location_cohorts(narrowed, senior, cohorts).rule == narrowed.rule
+    assert (
+        _exclude_separate_location_cohorts(narrowed, senior, cohorts[product_id]).rule
+        == narrowed.rule
+    )
     assert _rule_without_product_location_context(
         narrowed.rule, {"product_location_exclusions": cohorts[product_id]}
     ) == proposal.rule
+
+
+def test_location_exclusion_respects_category_insured_entities() -> None:
+    location = "All Employees based in Thailand"
+    catalog = _catalog(job_category=["A1"], category=[location])
+    thailand = Category(
+        product_id="life-product",
+        raw_description=location,
+        plan_assignments={"insured": ["Entity A"]},
+    )
+    grade = Category(
+        product_id="life-product",
+        raw_description="Senior (Job Category: A1)",
+        plan_assignments={"insured": ["Entity B"]},
+    )
+    scoped = _separate_location_cohorts(
+        [thailand, grade], catalog, target_category=grade
+    )
+    proposal = propose_category_rule(grade.raw_description, catalog)
+
+    assert scoped.get(grade.product_id, {}) == {}
+    assert _exclude_separate_location_cohorts(
+        proposal, grade, scoped.get(grade.product_id, {})
+    ).rule == proposal.rule
+    assert evaluate(proposal.rule, {"job_category": "A1", "category": location})
+
+    grade.plan_assignments = {"insured": ["Entity A", "Entity B"]}
+    overlapping = _separate_location_cohorts(
+        [thailand, grade], catalog, target_category=grade
+    )
+    assert overlapping[grade.product_id] == {"category": [location]}
+
+    grade.plan_assignments = {"insured": ["Entity B"]}
+    product_scoped = _separate_location_cohorts(
+        [thailand, grade],
+        catalog,
+        target_category=grade,
+        product_gate=frozenset({"entity b"}),
+    )
+    assert product_scoped[grade.product_id] == {"category": [location]}
 
 
 def test_upload_proposal_does_not_replace_unmapped_codes_with_text_cohort() -> None:
@@ -631,6 +675,75 @@ def test_ai_rule_restores_safe_country_branch_when_model_omits_it() -> None:
     assert review_clauses == [
         "based in Thailand mapped through nationality; confirm nationality represents work base"
     ]
+    assert validate_ai_matching_rule(description, normalized, catalog).valid
+
+
+def test_reviewed_nationality_union_can_be_confirmed() -> None:
+    description = (
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3)"
+    )
+    with SessionLocal() as db:
+        product = Product(
+            client_id=CLIENT_ID,
+            code="THAI-PROXY-CONFIRM-QA",
+            display_name="Thai proxy confirmation QA",
+        )
+        db.add(product)
+        db.flush()
+        category = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            display_name="Thailand officers",
+            raw_description=description,
+            status=CategoryStatus.needs_review.value,
+            plan_assignments={"plan_code": "THAI-PROXY"},
+        )
+        db.add(category)
+        db.add_all([
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-THAI-PROXY-OFFICER",
+                attribute_values={
+                    "job_category": "J1", "nationality": "Singapore",
+                    "role": "EMPLOYEE",
+                },
+            ),
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-THAI-PROXY-THAI",
+                attribute_values={
+                    "job_category": "D1", "nationality": "Thailand",
+                    "role": "EMPLOYEE",
+                },
+            ),
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-THAI-PROXY-DIRECTOR",
+                attribute_values={
+                    "job_category": "D1", "nationality": "Thailand", "role": "DIRECTOR",
+                },
+            ),
+        ])
+        db.flush()
+        catalog, _, _ = build_attribute_catalog(db, PY_2026, CLIENT_ID)
+        proposal = propose_category_rule(description, catalog)
+        assert proposal.unresolved_clauses == [
+            "based in Thailand mapped through nationality; confirm nationality represents work base"
+        ]
+        category.matching_rule = proposal.rule
+
+        profile = confirm_category_mapping(db, category=category, client_id=CLIENT_ID)
+
+        assert profile.matching_rule == proposal.rule
+        assert category.status == CategoryStatus.confirmed.value
+        assert evaluate(category.matching_rule, {
+            "job_category": "D1", "nationality": "Thailand", "role": "EMPLOYEE"
+        })
+        db.rollback()
 
 
 @pytest.mark.parametrize(
@@ -1882,6 +1995,94 @@ def test_ai_suggest_receives_company_context_and_persists_validation(
     )
 
 
+def test_ai_routes_accept_product_scoped_location_exclusion(client: TestClient) -> None:
+    location = "All Employees based in Thailand"
+    description = "Senior (Job Category: A1)"
+    rule = {"and": [
+        {"=": ["job_category", "A1"]},
+        {"not": {"in": ["category", [location]]}},
+    ]}
+    with SessionLocal() as db:
+        product = Product(
+            client_id=CLIENT_ID,
+            code="AI-LOCATION-GUARD-QA",
+            display_name="AI location guard QA",
+        )
+        db.add(product)
+        db.flush()
+        location_category = Category(
+            policy_year_id=PY_2027,
+            product_id=product.id,
+            display_name=location,
+            raw_description=location,
+            status=CategoryStatus.needs_review.value,
+            plan_assignments={"plan_code": "LOCATION"},
+        )
+        grade_category = Category(
+            policy_year_id=PY_2027,
+            product_id=product.id,
+            display_name="Senior",
+            raw_description=description,
+            status=CategoryStatus.needs_review.value,
+            plan_assignments={"plan_code": "SUGGEST"},
+        )
+        plan = Plan(
+            product_id=product.id,
+            policy_year_id=PY_2027,
+            code="CREATE",
+            display_name="AI create plan",
+            status="needs_review",
+        )
+        db.add_all([location_category, grade_category, plan])
+        db.add_all([
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2027,
+                staff_id="E-AI-LOCATION-GRADE",
+                attribute_values={"job_category": "A1", "employment_type": "MANUAL"},
+            ),
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2027,
+                staff_id="E-AI-LOCATION-THAI",
+                attribute_values={
+                    "job_category": "A1", "category": location,
+                    "employment_type": "MANUAL",
+                },
+            ),
+        ])
+        db.commit()
+        grade_id = grade_category.id
+        plan_id = plan.id
+
+    with patch(
+        "app.api.v1.categories.generate_rule_for_category",
+        return_value=_ai_result(rule),
+    ), patch(
+        "app.api.v1.categories.normalize_ai_matching_rule",
+        return_value=(rule, []),
+    ):
+        suggested = client.post(f"/api/v1/categories/{grade_id}/ai-suggest")
+
+    assert suggested.status_code == 200
+    assert suggested.json()["matching_rule"] == rule
+
+    with patch(
+        "app.api.v1.eligibility_mappings.generate_rule_for_category",
+        return_value=_ai_result(rule),
+    ), patch(
+        "app.api.v1.eligibility_mappings.normalize_ai_matching_rule",
+        return_value=(rule, []),
+    ):
+        created = client.post(
+            f"/api/v1/policy-years/{PY_2027}/eligibility-mappings/ai-create-category",
+            json={"plan_id": plan_id, "eligibility_description": description},
+        )
+
+    assert created.status_code == 201, created.text
+    assert created.json()["matching_rule"] == rule
+
+
 def test_missing_plan_is_detected_and_ai_category_creation_is_guided(
     client: TestClient,
 ) -> None:
@@ -1924,7 +2125,7 @@ def test_missing_plan_is_detected_and_ai_category_creation_is_guided(
             },
         )
 
-    assert created.status_code == 201
+    assert created.status_code == 201, created.text
     body = created.json()
     assert body["plan_assignments"]["plan_code"] == "AI-MISSING"
     assert body["matching_rule"] == {"=": ["employment_type", "MANUAL"]}

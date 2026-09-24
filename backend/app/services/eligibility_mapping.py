@@ -1358,6 +1358,16 @@ def _category_only_for_location_cohort(
         if op in {"and", "or"} and isinstance(args, list):
             return all(walk(child) for child in args)
         if op == "not":
+            if isinstance(args, dict) and isinstance(args.get("in"), list):
+                child = args["in"]
+                if len(child) == 2 and child[0] in {"category", "employee_category"}:
+                    values = child[1]
+                    return (
+                        isinstance(values, list)
+                        and bool(values)
+                        and set(map(str, values))
+                        == set(map(str, exclusions.get(child[0], [])))
+                    )
             return not _references_category(args) and walk(args)
         if (
             not isinstance(args, list)
@@ -1404,7 +1414,11 @@ def _explicit_rule_stays_within_source(
     allowed = {str(value).strip().casefold() for value in allowed_values}
     proposal = propose_category_rule(description, catalog)
     exceptions: list[Rule] = []
-    if not proposal.unresolved_clauses and isinstance(proposal.rule, dict):
+    nationality_review_only = all(
+        "mapped through nationality; confirm nationality represents work base" in clause
+        for clause in proposal.unresolved_clauses
+    )
+    if nationality_review_only and isinstance(proposal.rule, dict):
         children = proposal.rule.get("or")
         if isinstance(children, list):
             exceptions = [child for child in children if isinstance(child, dict)]
@@ -2090,11 +2104,23 @@ def _candidate_for_category(
 
 
 def _separate_location_cohorts(
-    categories: list[Category], catalog: AttributeValueCatalog
+    categories: list[Category],
+    catalog: AttributeValueCatalog,
+    *,
+    target_category: Category | None = None,
+    product_gate: frozenset[str] = frozenset(),
+    aliases: dict[str, frozenset[str]] | None = None,
 ) -> dict[str | None, dict[str, list[Any]]]:
     """Find location cohorts the slip prices separately from grade cohorts."""
     by_product: dict[str | None, dict[str, list[Any]]] = defaultdict(dict)
     for category in categories:
+        if target_category is not None:
+            if category.product_id != target_category.product_id:
+                continue
+            target_gate = product_gate or category_insured_entities(target_category, aliases)
+            location_gate = product_gate or category_insured_entities(category, aliases)
+            if target_gate and location_gate and not target_gate & location_gate:
+                continue
         text = _intent_text(category.raw_description)
         if has_explicit_grade_clause(text):
             continue
@@ -2106,10 +2132,41 @@ def _separate_location_cohorts(
     return by_product
 
 
+def location_exclusions_for_category(
+    db: Session,
+    *,
+    category: Category,
+    catalog: AttributeValueCatalog,
+    client_id: str,
+) -> dict[str, list[Any]]:
+    """Find separately priced location labels that can cover this category's entities."""
+    categories = list(db.execute(
+        select(Category).where(Category.policy_year_id == category.policy_year_id)
+    ).scalars())
+    if category not in categories:
+        categories.append(category)
+    aliases = entity_alias_map(db, client_id)
+    product = db.get(Product, category.product_id) if category.product_id else None
+    cohorts = _separate_location_cohorts(
+        [item for item in categories if _is_employee_mapping_category(item)],
+        catalog,
+        target_category=category,
+        product_gate=product_entities(product, aliases),
+        aliases=aliases,
+    )
+    return cohorts.get(category.product_id, {})
+
+
+def _location_exclusion_guard(attribute_id: str, values: list[Any]) -> Rule:
+    # evaluate() treats a missing attribute as false for `in`, so its negation
+    # preserves grade matches when the roster category is blank.
+    return {"not": {"in": [attribute_id, values]}}
+
+
 def _exclude_separate_location_cohorts(
     proposal: RuleProposal,
     category: Category,
-    cohorts: dict[str | None, dict[str, list[Any]]],
+    exclusions: dict[str, list[Any]],
 ) -> RuleProposal:
     """Keep grade-only rows from swallowing a separately priced location cohort."""
     if (
@@ -2118,11 +2175,10 @@ def _exclude_separate_location_cohorts(
         or _BASED_IN_RE.search(category.raw_description)
     ):
         return proposal
-    exclusions = cohorts.get(category.product_id, {})
     if not exclusions:
         return proposal
     guards = [
-        _rule_for_values(attribute_id, values, negate=True)
+        _location_exclusion_guard(attribute_id, values)
         for attribute_id, values in exclusions.items()
     ]
     if (
@@ -2149,12 +2205,21 @@ def _rule_without_product_location_context(
     if not isinstance(exclusions, dict) or not isinstance(rule, dict):
         return rule
     guards = [
+        _location_exclusion_guard(attribute_id, values)
+        for attribute_id, values in exclusions.items()
+        if isinstance(attribute_id, str) and isinstance(values, list) and values
+    ]
+    legacy_guards = [
         _rule_for_values(attribute_id, values, negate=True)
         for attribute_id, values in exclusions.items()
         if isinstance(attribute_id, str) and isinstance(values, list) and values
     ]
     parts = rule.get("and")
-    if not guards or not isinstance(parts, list) or parts[-len(guards):] != guards:
+    if (
+        not guards
+        or not isinstance(parts, list)
+        or (parts[-len(guards):] != guards and parts[-len(legacy_guards):] != legacy_guards)
+    ):
         return rule
     base = parts[:-len(guards)]
     return base[0] if len(base) == 1 else {"and": base} if base else rule
@@ -2318,17 +2383,14 @@ class CategoryConfirmationBatch:
         policy_categories = list(db.execute(
             select(Category).where(Category.policy_year_id == policy_year_id)
         ).scalars())
-        self.location_cohorts = _separate_location_cohorts(
-            [
-                category
-                for category in [
-                    *policy_categories,
-                    *(candidate for candidate in candidates if candidate not in policy_categories),
-                ]
-                if _is_employee_mapping_category(category)
-            ],
-            self.catalog,
-        )
+        mapping_categories = [
+            category
+            for category in [
+                *policy_categories,
+                *(candidate for candidate in candidates if candidate not in policy_categories),
+            ]
+            if _is_employee_mapping_category(category)
+        ]
         confirmed = [
             category
             for category in policy_categories
@@ -2346,6 +2408,19 @@ class CategoryConfirmationBatch:
             ).scalars()
         }
         aliases = entity_alias_map(db, client_id)
+        self.location_cohorts = {
+            category.id: _separate_location_cohorts(
+                mapping_categories,
+                self.catalog,
+                target_category=category,
+                product_gate=product_entities(
+                    products.get(category.product_id) if category.product_id else None,
+                    aliases,
+                ),
+                aliases=aliases,
+            ).get(category.product_id, {})
+            for category in candidates
+        }
         self._employee_gates = [
             employee_entity(employee.attribute_values, aliases)
             for employee in self._employees
@@ -2492,14 +2567,14 @@ def assess_category_rule(
     )
     if category not in categories:
         categories.append(category)
-    location_cohorts = _separate_location_cohorts(
-        [item for item in categories if _is_employee_mapping_category(item)], catalog
+    location_exclusions = location_exclusions_for_category(
+        db, category=category, catalog=catalog, client_id=client_id
     )
     validation = validate_ai_matching_rule(
         category.raw_description,
         category.matching_rule,
         catalog,
-        location_exclusions=location_cohorts.get(category.product_id),
+        location_exclusions=location_exclusions,
     )
     counts, overlaps = _assignment_counts(
         db=db,
@@ -2585,7 +2660,28 @@ def auto_map_policy_year(
         ).scalars()
     }
     previous = _previous_confirmed_rules(db, policy_year_id, client_id)
-    location_cohorts = _separate_location_cohorts(categories, catalog)
+    products = {
+        product.id: product
+        for product in db.execute(
+            select(Product).where(
+                Product.id.in_({c.product_id for c in categories if c.product_id})
+            )
+        ).scalars()
+    }
+    aliases = entity_alias_map(db, client_id)
+    location_exclusions = {
+        category.id: _separate_location_cohorts(
+            categories,
+            catalog,
+            target_category=category,
+            product_gate=product_entities(
+                products.get(category.product_id) if category.product_id else None,
+                aliases,
+            ),
+            aliases=aliases,
+        ).get(category.product_id, {})
+        for category in categories
+    }
     proposal_meta: dict[str, tuple[RuleProposal, bool, RuleValidation]] = {}
     profile_proposals: dict[str, RuleProposal] = {}
 
@@ -2596,7 +2692,7 @@ def auto_map_policy_year(
                 category.raw_description,
                 category.matching_rule,
                 catalog,
-                location_exclusions=location_cohorts.get(category.product_id),
+                location_exclusions=location_exclusions[category.id],
             )
             proposal = RuleProposal(
                 rule=category.matching_rule,
@@ -2611,13 +2707,13 @@ def auto_map_policy_year(
             proposal, reused = _candidate_for_category(category, catalog, profiles, previous)
             profile_proposals[category.id] = proposal
             proposal = _exclude_separate_location_cohorts(
-                proposal, category, location_cohorts
+                proposal, category, location_exclusions[category.id]
             )
             validation = validate_ai_matching_rule(
                 category.raw_description,
                 proposal.rule,
                 catalog,
-                location_exclusions=location_cohorts.get(category.product_id),
+                location_exclusions=location_exclusions[category.id],
             )
             category.matching_rule = proposal.rule
             category.rule_human_readable = proposal.human_readable
@@ -2653,14 +2749,6 @@ def auto_map_policy_year(
     )
 
     items: list[MappingItem] = []
-    products = {
-        product.id: product
-        for product in db.execute(
-            select(Product).where(
-                Product.id.in_({c.product_id for c in categories if c.product_id})
-            )
-        ).scalars()
-    }
     for category in categories:
         proposal, reused, validation = proposal_meta[category.id]
         pa = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
@@ -2701,7 +2789,7 @@ def auto_map_policy_year(
             category.id in profile_proposals
             and proposal.rule != profile_proposals[category.id].rule
         ):
-            payload["product_location_exclusions"] = location_cohorts[category.product_id]
+            payload["product_location_exclusions"] = location_exclusions[category.id]
         category.rule_validation = payload
         if persist_profiles and proposal.rule is not None:
             profile = _upsert_profile(
@@ -2774,7 +2862,7 @@ def confirm_category_mapping(
         category.raw_description,
         category.matching_rule,
         catalog,
-        location_exclusions=batch.location_cohorts.get(category.product_id),
+        location_exclusions=batch.location_cohorts.get(category.id),
     )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
@@ -2941,6 +3029,7 @@ __all__ = [
     "category_signature",
     "confirm_category_mapping",
     "current_category_overlaps",
+    "location_exclusions_for_category",
     "missing_category_plans",
     "normalize_ai_matching_rule",
     "propose_category_rule",

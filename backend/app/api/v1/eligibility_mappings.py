@@ -28,6 +28,7 @@ from app.services.eligibility_mapping import (
     assess_category_rule,
     auto_map_policy_year,
     build_ai_eligibility_inputs,
+    location_exclusions_for_category,
     normalize_ai_matching_rule,
     stored_mapping_summary,
     validate_ai_matching_rule,
@@ -224,7 +225,14 @@ def ai_create_missing_category(
         description, envelope.rule, catalog
     )
     unresolved = list(dict.fromkeys([*unresolved, *normalization_review]))[:20]
-    validation = validate_ai_matching_rule(description, matching_rule, catalog)
+    validation = validate_ai_matching_rule(
+        description,
+        matching_rule,
+        catalog,
+        location_exclusions=location_exclusions_for_category(
+            db, category=category, catalog=catalog, client_id=client_id
+        ),
+    )
     if envelope.rule is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,

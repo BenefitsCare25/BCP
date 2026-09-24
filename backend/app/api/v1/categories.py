@@ -49,6 +49,7 @@ from app.services.eligibility_mapping import (
     build_ai_eligibility_inputs,
     confirm_category_mapping,
     current_category_overlaps,
+    location_exclusions_for_category,
     normalize_ai_matching_rule,
     validate_ai_matching_rule,
 )
@@ -530,7 +531,14 @@ def ai_suggest_rule(
         c.raw_description, envelope.rule, catalog
     )
     unresolved = list(dict.fromkeys([*unresolved, *normalization_review]))[:20]
-    validation = validate_ai_matching_rule(c.raw_description, matching_rule, catalog)
+    validation = validate_ai_matching_rule(
+        c.raw_description,
+        matching_rule,
+        catalog,
+        location_exclusions=location_exclusions_for_category(
+            db, category=c, catalog=catalog, client_id=client_id
+        ),
+    )
     if envelope.rule is None:
         reason = str(result.metadata.get("reasoning") or "").strip()
         detail = "No safe suggestion available"
