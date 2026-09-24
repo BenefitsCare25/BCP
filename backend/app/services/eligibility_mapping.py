@@ -1946,6 +1946,11 @@ def _assignment_counts(
                                 "employee_id": employee.id,
                                 "staff_id": employee.staff_id,
                                 "employee_name": employee.employee_name,
+                                "job_category": (
+                                    str(view["job_category"])[:64]
+                                    if view.get("job_category") is not None
+                                    else None
+                                ),
                                 "other_categories": other_categories,
                             }
                         )

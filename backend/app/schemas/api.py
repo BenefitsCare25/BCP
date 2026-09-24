@@ -484,6 +484,7 @@ class CategoryOverlapEmployee(BaseModel):
     employee_id: str
     staff_id: str
     employee_name: str | None
+    job_category: str | None = None
     other_categories: list[str]
 
 

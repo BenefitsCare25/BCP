@@ -266,6 +266,7 @@ export interface CategoryOverlap {
     employee_id: string;
     staff_id: string;
     employee_name: string | null;
+    job_category: string | null;
     other_categories: string[];
   }[];
 }

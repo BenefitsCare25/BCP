@@ -980,6 +980,7 @@ def test_category_overlap_endpoint_identifies_employee(client: TestClient) -> No
                 "employee_id": employee_id,
                 "staff_id": "E-OVERLAP-DETAILS",
                 "employee_name": "Overlap Details Employee",
+                "job_category": "OVERLAP-QA-CODE",
                 "other_categories": ["Details second cohort"],
             }
         ]
@@ -994,6 +995,66 @@ def test_category_overlap_endpoint_identifies_employee(client: TestClient) -> No
             if stored_product := db.get(Product, product_id):
                 db.delete(stored_product)
             db.commit()
+
+
+def test_disjoint_plan_rules_do_not_report_an_overlap() -> None:
+    with SessionLocal() as db:
+        product = Product(
+            id="00000000-0000-0000-0000-00000000e1c5",
+            client_id=CLIENT_ID,
+            code="DISJOINT-PLANS-QA",
+            display_name="Disjoint plans QA",
+        )
+        db.add(product)
+        db.flush()
+        categories = [
+            Category(
+                policy_year_id=PY_2026,
+                product_id=product.id,
+                priority=priority,
+                display_name=name,
+                raw_description=name,
+                matching_rule={"in": ["job_category", codes]},
+                status=CategoryStatus.needs_review.value,
+                source="manual",
+                plan_assignments={"plan_code": plan},
+            )
+            for priority, name, codes, plan in [
+                (1, "Manager cohort", ["E1", "E2"], "A"),
+                (2, "Manager cohort", ["E1", "E2"], "B"),
+                (3, "Thailand cohort", ["J1", "J2"], "A"),
+                (4, "Thailand cohort", ["J1", "J2"], "B"),
+            ]
+        ]
+        db.add_all(categories)
+        db.add(
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-DISJOINT-QA",
+                employee_name="Disjoint QA Employee",
+                attribute_values={"job_category": "J1"},
+                derived_attribute_values={},
+            )
+        )
+        db.flush()
+
+        overlaps = current_category_overlaps(
+            db, policy_year_id=PY_2026, client_id=CLIENT_ID
+        )
+        assert all(category.id not in overlaps for category in categories)
+
+        # A hidden plan row with a broader rule is the only way these cohorts
+        # can overlap for a single-valued job category.
+        categories[1].matching_rule = {"in": ["job_category", ["E1", "E2", "J1"]]}
+        overlaps = current_category_overlaps(
+            db, policy_year_id=PY_2026, client_id=CLIENT_ID
+        )
+        assert categories[0].id not in overlaps
+        assert categories[1].id in overlaps
+        assert categories[2].id in overlaps
+        assert categories[3].id in overlaps
+        db.rollback()
 
 
 def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:

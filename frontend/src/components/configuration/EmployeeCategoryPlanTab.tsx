@@ -140,7 +140,7 @@ export function EmployeeCategoryPlanTab(props: Props) {
             editing={editing}
             onToggle={() => toggleGroup(group.key)}
             onEditAssignment={(id) => setEditing((current) => (current === id ? null : id))}
-            onEditRule={() => props.onEditRule(group.representative)}
+            onEditRule={props.onEditRule}
             productEntities={data.productEntities}
           />
         ))
@@ -157,11 +157,13 @@ export function EmployeeCategoryPlanTab(props: Props) {
   );
 }
 
-type OverlapEmployee = CategoryOverlap["employees"][number];
+type OverlapEmployee = CategoryOverlap["employees"][number] & {
+  matching_category_ids: string[];
+};
 
 function groupOverlapEmployees(
   group: EmployeeCategoryGroup,
-  byCategory: Map<string, OverlapEmployee[]>,
+  byCategory: Map<string, CategoryOverlap["employees"]>,
 ): OverlapEmployee[] {
   const employees = new Map<string, OverlapEmployee>();
   for (const category of group.categories) {
@@ -169,6 +171,9 @@ function groupOverlapEmployees(
       const previous = employees.get(employee.employee_id);
       employees.set(employee.employee_id, {
         ...employee,
+        matching_category_ids: [
+          ...new Set([...(previous?.matching_category_ids ?? []), category.id]),
+        ],
         other_categories: [...new Set([
           ...(previous?.other_categories ?? []),
           ...employee.other_categories,
@@ -359,7 +364,7 @@ function EmployeeCategoryRow({
   editing: string | null;
   onToggle: () => void;
   onEditAssignment: (id: string) => void;
-  onEditRule: () => void;
+  onEditRule: (category: Category) => void;
   productEntities: string[];
 }) {
   return (
@@ -381,8 +386,8 @@ function EmployeeCategoryRow({
           {group.categories.length} plan assignment{group.categories.length === 1 ? "" : "s"}
           {employeesAvailable && count ? ` · ${count.employees} employees${hasDependants ? ` · ${count.dependants} dependants` : ""}` : ""}
         </span>
-        <Button size="sm" variant="outline" onClick={onEditRule}>
-          <Pencil className="size-3.5" /> Employee category rule
+        <Button size="sm" variant="outline" onClick={onToggle}>
+          {expanded ? "Hide plan rules" : "Review plan rules"}
         </Button>
       </div>
       {expanded && (
@@ -395,6 +400,14 @@ function EmployeeCategoryRow({
                   <li key={employee.employee_id}>
                     <span className="font-medium">{employee.employee_name || employee.staff_id}</span>
                     {employee.employee_name && <span> · {employee.staff_id}</span>}
+                    {employee.job_category && <span> · Job Category Code: {employee.job_category}</span>}
+                    <span>
+                      {" · Matched in: "}
+                      {employee.matching_category_ids.map((id) => {
+                        const category = group.categories.find((item) => item.id === id);
+                        return category ? planFor(category, planOptions)?.display_name || assignmentCode(category) || "Unknown plan" : "Unknown plan";
+                      }).join(", ")}
+                    </span>
                     <span> · Also matches: {employee.other_categories.join(", ")}</span>
                   </li>
                 ))}
@@ -406,14 +419,20 @@ function EmployeeCategoryRow({
             const warning = assignmentWarning(category, group);
             return (
               <div key={category.id} className="rounded-md bg-muted/35 p-2">
-                <div className="grid grid-cols-[minmax(10rem,0.8fr)_minmax(15rem,1.5fr)_auto] items-center gap-3">
-                  <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="flex min-w-40 flex-1 items-center gap-2 text-sm font-medium text-foreground">
                     <span className="truncate">
                       {plan?.display_name || assignmentCode(category) || "Plan type missing"}
                     </span>
                     {warning && <Badge variant="warn">{warning}</Badge>}
+                    {overlapEmployees.some((employee) => employee.matching_category_ids.includes(category.id)) && (
+                      <Badge variant="warn">Overlap in this plan</Badge>
+                    )}
                   </span>
-                  <span className="truncate text-xs text-muted-foreground">{assignmentSummary(category, rateModel, hasDependants)}</span>
+                  <span className="min-w-60 flex-[1.5] text-xs text-muted-foreground">{assignmentSummary(category, rateModel, hasDependants)}</span>
+                  <Button size="sm" variant="outline" onClick={() => onEditRule(category)}>
+                    <Pencil className="size-3.5" /> Edit rule
+                  </Button>
                   <Button size="sm" variant="ghost" onClick={() => onEditAssignment(category.id)}>
                     {editing === category.id ? "Close settings" : "Edit assignment"}
                   </Button>
@@ -428,7 +447,7 @@ function EmployeeCategoryRow({
                       tiers={tiers}
                       hasDependants={hasDependants}
                       insuredEntities={productEntities}
-                      onEditRule={onEditRule}
+                      onEditRule={() => onEditRule(category)}
                       assignmentOnly
                     />
                   </div>
