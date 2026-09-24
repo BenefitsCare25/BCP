@@ -40,8 +40,8 @@ export function PortalCoveragePage() {
     <Tabs
       value={tab}
       onValueChange={(value) =>
-        // `p` is deliberately NOT carried across: it names a slide of the
-        // coverage deck, which only "What's covered" has. TanStack replaces the
+        // `p` is deliberately NOT carried across: it names a care route that
+        // only "What's covered" has. TanStack replaces the
         // whole search object, so dropping it is the default and the right
         // behaviour — a stale product key on the family tab would come back the
         // next time someone returned to this one.
@@ -70,11 +70,9 @@ export function PortalCoveragePage() {
         </LeafTabsList>
       </HeadRail>
       <TabsContent value="benefits">
-        {/* The selected benefit lives in the URL so it survives a refresh, the
-            back button and a shared link. `replace` because stepping through
-            nine products is reading, not navigating: without it the browser's
-            Back button walks back through every product visited instead of
-            leaving the page. */}
+        {/* The selected care route survives a refresh and a shared link.
+            `replace` keeps Back focused on leaving coverage rather than
+            stepping through every route visited. */}
         <PortalBenefitsPage
           productKey={search.p ?? null}
           onProductKeyChange={(p) =>

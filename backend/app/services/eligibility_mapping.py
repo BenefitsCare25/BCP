@@ -2005,7 +2005,7 @@ def _profile_proposal(profile: EligibilityMappingProfile) -> RuleProposal:
     )
 
 
-def _is_employee_mapping_category(category: Category) -> bool:
+def is_employee_mapping_category(category: Category) -> bool:
     """Dependant-only price/option rows do not assign an employee cohort."""
 
     assignments = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
@@ -2148,7 +2148,7 @@ def location_exclusions_for_category(
     aliases = entity_alias_map(db, client_id)
     product = db.get(Product, category.product_id) if category.product_id else None
     cohorts = _separate_location_cohorts(
-        [item for item in categories if _is_employee_mapping_category(item)],
+        [item for item in categories if is_employee_mapping_category(item)],
         catalog,
         target_category=category,
         product_gate=product_entities(product, aliases),
@@ -2389,7 +2389,7 @@ class CategoryConfirmationBatch:
                 *policy_categories,
                 *(candidate for candidate in candidates if candidate not in policy_categories),
             ]
-            if _is_employee_mapping_category(category)
+            if is_employee_mapping_category(category)
         ]
         confirmed = [
             category
@@ -2648,7 +2648,7 @@ def auto_map_policy_year(
         ).scalars()
     )
     categories = [
-        category for category in all_categories if _is_employee_mapping_category(category)
+        category for category in all_categories if is_employee_mapping_category(category)
     ]
     not_applicable = len(all_categories) - len(categories)
     profiles = {
@@ -2948,7 +2948,7 @@ def stored_mapping_summary(db: Session, *, policy_year_id: str) -> MappingSummar
         ).scalars()
     )
     categories = [
-        category for category in all_categories if _is_employee_mapping_category(category)
+        category for category in all_categories if is_employee_mapping_category(category)
     ]
     not_applicable = len(all_categories) - len(categories)
     products = {

@@ -1040,6 +1040,24 @@ export function useCreatePolicyYear() {
   });
 }
 
+export function useBulkConfirmCategories() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (policyYearId: string) =>
+      api.post<{ confirmed: number; skipped_invalid_rules: number; threshold: number }>(
+        `/categories/bulk-confirm?policy_year_id=${encodeURIComponent(policyYearId)}`,
+        {},
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["categories"] });
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
+      qc.invalidateQueries({ queryKey: ["policy-year-readiness"] });
+      qc.invalidateQueries({ queryKey: ["member-counts"] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
 export function useUpdatePolicyYear() {
   const qc = useQueryClient();
   return useMutation({

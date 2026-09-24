@@ -1,155 +1,205 @@
-/** "What am I covered for" — the member's leaf.
- *
- * Replaces `BenefitStatement` on member surfaces. That component is the
- * broker's placement-slip renderer pointed at a member token: the server strips
- * the figures it must, but the copy, hierarchy, vocabulary and density were
- * never re-authored. This is the re-authoring.
- *
- * Roster attributes (job grade, salary band, entity) are deliberately not
- * rendered. They are how the company files the member, not an answer to any of
- * the four questions a member actually opens this page with.
- *
- * **This tab is ENTITLEMENT, not account.** No claimed totals, no "still under
- * review", no remaining balances on an insured product — that is the "What's
- * left" tab's question, and interleaving the two made a page about what the
- * policy covers read as a statement of account. Flexible benefits is the single
- * exception and it is not really one: a flex wallet's allowance and what remains
- * of it ARE its entitlement, so `FlexMount` keeps its ledger. Consequently
- * nothing here reads `Utilization` at all.
- *
- * **The products are a DECK, not a stack** — see `Deck.tsx` for why. This module
- * owns what belongs to coverage rather than to the deck: which slides exist,
- * what each is called in the rail, and how the selection is carried (the member
- * page hands it a URL parameter; the broker's employee-view preview lets the
- * deck hold its own). */
-import { useMemo } from "react";
-import type { BenefitStatement } from "@/types";
-import { BenefitMount } from "./BenefitMount";
+import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft, ArrowRight, ChevronDown, MapPin } from "lucide-react";
+import type { BenefitStatement, CoverageLine, DependantSummary } from "@/types";
+import { actionClass } from "./Action";
 import { FlexMount } from "./FlexMount";
-import { Mount } from "./Mount";
-import { Deck, type DeckSlide } from "./Deck";
+import { Mount, MountRule, glassHover, glassSurface } from "./Mount";
+import { ScheduleLeaf } from "./ScheduleLeaf";
+import { buildCareRoutes, careFacts, isMemberVisible, type CareRoute } from "./careRoutes";
 import { productShortLabel } from "./glossary";
 
-/** The flex wallet's slide key, and the value `?p=flex` carries. Namespaced so
- * it can never collide with a product code, since both share one deck and one
- * URL parameter. Module-private: nothing outside builds these keys. */
-const FLEX_SLIDE_KEY = "flex";
+function dependantName(person: DependantSummary): string {
+  return person.name ?? person.relationship ?? "Family member";
+}
 
-export function CoverageLeaf({
-  data,
-  productKey,
-  onProductKeyChange,
-}: {
+function coveredPeople(lines: CoverageLine[]): DependantSummary[] {
+  const people = new Map<string, DependantSummary>();
+  for (const line of lines) {
+    if (!line.covers_dependants) continue;
+    for (const person of line.covered_dependants) people.set(person.id, person);
+  }
+  return [...people.values()];
+}
+
+function RouteCard({ route, onClick }: { route: CareRoute; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`${glassSurface} ${glassHover} leaf-focus leaf-rise flex min-h-32 w-full flex-col items-start justify-between gap-3 rounded-tile p-4 text-left sm:p-5`}>
+      <span>
+        <span className="block text-md font-semibold text-record">{route.title}</span>
+        <span className="mt-1 block text-row text-label">{route.description}</span>
+      </span>
+      <span className="flex items-center gap-1.5 text-row font-semibold text-action-ink">
+        View cover <ArrowRight className="size-4" aria-hidden />
+      </span>
+    </button>
+  );
+}
+
+function PlanDetail({ line, routeKey, person }: {
+  line: CoverageLine;
+  routeKey: string;
+  person: DependantSummary | null;
+}) {
+  const facts = careFacts(line, routeKey);
+  const code = line.product_code.trim().toUpperCase();
+  const additionalMedical = code === "GMM" || code === "GMM2";
+  const label = additionalMedical
+    ? "Additional major medical cover"
+    : productShortLabel(line.product_code, line.product_name);
+
+  return (
+    <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
+      <p className="text-row text-label">
+        Covered person: <span className="font-medium text-record">{person ? dependantName(person) : "You"}</span>
+      </p>
+      {additionalMedical && (
+        <p className="text-row text-label">This plan has its own conditions and limits. Check them alongside your hospital plan.</p>
+      )}
+      {facts.length > 0 ? (
+        <>
+          <MountRule />
+          <dl className="divide-y divide-hairline/75">
+            {facts.map((fact) => (
+              <div key={fact.label} className="grid gap-1 py-3 sm:grid-cols-[minmax(0,12rem)_1fr] sm:gap-4">
+                <dt className="text-row text-label">{fact.label}</dt>
+                <dd className="text-row font-medium text-record">
+                  {fact.value}
+                  {fact.note && <span className="mt-1 block font-normal text-label">{fact.note}</span>}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </>
+      ) : (
+        <p className="text-row text-label">
+          Key amounts and conditions aren't recorded in a form we can summarise. Read the plan details below or ask your HR team before arranging care.
+        </p>
+      )}
+      <MountRule />
+      <details className="group">
+        <summary className="leaf-focus flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-row font-semibold text-record [&::-webkit-details-marker]:hidden">
+          Full benefit schedule
+          <ChevronDown className="size-4 shrink-0 text-label transition-transform group-open:rotate-180" aria-hidden />
+        </summary>
+        <div className="pt-2"><ScheduleLeaf schedule={line.benefit_schedule} allRows /></div>
+      </details>
+    </Mount>
+  );
+}
+
+/** Member coverage is organised around a care decision, then the matched plan. */
+export function CoverageLeaf({ data, productKey, onProductKeyChange, company }: {
   data: BenefitStatement;
-  /** Controlled selection. Omit entirely for a self-driving deck. */
   productKey?: string | null;
   onProductKeyChange?: (key: string) => void;
+  /** Present in the live portal; preview keeps navigation inside its frame. */
+  company?: string;
 }) {
-  const hasFlex = Boolean(data.flex);
-  // Gate on what there is to RENDER, not on `is_matched`. A member can be
-  // matched and still have no coverage lines — `hydrate_plans` skips
-  // matched_categories entries whose category was deleted or re-parsed — and
-  // gating on the flag alone rendered an empty page with no explanation.
-  const hasAnyCoverage = data.coverage.length > 0 || hasFlex;
+  const [localKey, setLocalKey] = useState("");
+  const [personId, setPersonId] = useState<string | null>(null);
+  const people = useMemo(() => coveredPeople(data.coverage.filter(isMemberVisible)), [data.coverage]);
+  const person = people.find((candidate) => candidate.id === personId) ?? null;
+  const lines = useMemo(() =>
+    person
+      ? data.coverage.filter((line) =>
+          line.covers_dependants && line.covered_dependants.some((candidate) => candidate.id === person.id),
+        )
+      : data.coverage.filter((line) => !line.product_code.toUpperCase().includes("DEPENDANTS")),
+    [data.coverage, person],
+  );
+  const routes = useMemo(() => buildCareRoutes(lines), [lines]);
+  const selectedKey = productKey === undefined ? localKey : productKey ?? "";
+  const selected = routes.find((route) =>
+    route.key === selectedKey || route.lines.some((line) => line.product_code === selectedKey),
+  ) ?? null;
+  const select = (key: string) => {
+    if (onProductKeyChange) onProductKeyChange(key);
+    else setLocalKey(key);
+  };
 
-  const slides = useMemo<DeckSlide[]>(() => {
-    const raw = data.coverage.map((line) => ({
-      code: line.product_code,
-      label: productShortLabel(line.product_code, line.product_name),
-      // The disambiguators, in the order they are tried below.
-      plan: line.plan_code,
-      name: line.product_name,
-      render: (rise: boolean) => <BenefitMount line={line} rise={rise} />,
-    }));
-
-    if (data.flex) {
-      raw.push({
-        code: FLEX_SLIDE_KEY,
-        label: "Flexible benefits",
-        plan: null,
-        name: null,
-        render: (rise: boolean) => <FlexMount flex={data.flex!} rise={rise} />,
-      });
-    }
-
-    // **A product code is not guaranteed unique across a statement.**
-    // `hydrate_plans` emits a line per matched CATEGORY and the product index is
-    // keyed on id, not code; a firm-library product and a company one may carry
-    // the same code (the unique constraint exempts `client_id IS NULL`), and an
-    // unlinked category falls back to "?". Two lines sharing a code collided on
-    // the React key, on the `deck-tab-`/`deck-panel-` ids that wire the tablist
-    // together, and on the `findIndex` that resolves a selection — so the second
-    // line was simply unreachable. The stack it replaced at least rendered both.
-    const keyCount = new Map<string, number>();
-    // Two codes can also share a rail LABEL: `GHS`/`GHS2` and `GMM`/`GMM2` exist
-    // precisely so one slip can carry two hospital or two major-medical plans,
-    // and both map to the same short form. Two chips reading "Hospital" name
-    // nothing. Disambiguated by the plan code the member's own mount is titled
-    // with, else the insurer's product name.
-    const labelCount = new Map<string, number>();
-    for (const s of raw) labelCount.set(s.label, (labelCount.get(s.label) ?? 0) + 1);
-
-    return raw.map((s) => {
-      const n = (keyCount.get(s.code) ?? 0) + 1;
-      keyCount.set(s.code, n);
-      const ambiguous = (labelCount.get(s.label) ?? 0) > 1;
-      return {
-        key: n === 1 ? s.code : `${s.code}~${n}`,
-        label: ambiguous
-          ? s.plan
-            ? `${s.label} · Plan ${s.plan}`
-            : (s.name ?? `${s.label} ${n}`)
-          : s.label,
-        render: () => s.render(false),
-      };
-    });
-  }, [data.coverage, data.flex]);
-
-  // The lone-benefit path renders the mount OUTSIDE the deck, where nothing else
-  // owns its arrival — so it keeps the entrance every other mount in the portal
-  // gets. `rise={false}` is a statement about the deck, not about the mount.
-  const soloRender = useMemo(() => {
-    if (data.coverage.length === 1 && !data.flex) {
-      const line = data.coverage[0];
-      return () => <BenefitMount line={line} />;
-    }
-    if (data.coverage.length === 0 && data.flex) {
-      const flex = data.flex;
-      return () => <FlexMount flex={flex} />;
-    }
-    return null;
-  }, [data.coverage, data.flex]);
-
-  if (!hasAnyCoverage) {
+  if (routes.length === 0 && !data.flex && people.length === 0) {
     return (
-      <Mount label="No benefits on record">
-        <p className="text-row text-label">
-          We don't have any benefits recorded against your name for this
-          period. If you think that's wrong, your HR team can check your record.
-        </p>
+      <Mount label="No care benefits to show">
+        <p className="text-row text-label">We don't have any care benefits recorded against your name for this period. Your HR team can check your record.</p>
       </Mount>
     );
   }
 
-  // One benefit is not a set, and a rail naming its only member — beside a
-  // counter reading "1 of 1" and two dead arrows — is chrome describing
-  // nothing. Show the mount.
-  if (slides.length < 2) {
-    return <>{soloRender ? soloRender() : slides[0].render()}</>;
-  }
-
-  // **Opens on the FIRST product, in the statement's own order.** It used to
-  // open on whichever product had a claim in flight, which was defensible while
-  // this tab showed claim figures — the member could see why they had landed
-  // there. Now that it shows entitlement only, that reason is invisible, and a
-  // page that opens halfway down a list for an unstated reason is the same
-  // failure as the activity dot this rail used to carry.
   return (
-    <Deck
-      slides={slides}
-      label="Your benefits"
-      activeKey={productKey}
-      onActiveKeyChange={onProductKeyChange}
-    />
+    <div className="space-y-4">
+      {people.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Choose covered person">
+          <span className="mr-1 text-row text-label">Cover for</span>
+          <button type="button" onClick={() => { setPersonId(null); select(""); }} aria-pressed={!person}
+            className={`${actionClass("neutral")} ${!person ? "bg-shade" : ""}`}>
+            Me
+          </button>
+          {people.map((candidate) => (
+            <button key={candidate.id} type="button" onClick={() => { setPersonId(candidate.id); select(""); }}
+              aria-pressed={person?.id === candidate.id}
+              className={`${actionClass("neutral")} ${person?.id === candidate.id ? "bg-shade" : ""}`}>
+              {dependantName(candidate)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selected ? (
+        <>
+          <button type="button" onClick={() => select("")}
+            className="leaf-focus inline-flex min-h-11 items-center gap-2 text-row font-semibold text-action-ink">
+            <ArrowLeft className="size-4" aria-hidden /> All care options
+          </button>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-title text-record">{selected.title}</h2>
+            <p className="mt-1 text-row text-label">{selected.description}</p>
+          </div>
+          <div className="grid gap-4">
+            {selected.lines.map((line, index) => (
+              <PlanDetail key={`${line.product_code}-${line.plan_code ?? ""}-${index}`} line={line} routeKey={selected.key} person={person} />
+            ))}
+          </div>
+          {company && ["gp", "specialist", "dental"].includes(selected.key) && (
+            <Link to="/portal/$company/clinics" params={{ company }} className={actionClass("quiet", { block: "phone" })}>
+              <MapPin className="size-4" aria-hidden /> Find a clinic
+            </Link>
+          )}
+        </>
+      ) : (
+        <>
+          <div>
+            <h2 className="text-2xl font-semibold tracking-title text-record">
+              {routes.some((route) => route.section === "care") ? "What care do you need?" : "Your cover"}
+            </h2>
+            <p className="mt-1 text-row text-label">Choose a topic to see the cover that applies to {person ? dependantName(person) : "you"}.</p>
+          </div>
+          {routes.filter((route) => route.section === "care").length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+              {routes.filter((route) => route.section === "care").map((route) => (
+                <RouteCard key={route.key} route={route} onClick={() => select(route.key)} />
+              ))}
+            </div>
+          )}
+          {routes.filter((route) => route.section === "other").length > 0 && (
+            <section className="space-y-3" aria-label="Other cover">
+              <h3 className="text-md font-semibold text-record">Other cover</h3>
+              <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+                {routes.filter((route) => route.section === "other").map((route) => (
+                  <RouteCard key={route.key} route={route} onClick={() => select(route.key)} />
+                ))}
+              </div>
+            </section>
+          )}
+          {routes.length === 0 && (
+            <Mount label="No care routes for this person">
+              <p className="text-row text-label">No care benefits are recorded for this person in the current benefit year.</p>
+            </Mount>
+          )}
+          {data.flex && !person && <FlexMount flex={data.flex} />}
+        </>
+      )}
+    </div>
   );
 }

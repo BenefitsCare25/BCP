@@ -129,6 +129,29 @@ def test_duplicate_or_unknown_scope_mapping_is_rejected():
     assert any("unknown claim type" in error for error in errors)
 
 
+def test_unreviewed_detected_limits_do_not_require_an_enforceable_amount():
+    pending = setting(amount=None, status="needs_review")
+    pending["source"] = "detected"
+    schedule = {
+        "claim_limit": pending,
+        "items": [
+            {
+                "name": "Emergency Travel Expenses",
+                "value": "Pays up to SGD 250 or SGD 2,500 depending on location",
+                "claim_limit": pending,
+            }
+        ],
+    }
+    assert validate_schedule_limits(schedule, valid_scope_codes=set()) == []
+
+    verified = {**pending, "status": "verified", "source": "manual"}
+    schedule["claim_limit"] = verified
+    schedule["items"][0]["claim_limit"] = verified
+    errors = validate_schedule_limits(schedule, valid_scope_codes=set())
+    assert "Overall policy-year limit needs an amount greater than zero." in errors
+    assert any("Emergency Travel Expenses: policy-year limit needs" in error for error in errors)
+
+
 def test_verified_setting_is_rejected_after_source_wording_changes():
     current = setting(scopes=["standard"])
     current["display"] = "SGD 300 per policy year"

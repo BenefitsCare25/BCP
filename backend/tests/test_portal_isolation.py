@@ -620,3 +620,28 @@ def test_member_statement_strips_financials_and_match_internals():
     assert line.match_confidence is None
     assert line.rule_human_readable is None
     assert line.product_code == "GHS"  # everything else intact
+
+
+def test_member_display_hides_gtl_without_changing_internal_statement():
+    from app.schemas.api import BenefitStatementOut, CoverageLine, StatementEmployee
+    from app.schemas.claims import UtilizationBucket, UtilizationOut
+    from app.services.member_statement import (
+        member_visible_statement,
+        member_visible_utilization,
+    )
+
+    statement = BenefitStatementOut(
+        employee=StatementEmployee(id="e1", staff_id="S-1", employee_name="A"),
+        policy_year_id="py1",
+        is_matched=True,
+        coverage=[CoverageLine(product_code="GTL"), CoverageLine(product_code="GHS")],
+    )
+    usage = UtilizationOut(
+        policy_year_id="py1",
+        insured=[UtilizationBucket(product_code="GTL"), UtilizationBucket(product_code="GHS")],
+    )
+
+    assert [line.product_code for line in member_visible_statement(statement).coverage] == ["GHS"]
+    assert [bucket.product_code for bucket in member_visible_utilization(usage).insured] == ["GHS"]
+    assert [line.product_code for line in statement.coverage] == ["GTL", "GHS"]
+    assert [bucket.product_code for bucket in usage.insured] == ["GTL", "GHS"]

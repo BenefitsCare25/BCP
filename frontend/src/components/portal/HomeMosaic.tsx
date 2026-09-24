@@ -70,6 +70,7 @@ import { ClaimStrike, Strike } from "./leaf/Strike";
 import { LeafSkeleton } from "./leaf/LeafSkeleton";
 import { formatDay } from "./leaf/date";
 import { useCompany } from "./useCompany";
+import { buildCareRoutes } from "./leaf/careRoutes";
 
 /** How many messages the home tile shows before deferring to the inbox. Three
  * is what fits the wide tile beside the claims tile without either column
@@ -390,6 +391,9 @@ export function HomeMosaicView({
           );
 
   const coverage = statement.data?.coverage ?? [];
+  const careRoutes = buildCareRoutes(
+    coverage.filter((line) => !line.product_code.toUpperCase().includes("DEPENDANTS")),
+  );
   const activeDependants = (dependants.data ?? []).filter(
     (d) => d.status === "active",
   );
@@ -592,21 +596,18 @@ export function HomeMosaicView({
         </Tile>
       )}
 
-      {coverage.length > 0 && (
+      {(careRoutes.length > 0 || statement.data?.flex) && (
         <Tile className="leaf-rise h-full">
-          <TileLabel>What&rsquo;s covered</TileLabel>
+          <TileLabel>Find your care</TileLabel>
           <p className="text-2xl font-semibold tracking-title text-record">
-            {coverage.length} {coverage.length === 1 ? "benefit" : "benefits"}
+            {careRoutes.length > 0 ? "What do you need?" : "Flexible benefits"}
           </p>
           <p className="text-row text-label">
-            {coverage
-              .slice(0, 4)
-              .map((c) => c.product_name || c.product_code)
-              .join(" · ")}
-            {coverage.length > 4 && ` · and ${coverage.length - 4} more`}
+            {careRoutes.slice(0, 4).map((route) => route.title).join(" · ")}
+            {careRoutes.length > 4 && ` · and ${careRoutes.length - 4} more`}
           </p>
           <Go dest="benefits" onGo={onGo}>
-            See what&rsquo;s covered
+            Explore my cover
           </Go>
         </Tile>
       )}

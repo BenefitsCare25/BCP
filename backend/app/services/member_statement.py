@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Employee
 from app.schemas.api import BenefitStatementOut
+from app.schemas.claims import UtilizationOut
 from app.services.benefit_statement import build_benefit_statement
 
 
@@ -29,3 +30,31 @@ def build_member_statement(db: Session, employee: Employee) -> BenefitStatementO
         for line in statement.coverage
     ]
     return statement.model_copy(update={"coverage": coverage})
+
+
+def member_visible_code(code: str | None) -> bool:
+    """GTL is a death benefit and belongs only in an offered enrolment choice."""
+    return (code or "").strip().upper() != "GTL"
+
+
+def member_visible_statement(statement: BenefitStatementOut) -> BenefitStatementOut:
+    """Apply employee-display rules at the API edge, preserving internal coverage."""
+    return statement.model_copy(
+        update={
+            "coverage": [
+                line for line in statement.coverage
+                if member_visible_code(line.product_code)
+            ],
+        }
+    )
+
+
+def member_visible_utilization(usage: UtilizationOut) -> UtilizationOut:
+    return usage.model_copy(
+        update={
+            "insured": [
+                bucket for bucket in usage.insured
+                if member_visible_code(bucket.product_code)
+            ],
+        }
+    )

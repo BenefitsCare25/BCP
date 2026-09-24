@@ -56,7 +56,11 @@ from app.services.enrollment_elections import (
 )
 from app.services.member_access import access_of, access_payload
 from app.services.member_enquiries import enquiry_out, load_member_enquiry
-from app.services.member_statement import build_member_statement
+from app.services.member_statement import (
+    build_member_statement,
+    member_visible_statement,
+    member_visible_utilization,
+)
 from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
 from app.services.utilization import build_utilization
@@ -127,7 +131,7 @@ def portal_preview_statement(
     employee: Employee = Depends(load_employee),
     db: Session = Depends(get_db),
 ) -> BenefitStatementOut:
-    return build_member_statement(db, employee)
+    return member_visible_statement(build_member_statement(db, employee))
 
 
 @router.get("/utilization", response_model=UtilizationOut)
@@ -135,7 +139,7 @@ def portal_preview_utilization(
     employee: Employee = Depends(load_employee),
     db: Session = Depends(get_db),
 ) -> UtilizationOut:
-    return build_utilization(db, employee)
+    return member_visible_utilization(build_utilization(db, employee))
 
 
 @router.get("/coverage-options", response_model=CoverageOptionsOut)

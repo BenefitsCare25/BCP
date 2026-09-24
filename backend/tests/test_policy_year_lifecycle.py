@@ -120,6 +120,48 @@ def test_set_current_demotes_previous(client: TestClient) -> None:
     assert years[a["id"]] == PolicyYearStatus.archived.value
 
 
+def test_dependant_options_do_not_block_employee_category_readiness(
+    client: TestClient,
+) -> None:
+    year = client.post(
+        API, json={"start_date": "2038-01-01", "end_date": "2038-12-31"}
+    ).json()
+    _make_ready(year["id"])
+    with SessionLocal() as db:
+        db.add_all([
+            Category(
+                policy_year_id=year["id"],
+                display_name="Child option",
+                raw_description="Child option",
+                source=SourceKind.manual.value,
+                status=CategoryStatus.needs_review.value,
+                plan_assignments={"member_scope": "dependant"},
+            ),
+            Category(
+                policy_year_id=year["id"],
+                display_name="Employees",
+                raw_description="Employees",
+                source=SourceKind.manual.value,
+                status=CategoryStatus.needs_review.value,
+            ),
+        ])
+        db.commit()
+
+    blocked = client.get(f"{API}/{year['id']}/readiness").json()
+    assert blocked["metrics"]["categories_needing_review"] == 1
+    assert "Review and confirm every employee category." in blocked["blockers"]
+
+    with SessionLocal() as db:
+        employee_category = db.query(Category).filter_by(
+            policy_year_id=year["id"], display_name="Employees"
+        ).one()
+        employee_category.status = CategoryStatus.confirmed.value
+        db.commit()
+    ready = client.get(f"{API}/{year['id']}/readiness").json()
+    assert ready["metrics"]["categories_needing_review"] == 0
+    assert ready["ready"] is True
+
+
 def test_cannot_delete_current_year(client: TestClient) -> None:
     y = client.post(
         API, json={"start_date": "2034-01-01", "end_date": "2034-12-31"}

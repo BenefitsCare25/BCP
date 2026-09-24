@@ -355,7 +355,7 @@ def validate_schedule_limits(
         errors.append("Overall plan limit has an invalid setting.")
     if root and root["basis"] == LIMIT_BASIS_POLICY_YEAR:
         if (
-            root["status"] != LIMIT_STATUS_NOT_LIMIT
+            root["status"] == LIMIT_STATUS_VERIFIED
             and enforceable_policy_year_amount(root) is None
         ):
             errors.append("Overall policy-year limit needs an amount greater than zero.")
@@ -381,7 +381,7 @@ def validate_schedule_limits(
             )
         if (
             setting["basis"] == LIMIT_BASIS_POLICY_YEAR
-            and setting["status"] != LIMIT_STATUS_NOT_LIMIT
+            and setting["status"] == LIMIT_STATUS_VERIFIED
             and enforceable_policy_year_amount(setting) is None
         ):
             errors.append(f"{name}: policy-year limit needs an amount greater than zero.")

@@ -401,8 +401,13 @@ export function MemberEnrollmentPanel({
   const decisions = tierSets.filter((ts) =>
     isDecisionful(ts, allowDeps, dependants.length),
   );
+  // GTL is a death benefit. A member sees it here only when the window asks
+  // them to make a choice; keep it in tierSets for pricing and submission.
+  const reviewTierSets = tierSets.filter(
+    (ts) => ts.product_code !== "GTL" || isDecisionful(ts, allowDeps, dependants.length),
+  );
   const standard: StandardLine[] = tierSets
-    .filter((ts) => !isDecisionful(ts, allowDeps, dependants.length))
+    .filter((ts) => ts.product_code !== "GTL" && !isDecisionful(ts, allowDeps, dependants.length))
     .map((ts) => {
       const tier = ts.tiers.find(
         (t) => t.key === current[ts.product_code]?.tierKey,
@@ -434,7 +439,7 @@ export function MemberEnrollmentPanel({
   // ONE computation behind the rail's marks, the rail's count and the review's
   // list. They used to be three, over two different product sets, so the index
   // could read "1 change" above a review that listed two.
-  const changes = buildChanges(tierSets, current, held, dependants, allowDeps);
+  const changes = buildChanges(reviewTierSets, current, held, dependants, allowDeps);
   const changedCodes = new Set(changes.map((c) => c.key));
 
   const slides: DeckSlide[] = [];
@@ -509,7 +514,7 @@ export function MemberEnrollmentPanel({
     render: () => (
       <ReviewMount
         rise={false}
-        tierSets={tierSets}
+        tierSets={reviewTierSets}
         state={current}
         changes={changes}
         leave={leaveChange}

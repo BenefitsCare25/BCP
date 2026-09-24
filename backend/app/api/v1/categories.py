@@ -313,6 +313,7 @@ def bulk_confirm(
             select(Category).where(
                 Category.policy_year_id == policy_year_id,
                 Category.status == CategoryStatus.needs_review.value,
+                Category.rule_status == "validated",
                 Category.matching_rule.is_not(None),
                 Category.confidence.is_not(None),
                 Category.confidence >= min_confidence,

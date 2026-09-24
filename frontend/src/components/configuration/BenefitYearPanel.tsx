@@ -14,9 +14,11 @@ import { toast } from "sonner";
 import { api } from "@/api/client";
 import {
   useArchivePolicyYear,
+  useBulkConfirmCategories,
   useCopyPolicyYear,
   useCreatePolicyYear,
   useDeletePolicyYear,
+  useEligibilityMappings,
   usePolicyYearDeletionImpact,
   usePolicyYearReadiness,
   useSetCurrentPolicyYear,
@@ -30,7 +32,7 @@ import { Input } from "@/components/ui/input";
 import { downloadResponseAsFile } from "@/lib/download";
 import { formatError } from "@/lib/errors";
 import { notify } from "@/stores/notifications";
-import type { PolicyYear } from "@/types";
+import type { EligibilityMappingItem, PolicyYear } from "@/types";
 import {
   BenefitYearDateFields,
   type BenefitYearDateField,
@@ -88,6 +90,16 @@ function dateRangeError(
     : null;
 }
 
+function countByProduct(items: EligibilityMappingItem[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const code = item.product_code ?? "Unassigned";
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  return [...counts].sort(([a], [b]) => a.localeCompare(b))
+    .map(([code, count]) => `${code} ${count}`).join(" · ");
+}
+
 function DownloadButton({ label, title, onDownload }: {
   label: string;
   title: string;
@@ -129,6 +141,8 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
   const copy = useCopyPolicyYear();
   const setCurrent = useSetCurrentPolicyYear();
   const archive = useArchivePolicyYear();
+  const bulkConfirm = useBulkConfirmCategories();
+  const [confirmValidated, setConfirmValidated] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<PolicyYear | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [panelError, setPanelError] = useState<string | null>(null);
@@ -144,6 +158,16 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
     : null;
   const viewingYear = years.find((year) => year.id === viewingId) ?? null;
   const readiness = usePolicyYearReadiness(viewingYear?.id);
+  const mapping = useEligibilityMappings(viewingYear?.id);
+  const pendingCategories = (mapping.data?.categories ?? []).filter(
+    (item) => item.category_status !== "confirmed",
+  );
+  const validatedCategories = pendingCategories.filter(
+    (item) => item.rule_status === "validated" && (item.confidence ?? 0) >= 0.85,
+  );
+  const unresolvedCategories = pendingCategories.filter(
+    (item) => !validatedCategories.includes(item),
+  );
   const deletionImpact = usePolicyYearDeletionImpact(confirmDelete?.id);
 
   const clearDateDraft = (id: string, field: BenefitYearDateField) =>
@@ -391,8 +415,41 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                 {readiness.data?.warnings.map((warning) => (
                   <p key={warning} className="text-sm text-warn">{warning}</p>
                 ))}
+                {viewingYear.status === "draft" && pendingCategories.length > 0 && (
+                  <div className="space-y-2 text-sm text-foreground">
+                    <p>
+                      {validatedCategories.length} employee categories have validated rules awaiting confirmation.
+                      {unresolvedCategories.length > 0 && ` ${unresolvedCategories.length} need a rule or roster correction.`}
+                    </p>
+                    {unresolvedCategories.length > 0 && (
+                      <details className="text-muted-foreground">
+                        <summary className="cursor-pointer font-medium text-foreground">
+                          Review categories needing attention
+                        </summary>
+                        <ul className="mt-2 max-h-48 space-y-1 overflow-auto pl-5 list-disc">
+                          {unresolvedCategories.map((item) => (
+                            <li key={item.category_id}>
+                              {item.product_code ?? "Unassigned"}: {item.display_name}
+                              {item.errors[0] && ` — ${item.errors[0]}`}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="mt-2">Open each product’s Employee Category &amp; Plan Type section to correct and confirm its rule.</p>
+                      </details>
+                    )}
+                  </div>
+                )}
               </div>
               {!readOnly && <div className="flex flex-wrap gap-2">
+                {viewingYear.status === "draft" && validatedCategories.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmValidated(true)}
+                  >
+                    Review {validatedCategories.length} validated rules
+                  </Button>
+                )}
                 {viewingYear.status !== "active" && (
                   <Button
                     size="sm"
@@ -420,6 +477,63 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
           </section>
         )}
       </CardContent>
+
+      <AlertDialog
+        open={confirmValidated}
+        onOpenChange={setConfirmValidated}
+        tone="info"
+        title="Confirm validated employee categories?"
+        description={
+          <div className="space-y-3">
+            <p>
+              {validatedCategories.length} rules matched the uploaded employee listing and passed validation.
+              Confirming them assigns the corresponding benefit plans to matching employees.
+            </p>
+            <p className="font-medium text-foreground">{countByProduct(validatedCategories)}</p>
+            <details>
+              <summary className="cursor-pointer font-medium text-foreground">
+                Inspect all {validatedCategories.length} rules
+              </summary>
+              <ul className="mt-2 max-h-48 space-y-2 overflow-auto rounded-md border border-border p-3">
+                {validatedCategories.map((item) => (
+                  <li key={item.category_id}>
+                    <span className="font-medium text-foreground">
+                      {item.product_code ?? "Unassigned"}: {item.display_name}
+                    </span>
+                    {item.rule_human_readable && (
+                      <span className="block">{item.rule_human_readable}</span>
+                    )}
+                    {item.matched_count != null && (
+                      <span className="block">{item.matched_count} employees matched</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+            <p>
+              {unresolvedCategories.length} categories still need individual review and will remain unconfirmed.
+              Any rule that fails the latest checks will also be skipped.
+            </p>
+          </div>
+        }
+        confirmLabel={`Confirm ${validatedCategories.length} rules`}
+        confirmVariant="default"
+        loading={bulkConfirm.isPending}
+        confirmDisabled={!viewingYear || validatedCategories.length === 0 || mapping.isFetching}
+        onConfirm={async () => {
+          if (!viewingYear) return;
+          try {
+            const result = await bulkConfirm.mutateAsync(viewingYear.id);
+            setConfirmValidated(false);
+            toast.success(`${result.confirmed} employee categories confirmed`);
+            if (result.skipped_invalid_rules > 0) {
+              toast.warning(`${result.skipped_invalid_rules} rules need individual review`);
+            }
+          } catch (error) {
+            toast.error(formatError(error));
+          }
+        }}
+      />
 
       <AlertDialog
         open={Boolean(confirmDelete)}

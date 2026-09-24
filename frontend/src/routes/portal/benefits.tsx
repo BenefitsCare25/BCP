@@ -1,21 +1,23 @@
 /** "What's covered" — the member's own leaf. */
-import { usePortalStatement } from "@/api/portal";
+import { usePortalMe, usePortalStatement } from "@/api/portal";
 import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { isNotFoundError } from "@/lib/errors";
+import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalBenefitsPage({
   productKey,
   onProductKeyChange,
 }: {
-  /** Which deck slide is showing. Driven by the route's `?p=` so the selection
-   * survives a refresh and a shared link; omitted, the deck holds its own. */
+  /** Selected care route. `?p=` preserves a refresh and a shared link. */
   productKey?: string | null;
   onProductKeyChange?: (key: string) => void;
 } = {}) {
   const statement = usePortalStatement();
+  const { data: profile } = usePortalMe();
+  const company = useCompany();
 
   if (statement.isLoading) return <LeafSkeleton label="Loading your benefits" />;
 
@@ -26,12 +28,13 @@ export function PortalBenefitsPage({
   }
 
   if (statement.isError || !statement.data) {
+    const awaitingPublication = profile?.policy_year === null;
     return (
-      <Mount label="No benefits on record">
+      <Mount label={awaitingPublication ? "Benefits not live yet" : "No benefits linked to your account"}>
         <p className="text-row text-label">
-          We don't have any benefits recorded against your name for this
-          period. This usually means your company's cover for the year hasn't
-          been finalised yet. Your HR team can tell you where things stand.
+          {awaitingPublication
+            ? "Your company's benefit year is still being prepared. Your coverage will appear here after it goes live. Ask your HR team if you need details sooner."
+            : "We couldn't find a benefit record linked to your account for the live year. Ask your HR team to check your employee record."}
         </p>
       </Mount>
     );
@@ -42,6 +45,7 @@ export function PortalBenefitsPage({
       data={statement.data}
       productKey={productKey}
       onProductKeyChange={onProductKeyChange}
+      company={company}
     />
   );
 }

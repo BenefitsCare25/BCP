@@ -205,15 +205,18 @@ export function ScheduleLeaf({
   schedule,
   annualPolicyLimit,
   titleId,
+  allRows = false,
 }: {
   schedule: BenefitSchedule | null | undefined;
   annualPolicyLimit?: string | null;
   /** Ties the disclosure's label to the mount it belongs to. */
   titleId?: string;
+  /** Use inside the care detail's single full-schedule disclosure. */
+  allRows?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
   const { items, headline, collapsible, valuesMissing } = readSchedule(
-    schedule?.items,
+    schedule?.items?.filter((item) => /\p{L}/u.test(item.name ?? "")),
   );
 
   if (items.length === 0) {
@@ -271,7 +274,7 @@ export function ScheduleLeaf({
           <Item
             key={`${item.number}-${idx}`}
             item={item}
-            hidden={!showAll && hiddenSet.has(item)}
+            hidden={!allRows && !showAll && hiddenSet.has(item)}
           />
         ))}
       </dl>
@@ -282,7 +285,7 @@ export function ScheduleLeaf({
           a reading task that needs neither interruption nor protected focus:
           no focus trap, no scroll lock, and `aria-expanded` + `aria-controls`
           carry the state that a dialog would have carried structurally. */}
-      {collapsible && (
+      {collapsible && !allRows && (
         <>
           <MountRule className="mt-1" />
           <button

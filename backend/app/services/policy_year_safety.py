@@ -36,6 +36,7 @@ from app.models import (
 from app.models.category import CategoryStatus
 from app.models.flex_scheme import FlexSchemeStatus
 from app.models.product_setup import ProductSetupStatus
+from app.services.eligibility_mapping import is_employee_mapping_category
 
 
 @dataclass(frozen=True)
@@ -111,16 +112,15 @@ def readiness(db: Session, policy_year_id: str) -> tuple[dict[str, int], list[st
         )
         or 0
     )
-    review_categories = int(
-        db.scalar(
-            select(func.count())
-            .select_from(Category)
-            .where(
-                Category.policy_year_id == policy_year_id,
-                Category.status != CategoryStatus.confirmed.value,
-            )
-        )
-        or 0
+    # Dependant-only option rows are not employee cohorts and have no matching
+    # rule to confirm. The category editor deliberately hides Confirm for them;
+    # counting them here made a ready year impossible to launch.
+    review_categories = sum(
+        category.status != CategoryStatus.confirmed.value
+        for category in db.execute(
+            select(Category).where(Category.policy_year_id == policy_year_id)
+        ).scalars()
+        if is_employee_mapping_category(category)
     )
     scheme = db.scalar(select(FlexScheme).where(FlexScheme.policy_year_id == policy_year_id))
     flex_confirmed = int(scheme is not None and scheme.status == FlexSchemeStatus.confirmed)
