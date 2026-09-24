@@ -312,6 +312,11 @@ def rule_specificity(rule: object) -> int:
     return total
 
 
+def rule_has_validation_errors(category: Category) -> bool:
+    validation = category.rule_validation
+    return isinstance(validation, dict) and bool(validation.get("errors"))
+
+
 def match_one(
     employee: MatchableEmployee,
     categories_by_priority: list[Category],
@@ -340,9 +345,23 @@ def match_one(
             for c in categories_by_priority
         }
     emp_entities = employee_entity(employee.attribute_values, entity_aliases)
+    view = {
+        **(employee.attribute_values or {}),
+        **(employee.derived_attribute_values or {}),
+    }
 
     def _allowed(cat: Category) -> bool:
-        return _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entities)
+        if not _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entities):
+            return False
+        if rule_has_validation_errors(cat):
+            return False
+        # A roster text label cannot override an explicit job-code rule when
+        # the employee has a resolved code. Apply this gate to every tier.
+        if view.get("job_category") is not None and re.search(
+            r"\bjob\s+category\s*:", cat.raw_description, re.I
+        ):
+            return bool(cat.matching_rule) and evaluate(cat.matching_rule, view)
+        return True
 
     raw_category: str | None = (
         employee.attribute_values.get("category") if employee.attribute_values else None
@@ -390,10 +409,6 @@ def match_one(
     # then pick the most specific (most leaf conditions); break ties
     # confirmed-first, then priority ASC. This stops a looser, earlier-priority
     # rule from shadowing a narrower one (e.g. foreign-worker plans).
-    view = {
-        **(employee.attribute_values or {}),
-        **(employee.derived_attribute_values or {}),
-    }
     matches = [
         cat
         for cat in categories_by_priority
@@ -455,6 +470,8 @@ def _build_exact_lookup(categories: list[Category]) -> dict[str, Category]:
     out: dict[str, Category] = {}
     for c in categories:
         if not c.display_name:
+            continue
+        if rule_has_validation_errors(c):
             continue
         key = _normalize(c.display_name)
         existing = out.get(key)

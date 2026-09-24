@@ -41,6 +41,7 @@ from app.services.matching_engine import (
     employee_entity,
     entity_alias_map,
     product_entities,
+    rule_has_validation_errors,
     rule_specificity,
 )
 from app.services.rule_evaluator import evaluate
@@ -1279,6 +1280,11 @@ def validate_ai_matching_rule(
         source_attribute = next(iter(source_values))
         if source_attribute not in validation.referenced_attributes:
             errors.append(f"Matching rule omitted explicit employee attribute: {source_attribute}")
+        if source_attribute == "job_category" and "category" in validation.referenced_attributes:
+            errors.append(
+                "AI rule may not use roster category text when the slip specifies "
+                "job category codes"
+            )
     return RuleValidation(
         valid=not errors,
         errors=list(dict.fromkeys(errors)),
@@ -1868,6 +1874,8 @@ def _assignment_counts(
     employees: list[Employee],
     views: list[dict[str, Any]],
     overlap_details: dict[str, list[dict[str, Any]]] | None = None,
+    excluded_category_ids: set[str] | None = None,
+    validated_category_ids: set[str] | None = None,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Count matched eligibility cohorts with the live matcher's precedence.
 
@@ -1892,6 +1900,8 @@ def _assignment_counts(
     aliases = entity_alias_map(db, client_id)
     counts: dict[str, int] = defaultdict(int)
     overlaps: dict[str, int] = defaultdict(int)
+    excluded = excluded_category_ids or set()
+    validated = validated_category_ids or set()
 
     def rank(category: Category) -> tuple[int, int]:
         status_rank = (
@@ -1919,6 +1929,10 @@ def _assignment_counts(
                 category
                 for category in product_categories
                 if category.matching_rule
+                and category.id not in excluded
+                and (
+                    category.id in validated or not rule_has_validation_errors(category)
+                )
                 and _entity_allows(gates[category.id], employee_gate)
                 and evaluate(category.matching_rule, view)
             ]
@@ -2181,6 +2195,8 @@ def assess_category_rule(
         categories=categories,
         employees=employees,
         views=views,
+        excluded_category_ids={category.id} if not validation.valid else None,
+        validated_category_ids={category.id} if validation.valid else None,
     )
 
     pa = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
@@ -2300,6 +2316,16 @@ def auto_map_policy_year(
         categories=categories,
         employees=employees,
         views=views,
+        excluded_category_ids={
+            category_id
+            for category_id, (_, _, validation) in proposal_meta.items()
+            if not validation.valid
+        },
+        validated_category_ids={
+            category_id
+            for category_id, (_, _, validation) in proposal_meta.items()
+            if validation.valid
+        },
     )
 
     items: list[MappingItem] = []

@@ -103,6 +103,48 @@ def test_exact_name_is_case_insensitive() -> None:
     assert out.method == "exact_name"
 
 
+def test_explicit_job_code_rejects_raw_category_label_match() -> None:
+    manager = _cat(
+        "manager",
+        "Manager (Job Category: X1 to X4)",
+        rule={"in": ["job_category", ["X1", "X2", "X3", "X4"]]},
+    )
+    thailand = _cat(
+        "thailand",
+        "All Employees based in Thailand (Job Category: J1 to J3)",
+        rule={"in": ["job_category", ["J1", "J2", "J3"]]},
+    )
+    employee = _emp(thailand.display_name, derived={"job_category": "X1"})
+    categories = [manager, thailand]
+    outcome = match_one(
+        employee,
+        categories,
+        _build_exact_lookup(categories),
+        {category.id: tokenize(category.display_name) for category in categories},
+    )
+    assert outcome.category_id == manager.id
+    assert outcome.method == "rule"
+
+
+def test_invalid_ai_rule_cannot_match_by_roster_category_label() -> None:
+    category = _cat(
+        "thailand",
+        "All Employees based in Thailand (Job Category: J1 to J3)",
+        rule={"=": ["category", "All Employees based in Thailand"]},
+    )
+    category.rule_validation = {
+        "errors": ["Matching rule omitted explicit employee attribute: job_category"]
+    }
+    employee = _emp(category.display_name, derived={"job_category": "X1"})
+    outcome = match_one(
+        employee,
+        [category],
+        _build_exact_lookup([category]),
+        {category.id: tokenize(category.display_name)},
+    )
+    assert outcome.category_id is None
+
+
 def test_fuzzy_matches_above_threshold() -> None:
     cats = [_cat("c1", "Grade 18 Married 2 child"), _cat("c2", "Single Grade 5")]
     # "Grade 18 Married 1 child" vs "Grade 18 Married 2 child"

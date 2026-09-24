@@ -35,6 +35,7 @@ from app.services.ai_gateway import AICallResult
 from app.services.eligibility_mapping import (
     AttributeValueCatalog,
     CategoryConfirmationBatch,
+    _assignment_counts,
     auto_map_policy_year,
     build_ai_eligibility_inputs,
     build_attribute_catalog,
@@ -310,6 +311,28 @@ def test_based_in_country_uses_work_location_not_nationality() -> None:
         ]
     }
     assert proposal.unresolved_clauses == []
+
+
+def test_ai_rule_rejects_roster_category_proxy_for_explicit_job_codes() -> None:
+    description = (
+        "Officer and All Employees based in Thailand (except for Director) "
+        "(Job Category: J1 to J3, JA to JC)"
+    )
+    catalog = _catalog(
+        job_category=["J1", "J2", "J3", "JA", "JB", "JC"],
+        category=["Officer", "All Employees based in Thailand (except for Director)"],
+    )
+    broad_rule = {
+        "or": [
+            {"in": ["job_category", ["J1", "J2", "J3", "JA", "JB", "JC"]]},
+            {"=": ["category", "Officer"]},
+        ]
+    }
+
+    validation = validate_ai_matching_rule(description, broad_rule, catalog)
+
+    assert not validation.valid
+    assert any("roster category text" in error for error in validation.errors)
 
 
 def test_based_in_country_uses_reviewed_nationality_proxy_as_last_resort() -> None:
@@ -1054,6 +1077,25 @@ def test_disjoint_plan_rules_do_not_report_an_overlap() -> None:
         assert categories[1].id in overlaps
         assert categories[2].id in overlaps
         assert categories[3].id in overlaps
+
+        categories[1].rule_validation = {
+            "errors": ["Matching rule omitted explicit employee attribute: job_category"]
+        }
+        overlaps = current_category_overlaps(
+            db, policy_year_id=PY_2026, client_id=CLIENT_ID
+        )
+        assert all(category.id not in overlaps for category in categories)
+
+        _, employees, views = build_attribute_catalog(db, PY_2026, CLIENT_ID)
+        _, reassessed_overlaps = _assignment_counts(
+            db=db,
+            client_id=CLIENT_ID,
+            categories=categories,
+            employees=employees,
+            views=views,
+            validated_category_ids={categories[1].id},
+        )
+        assert reassessed_overlaps[categories[1].id] == 1
         db.rollback()
 
 
