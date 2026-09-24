@@ -33,8 +33,5 @@
     { "number": "2", "name": "Polyclinic — per visit / co-payment / per policy year", "kind": "copay" },
     { "number": "3", "name": "Non-Panel — per visit / co-payment / per policy year", "kind": "copay" }
   ],
-  "additional_arrangements": [
-    { "id": "teleconsultation", "label": "Extension to cover teleconsultation", "default_enabled": false },
-    { "id": "panel_tcm", "label": "Extension to cover panel TCM clinics (consultation only)", "default_enabled": false }
-  ]
+  "additional_arrangements": []
 }

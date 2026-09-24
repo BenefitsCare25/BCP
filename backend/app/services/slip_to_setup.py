@@ -591,7 +591,5 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
         "rate_table": _rate_table(slip),
         "categories": _category_rows(slip, tpl),
         "endorsements": _endorsements(slip),
-        "arrangements": {
-            a.id: a.default_enabled for a in tpl.additional_arrangements
-        },
+        "arrangements": {},
     }

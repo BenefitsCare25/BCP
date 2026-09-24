@@ -26,10 +26,5 @@
     { "number": "1", "name": "Sum Assured payable on Death", "kind": "text" },
     { "number": "2", "name": "Terminal Illness (acceleration of Sum Assured)", "kind": "text" }
   ],
-  "additional_arrangements": [
-    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
-    { "id": "not_actively_at_work", "label": "Cover for employees not actively at work (takeover only), subject to proof of insurability", "default_enabled": true },
-    { "id": "free_cover_limit", "label": "Free Cover / Non-Evidence Limit applies up to scheme limit", "default_enabled": true },
-    { "id": "addition_deletion", "label": "Addition & deletion clause (name basis) — backdating up to 90 days", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

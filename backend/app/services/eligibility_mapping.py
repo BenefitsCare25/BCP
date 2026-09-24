@@ -1867,6 +1867,7 @@ def _assignment_counts(
     categories: list[Category],
     employees: list[Employee],
     views: list[dict[str, Any]],
+    confirmation_candidate_id: str | None = None,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Count matched eligibility cohorts with the live matcher's precedence.
 
@@ -1895,7 +1896,10 @@ def _assignment_counts(
     def rank(category: Category) -> tuple[int, int]:
         status_rank = (
             0
-            if category.status == CategoryStatus.confirmed.value
+            if (
+                category.status == CategoryStatus.confirmed.value
+                or category.id == confirmation_candidate_id
+            )
             else 1
             if category.status == CategoryStatus.needs_review.value
             else 2
@@ -1955,7 +1959,9 @@ def _rule_messages(
     if not catalog.roster_present and matching_rule is not None:
         warnings.append("No active employee listing is available to validate matched employees")
     if overlap_count:
-        message = f"{overlap_count} employees also match an equally specific employee cohort"
+        noun = "employee" if overlap_count == 1 else "employees"
+        verb = "matches" if overlap_count == 1 else "match"
+        message = f"{overlap_count} {noun} also {verb} an equally specific employee cohort"
         warnings.append(message)
         blockers.append(message)
     if expected is not None and matched is not None and expected != matched:
@@ -2047,6 +2053,7 @@ def assess_category_rule(
         "source": source,
         "errors": validation.errors,
         "warnings": warnings,
+        "overlap_count": overlaps.get(category.id, 0),
         "unresolved_clauses": unresolved,
         "required_attributes": validation.referenced_attributes,
         "matched_count": matched,
@@ -2177,6 +2184,7 @@ def auto_map_policy_year(
             "source": proposal.source,
             "errors": errors,
             "warnings": warnings,
+            "overlap_count": overlaps.get(category.id, 0),
             "unresolved_clauses": proposal.unresolved_clauses,
             "required_attributes": validation.referenced_attributes,
             "matched_count": matched,
@@ -2241,7 +2249,7 @@ def confirm_category_mapping(
 ) -> EligibilityMappingProfile:
     """Validate and persist one broker-confirmed reusable mapping profile."""
 
-    catalog, _, _ = build_attribute_catalog(db, category.policy_year_id, client_id)
+    catalog, employees, views = build_attribute_catalog(db, category.policy_year_id, client_id)
     validation = validate_matching_rule(
         category.matching_rule,
         catalog,
@@ -2249,6 +2257,39 @@ def confirm_category_mapping(
     )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
+    categories = list(
+        db.execute(
+            select(Category).where(Category.policy_year_id == category.policy_year_id)
+        ).scalars()
+    )
+    if category not in categories:
+        categories.append(category)
+    counts, overlaps = _assignment_counts(
+        db=db,
+        client_id=client_id,
+        categories=categories,
+        employees=employees,
+        views=views,
+        confirmation_candidate_id=category.id,
+    )
+    overlap_count = overlaps.get(category.id, 0)
+    if overlap_count:
+        noun = "employee" if overlap_count == 1 else "employees"
+        verb = "matches" if overlap_count == 1 else "match"
+        raise ValueError(f"{overlap_count} {noun} {verb} equally specific employee categories")
+    pa = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
+    expected_raw = pa.get("num_employees")
+    expected = int(expected_raw) if isinstance(expected_raw, (int, float)) else None
+    matched = counts.get(category.id, 0) if catalog.roster_present else None
+    warnings, _ = _rule_messages(
+        catalog=catalog,
+        matching_rule=category.matching_rule,
+        validation=validation,
+        matched=matched,
+        expected=expected,
+        overlap_count=0,
+        unresolved=[],
+    )
     existing = category.rule_validation if isinstance(category.rule_validation, dict) else {}
     proposal = RuleProposal(
         rule=category.matching_rule,
@@ -2263,7 +2304,12 @@ def confirm_category_mapping(
         **existing,
         "state": "validated",
         "errors": [],
+        "warnings": warnings,
+        "overlap_count": 0,
+        "unresolved_clauses": [],
         "required_attributes": validation.referenced_attributes,
+        "matched_count": matched,
+        "expected_count": expected,
         "confirmed": True,
     }
     profile = _upsert_profile(

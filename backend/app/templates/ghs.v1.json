@@ -77,13 +77,5 @@
     { "number": "15", "name": "Extension to cover GST", "kind": "text" },
     { "number": "16", "name": "Hospital Cash Allowance Benefit (Singaporeans & PRs only)", "kind": "text" }
   ],
-  "additional_arrangements": [
-    { "id": "takeover", "label": "Take Over Basis from previous insurer's Endorsements and Practices", "default_enabled": true },
-    { "id": "not_actively_at_work", "label": "Include cover for employees who are not actively at work (takeover only), subject to proof of insurability", "default_enabled": true },
-    { "id": "addition_deletion", "label": "Addition & deletion clause (name basis) - allow backdating of employee movement up to 90 days", "default_enabled": true },
-    { "id": "intl_transferees", "label": "International Transferees / expatriates & eligible dependants in Singapore subject to 12 months pre-existing exclusion (unless continuously insured)", "default_enabled": true },
-    { "id": "log_applicable", "label": "Letter of Guarantee (LOG) Applicable (on case by case basis)", "default_enabled": true },
-    { "id": "pre_existing", "label": "Pre-existing conditions: 12 months waiting period, creditable against prior continuous coverage", "default_enabled": true },
-    { "id": "hospital_cash", "label": "Hospital Cash Allowance Benefit (Singaporeans & PRs only) per schedule of benefits", "default_enabled": false }
-  ]
+  "additional_arrangements": []
 }

@@ -20,7 +20,6 @@ import { insuredNames } from "@/lib/insured";
 import type {
   BasisModel,
   Category,
-  EligibilityRuleStatus,
   PlanAssignment,
   PlanDetail,
   RateModel,
@@ -323,7 +322,7 @@ function EmployeeCategoryRow({
           {expanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="truncate text-sm font-semibold text-foreground">{group.name}</span>
         </button>
-        <RuleStatus status={group.ruleStatus} employeesAvailable={employeesAvailable} />
+        <RuleStatus group={group} employeesAvailable={employeesAvailable} />
         <span className="whitespace-nowrap text-xs text-muted-foreground">
           {group.categories.length} plan assignment{group.categories.length === 1 ? "" : "s"}
           {employeesAvailable && count ? ` · ${count.employees} employees${hasDependants ? ` · ${count.dependants} dependants` : ""}` : ""}
@@ -375,11 +374,26 @@ function EmployeeCategoryRow({
   );
 }
 
-function RuleStatus({ status, employeesAvailable }: { status: EligibilityRuleStatus; employeesAvailable: boolean }) {
+function RuleStatus({ group, employeesAvailable }: { group: EmployeeCategoryGroup; employeesAvailable: boolean }) {
+  const status = group.ruleStatus;
   if (status === "validated") return <Badge variant="good">Rule validated</Badge>;
   if (status === "unmapped") return <Badge variant="error">Employee category rule missing</Badge>;
   if (status === "proposed" && !employeesAvailable) {
     return <Badge variant="info">Proposed — awaiting employee listing</Badge>;
+  }
+  const count = Math.max(...group.categories.map((category) => {
+    if (category.rule_status !== "needs_review" || category.rule_validation?.confirmed === true) return 0;
+    const validation = category.rule_validation;
+    if (typeof validation?.overlap_count === "number") return validation.overlap_count;
+    const warnings = validation?.warnings;
+    if (!Array.isArray(warnings)) return 0;
+    const overlap = warnings
+      .map((warning) => String(warning).match(/^(\d+) employees? also match(?:es)? an equally specific employee cohort$/))
+      .find((match) => match !== null);
+    return overlap ? Number(overlap[1]) : 0;
+  }));
+  if (count > 0) {
+    return <Badge variant="warn">{count} overlapping employee{count === 1 ? "" : "s"}</Badge>;
   }
   return <Badge variant="warn">Rule needs attention</Badge>;
 }

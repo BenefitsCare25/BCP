@@ -805,9 +805,19 @@ def test_policy_year_mapping_persists_validated_rule_and_profile() -> None:
         assert item.expected_count == 1
         assert category.mapping_profile_id is not None
 
+        # Confirmation must not keep an older review result beside "validated".
+        category.rule_validation = {
+            **(category.rule_validation or {}),
+            "warnings": ["1 employees also match an equally specific employee cohort"],
+            "overlap_count": 1,
+            "unresolved_clauses": ["obsolete suggestion"],
+        }
         profile = confirm_category_mapping(db, category=category, client_id=CLIENT_ID)
         assert profile.status == "confirmed"
         assert category.status == CategoryStatus.confirmed.value
+        assert category.rule_validation["warnings"] == []
+        assert category.rule_validation["overlap_count"] == 0
+        assert category.rule_validation["unresolved_clauses"] == []
         db.commit()
 
 
@@ -847,6 +857,61 @@ def test_manual_confirmation_accepts_equivalent_grade_attribute() -> None:
         db.rollback()
 
 
+def test_confirmation_rechecks_real_cohort_overlap() -> None:
+    with SessionLocal() as db:
+        product = Product(
+            id="00000000-0000-0000-0000-00000000e1c3",
+            client_id=CLIENT_ID,
+            code="OVERLAP-CONFIRM-QA",
+            display_name="Overlap confirmation QA",
+        )
+        db.add(product)
+        db.flush()
+        first = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=1,
+            display_name="First cohort",
+            raw_description="First cohort",
+            matching_rule={"=": ["employment_type", "MANUAL"]},
+            status=CategoryStatus.needs_review.value,
+            source="manual",
+            plan_assignments={"plan_code": "A"},
+        )
+        second = Category(
+            policy_year_id=PY_2026,
+            product_id=product.id,
+            priority=2,
+            display_name="Second cohort",
+            raw_description="Second cohort",
+            matching_rule={"=": ["employment_type", "MANUAL"]},
+            status=CategoryStatus.needs_review.value,
+            source="manual",
+            plan_assignments={"plan_code": "B"},
+        )
+        db.add_all([first, second])
+        db.add(
+            Employee(
+                client_id=CLIENT_ID,
+                policy_year_id=PY_2026,
+                staff_id="E-CONFIRM-OVERLAP",
+                employee_name="Overlap Employee",
+                attribute_values={"employment_type": "MANUAL"},
+                derived_attribute_values={},
+            )
+        )
+        db.flush()
+
+        confirm_category_mapping(db, category=first, client_id=CLIENT_ID)
+        with pytest.raises(
+            ValueError,
+            match=r"\d+ employees? match(?:es)? equally specific employee categories",
+        ):
+            confirm_category_mapping(db, category=second, client_id=CLIENT_ID)
+        assert second.status == CategoryStatus.needs_review.value
+        db.rollback()
+
+
 def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
     with SessionLocal() as db:
         product = Product(
@@ -881,6 +946,25 @@ def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
         )
         db.add_all([first, second])
         db.flush()
+        manual_employees = [
+            employee
+            for employee in db.execute(
+                select(Employee).where(Employee.policy_year_id == PY_2026)
+            ).scalars()
+            if employee.attribute_values.get("employment_type") == "MANUAL"
+        ]
+        if not manual_employees:
+            db.add(
+                Employee(
+                    client_id=CLIENT_ID,
+                    policy_year_id=PY_2026,
+                    staff_id="E-COHORT-QA",
+                    employee_name="Cohort QA Employee",
+                    attribute_values={"employment_type": "MANUAL"},
+                    derived_attribute_values={},
+                )
+            )
+            db.flush()
 
         summary = auto_map_policy_year(db, policy_year_id=PY_2026, client_id=CLIENT_ID)
         items = {
@@ -894,6 +978,11 @@ def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
         assert items[first.id].matched_count == 1
         assert items[second.id].matched_count == 1
         assert all("equally specific" not in " ".join(item.warnings) for item in items.values())
+        confirm_category_mapping(db, category=first, client_id=CLIENT_ID)
+        confirm_category_mapping(db, category=second, client_id=CLIENT_ID)
+        assert first.rule_validation["overlap_count"] == 0
+        assert second.rule_validation["overlap_count"] == 0
+        db.rollback()
 
 
 def test_slip_headcount_drift_is_advisory_not_a_rule_failure() -> None:

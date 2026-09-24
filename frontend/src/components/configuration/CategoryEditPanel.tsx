@@ -64,6 +64,37 @@ function validationStrings(
     : [];
 }
 
+function mappingChecks(validation: Record<string, unknown>) {
+  const warnings = validationStrings(validation, "warnings").filter(
+    (message) => !message.toLowerCase().startsWith("no active employee listing"),
+  );
+  const inactiveValues = warnings.filter((message) =>
+    /^Configured value .+ has no active employees in /i.test(message),
+  );
+  const headcount = warnings.filter((message) =>
+    /^Matched \d+ employees; placement slip states \d+$/i.test(message),
+  );
+  const inactiveLabel = inactiveValues.every((message) =>
+    message.endsWith(" in job_category"),
+  ) ? "job category code" : "rule value";
+  return {
+    attention: [
+      ...validationStrings(validation, "errors"),
+      ...warnings.filter(
+        (message) => !inactiveValues.includes(message) && !headcount.includes(message),
+      ),
+    ],
+    notes: [
+      ...(inactiveValues.length
+        ? [
+            `${inactiveValues.length} ${inactiveLabel}${inactiveValues.length === 1 ? " has" : "s have"} no active employees. They remain in the rule for future hires.`,
+          ]
+        : []),
+      ...headcount.map((message) => `${message}. This does not affect rule validation.`),
+    ],
+  };
+}
+
 function AISuggestionSummary({
   category,
   schema,
@@ -87,13 +118,11 @@ function AISuggestionSummary({
     typeof validation.expected_count === "number"
       ? validation.expected_count
       : null;
-  const checks = [
-    ...validationStrings(validation, "errors"),
-    ...validationStrings(validation, "warnings"),
-  ].filter(
-    (message) =>
-      !message.toLowerCase().startsWith("no active employee listing"),
-  );
+  const confirmed = !edited && category.status === "confirmed" && category.rule_status === "validated";
+  const savedChecks = mappingChecks(validation);
+  const checks = edited || (confirmed && validation.confirmed === true)
+    ? { attention: [], notes: [] }
+    : savedChecks;
 
   return (
     <section className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
@@ -101,8 +130,8 @@ function AISuggestionSummary({
         <div className="flex items-center gap-2 font-medium text-foreground">
           <Sparkles className="size-4 text-warn" /> AI suggested setup
         </div>
-        <Badge variant={edited ? "warn" : "outline"}>
-          {edited ? "Edited after suggestion" : "Saved for review"}
+        <Badge variant={edited ? "warn" : confirmed ? "good" : "outline"}>
+          {edited ? "Edited after suggestion" : confirmed ? "Confirmed" : "Saved for review"}
         </Badge>
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
@@ -131,21 +160,37 @@ function AISuggestionSummary({
                   expected === null ? "" : ` · ${expected} stated on the slip`
                 }`}
           </dd>
+          {matched !== null && expected !== null && matched !== expected && (
+            <dd className="mt-1 text-xs text-muted-foreground">
+              The slip headcount does not decide rule validity.
+            </dd>
+          )}
         </div>
       </dl>
-      {checks.length > 0 && (
-        <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-2.5 text-xs">
-          <p className="font-medium text-foreground">Needs review</p>
-          <ul className="mt-1 space-y-1 text-warn">
-            {checks.map((message) => (
-              <li key={message}>• {message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <div className={checks.attention.length > 0
+        ? "rounded-md border border-warn/40 bg-warn-soft/40 p-2.5 text-xs"
+        : "rounded-md border border-border bg-background p-2.5 text-xs"}>
+        <p className="font-medium text-foreground">Mapping checks</p>
+        {checks.attention.length > 0 && <ul className="mt-1 space-y-1 text-warn">
+          {checks.attention.map((message) => <li key={message}>• {message}</li>)}
+        </ul>}
+        {checks.notes.length > 0 && <ul className="mt-1 space-y-1 text-muted-foreground">
+          {checks.notes.map((message) => <li key={message}>• {message}</li>)}
+        </ul>}
+        {checks.attention.length === 0 && checks.notes.length === 0 && (
+          <p className="mt-1 text-muted-foreground">
+            {edited
+              ? "Changes have not been checked yet."
+              : confirmed ? "Mapping confirmed by reviewer." : "No rule issues found."}
+          </p>
+        )}
+      </div>
       <p className="text-xs text-muted-foreground">
-        This suggestion is saved for review but is not confirmed. Edit the
-        conditions below or confirm the mapping when it is correct.
+        {edited
+          ? "Save or confirm the changed conditions to update this mapping."
+          : confirmed
+            ? "This mapping is confirmed. Edit the conditions below to update it."
+            : "This suggestion is saved for review but is not confirmed. Edit the conditions below or confirm the mapping when it is correct."}
       </p>
     </section>
   );
@@ -195,8 +240,7 @@ function EditForm({
   const { data: aiStatus } = useAIStatus();
   const [showDelete, setShowDelete] = useState(false);
   const validation = current.rule_validation ?? {};
-  const validationErrors = validationStrings(validation, "errors");
-  const validationWarnings = validationStrings(validation, "warnings");
+  const checks = mappingChecks(validation);
   const matchedCount =
     typeof validation.matched_count === "number" ? validation.matched_count : null;
   const expectedCount =
@@ -351,14 +395,19 @@ function EditForm({
         <Separator />
 
         {current.source !== "ai_extracted" &&
-          (validationErrors.length > 0 || validationWarnings.length > 0) && (
-          <div className="rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs">
+          (checks.attention.length > 0 || checks.notes.length > 0) && (
+          <div className={checks.attention.length > 0
+            ? "rounded-md border border-warn/40 bg-warn-soft/40 p-3 text-xs"
+            : "rounded-md border border-border bg-muted/40 p-3 text-xs"}>
             <p className="font-medium text-foreground">Mapping checks</p>
-            <ul className="mt-1 space-y-1 text-warn">
-              {[...validationErrors, ...validationWarnings].map((message) => (
+            {checks.attention.length > 0 && <ul className="mt-1 space-y-1 text-warn">
+              {checks.attention.map((message) => (
                 <li key={message}>• {message}</li>
               ))}
-            </ul>
+            </ul>}
+            {checks.notes.length > 0 && <ul className="mt-1 space-y-1 text-muted-foreground">
+              {checks.notes.map((message) => <li key={message}>• {message}</li>)}
+            </ul>}
           </div>
         )}
 

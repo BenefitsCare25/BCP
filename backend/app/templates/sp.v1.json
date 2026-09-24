@@ -41,7 +41,5 @@
       ]
     }
   ],
-  "additional_arrangements": [
-    { "id": "referral_required", "label": "Referral letter required from panel GP / polyclinic", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

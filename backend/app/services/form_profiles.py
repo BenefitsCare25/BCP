@@ -2,7 +2,7 @@
 
 A product's guided setup form used to be one fixed, medical-shaped skeleton
 (header → eligibility → plans → EO/ES/EC/EF tiers → Basis of Cover → Schedule
-of Benefits → arrangements). That fits hospital/surgical products but is wrong
+of Benefits). That fits hospital/surgical products but is wrong
 for life (sum-assured), accident (capital sum + scale), travel (per-trip
 limits, no family tiers) and statutory (earnings-based) products.
 
@@ -70,8 +70,8 @@ PROFILE_RATE_MODEL: dict[FormProfile, RateModel] = {
 }
 
 # ── Section ids the frontend knows how to render ────────────────────────────
-# The old standalone Plans / Cover-details / Arrangements sections were folded
-# into Basis of Cover + Schedule of Benefits, so their ids no longer exist here.
+# The old standalone Plans / Cover-details sections were folded into Basis of
+# Cover + Schedule of Benefits; Additional Arrangements was retired.
 SECTION_HEADER = "header"
 SECTION_ELIGIBILITY = "eligibility"
 SECTION_RATE_TABLE = "rate_table"
@@ -89,11 +89,9 @@ _CODE_PROFILE: dict[str, FormProfile] = cast(
 # Every product family now shares the same five-section layout, mirroring the
 # SME-scheme Excel sheets: Header → Eligibility → Basis of Cover → Rate →
 # Schedule of Benefits. The old standalone Plans/Participation, Cover Details
-# (profile fields) and Additional Arrangements sections were folded into these
-# three: plans+participation live in Basis of Cover, cover details + benefit
-# lines + arrangements live in Schedule of Benefits. The frontend renders the
-# folded content from `template.profile_fields` / `plans` / `additional_arrangements`
-# inside those sections, so it isn't a section id here.
+# (profile fields) and Additional Arrangements sections were removed or folded
+# into these three: plans+participation live in Basis of Cover, while cover
+# details + benefit lines live in Schedule of Benefits.
 _UNIFIED_SECTIONS: list[str] = [
     SECTION_HEADER,
     SECTION_ELIGIBILITY,

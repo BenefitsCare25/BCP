@@ -15,9 +15,11 @@ interface Props {
 
 export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
   const [adding, setAdding] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const selectedPlan = plans.find((plan) => plan.id === selectedPlanId);
   return (
     <section className="rounded-lg border border-border bg-card p-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-foreground">Plan types</h3>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
@@ -27,30 +29,58 @@ export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
             size="sm"
             variant="outline"
             disabled={!productId || adding}
-            onClick={() => setAdding(true)}
+            onClick={() => {
+              setSelectedPlanId(null);
+              setAdding(true);
+            }}
           >
             <Plus className="size-3.5" /> Add plan type
           </Button>
         </div>
       </div>
-      <div className="grid gap-2">
-        {adding && productId && (
-          <NewPlanTypeRow
-            plans={plans}
-            policyYearId={policyYearId}
-            productId={productId}
-            onClose={() => setAdding(false)}
-          />
-        )}
-        {plans.map((plan) => (
-          <PlanTypeRow key={plan.id} plan={plan} />
-        ))}
-        {!adding && plans.length === 0 && (
-          <p className="px-3 py-2 text-sm text-muted-foreground">
-            No plan types yet. Add one before assigning employee categories.
-          </p>
-        )}
-      </div>
+      {plans.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Plan types">
+          {plans.map((plan) => (
+            <Button
+              key={plan.id}
+              size="sm"
+              variant={selectedPlanId === plan.id ? "secondary" : "outline"}
+              className="max-w-full rounded-full"
+              aria-expanded={selectedPlanId === plan.id}
+              aria-controls={selectedPlanId === plan.id ? "plan-type-editor" : undefined}
+              title={plan.report_label ? `Insurer report label: ${plan.report_label}` : undefined}
+              onClick={() => {
+                setAdding(false);
+                setSelectedPlanId((current) => current === plan.id ? null : plan.id);
+              }}
+            >
+              <span className="truncate">{plan.display_name || plan.code}</span>
+              <Pencil className="size-3 shrink-0" aria-hidden="true" />
+              <span className="sr-only">Edit plan type</span>
+            </Button>
+          ))}
+        </div>
+      )}
+      {!adding && !selectedPlan && plans.length === 0 && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          No plan types yet. Add one before assigning employee categories.
+        </p>
+      )}
+      {adding && productId && (
+        <NewPlanTypeRow
+          plans={plans}
+          policyYearId={policyYearId}
+          productId={productId}
+          onClose={() => setAdding(false)}
+        />
+      )}
+      {selectedPlan && (
+        <PlanTypeEditor
+          key={selectedPlan.id}
+          plan={selectedPlan}
+          onClose={() => setSelectedPlanId(null)}
+        />
+      )}
     </section>
   );
 }
@@ -85,7 +115,7 @@ function NewPlanTypeRow({
     }
   };
   return (
-    <div className="grid grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,1.5fr)_auto] items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+    <div className="mt-3 grid gap-2 rounded-md bg-muted/40 p-3 sm:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.5fr)_auto] sm:items-center">
       <Input
         value={name}
         onChange={(event) => setName(event.target.value)}
@@ -134,9 +164,8 @@ function nextPlanName(plans: PlanDetail[]): string {
   return `Plan ${number}`;
 }
 
-function PlanTypeRow({ plan }: { plan: PlanDetail }) {
+function PlanTypeEditor({ plan, onClose }: { plan: PlanDetail; onClose: () => void }) {
   const updatePlan = useUpdatePlan();
-  const [editing, setEditing] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.code);
   const [reportLabel, setReportLabel] = useState(plan.report_label ?? "");
 
@@ -155,60 +184,43 @@ function PlanTypeRow({ plan }: { plan: PlanDetail }) {
       patch.report_label = nextReportLabel || null;
     }
     if (Object.keys(patch).length === 0) {
-      setEditing(false);
+      onClose();
       return;
     }
     try {
       await updatePlan.mutateAsync({ id: plan.id, patch });
       toast.success("Plan type saved");
-      setEditing(false);
+      onClose();
     } catch (error) {
       toast.error(`Plan type: ${formatError(error)}`);
     }
   };
 
   return (
-    <div className="grid grid-cols-[minmax(10rem,0.8fr)_minmax(16rem,1.5fr)_auto] items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
-      {editing ? (
-        <>
-          <Input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            aria-label="Plan type name"
-            className="h-8 text-sm"
-          />
-          <Input
-            value={reportLabel}
-            onChange={(event) => setReportLabel(event.target.value)}
-            placeholder="Insurer report label"
-            aria-label="Insurer report label"
-            className="h-8 text-sm"
-          />
-          <div className="flex items-center gap-1">
-            <Button size="icon-sm" variant="ghost" onClick={save}>
-              <Check className="size-3.5" />
-              <span className="sr-only">Save plan type</span>
-            </Button>
-            <Button size="icon-sm" variant="ghost" onClick={() => setEditing(false)}>
-              <X className="size-3.5" />
-              <span className="sr-only">Cancel plan type edit</span>
-            </Button>
-          </div>
-        </>
-      ) : (
-        <>
-          <span className="truncate text-sm font-medium text-foreground">
-            {plan.display_name || plan.code}
-          </span>
-          <span className="truncate text-sm text-muted-foreground">
-            {plan.report_label || "No insurer report label"}
-          </span>
-          <Button size="icon-sm" variant="ghost" onClick={() => setEditing(true)}>
-            <Pencil className="size-3.5" />
-            <span className="sr-only">Edit plan type</span>
-          </Button>
-        </>
-      )}
+    <div id="plan-type-editor" className="mt-3 grid gap-2 rounded-md bg-muted/40 p-3 sm:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.5fr)_auto] sm:items-center">
+      <Input
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        aria-label="Plan type name"
+        className="h-8 text-sm"
+      />
+      <Input
+        value={reportLabel}
+        onChange={(event) => setReportLabel(event.target.value)}
+        placeholder="Insurer report label"
+        aria-label="Insurer report label"
+        className="h-8 text-sm"
+      />
+      <div className="flex items-center gap-1">
+        <Button size="icon-sm" variant="ghost" onClick={save} disabled={updatePlan.isPending || !name.trim()}>
+          <Check className="size-3.5" />
+          <span className="sr-only">Save plan type</span>
+        </Button>
+        <Button size="icon-sm" variant="ghost" onClick={onClose} disabled={updatePlan.isPending}>
+          <X className="size-3.5" />
+          <span className="sr-only">Cancel plan type edit</span>
+        </Button>
+      </div>
     </div>
   );
 }

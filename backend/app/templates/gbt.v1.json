@@ -57,8 +57,5 @@
     { "number": "20", "name": "Political and Natural Disaster Evacuation", "kind": "amount", "value": "10,000" },
     { "number": "21", "name": "Flight Diversion ($200 for each 6 hours of delay)", "kind": "amount", "value": "1,000" }
   ],
-  "additional_arrangements": [
-    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
-    { "id": "24hr_worldwide", "label": "24-hour worldwide cover", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

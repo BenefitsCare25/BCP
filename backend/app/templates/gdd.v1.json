@@ -43,8 +43,5 @@
       ]
     }
   ],
-  "additional_arrangements": [
-    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
-    { "id": "free_cover_limit", "label": "Non-Evidence Limit applies up to scheme limit", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

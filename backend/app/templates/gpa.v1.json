@@ -37,8 +37,5 @@
     { "number": "3", "name": "Temporary Total Disablement (weekly benefit)", "kind": "text" },
     { "number": "4", "name": "Medical Expenses (due to accident)", "kind": "amount" }
   ],
-  "additional_arrangements": [
-    { "id": "takeover", "label": "Take Over Basis from previous insurer's terms", "default_enabled": true },
-    { "id": "24hr_worldwide", "label": "24-hour worldwide cover", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

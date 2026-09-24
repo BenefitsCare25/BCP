@@ -1091,8 +1091,8 @@ def _resolve_template(
 
     When the product has slip-derived Plan/Category rows, the synthesized
     structure (the client's real plans + benefit lines) is preferred and the
-    hand-authored file template is overlaid for presentation (models, kinds,
-    arrangements) — so a slip with more plans than the canned template still shows
+    hand-authored file template is overlaid for presentation (models and kinds)
+    — so a slip with more plans than the canned template still shows
     every plan. Without slip rows, the file template (or starter) is used as the
     from-scratch scaffold.
     """

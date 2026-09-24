@@ -43,7 +43,5 @@
     { "number": "3", "name": "Other Diagnostic Test / Scan (CT, MRI, PET, etc.)", "kind": "amount" },
     { "number": "4", "name": "Outpatient Physiotherapy / Chiropractor (with referral)", "kind": "amount" }
   ],
-  "additional_arrangements": [
-    { "id": "referral_required", "label": "Referral letter required from panel GP / specialist", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

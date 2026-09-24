@@ -47,7 +47,5 @@
     { "number": "10", "name": "Loss of Money & Travel Documents", "kind": "amount" },
     { "number": "11", "name": "Personal Property & Baggage", "kind": "amount" }
   ],
-  "additional_arrangements": [
-    { "id": "worldwide", "label": "24-hour worldwide cover during secondment", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

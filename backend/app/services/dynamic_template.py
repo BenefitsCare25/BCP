@@ -284,7 +284,7 @@ def merge_file_overlay(
     client's actual scheme, e.g. STM GHS has 6 plans, not the template's 4) — so
     the form shows what was really placed. The file template wins on PRESENTATION:
     form profile, basis/rate models, column axis, profile/header/eligibility
-    fields, additional arrangements, and each benefit line's ``kind`` (matched by
+    fields and each benefit line's ``kind`` (matched by
     number, so an outpatient line stays a Yes/No or a copay row).
 
     Falls back to the file template's plans/tiers/benefit lines only where the
@@ -343,9 +343,6 @@ def merge_file_overlay(
         plans=[p.model_copy() for p in (base.plans or file_tpl.plans)],
         tiers=[t.model_copy() for t in (base.tiers or file_tpl.tiers)],
         benefit_items=benefit_items,
-        additional_arrangements=[
-            a.model_copy() for a in file_tpl.additional_arrangements
-        ],
     )
 
 

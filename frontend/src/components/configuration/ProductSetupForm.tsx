@@ -4,7 +4,6 @@ import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/cn";
 import {
@@ -93,8 +92,7 @@ function setupDirtySections(current: SetupAnswers, savedJson: string): string[] 
   }
   if (
     changed(current.sob, saved.sob) ||
-    changed(current.cover_description, saved.cover_description) ||
-    changed(current.arrangements, saved.arrangements)
+    changed(current.cover_description, saved.cover_description)
   ) {
     sections.push("SOB");
   }
@@ -198,10 +196,6 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
   // real values arrive via slip pre-fill, broker input, or dynamic suggestions.
   const fieldDefaults = (fields: TemplateField[]) =>
     Object.fromEntries(fields.map((f) => [f.id, ""]));
-  const arrangementDefaults = () =>
-    Object.fromEntries(
-      tpl.additional_arrangements.map((x) => [x.id, x.default_enabled]),
-    );
   const blankCategory = (): BasisOfCoverRow => ({
     id: crypto.randomUUID(),
     insured: [],
@@ -240,7 +234,8 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
         insured: insuredNames(c.insured),
       })),
       endorsements: normalizeEndorsements(a.endorsements),
-      arrangements: a.arrangements ?? arrangementDefaults(),
+      // Retired template toggles are not part of the effective setup.
+      arrangements: {},
     });
   }
 
@@ -292,7 +287,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
     rate_table: {},
     categories: [blankCategory()],
     endorsements: [],
-    arrangements: arrangementDefaults(),
+    arrangements: {},
   });
 }
 
@@ -481,11 +476,6 @@ export function ProductSetupForm({
   // helpers in lib/sob.ts, so there's no per-field handler fan-out here.
   const setSob = (fn: (s: SobSchedule) => SobSchedule) =>
     setAnswers((a) => ({ ...a, sob: fn(a.sob ?? { columns: [], items: [] }) }));
-  const toggleArrangement = (id: string) =>
-    setAnswers((a) => ({
-      ...a,
-      arrangements: { ...a.arrangements, [id]: !a.arrangements[id] },
-    }));
   const setEndorsements = (endorsements: EndorsementAnswer[]) =>
     setAnswers((a) => ({ ...a, endorsements }));
 
@@ -550,10 +540,6 @@ export function ProductSetupForm({
       confirmInFlight.current = false;
     }
   };
-  const enabledArrangements = Object.values(answers.arrangements).filter(
-    Boolean,
-  ).length;
-
   // Spouse/Child ticks control the dependant section and age-limit visibility.
   // Hidden category-level dependant settings are preserved until reselected.
   useEffect(() => {
@@ -674,7 +660,7 @@ export function ProductSetupForm({
       />
     ),
     // Schedule of Benefits = what's covered: cover description + cover-term
-    // fields + the benefit-line table + additional arrangements.
+    // fields + the benefit-line table.
     // (Rate + premium are edited inline on each Category card, not here.)
     schedule_of_benefits: (
       <div className="flex flex-col gap-5">
@@ -701,24 +687,6 @@ export function ProductSetupForm({
           claimScopes={template.claim_scopes ?? []}
           setSob={setSob}
         />
-
-        {template.additional_arrangements.length > 0 && (
-          <div className="flex flex-col gap-2.5">
-            <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-              Additional arrangements · {enabledArrangements} enabled
-            </Label>
-            {template.additional_arrangements.map((a) => (
-              <div key={a.id} className="flex items-start gap-3">
-                <Switch
-                  aria-label={a.label}
-                  checked={Boolean(answers.arrangements[a.id])}
-                  onCheckedChange={() => toggleArrangement(a.id)}
-                />
-                <span className="text-sm text-foreground">{a.label}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     ),
     endorsements: (

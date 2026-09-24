@@ -44,9 +44,5 @@
     },
     { "number": "6", "name": "Extension to cover GST", "kind": "text" }
   ],
-  "additional_arrangements": [
-    { "id": "takeover", "label": "Take Over Basis from previous insurer's Endorsements and Practices", "default_enabled": true },
-    { "id": "addition_deletion", "label": "Addition & deletion clause (name basis) — backdating up to 90 days", "default_enabled": true },
-    { "id": "pre_existing", "label": "Pre-existing conditions: 12 months waiting period, creditable against prior continuous coverage", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }

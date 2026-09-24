@@ -305,7 +305,7 @@ def _prefill_setup_drafts(
     just-written Plan/Category rows, so the form shows the client's real plans and
     benefit lines — e.g. all 6 GHS plans, not the canned template's 4), with the
     hand-authored template overlaid for presentation (basis/rate models, benefit
-    kinds, arrangements). When the slip yielded no structure, the file template is
+    kinds). When the slip yielded no structure, the file template is
     the fallback. A re-upload replaces an unconfirmed slip draft; a confirmed
     setup is never overwritten. Returns the product codes freshly pre-filled.
     """

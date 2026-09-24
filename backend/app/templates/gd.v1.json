@@ -31,7 +31,5 @@
     { "number": "6", "name": "Fillings (Amalgam / Tooth-coloured)", "kind": "amount" },
     { "number": "7", "name": "Extractions", "kind": "amount" }
   ],
-  "additional_arrangements": [
-    { "id": "overall_annual_limit", "label": "Overall annual limit applies to Non-Panel claims", "default_enabled": true }
-  ]
+  "additional_arrangements": []
 }
