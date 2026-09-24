@@ -137,7 +137,9 @@ test("broker saves inclusive ANB employee and dependant boundaries", async ({
   const savedBody = await mockFlexData(page, policyYearId);
 
   await page.goto("/client-relations/company-benefits?tab=flex");
-  await expect(page.getByText("Age next birthday · inclusive")).toBeVisible();
+  // First paint of this lazily loaded page can exceed the 5s default while the
+  // full suite shares one dev server; the render itself is not under test.
+  await expect(page.getByText("Age next birthday · inclusive")).toBeVisible({ timeout: 15_000 });
 
   await page.getByLabel("Employee min").fill("18");
   await page.getByLabel("Employee max").fill("65");

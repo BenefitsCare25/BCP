@@ -28,7 +28,7 @@ type CoverageTab = (typeof TABS)[number]["key"];
 export function PortalCoveragePage() {
   const navigate = useNavigate();
   const company = useCompany();
-  const search = useSearch({ strict: false }) as { tab?: string; p?: string };
+  const search = useSearch({ strict: false }) as { tab?: string; p?: string; who?: string };
   const tab: CoverageTab =
     search.tab === "usage" || search.tab === "dependants"
       ? search.tab
@@ -40,8 +40,8 @@ export function PortalCoveragePage() {
     <Tabs
       value={tab}
       onValueChange={(value) =>
-        // `p` is deliberately NOT carried across: it names a care route that
-        // only "What's covered" has. TanStack replaces the
+        // `p` and `who` are deliberately NOT carried across: they name a care
+        // route and person that only "What's covered" has. TanStack replaces the
         // whole search object, so dropping it is the default and the right
         // behaviour — a stale product key on the family tab would come back the
         // next time someone returned to this one.
@@ -70,17 +70,23 @@ export function PortalCoveragePage() {
         </LeafTabsList>
       </HeadRail>
       <TabsContent value="benefits">
-        {/* The selected care route survives a refresh and a shared link.
-            `replace` keeps Back focused on leaving coverage rather than
-            stepping through every route visited. */}
+        {/* The care list and a care route's detail are two pages to the
+            member, so opening or leaving a route is a history entry: Back
+            from the detail returns to the list, as it does on every phone.
+            Switching whose cover is shown is a filter on the same page and
+            replaces the entry instead. Both survive a refresh and a link. */}
         <PortalBenefitsPage
-          productKey={search.p ?? null}
-          onProductKeyChange={(p) =>
+          selection={{ routeKey: search.p ?? "", personId: search.who ?? null }}
+          onSelectionChange={(next) =>
             navigate({
               to: "/portal/$company/coverage",
               params: { company },
-              search: { tab: "benefits", p },
-              replace: true,
+              search: {
+                tab: "benefits",
+                ...(next.routeKey ? { p: next.routeKey } : {}),
+                ...(next.personId ? { who: next.personId } : {}),
+              },
+              replace: next.personId !== (search.who ?? null),
             })
           }
         />

@@ -84,6 +84,7 @@ import {
   StandardMount,
 } from "@/components/portal/enrollment/StandardMount";
 import { productShortLabel } from "@/components/portal/leaf/glossary";
+import { isHiddenUnlessChosen } from "@/components/portal/memberVisibility";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { fmtAmount } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -401,13 +402,18 @@ export function MemberEnrollmentPanel({
   const decisions = tierSets.filter((ts) =>
     isDecisionful(ts, allowDeps, dependants.length),
   );
-  // GTL is a death benefit. A member sees it here only when the window asks
-  // them to make a choice; keep it in tierSets for pricing and submission.
-  const reviewTierSets = tierSets.filter(
-    (ts) => ts.product_code !== "GTL" || isDecisionful(ts, allowDeps, dependants.length),
-  );
-  const standard: StandardLine[] = tierSets
-    .filter((ts) => ts.product_code !== "GTL" && !isDecisionful(ts, allowDeps, dependants.length))
+  // GTL is a death benefit. A member sees it only when the window asks them
+  // to choose, or when it is paid from their flex dollars — hiding a priced
+  // product would leave an unexplained deduction in the balance. It always
+  // stays in tierSets for pricing and submission.
+  const memberFacing = (ts: ProductTierSet) =>
+    !isHiddenUnlessChosen(ts.product_code) ||
+    isDecisionful(ts, allowDeps, dependants.length) ||
+    (flex !== null &&
+      (ts.tiers.find((t) => t.key === current[ts.product_code]?.tierKey)?.price_tag ?? 0) > 0);
+  const reviewTierSets = tierSets.filter(memberFacing);
+  const standard: StandardLine[] = reviewTierSets
+    .filter((ts) => !isDecisionful(ts, allowDeps, dependants.length))
     .map((ts) => {
       const tier = ts.tiers.find(
         (t) => t.key === current[ts.product_code]?.tierKey,

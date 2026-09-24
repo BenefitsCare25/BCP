@@ -7,14 +7,17 @@ const MEMBER = {
   display_name: "Alex Tan",
 };
 
-function item(name: string, value: string, note?: string) {
-  return { number: "1", name, value, note: note ?? null, kind: "currency", sub_items: [], properties: {} };
+function item(name: string, value: string, note?: string, properties: Record<string, string> = {}) {
+  return { number: "1", name, value, note: note ?? null, kind: "currency", sub_items: [], properties };
 }
 
-function line(code: string, name: string, items: ReturnType<typeof item>[], family = false) {
+const CARE_ROUTE: Record<string, string> = { GCGP: "gp", GCSP: "specialist", GHS: "hospital", GMM: "hospital" };
+
+function line(code: string, name: string, items: ReturnType<typeof item>[], family = false, cap: string | null = null) {
   return {
     product_code: code,
     product_name: name,
+    care_route: CARE_ROUTE[code] ?? null,
     category_id: null,
     category_display: null,
     match_method: null,
@@ -22,7 +25,7 @@ function line(code: string, name: string, items: ReturnType<typeof item>[], fami
     rule_human_readable: null,
     plan_code: "A",
     cover_description: null,
-    annual_policy_limit: null,
+    annual_policy_limit: cap,
     benefit_schedule: { items },
     financials: null,
     covers_dependants: family,
@@ -55,9 +58,13 @@ async function mockMember(page: Page) {
     employee: { id: "employee-1", staff_id: "EMP-001", employee_name: "Alex Tan" },
     policy_year_id: "year-1", is_matched: true, attributes: [], dependants: [], flex: null,
     coverage: [
-      line("GCGP", "Group GP", [item("Panel consultation", "As charged"), item("Non-panel visit", "80", "per visit")]),
+      line("GCGP", "Group GP", [
+        item("Panel consultation", "As charged"),
+        item("Non-panel visit", "80", "per visit", { maximum_visits: "6" }),
+        item("Annual health screening", "150"),
+      ]),
       line("GCSP", "Group Specialist", [item("Referral from GP", "Required"), item("Specialist consultation", "120", "per visit")]),
-      line("GHS", "Group Hospital & Surgical", [item("Daily Room & Board", "250", "per day"), item("Intensive Care Unit", "500", "per day"), item("In-patient Expenses", "As charged")], true),
+      line("GHS", "Group Hospital & Surgical", [item("Daily Room & Board", "250", "per day"), item("Intensive Care Unit", "500", "per day"), item("In-patient Expenses", "As charged")], true, "50000"),
       line("GMM", "Group Major Medical", [item("Inpatient Benefits", "10000")]),
       line("GTL", "Group Term Life", [item("Death benefit", "100000")]),
     ],
@@ -78,6 +85,8 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
 
   await page.getByRole("button", { name: /Hospital & surgery/ }).click();
   await expect(page.getByText("Room & board", { exact: true })).toBeVisible();
+  await expect(page.getByText("Yearly cap", { exact: true })).toBeVisible();
+  await expect(page.locator("dd").filter({ hasText: "S$50,000" })).toBeVisible();
   await expect(page.locator("dl").getByText("S$250", { exact: false }).first()).toBeVisible();
   await expect(page.getByText("Additional major medical cover")).toBeVisible();
   await expect(page.getByText("Daily Room & Board", { exact: true })).toBeHidden();
@@ -85,13 +94,24 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
   await expect(page.getByText("Daily Room & Board", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("coverage-hospital.png"), fullPage: true });
 
+  // Back from a care detail returns to the care list, not out of coverage.
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "What care do you need?" })).toBeVisible();
+
+  // The chosen family member survives a refresh along with the open route.
   await page.getByRole("button", { name: "Jamie Tan" }).click();
   await expect(page.getByRole("button", { name: /Hospital & surgery/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /See a GP/ })).toHaveCount(0);
+  await page.getByRole("button", { name: /Hospital & surgery/ }).click();
+  await page.reload();
+  await expect(page.getByText("Covered person:")).toContainText("Jamie Tan");
   await page.getByRole("button", { name: "Me", exact: true }).click();
   await page.getByRole("button", { name: /See a GP/ }).click();
   await expect(page.getByText("Panel clinic", { exact: true })).toBeVisible();
   await expect(page.getByText("Non-panel clinic", { exact: true })).toBeVisible();
+  // A visit count stored as a property is not money, and a screening is not a cap.
+  await expect(page.getByText("Yearly limit", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("S$6", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Find a clinic" })).toBeVisible();
   await page.getByRole("button", { name: "All care options" }).click();
   await page.getByRole("button", { name: /See a specialist/ }).click();

@@ -81,6 +81,9 @@ async function assertAccessible(page: Page) {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((session) => {
     localStorage.setItem("inspro-hr-session", JSON.stringify(session));
+    // Header tenancy (what prod runs) sends the slug HR sign-in stored; the
+    // subdomain default only covers dev servers without VITE_TENANT_MODE.
+    localStorage.setItem("inspro.tenantSlug", "demo");
   }, HR_SESSION);
 });
 

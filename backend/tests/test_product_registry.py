@@ -182,3 +182,18 @@ def test_tier_schemes_dependant_only_never_maps_to_composite_keys():
         assert scheme.member_scope == "dependant"
         # dependant-only tiers must never canonicalize onto employee-composite keys
         assert not (set(scheme.token_map.values()) & {"ES", "EC", "EF"})
+
+
+def test_care_route_resolves_compound_codes_and_aliases_and_hides_gtl():
+    def route(code: str) -> str | None:
+        entry = product_registry.get_entry(code)
+        return entry.care_route if entry else None
+
+    assert route("GHS-LOCALS") == "hospital"
+    assert route("GMM2") == "hospital"
+    assert route("GCGP") == "gp"
+    assert route("WICI") == "work-injury"
+    assert route("GTL") is None
+    assert route("GXYZ") is None
+    # Every member-visible registry product has a route; none silently falls to Other.
+    assert [e.code for e in product_registry.entries() if e.care_route is None] == ["GTL"]

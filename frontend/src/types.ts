@@ -355,6 +355,8 @@ export interface EligibilityMappingItem {
   errors: string[];
   warnings: string[];
   reused: boolean;
+  /** Exactly the rows POST /categories/bulk-confirm would take. */
+  bulk_confirmable: boolean;
 }
 
 export interface MissingCategoryPlan {
@@ -595,6 +597,8 @@ export interface StatementAttribute {
 export interface CoverageLine {
   product_code: string;
   product_name: string | null;
+  /** Registry-owned member care grouping; null = not a known care route. */
+  care_route?: string | null;
   category_id: string | null;
   category_display: string | null;
   match_method: string | null;

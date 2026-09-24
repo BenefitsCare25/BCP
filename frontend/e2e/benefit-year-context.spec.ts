@@ -442,27 +442,37 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   );
   expect(panelsResponse.ok(), await panelsResponse.text()).toBeTruthy();
 
+  // Assert on the draft product itself, not on the line's badge total: the
+  // badge also counts company-level catalog products, which span every year by
+  // design, and a spec running in parallel (rule-builder) adds one to this
+  // same company while it runs.
+  const lineTab = page.getByRole("tab", { name: new RegExp(`^${draft.line}`) });
+  const draftProductTab = page.getByRole("tab", { name: draft.code, exact: true });
   await selectYear(page, 2025);
   await page.goto("/client-relations/company-benefits");
-  for (const line of ["Medical Insurance", "Life Insurance", "General Insurance"]) {
-    const tab = page.getByRole("tab", { name: new RegExp(`^${line}`) });
-    await expect(tab).not.toContainText(/\d/);
-  }
+  await expect(page.getByRole("combobox", { name: "Select benefit year" })).toContainText("2025");
+  await lineTab.click();
+  await expect(draftProductTab).toHaveCount(0);
 
   await selectYear(page, 2026);
-  const currentTab = page.getByRole("tab", {
-    name: new RegExp(`^${draft.line}`),
-  });
-  await expect(currentTab).toContainText(/\d/);
+  await lineTab.click();
+  await expect(draftProductTab).toBeVisible();
+  await expect(lineTab).toContainText(/\d/);
 
   await page.goto("/policy-admin/panel-clinics");
   const switches = page.getByRole("switch");
   await expect.poll(() => switches.count()).toBeGreaterThan(0);
-  const currentChecked = await switches.evaluateAll((items) =>
-    items.filter((item) => (item as HTMLButtonElement).dataset.state === "checked")
-      .length,
-  );
-  expect(currentChecked).toBeGreaterThan(0);
+  // The switches render from the listing catalog before the year's selection
+  // arrives, so the checked count has to be polled like the 2025 one below.
+  await expect
+    .poll(async () =>
+      switches.evaluateAll(
+        (items) =>
+          items.filter((item) => (item as HTMLButtonElement).dataset.state === "checked")
+            .length,
+      ),
+    )
+    .toBeGreaterThan(0);
 
   await selectYear(page, 2025);
   await expect
@@ -481,4 +491,75 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
   await assertAccessible(page);
 
   expect(runtimeErrors).toEqual([]);
+});
+
+test("bulk confirm counts only the categories the endpoint will take", async ({
+  page,
+  request,
+}, testInfo) => {
+  const years = await context(
+    request,
+    testInfo.project.name === "mobile-chromium" ? 2030 : 2029,
+  );
+  const draft = years.future;
+  const mappingItem = (id: string, name: string, overrides: Record<string, unknown>) => ({
+    category_id: id,
+    product_code: "GHS",
+    display_name: name,
+    plan_code: "A",
+    category_status: "needs_review",
+    rule_status: "validated",
+    source: "slip",
+    matching_rule: { op: "all" },
+    rule_human_readable: `${name} rule`,
+    confidence: 0.9,
+    matched_count: 12,
+    expected_count: 12,
+    unresolved_clauses: [],
+    errors: [],
+    warnings: [],
+    reused: false,
+    bulk_confirmable: false,
+    ...overrides,
+  });
+  await page.route(`**${API}/policy-years/${draft.id}/eligibility-mappings`, (route) =>
+    route.fulfill({ json: {
+      policy_year_id: draft.id, employee_count: 24, total: 2, validated: 2, proposed: 0,
+      needs_review: 1, unmapped: 0, not_applicable: 0, reused: 0, missing_categories: 0,
+      missing_category_plans: [],
+      categories: [
+        mappingItem("ready", "Managers", { bulk_confirmable: true }),
+        // Validated and confident, but a draft: the endpoint never takes it.
+        mappingItem("draft", "Executives", { category_status: "draft" }),
+      ],
+    } }),
+  );
+  let bulkConfirms = 0;
+  await page.route(`**${API}/categories/bulk-confirm**`, (route) => {
+    bulkConfirms += 1;
+    // Simulate the list going stale: nothing was confirmed after all.
+    return route.fulfill({ json: { confirmed: 0, skipped_invalid_rules: 0, threshold: 0.85 } });
+  });
+  const runtimeErrors = runtimeMonitor(page);
+  await installSession(page, years.client.id);
+  await page.goto("/client-relations/company-benefits");
+  await selectYear(page, Number(draft.start_date.slice(0, 4)));
+
+  await expect(
+    page.getByText("1 employee category has validated rules ready to confirm together. 1 needs individual review."),
+  ).toBeVisible();
+  await page.getByText("Review categories needing attention").click();
+  await expect(page.getByText("GHS: Executives — draft; open it to finish the rule")).toBeVisible();
+
+  await page.getByRole("button", { name: "Review 1 validated rule" }).click();
+  const dialog = page.getByRole("dialog", { name: "Confirm validated employee categories?" });
+  await expect(dialog.getByText("1 category still needs individual review", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "Confirm 1 rule" }).click();
+  await expect(
+    page.getByText("1 category changed since this list loaded and was not confirmed. Review the list again."),
+  ).toBeVisible();
+  await expect(page.getByText("0 employee categories confirmed")).toHaveCount(0);
+  expect(bulkConfirms).toBe(1);
+  expect(runtimeErrors).toEqual([]);
+  await screenshot(page, testInfo, "launch-readiness-bulk-confirm");
 });

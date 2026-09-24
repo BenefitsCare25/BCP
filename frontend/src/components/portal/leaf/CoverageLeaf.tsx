@@ -6,8 +6,13 @@ import { actionClass } from "./Action";
 import { FlexMount } from "./FlexMount";
 import { Mount, MountRule, glassHover, glassSurface } from "./Mount";
 import { ScheduleLeaf } from "./ScheduleLeaf";
-import { buildCareRoutes, careFacts, isMemberVisible, type CareRoute } from "./careRoutes";
+import { buildCareRoutes, careFacts, type CareRoute } from "./careRoutes";
 import { productShortLabel } from "./glossary";
+import { isEmployeeLine } from "../memberVisibility";
+
+/** What the member is looking at. Lives in the URL on the live portal (`?p=`,
+ * `?who=`) so Back, refresh and a shared link all land on the same view. */
+export type CoverageSelection = { routeKey: string; personId: string | null };
 
 function dependantName(person: DependantSummary): string {
   return person.name ?? person.relationship ?? "Family member";
@@ -90,34 +95,38 @@ function PlanDetail({ line, routeKey, person }: {
 }
 
 /** Member coverage is organised around a care decision, then the matched plan. */
-export function CoverageLeaf({ data, productKey, onProductKeyChange, company }: {
+export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
   data: BenefitStatement;
-  productKey?: string | null;
-  onProductKeyChange?: (key: string) => void;
+  /** Controlled by the live portal's URL; the broker preview holds its own. */
+  selection?: CoverageSelection;
+  onSelectionChange?: (next: CoverageSelection) => void;
   /** Present in the live portal; preview keeps navigation inside its frame. */
   company?: string;
 }) {
-  const [localKey, setLocalKey] = useState("");
-  const [personId, setPersonId] = useState<string | null>(null);
-  const people = useMemo(() => coveredPeople(data.coverage.filter(isMemberVisible)), [data.coverage]);
-  const person = people.find((candidate) => candidate.id === personId) ?? null;
+  const [local, setLocal] = useState<CoverageSelection>({ routeKey: "", personId: null });
+  const current = selection ?? local;
+  const people = useMemo(() => coveredPeople(data.coverage), [data.coverage]);
+  // An id that no longer resolves (dependant removed, stale link) falls back
+  // to the member; "Me" and "Covered person: You" then state that honestly.
+  const person = people.find((candidate) => candidate.id === current.personId) ?? null;
   const lines = useMemo(() =>
     person
       ? data.coverage.filter((line) =>
           line.covers_dependants && line.covered_dependants.some((candidate) => candidate.id === person.id),
         )
-      : data.coverage.filter((line) => !line.product_code.toUpperCase().includes("DEPENDANTS")),
+      : data.coverage.filter(isEmployeeLine),
     [data.coverage, person],
   );
   const routes = useMemo(() => buildCareRoutes(lines), [lines]);
-  const selectedKey = productKey === undefined ? localKey : productKey ?? "";
   const selected = routes.find((route) =>
-    route.key === selectedKey || route.lines.some((line) => line.product_code === selectedKey),
+    route.key === current.routeKey || route.lines.some((line) => line.product_code === current.routeKey),
   ) ?? null;
-  const select = (key: string) => {
-    if (onProductKeyChange) onProductKeyChange(key);
-    else setLocalKey(key);
+  const change = (next: CoverageSelection) => {
+    if (onSelectionChange) onSelectionChange(next);
+    else setLocal(next);
   };
+  const select = (routeKey: string) => change({ routeKey, personId: person?.id ?? null });
+  const choosePerson = (personId: string | null) => change({ routeKey: "", personId });
 
   if (routes.length === 0 && !data.flex && people.length === 0) {
     return (
@@ -132,12 +141,12 @@ export function CoverageLeaf({ data, productKey, onProductKeyChange, company }: 
       {people.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Choose covered person">
           <span className="mr-1 text-row text-label">Cover for</span>
-          <button type="button" onClick={() => { setPersonId(null); select(""); }} aria-pressed={!person}
+          <button type="button" onClick={() => choosePerson(null)} aria-pressed={!person}
             className={`${actionClass("neutral")} ${!person ? "bg-shade" : ""}`}>
             Me
           </button>
           {people.map((candidate) => (
-            <button key={candidate.id} type="button" onClick={() => { setPersonId(candidate.id); select(""); }}
+            <button key={candidate.id} type="button" onClick={() => choosePerson(candidate.id)}
               aria-pressed={person?.id === candidate.id}
               className={`${actionClass("neutral")} ${person?.id === candidate.id ? "bg-shade" : ""}`}>
               {dependantName(candidate)}

@@ -1,5 +1,5 @@
 import type { BenefitItem, CoverageLine } from "@/types";
-import { formatValue, subItemsOf } from "@/lib/benefitSchedule";
+import { displayProps, formatValue, propertyKind, subItemsOf } from "@/lib/benefitSchedule";
 import { propertyLabel } from "@/lib/sob";
 import { productShortLabel } from "./glossary";
 
@@ -28,29 +28,15 @@ const PROFILES: RouteProfile[] = [
   { key: "work-injury", title: "Work injury help", description: "Support after an injury at work", section: "other" },
 ];
 
-const CODE_ROUTE: Record<string, string> = {
-  GCGP: "gp", GOGP: "gp", GP: "gp",
-  SP: "specialist", GCSP: "specialist", GOSP: "specialist",
-  GHS: "hospital", GHS2: "hospital", GMM: "hospital", GMM2: "hospital",
-  GD: "dental", DENTAL: "dental",
-  MATERNITY: "maternity", VISION: "vision", WELLNESS: "wellness", IMP: "international",
-  GCI: "protection", GDD: "protection", GDI: "protection", GPA: "protection", GTPD: "protection",
-  OSI: "posting", GBT: "travel", WICA: "work-injury", WICI: "work-injury",
-};
-
-export function isMemberVisible(line: CoverageLine): boolean {
-  return line.product_code.trim().toUpperCase() !== "GTL";
-}
-
+/** The registry (`product_registry.care_route`) owns the grouping; a product
+ * it doesn't route lands under "Other cover" under its own name. */
 function routeKey(line: CoverageLine): string {
-  const code = line.product_code.trim().toUpperCase();
-  if (code.startsWith("GHS-")) return "hospital";
-  return CODE_ROUTE[code] ?? `other:${code}`;
+  return line.care_route ?? `other:${line.product_code.trim().toUpperCase()}`;
 }
 
 export function buildCareRoutes(lines: CoverageLine[]): CareRoute[] {
   const groups = new Map<string, CoverageLine[]>();
-  for (const line of lines.filter(isMemberVisible)) {
+  for (const line of lines) {
     const key = routeKey(line);
     groups.set(key, [...(groups.get(key) ?? []), line]);
   }
@@ -72,14 +58,19 @@ export function buildCareRoutes(lines: CoverageLine[]): CareRoute[] {
 
 export type CareFact = { label: string; value: string; note?: string };
 
+const CURRENCY = "S$";
+
 type FactSlot = { label: string; match: RegExp };
+/** A cap, not any row that merely mentions a year ("Annual health screening"). */
+const YEARLY_LIMIT =
+  /^(?:annual|yearly|overall)$|\b(?:annual|yearly|overall)\s+(?:limit|maximum|cap)\b|\bper[ -]?(?:policy[ -]?)?year\b/i;
 const SLOTS: Record<string, FactSlot[]> = {
   gp: [
     { label: "Panel clinic", match: /^(?:panel(?:\s+(?:gp|clinic|doctor|consultation))?|panel consultation)$/i },
     { label: "Non-panel clinic", match: /non[ -]?panel|non[ -]?preferred/i },
     { label: "Your share", match: /co[ -]?(?:pay(?:ment)?|insurance)|deductible/i },
     { label: "Visit limit", match: /per[ -]?visit|consultation (?:fee|limit)|maximum visits?/i },
-    { label: "Yearly limit", match: /annual|yearly|per[ -]?policy[ -]?year/i },
+    { label: "Yearly limit", match: YEARLY_LIMIT },
   ],
   specialist: [
     { label: "Referral", match: /referral|referred/i },
@@ -98,13 +89,13 @@ const SLOTS: Record<string, FactSlot[]> = {
   dental: [
     { label: "Panel dentist", match: /^panel(?: dentist| dental)?$/i },
     { label: "Non-panel dentist", match: /non[ -]?panel/i },
-    { label: "Yearly limit", match: /annual|yearly|per[ -]?year/i },
+    { label: "Yearly limit", match: YEARLY_LIMIT },
     { label: "Treatment", match: /scaling|polishing|extraction|consultation/i },
   ],
 };
 
 function readable(item: BenefitItem): string | null {
-  const value = formatValue(item.value, item.kind, "S$");
+  const value = formatValue(item.value, item.kind, CURRENCY);
   const note = item.note?.trim();
   if (value) return value;
   if (note) return note;
@@ -124,18 +115,38 @@ export function careFacts(line: CoverageLine, routeKey: string): CareFact[] {
       kind: sub.kind,
       limits: sub.limits,
     })),
-    ...Object.entries(item.properties ?? {}).map(([key, value]) => ({
+    // Properties carry no kind of their own: the parent's would print a visit
+    // count under a currency row as "S$6", so they format by their key, exactly
+    // as the full schedule renders them. Keys the parser also mirrors into
+    // `limits` are skipped so a fact never repeats its own note.
+    ...displayProps(item.properties).map(([key, value]) => ({
       ...item,
       name: propertyLabel(key),
       value,
+      kind: propertyKind(key),
       note: `For ${item.name}`,
       limits: [],
+      sub_items: [],
+      properties: {},
     })),
   ]);
-  const slots = SLOTS[routeKey];
-  if (!slots) return [];
-  const used = new Set<BenefitItem>();
   const facts: CareFact[] = [];
+  const sumInsured = line.financials?.sum_insured;
+  if (sumInsured != null) {
+    facts.push({
+      label: "Amount you're covered for",
+      value: formatValue(String(sumInsured), "currency", CURRENCY)!,
+    });
+  }
+  if (line.annual_policy_limit) {
+    facts.push({
+      label: "Yearly cap",
+      value: formatValue(line.annual_policy_limit, undefined, CURRENCY) ?? line.annual_policy_limit,
+      note: "The most this plan pays in one policy year",
+    });
+  }
+  const slots = SLOTS[routeKey] ?? [];
+  const used = new Set<BenefitItem>();
   for (const slot of slots) {
     const item = candidates.find((candidate) =>
       !used.has(candidate) && slot.match.test(candidate.name ?? "") && readable(candidate),

@@ -36,7 +36,7 @@ from app.models import (
 from app.models.category import CategoryStatus
 from app.models.flex_scheme import FlexSchemeStatus
 from app.models.product_setup import ProductSetupStatus
-from app.services.eligibility_mapping import is_employee_mapping_category
+from app.services.eligibility_mapping import is_employee_scope
 
 
 @dataclass(frozen=True)
@@ -114,13 +114,17 @@ def readiness(db: Session, policy_year_id: str) -> tuple[dict[str, int], list[st
     )
     # Dependant-only option rows are not employee cohorts and have no matching
     # rule to confirm. The category editor deliberately hides Confirm for them;
-    # counting them here made a ready year impossible to launch.
+    # counting them here made a ready year impossible to launch. Only the scope
+    # column of unconfirmed rows is read: the JSON column is not portable to
+    # filter in SQL, and full rows would drag every rule and validation blob.
     review_categories = sum(
-        category.status != CategoryStatus.confirmed.value
-        for category in db.execute(
-            select(Category).where(Category.policy_year_id == policy_year_id)
+        is_employee_scope(assignments)
+        for assignments in db.execute(
+            select(Category.plan_assignments).where(
+                Category.policy_year_id == policy_year_id,
+                Category.status != CategoryStatus.confirmed.value,
+            )
         ).scalars()
-        if is_employee_mapping_category(category)
     )
     scheme = db.scalar(select(FlexScheme).where(FlexScheme.policy_year_id == policy_year_id))
     flex_confirmed = int(scheme is not None and scheme.status == FlexSchemeStatus.confirmed)

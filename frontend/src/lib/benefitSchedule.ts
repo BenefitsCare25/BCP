@@ -41,6 +41,18 @@ export function displayProps(
   );
 }
 
+/** A property's type, read from its key. Properties carry no stored `kind`, and
+ * the bare-number heuristic in `formatValue` would print a visit count as "$6".
+ * `per_*` keys are money (per visit, per policy year) and keep the heuristic. */
+export function propertyKind(key: string): BenefitKind | undefined {
+  const k = key.toLowerCase();
+  if (/co_?insurance|percent/.test(k)) return "percent";
+  if (!k.startsWith("per_") && /(?:^|_)(?:days?|visits?|sessions?|times|period)$/.test(k)) {
+    return "text";
+  }
+  return undefined;
+}
+
 /** How many valued rows to show before collapsing the rest. A fully-covered
  * employee's schedules run to ~230 rows across all products. */
 export const SUMMARY_ROWS = 6;

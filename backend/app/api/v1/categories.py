@@ -44,11 +44,14 @@ from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError, generate_rule_for_category
 from app.services.category_factory import build_manual_category
 from app.services.eligibility_mapping import (
+    BULK_CONFIRM_MIN_CONFIDENCE,
     CategoryConfirmationBatch,
     assess_category_rule,
     build_ai_eligibility_inputs,
+    bulk_confirm_filters,
     confirm_category_mapping,
     current_category_overlaps,
+    is_employee_mapping_category,
     location_exclusions_for_category,
     normalize_ai_matching_rule,
     validate_ai_matching_rule,
@@ -303,25 +306,21 @@ def confirm_category(
 @router.post("/bulk-confirm", response_model=dict)
 def bulk_confirm(
     policy_year_id: str,
-    min_confidence: float = Query(0.85, ge=0.0, le=1.0),
+    min_confidence: float = Query(BULK_CONFIRM_MIN_CONFIDENCE, ge=0.0, le=1.0),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     assert_policy_year_editable(assert_policy_year_for_user(policy_year_id, user, db))
-    rows = (
-        db.execute(
+    rows = [
+        category
+        for category in db.execute(
             select(Category).where(
                 Category.policy_year_id == policy_year_id,
-                Category.status == CategoryStatus.needs_review.value,
-                Category.rule_status == "validated",
-                Category.matching_rule.is_not(None),
-                Category.confidence.is_not(None),
-                Category.confidence >= min_confidence,
+                *bulk_confirm_filters(min_confidence),
             )
-        )
-        .scalars()
-        .all()
-    )
+        ).scalars()
+        if is_employee_mapping_category(category)
+    ]
     confirmed = 0
     skipped = 0
     client_id = require_client_id(user)
@@ -615,7 +614,8 @@ def coverage_stats(
                 func.sum(
                     case(
                         (
-                            (Category.confidence.is_not(None)) & (Category.confidence >= 0.85),
+                            (Category.confidence.is_not(None))
+                            & (Category.confidence >= BULK_CONFIRM_MIN_CONFIDENCE),
                             1,
                         ),
                         else_=0,

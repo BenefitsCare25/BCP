@@ -22,6 +22,7 @@ import type {
 import { propertyLabel } from "@/lib/sob";
 import {
   displayProps,
+  propertyKind,
   formatValue,
   isEnumeration,
   readSchedule,
@@ -184,7 +185,7 @@ function Item({
         limits={item.limits}
       />
       {displayProps(item.properties).map(([key, value]) => (
-        <ScheduleRow key={key} indent label={propertyLabel(key)} value={value} />
+        <ScheduleRow key={key} indent label={propertyLabel(key)} value={value} kind={propertyKind(key)} />
       ))}
       {subs.map((sub, i) => (
         <ScheduleRow
@@ -203,12 +204,10 @@ function Item({
 
 export function ScheduleLeaf({
   schedule,
-  annualPolicyLimit,
   titleId,
   allRows = false,
 }: {
   schedule: BenefitSchedule | null | undefined;
-  annualPolicyLimit?: string | null;
   /** Ties the disclosure's label to the mount it belongs to. */
   titleId?: string;
   /** Use inside the care detail's single full-schedule disclosure. */
@@ -246,16 +245,9 @@ export function ScheduleLeaf({
 
   return (
     <div>
-      {/* The slip's cover description is NOT rendered here. It moved up to sit
-          directly under the product's title (`BenefitMount`), where it replaces
-          the generic per-code gloss instead of repeating it further down. */}
-      {annualPolicyLimit && (
-        <p className="mb-2 text-row text-record">
-          <span className="text-label">Yearly cap · </span>
-          {formatValue(annualPolicyLimit, undefined, MEMBER_CURRENCY) ??
-            annualPolicyLimit}
-        </p>
-      )}
+      {/* Neither the cover description nor the plan's yearly cap is rendered
+          here: the cap is a summary fact at the head of the care detail
+          (`careFacts`), and the description only restated the product title. */}
       {valuesMissing && (
         <p className="mb-2 text-row text-label">
           These are the benefits you're covered for. The amounts for this plan

@@ -71,6 +71,7 @@ import { LeafSkeleton } from "./leaf/LeafSkeleton";
 import { formatDay } from "./leaf/date";
 import { useCompany } from "./useCompany";
 import { buildCareRoutes } from "./leaf/careRoutes";
+import { isEmployeeLine } from "./memberVisibility";
 
 /** How many messages the home tile shows before deferring to the inbox. Three
  * is what fits the wide tile beside the claims tile without either column
@@ -391,9 +392,7 @@ export function HomeMosaicView({
           );
 
   const coverage = statement.data?.coverage ?? [];
-  const careRoutes = buildCareRoutes(
-    coverage.filter((line) => !line.product_code.toUpperCase().includes("DEPENDANTS")),
-  );
+  const careRoutes = buildCareRoutes(coverage.filter(isEmployeeLine));
   const activeDependants = (dependants.data ?? []).filter(
     (d) => d.status === "active",
   );

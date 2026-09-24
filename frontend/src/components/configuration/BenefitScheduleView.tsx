@@ -11,6 +11,7 @@ import type {
 import { propertyLabel } from "@/lib/sob";
 import {
   displayProps,
+  propertyKind,
   formatValue,
   isEnumeration,
   readSchedule,
@@ -197,7 +198,7 @@ function ItemBlock({
       />
       {usage && <UsagePill bucket={usage} />}
       {displayProps(item.properties).map(([key, value]) => (
-        <Row key={key} indent label={propertyLabel(key)} value={value} />
+        <Row key={key} indent label={propertyLabel(key)} value={value} kind={propertyKind(key)} />
       ))}
       {subs
         .filter(

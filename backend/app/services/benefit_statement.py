@@ -53,6 +53,7 @@ from app.services.flex_membership import (
 from app.services.flex_pricing_resolver import summarize_employee
 from app.services.flex_proration import proration_line
 from app.services.plan_hydration import basis_amount, hydrate_plans
+from app.services.product_registry import get_entry
 from app.services.roster_attributes import (
     DOB_KEYS,
     REL_KEYS,
@@ -352,6 +353,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
         coverage.append(CoverageLine(
             product_code=mp.product_code,
             product_name=mp.product_name,
+            care_route=entry.care_route if (entry := get_entry(mp.product_code)) else None,
             category_id=mp.category_id,
             category_display=mp.category_display,
             match_method=mp.method,

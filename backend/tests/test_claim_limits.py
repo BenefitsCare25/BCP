@@ -129,7 +129,7 @@ def test_duplicate_or_unknown_scope_mapping_is_rejected():
     assert any("unknown claim type" in error for error in errors)
 
 
-def test_unreviewed_detected_limits_do_not_require_an_enforceable_amount():
+def test_unreviewed_policy_year_limits_block_confirmation_with_a_clear_reason():
     pending = setting(amount=None, status="needs_review")
     pending["source"] = "detected"
     schedule = {
@@ -142,7 +142,26 @@ def test_unreviewed_detected_limits_do_not_require_an_enforceable_amount():
             }
         ],
     }
-    assert validate_schedule_limits(schedule, valid_scope_codes=set()) == []
+    errors = validate_schedule_limits(schedule, valid_scope_codes=set())
+    assert errors == [
+        "Overall plan limit: detected policy-year limit still needs review. "
+        "Verify the amount or mark it informational.",
+        "Emergency Travel Expenses: detected policy-year limit still needs review. "
+        "Verify the amount or mark it informational.",
+    ]
+
+    # Resolved as informational: nothing is enforced, and nothing blocks.
+    informational = {**pending, "status": "not_limit", "source": "manual"}
+    informational["display"] = schedule["items"][0]["value"]
+    resolved = {
+        "claim_limit": informational,
+        "items": [{**schedule["items"][0], "claim_limit": informational}],
+    }
+    assert validate_schedule_limits(resolved, valid_scope_codes=set()) == []
+
+    # Guidance-only bases are never enforced, so review is not a blocker there.
+    per_visit = {**pending, "basis": "per_visit"}
+    assert validate_schedule_limits({"claim_limit": per_visit}, valid_scope_codes=set()) == []
 
     verified = {**pending, "status": "verified", "source": "manual"}
     schedule["claim_limit"] = verified

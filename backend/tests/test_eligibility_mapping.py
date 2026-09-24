@@ -2141,3 +2141,27 @@ def test_missing_plan_is_detected_and_ai_category_creation_is_guided(
         },
     )
     assert duplicate.status_code == 409
+
+
+def test_bulk_confirmable_matches_the_bulk_confirm_endpoint_filter() -> None:
+    from app.services.eligibility_mapping import is_bulk_confirmable
+
+    def category(**overrides: object) -> Category:
+        values: dict[str, object] = {
+            "status": CategoryStatus.needs_review.value,
+            "rule_status": "validated",
+            "matching_rule": {"op": "all"},
+            "confidence": 0.9,
+            "plan_assignments": {},
+        }
+        values.update(overrides)
+        return Category(display_name="Staff", raw_description="Staff", **values)
+
+    assert is_bulk_confirmable(category())
+    # The panel used to count these; the endpoint never took them.
+    assert not is_bulk_confirmable(category(status=CategoryStatus.draft.value))
+    assert not is_bulk_confirmable(category(status=CategoryStatus.confirmed.value))
+    assert not is_bulk_confirmable(category(rule_status="proposed"))
+    assert not is_bulk_confirmable(category(confidence=0.84))
+    assert not is_bulk_confirmable(category(matching_rule=None))
+    assert not is_bulk_confirmable(category(plan_assignments={"member_scope": "dependant"}))

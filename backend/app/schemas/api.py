@@ -510,6 +510,8 @@ class EligibilityMappingItemOut(BaseModel):
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     reused: bool = False
+    # Exactly the rows POST /categories/bulk-confirm would take.
+    bulk_confirmable: bool = False
 
 
 class MissingCategoryPlanOut(BaseModel):
@@ -800,6 +802,8 @@ class CoverageLine(BaseModel):
 
     product_code: str
     product_name: str | None = None
+    # Registry-owned member care grouping (product_registry.care_route).
+    care_route: str | None = None
     category_id: str | None = None
     category_display: str | None = None
     match_method: str | None = None

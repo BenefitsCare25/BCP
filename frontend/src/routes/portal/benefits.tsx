@@ -1,6 +1,6 @@
 /** "What's covered" — the member's own leaf. */
 import { usePortalMe, usePortalStatement } from "@/api/portal";
-import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
+import { CoverageLeaf, type CoverageSelection } from "@/components/portal/leaf/CoverageLeaf";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
@@ -8,12 +8,12 @@ import { isNotFoundError } from "@/lib/errors";
 import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalBenefitsPage({
-  productKey,
-  onProductKeyChange,
+  selection,
+  onSelectionChange,
 }: {
-  /** Selected care route. `?p=` preserves a refresh and a shared link. */
-  productKey?: string | null;
-  onProductKeyChange?: (key: string) => void;
+  /** Selected care route and person, carried in `?p=` / `?who=`. */
+  selection?: CoverageSelection;
+  onSelectionChange?: (next: CoverageSelection) => void;
 } = {}) {
   const statement = usePortalStatement();
   const { data: profile } = usePortalMe();
@@ -43,8 +43,8 @@ export function PortalBenefitsPage({
   return (
     <CoverageLeaf
       data={statement.data}
-      productKey={productKey}
-      onProductKeyChange={onProductKeyChange}
+      selection={selection}
+      onSelectionChange={onSelectionChange}
       company={company}
     />
   );

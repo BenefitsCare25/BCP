@@ -344,6 +344,15 @@ def configured_benefit_rows(schedule: dict[str, Any] | None) -> set[str]:
     return rows
 
 
+# An unreviewed policy-year limit is never enforced, so confirming the plan
+# with one would put it live with no annual cap on claims. Fail closed at
+# confirm and tell the broker what resolves it.
+_UNREVIEWED_LIMIT = (
+    "{name}: detected policy-year limit still needs review. "
+    "Verify the amount or mark it informational."
+)
+
+
 def validate_schedule_limits(
     schedule: dict[str, Any], *, valid_scope_codes: set[str] | frozenset[str]
 ) -> list[str]:
@@ -354,7 +363,9 @@ def validate_schedule_limits(
     if "claim_limit" in schedule and root is None:
         errors.append("Overall plan limit has an invalid setting.")
     if root and root["basis"] == LIMIT_BASIS_POLICY_YEAR:
-        if (
+        if root["status"] == LIMIT_STATUS_NEEDS_REVIEW:
+            errors.append(_UNREVIEWED_LIMIT.format(name="Overall plan limit"))
+        elif (
             root["status"] == LIMIT_STATUS_VERIFIED
             and enforceable_policy_year_amount(root) is None
         ):
@@ -379,12 +390,14 @@ def validate_schedule_limits(
                 f"{name}: Schedule of Benefits wording changed; "
                 "review the claim-limit setting again."
             )
-        if (
-            setting["basis"] == LIMIT_BASIS_POLICY_YEAR
-            and setting["status"] == LIMIT_STATUS_VERIFIED
-            and enforceable_policy_year_amount(setting) is None
-        ):
-            errors.append(f"{name}: policy-year limit needs an amount greater than zero.")
+        if setting["basis"] == LIMIT_BASIS_POLICY_YEAR:
+            if setting["status"] == LIMIT_STATUS_NEEDS_REVIEW:
+                errors.append(_UNREVIEWED_LIMIT.format(name=name))
+            elif (
+                setting["status"] == LIMIT_STATUS_VERIFIED
+                and enforceable_policy_year_amount(setting) is None
+            ):
+                errors.append(f"{name}: policy-year limit needs an amount greater than zero.")
         for scope in setting["claim_scope_codes"]:
             if scope not in valid_scope_codes:
                 errors.append(f"{name}: unknown claim type '{scope}'.")
