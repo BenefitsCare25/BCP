@@ -217,8 +217,9 @@ test("a broker can add required conditions to leaf and OR categories", async ({
       .filter({ hasText: leafCategory.display_name })
       .first();
     await leafCategorySection
-      .getByRole("button", { name: "Employee category rule" })
+      .getByRole("button", { name: "Review plan rules" })
       .click();
+    await leafCategorySection.getByRole("button", { name: "Edit rule" }).click();
 
     const editor = page.getByRole("dialog");
     const addCondition = editor.getByRole("button", {
@@ -262,8 +263,9 @@ test("a broker can add required conditions to leaf and OR categories", async ({
       .filter({ hasText: orCategory.display_name })
       .first();
     await orCategorySection
-      .getByRole("button", { name: "Employee category rule" })
+      .getByRole("button", { name: "Review plan rules" })
       .click();
+    await orCategorySection.getByRole("button", { name: "Edit rule" }).click();
 
     const orEditor = page.getByRole("dialog");
     await expect(orEditor.getByText("OR", { exact: true })).toBeVisible();
