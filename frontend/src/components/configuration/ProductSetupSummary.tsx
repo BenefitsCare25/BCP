@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { useCategoryOverlaps, useRosterReadiness } from "@/api/hooks";
 import { fmtDay, fmtMoney } from "@/lib/format";
 import type {
   CategoryGroup,
@@ -19,10 +20,12 @@ import {
 } from "@/lib/claimLimits";
 import {
   groupEmployeeCategories,
+  onlyPastOverlapWarnings,
   type EmployeeCategoryGroup,
 } from "./employeeCategoryGroups";
 
 interface Props {
+  policyYearId: string;
   template: ProductTemplate;
   draft: ProductSetup | null;
   group?: CategoryGroup;
@@ -66,7 +69,23 @@ export function ProductSetupStatus({
   );
 }
 
-function categoryStatus(group: EmployeeCategoryGroup) {
+function categoryStatus(
+  group: EmployeeCategoryGroup,
+  overlapCount: number | null,
+  employeesAvailable: boolean,
+) {
+  if (overlapCount && overlapCount > 0) {
+    return {
+      label: `${overlapCount} overlapping employee${overlapCount === 1 ? "" : "s"}`,
+      variant: "warn" as const,
+    };
+  }
+  if (overlapCount === 0 && employeesAvailable && onlyPastOverlapWarnings(group)) {
+    return { label: "No current overlap", variant: "info" as const };
+  }
+  if (overlapCount === null && onlyPastOverlapWarnings(group)) {
+    return { label: "Checking overlap", variant: "outline" as const };
+  }
   if (group.ruleStatus === "validated") {
     return { label: "Rule validated", variant: "good" as const };
   }
@@ -303,9 +322,14 @@ function ClaimLimitSummary({
   );
 }
 
-export function ProductSetupSummary({ template, draft, group, term }: Props) {
+export function ProductSetupSummary({ policyYearId, template, draft, group, term }: Props) {
   const answers = draft?.answers ?? null;
   const categoryGroups = groupEmployeeCategories(group?.categories ?? []);
+  const overlapQuery = useCategoryOverlaps(policyYearId);
+  const rosterQuery = useRosterReadiness(policyYearId);
+  const overlapsByCategory = new Map(
+    (overlapQuery.data ?? []).map((item) => [item.category_id, item.employees]),
+  );
   const memberCover = selectedMemberCover(
     answers?.eligibility?.member_cover_eligibility,
   );
@@ -359,7 +383,16 @@ export function ProductSetupSummary({ template, draft, group, term }: Props) {
         {categoryGroups.length ? (
           <div className="divide-y divide-border rounded-lg border border-border">
             {categoryGroups.slice(0, 5).map((categoryGroup) => {
-              const status = categoryStatus(categoryGroup);
+              const overlappingIds = new Set(
+                categoryGroup.categories.flatMap((category) =>
+                  (overlapsByCategory.get(category.id) ?? []).map((employee) => employee.employee_id),
+                ),
+              );
+              const status = categoryStatus(
+                categoryGroup,
+                overlapQuery.isSuccess ? overlappingIds.size : null,
+                (rosterQuery.data?.employee_count ?? 0) > 0,
+              );
               return (
                 <div
                   key={categoryGroup.key}

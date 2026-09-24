@@ -64,6 +64,7 @@ export function ProductConfigurator({
   if (!isEditing) {
     return (
       <ProductSetupSummary
+        policyYearId={policyYearId}
         template={template}
         draft={draft}
         group={group}
