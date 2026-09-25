@@ -1,12 +1,13 @@
-import { useMemo, useState } from "react";
-import { ArrowUpRight, ChevronDown } from "lucide-react";
+import { useState } from "react";
+import { ArrowUpRight, Building2, ChevronDown, HeartPulse, Stethoscope, UserRound } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { Utilization, UtilizationBucket } from "@/types";
+import type { CoverageLine, Utilization, UtilizationBucket } from "@/types";
 import { availableAfterPending } from "@/lib/claimLimits";
 import { isNotFoundError } from "@/lib/errors";
 import { currencySymbol, moneyText } from "../leaf/Figure";
 import { productShortLabel } from "../leaf/glossary";
 import { PortalErrorState } from "../PortalErrorState";
+import type { CareRoute } from "../leaf/careRoutes";
 
 type HomeBucket = Omit<UtilizationBucket, "limit_basis"> & {
   limit_basis?: UtilizationBucket["limit_basis"] | "visits_per_year";
@@ -24,7 +25,11 @@ function verifiedBucket(bucket: HomeBucket): boolean {
   );
 }
 
-function groupsFor(utilization: Utilization | undefined): LimitGroup[] {
+function groupName(code: string, name: string | null | undefined): string {
+  return code === "GHS" || code === "GHS2" ? "Hospital & surgery" : productShortLabel(code, name);
+}
+
+function groupsFor(utilization: Utilization | undefined, coverage: CoverageLine[]): LimitGroup[] {
   const groups = new Map<string, LimitGroup>();
   for (const bucket of (utilization?.insured ?? []) as HomeBucket[]) {
     if (!verifiedBucket(bucket)) continue;
@@ -35,9 +40,15 @@ function groupsFor(utilization: Utilization | undefined): LimitGroup[] {
     } else {
       groups.set(code, {
         code,
-        name: productShortLabel(code, bucket.product_name),
+        name: groupName(code, bucket.product_name),
         buckets: [bucket],
       });
+    }
+  }
+  for (const line of coverage) {
+    const code = line.product_code?.trim();
+    if (code && !groups.has(code)) {
+      groups.set(code, { code, name: groupName(code, line.product_name), buckets: [] });
     }
   }
   return [...groups.values()];
@@ -49,7 +60,9 @@ function figureFor(bucket: HomeBucket, currency: string) {
       label: "Visits left",
       value: String(bucket.visits_remaining),
       suffix: "visits",
-      detail: `${bucket.visits_used ?? 0} used · ${bucket.visit_limit} annual limit`,
+      used: `${bucket.visits_used ?? 0} used`,
+      limitLabel: `${bucket.visit_limit} visit limit`,
+      note: null,
       ratio: bucket.visit_limit ? (bucket.visits_used ?? 0) / bucket.visit_limit : 0,
     };
   }
@@ -64,27 +77,47 @@ function figureFor(bucket: HomeBucket, currency: string) {
     label: afterPending !== null && bucket.pending > 0 ? "Available after pending" : "Available",
     value: `${currency}${moneyText(value)}`,
     suffix: "",
-    detail: bucket.pending_unconverted > 0
+    used: `${currency}${moneyText(bucket.approved)} used`,
+    limitLabel: `${currency}${moneyText(bucket.limit ?? 0)} limit`,
+    note: bucket.pending_unconverted > 0
       ? `${currency}${moneyText(confirmed)} confirmed · currency conversion pending`
-      : `${currency}${moneyText(bucket.approved)} used · ${currency}${moneyText(bucket.limit ?? 0)} annual limit`,
+      : null,
     ratio: bucket.limit ? bucket.approved / bucket.limit : 0,
   };
+}
+
+function ToothIcon() {
+  return (
+    <svg width="31" height="31" viewBox="0 0 29 29" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14.5 6.3c-2.5-1.4-4.1-1.7-6-1.1-3 1-3.7 3.3-3.2 6.1.4 2 1.7 4 2.2 7.7.3 2.2.7 4.7 2.3 4.8 1.9.1 2.1-2.6 2.9-4.8.6-1.8 1-2.8 2.1-2.8s1.5 1 2.1 2.8c.8 2.2 1 4.9 2.9 4.8 1.6-.1 2-2.6 2.3-4.8.5-3.7 1.8-5.7 2.2-7.7.5-2.8-.2-5.1-3.2-6.1-1.9-.6-3.5-.3-6 1.1Z" />
+    </svg>
+  );
+}
+
+function CareIcon({ routeKey }: { routeKey: string }) {
+  if (routeKey === "dental") return <ToothIcon />;
+  const Icon = routeKey === "gp" ? Stethoscope : routeKey === "specialist" ? UserRound : routeKey === "hospital" ? Building2 : HeartPulse;
+  return <Icon size={31} strokeWidth={1.4} aria-hidden />;
 }
 
 export function HomeLimits({
   company,
   utilization,
+  coverage,
+  careRoutes,
   isLoading,
   error,
   onRetry,
 }: {
   company: string;
   utilization: Utilization | undefined;
+  coverage: CoverageLine[];
+  careRoutes: CareRoute[];
   isLoading: boolean;
   error: unknown;
   onRetry: () => void;
 }) {
-  const groups = useMemo(() => groupsFor(utilization), [utilization]);
+  const groups = groupsFor(utilization, coverage);
   const [productCode, setProductCode] = useState<string | null>(null);
   const [benefitIndex, setBenefitIndex] = useState(0);
   const [allOpen, setAllOpen] = useState(false);
@@ -114,9 +147,11 @@ export function HomeLimits({
             </button>
           ))}
         </div>
-        <button type="button" className="portal-text-link portal-all-limits" onClick={() => setAllOpen((open) => !open)} aria-expanded={allOpen}>
-          All limits <ArrowUpRight size={17} aria-hidden />
-        </button>
+        {groups.some((group) => group.buckets.length > 0) && (
+          <button type="button" className="portal-text-link portal-all-limits" onClick={() => setAllOpen((open) => !open)} aria-expanded={allOpen}>
+            All limits <ArrowUpRight size={17} aria-hidden />
+          </button>
+        )}
       </div>
 
       {bucket && figure ? (
@@ -140,22 +175,23 @@ export function HomeLimits({
           <div className="portal-limit-progress" role="progressbar" aria-label={`${selected.name} limit used`} aria-valuenow={Math.round(Math.min(1, Math.max(0, figure.ratio)) * 100)} aria-valuemin={0} aria-valuemax={100}>
             <span style={{ width: `${Math.min(100, Math.max(0, figure.ratio * 100))}%` }} />
           </div>
-          <p className="portal-limit-detail">{figure.detail}</p>
+          <p className="portal-limit-detail"><span>{figure.used}</span><span>{figure.limitLabel}</span></p>
+          {figure.note && <p className="portal-limit-pending">{figure.note}</p>}
           {bucket.pending > 0 && bucket.limit_basis === "policy_year" && bucket.pending_unconverted === 0 && (
             <p className="portal-limit-pending">Includes {currency}{moneyText(bucket.pending)} in pending claims</p>
           )}
         </div>
       ) : (
         <div className="portal-limit-empty">
-          <p className="portal-kicker">Your cover</p>
-          <p>No tracked annual limits are available for this year.</p>
-          <Link className="portal-text-link" to="/portal/$company/coverage" params={{ company }} search={{ tab: "benefits" }}>Explore your cover <ArrowUpRight size={17} aria-hidden /></Link>
+          <p className="portal-kicker">{selected?.name ?? "Your cover"}</p>
+          <p>No tracked annual limit for this product.</p>
+          <Link className="portal-text-link" to="/portal/$company/coverage" params={{ company }} search={{ tab: "benefits" }}>View plan details <ArrowUpRight size={17} aria-hidden /></Link>
         </div>
       )}
 
-      {allOpen && groups.length > 0 && (
+      {allOpen && groups.some((group) => group.buckets.length > 0) && (
         <div className="portal-all-list">
-          {groups.map((group) => (
+          {groups.filter((group) => group.buckets.length > 0).map((group) => (
             <div key={group.code} className="portal-all-group">
               <h3>{group.name}</h3>
               {group.buckets.map((item, index) => {
@@ -171,6 +207,16 @@ export function HomeLimits({
           ))}
           <Link className="portal-text-link" to="/portal/$company/coverage" params={{ company }} search={{ tab: "usage" }}>Full usage details <ArrowUpRight size={17} aria-hidden /></Link>
         </div>
+      )}
+      {careRoutes.length > 0 && (
+        <nav className="portal-limit-care" aria-label="Care benefits">
+          {careRoutes.map((route) => (
+            <Link key={route.key} to="/portal/$company/coverage" params={{ company }} search={{ tab: "benefits" }} aria-label={route.title}>
+              <CareIcon routeKey={route.key} />
+              <span>{route.key === "gp" ? "GP" : route.key === "specialist" ? "Specialist" : route.key === "hospital" ? "Hospital" : route.key === "dental" ? "Dental" : route.title}</span>
+            </Link>
+          ))}
+        </nav>
       )}
     </section>
   );

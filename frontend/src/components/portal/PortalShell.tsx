@@ -238,10 +238,10 @@ export function PortalShell() {
     <LeafScopeContext.Provider value>
       {/* min-h-dvh, not min-h-screen: on mobile Safari `100vh` is the browser's
           *largest* viewport, so the last row of any page sat under the URL bar. */}
-      <div className="leaf portal-refresh flex min-h-dvh flex-col">
+      <div className={cn("leaf portal-refresh flex min-h-dvh flex-col", isHome && "portal-home-route")}>
         <header className="portal-topbar">
           {/* ── Phone: name, scope, account. No mark, by request. ────────── */}
-          <div className="mx-auto flex max-w-5xl items-center gap-2.5 px-4 py-2.5 sm:hidden">
+          <div className="mx-auto flex max-w-5xl items-center gap-2.5 px-4 py-2.5 lg:hidden">
             {isHome ? (
               <p className="min-w-0 flex-1 truncate text-base font-bold tracking-title text-record">{who}</p>
             ) : (
@@ -258,7 +258,7 @@ export function PortalShell() {
           </div>
 
           {/* ── Desktop: one row. ────────────────────────────────────────── */}
-          <div className="mx-auto hidden max-w-7xl items-center gap-0 px-6 py-3.5 sm:flex">
+          <div className="mx-auto hidden max-w-7xl items-center gap-0 px-6 py-3.5 lg:flex">
             {/* Used whole and uncropped. Its three-line wordmark needs this
                 much height to stay legible, which is what decided a single tall
                 row over two short ones. Served from a 50 KB derivative — the
@@ -310,14 +310,14 @@ export function PortalShell() {
             that makes the glass read as glass rather than as paler paint — see
             leaf.css. Without this class the whole material fails. */}
         <main className="leaf-ground flex-1">
-          <div className={cn("mx-auto w-full px-4 py-5 pb-28 sm:px-6 sm:pb-10", isHome ? "max-w-7xl" : "max-w-5xl")}>
+          <div className={cn("mx-auto w-full px-4 py-5 pb-28 sm:px-6 lg:pb-10", isHome ? "max-w-7xl" : "max-w-5xl")}>
             {/* The page heading on desktop only; on a phone the bar above is
                 already carrying it. `hidden` is display:none, so exactly one h1
                 is ever in the accessibility tree.
                 The year selector shares this row rather than stacking under the
                 name — it scopes the content below it, and a period set beneath a
                 name reads as a subtitle explaining the person. */}
-            <div className={cn("mb-5 items-center gap-4", isHome ? "hidden" : "hidden sm:flex")}>
+            <div className={cn("mb-5 items-center gap-4", isHome ? "hidden" : "hidden lg:flex")}>
               {/* Both flanks are `flex-1 basis-0`, so they resolve to equal
                   widths and whatever a route hangs in the rail is centred in
                   the row exactly — not merely balanced by eye. The name
@@ -403,7 +403,7 @@ export function PortalShell() {
           aria-label="Portal sections"
           className={cn(
             glassSurface,
-            "fixed inset-x-3 bottom-3 z-20 flex rounded-pill p-1.5 shadow-float sm:hidden",
+            "fixed inset-x-3 bottom-3 z-20 flex rounded-pill p-1.5 shadow-float lg:hidden",
             "mb-[env(safe-area-inset-bottom)]",
           )}
         >

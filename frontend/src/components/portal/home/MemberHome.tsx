@@ -1,7 +1,7 @@
 import { useNavigate, Link } from "@tanstack/react-router";
 import {
-  ArrowRight, ArrowUpRight, Bell, FileText, MapPin, MessageSquare,
-  ShieldCheck, Stethoscope, UserRound, UsersRound, Building2,
+  ArrowRight, ArrowUpRight, Bell, FileText, MapPin, MessageSquare, MessagesSquare,
+  UsersRound,
 } from "lucide-react";
 import {
   usePortalCards, usePortalCardArtwork, usePortalClaims, usePortalDependants,
@@ -19,6 +19,7 @@ import { buildCareRoutes } from "../leaf/careRoutes";
 import { isEmployeeLine } from "../memberVisibility";
 import { useCompany } from "../useCompany";
 import { HomeLimits } from "./HomeLimits";
+import { TemporaryCard } from "./TemporaryCard";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -30,16 +31,11 @@ function familiarName(displayName: string): string {
   return preferred || displayName.trim().split(/\s+/)[0] || "there";
 }
 
-function ToothIcon() {
-  return (
-    <svg width="29" height="29" viewBox="0 0 29 29" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M14.5 6.3c-2.5-1.4-4.1-1.7-6-1.1-3 1-3.7 3.3-3.2 6.1.4 2 1.7 4 2.2 7.7.3 2.2.7 4.7 2.3 4.8 1.9.1 2.1-2.6 2.9-4.8.6-1.8 1-2.8 2.1-2.8s1.5 1 2.1 2.8c.8 2.2 1 4.9 2.9 4.8 1.6-.1 2-2.6 2.3-4.8.5-3.7 1.8-5.7 2.2-7.7.5-2.8-.2-5.1-3.2-6.1-1.9-.6-3.5-.3-6 1.1Z" />
-    </svg>
-  );
-}
-
-function HeroCard({ card }: { card: MemberCard }) {
+function HeroCard({ card, companyName }: { card: MemberCard; companyName: string }) {
   const artwork = usePortalCardArtwork(card.card_id, "front", card.has_front);
+  if (artwork.status === "absent") {
+    return <TemporaryCard memberName={card.holder_name ?? ""} companyName={companyName} />;
+  }
   return (
     <div className="portal-hero-card-wrap">
       <CardCanvas
@@ -80,14 +76,14 @@ export function MemberHome() {
     ?? null;
   const who = familiarName(member?.display_name || member?.email || "");
   const companyLabel = me.data?.company?.legal_name || me.data?.company?.name || "";
-  const care = buildCareRoutes((statement.data?.coverage ?? []).filter(isEmployeeLine)).filter((route) => route.section === "care").slice(0, 4);
+  const coverage = (statement.data?.coverage ?? []).filter(isEmployeeLine);
+  const care = buildCareRoutes(coverage).filter((route) => route.section === "care").slice(0, 4);
   const activeDependants = (dependants.data ?? []).filter((person) => person.status === "active");
   const claimCount = claims.data?.items.length ?? 0;
   const inbox = messages.data?.items ?? [];
-  const unread = messages.data?.unread_total ?? 0;
-
   return (
     <div className="portal-home">
+      <div className="portal-home-stage">
       <section className="portal-hero" aria-label="Welcome">
         <div className="portal-hero-copy">
           {companyLabel && <p className="portal-company-name">{companyLabel}</p>}
@@ -103,11 +99,6 @@ export function MemberHome() {
               </Link>
             )}
           </div>
-          <Link className="portal-hero-message" to="/portal/$company/messages" params={{ company }}>
-            <MessageSquare size={17} aria-hidden />
-            {messages.isLoading ? "Loading messages" : messages.isError && !isNotFoundError(messages.error)
-              ? "Open messages" : unread > 0 ? `${unread} unread ${unread === 1 ? "message" : "messages"}` : "No new messages"}
-          </Link>
         </div>
         <div className="portal-hero-aside">
           {me.data?.policy_year && <BenefitYearControl start={me.data.policy_year.start_date} end={me.data.policy_year.end_date} className="portal-year" />}
@@ -115,8 +106,8 @@ export function MemberHome() {
             <div className="portal-hero-card-area">
               {cards.isLoading ? <div className="portal-card-skeleton" aria-label="Loading your panel card" />
                 : cards.isError && !isNotFoundError(cards.error) ? <PortalErrorState onRetry={() => { void cards.refetch(); }} />
-                : card ? <HeroCard card={card} />
-                : <div className="portal-no-card"><ShieldCheck size={32} aria-hidden /><p>No panel card has been issued yet.</p></div>}
+                : card?.has_front ? <HeroCard card={card} companyName={companyLabel} />
+                : <TemporaryCard memberName={member?.display_name ?? ""} companyName={companyLabel} />}
               <Link className="portal-card-link" to="/portal/$company/card" params={{ company }}>View panel card <ArrowUpRight size={17} aria-hidden /></Link>
             </div>
           )}
@@ -126,12 +117,12 @@ export function MemberHome() {
       <div className="portal-home-panels">
         <section className="portal-glass portal-messages" aria-label="Messages">
           <div className="portal-panel-head">
-            <span className="portal-panel-icon"><MessageSquare size={23} aria-hidden /></span>
-            <Link className="portal-text-link" to="/portal/$company/messages" params={{ company }}>All messages <ArrowUpRight size={17} aria-hidden /></Link>
+            <span className="portal-panel-title"><MessageSquare size={23} strokeWidth={1.4} aria-hidden /> Messages</span>
+            <Link className="portal-text-link" to="/portal/$company/messages" params={{ company }}>View all <ArrowUpRight size={17} aria-hidden /></Link>
           </div>
           {messages.isLoading ? <div className="portal-panel-loading" aria-busy="true" />
             : messages.isError && !isNotFoundError(messages.error) ? <PortalErrorState onRetry={() => { void messages.refetch(); }} />
-            : inbox.length === 0 ? <div className="portal-message-empty"><p>No messages yet</p><span>Updates about your claims and enquiries will appear here.</span></div>
+            : inbox.length === 0 ? <div className="portal-message-empty"><MessagesSquare size={66} strokeWidth={1.15} aria-hidden /><p>No messages yet</p><span>Claim updates and replies will appear here.</span></div>
             : <div className="portal-message-list">
               {inbox.slice(0, 3).map((conversation) => (
                 <button
@@ -151,23 +142,14 @@ export function MemberHome() {
         <HomeLimits
           company={company}
           utilization={utilization.data}
+          coverage={coverage}
+          careRoutes={care}
           isLoading={utilization.isLoading}
           error={utilization.isError ? utilization.error : null}
           onRetry={() => { void utilization.refetch(); }}
         />
       </div>
-
-      {care.length > 0 && (
-        <section className="portal-glass portal-care" aria-label="Explore your cover">
-          <div className="portal-section-head"><h2>Explore your cover</h2><Link className="portal-text-link" to="/portal/$company/coverage" params={{ company }} search={{ tab: "benefits" }}>View all benefits <ArrowRight size={17} aria-hidden /></Link></div>
-          <div className="portal-care-grid">
-            {care.map((route) => {
-              const Icon = route.key === "gp" ? Stethoscope : route.key === "specialist" ? UserRound : Building2;
-              return <Link key={route.key} className="portal-care-item" to="/portal/$company/coverage" params={{ company }} search={{ tab: "benefits" }}>{route.key === "dental" ? <ToothIcon /> : <Icon size={29} strokeWidth={1.45} aria-hidden />}<span><strong>{route.title}</strong><small>{route.description}</small></span></Link>;
-            })}
-          </div>
-        </section>
-      )}
+      </div>
 
       <section className="portal-glass portal-quick" aria-label="Your account">
         <Link to="/portal/$company/coverage" params={{ company }} search={{ tab: "dependants" }} className="portal-quick-item">
@@ -181,6 +163,7 @@ export function MemberHome() {
       {me.data?.enrollment_open && holds(me.data.access.capabilities, "elect") && (
         <Link className="portal-enrol-notice" to="/portal/$company/enrollment" params={{ company }}>Your enrolment window is open <ArrowRight size={17} aria-hidden /></Link>
       )}
+      <footer className="portal-home-footer">© {new Date().getFullYear()} Inspro Insurance Brokers.</footer>
     </div>
   );
 }

@@ -47,9 +47,9 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000",
+        "uv run uvicorn app.main:app --host 127.0.0.1 --port 8006",
       cwd: "../backend",
-      url: "http://127.0.0.1:8000/health",
+      url: "http://127.0.0.1:8006/health",
       reuseExistingServer: false,
       timeout: 120_000,
       env: {
@@ -67,6 +67,7 @@ export default defineConfig({
       url: baseURL,
       reuseExistingServer: false,
       timeout: 120_000,
+      env: { INSPRO_DEV_API_TARGET: "http://127.0.0.1:8006" },
     },
   ],
   projects: [
