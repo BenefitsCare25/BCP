@@ -40,6 +40,12 @@
       "decision": "Place the benefit-year selector in the company context row and use it as the single scope across company pages.",
       "reason": "Historical products, plans, members, claims, and panel setup must remain visibly tied to the same selected benefit year during navigation.",
       "date": "2026-08-23"
+    },
+    {
+      "id": "member-home-cloth-glass",
+      "decision": "Use the approved champagne cloth background, quiet glass panels, orange-gold claim action, and insurer-controlled panel card artwork on member Home.",
+      "reason": "The member approved the hero-plus-card composition, product-specific limits, messages, and compact navigation strip after reviewing design images.",
+      "date": "2026-09-25"
     }
   ],
   "evidence": [
