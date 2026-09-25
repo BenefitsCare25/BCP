@@ -34,6 +34,7 @@ export function isLiveAnnualLimit(
   return Boolean(
     setting &&
       setting.status === "verified" &&
+      !setting.display_only &&
       setting.basis === "policy_year" &&
       setting.currency === "SGD" &&
       setting.amount !== null &&
@@ -45,6 +46,7 @@ export function isLiveVisitLimit(setting: ClaimLimitSetting | null | undefined):
   return Boolean(
     setting &&
       setting.status === "verified" &&
+      !setting.display_only &&
       setting.basis === "visits_per_year" &&
       setting.amount !== null &&
       Number.isInteger(setting.amount) &&
@@ -71,10 +73,26 @@ export function availableAfterPending(
 
 const VISIT_COUNT = /\b(\d{1,3})\s*visits?\b/i;
 const MONEY = /\$|\bsgd\b|\bdollars?\b/i;
+const PER_VISIT = /\/(?:visit|consultation?)\b|\bper\s+(?:visit|consultation?)\b/i;
+const PER_DAY = /\/(?:day|night)\b|\bper\s+(?:day|night)\b|\bdaily\b/i;
+const ANNUAL =/\bannual(?:ly)?\b|\bper\s+(?:policy\s+)?year\b|\bper\s+annum\b|\/year\b/i;
+const BARE_AMOUNT_WORDS = /s?\$|\bsgd\b|\d[\d,]*(?:\.\d+)?|\b(?:overall|maximum|max|limit|up|to|of)\b/gi;
 
 /** Mirror of backend `claim_limits.infer_limit_basis` (a SUGGESTION only). */
 export function inferredLimitBasis(value: string | null): ClaimLimitBasis {
   const text = (value ?? "").trim().toLowerCase();
+  // "As Charged up to Overall Annual Limit of $1,000" is a S$1,000 yearly cap.
+  // Only when nothing narrower is stated ("S$30 per visit, 10 visits per year").
+  if (
+    ANNUAL.test(text) &&
+    MONEY.test(text) &&
+    !text.includes("%") &&
+    !PER_VISIT.test(text) &&
+    !PER_DAY.test(text) &&
+    !VISIT_COUNT.test(text)
+  ) {
+    return "policy_year";
+  }
   if (text.includes("as charged")) return "as_charged";
   if (text.includes("%")) return "percentage";
   if (/\/(?:day|night)\b|\bper\s+(?:day|night)\b|\bdaily\b/i.test(text)) {
@@ -89,7 +107,11 @@ export function inferredLimitBasis(value: string | null): ClaimLimitBasis {
   if (/\bper\s+(?:policy\s+)?year\b|\bper\s+annum\b|\/year\b/i.test(text)) {
     return "policy_year";
   }
-  return /\d/.test(text) ? "policy_year" : "informational";
+  // Only a bare amount ("3000", "S$500", "Maximum SGD 1,000") reads as a yearly
+  // cap; "SGD 250 per tooth" or "S$15 million any one claim" says something else.
+  return /\d/.test(text) && !text.replace(BARE_AMOUNT_WORDS, "").replace(/[\s.,:;()-]/g, "")
+    ? "policy_year"
+    : "informational";
 }
 
 export function parsedLimitAmount(value: string | null): number | null {
@@ -245,51 +267,98 @@ export function looksLikeLimit(wording: string | null): boolean {
   return /\$|\d{2,}/.test(wording ?? "");
 }
 
+/** A per-policy-year figure with no unit ("5"): dollars or visits, only the
+ * broker knows. Mirror of backend `claim_limits.unitless_policy_year`. */
+export function isUnitlessPolicyYear(source: ClaimLimitSource): boolean {
+  return (
+    source.structuredPolicyYear &&
+    !source.monetary &&
+    !VISIT_COUNT.test(source.wording ?? "") &&
+    /\d/.test(source.wording ?? "")
+  );
+}
+
+/** Whether Confirm setup would be refused for this cell — the same rules as
+ * backend `validate_schedule_limits`, so "to review" means exactly that.
+ * `source` is `undefined` for the overall limit, which has no SOB cell. */
+export function blocksConfirm(
+  setting: ClaimLimitSetting | null | undefined,
+  source: ClaimLimitSource | undefined,
+): boolean {
+  if (!setting) return false;
+  if (setting.status === "needs_review") {
+    if (TRACKED_BASES.has(setting.basis)) return true;
+    return setting.basis === "informational" && source !== undefined && isUnitlessPolicyYear(source);
+  }
+  return source !== undefined && sourceChanged(setting, source.wording);
+}
+
+/** live = counts down on the portal · review = blocks confirmation ·
+ * wording = shown to employees as the policy states it · none = nothing set. */
 export type LimitTone = "live" | "review" | "wording" | "none";
 
-/** One plain-English line for a limit cell, plus whether it counts down. */
+const visits = (count: number) => `${count} visit${count === 1 ? "" : "s"}`;
+
+/** One plain-English line for a limit cell, plus how it behaves. */
 export function describeLimit(
   setting: ClaimLimitSetting | null | undefined,
   /** `undefined` = the setting has no SOB cell behind it (overall limit). */
-  wording: string | null | undefined,
+  source: ClaimLimitSource | undefined,
+  /** The row is hidden from employees in the SOB. */
+  hidden = false,
 ): { text: string; tone: LimitTone } {
+  const wording = source?.wording;
   if (!setting) {
     const text = readableWording(wording);
     return { text: text ?? "—", tone: text ? "wording" : "none" };
   }
-  // A broker decision recorded against wording the slip no longer says.
   const changed =
-    wording !== undefined && setting.source === "manual" && sourceChanged(setting, wording);
-  const tone: LimitTone =
-    setting.status === "needs_review" || changed
-      ? "review"
-      : isLiveTrackedLimit(setting)
-        ? "live"
+    source !== undefined && setting.status !== "needs_review" && sourceChanged(setting, wording ?? null);
+  // A drawdown balance on What's left for a line What's covered hides:
+  // Confirm setup refuses it (backend `validate_schedule_limits`).
+  const hiddenDrawdown = hidden && isLiveTrackedLimit(setting);
+  // "Not a limit" and "As charged" state no limit, so they carry no state
+  // badge and never count as a displayed limit.
+  const tone: LimitTone = blocksConfirm(setting, source) || hiddenDrawdown
+    ? "review"
+    : isLiveTrackedLimit(setting)
+      ? "live"
+      : setting.status === "not_limit" || setting.basis === "as_charged"
+        ? "none"
         : "wording";
   const amount = setting.amount;
   const text = (() => {
+    if (setting.status === "not_limit") return "Not a limit";
+    if (source && setting.status === "needs_review" && isUnitlessPolicyYear(source)) {
+      return `“${parsedLimitAmount(wording ?? null)}” a year · S$ or visits?`;
+    }
     switch (setting.basis) {
       case "policy_year":
-        return amount ? `${money(amount)} a year` : "Yearly amount not set";
+        return amount ? `${money(amount)} a year` : "Amount not set";
       case "visits_per_year":
-        return amount ? `${amount} visit${amount === 1 ? "" : "s"} a year` : "Visit count not set";
+        return amount ? `${visits(amount)} a year` : "Visit count not set";
       case "as_charged":
         return "As charged";
       default:
         return readableWording(wording) ?? CLAIM_LIMIT_BASIS_LABELS[setting.basis];
     }
   })();
-  return { text: changed ? `${text} · slip changed` : text, tone };
+  const flagged = hiddenDrawdown ? `${text} · hidden in SOB` : text;
+  return { text: changed ? `${flagged} · slip changed` : flagged, tone };
 }
 
 /** What an employee will read for this setting on the portal. */
 export function memberPreview(setting: ClaimLimitSetting, wording: string | null | undefined): string {
+  if (setting.display_only && setting.amount) {
+    const cap = setting.basis === "visits_per_year" ? visits(setting.amount) : money(setting.amount);
+    return `Up to ${cap} a year`;
+  }
   if (setting.basis === "policy_year" && setting.amount) {
-    return `“${money(setting.amount)} left of ${money(setting.amount)} this year” — counts down as claims are approved`;
+    return `${money(setting.amount)} left of ${money(setting.amount)} this year`;
   }
   if (setting.basis === "visits_per_year" && setting.amount) {
-    return `“${setting.amount} of ${setting.amount} visits left this year” — counts down as claims are approved`;
+    return `${setting.amount} of ${setting.amount} visits left this year`;
   }
-  if (setting.basis === "as_charged") return "“Covered as charged, subject to policy terms”";
-  return wording ? `“${wording}” — shown as a condition, never a balance` : "Shown as a condition, never a balance";
+  if (setting.basis === "as_charged") return "Covered as charged";
+  return wording?.trim() || "—";
 }

@@ -475,60 +475,72 @@ test("broker reviews claim limits in one grid across plans", async ({
 
   const grid = page.getByRole("region", { name: "Claim limits" });
   await expect(grid).toBeVisible();
-  await expect(grid).toContainText("count down on the employee's");
+  await expect(grid.getByRole("heading", { name: "Benefit limits" })).toBeVisible();
 
   // Overall yearly limit: one decision, applied to every plan column.
-  await grid.getByRole("row", { name: /Overall yearly limit/ }).getByRole("button").first().click();
-  await expect(grid.getByRole("radio", { name: /Yearly amount — tracked/ })).toBeChecked();
-  await grid.getByRole("spinbutton", { name: "Yearly amount (S$)" }).fill("2500");
+  await grid.getByRole("row", { name: /Overall annual limit/ }).getByRole("button").first().click();
+  await expect(grid.getByRole("radio", { name: "Annual amount" })).toBeChecked();
+  await grid.getByRole("spinbutton", { name: "Limit (S$)" }).fill("2500");
+  await expect(grid.getByRole("radio", { name: "Allow drawdown from limit" })).toBeChecked();
   await expect(grid).toContainText("S$2,500 left of S$2,500 this year");
-  await grid.getByRole("button", { name: "Confirm" }).click();
-  await expect(grid.getByRole("row", { name: /Overall yearly limit/ })).toContainText("S$2,500 a year");
-  await expect(grid).toContainText("tracked");
+  await grid.getByRole("button", { name: "Apply" }).click();
+  await expect(grid.getByRole("row", { name: /Overall annual limit/ })).toContainText("S$2,500 a year");
+  await expect(grid).toContainText(/[1-9]\d* on What's left/);
 
   if (testInfo.project.name === "mobile-chromium") {
-    // A per-policy-year amount typed into the SOB becomes a reviewable cell.
+    // GP channels sit in their own table; none of them is the product's limit.
+    await expect(grid.getByRole("table", { name: "Clinic channels" })).toBeVisible();
+    const panelRow = grid.getByRole("row", { name: /^Panel/ }).first();
+
+    // A yearly S$ cap typed into the SOB shows on the channel, not yet set.
     await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
     await page.getByRole("button", { name: /Expand details for Panel/ }).click();
     await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("SGD 300");
     await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
+    await expect(panelRow).toContainText("S$300 a year");
 
-    const panelRow = grid.getByRole("row", { name: /^Panel/ }).first();
-    await expect(panelRow).toContainText("SGD 300 per policy year");
+    // Counting it down needs the claim type whose approved claims use it.
     await panelRow.getByRole("button").first().click();
-    await expect(grid.getByRole("spinbutton", { name: "Yearly amount (S$)" })).toHaveValue("300");
-    const confirm = grid.getByRole("button", { name: "Confirm" });
-    // A tracked limit needs the claim type it funds.
+    await expect(grid.getByRole("spinbutton", { name: "Limit (S$)" })).toHaveValue("300");
+    await grid.getByRole("radio", { name: "Allow drawdown from limit" }).check();
+    const confirm = grid.getByRole("button", { name: "Apply" });
     const scopeBoxes = grid.getByRole("group", { name: "Claim types" }).getByRole("checkbox");
     for (const box of await scopeBoxes.all()) {
       if ((await box.getAttribute("aria-checked")) === "true") await box.click();
     }
     await expect(confirm).toBeDisabled();
-    await expect(grid).toContainText("Choose at least one claim type for a tracked limit.");
+    await expect(grid).toContainText("Select a claim type to allow drawdown");
     await scopeBoxes.first().click();
-    await expect(confirm).toBeEnabled();
+    await expect(grid).toContainText("S$300 left of S$300 this year");
     await confirm.click();
-    await expect(panelRow).toContainText("S$300 a year");
+    await expect(panelRow).toContainText("Drawdown");
+    await expect(panelRow).not.toContainText("No claim type");
 
-    // The slip wording moves: the cell goes back to review.
+    // The slip moves under a confirmed decision: the cell goes back to review.
     await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
     await page.getByRole("button", { name: /Expand details for Panel/ }).click();
     await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("SGD 500");
     await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
-    await expect(panelRow).toContainText("slip changed");
+    await expect(panelRow).toContainText("Review");
+    await expect(grid).toContainText("to review");
 
-    // A visit count is tracked as visits, never as dollars.
+    // A bare number is dollars or visits only the broker can say; a cashless
+    // teleconsult cap is shown, never counted.
     await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
     await page.getByRole("button", { name: /Expand details for Panel/ }).click();
-    await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("5 visits");
+    await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("5");
     await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
     await panelRow.getByRole("button").first().click();
-    await grid.getByRole("radio", { name: /Visits per year — tracked/ }).check();
-    await grid.getByRole("spinbutton", { name: "Visits per policy year" }).fill("5");
-    await expect(grid).toContainText("5 of 5 visits left this year");
-    await grid.getByRole("button", { name: "Confirm" }).click();
+    await expect(grid).toContainText("with no unit. Choose S$ or visits.");
+    await expect(confirm).toBeDisabled();
+    await grid.getByRole("radio", { name: "Visits", exact: true }).check();
+    await grid.getByRole("spinbutton", { name: "Visits per year" }).fill("5");
+    await grid.getByRole("radio", { name: "No drawdown" }).check();
+    await expect(grid).toContainText("Up to 5 visits a year");
+    await confirm.click();
+    await expect(panelRow).toContainText("No drawdown");
     await expect(panelRow).toContainText("5 visits a year");
-    await expect(panelRow).not.toContainText("S$5");
+    await expect(panelRow).not.toContainText("S$5 a year");
   }
 
   const overflow = await page.evaluate(
@@ -541,9 +553,8 @@ test("broker reviews claim limits in one grid across plans", async ({
   expect(accessibility.violations).toEqual([]);
   expect(runtimeErrors).toEqual([]);
 
-  await page.screenshot({
+  await grid.screenshot({
     path: testInfo.outputPath(`broker-claim-limits-${testInfo.project.name}.png`),
-    fullPage: true,
     animations: "disabled",
   });
 });

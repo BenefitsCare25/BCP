@@ -73,6 +73,7 @@ from app.services.claim_limits import (
     product_setting,
     setting_display,
 )
+from app.services.member_schedule import member_row_name
 from app.services.member_statement import (
     build_member_statement,
     member_visible_utilization,
@@ -316,6 +317,8 @@ def _insured_buckets(
                     product_code=line.product_code,
                     product_name=line.product_name,
                     benefit_key=key,
+                    benefit_label=member_row_name(item.get("name") or key) or key,
+                    benefit_kind=str(item["kind"]) if item.get("kind") else None,
                     limit=item_limit,
                     limit_display=item_display,
                     approved=round(float(row["approved"]), 2),

@@ -24,6 +24,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from app.services.claim_limits import visit_count_value
 from app.services.placement_slip_parser import (
     ExtractedCategory,
     ProductSlip,
@@ -228,7 +229,7 @@ def _slip_values_by_plan(slip: ProductSlip) -> dict[str, dict[str, dict[str, Any
                 (_norm_key(s.key) or _s(s.name).lower()): {
                     "key": _s(s.key),
                     "name": _s(s.name),
-                    "value": _s(s.value),
+                    "value": visit_count_value(s.name, _s(s.value)),
                     "note": _s(s.note) or None,
                     "limits": _limits(s.limits),
                     # "NA" vs blank — see ExtractedBenefitItem.not_applicable.

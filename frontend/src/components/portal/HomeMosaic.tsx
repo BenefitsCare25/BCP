@@ -71,6 +71,7 @@ import { LeafSkeleton } from "./leaf/LeafSkeleton";
 import { formatDay } from "./leaf/date";
 import { useCompany } from "./useCompany";
 import { buildCareRoutes } from "./leaf/careRoutes";
+import { balanceLabel } from "./leaf/careFacts";
 import { isEmployeeLine } from "./memberVisibility";
 
 /** How many messages the home tile shows before deferring to the inbox. Three
@@ -567,7 +568,7 @@ export function HomeMosaicView({
               the benefit name is preferred when there is one, since it is the
               narrower, more specific fact. */}
           <p className="truncate text-row text-label">
-            {headline.benefit_key ||
+            {(headline.benefit_key && balanceLabel(headline)) ||
               headline.product_name ||
               headline.product_code}
           </p>

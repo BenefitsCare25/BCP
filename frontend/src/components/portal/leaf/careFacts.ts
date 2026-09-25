@@ -164,6 +164,14 @@ function clinicLabel(name: string): string {
   return CLINIC_LABELS.find(([pattern]) => pattern.test(name))?.[1] ?? name;
 }
 
+/** A sub-limit's name on What's left, matching how What's covered names the
+ * same row: clinic channels by clinic type, every other row by its cleaned
+ * schedule name. */
+export function balanceLabel(bucket: { benefit_key: string | null; benefit_label?: string | null; benefit_kind?: string | null }): string {
+  const name = bucket.benefit_label || bucket.benefit_key || "";
+  return bucket.benefit_kind === "copay" ? clinicLabel(name) : name;
+}
+
 /** One clinic type's cost, in the order a member reads it. */
 function clinicCost(item: BenefitItem): CareFact | null {
   const parts: string[] = [];
@@ -187,10 +195,16 @@ function clinicCost(item: BenefitItem): CareFact | null {
   return {
     label: clinicLabel(item.name),
     value: value.charAt(0).toUpperCase() + value.slice(1),
-    // A bare number here is a count or an amount depending on the policy, so
-    // it is shown as the policy states it rather than guessed into dollars.
-    note: yearly ? `Per policy year: ${isBareAmount(yearly) ? yearly : money(yearly)}` : undefined,
+    note: yearly ? yearlyNote(yearly) : undefined,
   };
+}
+
+/** "5 visits" → "Up to 5 visits a year"; "S$500" → "Up to S$500 a year". A
+ * bare number is a count or an amount depending on the policy, so it is shown
+ * as the policy states it rather than guessed into dollars. */
+function yearlyNote(yearly: string): string {
+  if (/\bvisits?\b/i.test(yearly) || /\$|\bsgd\b/i.test(yearly)) return `Up to ${yearly} a year`;
+  return `Per policy year: ${yearly}`;
 }
 
 /** A schedule that states each clinic type as its own row ("Panel

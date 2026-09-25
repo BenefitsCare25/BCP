@@ -1,32 +1,36 @@
-import { useState } from "react";
-import { AlertTriangle, CheckCircle2, Trash2 } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/cn";
 import type { ClaimLimitBasis, ClaimLimitScope, ClaimLimitSetting } from "@/types";
 import { TRACKED_BASES, memberPreview, sourceChanged } from "@/lib/claimLimits";
+import { DRAWDOWN_OPTIONS, EditorShell, Field, Notice, Preview, Segmented, type SegmentOption } from "./FormParts";
 import { ScopePicker } from "./ScopePicker";
 
-/** The choices, in the order a broker decides: does it count down, or is it
- * a condition the member and assessor read? */
-const CHOICES: { basis: ClaimLimitBasis | "not_limit"; title: string; hint: string }[] = [
-  { basis: "policy_year", title: "Yearly amount — tracked", hint: "Counts down as claims are approved. Approving past it needs an acknowledgement." },
-  { basis: "visits_per_year", title: "Visits per year — tracked", hint: "Each approved claim uses one visit. Approving past it needs an acknowledgement." },
-  { basis: "per_visit", title: "Per visit", hint: "A cap on each claim, shown as a condition." },
-  { basis: "per_day", title: "Per day", hint: "A daily cap (e.g. room & board), shown as a condition." },
-  { basis: "per_disability", title: "Per disability", hint: "A cap per illness or injury, shown as a condition." },
-  { basis: "as_charged", title: "As charged", hint: "Covered in full, subject to policy terms." },
-  { basis: "percentage", title: "Co-pay / percentage", hint: "The member's share, shown as a condition." },
-  { basis: "lifetime", title: "Lifetime", hint: "A cap over the member's whole cover, shown as a condition." },
-  { basis: "not_limit", title: "Not a limit", hint: "Just schedule wording — nothing extra is shown or checked." },
+type Choice = ClaimLimitBasis | "not_limit";
+
+const CHOICES: SegmentOption<Choice>[] = [
+  { value: "policy_year", label: "Annual amount" },
+  { value: "visits_per_year", label: "Annual visits" },
+  { value: "per_visit", label: "Per visit" },
+  { value: "per_day", label: "Per day" },
+  { value: "per_disability", label: "Per disability" },
+  { value: "lifetime", label: "Lifetime" },
+  { value: "percentage", label: "Co-pay %" },
+  { value: "as_charged", label: "As charged" },
+  { value: "not_limit", label: "Not a limit" },
 ];
 
 interface Props {
   idPrefix: string;
+  title: ReactNode;
   setting: ClaimLimitSetting;
   /** `undefined` for the overall limit, which has no SOB cell. */
   wording: string | null | undefined;
+  /** The row's sub-lines as the slip states them, when the amounts live
+   * there rather than on the row itself. */
+  context?: string[];
   scopes: ClaimLimitScope[];
   suggested: string[];
   /** Other plan columns stating the same wording, which this decision can
@@ -34,6 +38,10 @@ interface Props {
   sameWordingCount: number;
   /** The overall plan limit: annual amount or nothing, no claim types. */
   overall?: boolean;
+  /** No setting stored yet for this cell. */
+  fresh?: boolean;
+  /** The row is hidden from employees in the SOB: no drawdown. */
+  hidden?: boolean;
   onSave: (next: ClaimLimitSetting, applyToSame: boolean) => void;
   onRemove?: () => void;
   onCancel: () => void;
@@ -41,46 +49,53 @@ interface Props {
 
 export function LimitSettingForm({
   idPrefix,
+  title,
   setting,
   wording,
+  context = [],
   scopes,
   suggested,
   sameWordingCount,
   overall = false,
+  fresh = false,
+  hidden = false,
   onSave,
   onRemove,
   onCancel,
 }: Props) {
-  const [choice, setChoice] = useState<ClaimLimitBasis | "not_limit">(() => {
+  const [choice, setChoice] = useState<Choice | null>(() => {
     if (setting.status === "not_limit") return "not_limit";
-    // "Other policy wording" has no choice of its own: it is wording, which is
-    // what "Not a limit" records. Without this no option would be selected.
-    return CHOICES.some((c) => c.basis === setting.basis) ? setting.basis : "not_limit";
+    if (CHOICES.some((c) => c.value === setting.basis)) return setting.basis;
+    // A new cell nothing was detected on starts undecided: pre-selecting "Not
+    // a limit" invited a one-click save that hid the benefit's amount.
+    return fresh ? null : "not_limit";
   });
   const [amount, setAmount] = useState(setting.amount != null ? String(setting.amount) : "");
+  // A detected guess's claim type is only as good as the rules that made it;
+  // start from today's suggestion, never a stale one.
   const [scopeCodes, setScopeCodes] = useState<string[]>(
-    setting.claim_scope_codes.length > 0 ? setting.claim_scope_codes : suggested,
+    setting.source !== "detected" && setting.claim_scope_codes.length > 0 ? setting.claim_scope_codes : suggested,
   );
   const [applyToSame, setApplyToSame] = useState(sameWordingCount > 0);
+  const [displayOnly, setDisplayOnly] = useState(Boolean(setting.display_only) || hidden);
 
-  const tracked = choice !== "not_limit" && TRACKED_BASES.has(choice);
+  const decided = choice !== null && choice !== "not_limit";
+  const yearly = decided && TRACKED_BASES.has(choice);
+  const tracked = yearly && !displayOnly;
+  const visits = choice === "visits_per_year";
   const parsed = amount.trim() ? Number(amount) : NaN;
-  const amountValid =
-    choice === "visits_per_year"
-      ? Number.isInteger(parsed) && parsed >= 1
-      : choice === "policy_year"
-        ? Number.isFinite(parsed) && parsed > 0
-        : true;
+  const amountValid = !yearly || (visits ? Number.isInteger(parsed) && parsed >= 1 : Number.isFinite(parsed) && parsed > 0);
   const needsScope = tracked && !overall && scopes.length > 0 && scopeCodes.length === 0;
   // A broker decision recorded against wording the slip no longer says.
-  const changed =
-    wording !== undefined && setting.source === "manual" && sourceChanged(setting, wording);
-  const choices = overall ? CHOICES.filter((c) => c.basis === "policy_year" || c.basis === "not_limit") : CHOICES;
+  const changed = wording !== undefined && setting.source === "manual" && sourceChanged(setting, wording);
+  const choices = overall ? CHOICES.filter((c) => c.value === "policy_year" || c.value === "not_limit") : CHOICES;
 
+  const { display_only: _previous, ...rest } = setting;
   const draft: ClaimLimitSetting = {
-    ...setting,
-    basis: choice === "not_limit" ? setting.basis : choice,
-    amount: tracked && amountValid ? parsed : null,
+    ...rest,
+    ...(yearly && displayOnly ? { display_only: true } : {}),
+    basis: decided ? choice : setting.basis,
+    amount: yearly && amountValid ? parsed : null,
     // The decision is recorded against the wording the broker is looking at,
     // which is what the backend re-checks at confirmation.
     display: wording?.trim() || setting.display,
@@ -89,129 +104,95 @@ export function LimitSettingForm({
     status: choice === "not_limit" ? "not_limit" : "verified",
   };
 
-  return (
-    <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-3 lg:grid-cols-[minmax(16rem,1fr)_minmax(16rem,1fr)]">
-      <div className="space-y-3">
-        {wording && (
-          <p className="text-xs leading-5 text-muted-foreground">
-            Slip wording: <span className="font-medium text-foreground">{wording}</span>
-          </p>
-        )}
-        {changed && (
-          <p className="flex gap-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-xs text-foreground">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" aria-hidden />
-            The slip wording changed since this was confirmed. Check the choice below still fits, then confirm again.
-          </p>
-        )}
-        <fieldset className="space-y-1.5">
-          <legend className="mb-1 text-xs font-medium text-foreground">How claims use this</legend>
-          {choices.map((c) => (
-            <label
-              key={c.basis}
-              className={cn(
-                "flex cursor-pointer gap-2 rounded-md border px-2.5 py-2 text-xs",
-                choice === c.basis ? "border-primary bg-card" : "border-transparent hover:bg-muted",
-              )}
-            >
-              <input
-                type="radio"
-                name={`${idPrefix}-basis`}
-                className="mt-0.5 accent-primary"
-                checked={choice === c.basis}
-                onChange={() => setChoice(c.basis)}
-              />
-              <span>
-                <span className="block font-medium text-foreground">{c.title}</span>
-                <span className="block text-2xs leading-4 text-muted-foreground">{c.hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-      </div>
+  const footer = (
+    <>
+      <Button type="button" size="sm" disabled={choice === null || !amountValid || needsScope} onClick={() => onSave(draft, applyToSame)}>
+        Apply
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+        Cancel
+      </Button>
+      {needsScope && <span className="text-xs text-warn">Select a claim type to allow drawdown</span>}
+      {onRemove && (
+        <Button type="button" size="sm" variant="ghost" className="ml-auto text-error hover:text-error" onClick={onRemove}>
+          <Trash2 className="size-3.5" aria-hidden /> Remove
+        </Button>
+      )}
+    </>
+  );
 
-      <div className="space-y-3">
-        {tracked && (
-          <div className="space-y-1.5">
-            <label htmlFor={`${idPrefix}-amount`} className="text-xs font-medium text-foreground">
-              {choice === "visits_per_year" ? "Visits per policy year" : "Yearly amount (S$)"}
-            </label>
+  return (
+    <EditorShell title={title} onClose={onCancel} footer={footer}>
+      {hidden && yearly && <Notice>Hidden in SOB. Show it there to allow drawdown.</Notice>}
+      {changed && <Notice>Slip wording changed since this was last applied.</Notice>}
+      {(wording || context.length > 0) && (
+        <Field label="Slip">
+          <div className="text-sm text-foreground sm:pt-1">
+            {wording && <p>{wording}</p>}
+            {context.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+        </Field>
+      )}
+      <Field label="Limit type" labelId={`${idPrefix}-basis`}>
+        <Segmented name={`${idPrefix}-basis`} labelledBy={`${idPrefix}-basis`} value={choice} options={choices} onChange={setChoice} />
+      </Field>
+      {yearly && (
+        <>
+          <Field label={visits ? "Visits per year" : "Limit (S$)"} htmlFor={`${idPrefix}-amount`}>
             <Input
               id={`${idPrefix}-amount`}
               type="number"
-              min={choice === "visits_per_year" ? 1 : 0.01}
-              step={choice === "visits_per_year" ? 1 : 0.01}
-              inputMode={choice === "visits_per_year" ? "numeric" : "decimal"}
+              min={visits ? 1 : 0.01}
+              step={visits ? 1 : 0.01}
+              inputMode={visits ? "numeric" : "decimal"}
               value={amount}
+              aria-invalid={!amountValid && amount.trim() !== ""}
               onChange={(e) => setAmount(e.target.value)}
               className="max-w-48"
             />
-            {!amountValid && amount.trim() !== "" && (
-              <p className="text-2xs text-warn">
-                {choice === "visits_per_year" ? "Enter a whole number of visits." : "Enter an amount above zero."}
-              </p>
-            )}
-          </div>
-        )}
-
-        {!overall && scopes.length > 0 && choice !== "not_limit" && (
+          </Field>
+          <Field label="Employee portal" labelId={`${idPrefix}-portal`}>
+            <Segmented
+              name={`${idPrefix}-portal`}
+              labelledBy={`${idPrefix}-portal`}
+              value={displayOnly ? "display" : "drawdown"}
+              options={DRAWDOWN_OPTIONS(!hidden)}
+              onChange={(v) => setDisplayOnly(v === "display")}
+            />
+          </Field>
+        </>
+      )}
+      {!overall && scopes.length > 0 && decided && (
+        <Field label="Claim types" labelId={`${idPrefix}-scopes`}>
           <ScopePicker
             idPrefix={idPrefix}
+            labelledBy={`${idPrefix}-scopes`}
             selected={scopeCodes}
             scopes={scopes}
             suggested={suggested}
-            legend="Claim types"
-            description={
-              tracked
-                ? "Claims of these types draw from this limit."
-                : "Assessors see this condition when reviewing these claim types."
-            }
             onToggle={(code, checked) =>
               setScopeCodes((current) =>
                 checked ? [...current.filter((c) => c !== code), code] : current.filter((c) => c !== code),
               )
             }
           />
-        )}
-
-        {choice !== "not_limit" && (
-          <p className="rounded-md bg-card px-2.5 py-2 text-xs leading-5 text-muted-foreground">
-            <span className="font-medium text-foreground">Employees see: </span>
-            {memberPreview(draft, wording)}
-          </p>
-        )}
-
-        {sameWordingCount > 0 && (
-          <label className="flex items-center gap-2 text-xs text-foreground">
-            <Checkbox checked={applyToSame} onCheckedChange={(v) => setApplyToSame(v === true)} />
-            Apply to the {sameWordingCount} other plan{sameWordingCount === 1 ? "" : "s"} with the same wording
-          </label>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            disabled={(tracked && !amountValid) || needsScope}
-            onClick={() => onSave(draft, applyToSame)}
-          >
-            <CheckCircle2 className="size-3.5" aria-hidden /> Confirm
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
-          {onRemove && (
-            <Button type="button" size="sm" variant="ghost" className="ml-auto text-error hover:text-error" onClick={onRemove}>
-              <Trash2 className="size-3.5" aria-hidden /> Remove
-            </Button>
-          )}
-        </div>
-        {needsScope && (
-          <p className="text-2xs text-warn">Choose at least one claim type for a tracked limit.</p>
-        )}
-        <p className="text-2xs leading-4 text-muted-foreground">
-          Saved to the draft. Confirm the setup when the review is done — nothing reaches employees before that.
-        </p>
-      </div>
-    </div>
+        </Field>
+      )}
+      {decided && (
+        <Field label="Portal preview">
+          <Preview>{memberPreview(draft, wording)}</Preview>
+        </Field>
+      )}
+      {sameWordingCount > 0 && (
+        <label className="flex items-center gap-2 text-xs text-foreground sm:pl-[10rem]">
+          <Checkbox checked={applyToSame} onCheckedChange={(v) => setApplyToSame(v === true)} />
+          {overall
+            ? `Apply to all ${sameWordingCount + 1} plans`
+            : `Apply to ${sameWordingCount} other plan${sameWordingCount === 1 ? "" : "s"} with the same wording`}
+        </label>
+      )}
+    </EditorShell>
   );
 }

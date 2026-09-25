@@ -935,6 +935,10 @@ class UtilizationBucket(BaseModel):
     product_code: str | None = None
     product_name: str | None = None
     benefit_key: str | None = None  # None = product-level roll-up
+    # The row as What's covered names it (the key is the raw SOB row name,
+    # which carries broker-editor suffixes), and its SOB kind.
+    benefit_label: str | None = None
+    benefit_kind: str | None = None
     limit: float | None = None  # parsed numeric annual limit, when known
     limit_display: str | None = None  # verbatim limit text for the UI
     # Explicit structured meaning. Only ``policy_year`` produces a remaining

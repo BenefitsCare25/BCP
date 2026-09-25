@@ -15,6 +15,7 @@ import type {
 } from "@/types";
 import { selectedMemberCover } from "./setup/memberEligibility";
 import { claimLimitSourceForColumn, describeLimit } from "@/lib/claimLimits";
+import { hiddenFromMembers } from "@/lib/sobValues";
 import { LimitChip } from "./setup/limits/LimitChip";
 import {
   groupEmployeeCategories,
@@ -253,8 +254,10 @@ function ClaimLimitSummary({
     const code = columns.find((c) => c.id === columnId)?.plan_codes[0];
     return code ? sob.plan_claim_limits?.[code] ?? null : null;
   };
-  const rows = sob.items.filter((item) => columns.some((c) => item.claim_limits?.[c.id]));
-  const hasOverall = columns.some((c) => overallFor(c.id));
+  // No claim types: members never claim it in the portal, so nothing can count.
+  const claimable = (scopes ?? []).length > 0;
+  const rows = claimable ? sob.items.filter((item) => columns.some((c) => item.claim_limits?.[c.id])) : [];
+  const hasOverall = claimable && columns.some((c) => overallFor(c.id));
 
   const tally = { live: 0, review: 0 };
   const count = (tone: string) => {
@@ -266,7 +269,7 @@ function ClaimLimitSummary({
     if (overall) count(describeLimit(overall, undefined).tone);
     for (const item of rows) {
       const setting = item.claim_limits?.[col.id];
-      if (setting) count(describeLimit(setting, claimLimitSourceForColumn(item, col.id).wording).tone);
+      if (setting) count(describeLimit(setting, claimLimitSourceForColumn(item, col.id), hiddenFromMembers(item)).tone);
     }
   }
 
@@ -276,18 +279,15 @@ function ClaimLimitSummary({
         <h4 className="text-sm font-semibold text-foreground">Claim limits</h4>
         {(rows.length > 0 || hasOverall) && (
           <p className="flex flex-wrap gap-3 text-xs">
-            <span className="text-good">{tally.live} tracked</span>
+            <span className="text-good">{tally.live} on What's left</span>
             {tally.review > 0 && <span className="text-warn">{tally.review} to review</span>}
           </p>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Tracked</span> limits count down on the
-        employee&apos;s &ldquo;What&apos;s left&rdquo; and guard claim approval. Everything else
-        shows as a condition. To change them, click Edit and open Claim limits.
-      </p>
       {rows.length === 0 && !hasOverall ? (
-        <p className="text-sm text-muted-foreground">No claim limits set for this product yet.</p>
+        <p className="text-sm text-muted-foreground">
+          {claimable ? "No claim limits set." : "No portal claims for this product."}
+        </p>
       ) : (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full border-collapse text-sm">
@@ -329,15 +329,14 @@ function ClaimLimitSummary({
                   </td>
                   {columns.map((col) => {
                     const setting = item.claim_limits?.[col.id] ?? null;
-                    const wording = claimLimitSourceForColumn(item, col.id).wording;
-                    const { text, tone } = describeLimit(setting, wording);
+                    const { text, tone } = describeLimit(setting, claimLimitSourceForColumn(item, col.id), hiddenFromMembers(item));
                     const sub = (setting?.claim_scope_codes ?? [])
                       .map((code) => scopeLabels.get(code) ?? code)
                       .join(" · ");
                     return (
                       <td key={col.id} className="px-2 py-2 align-top">
                         <LimitChip
-                          text={setting?.status === "not_limit" ? "Not a limit" : text}
+                          text={text}
                           tone={setting ? tone : "none"}
                           sub={setting ? sub || "No claim type" : undefined}
                           unset={!setting}

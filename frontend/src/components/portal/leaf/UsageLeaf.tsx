@@ -25,6 +25,7 @@ import { drawnAgainst } from "./FillRule";
 import { prorationReason } from "./FlexProrationNote";
 import { BalanceCard, BalanceCardShell, SubBalanceRow } from "./BalanceCard";
 import { formatDay } from "./date";
+import { balanceLabel } from "./careFacts";
 import { availableAfterPending } from "@/lib/claimLimits";
 
 /** The amount a claim contributes to a POLICY-CURRENCY bucket, exactly as
@@ -427,7 +428,7 @@ export function UsageLeaf({
             productCode={b.product_code}
             productName={b.product_name}
             bucket={lead}
-            subLabel={lead === b ? null : lead.benefit_key}
+            subLabel={lead === b ? null : balanceLabel(lead)}
           >
             {lead.pending > 0 && <PendingBreakdown bucket={lead} claims={claims} />}
             {rest.map((sub) => <SubBalanceRow key={`${sub.product_code}/${sub.benefit_key}`} bucket={sub} />)}

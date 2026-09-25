@@ -109,6 +109,11 @@ def _clean_name(name: Any) -> str:
     return text.rstrip(" :").strip()
 
 
+def member_row_name(name: Any) -> str:
+    """A schedule row's name as What's covered prints it."""
+    return _clean_name(name)
+
+
 def _fraction_percent(value: str) -> str:
     """Co-insurance stored as a fraction ("0.1") reads as a percentage."""
     try:

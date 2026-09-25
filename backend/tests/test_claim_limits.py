@@ -145,13 +145,16 @@ def test_unreviewed_policy_year_limits_block_confirmation_with_a_clear_reason():
             }
         ],
     }
-    errors = validate_schedule_limits(schedule, valid_scope_codes=set())
+    errors = validate_schedule_limits(schedule, valid_scope_codes={"standard"})
     assert errors == [
         "Overall plan limit: detected policy-year limit still needs review. "
         "Verify the amount or mark it informational.",
         "Emergency Travel Expenses: detected policy-year limit still needs review. "
         "Verify the amount or mark it informational.",
     ]
+    # A product members never claim in the portal has no claim types and no
+    # Claim limits step: no limit can count there, so no guess blocks.
+    assert validate_schedule_limits(schedule, valid_scope_codes=set()) == []
 
     # Resolved as informational: nothing is enforced, and nothing blocks.
     informational = {**pending, "status": "not_limit", "source": "manual"}
@@ -172,6 +175,22 @@ def test_unreviewed_policy_year_limits_block_confirmation_with_a_clear_reason():
     errors = validate_schedule_limits(schedule, valid_scope_codes=set())
     assert "Overall policy-year limit needs an amount greater than zero." in errors
     assert any("Emergency Travel Expenses: policy-year limit needs" in error for error in errors)
+
+
+def test_drawdown_on_a_row_hidden_from_members_blocks_confirmation():
+    drawdown = setting(scopes=["standard"])
+    drawdown["display"] = "S$500 per policy year"
+    row = {"name": "Panel", "value": "S$500 per policy year", "claim_limit": drawdown}
+    hidden = {"items": [{**row, "member_hidden": True}]}
+    errors = validate_schedule_limits(hidden, valid_scope_codes={"standard"})
+    assert errors == [
+        "Panel: hidden from employees in the SOB but set to drawdown. "
+        "Show it in the SOB or turn off drawdown."
+    ]
+    no_drawdown = {**drawdown, "display_only": True}
+    shown_only = {"items": [{**row, "member_hidden": True, "claim_limit": no_drawdown}]}
+    assert validate_schedule_limits(shown_only, valid_scope_codes={"standard"}) == []
+    assert validate_schedule_limits({"items": [row]}, valid_scope_codes={"standard"}) == []
 
 
 def test_verified_setting_is_rejected_after_source_wording_changes():

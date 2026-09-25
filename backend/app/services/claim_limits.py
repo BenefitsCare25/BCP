@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.member_schedule import is_absent_value
+from app.services.member_schedule import is_absent_value, member_hidden
 
 LIMIT_BASIS_POLICY_YEAR = "policy_year"
 LIMIT_BASIS_LIFETIME = "lifetime"
@@ -60,6 +60,27 @@ _PER_DAY_RE = re.compile(r"(?:/|\bper\s+)(?:day|night)\b|\bdaily\b", re.I)
 _PER_YEAR_RE = re.compile(r"\bper\s+(?:policy\s+)?year\b|\bper\s+annum\b|/year\b", re.I)
 _VISIT_COUNT_RE = re.compile(r"\b(\d{1,3})\s*visits?\b", re.I)
 _PER_DISABILITY_RE = re.compile(r"\bper\s+(?:disability|admission)\b", re.I)
+_ANNUAL_RE = re.compile(
+    r"\bannual(?:ly)?\b|\bper\s+(?:policy\s+)?year\b|\bper\s+annum\b|/year\b", re.I
+)
+# What may surround a bare amount for it to still read as "the limit is X".
+_BARE_AMOUNT_LEFTOVER_RE = re.compile(
+    r"s?\$|\bsgd\b|\d[\d,]*(?:\.\d+)?|\b(?:overall|maximum|max|limit|up|to|of)\b"
+)
+
+
+_VISIT_LABEL_RE = re.compile(r"\b(?:number|no\.?)\s+of\s+visits?\b", re.I)
+_WHOLE_NUMBER_RE = re.compile(r"\d+(?:\.0+)?")
+
+
+def visit_count_value(label: Any, value: Any) -> str:
+    """"Number of Visits (Per Policy Year): 6" is a count. Stored bare, every
+    renderer reads a bare number as money and the member sees "S$6"."""
+    text = " ".join(str(value or "").split())
+    if _VISIT_LABEL_RE.search(str(label or "")) and _WHOLE_NUMBER_RE.fullmatch(text):
+        count = int(float(text))
+        return f"{count} visit{'' if count == 1 else 's'}"
+    return text
 
 
 def parse_limit_amount(value: Any) -> float | None:
@@ -88,6 +109,19 @@ def infer_limit_basis(value: Any) -> str | None:
     if is_absent_value(text):
         return None
     folded = text.casefold()
+    # "As Charged up to Overall Annual Limit of $1,000" (CDL GD) is a S$1,000
+    # yearly cap, not "no cap".
+    # Only when nothing narrower is stated: "S$30 per visit, up to 10 visits per
+    # policy year" is a per-visit cap, not S$30 a year.
+    if (
+        _ANNUAL_RE.search(text)
+        and has_monetary_context(text)
+        and "%" not in text
+        and not _PER_VISIT_RE.search(text)
+        and not _PER_DAY_RE.search(text)
+        and not _VISIT_COUNT_RE.search(text)
+    ):
+        return LIMIT_BASIS_POLICY_YEAR
     if "as charged" in folded:
         return LIMIT_BASIS_AS_CHARGED
     if "%" in text:
@@ -104,10 +138,15 @@ def infer_limit_basis(value: Any) -> str | None:
         return LIMIT_BASIS_PER_DISABILITY
     if _PER_YEAR_RE.search(text):
         return LIMIT_BASIS_POLICY_YEAR
-    # A bare monetary amount historically behaved as an annual allowance. Keep
-    # that behaviour during migration, but mark it for broker review.
-    if parse_limit_amount(text) is not None and any(
-        token in folded for token in ("$", "sgd", "limit", "maximum", "max ")
+    # A bare monetary amount ("S$500", "Maximum SGD 1,000") historically behaved
+    # as an annual allowance; keep that, marked for review. Anything with more
+    # wording ("SGD 250 per tooth", "S$15 million any one claim", "within 1
+    # year") says something else, and guessing it into a yearly S$ cap put
+    # nonsense (S$250, S$15, S$1) in front of the broker as a blocking decision.
+    if (
+        parse_limit_amount(text) is not None
+        and any(token in folded for token in ("$", "sgd", "limit", "maximum", "max "))
+        and not _BARE_AMOUNT_LEFTOVER_RE.sub("", folded).strip(" .,:;-()")
     ):
         return LIMIT_BASIS_POLICY_YEAR
     return None
@@ -195,7 +234,8 @@ _SCOPE_MATCH_TERMS: dict[str, dict[str, tuple[str, ...]]] = {
         "standard": ("general practitioner", "outpatient gp", "gp consult"),
     },
     "sp": {"standard": ("specialist", "consultation")},
-    "dental": {"standard": ("dental",)},
+    # Panel dentistry is cashless; members claim NON-panel visits.
+    "dental": {"standard": ("dental", "non-panel dentist", "non panel dentist")},
     "hospital": {
         "ghs_pre_post": ("pre+post+hospital",),
         "ghs_dialysis_cancer": ("dialysis", "cancer treatment"),
@@ -209,6 +249,14 @@ _SCOPE_MATCH_TERMS: dict[str, dict[str, tuple[str, ...]]] = {
 _SCOPE_EXCLUDE_TERMS: dict[str, tuple[str, ...]] = {
     "hospital": ("overseas", "funeral", "death"),
 }
+# Teleconsults are cashless in the provider's app, so no member claim is ever
+# one of theirs. "WhiteCoat Pediatric / Specialist" named "specialist" and took
+# the whole SP claim type.
+_TELECONSULT_TERMS = ("whitecoat", "white coat", "teleconsult", "tele-consult", "telemedicine")
+
+
+def _exclude_terms(family: str) -> tuple[str, ...]:
+    return _SCOPE_EXCLUDE_TERMS.get(family, ()) + _TELECONSULT_TERMS
 
 
 def _scope_family(product_code: str | None) -> str | None:
@@ -227,7 +275,7 @@ def claim_scope_match_terms(product_code: str | None) -> tuple[dict[str, list[st
         return {}, []
     return (
         {code: list(terms) for code, terms in _SCOPE_MATCH_TERMS[family].items()},
-        list(_SCOPE_EXCLUDE_TERMS.get(family, ())),
+        list(_exclude_terms(family)),
     )
 
 
@@ -237,7 +285,7 @@ def suggested_scope_codes(product_code: str | None, row_name: Any) -> list[str]:
     family = _scope_family(product_code)
     if not name or family is None:
         return []
-    if any(term in name for term in _SCOPE_EXCLUDE_TERMS.get(family, ())):
+    if any(term in name for term in _exclude_terms(family)):
         return []
     for scope, terms in _SCOPE_MATCH_TERMS[family].items():
         if any(_term_matches(term, name) for term in terms):
@@ -271,7 +319,7 @@ def normalize_limit_setting(raw: Any, *, fallback_display: Any = None) -> dict[s
     # Accepting another code here would compare unlike currencies.
     if currency != "SGD":
         return None
-    return {
+    normalized: dict[str, Any] = {
         "basis": basis,
         # Amounts on non-annual settings are deliberately ignored by every
         # enforcement path. Keeping a cleaned value is still useful to future
@@ -283,6 +331,24 @@ def normalize_limit_setting(raw: Any, *, fallback_display: Any = None) -> dict[s
         "status": status,
         "source": source,
     }
+    # A yearly cap the member reads but nothing counts against — usage happens
+    # outside our claims (CDL GCGP WhiteCoat: 5 teleconsults a year, cashless in
+    # the insurer's app). A countdown there would read "5 of 5 left" all year.
+    if raw.get("display_only") is True:
+        normalized["display_only"] = True
+    return normalized
+
+
+def _positive_amount(setting: dict[str, Any]) -> float | None:
+    amount = setting.get("amount")
+    return float(amount) if amount is not None and float(amount) > 0 else None
+
+
+def _whole_visits(setting: dict[str, Any]) -> int | None:
+    amount = setting.get("amount")
+    if amount is None or float(amount) < 1 or float(amount) != int(float(amount)):
+        return None
+    return int(float(amount))
 
 
 def enforceable_policy_year_amount(setting: Any) -> float | None:
@@ -297,10 +363,10 @@ def enforceable_policy_year_amount(setting: Any) -> float | None:
         normalized is None
         or normalized["basis"] != LIMIT_BASIS_POLICY_YEAR
         or normalized["status"] != LIMIT_STATUS_VERIFIED
+        or normalized.get("display_only")
     ):
         return None
-    amount = normalized.get("amount")
-    return float(amount) if amount is not None and float(amount) > 0 else None
+    return _positive_amount(normalized)
 
 
 def enforceable_visit_limit(setting: Any) -> int | None:
@@ -311,12 +377,10 @@ def enforceable_visit_limit(setting: Any) -> int | None:
         normalized is None
         or normalized["basis"] != LIMIT_BASIS_VISITS_PER_YEAR
         or normalized["status"] != LIMIT_STATUS_VERIFIED
+        or normalized.get("display_only")
     ):
         return None
-    amount = normalized.get("amount")
-    if amount is None or float(amount) < 1 or float(amount) != int(float(amount)):
-        return None
-    return int(float(amount))
+    return _whole_visits(normalized)
 
 
 def setting_display(setting: Any, fallback: Any = None) -> str | None:
@@ -375,6 +439,21 @@ def item_source_wording(item: dict[str, Any]) -> str | None:
         return policy_year if _PER_YEAR_RE.search(policy_year) else f"{policy_year} per policy year"
     value = " ".join(str(item.get("value") or "").split())
     return value or None
+
+
+def unitless_policy_year(item: dict[str, Any]) -> bool:
+    """A structured per-policy-year value that is a bare number: neither money
+    nor a visit count, so neither the member nor the approval guard can read it."""
+    properties = item.get("properties")
+    raw = properties.get("per_policy_year") if isinstance(properties, dict) else None
+    text = " ".join(str(raw or "").split())
+    if is_absent_value(text) or parse_limit_amount(text) is None:
+        return False
+    return not (
+        has_monetary_context(text)
+        or _VISIT_COUNT_RE.search(text)
+        or "as charged" in text.casefold()
+    )
 
 
 def _normalized_wording(value: Any) -> str:
@@ -440,16 +519,19 @@ def validate_schedule_limits(
     """Return actionable configuration errors for one materialized plan."""
     errors: list[str] = []
     owners: dict[str, str] = {}
+    # No claim types = members never claim this product in the portal, so no
+    # limit can count there, and the form hides the Claim limits step: an
+    # untouched guess is neither a decision nor one a broker could make.
+    claimable = bool(valid_scope_codes)
     root = product_setting(schedule)
     if "claim_limit" in schedule and root is None:
         errors.append("Overall plan limit has an invalid setting.")
+    if root and not claimable and root["status"] == LIMIT_STATUS_NEEDS_REVIEW:
+        root = None
     if root and root["basis"] == LIMIT_BASIS_POLICY_YEAR:
         if root["status"] == LIMIT_STATUS_NEEDS_REVIEW:
             errors.append(_UNREVIEWED_LIMIT.format(name="Overall plan limit"))
-        elif (
-            root["status"] == LIMIT_STATUS_VERIFIED
-            and enforceable_policy_year_amount(root) is None
-        ):
+        elif root["status"] == LIMIT_STATUS_VERIFIED and _positive_amount(root) is None:
             errors.append("Overall policy-year limit needs an amount greater than zero.")
 
     for index, item in enumerate(schedule.get("items") or []):
@@ -462,6 +544,17 @@ def validate_schedule_limits(
         if setting is None:
             errors.append(f"{name}: invalid claim-limit setting.")
             continue
+        if not claimable and setting["status"] == LIMIT_STATUS_NEEDS_REVIEW:
+            continue
+        if member_hidden(item) and (
+            enforceable_policy_year_amount(setting) is not None
+            or enforceable_visit_limit(setting) is not None
+        ):
+            # A drawdown balance on What's left for a line What's covered hides.
+            errors.append(
+                f"{name}: hidden from employees in the SOB but set to drawdown. "
+                "Show it in the SOB or turn off drawdown."
+            )
         if (
             setting["status"] in {LIMIT_STATUS_VERIFIED, LIMIT_STATUS_NOT_LIMIT}
             and _normalized_wording(setting.get("display"))
@@ -474,10 +567,7 @@ def validate_schedule_limits(
         if setting["basis"] == LIMIT_BASIS_POLICY_YEAR:
             if setting["status"] == LIMIT_STATUS_NEEDS_REVIEW:
                 errors.append(_UNREVIEWED_LIMIT.format(name=name))
-            elif (
-                setting["status"] == LIMIT_STATUS_VERIFIED
-                and enforceable_policy_year_amount(setting) is None
-            ):
+            elif setting["status"] == LIMIT_STATUS_VERIFIED and _positive_amount(setting) is None:
                 errors.append(f"{name}: policy-year limit needs an amount greater than zero.")
         if setting["basis"] == LIMIT_BASIS_VISITS_PER_YEAR:
             if setting["status"] == LIMIT_STATUS_NEEDS_REVIEW:
@@ -485,11 +575,19 @@ def validate_schedule_limits(
                     f"{name}: detected visit limit still needs review. "
                     "Confirm the number of visits or mark it informational."
                 )
-            elif (
-                setting["status"] == LIMIT_STATUS_VERIFIED
-                and enforceable_visit_limit(setting) is None
-            ):
+            elif setting["status"] == LIMIT_STATUS_VERIFIED and _whole_visits(setting) is None:
                 errors.append(f"{name}: visit limit needs a whole number of visits.")
+        if (
+            setting["basis"] == LIMIT_BASIS_INFORMATIONAL
+            and setting["status"] == LIMIT_STATUS_NEEDS_REVIEW
+            and unitless_policy_year(item)
+        ):
+            # "5 per policy year" reads as S$5 to a member when it means five
+            # visits (or the reverse). Only the broker knows which.
+            errors.append(
+                f"{name}: per-policy-year figure has no unit. "
+                "Say whether it is a dollar amount or a number of visits."
+            )
         for scope in setting["claim_scope_codes"]:
             if scope not in valid_scope_codes:
                 errors.append(f"{name}: unknown claim type '{scope}'.")

@@ -423,6 +423,14 @@ def seed_sob_claim_limits(
     matches compete, the first schedule row wins and the broker sees the second
     as an unmapped detected limit instead of an invalid duplicate mapping.
     """
+    # Local import: claim_intake pulls in the ORM models.
+    from app.services.claim_intake import claim_profile_for
+
+    # Members never claim this product in the portal (life, PA, WICA, GMM …):
+    # a line-level limit can never count down or guard an approval, so a
+    # guessed one is only a false decision in front of the broker.
+    if product_code and not claim_profile_for(product_code).member_claimable:
+        return sob
     columns = [c for c in (sob.get("columns") or []) if isinstance(c, dict)]
     assigned: dict[str, set[str]] = {str(c.get("id") or ""): set() for c in columns if c.get("id")}
     # Reserve every existing owner before adding anything. A setting later in

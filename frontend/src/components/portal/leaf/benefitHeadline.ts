@@ -13,7 +13,7 @@
  */
 import type { CoverageLine, Utilization, UtilizationBucket } from "@/types";
 import { availableAfterPending } from "@/lib/claimLimits";
-import { careFacts } from "./careFacts";
+import { balanceLabel, careFacts } from "./careFacts";
 import { currencySymbol, moneyText } from "./Figure";
 
 export type BenefitHeadline = {
@@ -51,7 +51,7 @@ export function bucketHeadline(bucket: VisitBucket, currency: string): BenefitHe
     const limit = bucket.visit_limit ?? 0;
     const used = bucket.visits_used ?? 0;
     return {
-      label: isSubLimit ? `${bucket.benefit_key} · visits left` : "Visits left",
+      label: isSubLimit ? `${balanceLabel(bucket)} · visits left` : "Visits left",
       value: `${bucket.visits_remaining} of ${limit}`,
       used: limit ? used / limit : 0,
     };
@@ -60,7 +60,7 @@ export function bucketHeadline(bucket: VisitBucket, currency: string): BenefitHe
   const afterPending = availableAfterPending(bucket.remaining, bucket.pending, bucket.pending_unconverted);
   const left = afterPending ?? bucket.remaining ?? 0;
   return {
-    label: isSubLimit ? `${bucket.benefit_key} · left` : "Left this year",
+    label: isSubLimit ? `${balanceLabel(bucket)} · left` : "Left this year",
     value: `${symbol}${moneyText(left)}`,
     note: bucket.pending > 0 ? `${symbol}${moneyText(bucket.pending)} in review` : `of ${symbol}${moneyText(bucket.limit ?? 0)}`,
     used: bucket.limit ? Math.min(1, bucket.approved / bucket.limit) : 0,

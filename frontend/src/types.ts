@@ -1194,6 +1194,9 @@ export interface ClaimLimitSetting {
   claim_scope_codes: string[];
   status: ClaimLimitStatus;
   source: "detected" | "manual";
+  /** A yearly cap employees read but nothing counts against (usage happens
+   * outside our claims, e.g. a cashless teleconsult app). */
+  display_only?: boolean;
 }
 
 export interface ClaimLimitScope {
@@ -1595,6 +1598,9 @@ export interface UtilizationBucket {
   product_name: string | null;
   /** null = the product-level roll-up row. */
   benefit_key: string | null;
+  /** The row as What's covered names it; `benefit_key` is the raw SOB name. */
+  benefit_label?: string | null;
+  benefit_kind?: string | null;
   /** Parsed numeric annual limit, when known. */
   limit: number | null;
   /** Verbatim limit text for display ("As charged", "S$650/day"). */

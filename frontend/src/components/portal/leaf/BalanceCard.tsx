@@ -11,6 +11,7 @@ import { availableAfterPending } from "@/lib/claimLimits";
 import { careArt, careTone, productRouteKey } from "./careTone";
 import { currencySymbol, moneyText } from "./Figure";
 import { productShortLabel } from "./glossary";
+import { balanceLabel } from "./careFacts";
 
 function Ring({ used, pending }: { used: number; pending: number }) {
   const r = 46;
@@ -114,7 +115,7 @@ export function SubBalanceRow({ bucket }: { bucket: UtilizationBucket }) {
     return (
       <div className="rounded-2xl bg-white/70 px-4 py-3">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="min-w-0 text-row font-semibold text-record">{bucket.benefit_key}</span>
+          <span className="min-w-0 text-row font-semibold text-record">{balanceLabel(bucket)}</span>
           <span className="shrink-0 text-row font-bold text-record">{bucket.visits_remaining} of {cap} visits left</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
@@ -127,7 +128,7 @@ export function SubBalanceRow({ bucket }: { bucket: UtilizationBucket }) {
   return (
     <div className="rounded-2xl bg-white/70 px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="min-w-0 text-row font-semibold text-record">{bucket.benefit_key}</span>
+        <span className="min-w-0 text-row font-semibold text-record">{balanceLabel(bucket)}</span>
         <span className="shrink-0 text-row font-bold text-record">{s}{moneyText(bucket.remaining ?? 0)} left</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
