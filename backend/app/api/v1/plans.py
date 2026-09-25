@@ -93,10 +93,24 @@ class BenefitItemIn(BaseModel):
     # the only type signal the read-only renderers have; without it they must
     # guess from the string and render a visit count as a dollar amount.
     kind: str | None = None
+    # Carried through a PATCH so an edit can't silently drop the broker's
+    # claim-limit decision or member visibility choice. Omitted when absent.
+    claim_limit: dict[str, Any] | None = None
+    member_hidden: bool | None = None
 
 
 class BenefitScheduleIn(BaseModel):
     items: list[BenefitItemIn]
+
+    def stored(self) -> dict[str, Any]:
+        """Schedule JSON as persisted: optional per-item keys only when set,
+        because the PRESENCE of ``claim_limit`` is itself meaningful."""
+        dumped = self.model_dump()
+        for item in dumped["items"]:
+            for key in ("claim_limit", "member_hidden"):
+                if item.get(key) is None:
+                    item.pop(key, None)
+        return dumped
 
 
 class PlanUpdate(BaseModel):
@@ -388,7 +402,7 @@ def update_plan(
         setattr(plan, field, value)
     # benefit_schedule is validated as BenefitScheduleIn then stored as raw dict
     if "benefit_schedule" in updates and updates["benefit_schedule"] is not None:
-        plan.benefit_schedule = body.benefit_schedule.model_dump()  # type: ignore[union-attr]
+        plan.benefit_schedule = body.benefit_schedule.stored()  # type: ignore[union-attr]
     if updates:
         plan.human_modified = True
         plan.modified_by = user.user_id

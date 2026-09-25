@@ -125,6 +125,7 @@ def _statement(employee) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",
@@ -160,12 +161,14 @@ def _statement(employee) -> BenefitStatementOut:
                 },
             ),
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GTL",
                 product_name="Group Term Life",
                 plan_code="A",
                 annual_policy_limit=None,  # no numeric limit → no guard
             ),
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GCGP",
                 product_name="Group Clinical GP",
                 plan_code="P1",
@@ -191,6 +194,7 @@ def _statement(employee) -> BenefitStatementOut:
         ],
         dependants=[],
         flex=FlexCoverageLine(
+            plan_status="confirmed",
             tier_name="Tier 1",
             wallet_amount=1000.0,
             currency="SGD",
@@ -316,6 +320,7 @@ def test_gp_rider_keywords_do_not_leak_into_unrelated_products(monkeypatch):
         ):
             value.coverage.append(
                 CoverageLine(
+                    plan_status="confirmed",
                     product_code=code,
                     product_name=name,
                     plan_code="P1",

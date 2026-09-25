@@ -85,6 +85,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",
@@ -93,6 +94,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 covered_dependants=[dep],
             ),
             CoverageLine(
+                plan_status="confirmed",
                 product_code="SP",
                 product_name="Specialist",
                 plan_code="P1",
@@ -101,6 +103,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 covered_dependants=[dep],
             ),
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GCGP",
                 product_name="Group Clinical GP",
                 plan_code="P1",

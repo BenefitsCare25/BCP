@@ -45,11 +45,10 @@ from app.services.member_access import (
 from app.services.member_statement import (
     build_member_statement,
     member_visible_statement,
-    member_visible_utilization,
 )
 from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
-from app.services.utilization import build_utilization
+from app.services.utilization import build_member_utilization
 
 router = APIRouter(
     prefix="/portal",
@@ -140,7 +139,7 @@ def portal_utilization(
 ) -> UtilizationOut:
     """The member's own claim usage vs limits (computed on read)."""
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    return member_visible_utilization(build_utilization(db, employee))
+    return build_member_utilization(db, employee)
 
 
 @router.get("/clinics", response_model=ClinicSearchOut)

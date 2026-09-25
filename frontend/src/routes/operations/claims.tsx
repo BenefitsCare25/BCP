@@ -459,7 +459,7 @@ function QueueTab({
     } catch (err) {
       if (
         err instanceof ConflictDetailError &&
-        ["limit_exceeded", "claim_amount_exceeded"].includes(err.detail.code)
+        ["limit_exceeded", "claim_amount_exceeded", "visit_limit_reached"].includes(err.detail.code)
       ) {
         // Keep the dialog open; confirming again acknowledges the overrun.
         setLimitWarning(err.message);

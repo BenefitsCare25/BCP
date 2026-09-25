@@ -477,6 +477,8 @@ export interface BenefitItem {
   // guessing from the string (a "6" visit count is not "$6").
   kind?: BenefitKind;
   claim_limit?: ClaimLimitSetting;
+  /** Broker's member-visibility choice; absent = default (admin rows hidden). */
+  member_hidden?: boolean;
 }
 
 export interface BenefitSchedule {
@@ -611,6 +613,11 @@ export interface CoverageLine {
   // Per-member Amount Covered + premium (age-banded for voluntary life tiers,
   // reflecting any elected upgrade/downgrade) — not group totals.
   financials: PlanFinancials | null;
+  /** Broker surfaces only: the matched plan's review status. */
+  plan_status?: string | null;
+  /** Member surfaces: false while the broker hasn't confirmed this plan's
+   * setup — the line carries no schedule or limit until then. */
+  published?: boolean;
   covers_dependants: boolean;
   covered_dependants: DependantSummary[];
 }
@@ -1153,6 +1160,9 @@ export interface SobItemAnswer {
   // One explicit setting per benefit column. A column can fund several basis-
   // of-cover plans that share the same SoB values.
   claim_limits?: Record<string, ClaimLimitSetting>;
+  /** true = never shown to members, false = shown even if it reads as insurer
+   * admin wording, absent = the default rule (`lib/sobValues.isAdminRow`). */
+  member_hidden?: boolean;
 }
 
 export interface SobSchedule {
@@ -1165,6 +1175,8 @@ export interface SobSchedule {
 
 export type ClaimLimitBasis =
   | "policy_year"
+  | "visits_per_year"
+  | "per_disability"
   | "lifetime"
   | "per_visit"
   | "per_day"
@@ -1188,6 +1200,13 @@ export interface ClaimLimitScope {
   code: string;
   label: string;
   sub_type: string | null;
+  /** Row-name terms that suggest this claim type (backend
+   * `claim_limits._SCOPE_MATCH_TERMS`); "a+b" needs both parts. */
+  match_terms?: string[];
+  /** Backend check order for `match_terms`; first match wins. */
+  match_priority?: number | null;
+  /** Row-name terms that rule out every suggestion for this product. */
+  exclude_terms?: string[];
 }
 
 export interface BasisOfCoverRow {
@@ -1595,6 +1614,11 @@ export interface UtilizationBucket {
    *  approved. */
   pending_unconverted: number;
   remaining: number | null;
+  /** Verified visits-per-year cap on this row; visits are settled claims. */
+  visit_limit?: number | null;
+  visits_used?: number;
+  visits_pending?: number;
+  visits_remaining?: number | null;
   claim_count: number;
   /** The claims `pending` was summed from. SERVED, never re-derived: "which
    *  statuses count as pending" is defined server-side by subtraction from the

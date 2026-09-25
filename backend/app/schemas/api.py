@@ -696,6 +696,9 @@ class MatchedPlan(BaseModel):
     benefit_schedule: dict[str, Any] | None = None
     cover_description: str | None = None
     annual_policy_limit: str | None = None
+    # The matched Plan row's review status; member surfaces publish only
+    # ``confirmed`` plans (see member_statement.member_visible_statement).
+    plan_status: str | None = None
     # Set when an EmployeePlanOverride changed this employee's plan away from the
     # cohort (category) default — see services/coverage_resolver.
     plan_overridden: bool = False
@@ -814,6 +817,13 @@ class CoverageLine(BaseModel):
     annual_policy_limit: str | None = None
     benefit_schedule: dict[str, Any] | None = None
     financials: PlanFinancials | None = None
+    # Broker-internal review status of the matched plan. Stripped from member
+    # responses, which carry ``published`` instead.
+    plan_status: str | None = None
+    # Member view only: False while the broker has not confirmed this plan's
+    # setup. The line stays (so the member knows the cover exists) but carries
+    # no schedule or limit.
+    published: bool = True
     covers_dependants: bool = False
     covered_dependants: list[DependantSummary] = Field(default_factory=list)
 

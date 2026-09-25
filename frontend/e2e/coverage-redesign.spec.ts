@@ -85,10 +85,10 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
 
   await page.getByRole("button", { name: /Hospital & surgery/ }).click();
   await expect(page.getByText("Room & board", { exact: true })).toBeVisible();
-  await expect(page.getByText("Yearly cap", { exact: true })).toBeVisible();
+  await expect(page.getByText("Yearly limit", { exact: true })).toBeVisible();
   await expect(page.locator("dd").filter({ hasText: "S$50,000" })).toBeVisible();
   await expect(page.locator("dl").getByText("S$250", { exact: false }).first()).toBeVisible();
-  await expect(page.getByText("Additional major medical cover")).toBeVisible();
+  await expect(page.getByText("Extra cover after your hospital plan")).toBeVisible();
   await expect(page.getByText("Daily Room & Board", { exact: true })).toBeHidden();
   await page.getByText("Full benefit schedule").first().click();
   await expect(page.getByText("Daily Room & Board", { exact: true })).toBeVisible();

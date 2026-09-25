@@ -79,6 +79,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",
@@ -98,6 +99,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
             # exercises the plan-aware GP riders (TCM offered/claimable,
             # Physiotherapy rejected at submit).
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GCGP",
                 product_name="Group Clinical GP",
                 plan_code="P1",
@@ -118,6 +120,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
             # NOT filed through the portal — must be hidden from the claim
             # picker and rejected at submit.
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GMM",
                 product_name="Group Major Medical",
                 plan_code="P1",
@@ -125,6 +128,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 covered_dependants=[],
             ),
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GTL",
                 product_name="Group Term Life",
                 plan_code="P1",
@@ -134,6 +138,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
         ],
         dependants=[dep, dep_b] if employee.id == EMP_A else [],
         flex=FlexCoverageLine(
+            plan_status="confirmed",
             tier_name="Tier 1",
             wallet_amount=1000.0,
             currency="SGD",

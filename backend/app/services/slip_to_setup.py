@@ -293,14 +293,50 @@ def _overlay_for(
     template numbers them plainly.
     """
     ov = overrides.get(bi.number)
-    if ov is not None:
+    if ov is not None and _names_agree(bi.name, ov.get("name")):
         return ov, bi.number
     if getattr(bi, "kind", "") == "copay":
         dash = f"-{bi.number}"
         ov = overrides.get(dash)
-        if ov is not None:
+        if ov is not None and _names_agree(bi.name, ov.get("name")):
             return ov, dash
     return {}, None
+
+
+_NAME_TOKEN = re.compile(r"[a-z0-9]+")
+# Words that say nothing about WHICH benefit a row is.
+_FILLER_TOKENS = frozenset({"and", "or", "of", "the", "for", "per", "with", "to", "a", "in"})
+
+
+def _name_tokens(name: Any) -> set[str]:
+    text = _s(name).lower().replace("&", " and ").replace("-", " ")
+    return {t for t in _NAME_TOKEN.findall(text) if t not in _FILLER_TOKENS}
+
+
+def _compact(name: Any) -> str:
+    return "".join(_NAME_TOKEN.findall(_s(name).lower()))
+
+
+def _names_agree(template_name: Any, slip_name: Any) -> bool:
+    """Whether a number-matched slip row describes the same benefit.
+
+    Numbers alone are positional and drift whenever the slip adds, merges or
+    drops a line: CDL's dental slip numbered "Bitewing" 4, which the curated
+    template calls "Test & Laboratory", so every amount landed one procedure
+    off. A row whose name shares no benefit word with the template's is left
+    unconsumed and surfaces as the slip's own extra line instead. An unnamed
+    slip row keeps the historical number match.
+    """
+    slip_tokens = _name_tokens(slip_name)
+    template_tokens = _name_tokens(template_name)
+    if not slip_tokens or not template_tokens:
+        return True
+    if slip_tokens & template_tokens:
+        return True
+    # Spelling variants split words differently: "Non Panel" / "Non-Panel —
+    # per visit …", "Ecards" / "E-cards".
+    slip_compact, template_compact = _compact(slip_name), _compact(template_name)
+    return slip_compact in template_compact or template_compact in slip_compact
 
 
 def _infer_extra_kind(ov: dict[str, Any]) -> str:
@@ -403,7 +439,14 @@ def _plan_answers(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any
                     "properties": dict(ov.get("properties") or {}),
                     "na": bool(ov.get("na")),
                     "sub_items": [
-                        _sub_answer(s, sub_ov.get(_norm_key(s.key)))
+                        # Same key rule the overlay was built with: the
+                        # normalised sub-key, else the lowercased name. Keyless
+                        # qualifier rows (GMM's "from" / "Deductible") are only
+                        # reachable by name.
+                        _sub_answer(
+                            s,
+                            sub_ov.get(_norm_key(s.key) or _s(s.name).lower()),
+                        )
                         for s in bi.sub_items
                     ],
                 }

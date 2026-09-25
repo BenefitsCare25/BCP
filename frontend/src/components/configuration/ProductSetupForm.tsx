@@ -35,6 +35,7 @@ import { FieldControl } from "./setup/SetupPrimitives";
 import { EmployeeCategoryPlanTab } from "./EmployeeCategoryPlanTab";
 import { employeeCategoryIssueCount } from "./employeeCategoryGroups";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
+import { ClaimLimitsPanel } from "./setup/limits/ClaimLimitsPanel";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
 import {
   CoveragePeriodEditor,
@@ -69,6 +70,7 @@ const SECTION_LABELS: Record<string, string> = {
   eligibility: "Eligibility",
   basis_of_cover: "Employee Category & Plan Type",
   schedule_of_benefits: "SOB",
+  claim_limits: "Claim limits",
   endorsements: "Endorsements",
 };
 
@@ -94,7 +96,7 @@ function setupDirtySections(current: SetupAnswers, savedJson: string): string[] 
     changed(current.sob, saved.sob) ||
     changed(current.cover_description, saved.cover_description)
   ) {
-    sections.push("SOB");
+    sections.push("SOB & claim limits");
   }
   if (changed(current.endorsements, saved.endorsements)) {
     sections.push("Endorsements");
@@ -681,13 +683,21 @@ export function ProductSetupForm({
 
         <ScheduleOfBenefitsSection
           sob={answers.sob ?? { columns: [], items: [] }}
-          productCode={template.code}
           plans={selectedPlans}
           columnAxis={template.column_axis}
-          claimScopes={template.claim_scopes ?? []}
           setSob={setSob}
         />
       </div>
+    ),
+    // Its own step, after the SOB it reads from: limits are a separate
+    // decision (what counts down, what is a condition) and used to sit above
+    // the benefit table, pushing it off the first screen.
+    claim_limits: (
+      <ClaimLimitsPanel
+        sob={answers.sob ?? { columns: [], items: [] }}
+        claimScopes={template.claim_scopes ?? []}
+        setSob={setSob}
+      />
     ),
     endorsements: (
       <EndorsementsSection
@@ -703,9 +713,16 @@ export function ProductSetupForm({
   const templateSections = (
     template.sections?.length ? template.sections : Object.keys(sectionInner)
   ).filter((id) => id in sectionInner);
-  const sections = templateSections.includes("endorsements")
+  const withEndorsements = templateSections.includes("endorsements")
     ? templateSections
     : [...templateSections, "endorsements"];
+  // Claim limits follow the SOB, only for products members claim against.
+  const sections =
+    (template.claim_scopes?.length ?? 0) > 0 && withEndorsements.includes("schedule_of_benefits")
+      ? withEndorsements.flatMap((id) =>
+          id === "schedule_of_benefits" ? [id, "claim_limits"] : [id],
+        )
+      : withEndorsements;
 
   // Active tab, falling back to the first section if the parent's stored value
   // isn't valid for this product's section list.

@@ -145,6 +145,27 @@ function PendingBreakdown({
   );
 }
 
+/** A visits-per-year cap reads as a count, never as money. */
+function VisitsBlock({ bucket }: { bucket: UtilizationBucket }) {
+  const cap = bucket.visit_limit ?? 0;
+  const left = bucket.visits_remaining ?? 0;
+  const pending = bucket.visits_pending ?? 0;
+  return (
+    <div className="py-3 pl-4">
+      <div className="flex items-baseline justify-between gap-4">
+        <span className="min-w-0 break-words text-row text-label">{bucket.benefit_key}</span>
+        <span className="shrink-0 text-row font-semibold text-record">
+          {left} of {cap} visit{cap === 1 ? "" : "s"} left
+        </span>
+      </div>
+      <p className="mt-1 text-row text-label">
+        {bucket.visits_used ?? 0} used this policy year
+        {pending > 0 && ` · ${pending} being reviewed`}
+      </p>
+    </div>
+  );
+}
+
 function BucketBlock({
   bucket,
   sub,
@@ -152,6 +173,9 @@ function BucketBlock({
   bucket: UtilizationBucket;
   sub?: boolean;
 }) {
+  if (sub && bucket.visit_limit != null && bucket.visits_remaining != null) {
+    return <VisitsBlock bucket={bucket} />;
+  }
   const title = sub
     ? bucket.benefit_key
     : (bucket.product_name ?? bucket.product_code ?? "Benefit");
@@ -399,8 +423,13 @@ export function UsageLeaf({
     bucket.limit_basis === "policy_year" &&
     bucket.limit !== null &&
     bucket.remaining !== null;
+  // A verified visits-per-year cap is the other thing that counts down.
+  const isVisitBalance = (bucket: UtilizationBucket) =>
+    bucket.limit_is_enforceable === true &&
+    bucket.visit_limit != null &&
+    bucket.visits_remaining != null;
   const balanceSubsFor = (product: string | null) =>
-    subsFor(product).filter(isAnnualBalance);
+    subsFor(product).filter((b) => isAnnualBalance(b) || isVisitBalance(b));
 
   // **A product with no cap, nothing claimed and no sub-limits is not shown.**
   // It has no fullness to draw and nothing to count down, so the only thing it
@@ -420,7 +449,7 @@ export function UsageLeaf({
     return (
       <Mount label="Nothing to track yet">
         <p className="text-row text-label">
-          No annual balances have been verified for this plan. Your full cover,
+          No yearly balances or visit limits have been confirmed for this plan. Your full cover,
           including visit, day and treatment conditions, remains under
           What&rsquo;s covered.
         </p>

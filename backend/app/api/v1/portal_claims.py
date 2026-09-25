@@ -162,7 +162,7 @@ from app.services.file_security import scan_quarantined_document
 from app.services.fx import POLICY_CURRENCY
 from app.services.insurer_listings import member_id_for_insurer
 from app.services.member_access import Capability
-from app.services.member_statement import build_member_statement
+from app.services.member_statement import build_member_statement, is_published
 from app.services.product_insurer import insurer_map
 from app.services.sg_diagnoses import search_diagnoses
 from app.services.sg_hospitals import hospital_directory
@@ -354,6 +354,10 @@ def build_coverage_options(
     insurers_by_product = insurer_map(db, year.id, products_by_code.values())
     insured = []
     for line in statement.coverage:
+        # An unconfirmed setup isn't published to members, so it can't be
+        # claimed against from the member form either.
+        if not is_published(line):
+            continue
         product_window = claim_period_window(
             db, year, CLAIM_KIND_INSURED, employee, line.product_code,
         )

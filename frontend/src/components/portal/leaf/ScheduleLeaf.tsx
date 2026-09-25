@@ -60,8 +60,14 @@ function ScheduleRow({
   limits?: BenefitLimit[];
   indent?: boolean;
 }) {
-  // The member surface writes money as S$ everywhere else.
-  const formatted = formatValue(value, kind, MEMBER_CURRENCY);
+  // The member surface writes money as S$ everywhere else, and a Yes/No row
+  // reads as whether the service is included.
+  const formatted =
+    kind === "boolean" && /^\s*(yes|y)\s*$/i.test(value ?? "")
+      ? "Included"
+      : kind === "boolean" && /^\s*(no|n)\s*$/i.test(value ?? "")
+        ? "Not included"
+        : formatValue(value, kind, MEMBER_CURRENCY);
   // A value that reads as a sentence rather than an amount goes full width
   // below its label; squeezing it into the right-hand column forces the label
   // to wrap one word per line.
@@ -154,6 +160,29 @@ function Enumeration({
   );
 }
 
+/** "X-Ray — Intraoral" → ["X-Ray", "Intraoral"]: the slip's procedure group,
+ * carried in the row name by the parser, becomes a heading here. */
+const GROUP_SEPARATOR = " — ";
+
+function splitGroup(name: string): [string | null, string] {
+  const at = name.indexOf(GROUP_SEPARATOR);
+  return at > 0 ? [name.slice(0, at), name.slice(at + GROUP_SEPARATOR.length)] : [null, name];
+}
+
+type Segment = { group: string | null; rows: { item: BenefitItem; idx: number }[] };
+
+/** Consecutive rows sharing a group prefix render under one heading. */
+function segmentsOf(items: BenefitItem[]): Segment[] {
+  const segments: Segment[] = [];
+  items.forEach((item, idx) => {
+    const [group] = splitGroup(item.name ?? "");
+    const last = segments[segments.length - 1];
+    if (last && last.group === group) last.rows.push({ item, idx });
+    else segments.push({ group, rows: [{ item, idx }] });
+  });
+  return segments;
+}
+
 function Item({
   item,
   hidden = false,
@@ -170,7 +199,7 @@ function Item({
   // a position in the insurer's document, not a fact about the benefit, and the
   // parser emits values like "-1" and "1A" that read as broken to someone who
   // has never seen the slip. Brokers keep the numbers for reconciliation.
-  const label = item.name ?? "";
+  const label = splitGroup(item.name ?? "")[1];
   const subs = subItemsOf(item).filter(
     (s) => s.value || s.note || (s.limits && s.limits.length > 0),
   );
@@ -261,15 +290,29 @@ export function ScheduleLeaf({
           the `aria-controls` on the button below even in the collapsed state,
           i.e. exactly when that association is what tells a screen-reader user
           there is something to open. */}
-      <dl id={panelId} className="divide-y divide-hairline/75">
-        {items.map((item, idx) => (
-          <Item
-            key={`${item.number}-${idx}`}
-            item={item}
-            hidden={!allRows && !showAll && hiddenSet.has(item)}
-          />
+      <div id={panelId}>
+        {segmentsOf(items).map((segment, s) => (
+          <div key={`${segment.group ?? "rows"}-${s}`}>
+            {segment.group && (
+              <h4
+                className="pt-3 text-row font-semibold text-record"
+                hidden={!allRows && !showAll && segment.rows.every(({ item }) => hiddenSet.has(item))}
+              >
+                {segment.group}
+              </h4>
+            )}
+            <dl className="divide-y divide-hairline/75">
+              {segment.rows.map(({ item, idx }) => (
+                <Item
+                  key={`${item.number}-${idx}`}
+                  item={item}
+                  hidden={!allRows && !showAll && hiddenSet.has(item)}
+                />
+              ))}
+            </dl>
+          </div>
         ))}
-      </dl>
+      </div>
 
       {/* The aperture. The frame grows outward to admit the rest of the
           schedule rather than a new page replacing it — the world's own

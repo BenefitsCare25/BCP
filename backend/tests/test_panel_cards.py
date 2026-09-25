@@ -510,6 +510,7 @@ def _statement(with_dependant: bool) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GCGP",
                 product_name="Group Clinical GP",
                 plan_code="Plan A",

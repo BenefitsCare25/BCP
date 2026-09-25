@@ -112,7 +112,10 @@ def test_portal_claim_period_selection_is_member_bound_and_draft_years_hidden(sc
         BenefitStatementOut(
             employee=StatementEmployee(id=employee.id, staff_id="staff", employee_name="Member"),
             policy_year_id=employee.policy_year_id, is_matched=True,
-            coverage=[CoverageLine(product_code="GHS", product_name="Hospital", plan_code="P1")],
+            coverage=[CoverageLine(
+                product_code="GHS", product_name="Hospital",
+                plan_code="P1", plan_status="confirmed",
+            )],
         ))
     member = CurrentMember(member_account_id="member", client_id="company", broker_firm_id=None,
                            email="member@example.test", staff_id="staff")
@@ -156,7 +159,10 @@ def test_coverage_options_expose_product_window_and_hide_expired_filing(scope, m
     statement = BenefitStatementOut(
         employee=StatementEmployee(id="old", staff_id="staff", employee_name="Member"),
         policy_year_id="old", is_matched=True,
-        coverage=[CoverageLine(product_code="GHS", product_name="Hospital", plan_code="P1")],
+        coverage=[CoverageLine(
+                product_code="GHS", product_name="Hospital",
+                plan_code="P1", plan_status="confirmed",
+            )],
     )
     monkeypatch.setattr(portal_claims, "business_today", lambda: date(2026, 4, 30))
     options = portal_claims.build_coverage_options(

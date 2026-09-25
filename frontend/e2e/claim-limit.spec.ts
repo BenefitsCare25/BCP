@@ -441,7 +441,7 @@ test("what's left shows only verified annual balances", async ({
   });
 });
 
-test("broker can review plan and line mappings from the SoB editor", async ({
+test("broker reviews claim limits in one grid across plans", async ({
   page,
   request,
 }, testInfo) => {
@@ -467,151 +467,68 @@ test("broker can review plan and line mappings from the SoB editor", async ({
   await expect(productTab).toBeVisible();
   await productTab.click();
   await page.getByRole("button", { name: "Edit" }).click();
+
+  // Limits are their own step after the SOB, not a panel above its table.
   await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
+  await expect(page.getByRole("region", { name: "Claim limits" })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
 
-  const editor = page.getByRole("region", { name: "Annual balances" });
-  await expect(editor).toBeVisible();
-  await expect(editor).toContainText(
-    "Per-visit amounts, visit counts, co-payments and as-charged conditions remain assessment guidance below and never block approval.",
-  );
-  await expect(editor.getByRole("button", { name: "Review routing" })).toHaveCount(0);
+  const grid = page.getByRole("region", { name: "Claim limits" });
+  await expect(grid).toBeVisible();
+  await expect(grid).toContainText("count down on the employee's");
 
-  const overallButton = editor
-    .getByRole("button", { name: /Set annual balance|Edit/ })
-    .first();
-  await overallButton.click();
-  const amount = editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first();
-  await amount.fill("2500");
-  await editor
-    .getByRole("button", { name: "Activate annual balance" })
-    .first()
-    .click();
-  await expect(editor).toContainText("SGD 2,500");
-  await expect(editor).toContainText("Verified");
+  // Overall yearly limit: one decision, applied to every plan column.
+  await grid.getByRole("row", { name: /Overall yearly limit/ }).getByRole("button").first().click();
+  await expect(grid.getByRole("radio", { name: /Yearly amount — tracked/ })).toBeChecked();
+  await grid.getByRole("spinbutton", { name: "Yearly amount (S$)" }).fill("2500");
+  await expect(grid).toContainText("S$2,500 left of S$2,500 this year");
+  await grid.getByRole("button", { name: "Confirm" }).click();
+  await expect(grid.getByRole("row", { name: /Overall yearly limit/ })).toContainText("S$2,500 a year");
+  await expect(grid).toContainText("tracked");
 
   if (testInfo.project.name === "mobile-chromium") {
-    const firstGroupNumber = page.getByRole("textbox", {
-      name: "Benefit 7 number",
-    });
-    await expect(firstGroupNumber).toHaveValue("Group 1");
-    await firstGroupNumber.fill("Group 4");
-    await expect(firstGroupNumber).toHaveValue("Group 4");
-    await page.getByRole("button", { name: "Renumber" }).click();
-    await expect(firstGroupNumber).toHaveValue("Group 1");
-    await firstGroupNumber.clear();
-    await page.getByRole("button", { name: "Renumber" }).click();
-    await expect(firstGroupNumber).toHaveValue("Group 1");
+    // A per-policy-year amount typed into the SOB becomes a reviewable cell.
+    await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
+    await page.getByRole("button", { name: /Expand details for Panel/ }).click();
+    await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("SGD 300");
+    await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
 
-    await page
-      .getByRole("button", { name: /Expand details for Panel/ })
-      .click();
-    await page
-      .getByRole("textbox", { name: /^Per policy year/i })
-      .fill("SGD 300");
-
-    await expect(editor).toContainText("Annual amounts to review");
-    await expect(editor).toContainText("SGD 300 per policy year");
-    await expect(editor).toContainText("No claim type mapped");
-    await editor
-      .getByRole("button", { name: "Review annual balance" })
-      .click();
-    const verifyDetected = editor
-      .getByRole("button", { name: "Activate annual balance" })
-      .first();
-    await expect(verifyDetected).toBeDisabled();
-    await expect(editor).toContainText(
-      "Choose at least one claim type before verifying this setting.",
-    );
-    await editor.getByRole("checkbox").first().click();
-    await expect(verifyDetected).toBeEnabled();
-    await verifyDetected.click();
-
-    const panelSetting = editor
-      .locator("div.grid")
-      .filter({ hasText: "Panel" })
-      .filter({ hasText: "SGD 300" })
-      .first();
-    await expect(panelSetting).toBeVisible();
-    await expect(panelSetting).not.toContainText("No claim type mapped");
-
-    await page
-      .getByRole("textbox", { name: /^Per policy year/i })
-      .fill("SGD 500");
-    await expect(editor).toContainText("SoB changed · review");
-    await expect(editor).toContainText(
-      "The SoB wording changed after this setting was saved.",
-    );
-    await expect(verifyDetected).toBeDisabled();
-    await editor
-      .getByRole("button", { name: "Use updated SoB value" })
-      .click();
-    await expect(
-      editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first(),
-    ).toHaveValue("500");
-    await expect(verifyDetected).toBeEnabled();
-    await verifyDetected.click();
-
-    await page
-      .getByRole("textbox", { name: /^Per policy year/i })
-      .fill("5 visits");
-    await expect(verifyDetected).toBeDisabled();
-    await editor
-      .getByRole("button", { name: "Use updated SoB value" })
-      .click();
-    await expect(editor).toContainText("Assessment guidance");
-    await expect(editor).toContainText("Claim mapping needs review");
-    await expect(editor).toContainText("5 visits");
-    await expect(editor.getByRole("button", { name: "Review routing" })).toHaveCount(0);
-    if (!(await editor.getByText("Where this guidance appears").isVisible())) {
-      await editor.getByRole("button", { name: "Review claim mapping" }).click();
+    const panelRow = grid.getByRole("row", { name: /^Panel/ }).first();
+    await expect(panelRow).toContainText("SGD 300 per policy year");
+    await panelRow.getByRole("button").first().click();
+    await expect(grid.getByRole("spinbutton", { name: "Yearly amount (S$)" })).toHaveValue("300");
+    const confirm = grid.getByRole("button", { name: "Confirm" });
+    // A tracked limit needs the claim type it funds.
+    const scopeBoxes = grid.getByRole("group", { name: "Claim types" }).getByRole("checkbox");
+    for (const box of await scopeBoxes.all()) {
+      if ((await box.getAttribute("aria-checked")) === "true") await box.click();
     }
-    await expect(editor).toContainText("Where this guidance appears");
-    await expect(editor.getByRole("checkbox")).toHaveCount(1);
-    await expect(editor.getByRole("checkbox").first()).toBeChecked();
-    await expect(
-      editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }),
-    ).toHaveCount(0);
-    await expect(
-      editor.getByRole("combobox", { name: "How claims use this rule" }),
-    ).toHaveCount(0);
-    await editor.getByRole("button", { name: "Confirm claim mapping" }).click();
-    await expect(editor).toContainText("Guidance mapping confirmed");
-    await expect(editor).not.toContainText("SGD 5");
-  }
+    await expect(confirm).toBeDisabled();
+    await expect(grid).toContainText("Choose at least one claim type for a tracked limit.");
+    await scopeBoxes.first().click();
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect(panelRow).toContainText("S$300 a year");
 
-  const addLine = editor.getByRole("combobox", { name: "Add an annual balance" });
-  if (await addLine.isVisible()) {
-    await addLine.click();
-    const options = page.getByRole("option");
-    await expect.poll(() => options.count()).toBeGreaterThan(0);
-    const firstLabel = (await options.first().textContent())?.trim() ?? "";
-    await options.first().click();
-    await editor.getByRole("button", { name: "Add annual balance" }).click();
-    if (testInfo.project.name === "mobile-chromium") {
-      await expect(editor.getByRole("checkbox")).toHaveCount(1);
-      await expect(editor.getByText("GP (General Practitioner)")).toBeVisible();
-      await expect(editor.getByText("TCM (Traditional Chinese Medicine)")).toHaveCount(0);
-      await expect(editor.getByText("Physiotherapy", { exact: true })).toHaveCount(0);
-      await editor
-        .getByRole("button", { name: "Show 2 other claim types" })
-        .click();
-      await expect(editor.getByRole("checkbox")).toHaveCount(3);
-      await expect(editor.getByText("TCM (Traditional Chinese Medicine)")).toBeVisible();
-      await expect(editor.getByText("Physiotherapy", { exact: true })).toBeVisible();
-    }
-    await editor.getByRole("checkbox").first().click();
-    const lineBasis = editor
-      .getByRole("combobox", { name: "How claims use this rule" })
-      .first();
-    await lineBasis.click();
-    await page.getByRole("option", { name: "Per policy year" }).click();
-    const lineAmount = editor.getByRole("spinbutton", { name: "Annual amount (SGD)" }).first();
-    await lineAmount.fill("750");
-    await editor
-      .getByRole("button", { name: "Activate annual balance" })
-      .first()
-      .click();
-    await expect(editor).toContainText(firstLabel);
+    // The slip wording moves: the cell goes back to review.
+    await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
+    await page.getByRole("button", { name: /Expand details for Panel/ }).click();
+    await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("SGD 500");
+    await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
+    await expect(panelRow).toContainText("slip changed");
+
+    // A visit count is tracked as visits, never as dollars.
+    await page.getByRole("button", { name: /^SOB(?:\s|$)/ }).click();
+    await page.getByRole("button", { name: /Expand details for Panel/ }).click();
+    await page.getByRole("textbox", { name: /^Per policy year/i }).first().fill("5 visits");
+    await page.getByRole("button", { name: /^Claim limits(?:\s|$)/ }).click();
+    await panelRow.getByRole("button").first().click();
+    await grid.getByRole("radio", { name: /Visits per year — tracked/ }).check();
+    await grid.getByRole("spinbutton", { name: "Visits per policy year" }).fill("5");
+    await expect(grid).toContainText("5 of 5 visits left this year");
+    await grid.getByRole("button", { name: "Confirm" }).click();
+    await expect(panelRow).toContainText("5 visits a year");
+    await expect(panelRow).not.toContainText("S$5");
   }
 
   const overflow = await page.evaluate(

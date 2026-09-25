@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -167,7 +167,7 @@ class ProductTemplate(BaseModel):
     additional_arrangements: list[TemplateArrangement] = Field(default_factory=list)
     # Server-owned claim-type vocabulary for explicit SoB limit mapping. Filled
     # by the tenant-scoped template endpoint; static template files omit it.
-    claim_scopes: list[dict[str, str | None]] = Field(default_factory=list)
+    claim_scopes: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _fill_profile_defaults(self) -> ProductTemplate:

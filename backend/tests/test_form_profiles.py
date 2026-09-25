@@ -210,9 +210,12 @@ def test_merge_overlay_uses_file_sob_when_slip_under_extracts() -> None:
     assert {"boolean", "copay"} <= {b.kind for b in merged.benefit_items}
 
 
-def test_merge_overlay_dental_keeps_column_axis_structure() -> None:
-    # Dental flattens to one column when parsed; the column-axis template wins so
-    # Panel/Non-Panel is preserved even if the slip yielded more raw lines.
+def test_merge_overlay_dental_price_list_drives_structure() -> None:
+    # A dental slip that prints its own procedure price list (CDL: 39 priced
+    # procedures) is richer than the curated template. Overlaying its values
+    # onto the template's 7 rows by number shifted every amount one procedure,
+    # so the slip's lines drive and the Panel/Non-Panel axis (one value per
+    # plan per procedure on such a slip) is dropped.
     file_tpl = get_template("GD")
     assert file_tpl is not None and file_tpl.column_axis == ["Panel", "Non-Panel"]
     synth = ProductTemplate(
@@ -223,8 +226,23 @@ def test_merge_overlay_dental_keeps_column_axis_structure() -> None:
         ],
     )
     merged = merge_file_overlay(synth, file_tpl)
+    assert merged.column_axis == []
+    assert [b.name for b in merged.benefit_items][:2] == ["Proc 1", "Proc 2"]
+
+
+def test_merge_overlay_dental_thin_slip_keeps_column_axis_template() -> None:
+    # A slip that under-extracts (fewer lines than the template) still falls
+    # back to the curated structure with its Panel/Non-Panel axis.
+    file_tpl = get_template("GD")
+    assert file_tpl is not None
+    synth = ProductTemplate(
+        code="GD", version=99, display_name="synth", form_profile="dental",
+        plans=[TemplatePlan(code="1", label="Plan 1")],
+        benefit_items=[TemplateBenefitItem(number="1", name="Examination")],
+    )
+    merged = merge_file_overlay(synth, file_tpl)
     assert merged.column_axis == ["Panel", "Non-Panel"]
-    assert len(merged.benefit_items) == len(file_tpl.benefit_items)  # template wins
+    assert len(merged.benefit_items) == len(file_tpl.benefit_items)
 
 
 def test_merge_overlay_uses_file_benefit_lines_when_slip_has_none() -> None:

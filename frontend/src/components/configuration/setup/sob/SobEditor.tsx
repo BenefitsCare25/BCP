@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useMemo, useState } from "react";
-import { AlertTriangle, ListOrdered, Plus, Search, Settings2, X } from "lucide-react";
+import { AlertTriangle, EyeOff, ListOrdered, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { ClaimLimitScope, PlanAnswer, SobSchedule } from "@/types";
+import type { PlanAnswer, SobSchedule } from "@/types";
 import {
   addColumn,
   addItem,
@@ -12,20 +12,18 @@ import {
   setColumnLabel,
   unassignedColumns,
 } from "@/lib/sob";
+import { memberVisibility, rowIssues } from "@/lib/sobAttention";
 import { ColumnManager } from "./ColumnManager";
 import { SobRow } from "./SobRow";
 import { SobRowDetail } from "./SobRowDetail";
-import { ClaimLimitEditor } from "./ClaimLimitEditor";
 
 interface Props {
   sob: SobSchedule;
-  productCode: string;
   // Selected basis-of-cover plans (for the column → plan mapping + labels).
   plans: PlanAnswer[];
   // Optional second value axis (dental Panel/Non-Panel). When set, each row
   // carries an axis value PER benefit column rather than a single per-row value.
   columnAxis?: string[];
-  claimScopes?: ClaimLimitScope[];
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }
 
@@ -44,25 +42,35 @@ const FILTER_THRESHOLD = 12;
  */
 export function SobEditor({
   sob,
-  productCode,
   plans,
   columnAxis = [],
-  claimScopes = [],
   setSob,
 }: Props) {
   const [showColumns, setShowColumns] = useState(false);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [attentionOnly, setAttentionOnly] = useState(false);
   const columns = sob.columns;
   const usesAxis = columnAxis.length > 0;
 
   const unassigned = useMemo(() => unassignedColumns(sob), [sob]);
+  const issues = useMemo(() => rowIssues(sob.items, sob.columns), [sob.items, sob.columns]);
+  const hiddenReasons = useMemo(
+    () =>
+      new Map(
+        sob.items.map((item) => [item.uid, memberVisibility(item, sob.columns).reason ?? ""]),
+      ),
+    [sob.items, sob.columns],
+  );
+  const hiddenCount = [...hiddenReasons.values()].filter(Boolean).length;
+  const showAttention = attentionOnly && issues.size > 0;
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     // Index is carried alongside because every edit helper addresses rows by
     // their position in the unfiltered list.
-    const rows = sob.items.map((item, idx) => ({ item, idx }));
+    const all = sob.items.map((item, idx) => ({ item, idx }));
+    const rows = showAttention ? all.filter(({ item }) => issues.has(item.uid)) : all;
     if (!q) return rows;
     return rows.filter(
       ({ item }) =>
@@ -70,7 +78,7 @@ export function SobEditor({
         item.number.toLowerCase().includes(q) ||
         (item.sub_items ?? []).some((s) => s.name.toLowerCase().includes(q)),
     );
-  }, [sob.items, query]);
+  }, [sob.items, query, showAttention, issues]);
 
   // Stable identity: `SobRow` is memoised and `sob.columns` / unedited `item`
   // objects already survive an edit by reference, so this callback is the only
@@ -135,10 +143,31 @@ export function SobEditor({
         )}
 
         <span className="text-2xs text-muted-foreground">
-          {query
+          {query || showAttention
             ? `${visible.length} of ${sob.items.length} benefits`
             : `${sob.items.length} benefit${sob.items.length === 1 ? "" : "s"}`}
         </span>
+
+        {issues.size > 0 && (
+          <Button
+            size="sm"
+            variant={showAttention ? "default" : "outline"}
+            aria-pressed={showAttention}
+            onClick={() => setAttentionOnly((on) => !on)}
+            title="Rows that probably need a decision before you confirm"
+          >
+            <AlertTriangle className="size-3.5" />
+            {issues.size} need{issues.size === 1 ? "s" : ""} attention
+          </Button>
+        )}
+        {hiddenCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-2xs text-muted-foreground"
+            title="Rows where every plan says NA or Not covered, and insurer admin rows. The employee portal leaves them out."
+          >
+            <EyeOff className="size-3" /> {hiddenCount} hidden from employees
+          </span>
+        )}
 
         <Button
           size="sm"
@@ -184,16 +213,6 @@ export function SobEditor({
         />
       )}
 
-      {claimScopes.length > 0 && (
-        <ClaimLimitEditor
-          sob={sob}
-          plans={plans}
-          productCode={productCode}
-          claimScopes={claimScopes}
-          setSob={setSob}
-        />
-      )}
-
       <div className="overflow-x-auto rounded-md border border-border">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-20 bg-muted">
@@ -226,7 +245,9 @@ export function SobEditor({
                   colSpan={valueColCount + 2}
                   className="px-3 py-6 text-center text-xs text-muted-foreground"
                 >
-                  No benefit matches “{query}”.
+                  {showAttention && !query
+                    ? "Nothing left to review."
+                    : `No benefit matches “${query}”.`}
                 </td>
               </tr>
             ) : (
@@ -238,7 +259,9 @@ export function SobEditor({
                     columns={columns}
                     axis={columnAxis}
                     rowCount={sob.items.length}
-                    reorderable={!query.trim()}
+                    reorderable={!query.trim() && !showAttention}
+                    issues={issues.get(item.uid)?.join(" · ")}
+                    hiddenReason={hiddenReasons.get(item.uid)}
                     expanded={expanded.has(item.uid)}
                     onToggle={toggle}
                     setSob={setSob}
@@ -251,6 +274,7 @@ export function SobEditor({
                       axis={columnAxis}
                       colSpan={valueColCount + 2}
                       setSob={setSob}
+                      issues={issues.get(item.uid)}
                     />
                   )}
                 </Fragment>

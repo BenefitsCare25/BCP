@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services.member_schedule import is_absent_value
+
 LIMIT_BASIS_POLICY_YEAR = "policy_year"
 LIMIT_BASIS_LIFETIME = "lifetime"
 LIMIT_BASIS_PER_VISIT = "per_visit"
@@ -24,9 +26,17 @@ LIMIT_BASIS_PER_DAY = "per_day"
 LIMIT_BASIS_PERCENTAGE = "percentage"
 LIMIT_BASIS_AS_CHARGED = "as_charged"
 LIMIT_BASIS_INFORMATIONAL = "informational"
+# A COUNT of visits per policy year (``amount`` holds the count). Tracked and
+# guarded like the annual SGD balance: every claim against the row is a visit.
+LIMIT_BASIS_VISITS_PER_YEAR = "visits_per_year"
+# Money per disability/admission. Shown to members and assessors; never a
+# running balance, because claims aren't grouped by disability.
+LIMIT_BASIS_PER_DISABILITY = "per_disability"
 LIMIT_BASES = frozenset(
     {
         LIMIT_BASIS_POLICY_YEAR,
+        LIMIT_BASIS_VISITS_PER_YEAR,
+        LIMIT_BASIS_PER_DISABILITY,
         LIMIT_BASIS_LIFETIME,
         LIMIT_BASIS_PER_VISIT,
         LIMIT_BASIS_PER_DAY,
@@ -48,6 +58,8 @@ _MONETARY_CONTEXT_RE = re.compile(r"\$|\bsgd\b|\bdollars?\b", re.I)
 _PER_VISIT_RE = re.compile(r"(?:/|\bper\s+)(?:visit|consult(?:ation)?)\b", re.I)
 _PER_DAY_RE = re.compile(r"(?:/|\bper\s+)(?:day|night)\b|\bdaily\b", re.I)
 _PER_YEAR_RE = re.compile(r"\bper\s+(?:policy\s+)?year\b|\bper\s+annum\b|/year\b", re.I)
+_VISIT_COUNT_RE = re.compile(r"\b(\d{1,3})\s*visits?\b", re.I)
+_PER_DISABILITY_RE = re.compile(r"\bper\s+(?:disability|admission)\b", re.I)
 
 
 def parse_limit_amount(value: Any) -> float | None:
@@ -73,7 +85,7 @@ def has_monetary_context(value: Any) -> bool:
 def infer_limit_basis(value: Any) -> str | None:
     """Classify obvious SoB limit wording for a broker-review suggestion."""
     text = " ".join(str(value or "").split())
-    if not text or text.casefold() == "not covered":
+    if is_absent_value(text):
         return None
     folded = text.casefold()
     if "as charged" in folded:
@@ -86,6 +98,10 @@ def infer_limit_basis(value: Any) -> str | None:
         return LIMIT_BASIS_PER_VISIT
     if "lifetime" in folded:
         return LIMIT_BASIS_LIFETIME
+    if _VISIT_COUNT_RE.search(text) and not has_monetary_context(text):
+        return LIMIT_BASIS_VISITS_PER_YEAR
+    if _PER_DISABILITY_RE.search(text):
+        return LIMIT_BASIS_PER_DISABILITY
     if _PER_YEAR_RE.search(text):
         return LIMIT_BASIS_POLICY_YEAR
     # A bare monetary amount historically behaved as an annual allowance. Keep
@@ -107,9 +123,15 @@ def suggested_limit_setting(
     if basis is None:
         return None
     text = " ".join(str(display or "").split()) or None
+    amount: float | None = None
+    if basis == LIMIT_BASIS_POLICY_YEAR:
+        amount = parse_limit_amount(text)
+    elif basis == LIMIT_BASIS_VISITS_PER_YEAR:
+        match = _VISIT_COUNT_RE.search(text or "")
+        amount = float(match.group(1)) if match else None
     return {
         "basis": basis,
-        "amount": (parse_limit_amount(text) if basis == LIMIT_BASIS_POLICY_YEAR else None),
+        "amount": amount,
         "currency": "SGD",
         "display": text,
         "claim_scope_codes": list(dict.fromkeys(claim_scope_codes or [])),
@@ -132,7 +154,7 @@ def suggested_structured_policy_year_setting(
     without an explicit broker edit.
     """
     text = " ".join(str(value or "").split())
-    if not text or text.casefold() in {"na", "n/a", "not applicable", "not covered"}:
+    if is_absent_value(text):
         return None
     display = text if _PER_YEAR_RE.search(text) else f"{text} per policy year"
     if has_monetary_context(text) or "as charged" in text.casefold():
@@ -148,34 +170,72 @@ def suggested_structured_policy_year_setting(
     }
 
 
-def suggested_scope_codes(product_code: str | None, row_name: Any) -> list[str]:
-    """Conservative claim-type suggestions for recognizable benefit rows."""
+# Which claim type a benefit row most likely funds, by row-name terms. DATA,
+# not code, because the broker editor needs the same rules: they ride to it on
+# the setup template (`claim_scope_match_terms`), so the suggestion a broker sees
+# and the one seeded at import can never disagree. A term joined with "+" needs
+# every part ("pre+post+hospital"). Families are checked in order; the first
+# matching scope wins.
+_SCOPE_FAMILIES: dict[str, frozenset[str]] = {
+    "gp": frozenset({"GP", "GCGP", "GOGP"}),
+    "sp": frozenset({"SP", "GCSP", "GOSP"}),
+    "dental": frozenset({"GD", "DENTAL"}),
+    "hospital": frozenset({"GHS", "GHS2", "IMP"}),
+}
+_SCOPE_MATCH_TERMS: dict[str, dict[str, tuple[str, ...]]] = {
+    "gp": {
+        "gp_tcm": ("tcm", "traditional chinese", "chinese physician"),
+        "gp_physiotherapy": ("physio",),
+        "standard": ("general practitioner", "outpatient gp", "gp consult"),
+    },
+    "sp": {"standard": ("specialist", "consultation")},
+    "dental": {"standard": ("dental",)},
+    "hospital": {
+        "ghs_pre_post": ("pre+post+hospital",),
+        "ghs_dialysis_cancer": ("dialysis", "cancer treatment"),
+        "ghs_emergency_outpatient": ("emergency", "a&e", "accidental outpatient"),
+        "ghs_hospitalisation": ("hospitalisation", "hospitalization", "day surgery"),
+    },
+}
+# Rows that name a claim type's words but are a different benefit: "Overseas
+# Hospitalisation due to accidental causes" is not the hospitalisation claim
+# type's balance, and a funeral benefit is never member-claimed.
+_SCOPE_EXCLUDE_TERMS: dict[str, tuple[str, ...]] = {
+    "hospital": ("overseas", "funeral", "death"),
+}
+
+
+def _scope_family(product_code: str | None) -> str | None:
     code = str(product_code or "").strip().upper()
+    return next((family for family, codes in _SCOPE_FAMILIES.items() if code in codes), None)
+
+
+def _term_matches(term: str, name: str) -> bool:
+    return all(part in name for part in term.split("+"))
+
+
+def claim_scope_match_terms(product_code: str | None) -> tuple[dict[str, list[str]], list[str]]:
+    """``({scope_code: terms}, exclude_terms)`` for a product, for the editor."""
+    family = _scope_family(product_code)
+    if family is None:
+        return {}, []
+    return (
+        {code: list(terms) for code, terms in _SCOPE_MATCH_TERMS[family].items()},
+        list(_SCOPE_EXCLUDE_TERMS.get(family, ())),
+    )
+
+
+def suggested_scope_codes(product_code: str | None, row_name: Any) -> list[str]:
+    """Conservative claim-type suggestion for a recognizable benefit row."""
     name = " ".join(str(row_name or "").split()).casefold()
-    if not name:
+    family = _scope_family(product_code)
+    if not name or family is None:
         return []
-    if code in {"GP", "GCGP", "GOGP"}:
-        if any(word in name for word in ("tcm", "traditional chinese", "chinese physician")):
-            return ["gp_tcm"]
-        if "physio" in name:
-            return ["gp_physiotherapy"]
-        if any(word in name for word in ("general practitioner", "outpatient gp", "gp consult")):
-            return ["standard"]
-    if code in {"SP", "GCSP", "GOSP"} and any(
-        word in name for word in ("specialist", "consultation")
-    ):
-        return ["standard"]
-    if code in {"GD", "DENTAL"} and "dental" in name:
-        return ["standard"]
-    if code in {"GHS", "GHS2", "IMP"}:
-        if "pre" in name and "post" in name and "hospital" in name:
-            return ["ghs_pre_post"]
-        if any(word in name for word in ("dialysis", "cancer treatment")):
-            return ["ghs_dialysis_cancer"]
-        if any(word in name for word in ("emergency", "a&e", "accidental outpatient")):
-            return ["ghs_emergency_outpatient"]
-        if any(word in name for word in ("hospitalisation", "hospitalization", "day surgery")):
-            return ["ghs_hospitalisation"]
+    if any(term in name for term in _SCOPE_EXCLUDE_TERMS.get(family, ())):
+        return []
+    for scope, terms in _SCOPE_MATCH_TERMS[family].items():
+        if any(_term_matches(term, name) for term in terms):
+            return [scope]
     return []
 
 
@@ -237,6 +297,22 @@ def enforceable_policy_year_amount(setting: Any) -> float | None:
     return float(amount) if amount is not None and float(amount) > 0 else None
 
 
+def enforceable_visit_limit(setting: Any) -> int | None:
+    """Verified visits-per-year count, or ``None`` (same fail-closed rule as
+    ``enforceable_policy_year_amount``)."""
+    normalized = normalize_limit_setting(setting)
+    if (
+        normalized is None
+        or normalized["basis"] != LIMIT_BASIS_VISITS_PER_YEAR
+        or normalized["status"] != LIMIT_STATUS_VERIFIED
+    ):
+        return None
+    amount = normalized.get("amount")
+    if amount is None or float(amount) < 1 or float(amount) != int(float(amount)):
+        return None
+    return int(float(amount))
+
+
 def setting_display(setting: Any, fallback: Any = None) -> str | None:
     normalized = normalize_limit_setting(setting, fallback_display=fallback)
     if normalized is None:
@@ -252,6 +328,9 @@ def setting_display(setting: Any, fallback: Any = None) -> str | None:
         and amount is not None
     ):
         return f"SGD {float(amount):,.2f} per policy year"
+    if normalized["basis"] == LIMIT_BASIS_VISITS_PER_YEAR and amount is not None:
+        count = int(float(amount))
+        return f"{count} visit{'' if count == 1 else 's'} per policy year"
     if normalized.get("display"):
         return str(normalized["display"])
     if amount is not None:
@@ -263,6 +342,7 @@ def setting_display(setting: Any, fallback: Any = None) -> str | None:
             LIMIT_BASIS_LIFETIME: "lifetime",
             LIMIT_BASIS_PER_VISIT: "per visit",
             LIMIT_BASIS_PER_DAY: "per day",
+            LIMIT_BASIS_PER_DISABILITY: "per disability",
         }.get(normalized["basis"])
         if suffix:
             return f"{normalized['currency']} {numeric_amount:,.2f} {suffix}"
@@ -285,12 +365,7 @@ def item_source_wording(item: dict[str, Any]) -> str | None:
         properties.get("per_policy_year") if isinstance(properties, dict) else None
     )
     policy_year = " ".join(str(raw_policy_year or "").split())
-    if policy_year and policy_year.casefold() not in {
-        "na",
-        "n/a",
-        "not applicable",
-        "not covered",
-    }:
+    if not is_absent_value(policy_year):
         return policy_year if _PER_YEAR_RE.search(policy_year) else f"{policy_year} per policy year"
     value = " ".join(str(item.get("value") or "").split())
     return value or None
@@ -398,6 +473,17 @@ def validate_schedule_limits(
                 and enforceable_policy_year_amount(setting) is None
             ):
                 errors.append(f"{name}: policy-year limit needs an amount greater than zero.")
+        if setting["basis"] == LIMIT_BASIS_VISITS_PER_YEAR:
+            if setting["status"] == LIMIT_STATUS_NEEDS_REVIEW:
+                errors.append(
+                    f"{name}: detected visit limit still needs review. "
+                    "Confirm the number of visits or mark it informational."
+                )
+            elif (
+                setting["status"] == LIMIT_STATUS_VERIFIED
+                and enforceable_visit_limit(setting) is None
+            ):
+                errors.append(f"{name}: visit limit needs a whole number of visits.")
         for scope in setting["claim_scope_codes"]:
             if scope not in valid_scope_codes:
                 errors.append(f"{name}: unknown claim type '{scope}'.")

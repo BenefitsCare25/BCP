@@ -6,7 +6,8 @@ import { actionClass } from "./Action";
 import { FlexMount } from "./FlexMount";
 import { Mount, MountRule, glassHover, glassSurface } from "./Mount";
 import { ScheduleLeaf } from "./ScheduleLeaf";
-import { buildCareRoutes, careFacts, type CareRoute } from "./careRoutes";
+import { buildCareRoutes, type CareRoute } from "./careRoutes";
+import { careFacts } from "./careFacts";
 import { productShortLabel } from "./glossary";
 import { isEmployeeLine } from "../memberVisibility";
 
@@ -47,20 +48,34 @@ function PlanDetail({ line, routeKey, person }: {
   routeKey: string;
   person: DependantSummary | null;
 }) {
-  const facts = careFacts(line, routeKey);
   const code = line.product_code.trim().toUpperCase();
   const additionalMedical = code === "GMM" || code === "GMM2";
   const label = additionalMedical
-    ? "Additional major medical cover"
+    ? "Extra cover after your hospital plan"
     : productShortLabel(line.product_code, line.product_name);
 
+  // The broker hasn't confirmed this plan yet, so nothing it says is
+  // published. The cover still exists, so the member is told it's coming
+  // rather than shown nothing.
+  if (line.published === false) {
+    return (
+      <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
+        <p className="text-row text-label">
+          Your plan details are being checked and will appear here once they're confirmed.
+          Your HR team can help in the meantime.
+        </p>
+      </Mount>
+    );
+  }
+
+  const facts = careFacts(line, routeKey);
   return (
     <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
       <p className="text-row text-label">
         Covered person: <span className="font-medium text-record">{person ? dependantName(person) : "You"}</span>
       </p>
       {additionalMedical && (
-        <p className="text-row text-label">This plan has its own conditions and limits. Check them alongside your hospital plan.</p>
+        <p className="text-row text-label">Pays for bigger hospital bills once your hospital plan's limits are used. It has its own conditions, listed below.</p>
       )}
       {facts.length > 0 ? (
         <>
@@ -85,7 +100,7 @@ function PlanDetail({ line, routeKey, person }: {
       <MountRule />
       <details className="group">
         <summary className="leaf-focus flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-row font-semibold text-record [&::-webkit-details-marker]:hidden">
-          Full benefit schedule
+          {routeKey === "dental" ? "Treatment price list and full details" : "Full benefit schedule"}
           <ChevronDown className="size-4 shrink-0 text-label transition-transform group-open:rotate-180" aria-hidden />
         </summary>
         <div className="pt-2"><ScheduleLeaf schedule={line.benefit_schedule} allRows /></div>

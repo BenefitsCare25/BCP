@@ -138,6 +138,7 @@ def _statement(employee) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",

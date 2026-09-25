@@ -84,6 +84,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",
@@ -107,6 +108,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
                 covered_dependants=[covered],
             ),
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GCGP",
                 product_name="Group Clinical GP",
                 plan_code="P1",
@@ -121,6 +123,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
             # Held by the member but NOT member-filed (`member_claimable=False`).
             # An assessor must still be able to record a LOG case against it.
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GMM",
                 product_name="Group Major Medical",
                 plan_code="P1",

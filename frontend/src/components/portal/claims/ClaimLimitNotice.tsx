@@ -20,6 +20,9 @@ function LimitRow({
   currency: string;
 }) {
   const hasComputedLimit = row.limit !== null && row.remaining !== null;
+  if (row.visitLimit != null && row.visitsRemaining != null) {
+    return <VisitRow row={row} />;
+  }
   const available = availableAfterPending(
     row.remaining,
     row.pending,
@@ -75,6 +78,34 @@ function LimitRow({
         <p className="mt-0.5 text-2xs text-label">
           {CLAIM_LIMIT_BASIS_LABELS[row.limitBasis]} condition; this is policy wording,
           not a yearly balance.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A visits-per-year cap: a count, advisory like the money balance. */
+function VisitRow({ row }: { row: NewClaimForm["limitRows"][number] }) {
+  const cap = row.visitLimit ?? 0;
+  const left = row.visitsRemaining ?? 0;
+  const pending = row.visitsPending ?? 0;
+  return (
+    <div className="border-t border-hairline pt-2 first:border-t-0 first:pt-0">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <span className="text-row text-label">{row.label}</span>
+        <span className="text-row font-semibold text-record">
+          {left} of {cap} visit{cap === 1 ? "" : "s"} left
+        </span>
+      </div>
+      {pending > 0 && (
+        <p className="mt-0.5 text-2xs text-label">
+          {pending} more {pending === 1 ? "visit is" : "visits are"} submitted and not settled yet.
+        </p>
+      )}
+      {left - pending <= 0 && (
+        <p className="mt-0.5 text-2xs text-warn">
+          You may have used every visit this benefit allows this policy year. You can still
+          submit; your claim will be assessed against the plan.
         </p>
       )}
     </div>

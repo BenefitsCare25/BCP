@@ -314,6 +314,18 @@ def merge_file_overlay(
         and not file_tpl.column_axis
         and not any(bi.kind in _CURATED_SOB_KINDS for bi in file_tpl.benefit_items)
     )
+    # A dental slip that prints its own procedure PRICE LIST (CDL: 39 priced
+    # procedures, panel/non-panel stated once for the whole table) is richer
+    # than the curated 7-row template, and overlaying its values onto the
+    # template's rows by number put every amount one procedure off. Its lines
+    # drive, and the Panel/Non-Panel axis is dropped because the slip states
+    # one value per plan per procedure.
+    slip_price_list = (
+        bool(file_tpl.column_axis)
+        and len(base.benefit_items) > len(file_tpl.benefit_items)
+    )
+    if slip_price_list:
+        prefer_slip_sob = True
     if prefer_slip_sob:
         benefit_items = [
             bi.model_copy(update={"kind": kinds.get(bi.number, bi.kind)})
@@ -337,7 +349,7 @@ def merge_file_overlay(
         form_profile=file_tpl.form_profile,
         basis_model=file_tpl.basis_model,
         rate_model=file_tpl.rate_model,
-        column_axis=list(file_tpl.column_axis),
+        column_axis=[] if slip_price_list else list(file_tpl.column_axis),
         header_fields=[f.model_copy() for f in file_tpl.header_fields],
         eligibility_fields=[f.model_copy() for f in file_tpl.eligibility_fields],
         plans=[p.model_copy() for p in (base.plans or file_tpl.plans)],

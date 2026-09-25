@@ -61,6 +61,7 @@ from app.services.benefit_key_guard import (
 from app.services.category_factory import build_manual_category
 from app.services.claim_intake import claim_scope_catalog
 from app.services.claim_limits import (
+    claim_scope_match_terms,
     enforceable_policy_year_amount,
     normalize_limit_setting,
     product_setting,
@@ -441,10 +442,26 @@ def get_setup_template(
             f"No template or slip data for product {product_code!r}",
         )
     scopes = claim_scope_catalog(tpl.code, tpl.display_name or tpl.code)
+    match_terms, exclude_terms = claim_scope_match_terms(tpl.code)
     return tpl.model_copy(
         update={
             "claim_scopes": [
-                {"code": scope.code, "label": scope.label, "sub_type": scope.sub_type}
+                {
+                    "code": scope.code,
+                    "label": scope.label,
+                    "sub_type": scope.sub_type,
+                    # The import-time suggestion rules, so the editor's
+                    # "Suggested" marks agree with what was seeded.
+                    "match_terms": match_terms.get(scope.code, []),
+                    # Backend check order (first match wins); the catalog
+                    # order above is display order and differs from it.
+                    "match_priority": (
+                        list(match_terms).index(scope.code)
+                        if scope.code in match_terms
+                        else None
+                    ),
+                    "exclude_terms": exclude_terms,
+                }
                 for scope in scopes
             ]
         }
@@ -1407,6 +1424,8 @@ def _benefit_schedule(answers: dict[str, Any], plan: dict[str, Any]) -> dict[str
             }
             if raw_claim_limit is not None:
                 projected["claim_limit"] = normalized_claim_limit or raw_claim_limit
+            if isinstance(it.get("member_hidden"), bool):
+                projected["member_hidden"] = it["member_hidden"]
             items.append(projected)
     schedule: dict[str, Any] = {"items": items}
     if isinstance(sob, dict):

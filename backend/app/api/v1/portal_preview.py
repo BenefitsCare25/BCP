@@ -59,11 +59,10 @@ from app.services.member_enquiries import enquiry_out, load_member_enquiry
 from app.services.member_statement import (
     build_member_statement,
     member_visible_statement,
-    member_visible_utilization,
 )
 from app.services.panel_cards import build_member_cards
 from app.services.panel_clinics import search_policy_year_clinics
-from app.services.utilization import build_utilization
+from app.services.utilization import build_member_utilization
 
 router = APIRouter(
     prefix="/employees/{employee_id}/portal-preview",
@@ -139,7 +138,7 @@ def portal_preview_utilization(
     employee: Employee = Depends(load_employee),
     db: Session = Depends(get_db),
 ) -> UtilizationOut:
-    return member_visible_utilization(build_utilization(db, employee))
+    return build_member_utilization(db, employee)
 
 
 @router.get("/coverage-options", response_model=CoverageOptionsOut)

@@ -190,6 +190,7 @@ def hydrate_plans(
             benefit_schedule = None
             cover_description = None
             annual_policy_limit = None
+            plan_status = None
             if prod_id:
                 if plan_code:
                     # Names a specific plan: resolve it exactly. If it's missing
@@ -203,6 +204,7 @@ def hydrate_plans(
                     benefit_schedule = plan_rec.benefit_schedule
                     cover_description = plan_rec.cover_description
                     annual_policy_limit = plan_rec.annual_policy_limit
+                    plan_status = plan_rec.status
 
             matched.append(MatchedPlan(
                 product_code=pcode or m.get("product_code", "?"),
@@ -216,6 +218,7 @@ def hydrate_plans(
                 benefit_schedule=benefit_schedule,
                 cover_description=cover_description,
                 annual_policy_limit=annual_policy_limit,
+                plan_status=plan_status,
                 plan_overridden=resolved.overridden,
                 override_source=resolved.override_source,
                 covered_dependant_ids=resolved.covered_dependant_ids,

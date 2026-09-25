@@ -1,8 +1,10 @@
 import { memo } from "react";
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  EyeOff,
   ListTree,
   StickyNote,
   Tags,
@@ -16,6 +18,8 @@ import {
   axisValue,
   benefitNumberLabel,
   cellValue,
+  copayFields,
+  copayValue,
   isOverridden,
   moveItem,
   pasteColumn,
@@ -24,7 +28,41 @@ import {
   setItemField,
   storedBenefitNumber,
 } from "@/lib/sob";
+import { isAbsentValue } from "@/lib/sobValues";
 import { SobCell } from "./SobCell";
+
+// Short labels so a copay group's three figures fit one table cell.
+const COPAY_SHORT: Record<string, string> = {
+  per_visit: "Visit",
+  co_payment: "Co-pay",
+  per_policy_year: "Year",
+};
+
+function copayShort(key: string, label: string): string {
+  if (COPAY_SHORT[key]) return COPAY_SHORT[key];
+  return label.replace(/^per visit\s*[—–-]\s*/i, "Visit ").replace(/^co-?payment\s*[—–-]\s*/i, "Co-pay ");
+}
+
+/** A copay group's values for one plan column, read-only: edit in details. */
+function CopaySummary({ item, columnId }: { item: SobItemAnswer; columnId: string }) {
+  const parts = copayFields(item)
+    .map((field) => ({ field, value: copayValue(item, columnId, field.key).trim() }))
+    .filter(({ value }) => value);
+  if (parts.length === 0) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span className="flex flex-wrap gap-x-2 gap-y-0.5">
+      {parts.map(({ field, value }) => (
+        <span
+          key={field.key}
+          className={isAbsentValue(value) ? "text-muted-foreground/70" : "text-foreground"}
+        >
+          <span className="text-muted-foreground">{copayShort(field.key, field.label)}</span>{" "}
+          {value}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 interface Props {
   item: SobItemAnswer;
@@ -47,6 +85,10 @@ interface Props {
    */
   onToggle: (uid: string) => void;
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
+  /** Review problems, joined — a primitive so `memo` survives re-renders. */
+  issues?: string;
+  /** Why employees won't see this row, or empty when they will. */
+  hiddenReason?: string;
 }
 
 /**
@@ -67,6 +109,8 @@ export const SobRow = memo(function SobRow({
   expanded,
   onToggle,
   setSob,
+  issues = "",
+  hiddenReason = "",
 }: Props) {
   const kind = item.kind ?? "amount";
   const isListLike = kind === "list" || kind === "scale";
@@ -76,7 +120,12 @@ export const SobRow = memo(function SobRow({
   const subCount = item.sub_items?.length ?? 0;
 
   return (
-    <tr className="group/row border-b border-border last:border-0 hover:bg-muted/20">
+    <tr
+      className={cn(
+        "group/row border-b border-border last:border-0 hover:bg-muted/20",
+        hiddenReason && "opacity-70",
+      )}
+    >
       <td className="sticky left-0 z-10 bg-card px-2 py-1 align-middle">
         <div className="flex items-center gap-1.5">
           <button
@@ -118,6 +167,16 @@ export const SobRow = memo(function SobRow({
             className="h-7 min-w-40 text-sm"
           />
           <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            {issues && (
+              <span title={issues} aria-label={`Needs attention: ${issues}`} className="text-warn">
+                <AlertTriangle className="size-3.5" />
+              </span>
+            )}
+            {hiddenReason && (
+              <span title={hiddenReason} aria-label={hiddenReason}>
+                <EyeOff className="size-3.5" />
+              </span>
+            )}
             {noteCount > 0 && (
               <span title={item.note ?? ""} aria-label="Has a footnote">
                 <StickyNote className="size-3" />
@@ -162,12 +221,21 @@ export const SobRow = memo(function SobRow({
           in details
         </td>
       ) : kind === "copay" ? (
-        <td
-          colSpan={columns.length}
-          className="px-3 py-1 text-xs italic text-muted-foreground"
-        >
-          Per-visit / co-payment values — edit in details
-        </td>
+        // One cell per plan column, like every other row: the figures are the
+        // point of an outpatient group, so they must be readable without
+        // opening each row. Editing stays in details (several fields per cell).
+        columns.map((col) => (
+          <td key={col.id} className="px-2 py-1 text-xs">
+            <button
+              type="button"
+              onClick={() => onToggle(item.uid)}
+              className="w-full rounded px-1 py-0.5 text-left hover:bg-muted"
+              aria-label={`Edit ${item.name || "benefit"} values for ${col.label}`}
+            >
+              <CopaySummary item={item} columnId={col.id} />
+            </button>
+          </td>
+        ))
       ) : (
         columns.map((col, ci) => {
           const overridden = ci > 0 && isOverridden(item, col.id);

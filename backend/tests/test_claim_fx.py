@@ -76,6 +76,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 product_name="Group Hospital & Surgical",
                 plan_code="P1",
@@ -101,6 +102,7 @@ def _statement_for(employee: Employee) -> BenefitStatementOut:
         ],
         dependants=[],
         flex=FlexCoverageLine(
+            plan_status="confirmed",
             tier_name="Tier 1",
             wallet_amount=1000.0,
             currency="SGD",

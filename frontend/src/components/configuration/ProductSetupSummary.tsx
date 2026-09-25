@@ -16,9 +16,9 @@ import type {
 } from "@/types";
 import { selectedMemberCover } from "./setup/memberEligibility";
 import {
-  CLAIM_LIMIT_BASIS_LABELS,
+  describeLimit,
   itemLimitForPlan,
-  isLiveAnnualLimit,
+  isLiveTrackedLimit,
 } from "@/lib/claimLimits";
 import {
   groupEmployeeCategories,
@@ -246,10 +246,7 @@ function LimitValue({ setting }: { setting: ClaimLimitSetting }) {
     <span className="text-xs text-foreground">
       {setting.status === "not_limit"
         ? "Not a limit"
-        : CLAIM_LIMIT_BASIS_LABELS[setting.basis]}
-      {setting.amount != null && setting.status !== "not_limit"
-        ? ` · SGD ${setting.amount.toLocaleString()}`
-        : ""}
+        : describeLimit(setting, setting.display).text}
     </span>
   );
 }
@@ -265,13 +262,13 @@ function LimitStatusBadge({ setting }: { setting: ClaimLimitSetting }) {
             : "warn"
       }
     >
-      {isLiveAnnualLimit(setting)
-        ? "Verified · live"
+      {isLiveTrackedLimit(setting)
+        ? "Tracked · live"
         : setting.status === "verified"
-          ? "Verified · policy wording"
+          ? "Condition"
         : setting.status === "not_limit"
-          ? "Informational · no balance"
-          : "Needs review · not live"}
+          ? "Wording only"
+          : "Needs review"}
     </Badge>
   );
 }

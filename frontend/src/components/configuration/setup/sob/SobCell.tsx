@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 import { NOT_COVERED, parsePastedColumn } from "@/lib/sob";
+import { isNotApplicable } from "@/lib/sobValues";
 
 const BOOLEAN_OPTIONS = ["YES", "NO", "NA"];
 
@@ -50,6 +51,10 @@ export function SobCell({
   ariaLabel,
 }: CellProps) {
   const notCovered = value === NOT_COVERED;
+  // "NA" stays editable (it is the slip's own wording) but reads as absent,
+  // because that is what the member portal does with it.
+  const notApplicable = isNotApplicable(value);
+  const naTitle = notApplicable ? "Not applicable — employees won't see this" : undefined;
   const { prefix, suffix } = affixes(kind);
 
   if (notCovered) {
@@ -74,7 +79,12 @@ export function SobCell({
         <Select value={value} onValueChange={onChange}>
           <SelectTrigger
             aria-label={ariaLabel}
-            className={cn("h-8 text-sm", overridden && "border-warn")}
+            title={naTitle}
+            className={cn(
+              "h-8 text-sm",
+              overridden && "border-warn",
+              notApplicable && "bg-muted/50 italic text-muted-foreground",
+            )}
           >
             <SelectValue placeholder="—" />
           </SelectTrigger>
@@ -95,6 +105,7 @@ export function SobCell({
           )}
           <Input
             aria-label={ariaLabel}
+            title={naTitle}
             value={value}
             onPaste={(e) => {
               if (!onPasteColumn) return;
@@ -120,6 +131,7 @@ export function SobCell({
               // An inherited cell is shown muted so it reads as "same as the
               // base column" rather than as a value someone typed here.
               inherited && !overridden && "text-muted-foreground",
+              notApplicable && "bg-muted/50 italic text-muted-foreground",
             )}
           />
           {suffix && (

@@ -76,6 +76,10 @@ export interface ClaimLimitRow {
   limitBasis: ClaimLimitBasis | null;
   limitStatus: ClaimLimitStatus | null;
   isEnforceable: boolean;
+  /** Verified visits-per-year cap on this row, when it has one. */
+  visitLimit?: number | null;
+  visitsRemaining?: number | null;
+  visitsPending?: number;
 }
 
 export function useNewClaimForm() {
@@ -355,6 +359,9 @@ export function useNewClaimForm() {
           limit_basis?: ClaimLimitBasis | null;
           limit_status?: ClaimLimitStatus | null;
           limit_is_enforceable?: boolean;
+          visit_limit?: number | null;
+          visits_remaining?: number | null;
+          visits_pending?: number;
         }
       | undefined,
   ): ClaimLimitRow | null => {
@@ -381,6 +388,9 @@ export function useNewClaimForm() {
           limitBasis: bucket.limit_basis ?? null,
           limitStatus: status,
           isEnforceable: bucket.limit_is_enforceable ?? bucket.limit !== null,
+          visitLimit: bucket.visit_limit ?? null,
+          visitsRemaining: bucket.visits_remaining ?? null,
+          visitsPending: bucket.visits_pending ?? 0,
         };
   };
 

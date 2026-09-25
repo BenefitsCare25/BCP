@@ -599,6 +599,7 @@ def test_member_statement_strips_financials_and_match_internals():
         is_matched=True,
         coverage=[
             CoverageLine(
+                plan_status="confirmed",
                 product_code="GHS",
                 plan_code="P1",
                 match_method="rule",

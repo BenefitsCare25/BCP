@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from app.services.excel_reader import Cell
@@ -167,6 +167,11 @@ def _is_stop_row(row: list[Cell]) -> bool:
     colon-terminated). That keeps a real benefit merely *starting* with the word
     (e.g. "Exclusions buy-back extension") from being mistaken for the end.
     """
+    # A section heading carries no figures. CDL's dental sheet has
+    # "Endorsements:" typed where a procedure name belongs, with its S$24 in the
+    # plan column; ending the schedule there dropped 40 procedures.
+    if any(isinstance(cell, (int, float)) and not isinstance(cell, bool) for cell in row[2:]):
+        return False
     col0 = _norm(row[0]) if row and _non_empty(row[0]) else ""
     col1 = _norm(row[1]) if len(row) > 1 and _non_empty(row[1]) else ""
     label = (col1 or col0).upper().strip()
@@ -982,6 +987,8 @@ def _parse_name_first_items(
     plan_col: int,
     all_plan_cols: list[int],
     name_col: int = 0,
+    *,
+    group_sections: bool = False,
 ) -> list[ExtractedBenefitItem]:
     """Parse SOB where the name column carries the benefit name directly.
 
@@ -995,8 +1002,17 @@ def _parse_name_first_items(
     benefit list with empty values, instead of vanishing. Continuation rows
     (name empty, a qualifier label in the next column, value optional) become
     sub-items or notes on the current benefit.
+
+    ``group_sections`` (procedure price lists such as CDL's dental sheet): a
+    valueless name row after a blank line heads the procedures below it, so
+    "Simple" under "Fracture of Jaw" becomes "Fracture of Jaw — Simple"; a
+    valueless row directly under a priced procedure describes it ("Dental
+    Checkup" under "Examination") and becomes its note. Off by default because
+    travel sheets use the same shape for "SECTION A:" banners.
     """
     label_col = name_col + 1
+    section = ""
+    after_blank = True
     items: list[ExtractedBenefitItem] = []
     current_name: str = ""
     current_value: str | None = None
@@ -1030,10 +1046,13 @@ def _parse_name_first_items(
             consec_blank += 1
             if consec_blank >= 4:
                 break
+            after_blank = True
+            section = ""
             continue
         consec_blank = 0
         if _is_stop_row(row):
             break
+        was_after_blank, after_blank = after_blank, False
 
         name_cell = _cell_text(row, name_col)
         label_cell = _cell_text(row, label_col)
@@ -1045,9 +1064,23 @@ def _parse_name_first_items(
         if name_cell:
             # A name row with NO value in any plan column is a section header.
             if not any_value:
+                if group_sections:
+                    if was_after_blank or not current_name:
+                        section = name_cell
+                    else:
+                        current_note = " ".join(
+                            p for p in (current_note, name_cell) if p
+                        ).strip() or None
                 continue
             _flush()
             current_name = name_cell
+            if (
+                group_sections
+                and section
+                and section.casefold() not in name_cell.casefold()
+                and name_cell.casefold() not in section.casefold()
+            ):
+                current_name = f"{section} — {name_cell}"
             current_value, current_note, current_na = _split_value_note(plan_cell)
             current_sub_items = []
         elif label_cell and current_name:
@@ -1071,6 +1104,106 @@ def _parse_name_first_items(
 
     _flush()
     return items
+
+
+_ANNUAL_LIMIT_OF = re.compile(
+    r"annual\s+limit\s+of\s+(?:S?\$|SGD)?\s*([\d,]+(?:\.\d+)?)", re.I
+)
+
+
+def _header_label(rows: list[list[Cell]], sob_idx: int, col: int) -> tuple[str, str | None]:
+    """A column's heading above the plan-code row, split into name and detail.
+
+    "Non-Panel Dentist / Maximum Amount per Visit (S$)" (two lines) → ("Non-Panel Dentist",
+    "Maximum Amount per Visit (S$)"). Looks at the two rows above the plan
+    codes, since slips put the heading either on or just above that row.
+    """
+    for i in (sob_idx, sob_idx - 1, sob_idx - 2):
+        if 0 <= i < len(rows) and col < len(rows[i] or []) and _non_empty(rows[i][col]):
+            text = str(rows[i][col]).strip()
+            if _PLAN_LABEL.match(_norm(rows[i][col])):
+                continue
+            first, _, rest = text.partition("\n")
+            detail = " ".join(rest.split())
+            if detail.startswith("(") and detail.endswith(")"):
+                detail = detail[1:-1].strip()
+            return " ".join(first.split()), detail or None
+    return "", None
+
+
+def _leading_basis_items(
+    rows: list[list[Cell]],
+    sob_idx: int,
+    data_start: int,
+    plan_cols: list[tuple[str, str, int]],
+    name_col: int,
+) -> tuple[dict[int, list[ExtractedBenefitItem]], dict[int, str]]:
+    """Plan-wide basis rows that sit between the plan header and the first
+    named benefit (CDL's dental sheet).
+
+    The row has NO benefit name: its cells state how every procedure below is
+    paid, and in the source workbook they are merged down the whole table.
+    Column 4 ("Panel Dentist — Cashless for all procedures") is not a plan
+    column at all, it applies to every plan; a plan column's own cell ("As
+    Charged up to Overall Annual Limit of $1,000") applies to that plan only.
+    Skipping the row lost both the panel basis and the only annual limit the
+    sheet states, leaving members a bare price list.
+
+    Returns ``{plan_col: [items]}`` plus ``{plan_col: annual limit}``. A plan
+    whose own basis cell is blank gets its column heading as the basis instead
+    of None: a blank would be read downstream as "same as the first plan" and
+    silently hand it that plan's annual limit.
+    """
+    plan_col_idx = {c for _, _, c in plan_cols}
+    first_plan_col = min(plan_col_idx) if plan_col_idx else 0
+    basis_row: list[Cell] | None = None
+    for i in range(sob_idx + 1, min(data_start + 1, len(rows))):
+        row = rows[i] or []
+        if _cell_text(row, name_col) or _cell_text(row, name_col + 1):
+            continue
+        if any(_non_empty(c) for c in row[name_col + 2:]):
+            basis_row = row
+            break
+    if basis_row is None:
+        return {}, {}
+
+    shared: list[tuple[str, str | None, str]] = []
+    for col in range(name_col + 2, first_plan_col):
+        if col < len(basis_row) and _non_empty(basis_row[col]):
+            name, detail = _header_label(rows, sob_idx, col)
+            if name:
+                shared.append((name, detail, _fmt_value(basis_row[col]) or ""))
+
+    own_heading = _header_label(rows, sob_idx, first_plan_col)
+    has_own = any(
+        c < len(basis_row) and _non_empty(basis_row[c]) for c in plan_col_idx
+    )
+    items_by_col: dict[int, list[ExtractedBenefitItem]] = {}
+    limits_by_col: dict[int, str] = {}
+    for _, _, col in plan_cols:
+        items = [
+            ExtractedBenefitItem(number="", name=name, value=value, note=detail)
+            for name, detail, value in shared
+        ]
+        if has_own and own_heading[0]:
+            own = _fmt_value(basis_row[col]) if col < len(basis_row) else None
+            _, detail = _header_label(rows, sob_idx, col)
+            items.append(ExtractedBenefitItem(
+                number="",
+                name=own_heading[0],
+                value=own or (
+                    "Up to the {} listed for each treatment".format(
+                        re.sub(r"\s*\(S\$\)", "", detail, flags=re.I).lower()
+                    )
+                    if detail else None
+                ),
+                note=None,
+            ))
+            match = _ANNUAL_LIMIT_OF.search(own or "")
+            if match:
+                limits_by_col[col] = match.group(1)
+        items_by_col[col] = items
+    return items_by_col, limits_by_col
 
 
 def _extract_plans_from_sheet(
@@ -1127,8 +1260,11 @@ def _extract_plans_from_sheet(
             source_row=sob_idx + 1,
         ),)
 
-    # Check for annual policy limit (appears between SOB header and first benefit)
-    annual_limit: str | None = None
+    # Annual policy limit row (between the SOB header and the first benefit).
+    # Read PER PLAN COLUMN: plans on one sheet routinely carry different
+    # limits, and taking the first non-empty cell for every plan handed the
+    # richest plan's limit to all of them.
+    annual_limits: dict[int, str] = {}
     for i in range(sob_idx + 1, data_start):
         row = rows[i] or []
         text = _row_text(row).upper()
@@ -1137,8 +1273,7 @@ def _extract_plans_from_sheet(
                 if col_idx < len(row) and _non_empty(row[col_idx]):
                     val = _fmt_value(row[col_idx])
                     if val:
-                        annual_limit = val
-                        break
+                        annual_limits[col_idx] = val
             break
 
     all_plan_cols = [c[2] for c in plan_cols]
@@ -1152,12 +1287,28 @@ def _extract_plans_from_sheet(
     # key-less, names-in-col1 layout that this misreads surfaces as needs_attention
     # and is correctable via the column-mapping fixer.
     key_col = roles.key_col if roles.key_col is not None else 0
+    basis_items: dict[int, list[ExtractedBenefitItem]] = {}
+    if roles.name_first:
+        basis_items, basis_limits = _leading_basis_items(
+            rows, sob_idx, data_start, plan_cols, roles.name_col
+        )
+        for limit_col, limit in basis_limits.items():
+            annual_limits.setdefault(limit_col, limit)
     plans: list[ExtractedPlan] = []
     for code, display_name, col_idx in plan_cols:
         if roles.name_first:
+            leading = basis_items.get(col_idx, [])
             items = _parse_name_first_items(
                 rows, data_start, col_idx, all_plan_cols, name_col=roles.name_col,
+                group_sections=bool(leading),
             )
+            if leading and items:
+                # Basis rows lead, then the procedures, numbered as one list:
+                # name-first rows are identified by position.
+                items = [
+                    replace(item, number=str(n))
+                    for n, item in enumerate([*leading, *items], start=1)
+                ]
         else:
             items = _parse_sob_items(
                 rows, data_start, col_idx,
@@ -1170,7 +1321,7 @@ def _extract_plans_from_sheet(
             code=code,
             display_name=display_name,
             cover_description=cover_desc,
-            annual_policy_limit=annual_limit,
+            annual_policy_limit=annual_limits.get(col_idx),
             items=tuple(items),
             source_row=sob_idx + 1,
             # The sheet's own column header, kept verbatim. A composite header

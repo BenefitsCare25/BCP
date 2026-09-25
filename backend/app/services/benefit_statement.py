@@ -363,6 +363,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             cover_description=mp.cover_description,
             annual_policy_limit=mp.annual_policy_limit,
             benefit_schedule=mp.benefit_schedule,
+            plan_status=mp.plan_status,
             financials=fin,
             covers_dependants=covers,
             covered_dependants=covered_deps,

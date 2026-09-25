@@ -68,11 +68,16 @@ from app.services.claim_intake import (
 from app.services.claim_limits import (
     configured_benefit_rows,
     enforceable_policy_year_amount,
+    enforceable_visit_limit,
     item_setting,
     product_setting,
     setting_display,
 )
-from app.services.member_statement import build_member_statement
+from app.services.member_statement import (
+    build_member_statement,
+    member_visible_utilization,
+    published_product_codes,
+)
 
 # In-flight claims that may still consume the limit. Defined on the model
 # (`models/claim.py`) beside the settled set it subtracts, and re-exported here
@@ -116,10 +121,25 @@ def _setting_fields(
         "limit_status": setting.get("status") if setting else None,
         "limit_is_enforceable": (
             enforceable_policy_year_amount(setting) is not None
+            or enforceable_visit_limit(setting) is not None
             if setting is not None
             else legacy_limit is not None
         ),
         "claim_scope_codes": list(setting.get("claim_scope_codes") or []) if setting else [],
+    }
+
+
+def _visit_fields(setting: dict[str, Any] | None, row: dict[str, Any]) -> dict[str, Any]:
+    """Visit-count usage for a bucket whose row carries a verified visit cap."""
+    cap = enforceable_visit_limit(setting) if setting is not None else None
+    if cap is None:
+        return {}
+    used = int(row.get("settled_count") or 0)
+    return {
+        "visit_limit": cap,
+        "visits_used": used,
+        "visits_pending": int(row.get("count") or 0) - used,
+        "visits_remaining": max(0, cap - used),
     }
 
 
@@ -153,7 +173,7 @@ def _bucket_sums(
     sums: dict[tuple[str | None, str | None], dict[str, Any]] = defaultdict(
         lambda: {
             "approved": 0.0, "pending": 0.0, "pending_unconverted": 0,
-            "count": 0, "claim_ids": [],
+            "count": 0, "settled_count": 0, "claim_ids": [],
         }
     )
 
@@ -161,6 +181,7 @@ def _bucket_sums(
         row = sums[key]
         row["count"] += 1
         if claim.status in SETTLED_STATUSES:
+            row["settled_count"] += 1
             row["approved"] += float(claim.amount_approved or 0.0)
         else:
             amount = _claim_amount(claim)
@@ -199,7 +220,7 @@ def _insured_buckets(
         seen_products.add(line.product_code)
         product_sum = sums.pop((line.product_code, None), None) or {
             "approved": 0.0, "pending": 0.0, "pending_unconverted": 0,
-            "count": 0, "claim_ids": [],
+            "count": 0, "settled_count": 0, "claim_ids": [],
         }
         schedule = line.benefit_schedule or {}
         has_product_setting = isinstance(schedule, dict) and "claim_limit" in schedule
@@ -272,6 +293,7 @@ def _insured_buckets(
                 "pending": 0.0,
                 "pending_unconverted": 0,
                 "count": 0,
+                "settled_count": 0,
                 "claim_ids": [],
             }
             item = item_by_name.get(key.lower()) or {}
@@ -311,6 +333,7 @@ def _insured_buckets(
                         if configured_item is not None
                         else _limit_unparsed(item_limit, item_display)
                     ),
+                    **_visit_fields(configured_item, row),
                     **_setting_fields(configured_item, legacy_limit=item_limit),
                 )
             )
@@ -462,14 +485,43 @@ def _flex_utilization(
     )
 
 
-def build_utilization(db: Session, employee: Employee) -> UtilizationOut:
-    statement = build_member_statement(db, employee)
+def build_utilization(
+    db: Session, employee: Employee, statement: BenefitStatementOut | None = None
+) -> UtilizationOut:
+    statement = statement or build_member_statement(db, employee)
     claims = _countable_claims(db, employee)
     return UtilizationOut(
         policy_year_id=employee.policy_year_id,
         insured=_insured_buckets(statement, claims),
         flex=_flex_utilization(statement, claims),
     )
+
+
+def build_member_utilization(db: Session, employee: Employee) -> UtilizationOut:
+    """Utilization as a member (or the broker's employee preview) sees it:
+    one statement drives both the buckets and the publication filter."""
+    statement = build_member_statement(db, employee)
+    return member_visible_utilization(
+        build_utilization(db, employee, statement),
+        published_product_codes(statement),
+    )
+
+
+def visits_remaining_for_claim(db: Session, claim: Claim, employee: Employee) -> int | None:
+    """Visits left on the claim's benefit row, or None when it has no verified
+    visit cap. The claim being decided is not yet settled, so it never counts
+    against itself."""
+    if claim.claim_kind != CLAIM_KIND_INSURED or not claim.benefit_key:
+        return None
+    wanted = claim.benefit_key.strip().lower()
+    for bucket in build_utilization(db, employee).insured:
+        if (
+            bucket.product_code == claim.product_code
+            and (bucket.benefit_key or "").strip().lower() == wanted
+            and bucket.visits_remaining is not None
+        ):
+            return bucket.visits_remaining
+    return None
 
 
 def remaining_for_claim(db: Session, claim: Claim, employee: Employee) -> float | None:

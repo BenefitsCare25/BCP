@@ -556,6 +556,10 @@ def resolve_plan_schedule(
                 "sub_items": subs_out,
                 "properties": properties,
                 "kind": it.get("kind"),
+                # Tri-state broker choice: True hides the row from members,
+                # False shows it even when it looks like insurer admin wording,
+                # None falls back to `member_schedule`'s admin-row defaults.
+                "member_hidden": it.get("member_hidden"),
                 "claim_limit": (
                     (it.get("claim_limits") or {}).get(col_id)
                     if col_id and isinstance(it.get("claim_limits"), dict)

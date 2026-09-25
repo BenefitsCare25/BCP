@@ -1,6 +1,6 @@
 # Inspro production resilience and ransomware-recovery design
 
-Last reviewed: 2026-09-21
+Last reviewed: 2026-09-23
 Production region: Azure `southeastasia` (Singapore) only
 
 ## Recovery record: 2026-08-25
@@ -251,6 +251,35 @@ and deleted. Both apps served the same immutable image, portal readiness reporte
 PostgreSQL and Redis healthy, worker readiness passed, all Key Vault references
 resolved, and the release produced no Key Vault secret deployment or activity
 operations. The Azure-managed migration resource group was intentionally retained.
+
+### Verified Phase 2 application release: 2026-09-23
+
+GitHub Actions run `35729848056` released commit
+`c6c4c9083a70504513b5b8ff01dea69df5c55215`. The run passed backend,
+frontend, dependency, strict typing, container build, private migration,
+deployment and production smoke gates.
+
+The release includes the completed non-email Phase 2 work, including premium
+breakdown reports, operational-report identity snapshots, claim-document
+replacement/removal and delegated HR claims. The private migration execution
+`inspro-prod-migrate-qegbdzn` succeeded with the exact release image and
+expected SHA, applying Alembic head and tenant provisioning before the image
+rollout.
+
+Post-release verification confirmed:
+
+- portal and review worker both use
+  `insproacr.azurecr.io/inspro-api:c6c4c9083a70504513b5b8ff01dea69df5c55215`;
+- portal `/health` returned HTTP 200 with the release SHA;
+- portal `/readiness` returned HTTP 200 with PostgreSQL and Redis healthy;
+- worker `/readyz` returned HTTP 200 with the release SHA;
+- ACR provisioning remained successful and admin credentials remained disabled.
+
+No separate Azure staging environment exists. CI, immutable-image validation,
+the private migration job and exact-SHA production smoke checks remain the
+canonical release gate. Do not rerun an already successful release merely to
+recreate staging evidence; a manual dispatch fails open and can rerun migrations
+and restart both applications.
 
 ## Target Singapore-only architecture
 

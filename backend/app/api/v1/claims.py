@@ -166,7 +166,7 @@ from app.services.log_cases import (
     set_case_type,
 )
 from app.services.sg_hospitals import sector_from_provider
-from app.services.utilization import remaining_for_claim
+from app.services.utilization import remaining_for_claim, visits_remaining_for_claim
 
 router = APIRouter(
     prefix="/claims",
@@ -663,6 +663,24 @@ def decide_claim(
                 if employee is not None
                 else None
             )
+            visits_left = (
+                visits_remaining_for_claim(db, claim, employee)
+                if employee is not None
+                else None
+            )
+            if visits_left == 0:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "visit_limit_reached",
+                        "message": (
+                            "This member has used every visit allowed on this "
+                            "benefit for the policy year. Resend with "
+                            "acknowledge=true to approve anyway."
+                        ),
+                        "visits_remaining": 0,
+                    },
+                )
             if remaining is not None and approving > remaining:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,

@@ -92,7 +92,7 @@ from app.services.claim_settlement import mint_reference_no
 from app.services.file_security import scan_quarantined_document
 from app.services.flex_membership import flex_effective_window
 from app.services.fx import POLICY_CURRENCY
-from app.services.member_statement import build_member_statement
+from app.services.member_statement import build_member_statement, is_published
 from app.services.roster_attributes import NAME_KEYS, cover_end, first_value
 
 logger = logging.getLogger(__name__)
@@ -943,6 +943,14 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
         # case on the member's behalf is precisely what it was written to
         # exclude. Gated on the case type rather than on who called, because the
         # exemption is a property of the case, not of the request.
+        if claim.case_type == CASE_TYPE_CLAIM and not is_published(line):
+            # Same publication rule as the member portal: an unconfirmed setup
+            # is extraction output, not cover a member can file against yet.
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"Your {claim.product_code} cover is still being set up — "
+                "please contact your HR team.",
+            )
         if (
             claim.case_type == CASE_TYPE_CLAIM
             and not claim_profile_for(claim.product_code).member_claimable

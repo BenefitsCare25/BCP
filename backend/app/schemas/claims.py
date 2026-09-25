@@ -946,6 +946,13 @@ class UtilizationBucket(BaseModel):
     approved: float = 0.0
     pending: float = 0.0  # in-flight claims — shown separately, never subtracted
     remaining: float | None = None  # limit - approved
+    # Verified visits-per-year cap (``visits_per_year`` basis). Each approved
+    # claim against the bucket is one visit; in-flight claims are counted
+    # separately, never subtracted — same convention as the SGD balance.
+    visit_limit: int | None = None
+    visits_used: int = 0
+    visits_pending: int = 0
+    visits_remaining: int | None = None
     # In-flight claims in a foreign currency whose SGD equivalent could not be
     # resolved, and which are therefore ABSENT from `pending`. Every figure in
     # this bucket is policy-currency, so a raw foreign amount cannot be added to
