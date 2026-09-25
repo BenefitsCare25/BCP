@@ -80,6 +80,11 @@ export function BalanceCard({
             </span>
             <span className="text-row font-semibold">{bucket.pending > 0 ? "left after claims in review" : "left this year"}</span>
           </p>
+          {bucket.pending > 0 && bucket.remaining !== null && (
+            <p className="mt-1 text-row text-[var(--tone-ink)]">
+              {s}{moneyText(bucket.remaining)} confirmed balance before claims in review
+            </p>
+          )}
           <dl className="mt-3 flex flex-wrap gap-2">
             {[
               ["Used", bucket.approved],

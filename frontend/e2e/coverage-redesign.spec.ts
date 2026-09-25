@@ -76,7 +76,7 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/portal/demo/coverage?tab=benefits");
-  await expect(page.getByRole("heading", { name: "What care do you need?" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "What's covered" })).toBeVisible();
   await expect(page.getByRole("button", { name: /See a GP/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /See a specialist/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Hospital & surgery/ })).toBeVisible();
@@ -96,7 +96,7 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
 
   // Back from a care detail returns to the care list, not out of coverage.
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "What care do you need?" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /See a GP/ })).toBeVisible();
 
   // The chosen family member survives a refresh along with the open route.
   await page.getByRole("button", { name: "Jamie Tan" }).click();

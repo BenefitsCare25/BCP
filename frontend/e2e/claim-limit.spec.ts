@@ -352,7 +352,7 @@ test("claim form shows the selected plan balance and warns without blocking a fu
     .getByRole("combobox", { name: "Claim type" })
     .selectOption({ label: "TCM (Traditional Chinese Medicine)" });
 
-  const limits = page.getByRole("region", { name: "Limit for this claim" });
+  const limits = page.getByRole("region", { name: "What you have left" });
   await expect(limits).toContainText("TCM & Chiropractor");
   await expect(limits).toContainText("S$150 available after pending");
   await expect(limits).toContainText("of S$300");
@@ -394,7 +394,7 @@ test("per-visit wording is informative and never becomes an annual balance", asy
     .getByRole("combobox", { name: "Claim type" })
     .selectOption({ label: "Physiotherapy" });
 
-  const limits = page.getByRole("region", { name: "Limit for this claim" });
+  const limits = page.getByRole("region", { name: "What you have left" });
   await expect(limits).toContainText("Physiotherapy");
   await expect(limits).toContainText("S$80 per visit");
   await expect(limits).toContainText("Per visit condition; this is policy wording");
@@ -419,11 +419,11 @@ test("what's left shows only verified annual balances", async ({
   await page.goto("/portal/demo/coverage?tab=usage");
 
   const main = page.getByRole("main");
-  await expect(main).toContainText("Group Clinical GP");
+  await expect(main).toContainText("GP visits");
   await expect(main).toContainText("TCM & Chiropractor");
   await expect(main).toContainText("S$150");
-  await expect(main).toContainText("available after pending");
-  await expect(main).toContainText("S$200 confirmed balance");
+  await expect(main).toContainText("left after claims in review");
+  await expect(main).toContainText("S$200 confirmed balance before claims in review");
   await expect(main).not.toContainText("S$9,999");
   await expect(main).not.toContainText("Physiotherapy");
   await expect(main).not.toContainText("As charged");
