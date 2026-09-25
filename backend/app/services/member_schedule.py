@@ -265,10 +265,10 @@ def _clean_item(item: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, 
     return cleaned
 
 
-def member_schedule(schedule: Any) -> dict[str, Any] | None:
+def member_schedule(schedule: dict[str, Any] | None) -> dict[str, Any] | None:
     """The schedule as a member reads it. ``None`` stays ``None``."""
     if not isinstance(schedule, dict):
-        return schedule
+        return None
     raw_items = [i for i in schedule.get("items") or [] if isinstance(i, dict)]
     note_counts = Counter(
         _fold(i.get("note")) for i in raw_items if not is_absent_value(i.get("note"))
