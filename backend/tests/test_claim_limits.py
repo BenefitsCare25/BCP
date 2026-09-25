@@ -58,7 +58,10 @@ def test_structured_annual_counts_never_become_sgd_balances():
     ambiguous = suggested_structured_policy_year_setting("5")
 
     assert money and money["basis"] == "policy_year" and money["amount"] == 300
-    assert visits and visits["basis"] == "informational" and visits["amount"] is None
+    # A stated count is a visit cap awaiting review — never an SGD balance.
+    assert visits and visits["basis"] == "visits_per_year" and visits["amount"] == 5
+    assert visits["status"] == "needs_review"
+    # A bare number states no unit, so it stays wording.
     assert ambiguous and ambiguous["basis"] == "informational"
     assert visits["display"] == "5 visits per policy year"
     assert enforceable_policy_year_amount(visits) is None

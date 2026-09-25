@@ -18,6 +18,7 @@ const CHOICES: { basis: ClaimLimitBasis | "not_limit"; title: string; hint: stri
   { basis: "per_disability", title: "Per disability", hint: "A cap per illness or injury, shown as a condition." },
   { basis: "as_charged", title: "As charged", hint: "Covered in full, subject to policy terms." },
   { basis: "percentage", title: "Co-pay / percentage", hint: "The member's share, shown as a condition." },
+  { basis: "lifetime", title: "Lifetime", hint: "A cap over the member's whole cover, shown as a condition." },
   { basis: "not_limit", title: "Not a limit", hint: "Just schedule wording — nothing extra is shown or checked." },
 ];
 
@@ -50,9 +51,12 @@ export function LimitSettingForm({
   onRemove,
   onCancel,
 }: Props) {
-  const [choice, setChoice] = useState<ClaimLimitBasis | "not_limit">(
-    setting.status === "not_limit" ? "not_limit" : setting.basis,
-  );
+  const [choice, setChoice] = useState<ClaimLimitBasis | "not_limit">(() => {
+    if (setting.status === "not_limit") return "not_limit";
+    // "Other policy wording" has no choice of its own: it is wording, which is
+    // what "Not a limit" records. Without this no option would be selected.
+    return CHOICES.some((c) => c.basis === setting.basis) ? setting.basis : "not_limit";
+  });
   const [amount, setAmount] = useState(setting.amount != null ? String(setting.amount) : "");
   const [scopeCodes, setScopeCodes] = useState<string[]>(
     setting.claim_scope_codes.length > 0 ? setting.claim_scope_codes : suggested,

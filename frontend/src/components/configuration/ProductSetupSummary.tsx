@@ -6,7 +6,6 @@ import { insuredNames } from "@/lib/insured";
 import type {
   CategoryGroup,
   ClaimLimitSetting,
-  PlanAnswer,
   ProductSetup,
   ProductTemplate,
   ProductTerm,
@@ -15,11 +14,8 @@ import type {
   TemplateField,
 } from "@/types";
 import { selectedMemberCover } from "./setup/memberEligibility";
-import {
-  describeLimit,
-  itemLimitForPlan,
-  isLiveTrackedLimit,
-} from "@/lib/claimLimits";
+import { claimLimitSourceForColumn, describeLimit } from "@/lib/claimLimits";
+import { LimitChip } from "./setup/limits/LimitChip";
 import {
   groupEmployeeCategories,
   onlySavedOverlapWarnings,
@@ -241,121 +237,118 @@ function DetailStrip({
   );
 }
 
-function LimitValue({ setting }: { setting: ClaimLimitSetting }) {
-  return (
-    <span className="text-xs text-foreground">
-      {setting.status === "not_limit"
-        ? "Not a limit"
-        : describeLimit(setting, setting.display).text}
-    </span>
-  );
-}
-
-function LimitStatusBadge({ setting }: { setting: ClaimLimitSetting }) {
-  return (
-    <Badge
-      variant={
-        setting.status === "verified"
-          ? "good"
-          : setting.status === "not_limit"
-            ? "default"
-            : "warn"
-      }
-    >
-      {isLiveTrackedLimit(setting)
-        ? "Tracked · live"
-        : setting.status === "verified"
-          ? "Condition"
-        : setting.status === "not_limit"
-          ? "Wording only"
-          : "Needs review"}
-    </Badge>
-  );
-}
-
+/** Read-only mirror of the Claim limits editor grid: benefit rows × plan
+ * columns, one chip per cell, same states and wording as the editor. */
 function ClaimLimitSummary({
   sob,
-  plans,
   scopes,
 }: {
   sob: SobSchedule | null | undefined;
-  plans: PlanAnswer[];
   scopes: ProductTemplate["claim_scopes"];
 }) {
-  if (!sob) return null;
+  if (!sob || sob.columns.length === 0) return null;
+  const columns = sob.columns;
   const scopeLabels = new Map((scopes ?? []).map((scope) => [scope.code, scope.label]));
-  const configuredPlans = plans
-    .filter((plan) => plan.selected)
-    .map((plan) => ({
-      plan,
-      overall: sob.plan_claim_limits?.[plan.code] ?? null,
-      items: sob.items
-        .map((item) => ({ item, setting: itemLimitForPlan(sob, item, plan.code) }))
-        .filter(
-          (row): row is { item: (typeof sob.items)[number]; setting: ClaimLimitSetting } =>
-            row.setting !== null,
-        ),
-    }));
-  const hasSettings = configuredPlans.some(
-    ({ overall, items }) => overall !== null || items.length > 0,
-  );
+  const overallFor = (columnId: string): ClaimLimitSetting | null => {
+    const code = columns.find((c) => c.id === columnId)?.plan_codes[0];
+    return code ? sob.plan_claim_limits?.[code] ?? null : null;
+  };
+  const rows = sob.items.filter((item) => columns.some((c) => item.claim_limits?.[c.id]));
+  const hasOverall = columns.some((c) => overallFor(c.id));
+
+  const tally = { live: 0, review: 0 };
+  const count = (tone: string) => {
+    if (tone === "live") tally.live += 1;
+    if (tone === "review") tally.review += 1;
+  };
+  for (const col of columns) {
+    const overall = overallFor(col.id);
+    if (overall) count(describeLimit(overall, undefined).tone);
+    for (const item of rows) {
+      const setting = item.claim_limits?.[col.id];
+      if (setting) count(describeLimit(setting, claimLimitSourceForColumn(item, col.id).wording).tone);
+    }
+  }
 
   return (
     <section className="space-y-2 border-t border-border pt-4">
-      <h4 className="text-sm font-semibold text-foreground">Claim limit settings</h4>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-sm font-semibold text-foreground">Claim limits</h4>
+        {(rows.length > 0 || hasOverall) && (
+          <p className="flex flex-wrap gap-3 text-xs">
+            <span className="text-good">{tally.live} tracked</span>
+            {tally.review > 0 && <span className="text-warn">{tally.review} to review</span>}
+          </p>
+        )}
+      </div>
       <p className="text-xs text-muted-foreground">
-        Only verified policy-year amounts are live in member balances and the
-        approval guard.
+        <span className="font-medium text-foreground">Tracked</span> limits count down on the
+        employee&apos;s &ldquo;What&apos;s left&rdquo; and guard claim approval. Everything else
+        shows as a condition. To change them, click Edit and open Claim limits.
       </p>
-      {!hasSettings ? (
-        <p className="text-sm text-muted-foreground">
-          No explicit claim limits have been reviewed for this product.
-        </p>
+      {rows.length === 0 && !hasOverall ? (
+        <p className="text-sm text-muted-foreground">No claim limits set for this product yet.</p>
       ) : (
-        <div className="divide-y divide-border rounded-lg border border-border">
-          {configuredPlans.map(({ plan, overall, items }) => (
-            <div key={plan.code} className="space-y-2 px-3 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-medium text-foreground">
-                  {plan.label || plan.code}
-                </p>
-                {overall && (
-                  <span className="inline-flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Overall</span>
-                    <LimitValue setting={overall} />
-                    <LimitStatusBadge setting={overall} />
-                  </span>
-                )}
-              </div>
-              {items.length > 0 ? (
-                <dl className="divide-y divide-border/70">
-                  {items.map(({ item, setting }) => (
-                    <div
-                      key={item.uid}
-                      className="grid gap-1 py-2 first:pt-0 last:pb-0 sm:grid-cols-[minmax(12rem,1fr)_auto]"
-                    >
-                      <div>
-                        <dt className="text-xs font-medium text-foreground">{item.name}</dt>
-                        <dd className="text-2xs text-muted-foreground">
-                          {setting.claim_scope_codes.length
-                            ? setting.claim_scope_codes
-                                .map((code) => scopeLabels.get(code) ?? code)
-                                .join(" · ")
-                            : "No claim type mapped"}
-                        </dd>
-                      </div>
-                      <div className="flex items-center gap-2 sm:justify-end">
-                        <LimitValue setting={setting} />
-                        <LimitStatusBadge setting={setting} />
-                      </div>
-                    </div>
-                  ))}
-                </dl>
-              ) : (
-                <p className="text-xs text-muted-foreground">No benefit line limits.</p>
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full border-collapse text-sm">
+            <thead className="bg-muted">
+              <tr className="border-b border-border">
+                <th className="min-w-40 px-3 py-1.5 text-left text-2xs uppercase tracking-wider text-muted-foreground sm:min-w-56">
+                  Benefit
+                </th>
+                {columns.map((col) => (
+                  <th key={col.id} className="min-w-44 px-2 py-1.5 text-left text-2xs uppercase tracking-wider text-muted-foreground">
+                    <span className="block truncate" title={col.label}>{col.label}</span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {hasOverall && (
+                <tr className="border-b border-border">
+                  <td className="px-3 py-2 text-sm font-medium text-foreground">Overall yearly limit</td>
+                  {columns.map((col) => {
+                    const setting = overallFor(col.id);
+                    const { text, tone } = setting
+                      ? describeLimit(setting, undefined)
+                      : { text: "None", tone: "none" as const };
+                    return (
+                      <td key={col.id} className="px-2 py-2">
+                        <LimitChip text={text} tone={tone} />
+                      </td>
+                    );
+                  })}
+                </tr>
               )}
-            </div>
-          ))}
+              {rows.map((item) => (
+                <tr key={item.uid} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2">
+                    <span className="block max-w-72 truncate text-sm text-foreground" title={item.name}>
+                      {item.name}
+                    </span>
+                  </td>
+                  {columns.map((col) => {
+                    const setting = item.claim_limits?.[col.id] ?? null;
+                    const wording = claimLimitSourceForColumn(item, col.id).wording;
+                    const { text, tone } = describeLimit(setting, wording);
+                    const sub = (setting?.claim_scope_codes ?? [])
+                      .map((code) => scopeLabels.get(code) ?? code)
+                      .join(" · ");
+                    return (
+                      <td key={col.id} className="px-2 py-2 align-top">
+                        <LimitChip
+                          text={setting?.status === "not_limit" ? "Not a limit" : text}
+                          tone={setting ? tone : "none"}
+                          sub={setting ? sub || "No claim type" : undefined}
+                          unset={!setting}
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -421,7 +414,6 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
 
       <ClaimLimitSummary
         sob={answers?.sob}
-        plans={answers?.plans ?? []}
         scopes={template.claim_scopes}
       />
 

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cn";
 import type { SobColumn, SobItemAnswer, SobSchedule } from "@/types";
 import {
@@ -21,7 +22,7 @@ import {
   copayFields,
   copayValue,
   isOverridden,
-  moveItem,
+  moveItemRenumbered,
   pasteColumn,
   removeItem,
   setCell,
@@ -29,6 +30,7 @@ import {
   storedBenefitNumber,
 } from "@/lib/sob";
 import { isAbsentValue } from "@/lib/sobValues";
+import { rowVisibility } from "@/lib/sobAttention";
 import { SobCell } from "./SobCell";
 
 // Short labels so a copay group's three figures fit one table cell.
@@ -87,8 +89,6 @@ interface Props {
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
   /** Review problems, joined — a primitive so `memo` survives re-renders. */
   issues?: string;
-  /** Why employees won't see this row, or empty when they will. */
-  hiddenReason?: string;
 }
 
 /**
@@ -110,7 +110,6 @@ export const SobRow = memo(function SobRow({
   onToggle,
   setSob,
   issues = "",
-  hiddenReason = "",
 }: Props) {
   const kind = item.kind ?? "amount";
   const isListLike = kind === "list" || kind === "scale";
@@ -118,12 +117,15 @@ export const SobRow = memo(function SobRow({
   const noteCount = item.note ? 1 : 0;
   const limitCount = item.limits?.length ?? 0;
   const subCount = item.sub_items?.length ?? 0;
+  const visibility = rowVisibility(item, columns);
 
   return (
     <tr
       className={cn(
         "group/row border-b border-border last:border-0 hover:bg-muted/20",
-        hiddenReason && "opacity-70",
+        // A hidden row reads as set aside — but its Visible switch stays at
+        // full strength, since that is the control that brings it back.
+        visibility.hidden && "[&>td:not([data-visibility])]:opacity-60",
       )}
     >
       <td className="sticky left-0 z-10 bg-card px-2 py-1 align-middle">
@@ -172,11 +174,6 @@ export const SobRow = memo(function SobRow({
                 <AlertTriangle className="size-3.5" />
               </span>
             )}
-            {hiddenReason && (
-              <span title={hiddenReason} aria-label={hiddenReason}>
-                <EyeOff className="size-3.5" />
-              </span>
-            )}
             {noteCount > 0 && (
               <span title={item.note ?? ""} aria-label="Has a footnote">
                 <StickyNote className="size-3" />
@@ -202,6 +199,38 @@ export const SobRow = memo(function SobRow({
             )}
           </div>
         </div>
+      </td>
+
+      {/* Whether employees see this row, stated on EVERY row so the portal
+          outcome reads straight down the table. A row with nothing to show
+          gets no switch: the portal drops it whatever is chosen here. */}
+      <td data-visibility="" className="px-2 py-1 align-middle" title={visibility.reason}>
+        {visibility.toggleable ? (
+          <label className="flex cursor-pointer items-center gap-2">
+            <Switch
+              checked={!visibility.hidden}
+              onCheckedChange={(shown) =>
+                setSob((s) => setItemField(s, idx, { member_hidden: !shown }))
+              }
+              aria-label={`Employees see ${item.name || `benefit ${idx + 1}`}`}
+              aria-describedby={`visibility-${item.uid}`}
+            />
+            <span
+              id={`visibility-${item.uid}`}
+              className={cn(
+                "text-2xs leading-tight",
+                visibility.hidden ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {visibility.label}
+            </span>
+          </label>
+        ) : (
+          <span className="flex items-center gap-2 text-2xs leading-tight text-muted-foreground">
+            <EyeOff className="size-3.5 shrink-0" aria-hidden />
+            <span>{visibility.label}</span>
+          </span>
+        )}
       </td>
 
       {usesAxis ? (
@@ -266,11 +295,11 @@ export const SobRow = memo(function SobRow({
       <td className="px-1 py-1">
         <div className="flex items-center">
           {reorderable && (
-          <div className="flex flex-col opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
+          <div className="flex flex-col opacity-40 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
             <button
               type="button"
               disabled={idx === 0}
-              onClick={() => setSob((s) => moveItem(s, idx, -1))}
+              onClick={() => setSob((s) => moveItemRenumbered(s, idx, -1))}
               aria-label={`Move ${item.name || `benefit ${idx + 1}`} up`}
               className="rounded px-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
             >
@@ -279,7 +308,7 @@ export const SobRow = memo(function SobRow({
             <button
               type="button"
               disabled={idx >= rowCount - 1}
-              onClick={() => setSob((s) => moveItem(s, idx, 1))}
+              onClick={() => setSob((s) => moveItemRenumbered(s, idx, 1))}
               aria-label={`Move ${item.name || `benefit ${idx + 1}`} down`}
               className="rounded px-0.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
             >

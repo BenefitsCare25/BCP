@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
-from app.services.excel_reader import Cell
+from app.services.excel_reader import Cell, CurrencyValue
 from app.services.slip_parsing.models import (
     ExtractedBenefitItem,
     ExtractedLimit,
@@ -337,6 +337,7 @@ def _parse_sob_items(
     current_limits: list[ExtractedLimit] = []
     current_sub_items: list[dict[str, Any]] = []
     current_properties: dict[str, str] = {}
+    group_uses_money_format = False
     # Where trailing limit/footnote rows attach: the last sub-item dict, or None
     # for the item itself.
     target: dict[str, Any] | None = None
@@ -424,6 +425,7 @@ def _parse_sob_items(
             current_limits = []
             current_sub_items = []
             current_properties = {}
+            group_uses_money_format = False
             target = None
             in_group = False
             pending_group_note = None
@@ -446,6 +448,7 @@ def _parse_sob_items(
             current_limits = []
             current_sub_items = []
             current_properties = {}
+            group_uses_money_format = False
             target = None
             in_group = True
             continue
@@ -468,6 +471,21 @@ def _parse_sob_items(
                 if prop:
                     raw = _norm(plan_cell) if plan_cell is not None else ""
                     val = _fmt_value(plan_cell) or raw
+                    if isinstance(plan_cell, CurrencyValue):
+                        group_uses_money_format = True
+                    elif (
+                        prop.startswith("per_policy_year")
+                        and group_uses_money_format
+                        and isinstance(plan_cell, (int, float))
+                        and not isinstance(plan_cell, bool)
+                        and float(plan_cell).is_integer()
+                        and plan_cell > 0
+                    ):
+                        # The group's dollar figures are currency-formatted
+                        # and this one is not: it counts visits (CDL GCGP
+                        # WhiteCoat "Per policy year 5" beside a "$5" co-pay).
+                        count = int(plan_cell)
+                        val = f"{count} visit{'' if count == 1 else 's'}"
                     if val:
                         current_properties[prop] = val
                     continue

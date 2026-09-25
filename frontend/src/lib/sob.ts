@@ -610,24 +610,62 @@ export function moveItem(
  * blank number, and reordering leaves the old numbering behind. This is the
  * one-click reconciliation.
  *
- * Letter enumerators (GCGP's "A".."G") are left alone. Outpatient copay
- * groups participate in the numeric sequence but retain a dash-prefixed
- * storage identity so a group label cannot collide with a genuine source row.
+ * Two independent sequences, each in current row order:
+ *   - letters: GCGP's "A".."G" re-letter A, B, C… (then AA, AB… past Z);
+ *   - numbers: plain numbered rows AND outpatient copay groups share one
+ *     count. Groups keep a dash-prefixed storage identity so a group label
+ *     cannot collide with a genuine source row.
+ * Anything else ("1a", "(b)", "1.2") is a deliberate label and is left alone.
+ *
+ * `only` limits the pass to one sequence — a row move relabels just the
+ * sequence the moved row belongs to, so moving a letter row never renumbers
+ * the groups below it.
  */
-export function renumberItems(sob: SobSchedule): SobSchedule {
-  let n = 0;
+export type RowSequence = "letter" | "number";
+
+export function rowSequence(it: SobItemAnswer): RowSequence | null {
+  const current = (it.number ?? "").trim();
+  if (it.kind === "copay" && (current === "" || /^-?\d+$/.test(current))) return "number";
+  if (current === "" || /^\d+$/.test(current)) return "number";
+  if (/^[A-Za-z]{1,2}$/.test(current)) return "letter";
+  return null;
+}
+
+function letterLabel(n: number): string {
+  // 1 → A … 26 → Z, 27 → AA (spreadsheet-style).
+  let label = "";
+  for (let k = n; k > 0; k = Math.floor((k - 1) / 26)) {
+    label = String.fromCharCode(65 + ((k - 1) % 26)) + label;
+  }
+  return label;
+}
+
+export function renumberItems(sob: SobSchedule, only?: RowSequence): SobSchedule {
+  let letters = 0;
+  let numbers = 0;
   return {
     ...sob,
     items: sob.items.map((it) => {
-      const current = (it.number ?? "").trim();
-      const isGroup =
-        it.kind === "copay" && (current === "" || /^-?\d+$/.test(current));
-      const isSequential = current === "" || /^\d+$/.test(current) || isGroup;
-      if (!isSequential) return it;
-      n += 1;
-      return { ...it, number: isGroup ? `-${n}` : String(n) };
+      const sequence = rowSequence(it);
+      if (!sequence || (only && sequence !== only)) return it;
+      if (sequence === "letter") {
+        letters += 1;
+        return { ...it, number: letterLabel(letters) };
+      }
+      numbers += 1;
+      const isGroup = it.kind === "copay";
+      return { ...it, number: isGroup ? `-${numbers}` : String(numbers) };
     }),
   };
+}
+
+/** Move a row, then relabel the sequence it belongs to, so B moved above A
+ * reads A, B again rather than B, A. */
+export function moveItemRenumbered(sob: SobSchedule, idx: number, delta: number): SobSchedule {
+  const moved = moveItem(sob, idx, delta);
+  if (moved === sob) return sob;
+  const sequence = rowSequence(sob.items[idx]);
+  return sequence ? renumberItems(moved, sequence) : moved;
 }
 
 export function setSubField(

@@ -13,6 +13,31 @@ from typing import Protocol
 
 Cell = str | int | float | bool | None
 
+
+class CurrencyValue(float):
+    """A number the workbook FORMATS as money ("$"#,##0.00, SGD …).
+
+    Still a float — every parser treats it exactly like one — but it records
+    what the raw value alone cannot: that the slip's author meant dollars.
+    Placement slips put a visit count and a dollar cap in the same column as
+    the same bare number (CDL GCGP WhiteCoat: co-pay 5 formatted "$", per
+    policy year 5 formatted General = 5 visits), so the format is the only
+    evidence that tells them apart.
+    """
+
+
+def _is_currency_format(fmt: object) -> bool:
+    text = str(fmt or "").lower()
+    return "$" in text or "sgd" in text or "¤" in text
+
+
+def _numeric(value: Cell, fmt: object) -> Cell:
+    if isinstance(value, float) and not isinstance(value, bool) and _is_currency_format(fmt):
+        return CurrencyValue(value)
+    if isinstance(value, int) and not isinstance(value, bool) and _is_currency_format(fmt):
+        return CurrencyValue(value)
+    return value
+
 # Hard bound on columns read per sheet. Real slips use < 20 columns; some
 # workbooks in the wild report thousands of phantom columns (stray formatting
 # pushes openpyxl's max_column to ~16k), which would balloon every row with
@@ -80,6 +105,12 @@ def _coerce(value: object) -> Cell:
     return str(value)
 
 
+def _openpyxl_value(cell: object) -> Cell:
+    return _numeric(
+        _coerce(getattr(cell, "value", None)), getattr(cell, "number_format", "")
+    )
+
+
 def _openpyxl_comments(rows: list[list[object]]) -> dict[tuple[int, int], CellNote]:
     comments: dict[tuple[int, int], CellNote] = {}
     for row_idx, row in enumerate(rows):
@@ -109,6 +140,13 @@ class _XlrdWorkbook:
     def sheet_names(self) -> list[str]:
         return list(self._wb.sheet_names())
 
+    def _format_of(self, ws: object, r: int, c: int) -> str:
+        try:
+            xf = self._wb.xf_list[ws.cell_xf_index(r, c)]  # type: ignore[attr-defined]
+            return str(self._wb.format_map[xf.format_key].format_str)
+        except (AttributeError, IndexError, KeyError):
+            return ""
+
     def sheet(self, name: str) -> Sheet:
         ws = self._wb.sheet_by_name(name)
         rows: list[list[Cell]] = []
@@ -121,7 +159,7 @@ class _XlrdWorkbook:
                 if val == "" or val is None:
                     row.append(None)
                 else:
-                    row.append(_coerce(val))
+                    row.append(_numeric(_coerce(val), self._format_of(ws, r, c)))
             rows.append(row)
         comments: dict[tuple[int, int], CellNote] = {}
         for (rowx, colx), note in ws.cell_note_map.items():
@@ -205,15 +243,18 @@ class _OpenpyxlWorkbook:
             # only path in the module that could return ragged rows, and a
             # positional read of one is wrong rather than loud.
             raw_cells = [list(r[:MAX_SCAN_COLS]) for r in ws.iter_rows()]
-            raw = [[getattr(cell, "value", None) for cell in row] for row in raw_cells]
-            width = max((len(r) for r in raw), default=0)
+            coerced = [
+                [
+                    _openpyxl_value(cell)
+                    for cell in row
+                ]
+                for row in raw_cells
+            ]
+            width = max((len(r) for r in coerced), default=0)
             comments = _openpyxl_comments(raw_cells)
             return Sheet(
                 name=name,
-                rows=[
-                    [_coerce(v) for v in r] + [None] * (width - len(r))
-                    for r in raw
-                ],
+                rows=[r + [None] * (width - len(r)) for r in coerced],
                 comments=comments,
                 merged_ranges=merged_ranges,
             )
@@ -221,7 +262,12 @@ class _OpenpyxlWorkbook:
         max_col = min(ws.max_column or MAX_SCAN_COLS, MAX_SCAN_COLS)
         raw_cells = [list(row) for row in ws.iter_rows(max_col=max_col)]
         for row in raw_cells:
-            rows.append([_coerce(getattr(cell, "value", None)) for cell in row])
+            rows.append(
+                [
+                    _openpyxl_value(cell)
+                    for cell in row
+                ]
+            )
         return Sheet(
             name=name,
             rows=rows,

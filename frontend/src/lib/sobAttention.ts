@@ -4,12 +4,12 @@
  *   - `rowIssues`: something is probably WRONG and needs a decision before
  *     confirming (a slip heading parsed as a benefit, a duplicate row, a count
  *     that will print as dollars).
- *   - `memberVisibility`: nothing is wrong, but employees won't see this row
- *     (every plan says NA, or it's insurer admin wording). Shown so the broker
- *     knows what the portal will leave out, never as an error. */
+ *   - `rowVisibility`: whether employees see each row on the portal, and why.
+ *     Stated for every row, never as an error, so the broker can read the
+ *     portal outcome straight down the table. */
 import type { SobColumn, SobItemAnswer } from "@/types";
 import { cellValue, copayFields, copayValue } from "@/lib/sob";
-import { hiddenFromMembers, isAbsentValue, isNotApplicable } from "@/lib/sobValues";
+import { isAbsentValue, isAdminRow, isNotApplicable } from "@/lib/sobValues";
 
 const HEADING_NAME = /^\s*(endorsements?|exclusions?|additional arrangements?|to note|list of exclusions?)\b|:\s*$/i;
 const COUNT_NAME = /\b(?:number|no\.?|max(?:imum)?\.?(?:\s+no\.?)?)\s+(?:of\s+)?(visits?|days?|sessions?|treatments?|times)\b/i;
@@ -66,26 +66,84 @@ export function rowIssues(items: SobItemAnswer[], columns: SobColumn[]): Map<str
   return issues;
 }
 
-export type MemberVisibility = { hidden: boolean; reason: string | null };
+export type RowVisibility = {
+  /** Employees see nothing of this row. */
+  hidden: boolean;
+  /** False when no switch can put the row on the portal: it has no value on
+   * any plan, and the member projection drops empty rows unconditionally. */
+  toggleable: boolean;
+  /** Short state for the Visible column. */
+  label: string;
+  /** The full why, for the tooltip. */
+  reason: string;
+};
 
-/** Whether employees will see this row at all, and why not. */
-export function memberVisibility(item: SobItemAnswer, columns: SobColumn[]): MemberVisibility {
-  if (hiddenFromMembers(item)) {
+/**
+ * Whether employees see this row, and why — for EVERY row, not only hidden
+ * ones, so a broker can read the portal outcome down the whole table.
+ *
+ * Mirrors `backend/app/services/member_schedule._clean_item`, in its order:
+ * a row with nothing to show is dropped whatever the broker chose, so that
+ * test comes first and makes the row non-toggleable; only then does the
+ * broker's `member_hidden` choice, then the admin-wording default, apply.
+ * The member projection runs per plan, so a row NA on some plans only is
+ * still shown — to the plans that state a value.
+ */
+export function rowVisibility(item: SobItemAnswer, columns: SobColumn[]): RowVisibility {
+  let partialNA = false;
+  if (!STRUCTURAL_KINDS.has(item.kind ?? "")) {
+    const stated = rowValues(item, columns).map((v) => String(v ?? "").trim()).filter(Boolean);
+    const anyValue = stated.some((v) => !isAbsentValue(v));
+    const anySub = item.sub_items.some(
+      (sub) =>
+        !isAbsentValue(sub.base_value) ||
+        Object.values(sub.overrides ?? {}).some((v) => !isAbsentValue(v)) ||
+        Boolean(sub.note?.trim()),
+    );
+    const anyLimit = (item.limits ?? []).some((limit) => !isAbsentValue(limit.value));
+    // A note alone survives only on a row that never stated a value (a
+    // heading like "Includes surgical implants"), never on a copay group.
+    const noteSurvives = Boolean(item.note?.trim()) && stated.length === 0 && item.kind !== "copay";
+    if (!anyValue && !anySub && !anyLimit && !noteSurvives) {
+      const allNA = stated.length > 0 && stated.every(isNotApplicable);
+      const notCovered = stated.length > 0 && !allNA;
+      return {
+        hidden: true,
+        toggleable: false,
+        label: allNA ? "Always hidden · NA" : notCovered ? "Always hidden · not covered" : "Always hidden · empty",
+        reason: allNA
+          ? "Always hidden: every plan says NA, so there is nothing to show employees."
+          : notCovered
+            ? "Always hidden: not covered on any plan, so there is nothing to show employees."
+            : "Always hidden: no value on any plan yet. Fill in a value to show it.",
+      };
+    }
+    partialNA = anyValue && stated.some(isAbsentValue);
+  }
+  if (item.member_hidden === true) {
     return {
       hidden: true,
-      reason: item.member_hidden === true ? "Hidden from employees" : "Insurer admin wording — hidden from employees",
+      toggleable: true,
+      label: "Hidden",
+      reason: "Hidden: you turned this row off. Turn it on to show employees.",
     };
   }
-  if (STRUCTURAL_KINDS.has(item.kind ?? "")) return { hidden: false, reason: null };
-  const values = rowValues(item, columns).filter((v) => String(v ?? "").trim());
-  const hasSubValues = item.sub_items.some((sub) => !isAbsentValue(sub.base_value));
-  if (values.length > 0 && values.every(isAbsentValue) && !hasSubValues) {
+  if (item.member_hidden !== false && isAdminRow(item.name)) {
     return {
       hidden: true,
-      reason: values.every(isNotApplicable)
-        ? "Every plan says NA — hidden from employees"
-        : "Not covered on any plan — hidden from employees",
+      toggleable: true,
+      label: "Hidden · default",
+      reason: "Hidden by default: this reads as insurer admin wording, not a benefit. Turn it on to show employees.",
     };
   }
-  return { hidden: false, reason: null };
+  return {
+    hidden: false,
+    toggleable: true,
+    label: partialNA ? "Shown · NA on some plans" : "Shown",
+    reason: partialNA
+      ? "Shown to plans that state a value. Plans that say NA or Not covered leave this row out."
+      : item.member_hidden === false
+        ? "Shown: you turned this row on for employees."
+        : "Shown to employees.",
+  };
 }

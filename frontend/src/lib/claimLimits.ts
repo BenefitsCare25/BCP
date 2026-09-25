@@ -136,7 +136,10 @@ export function draftDetectedLimitSetting(
   claimScopeCodes: string[] = [],
 ): ClaimLimitSetting {
   const draft = draftLimitSetting(source.wording, claimScopeCodes);
-  if (source.structuredPolicyYear && !source.monetary) {
+  // A bare per-policy-year number carries no unit (dollars or visits), so it
+  // stays wording until a broker says which. "5 visits" states its unit — the
+  // parser writes it when the slip's formatting shows a count.
+  if (source.structuredPolicyYear && !source.monetary && draft.basis !== "visits_per_year") {
     return { ...draft, basis: "informational", amount: null };
   }
   return draft;

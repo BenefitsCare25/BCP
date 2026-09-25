@@ -2,7 +2,6 @@ import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -33,7 +32,6 @@ import {
   setSubField,
   subCellValue,
 } from "@/lib/sob";
-import { hiddenFromMembers, isAdminRow } from "@/lib/sobValues";
 import { SobCell } from "./SobCell";
 
 // Line types a broker can pick when a schedule needs structure the template
@@ -127,30 +125,6 @@ export function SobRowDetail({
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <Label
-                htmlFor={`visible-${item.uid}`}
-                className="text-2xs uppercase tracking-wider text-muted-foreground"
-              >
-                Employees see this row
-              </Label>
-              <div className="flex h-8 items-center gap-2">
-                <Switch
-                  id={`visible-${item.uid}`}
-                  checked={!hiddenFromMembers(item)}
-                  onCheckedChange={(shown) =>
-                    setSob((s) => setItemField(s, idx, { member_hidden: !shown }))
-                  }
-                />
-                <span className="text-2xs text-muted-foreground">
-                  {item.member_hidden === undefined && isAdminRow(item.name)
-                    ? "Hidden by default: insurer admin wording"
-                    : hiddenFromMembers(item)
-                      ? "Hidden from the employee portal"
-                      : "NA cells are hidden automatically"}
-                </span>
-              </div>
             </div>
             <div className="flex min-w-64 flex-1 flex-col gap-1">
               <Label

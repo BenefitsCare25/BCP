@@ -8,7 +8,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/cn";
 import type { ClaimLimitScope, ClaimLimitSetting, SobItemAnswer, SobSchedule } from "@/types";
 import {
   claimLimitSourceForColumn,
@@ -19,6 +18,7 @@ import {
   suggestedScopeCodes,
   type LimitTone,
 } from "@/lib/claimLimits";
+import { LimitChip } from "./LimitChip";
 import { LimitSettingForm } from "./LimitSettingForm";
 
 interface Props {
@@ -28,20 +28,6 @@ interface Props {
 }
 
 type Selection = { kind: "item"; uid: string; columnId: string } | { kind: "overall"; columnId: string };
-
-const TONE_CLASS: Record<LimitTone, string> = {
-  live: "border-good/40 bg-good/10 text-foreground",
-  review: "border-warn/50 bg-warn/10 text-foreground",
-  wording: "border-border bg-muted/40 text-muted-foreground",
-  none: "border-dashed border-border text-muted-foreground",
-};
-
-const TONE_LABEL: Record<LimitTone, string> = {
-  live: "Tracked",
-  review: "Review",
-  wording: "Condition",
-  none: "",
-};
 
 const norm = (value: string | null | undefined) => (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
 
@@ -382,42 +368,5 @@ function ItemForm({
       onRemove={setting ? onRemove : undefined}
       onCancel={onCancel}
     />
-  );
-}
-
-function LimitChip({
-  text,
-  tone,
-  sub,
-  unset = false,
-  active,
-  onClick,
-}: {
-  text: string;
-  tone: LimitTone;
-  sub?: string;
-  unset?: boolean;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "w-full rounded-md border px-2 py-1 text-left text-xs transition-colors hover:border-foreground/30",
-        TONE_CLASS[tone],
-        active && "ring-2 ring-ring/40",
-      )}
-    >
-      <span className="flex items-center gap-1.5">
-        {!unset && TONE_LABEL[tone] && (
-          <span className="shrink-0 text-2xs font-medium uppercase tracking-wider opacity-80">{TONE_LABEL[tone]}</span>
-        )}
-        <span className="min-w-0 truncate" title={text}>{unset && tone !== "none" ? `${text} · not set` : text}</span>
-      </span>
-      {sub && <span className="mt-0.5 block truncate text-2xs text-muted-foreground" title={sub}>{sub}</span>}
-    </button>
   );
 }

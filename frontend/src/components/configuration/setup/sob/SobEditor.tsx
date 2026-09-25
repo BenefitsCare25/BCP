@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useMemo, useState } from "react";
-import { AlertTriangle, EyeOff, ListOrdered, Plus, Search, Settings2, X } from "lucide-react";
+import { toast } from "sonner";
+import { AlertTriangle, Eye, EyeOff, ListOrdered, Plus, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 import type { PlanAnswer, SobSchedule } from "@/types";
 import {
   addColumn,
@@ -12,7 +14,7 @@ import {
   setColumnLabel,
   unassignedColumns,
 } from "@/lib/sob";
-import { memberVisibility, rowIssues } from "@/lib/sobAttention";
+import { rowIssues, rowVisibility, type RowVisibility } from "@/lib/sobAttention";
 import { ColumnManager } from "./ColumnManager";
 import { SobRow } from "./SobRow";
 import { SobRowDetail } from "./SobRowDetail";
@@ -26,6 +28,8 @@ interface Props {
   columnAxis?: string[];
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }
+
+type ViewFilter = "all" | "shown" | "hidden";
 
 // Above this many rows the filter box earns its place in the toolbar.
 const FILTER_THRESHOLD = 12;
@@ -50,27 +54,35 @@ export function SobEditor({
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [attentionOnly, setAttentionOnly] = useState(false);
+  const [viewFilter, setViewFilter] = useState<ViewFilter>("all");
   const columns = sob.columns;
   const usesAxis = columnAxis.length > 0;
 
   const unassigned = useMemo(() => unassignedColumns(sob), [sob]);
   const issues = useMemo(() => rowIssues(sob.items, sob.columns), [sob.items, sob.columns]);
-  const hiddenReasons = useMemo(
-    () =>
-      new Map(
-        sob.items.map((item) => [item.uid, memberVisibility(item, sob.columns).reason ?? ""]),
-      ),
+  const visibility = useMemo(
+    () => new Map<string, RowVisibility>(sob.items.map((item) => [item.uid, rowVisibility(item, sob.columns)])),
     [sob.items, sob.columns],
   );
-  const hiddenCount = [...hiddenReasons.values()].filter(Boolean).length;
+  const shownCount = [...visibility.values()].filter((v) => !v.hidden).length;
+  const hiddenCount = sob.items.length - shownCount;
   const showAttention = attentionOnly && issues.size > 0;
+  // Any filter means `idx` no longer walks the visible list, so reordering and
+  // paste-down (which address the unfiltered list) are switched off.
+  const filtered = Boolean(query.trim()) || showAttention || viewFilter !== "all";
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     // Index is carried alongside because every edit helper addresses rows by
     // their position in the unfiltered list.
     const all = sob.items.map((item, idx) => ({ item, idx }));
-    const rows = showAttention ? all.filter(({ item }) => issues.has(item.uid)) : all;
+    const rows = all.filter(({ item }) => {
+      if (showAttention && !issues.has(item.uid)) return false;
+      const hidden = visibility.get(item.uid)?.hidden ?? false;
+      if (viewFilter === "shown" && hidden) return false;
+      if (viewFilter === "hidden" && !hidden) return false;
+      return true;
+    });
     if (!q) return rows;
     return rows.filter(
       ({ item }) =>
@@ -78,7 +90,7 @@ export function SobEditor({
         item.number.toLowerCase().includes(q) ||
         (item.sub_items ?? []).some((s) => s.name.toLowerCase().includes(q)),
     );
-  }, [sob.items, query, showAttention, issues]);
+  }, [sob.items, query, showAttention, issues, viewFilter, visibility]);
 
   // Stable identity: `SobRow` is memoised and `sob.columns` / unedited `item`
   // objects already survive an edit by reference, so this callback is the only
@@ -143,7 +155,7 @@ export function SobEditor({
         )}
 
         <span className="text-2xs text-muted-foreground">
-          {query || showAttention
+          {filtered
             ? `${visible.length} of ${sob.items.length} benefits`
             : `${sob.items.length} benefit${sob.items.length === 1 ? "" : "s"}`}
         </span>
@@ -160,21 +172,58 @@ export function SobEditor({
             {issues.size} need{issues.size === 1 ? "s" : ""} attention
           </Button>
         )}
-        {hiddenCount > 0 && (
-          <span
-            className="inline-flex items-center gap-1 text-2xs text-muted-foreground"
-            title="Rows where every plan says NA or Not covered, and insurer admin rows. The employee portal leaves them out."
-          >
-            <EyeOff className="size-3" /> {hiddenCount} hidden from employees
-          </span>
-        )}
+        <div
+          role="group"
+          aria-label="Filter by what employees see"
+          className="inline-flex items-center rounded-md border border-border p-0.5"
+        >
+          {(
+            [
+              ["all", `All ${sob.items.length}`, null],
+              ["shown", `Shown ${shownCount}`, Eye],
+              ["hidden", `Hidden ${hiddenCount}`, EyeOff],
+            ] as const
+          ).map(([key, label, Icon]) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={viewFilter === key}
+              onClick={() => setViewFilter(key)}
+              title={
+                key === "shown"
+                  ? "Rows employees see on the portal"
+                  : key === "hidden"
+                    ? "Rows the portal leaves out: turned off, insurer admin wording, or no value on any plan"
+                    : undefined
+              }
+              className={cn(
+                "inline-flex h-7 items-center gap-1 rounded px-2 text-2xs",
+                viewFilter === key
+                  ? "bg-card text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {Icon && <Icon className="size-3" aria-hidden />}
+              {label}
+            </button>
+          ))}
+        </div>
 
         <Button
           size="sm"
           variant="ghost"
           className="ml-auto"
-          title="Renumber numeric rows and outpatient groups in their current order; letter labels are preserved"
-          onClick={() => setSob(renumberItems)}
+          title="Relabels rows in their current order: lettered rows A, B, C…, numbered rows and outpatient groups 1, 2, 3…. It doesn't move rows. Moving a row with its arrows relabels automatically."
+          onClick={() =>
+            setSob((s) => {
+              const next = renumberItems(s);
+              const changed = next.items.some((it, i) => it.number !== s.items[i].number);
+              toast[changed ? "success" : "info"](
+                changed ? "Renumbered" : "Already in order — nothing to renumber",
+              );
+              return next;
+            })
+          }
         >
           <ListOrdered className="size-3.5" /> Renumber
         </Button>
@@ -213,12 +262,30 @@ export function SobEditor({
         />
       )}
 
+      <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-muted-foreground">
+        <span className="font-medium text-foreground">Employees see:</span>
+        <span className="inline-flex items-center gap-1">
+          <Eye className="size-3" aria-hidden /> Shown — on the employee portal
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <EyeOff className="size-3" aria-hidden /> Hidden — switch it on to show it
+        </span>
+        <span>Always hidden — no value on any plan, nothing to show</span>
+        <span>NA cells are left out automatically</span>
+      </p>
+
       <div className="overflow-x-auto rounded-md border border-border">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-20 bg-muted">
             <tr className="border-b border-border">
               <th className="sticky left-0 z-30 bg-muted px-2 py-1.5 text-left text-2xs uppercase tracking-wider text-muted-foreground">
                 Benefit
+              </th>
+              <th
+                className="min-w-32 px-2 py-1.5 text-left text-2xs uppercase tracking-wider text-muted-foreground"
+                title="Whether employees see this row on the portal"
+              >
+                Employees see
               </th>
               {columns.map((col) => (
                 <th
@@ -242,12 +309,16 @@ export function SobEditor({
             {visible.length === 0 ? (
               <tr>
                 <td
-                  colSpan={valueColCount + 2}
+                  colSpan={valueColCount + 3}
                   className="px-3 py-6 text-center text-xs text-muted-foreground"
                 >
-                  {showAttention && !query
-                    ? "Nothing left to review."
-                    : `No benefit matches “${query}”.`}
+                  {query
+                    ? `No benefit matches “${query}”.`
+                    : showAttention
+                      ? "Nothing left to review."
+                      : viewFilter === "hidden"
+                        ? "Every row is shown to employees."
+                        : "No row is shown to employees yet."}
                 </td>
               </tr>
             ) : (
@@ -259,9 +330,8 @@ export function SobEditor({
                     columns={columns}
                     axis={columnAxis}
                     rowCount={sob.items.length}
-                    reorderable={!query.trim() && !showAttention}
+                    reorderable={!filtered}
                     issues={issues.get(item.uid)?.join(" · ")}
-                    hiddenReason={hiddenReasons.get(item.uid)}
                     expanded={expanded.has(item.uid)}
                     onToggle={toggle}
                     setSob={setSob}
@@ -272,7 +342,7 @@ export function SobEditor({
                       idx={idx}
                       columns={columns}
                       axis={columnAxis}
-                      colSpan={valueColCount + 2}
+                      colSpan={valueColCount + 3}
                       setSob={setSob}
                       issues={issues.get(item.uid)}
                     />

@@ -217,7 +217,7 @@ def test_monetary_copay_policy_year_property_becomes_a_reviewable_limit() -> Non
     assert schedule[0]["claim_limit"] == setting
 
 
-def test_copay_annual_count_stays_informational() -> None:
+def test_copay_annual_count_is_a_visit_cap_for_review() -> None:
     plans = [
         {
             "code": "1",
@@ -239,8 +239,10 @@ def test_copay_annual_count_stays_informational() -> None:
     setting = sob_from_plan_items(plans, product_code="GCGP")["items"][0][
         "claim_limits"
     ]["col0"]
-    assert setting["basis"] == "informational"
-    assert setting["amount"] is None
+    # A count, never money: a visit cap that stays off until a broker confirms.
+    assert setting["basis"] == "visits_per_year"
+    assert setting["amount"] == 5
+    assert setting["status"] == "needs_review"
     assert setting["display"] == "5 visits per policy year"
 
 

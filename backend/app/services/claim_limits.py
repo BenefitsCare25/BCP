@@ -157,7 +157,13 @@ def suggested_structured_policy_year_setting(
     if is_absent_value(text):
         return None
     display = text if _PER_YEAR_RE.search(text) else f"{text} per policy year"
-    if has_monetary_context(text) or "as charged" in text.casefold():
+    # "5 visits" (the parser writes the unit when the slip's formatting says
+    # it's a count) is a visit cap, suggested for review like any other.
+    if (
+        has_monetary_context(text)
+        or "as charged" in text.casefold()
+        or _VISIT_COUNT_RE.search(text)
+    ):
         return suggested_limit_setting(display, claim_scope_codes=claim_scope_codes)
     return {
         "basis": LIMIT_BASIS_INFORMATIONAL,
