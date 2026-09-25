@@ -270,16 +270,14 @@ export function PortalShell() {
 
           {/* ── Desktop: one row. ────────────────────────────────────────── */}
           <div className="hidden items-center gap-0 py-2.5 pl-5 pr-3 lg:flex">
-            {/* Used whole and uncropped. Its three-line wordmark needs this
-                much height to stay legible, which is what decided a single tall
-                row over two short ones. Served from a 50 KB derivative — the
+            {/* Used whole and uncropped. Served from a 50 KB derivative — the
                 source asset is 792 KB and has no business in a header. */}
             <img
               src="/inspro-logo-header.png"
               alt="Inspro Insurance Brokers"
-              width={162}
-              height={52}
-              className="h-13 w-auto shrink-0"
+              width={125}
+              height={40}
+              className="h-10 w-auto shrink-0"
             />
             <span aria-hidden className="mx-5 h-8 w-px shrink-0 bg-hairline" />
 

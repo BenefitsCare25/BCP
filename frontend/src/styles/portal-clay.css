@@ -294,7 +294,7 @@
 .sky-stage h1 .name { color: var(--ink-accent); }
 .sky-sub { text-shadow: 0 0 18px rgb(255 255 255 / 0.9); margin: 16px 0 0; font-size: clamp(16px, 1.5vw, 20px); font-weight: 500; color: var(--ink); opacity: 0.85; }
 .sky-rule { display: block; width: 56px; height: 3px; margin: 22px auto 0; border-radius: 9999px; background: var(--ink-accent); }
-.sky-stage .clay-hero-actions { justify-content: center; gap: 14px; margin-top: 28px; }
+.sky-stage .clay-hero-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-top: 28px; }
 .sky-stage .clay-hero-actions .clay-btn { min-width: 184px; min-height: 52px; }
 .sky-stage .clay-btn { border-radius: 9999px; padding: 0 24px; }
 .sky-stage .clay-btn-dark {
@@ -526,7 +526,7 @@ a.clay-sheet:hover .clay-sheet-go svg, button.clay-sheet:hover .clay-sheet-go sv
   .sky-content { padding: 88px 22px 0; }
   .sky-eyebrow { font-size: 11px; margin-bottom: 12px; }
   .sky-sub { font-size: 15px; }
-  .sky-stage .clay-hero-actions { max-width: 340px; margin: 24px auto 0; }
+  .sky-stage .clay-hero-actions { display: grid; max-width: 340px; gap: 12px; margin: 24px auto 0; }
   .sky-stage .clay-hero-actions .clay-btn { min-width: 0; }
   .sky-note { display: none; }
   .sky-sun { width: 90vw; height: 90vw; }
