@@ -206,6 +206,15 @@ export function useMemberMfaEnrollConfirm() {
   });
 }
 
+export function useMemberChangePassword() {
+  return useMutation({
+    mutationFn: (input: { current_password: string; new_password: string }) =>
+      // `verify`: a 401 here means "current password wrong", not "signed out".
+      portalApi.verify<{ status: string }>("/portal/auth/change-password", input),
+    meta: { localErrorHandling: true },
+  });
+}
+
 export function useMemberMfaDisable() {
   const qc = useQueryClient();
   return useMutation({
@@ -433,6 +442,10 @@ export interface PortalClaim {
   status: string;
   dependant_id: string | null;
   dependant_name: string | null;
+  /** Minted at submit; quotable to support. */
+  reference_no?: string | null;
+  /** When the insurer paid — "approved" and "in my account" differ. */
+  paid_on?: string | null;
   submitted_at: string | null;
   decided_at: string | null;
   decision_notes: string | null;

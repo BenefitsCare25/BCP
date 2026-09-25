@@ -94,7 +94,7 @@ export function PortalNewClaimPage() {
   const queued = form.pendingClaims.length;
 
   return (
-    <div className="mx-auto max-w-xl">
+    <div className="max-w-2xl">
       {/* No heading and no preamble. The nav and the document title already say
           what this page is; "your broker reviews every claim" describes our
           process, not the member's task; and the eligible-date window is

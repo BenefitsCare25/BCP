@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { Copy, Loader2 } from "lucide-react";
 import {
   useMemberMfaDisable,
+  useMemberChangePassword,
   useMemberMfaEnrollConfirm,
   useMemberMfaEnrollStart,
   useMemberSecurityStatus,
@@ -28,7 +29,9 @@ import {
 import { Field, FormAlert, leafControl } from "@/components/portal/leaf/Field";
 import { Mount, MountRule } from "@/components/portal/leaf/Mount";
 import { Strike } from "@/components/portal/leaf/Strike";
-import { actionClass } from "@/components/portal/leaf/Action";
+import { Action, actionClass } from "@/components/portal/leaf/Action";
+import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
+import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { errorStatus, formatError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
@@ -279,14 +282,84 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
   );
 }
 
+function ChangePasswordPanel() {
+  const change = useMemberChangePassword();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const mismatch = confirm.length > 0 && confirm !== next;
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    if (next !== confirm) {
+      setError("The new passwords don't match.");
+      return;
+    }
+    change.mutate(
+      { current_password: current, new_password: next },
+      {
+        onSuccess: () => {
+          toast.success("Password changed");
+          setCurrent("");
+          setNext("");
+          setConfirm("");
+        },
+        onError: (e) => setError(credentialError(e, "Your current password is incorrect.")),
+      },
+    );
+  };
+
+  return (
+    <Mount label="Password" gloss="At least 12 characters. Avoid one you use anywhere else.">
+      <MountRule />
+      <form onSubmit={submit} className="grid gap-4 sm:max-w-md">
+        <Field label="Current password" required>
+          {(props) => (
+            <input {...props} type="password" autoComplete="current-password" value={current}
+              onChange={(e) => setCurrent(e.target.value)} className={leafControl} />
+          )}
+        </Field>
+        <Field label="New password" required>
+          {(props) => (
+            <input {...props} type="password" autoComplete="new-password" minLength={12} value={next}
+              onChange={(e) => setNext(e.target.value)} className={leafControl} />
+          )}
+        </Field>
+        <Field label="Confirm new password" required error={mismatch ? "Doesn't match the new password." : error}>
+          {(props) => (
+            <input {...props} type="password" autoComplete="new-password" value={confirm}
+              onChange={(e) => setConfirm(e.target.value)} className={leafControl} />
+          )}
+        </Field>
+        <div>
+          <Action tone="primary" type="submit" disabled={change.isPending || !current || next.length < 12 || mismatch}>
+            {change.isPending && <Loader2 className="size-4 animate-spin" aria-hidden />}
+            Change password
+          </Action>
+        </div>
+      </form>
+    </Mount>
+  );
+}
+
 export function PortalSecurityPage() {
-  useDocumentTitle("Two-step sign-in");
-  const { data, refetch } = useMemberSecurityStatus();
+  useDocumentTitle("Sign-in & security");
+  const { data, refetch, isLoading, isError } = useMemberSecurityStatus();
   const enrolled = data?.mfa_status === "confirmed";
   const available = data?.mfa_available ?? false;
   const [recovery, setRecovery] = useState<string[] | null>(null);
 
   return (
+    <div className="max-w-3xl space-y-4">
+    <ChangePasswordPanel />
+    {isLoading ? (
+      <LeafSkeleton label="Loading your sign-in settings" mounts={1} />
+    ) : isError ? (
+      // A failed status read is NOT "your company hasn't switched this on".
+      <PortalErrorState onRetry={() => void refetch()} />
+    ) : (
     <Mount
       label="Two-step sign-in"
       gloss="A code from your phone, asked for alongside your password."
@@ -314,5 +387,7 @@ export function PortalSecurityPage() {
         </p>
       )}
     </Mount>
+    )}
+    </div>
   );
 }

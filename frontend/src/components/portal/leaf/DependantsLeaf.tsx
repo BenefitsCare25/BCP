@@ -9,13 +9,16 @@
  *
  * Shared by the member's own page and the broker's employee-view preview, so
  * the two provably cannot drift. */
-import type { Dependant } from "@/types";
+import type { BenefitStatement, CoverageLine, Dependant } from "@/types";
 import {
   dependantDob,
   dependantName,
   dependantRelationship,
 } from "@/lib/dependant";
-import { Mount, MountRow } from "./Mount";
+import { Mount } from "./Mount";
+import { buildCareRoutes } from "./careRoutes";
+import { careTone } from "./careTone";
+import { isEmployeeLine } from "../memberVisibility";
 import { Strike } from "./Strike";
 import { formatDay } from "./date";
 
@@ -44,69 +47,72 @@ function DependantState({
   return <Strike tone="approved">Covered</Strike>;
 }
 
+/** The benefits one person holds, as the same coloured tags Home uses. */
+function CareTags({ lines }: { lines: CoverageLine[] }) {
+  const routes = buildCareRoutes(lines);
+  if (routes.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-x-2.5 gap-y-3 pt-1">
+      {routes.map((route) => (
+        <span key={route.key} className={`clay-tag !text-[10px] !normal-case !tracking-normal tone-${careTone(route.key)}`}>
+          {route.title}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function DependantsLeaf({
   rows,
-  cover,
+  statement,
+  selfName,
 }: {
   rows: Dependant[];
-  /** dependant id → the PLANS covering them, named. Omit when unresolvable
-   *  (the value is the answer to "what am I covered for", so an empty entry
-   *  and a missing one mean different things: nothing, versus not known). */
-  cover?: Map<string, string[]>;
+  /** The member's statement, to name what each person is covered for. Omit
+   *  while it is unresolvable — an absent list is not "covered for nothing". */
+  statement?: BenefitStatement;
+  /** The member's own name: the family starts with them. */
+  selfName?: string;
 }) {
-  if (rows.length === 0) {
-    return (
-      <Mount label="No one added yet">
-        <p className="text-row text-label">
-          Family members you add here can be covered under the plans that
-          include dependants. Your HR team approves each one before their cover
-          starts.
-        </p>
-      </Mount>
-    );
-  }
+  const selfLines = statement ? statement.coverage.filter(isEmployeeLine) : null;
+  const linesFor = (id: string) =>
+    statement ? statement.coverage.filter((line) => line.covered_dependants.some((person) => person.id === id)) : null;
 
   return (
     <ul className="space-y-3">
+      {selfName && selfLines && (
+        <Mount as="li" label={selfName} gloss="You" aside={<Strike tone="approved">Covered</Strike>}>
+          <CareTags lines={selfLines} />
+        </Mount>
+      )}
+      {rows.length === 0 && (
+        <Mount as="li" label="No one added yet">
+          <p className="text-row text-label">
+            Add your spouse or children to be covered under the plans that
+            include family. Your HR team approves each one first.
+          </p>
+        </Mount>
+      )}
       {rows.map((dep) => {
         const name = dependantName(dep);
         const relationship = dependantRelationship(dep);
         const dob = dependantDob(dep);
-        const plans = cover?.get(dep.id);
+        const lines = linesFor(dep.id);
         return (
           <Mount
             key={dep.id}
             as="li"
             label={name ?? "Family member"}
-            gloss={relationship ? <span className="capitalize">{relationship}</span> : null}
-            aside={
-              <DependantState
-                status={dep.status}
-                covered={plans ? plans.length > 0 : undefined}
-              />
+            gloss={
+              <span className="capitalize">
+                {[relationship, dob ? `born ${formatDay(dob)}` : null].filter(Boolean).join(" · ")}
+              </span>
             }
+            aside={<DependantState status={dep.status} covered={lines ? lines.length > 0 : undefined} />}
           >
-            {(dob || plans) && (
-              <dl>
-                {/* Written the way the member would say it. The roster's
-                    "1966-05-21" is a database value, and the portal prints
-                    every other date through `formatDay` — a person's own
-                    date of birth is the last place to break that. */}
-                {dob && <MountRow term="Date of birth">{formatDay(dob)}</MountRow>}
-                {/* WHAT they are covered for, which is the question this page
-                    exists to answer and the one it did not. A relationship and
-                    a date of birth are facts the member supplied; the plans are
-                    the thing they came here to read. Named in full, never as
-                    GHS/GMM — a code is an unglossed term on a member surface. */}
-                {plans && plans.length > 0 && (
-                  <MountRow term="Covered under">{plans.join(", ")}</MountRow>
-                )}
-                {plans && plans.length === 0 && dep.status === "active" && (
-                  <MountRow term="Covered under">
-                    No plan covers them yet — your HR team can add them.
-                  </MountRow>
-                )}
-              </dl>
+            {lines && lines.length > 0 && <CareTags lines={lines} />}
+            {lines && lines.length === 0 && dep.status === "active" && (
+              <p className="text-row text-label">No plan covers them yet — your HR team can add them.</p>
             )}
           </Mount>
         );

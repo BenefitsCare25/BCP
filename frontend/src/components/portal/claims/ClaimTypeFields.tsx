@@ -11,6 +11,7 @@
 import { Field, FieldGroup, leafControl } from "@/components/portal/leaf/Field";
 import { FLEX_PREFIX, type InsuredGroupKey } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
+import { formatDay } from "@/components/portal/leaf/date";
 
 export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
   const {
@@ -25,8 +26,8 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
   return (
     <>
       {selectedProduct?.claimable_from && <p className="text-sm text-label">
-        Coverage: {selectedProduct.claimable_from} to {selectedProduct.claimable_to}.
-        {selectedProduct.submission_deadline && ` Submit by ${selectedProduct.submission_deadline}.`}
+        Covered {formatDay(selectedProduct.claimable_from)} – {formatDay(selectedProduct.claimable_to)}.
+        {selectedProduct.submission_deadline && ` Submit by ${formatDay(selectedProduct.submission_deadline)}.`}
       </p>}
       {form.hasDependants && (
         <Field label="Who is this claim for?">

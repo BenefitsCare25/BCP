@@ -56,6 +56,7 @@ _ACTIVITY_LABELS: dict[str, str] = {
     "lockout": "Account Locked",
     "password_reset_request": "Password Reset Requested",
     "password_reset_complete": "Password Reset Completed",
+    "password_change": "Password Changed",
     "token_refresh": "Session Refreshed",
     "token_reuse_detected": "Session Token Reuse Detected",
 }

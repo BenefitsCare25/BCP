@@ -19,11 +19,11 @@ import type {
 import type { PortalClaim } from "@/api/portal";
 import { Mount, MountRow, MountRule } from "./Mount";
 import { insuredClaimTitle } from "./ClaimMount";
-import { Limit, Money, currencySymbol } from "./Figure";
+import { Money, currencySymbol } from "./Figure";
 import { ClaimStrike, claimBucket } from "./Strike";
-import { FillRule, drawnAgainst } from "./FillRule";
+import { drawnAgainst } from "./FillRule";
 import { prorationReason } from "./FlexProrationNote";
-import { glossBeside } from "./glossary";
+import { BalanceCard, BalanceCardShell, SubBalanceRow } from "./BalanceCard";
 import { formatDay } from "./date";
 import { availableAfterPending } from "@/lib/claimLimits";
 
@@ -141,74 +141,6 @@ function PendingBreakdown({
             : `${awaiting} more claims are being converted to SGD and aren't counted above yet.`}
         </p>
       )}
-    </div>
-  );
-}
-
-/** A visits-per-year cap reads as a count, never as money. */
-function VisitsBlock({ bucket }: { bucket: UtilizationBucket }) {
-  const cap = bucket.visit_limit ?? 0;
-  const left = bucket.visits_remaining ?? 0;
-  const pending = bucket.visits_pending ?? 0;
-  return (
-    <div className="py-3 pl-4">
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="min-w-0 break-words text-row text-label">{bucket.benefit_key}</span>
-        <span className="shrink-0 text-row font-semibold text-record">
-          {left} of {cap} visit{cap === 1 ? "" : "s"} left
-        </span>
-      </div>
-      <p className="mt-1 text-row text-label">
-        {bucket.visits_used ?? 0} used this policy year
-        {pending > 0 && ` · ${pending} being reviewed`}
-      </p>
-    </div>
-  );
-}
-
-function BucketBlock({
-  bucket,
-  sub,
-}: {
-  bucket: UtilizationBucket;
-  sub?: boolean;
-}) {
-  if (sub && bucket.visit_limit != null && bucket.visits_remaining != null) {
-    return <VisitsBlock bucket={bucket} />;
-  }
-  const title = sub
-    ? bucket.benefit_key
-    : (bucket.product_name ?? bucket.product_code ?? "Benefit");
-
-  return (
-    <div className={sub ? "py-3 pl-4" : "py-3"}>
-      <div className="mb-2 flex items-baseline justify-between gap-4">
-        <span
-          className={`min-w-0 break-words text-row ${
-            sub ? "text-label" : "font-medium text-record"
-          }`}
-        >
-          {title}
-        </span>
-        {/* Through `Limit`, not raw: it is the one place that decides how a
-            cap prints, so the tab agrees with `FillRule` directly beneath it. */}
-        {(bucket.limit_display || bucket.limit === null) && (
-          <span className="shrink-0 text-row text-label">
-            <Limit
-              amount={null}
-              display={bucket.limit_display}
-              currency={currencySymbol(null)}
-            />
-          </span>
-        )}
-      </div>
-      <FillRule
-        limit={bucket.limit}
-        approved={bucket.approved}
-        pending={bucket.pending}
-        pendingUnconverted={bucket.pending_unconverted}
-        remaining={bucket.remaining}
-      />
     </div>
   );
 }
@@ -474,60 +406,34 @@ export function UsageLeaf({
   ).length;
 
   return (
-    <div className="space-y-3">
-      {active.map((b) => (
-        <Mount
-          key={b.product_code ?? "unknown"}
-          label={b.product_name ?? b.product_code ?? "Benefit"}
-          gloss={
-            b.product_code
-              ? glossBeside(
-                  b.product_name ?? b.product_code,
-                  b.product_code,
-                  b.product_name,
-                )
-              : null
-          }
-          aside={
-            isAnnualBalance(b) && b.limit_display ? (
-              <span className="text-row text-label">
-                <Limit
-                  amount={null}
-                  display={b.limit_display}
-                  currency={currencySymbol(null)}
-                />
-              </span>
-            ) : undefined
-          }
-        >
-          {isAnnualBalance(b) && (
-            <FillRule
-              limit={b.limit}
-              approved={b.approved}
-              pending={b.pending}
-              pendingUnconverted={b.pending_unconverted}
-              remaining={b.remaining}
-            />
-          )}
-          {isAnnualBalance(b) && b.pending > 0 && (
-            <PendingBreakdown bucket={b} claims={claims} />
-          )}
-          {balanceSubsFor(b.product_code).length > 0 && (
-            <>
-              <MountRule className="mt-4" />
-              <div className="divide-y divide-hairline/75">
-                {balanceSubsFor(b.product_code).map((s) => (
-                  <BucketBlock
-                    key={`${s.product_code}/${s.benefit_key}`}
-                    bucket={s}
-                    sub
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </Mount>
-      ))}
+    <div className="space-y-4">
+      {active.map((b) => {
+        // The card leads with the product's own cap, or — when only a
+        // sub-limit is tracked (GHS dialysis) — that sub-limit, NAMED, so it is
+        // never read as the whole benefit.
+        const subs = balanceSubsFor(b.product_code);
+        const lead = isAnnualBalance(b) ? b : subs.find(isAnnualBalance) ?? null;
+        const rest = subs.filter((sub) => sub !== lead);
+        if (!lead) {
+          return (
+            <BalanceCardShell key={b.product_code ?? "unknown"} productCode={b.product_code} productName={b.product_name}>
+              {rest.map((sub) => <SubBalanceRow key={`${sub.product_code}/${sub.benefit_key}`} bucket={sub} />)}
+            </BalanceCardShell>
+          );
+        }
+        return (
+          <BalanceCard
+            key={b.product_code ?? "unknown"}
+            productCode={b.product_code}
+            productName={b.product_name}
+            bucket={lead}
+            subLabel={lead === b ? null : lead.benefit_key}
+          >
+            {lead.pending > 0 && <PendingBreakdown bucket={lead} claims={claims} />}
+            {rest.map((sub) => <SubBalanceRow key={`${sub.product_code}/${sub.benefit_key}`} bucket={sub} />)}
+          </BalanceCard>
+        );
+      })}
 
       {data.flex && <FlexBlock flex={data.flex} />}
 

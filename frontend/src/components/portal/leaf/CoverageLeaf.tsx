@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, MapPin } from "lucide-react";
+import { ArrowLeft, ChevronDown, MapPin } from "lucide-react";
 import type { BenefitStatement, CoverageLine, DependantSummary } from "@/types";
 import { actionClass } from "./Action";
 import { FlexMount } from "./FlexMount";
-import { Mount, MountRule, glassHover, glassSurface } from "./Mount";
+import { Mount, MountRule } from "./Mount";
 import { ScheduleLeaf } from "./ScheduleLeaf";
-import { buildCareRoutes, type CareRoute } from "./careRoutes";
+import { buildCareRoutes } from "./careRoutes";
 import { careFacts } from "./careFacts";
+import { careArt, careTone } from "./careTone";
+import { BenefitSheetButton } from "../home/BenefitSheet";
 import { productShortLabel } from "./glossary";
 import { isEmployeeLine } from "../memberVisibility";
 
@@ -26,21 +28,6 @@ function coveredPeople(lines: CoverageLine[]): DependantSummary[] {
     for (const person of line.covered_dependants) people.set(person.id, person);
   }
   return [...people.values()];
-}
-
-function RouteCard({ route, onClick }: { route: CareRoute; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick}
-      className={`${glassSurface} ${glassHover} leaf-focus leaf-rise flex min-h-32 w-full flex-col items-start justify-between gap-3 rounded-tile p-4 text-left sm:p-5`}>
-      <span>
-        <span className="block text-md font-semibold text-record">{route.title}</span>
-        <span className="mt-1 block text-row text-label">{route.description}</span>
-      </span>
-      <span className="flex items-center gap-1.5 text-row font-semibold text-action-ink">
-        View cover <ArrowRight className="size-4" aria-hidden />
-      </span>
-    </button>
-  );
 }
 
 function PlanDetail({ line, routeKey, person }: {
@@ -176,9 +163,15 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
             className="leaf-focus inline-flex min-h-11 items-center gap-2 text-row font-semibold text-action-ink">
             <ArrowLeft className="size-4" aria-hidden /> All care options
           </button>
-          <div>
-            <h2 className="text-2xl font-semibold tracking-title text-record">{selected.title}</h2>
-            <p className="mt-1 text-row text-label">{selected.description}</p>
+          <div className={`tone-${careTone(selected.key)} relative flex min-h-36 items-end overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-6 pr-40 sm:min-h-44 sm:p-8 sm:pr-56`}>
+            <div>
+              <span className="clay-tag">{productShortLabel(selected.lines[0].product_code, selected.lines[0].product_name)}</span>
+              <h2 className="mt-4 text-3xl font-bold tracking-title text-record sm:text-4xl">{selected.title}</h2>
+              <p className="mt-1 text-row text-[var(--tone-ink)]">{selected.description}</p>
+            </div>
+            {careArt(selected.key) && (
+              <img src={careArt(selected.key)!} alt="" className="pointer-events-none absolute -bottom-2 right-2 size-36 object-contain sm:right-6 sm:size-48" />
+            )}
           </div>
           <div className="grid gap-4">
             {selected.lines.map((line, index) => (
@@ -193,25 +186,19 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
         </>
       ) : (
         <>
-          <div>
-            <h2 className="text-2xl font-semibold tracking-title text-record">
-              {routes.some((route) => route.section === "care") ? "What care do you need?" : "Your cover"}
-            </h2>
-            <p className="mt-1 text-row text-label">Choose a topic to see the cover that applies to {person ? dependantName(person) : "you"}.</p>
-          </div>
           {routes.filter((route) => route.section === "care").length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+            <div className="clay-sheets">
               {routes.filter((route) => route.section === "care").map((route) => (
-                <RouteCard key={route.key} route={route} onClick={() => select(route.key)} />
+                <BenefitSheetButton key={route.key} route={route} onClick={() => select(route.key)} />
               ))}
             </div>
           )}
           {routes.filter((route) => route.section === "other").length > 0 && (
             <section className="space-y-3" aria-label="Other cover">
-              <h3 className="text-md font-semibold text-record">Other cover</h3>
-              <div className="grid gap-3 sm:grid-cols-2 sm:gap-4">
+              <h3 className="clay-subhead !m-0">Also covered</h3>
+              <div className="clay-sheets clay-sheets-other">
                 {routes.filter((route) => route.section === "other").map((route) => (
-                  <RouteCard key={route.key} route={route} onClick={() => select(route.key)} />
+                  <BenefitSheetButton key={route.key} route={route} onClick={() => select(route.key)} />
                 ))}
               </div>
             </section>

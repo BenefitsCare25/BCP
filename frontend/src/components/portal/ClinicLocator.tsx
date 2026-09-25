@@ -43,7 +43,7 @@ import type {
 } from "@/api/panelListings";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
-import { Mount, glassSurface } from "@/components/portal/leaf/Mount";
+import { Mount } from "@/components/portal/leaf/Mount";
 import { actionClass } from "@/components/portal/leaf/Action";
 import { ClinicRow } from "@/components/portal/clinics/ClinicRow";
 import {
@@ -52,7 +52,6 @@ import {
   type OriginState,
   type OriginStatus,
 } from "@/components/portal/clinics/ClinicFinder";
-import { cn } from "@/lib/cn";
 import { singaporeNow, type ClinicClock } from "@/lib/clinicHours";
 import { readableCase } from "@/lib/clinicText";
 import { formatError, isNotFoundError } from "@/lib/errors";
@@ -129,12 +128,7 @@ function ClinicGroups({
         // `:nth-of-type` rule over siblings.
         <section key={group.key} className="leaf-rise space-y-1.5">
           <h2 className={showHeadings ? "leaf-label px-1" : "sr-only"}>{group.label}</h2>
-          <ul
-            className={cn(
-              glassSurface,
-              "divide-y divide-hairline/75 rounded-tile p-1.5 sm:p-2",
-            )}
-          >
+          <ul className="clinic-grid">
             {group.items.map((clinic) => (
               <ClinicRow key={clinic.id} clinic={clinic} clock={clock} />
             ))}

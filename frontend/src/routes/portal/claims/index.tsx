@@ -5,8 +5,8 @@ import { usePortalClaimPages, usePortalMe } from "@/api/portal";
 import { holds } from "@/components/portal/capabilities";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
-import { Mount } from "@/components/portal/leaf/Mount";
 import { actionClass } from "@/components/portal/leaf/Action";
+import { ClayEmpty } from "@/components/portal/leaf/ClayEmpty";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
@@ -64,7 +64,7 @@ function MakeClaimAction() {
  * traverse it to pair a claim with its amount. Sharing the detail page's
  * `max-w-3xl` also means opening a claim expands the row in place instead of
  * reflowing the column it came from. */
-const MEASURE = "mx-auto max-w-3xl";
+const MEASURE = "max-w-3xl";
 
 export function PortalClaimsPage() {
   const company = useCompany();
@@ -95,25 +95,23 @@ export function PortalClaimsPage() {
   // one-handed.
   if (rows.length === 0) {
     return (
-      <Mount label="No claims yet" className={MEASURE}>
+      <div>
         <ClaimPeriodPicker />
-        <p className="text-row text-label">
-          When you pay for treatment that your benefits cover, send us the
-          receipt here and we&rsquo;ll tell you where it&rsquo;s up to.
-        </p>
-        {canClaim && (
-          <div>
-            <Link
-              to="/portal/$company/claims/new"
-              params={{ company }}
-              className={actionClass("primary", { block: "phone" })}
-            >
+        <ClayEmpty
+          tone="peach"
+          art="/portal/clay/claim.webp"
+          title="No claims yet"
+          action={canClaim ? (
+            <Link to="/portal/$company/claims/new" params={{ company }} className={actionClass("primary")}>
               <FilePlus2 className="size-4" aria-hidden />
               Make a claim
             </Link>
-          </div>
-        )}
-      </Mount>
+          ) : undefined}
+        >
+          Paid for treatment your benefits cover? Send us the receipt and
+          we&rsquo;ll keep you posted here.
+        </ClayEmpty>
+      </div>
     );
   }
 

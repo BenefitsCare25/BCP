@@ -7,7 +7,8 @@ would force those callers through HTTP-shaped infra.
 
 Master keys come from env:
 
-- ``INSPRO_AI_KEY_ENCRYPTION_KEY``           — current (required)
+- ``INSPRO_AI_KEY_ENCRYPTION_KEY``           — current (required in staging/prod;
+  local dev falls back to a key persisted in ``backend/var/dev_master.key``)
 - ``INSPRO_AI_KEY_ENCRYPTION_KEY_PREVIOUS``  — optional, for rotation
 
 Both must be valid 32-byte urlsafe-base64 strings (i.e. ``Fernet`` keys). On
@@ -31,6 +32,7 @@ import os
 import secrets
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
@@ -61,9 +63,36 @@ def _parse(name: str, value: str) -> Fernet:
         ) from exc
 
 
+_DEV_KEY_FILE = Path(__file__).resolve().parents[2] / "var" / "dev_master.key"
+
+
+def _dev_fallback_key() -> str:
+    """Local dev only: a key minted once and kept in gitignored `backend/var/`.
+
+    Dev never has to supply the env var, yet anything encrypted locally (BYOK
+    rows, TOTP secrets) still decrypts after a restart — a per-boot ephemeral
+    key would silently orphan them. Staging/prod never reach this: they fail
+    closed in `_load_keys`.
+    """
+    if _DEV_KEY_FILE.exists():
+        return _DEV_KEY_FILE.read_text(encoding="ascii").strip()
+    _DEV_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    key = Fernet.generate_key().decode("ascii")
+    _DEV_KEY_FILE.write_text(key, encoding="ascii")
+    return key
+
+
+def _is_dev() -> bool:
+    from app.core.settings import _resolve_env
+
+    return _resolve_env() == "dev"
+
+
 @lru_cache(maxsize=1)
 def _load_keys() -> _Keys:
     current_raw = os.environ.get(_ENV_CURRENT, "").strip()
+    if not current_raw and _is_dev():
+        current_raw = _dev_fallback_key()
     if not current_raw:
         # Bake a fresh suggestion into the error so the operator can paste it.
         suggested = Fernet.generate_key().decode("ascii")

@@ -1,0 +1,609 @@
+/* ─── Clay — the member portal's visual world ────────────────────────────────
+   Scope: `.portal-clay`, set on PortalShell's root beside `.leaf`. `.leaf`
+   re-points the shared primitives onto the portal token NAMES; this file sets
+   what those names MEAN here. The broker's employee preview (`PortalFrame`)
+   renders the same components under `.leaf` alone, so it keeps the older
+   values until it opts into this class.
+
+   The world, in one line: a warm-white ground carrying rounded SHEETS, each
+   benefit owning one colour pair and one clay object, black pills for the
+   actions that DO something. Colour is identity (which benefit); claim status
+   keeps the strike inks from leaf.css and never borrows a benefit tone. */
+
+@import "@fontsource-variable/figtree/wght.css";
+@import "@fontsource/caveat/600.css";
+
+.portal-clay {
+  /* Ground + ink. The label grey is 6.4:1 on the ground, 6.0:1 on shade. */
+  --color-ground: #fefdfb;
+  --color-shade: #f3f2ed;
+  --color-bar: #ffffff;
+  --color-hairline: #e7e3da;
+  --color-track: #ebe8e0;
+  --color-record: #16150f;
+  --color-label: #625e55;
+  --color-leaf-input: #8a8579;
+
+  /* The pane is paper, not glass: solid white, a hairline, no blur, no bloom. */
+  --color-glass: #ffffff;
+  --color-glass-hover: #ffffff;
+  --color-glass-edge: #ebe7de;
+  --blur-glass: 0px;
+  --shadow-mount: 0 1px 0 rgb(22 21 15 / 0.03);
+  --shadow-float: 0 10px 30px -12px rgb(22 21 15 / 0.28), 0 2px 6px rgb(22 21 15 / 0.06);
+
+  /* Actions are the sky's deep blue — the colour of the member's name in the
+     greeting, so the one thing to DO reads as part of the same world. White on
+     #2447d8 is 6.6:1; the ink twin #1d3bc4 is 7.6:1 on the ground. */
+  --color-action: #2447d8;
+  --color-action-ink: #1d3bc4;
+  --color-action-wash: #f3f2ed;
+  --color-action-foreground: #ffffff;
+  --shadow-cta: none;
+  --shadow-cta-hover: none;
+
+  --color-card: #ffffff;
+  --color-muted: #f3f2ed;
+  --color-accent: #f3f2ed;
+  --color-secondary: #f3f2ed;
+
+  --radius-tile: 1.5rem; /* 24px — every pane */
+  --radius-sheet: 2rem; /* 32px — the big coloured sheets */
+  --radius-control: 0.75rem; /* 12px — buttons, inputs */
+
+  --font-leaf: "Figtree Variable", "Figtree", ui-sans-serif, system-ui, sans-serif;
+
+
+  background: var(--color-ground);
+}
+
+/* No blooms, no specular sheen: they existed to make glass read as glass. */
+.portal-clay .leaf-ground::before { content: none; }
+.portal-clay .leaf-specular { background-image: none; }
+.portal-clay .leaf-lift:hover { translate: none; }
+
+/* Display type: tight, heavy, never smaller than it needs to be. */
+.portal-clay h1,
+.portal-clay h2,
+.portal-clay h3 { letter-spacing: -0.02em; }
+
+/* ── Benefit tones — wash (ground), pill (tag fill), ink (text on both). Each
+   ink measures ≥ 6:1 on its wash and ≥ 4.5:1 on its pill. Self-contained so
+   the broker preview, which lacks `.portal-clay`, renders them too. ─────── */
+.tone-lime { --tone-wash: #f8fcd9; --tone-pill: #e3f06a; --tone-ink: #3f4700; }
+.tone-blue { --tone-wash: #eef5ff; --tone-pill: #c3dfff; --tone-ink: #1d3bc4; }
+.tone-peach { --tone-wash: #fff2ea; --tone-pill: #fcd0b4; --tone-ink: #9a3606; }
+.tone-pink { --tone-wash: #fff0f9; --tone-pill: #f9c3e8; --tone-ink: #9c0877; }
+.tone-lilac { --tone-wash: #f4f0ff; --tone-pill: #d9ccff; --tone-ink: #5329bf; }
+.tone-mint { --tone-wash: #ebf8f0; --tone-pill: #b3e7c8; --tone-ink: #0e6340; }
+
+/* The tag pill: a solid core inside two ghost rings, Clay's stacked capsule. */
+.clay-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  background: var(--tone-pill);
+  color: var(--tone-ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--tone-pill) 55%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--tone-pill) 25%, transparent);
+}
+
+/* ── Buttons outside `Action` (Home hero + top bar only). ────────────────── */
+.clay-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: var(--radius-control);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  transition: background-color 160ms ease, scale 120ms ease;
+}
+.clay-btn:active { scale: 0.97; }
+.clay-btn-dark { background: var(--color-action); color: var(--color-action-foreground); }
+.clay-btn-dark:hover { background: color-mix(in srgb, var(--color-action) 86%, #000); }
+.clay-btn-pale { background: var(--color-shade); color: var(--color-record); }
+.clay-btn-pale:hover { background: #e9e7df; }
+.clay-btn-white { background: #ffffff; color: var(--color-record); }
+.clay-btn-white:hover { background: #f7f6f2; }
+.clay-btn svg { flex: none; }
+
+/* ── Shell ──────────────────────────────────────────────────────────────── */
+/* Stuck to the top edge: square top, rounded bottom, like a tab hanging from
+   the browser chrome. On Home it floats OVER the scene (fixed), elsewhere it
+   stays in flow (sticky) so no page has to reserve space for it. */
+.clay-topbar { position: sticky; top: 0; z-index: 40; padding: 0 16px; }
+.is-home .clay-topbar { position: fixed; inset-inline: 0; }
+.clay-topbar-inner {
+  border: 1px solid var(--color-glass-edge);
+  border-top: 0;
+  border-radius: 0 0 22px 22px;
+  background: rgb(255 255 255 / 0.96);
+  box-shadow: 0 1px 2px rgb(22 21 15 / 0.04);
+  transition: box-shadow 240ms ease, background-color 240ms ease;
+}
+.is-scrolled .clay-topbar-inner { box-shadow: 0 10px 30px -14px rgb(22 21 15 / 0.25); background: #ffffff; }
+.clay-navlink { position: relative; z-index: 1; }
+.clay-navlink[aria-current="page"] { background: var(--color-shade); color: var(--color-record); font-weight: 600; }
+/* One pill slides to whichever item the pointer is on. */
+.clay-nav-pill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 40px;
+  margin-top: -20px;
+  border-radius: 12px;
+  background: var(--color-shade);
+  opacity: 0;
+  pointer-events: none;
+  transition: translate 320ms cubic-bezier(0.2, 0.9, 0.25, 1), width 320ms cubic-bezier(0.2, 0.9, 0.25, 1), opacity 160ms ease;
+}
+.is-home main > div { padding-top: 0; }
+.is-home { overflow-x: clip; }
+
+/* ── Home ───────────────────────────────────────────────────────────────── */
+.clay-home { display: grid; gap: 20px; }
+.clay-rise { animation: clay-rise 560ms both cubic-bezier(0.2, 0.8, 0.2, 1); }
+.clay-rise-2 { animation-delay: 80ms; }
+.clay-rise-3 { animation-delay: 160ms; }
+@keyframes clay-rise {
+  from { opacity: 0; translate: 0 14px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* ── The opening sky ────────────────────────────────────────────────────
+   A painted valley, full-bleed, the greeting in its open sky. Layers, back to
+   front: plate (slow settle + parallax), the sun's breathing glow, two cloud
+   bands drifting at different speeds, then the words and the handwritten notes. */
+.sky-stage {
+  --px: 0;
+  --py: 0;
+  --sun-x: 76%;
+  --sun-y: 50%;
+  --ink: #14224a;
+  --ink-accent: #2447d8;
+  --note: #ffffff;
+  position: relative;
+  isolation: isolate;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  height: clamp(440px, 36vw, 560px);
+  overflow: hidden;
+  background: #9dc0ec;
+}
+/* The valley dissolves into the page: no hard edge between scene and content. */
+.sky-stage::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 0;
+  height: 24%;
+  background: linear-gradient(to bottom, rgb(254 253 251 / 0) 0%, rgb(254 253 251 / 0.55) 50%, var(--color-ground) 100%);
+  -webkit-backdrop-filter: blur(0.5px);
+  pointer-events: none;
+}
+.sky-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 82%;
+}
+
+.sky-stage[data-period="dusk"] { --sun-x: 73.6%; --sun-y: 55%; --ink-accent: #3a2aa8; }
+.sky-plate {
+  position: absolute;
+  inset: -3%;
+  z-index: -3;
+  background: url("/portal/sky/day.webp") center 82% / cover no-repeat;
+  translate: calc(var(--px) * -14px) calc(var(--py) * -8px);
+  transition: translate 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: sky-settle 2.4s both cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.sky-stage[data-period="dusk"] .sky-plate { background-image: url("/portal/sky/dusk.webp"); }
+@keyframes sky-settle { from { transform: scale(1.08); } to { transform: scale(1); } }
+.sky-sun {
+  position: absolute;
+  z-index: -2;
+  left: var(--sun-x);
+  top: var(--sun-y);
+  width: 44vw;
+  height: 44vw;
+  translate: -50% -50%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgb(255 236 170 / 0.55) 0%, rgb(255 214 140 / 0.22) 30%, rgb(255 214 140 / 0) 65%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: sky-breathe 7s ease-in-out infinite;
+}
+@keyframes sky-breathe { 0%, 100% { opacity: 0.75; scale: 0.94; } 50% { opacity: 1; scale: 1.06; } }
+.sky-clouds {
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  right: 0;
+  background-image: url("/portal/sky/clouds.webp");
+  background-repeat: repeat-x;
+  pointer-events: none;
+  will-change: background-position;
+  /* Clouds frame the scene; they thin out behind the words. */
+  -webkit-mask-image: linear-gradient(to right, #000 0%, rgb(0 0 0 / 0.9) 18%, transparent 36%, transparent 64%, rgb(0 0 0 / 0.9) 82%, #000 100%);
+  mask-image: linear-gradient(to right, #000 0%, rgb(0 0 0 / 0.9) 18%, transparent 36%, transparent 64%, rgb(0 0 0 / 0.9) 82%, #000 100%);
+}
+.sky-clouds-far {
+  top: 22%;
+  height: 70px;
+  background-size: auto 70px;
+  opacity: 0.4;
+  translate: calc(var(--px) * -20px) 0;
+  animation: sky-drift 160s linear infinite;
+}
+.sky-clouds-near {
+  top: 44%;
+  height: 120px;
+  background-size: auto 120px;
+  opacity: 0.7;
+  translate: calc(var(--px) * -36px) 0;
+  animation: sky-drift 95s linear infinite reverse;
+}
+@keyframes sky-drift { from { background-position-x: 0; } to { background-position-x: -389px; } }
+.sky-clouds-near { animation-name: sky-drift-near; }
+@keyframes sky-drift-near { from { background-position-x: 0; } to { background-position-x: -667px; } }
+
+.sky-content {
+  position: relative;
+  z-index: 1;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 104px 24px 0;
+  text-align: center;
+  animation: sky-rise 900ms 200ms both cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes sky-rise { from { opacity: 0; translate: 0 18px; } to { opacity: 1; translate: 0 0; } }
+.sky-eyebrow {
+  margin: 0 0 16px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.72;
+}
+.sky-stage h1 {
+  margin: 0;
+  font-size: clamp(34px, 4.6vw, 68px);
+  line-height: 1.04;
+  text-wrap: balance;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  color: var(--ink);
+}
+.sky-stage h1 .name { color: var(--ink-accent); }
+.sky-sub { text-shadow: 0 0 18px rgb(255 255 255 / 0.9); margin: 16px 0 0; font-size: clamp(16px, 1.5vw, 20px); font-weight: 500; color: var(--ink); opacity: 0.85; }
+.sky-rule { display: block; width: 56px; height: 3px; margin: 22px auto 0; border-radius: 9999px; background: var(--ink-accent); }
+.sky-stage .clay-hero-actions { justify-content: center; gap: 14px; margin-top: 28px; }
+.sky-stage .clay-hero-actions .clay-btn { min-width: 184px; min-height: 52px; }
+.sky-stage .clay-btn { border-radius: 9999px; padding: 0 24px; }
+.sky-stage .clay-btn-dark {
+  background: linear-gradient(180deg, #3159f0 0%, #2447d8 55%, #1d3bc4 100%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.25), 0 10px 24px -10px rgb(36 71 216 / 0.7);
+}
+.sky-stage .clay-btn-dark:hover { background: linear-gradient(180deg, #2a4fe0 0%, #1f3fc8 100%); }
+.sky-stage .clay-btn-white {
+  background: rgb(255 255 255 / 0.72);
+  color: var(--ink);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.8), 0 10px 24px -12px rgb(20 34 74 / 0.4);
+}
+.sky-stage .clay-btn-white:hover { background: rgb(255 255 255 / 0.92); }
+
+.sky-note {
+  position: absolute;
+  z-index: 1;
+  bottom: 24%;
+  margin: 0;
+  font-family: "Caveat", cursive;
+  font-weight: 600;
+  font-size: clamp(20px, 1.8vw, 28px);
+  line-height: 1.05;
+  color: var(--note);
+  text-shadow: 0 2px 10px rgb(10 20 50 / 0.35);
+  max-width: 300px;
+  animation: sky-rise 900ms 700ms both cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sky-note svg { display: block; width: 70%; height: 12px; margin-top: 4px; overflow: visible; }
+.sky-note path { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 140; stroke-dashoffset: 140; animation: sky-draw 900ms 1.4s forwards ease-out; }
+@keyframes sky-draw { to { stroke-dashoffset: 0; } }
+.sky-note-left { left: 5%; rotate: -7deg; }
+.sky-note-right { right: 5%; rotate: -5deg; text-align: right; }
+.sky-note-right svg { margin-left: auto; }
+
+/* Panel card, now a quiet sheet beside Messages. */
+.clay-card-panel { display: flex; flex-direction: column; gap: 14px; }
+.clay-card-panel .portal-hero-card-wrap { max-width: 320px; }
+.clay-card-tilt { rotate: -3deg; filter: drop-shadow(0 18px 20px rgb(20 30 60 / 0.18)); transition: rotate 400ms cubic-bezier(0.2, 0.8, 0.2, 1), scale 400ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.clay-card-panel:hover .clay-card-tilt { rotate: 0deg; scale: 1.02; }
+.clay-card-tilt .portal-hero-card { border-radius: 16px; }
+
+/* Buttons with a travelling arrow. */
+.clay-btn-lime { background: #d4e22a; color: #16150f; }
+.clay-btn-lime:hover { background: #e0ec45; }
+.clay-btn-go .clay-go { transition: translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.clay-btn-go:hover .clay-go { translate: 4px 0; }
+.clay-btn-white:hover, .clay-btn-lime:hover { translate: 0 -1px; }
+.clay-btn { transition: background-color 160ms ease, scale 120ms ease, translate 200ms ease; }
+
+/* The "needs you" strip: things only the member can move forward. */
+.clay-needs {
+  display: grid;
+  gap: 10px;
+}
+.clay-need {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px 14px 14px;
+  border-radius: 20px;
+  background: var(--tone-wash);
+  color: var(--tone-ink);
+  text-decoration: none;
+  transition: background-color 160ms ease;
+}
+.clay-need:hover { background: color-mix(in srgb, var(--tone-pill) 35%, var(--tone-wash)); }
+.clay-need img { width: 56px; height: 56px; object-fit: contain; flex: none; }
+.clay-need strong { display: block; font-size: 16px; font-weight: 700; color: var(--color-record); }
+.clay-need span { display: block; font-size: 14px; }
+
+.clay-section-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 8px 4px 0; }
+.clay-section-head h2 { margin: 0; font-size: clamp(24px, 2.4vw, 32px); font-weight: 700; line-height: 1.05; }
+.clay-section-head h2 .second { color: var(--color-label); font-weight: 600; }
+.clay-section-link { font-size: 14px; font-weight: 600; color: var(--color-record); text-decoration: underline; text-underline-offset: 4px; white-space: nowrap; }
+
+/* ── Benefit sheets ────────────────────────────────────────────────────── */
+.clay-sheets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+/* Each card is a subgrid of its row, so tag / title / label / figure / detail
+   sit on the same lines across every card in that row — a card with a longer
+   title pushes its neighbours' labels down with it instead of out of step. */
+.clay-sheet {
+  position: relative;
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 7;
+  row-gap: 0;
+  align-content: start;
+  padding: 22px 22px 20px;
+  border-radius: 28px;
+  background: var(--tone-wash);
+  color: var(--tone-ink);
+  text-decoration: none;
+  overflow: hidden;
+  transition: background-color 180ms ease, translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.clay-sheet > .clay-tag { justify-self: start; align-self: start; }
+a.clay-sheet:hover, button.clay-sheet:hover {
+  background: color-mix(in srgb, var(--tone-pill) 30%, var(--tone-wash));
+  translate: 0 -3px;
+}
+.clay-sheet-art {
+  position: absolute;
+  top: 10px;
+  right: 6px;
+  width: 124px;
+  height: 124px;
+  object-fit: contain;
+  pointer-events: none;
+  transition: rotate 300ms cubic-bezier(0.2, 0.8, 0.2, 1), scale 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+a.clay-sheet:hover .clay-sheet-art, button.clay-sheet:hover .clay-sheet-art { rotate: -6deg; scale: 1.06; }
+.clay-sheet-title { display: block; margin: 44px 0 0; max-width: 60%; font-size: 22px; font-weight: 700; line-height: 1.1; color: var(--color-record); }
+.clay-sheet-label { display: block; margin-top: 22px; font-size: 13px; font-weight: 600; min-height: 1em; }
+.clay-sheet-value {
+  display: block;
+  margin-top: 2px;
+  font-size: clamp(26px, 2.4vw, 32px);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+  color: var(--color-record);
+}
+.clay-sheet-value.is-words { font-size: clamp(20px, 1.7vw, 23px); letter-spacing: -0.02em; line-height: 1.2; }
+.clay-sheet-value.is-quiet { font-size: 14px; font-weight: 500; letter-spacing: 0; color: var(--tone-ink); }
+/* One quiet line; the full wording is on the Coverage page (and the title attr). */
+.clay-sheet-detail { display: block; margin-top: 6px; min-height: 1.3em; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clay-meter { display: block; height: 8px; margin-top: 10px; border-radius: 9999px; background: rgb(255 255 255 / 0.75); overflow: hidden; }
+.clay-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--tone-ink); }
+.clay-sheet-go { display: inline-flex; align-items: center; gap: 6px; margin-top: 16px; font-size: 14px; font-weight: 600; }
+.clay-sheet-go svg { transition: translate 220ms ease; }
+a.clay-sheet:hover .clay-sheet-go svg, button.clay-sheet:hover .clay-sheet-go svg { translate: 4px 0; }
+
+.clay-sheets-other { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.clay-sheets-other .clay-sheet { display: flex; grid-row: auto; min-height: 0; flex-direction: row; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 22px; }
+.clay-sheets-other .clay-sheet-title { margin: 0; max-width: none; font-size: 17px; }
+.clay-sheets-other .clay-sheet > :not(.clay-sheet-title) { display: none; }
+.clay-subhead { margin: 4px 4px -4px; font-size: 14px; font-weight: 600; color: var(--color-label); }
+
+/* Plain white sheets for the second row (messages, family, claims…). */
+.clay-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.clay-row-3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr); }
+@media (max-width: 1100px) { .clay-row-3 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.clay-panel {
+  border: 1px solid var(--color-glass-edge);
+  border-radius: 28px;
+  background: #ffffff;
+  padding: 22px;
+}
+.clay-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.clay-panel-head h2 { margin: 0; font-size: 20px; font-weight: 700; }
+.clay-quick { display: grid; gap: 10px; }
+.clay-quick a {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px 12px 12px;
+  border-radius: 20px;
+  background: var(--tone-wash);
+  color: var(--tone-ink);
+  text-decoration: none;
+  transition: background-color 160ms ease;
+}
+.clay-quick a:hover { background: color-mix(in srgb, var(--tone-pill) 30%, var(--tone-wash)); }
+.clay-quick img { width: 52px; height: 52px; object-fit: contain; flex: none; }
+.clay-quick small { display: block; font-size: 13px; font-weight: 600; }
+.clay-quick strong { display: block; font-size: 17px; font-weight: 700; color: var(--color-record); }
+.clay-quick svg { margin-left: auto; flex: none; }
+
+.clay-msg { display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 4px; border-top: 1px solid var(--color-hairline); text-align: left; background: none; }
+.clay-msg:first-child { border-top: 0; }
+.clay-msg strong { display: block; font-size: 15px; font-weight: 650; color: var(--color-record); }
+.clay-msg small { display: block; font-size: 13px; color: var(--color-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clay-msg-unread { margin-left: auto; flex: none; padding: 3px 9px; border-radius: 9999px; background: var(--color-record); color: #ffffff; font-size: 12px; font-weight: 700; }
+.clay-empty { display: flex; align-items: center; gap: 16px; padding: 6px 0; }
+.clay-empty img { width: 72px; height: 72px; object-fit: contain; flex: none; }
+.clay-empty strong { display: block; font-size: 16px; color: var(--color-record); }
+.clay-empty span { display: block; font-size: 14px; color: var(--color-label); }
+
+.clay-footer { padding: 12px 4px 0; font-size: 12px; color: var(--color-label); }
+
+/* ── Temporary card (no insurer artwork yet). ──────────────────────────── */
+.portal-hero-card-wrap { width: 100%; }
+.portal-temporary-card {
+  position: relative;
+  aspect-ratio: 1.586;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 7% 7.5%;
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(140deg, #ffffff 0%, #eef1f4 55%, #d9dee5 100%);
+  color: #1d232b;
+}
+.portal-temporary-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.portal-temporary-card-top img { width: 104px; height: auto; filter: grayscale(1) brightness(0.35); }
+.portal-temporary-card-top svg { color: #7d8691; flex: none; }
+.portal-temporary-card-bottom { display: grid; gap: 2px; max-width: 85%; }
+.portal-temporary-card-bottom strong { font-size: clamp(14px, 1.2vw, 17px); font-weight: 700; line-height: 1.15; }
+.portal-temporary-card-bottom span { font-size: 12px; color: #4c5561; }
+.portal-temporary-card-id { font-size: 13px; font-weight: 600; letter-spacing: 0.06em; color: #2a323c; }
+.portal-temporary-card-mark {
+  position: absolute;
+  right: 7%;
+  bottom: 7%;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #6b747f;
+}
+
+/* ── Phone ──────────────────────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  .clay-topbar { padding: 0 8px; }
+  /* The phone bar already carries the year. */
+  .sky-year { display: none; }
+}
+@media (max-width: 860px) {
+  .clay-row { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .sky-stage { height: 470px; }
+  .sky-plate { background-position: 64% 48%; }
+  .sky-video { object-position: 64% 48%; }
+  .sky-content { padding: 88px 22px 0; }
+  .sky-eyebrow { font-size: 11px; margin-bottom: 12px; }
+  .sky-sub { font-size: 15px; }
+  .sky-stage .clay-hero-actions { max-width: 340px; margin: 24px auto 0; }
+  .sky-stage .clay-hero-actions .clay-btn { min-width: 0; }
+  .sky-note { display: none; }
+  .sky-sun { width: 90vw; height: 90vw; }
+  .clay-hero-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 24px; }
+  .clay-hero-actions .clay-btn { min-height: 46px; padding: 0 12px; font-size: 14px; gap: 8px; }
+  .clay-hero-actions .clay-go { display: none; }
+}
+@media (max-width: 560px) {
+  .clay-sheets { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .clay-sheet { padding: 16px 14px 14px; border-radius: 22px; }
+  .clay-sheet-art { width: 84px; height: 84px; top: 6px; right: 2px; }
+  .clay-sheet-title { margin-top: 56px; max-width: 100%; font-size: 17px; }
+  .clay-sheet-label { margin-top: 14px; font-size: 12px; }
+  .clay-sheet-value { font-size: 22px; }
+  .clay-sheet-value.is-words { font-size: 16px; }
+  .clay-sheet-detail { font-size: 12px; }
+  .clay-sheet-go { display: none; }
+  .clay-tag { font-size: 10px; padding: 4px 9px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clay-rise, .sky-plate, .sky-sun, .sky-clouds, .sky-content, .sky-note, .sky-note path { animation: none; }
+  .sky-note path { stroke-dashoffset: 0; }
+  .sky-plate, .sky-clouds { transition: none; translate: none; }
+  .clay-sheet, .clay-sheet-art { transition: none; }
+  a.clay-sheet:hover, button.clay-sheet:hover { translate: none; }
+  a.clay-sheet:hover .clay-sheet-art, button.clay-sheet:hover .clay-sheet-art { rotate: none; scale: none; }
+}
+
+/* ── Clinic cards ─────────────────────────────────────────────────────────
+   The locator's rows become cards in a grid: name and where, then a status
+   line (open/closed · distance), then two real buttons — Call and Directions.
+   Re-areas the same `data-cell` children ClinicRow already renders, so every
+   behaviour (tel: links, disclosure, hours panel) is untouched. */
+.clinic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.clinic-grid > li {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-glass-edge);
+  border-radius: 22px;
+  background: #ffffff;
+  transition: translate 220ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 220ms ease, border-color 220ms ease;
+}
+.clinic-grid > li:hover { translate: 0 -2px; border-color: #d9e6df; box-shadow: 0 16px 34px -22px rgb(14 99 64 / 0.45); }
+.clinic-grid .leaf-clinic-row {
+  flex: 1;
+  padding: 16px 16px 14px;
+  border-radius: 22px;
+  row-gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "main  disc"
+    "state dist"
+    "sub   sub"
+    "call  dirs";
+}
+.clinic-grid .leaf-clinic-row:hover, .clinic-grid .leaf-clinic-row.bg-shade\/50 { background: transparent; }
+.clinic-grid .leaf-clinic-row > [data-cell="main"] h3 { font-size: 16px; font-weight: 700; line-height: 1.3; }
+.clinic-grid .leaf-clinic-row > [data-cell="main"] p { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.clinic-grid .leaf-clinic-row > [data-cell="state"],
+.clinic-grid .leaf-clinic-row > [data-cell="sub"] { justify-self: start; }
+.clinic-grid .leaf-clinic-row > [data-cell="sub"] { margin-top: -6px; }
+.clinic-grid .leaf-clinic-row > [data-cell="call"],
+.clinic-grid .leaf-clinic-row > [data-cell="dirs"] {
+  justify-self: stretch;
+  justify-content: center;
+  min-height: 42px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.clinic-grid .leaf-clinic-row > a[data-cell="call"] { background: var(--color-shade); color: var(--color-record); }
+.clinic-grid .leaf-clinic-row > a[data-cell="call"]:hover { background: var(--color-hairline); }
+.clinic-grid .leaf-clinic-row > [data-cell="dirs"] { background: #ebf8f0; color: #0e6340; }
+.clinic-grid .leaf-clinic-row > [data-cell="dirs"]:hover { background: #d7f0e1; }
+.clinic-grid .leaf-clinic-row > [data-cell="dirs"]:only-of-type { grid-column: 1 / -1; }
+.clinic-grid > li > div[id] { padding: 0 16px 14px; }
+@media (max-width: 640px) {
+  .clinic-grid { grid-template-columns: minmax(0, 1fr); }
+}

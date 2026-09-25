@@ -53,6 +53,8 @@ import {
 import { useContainerWide } from "@/components/portal/leaf/useContainerWide";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
+import { ClayEmpty } from "@/components/portal/leaf/ClayEmpty";
+import { sectionArt } from "@/components/portal/leaf/careTone";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
 
@@ -190,14 +192,9 @@ export function PortalMessagesPage() {
   if (items.length === 0) {
     return (
       <>
-        <Mount label="No messages yet">
-          <p className="text-row text-label">
-            When we have news about a claim &mdash; that we&rsquo;ve received
-            it, that it&rsquo;s settled, or that we need something else &mdash;
-            it will appear here. You can also ask us anything at all.
-          </p>
-          <div>{ask}</div>
-        </Mount>
+        <ClayEmpty tone="lilac" art={sectionArt.messages} title="No messages yet" action={ask}>
+          Updates on your claims land here. Got a question? Ask us anything.
+        </ClayEmpty>
         {askDialog}
       </>
     );

@@ -6,7 +6,7 @@
  * none is tracked the member is prompted to attach one. */
 import { useRef } from "react";
 import { AlertTriangle, Paperclip } from "lucide-react";
-import { FieldGroup, leafControl } from "@/components/portal/leaf/Field";
+import { RequiredMark, FieldGroup, leafControl } from "@/components/portal/leaf/Field";
 import { Action } from "@/components/portal/leaf/Action";
 import { formatDay } from "@/components/portal/leaf/date";
 import { ACCEPT, type ReferralMode } from "./claimForm";
@@ -19,7 +19,7 @@ export function ReferralField({ form }: { form: NewClaimForm }) {
 
   return (
     <FieldGroup
-      label="Upload or select referral letter (required)"
+      label={<>Upload or select referral letter<RequiredMark /></>}
       error={form.fieldErrors.referral}
     >
       {form.visitType === "follow_up" && letters.length === 0 && (

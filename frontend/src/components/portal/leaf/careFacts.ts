@@ -178,7 +178,9 @@ function clinicCost(item: BenefitItem): CareFact | null {
     parts.push(`Private hospital: ${asCharged(privateVisit) ? "covered as charged" : `up to ${money(privateVisit)}`}`);
   }
   const copay = prop(item, "co_payment");
-  if (copay) parts.push(`you pay ${/%$/.test(copay) ? copay : money(copay)} a visit`);
+  // "Co-pay", never "you pay": the member's share is a co-payment on top of
+  // cover, and "you pay S$5 a visit" read as if S$5 were the benefit.
+  if (copay) parts.push(`${/%$/.test(copay) ? copay : money(copay)} co-pay per visit`);
   if (parts.length === 0) return null;
   const value = parts.join(" · ");
   const yearly = prop(item, "per_policy_year");

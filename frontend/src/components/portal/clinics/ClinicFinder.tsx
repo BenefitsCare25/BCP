@@ -43,7 +43,6 @@ import { ArrowRight, Loader2, LocateFixed, Search, X } from "lucide-react";
 import type { ClinicTypeFacet } from "@/api/panelListings";
 import { actionClass } from "@/components/portal/leaf/Action";
 import { leafControl } from "@/components/portal/leaf/Field";
-import { Mount, MountRule } from "@/components/portal/leaf/Mount";
 import { pickChipClass } from "@/components/portal/leaf/pickChip";
 import { cn } from "@/lib/cn";
 
@@ -321,30 +320,30 @@ export function ClinicFinder({
   onClearOrigin: () => void;
 }) {
   return (
-    <Mount className="gap-0 p-2.5 sm:p-3">
-      <div className="flex flex-col gap-2 py-1.5 sm:flex-row sm:items-center sm:gap-3.5">
-        <span className="leaf-label sm:w-32 sm:shrink-0 sm:whitespace-nowrap">Where you are</span>
-        <OriginRow
-          origin={origin}
-          busy={status.kind === "busy"}
-          onGps={onGps}
-          onLocate={onLocate}
-          onClear={onClearOrigin}
-        />
+    <section className="tone-mint relative overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-5 text-[var(--tone-ink)] sm:p-7">
+      <img
+        src="/portal/clay/clinic.webp"
+        alt=""
+        className="pointer-events-none absolute -right-2 -top-1 hidden size-36 object-contain sm:block lg:size-44"
+      />
+      <div className="sm:pr-44">
+        <h2 className="text-2xl font-bold tracking-title text-record sm:text-3xl">Find a panel clinic</h2>
+        <div className="mt-4">
+          <OriginRow
+            origin={origin}
+            busy={status.kind === "busy"}
+            onGps={onGps}
+            onLocate={onLocate}
+            onClear={onClearOrigin}
+          />
+        </div>
+        {status.kind === "error" && (
+          <p role="alert" className="mt-2 text-row text-strike-pending">
+            {status.message}
+          </p>
+        )}
       </div>
-
-      {status.kind === "error" && (
-        // Announced: it arrives after a tap, and the member is looking at the
-        // control they just pressed.
-        <p role="alert" className="pb-1.5 text-row text-strike-pending">
-          {status.message}
-        </p>
-      )}
-
-      <MountRule />
-
-      <div className="flex flex-col gap-2 py-1.5 sm:flex-row sm:items-center sm:gap-3.5">
-        <span className="leaf-label sm:w-32 sm:shrink-0 sm:whitespace-nowrap">What to show</span>
+      <div className="mt-5 flex flex-col gap-3 rounded-2xl bg-white/85 p-2.5 sm:flex-row sm:items-center">
         <FilterRow
           facets={facets}
           typeKey={typeKey}
@@ -356,6 +355,6 @@ export function ClinicFinder({
           onSearch={onSearch}
         />
       </div>
-    </Mount>
+    </section>
   );
 }

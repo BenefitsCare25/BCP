@@ -119,16 +119,12 @@ export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
   return (
     <section
       aria-labelledby="claim-limit-heading"
-      className="space-y-2.5 rounded-control border border-hairline bg-bar/55 px-3 py-3"
+      className="space-y-2 rounded-2xl bg-shade px-4 py-3.5"
     >
       <div>
         <h2 id="claim-limit-heading" className="leaf-label">
-          Limit for this claim
+          What you have left
         </h2>
-        <p className="text-row text-label">
-          Verified annual balances and applicable policy conditions for your
-          selected claim type.
-        </p>
       </div>
 
       {form.utilization.isLoading ? (
@@ -146,8 +142,8 @@ export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
         </div>
       ) : (
         <p className="text-row text-label">
-          No verified annual balance is configured for this claim type. Visit,
-          day and treatment conditions under What&rsquo;s covered still apply.
+          No yearly cap to count down for this type of claim. Your plan&rsquo;s
+          per-visit terms still apply — see What&rsquo;s covered.
         </p>
       )}
 

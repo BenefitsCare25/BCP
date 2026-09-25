@@ -34,6 +34,7 @@ import { portalPath } from "@/lib/tenant";
 import { useCompany } from "@/components/portal/useCompany";
 import { AccessNotice } from "./AccessNotice";
 import { holds, type Capability } from "./capabilities";
+import { familiarName } from "./memberNames";
 
 /** Six destinations on desktop, five in the phone dock — "Home" is the dock's
  * first slot and Coverage is reached from the tiles that summarise it, so the
@@ -191,6 +192,15 @@ export function PortalShell() {
   const year = me?.policy_year;
   const companyLabel = me?.company?.legal_name || me?.company?.name || "";
   const isHome = isActive("");
+  const [hover, setHover] = useState<{ left: number; width: number } | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  const firstName = familiarName(member?.display_name || "") === "there" ? who : familiarName(member?.display_name || "");
 
   const accountControls = (
     <>
@@ -238,14 +248,15 @@ export function PortalShell() {
     <LeafScopeContext.Provider value>
       {/* min-h-dvh, not min-h-screen: on mobile Safari `100vh` is the browser's
           *largest* viewport, so the last row of any page sat under the URL bar. */}
-      <div className={cn("leaf portal-refresh flex min-h-dvh flex-col", isHome && "portal-home-route")}>
-        <header className="portal-topbar">
+      <div className={cn("leaf portal-clay flex min-h-dvh flex-col", isHome && "is-home", scrolled && "is-scrolled")}>
+        <header className="clay-topbar">
+          <div className="clay-topbar-inner mx-auto max-w-[1440px]">
           {/* ── Phone: name, scope, account. No mark, by request. ────────── */}
-          <div className="mx-auto flex max-w-5xl items-center gap-2.5 px-4 py-2.5 lg:hidden">
+          <div className="flex items-center gap-2 py-2 pl-4 pr-1.5 lg:hidden">
             {isHome ? (
-              <p className="min-w-0 flex-1 truncate text-base font-bold tracking-title text-record">{who}</p>
+              <p className="min-w-0 flex-1 truncate text-lg font-bold tracking-title text-record">{firstName}</p>
             ) : (
-              <h1 className="min-w-0 flex-1 truncate text-base font-bold tracking-title text-record">{who}</h1>
+              <h1 className="min-w-0 flex-1 truncate text-lg font-bold tracking-title text-record">{firstName}</h1>
             )}
             {year && (
               <BenefitYearControl
@@ -258,7 +269,7 @@ export function PortalShell() {
           </div>
 
           {/* ── Desktop: one row. ────────────────────────────────────────── */}
-          <div className="mx-auto hidden max-w-7xl items-center gap-0 px-6 py-3.5 lg:flex">
+          <div className="hidden items-center gap-0 py-2.5 pl-5 pr-3 lg:flex">
             {/* Used whole and uncropped. Its three-line wordmark needs this
                 much height to stay legible, which is what decided a single tall
                 row over two short ones. Served from a 50 KB derivative — the
@@ -272,20 +283,25 @@ export function PortalShell() {
             />
             <span aria-hidden className="mx-5 h-8 w-px shrink-0 bg-hairline" />
 
-            <nav aria-label="Portal sections" className="flex items-center gap-0.5">
+            <nav aria-label="Portal sections" className="clay-nav relative flex items-center gap-0.5" onMouseLeave={() => setHover(null)}>
+              <span aria-hidden className="clay-nav-pill" style={hover ? { opacity: 1, translate: `${hover.left}px 0`, width: hover.width } : undefined} />
               {nav.map((item) => {
                 const active = isActive(item.sub);
                 return (
                   <Link
                     key={item.sub}
                     to={href(item.sub)}
+                    // The router marks a PARENT route active too, and sets its own
+                    // `aria-current` — Home would light on every page. Exact for Home only.
+                    activeOptions={{ exact: item.sub === "" }}
                     aria-current={active ? "page" : undefined}
+                    onMouseEnter={(event) => setHover({ left: event.currentTarget.offsetLeft, width: event.currentTarget.offsetWidth })}
                     className={cn(
-                      "leaf-focus inline-flex h-10 items-center gap-2 rounded-pill px-4 text-row",
+                      "clay-navlink leaf-focus inline-flex h-10 items-center gap-2 rounded-xl px-3.5 text-[15px]",
                       "transition-colors duration-200 ease-leaf",
                       active
                         ? "bg-shade font-semibold text-record"
-                        : "text-label hover:bg-shade hover:text-record",
+                        : "text-record/75 hover:text-record",
                     )}
                   >
                     {item.label}
@@ -300,9 +316,10 @@ export function PortalShell() {
                 past the edge on a laptop. The enrolment deadline is likewise
                 announced in the page (the home tile) rather than as a chip in
                 the nav — time-sensitive signals live in the page. */}
-            <div className="ml-auto flex shrink-0 items-center pl-6">
+            <div className="ml-auto flex shrink-0 items-center gap-1 pl-6">
               {accountControls}
             </div>
+          </div>
           </div>
         </header>
 
@@ -336,7 +353,7 @@ export function PortalShell() {
                   recognises; `name` is the broker's internal handle ("CDL")
                   and is the fallback only. */}
               <div className="min-w-0 flex-1 basis-0">
-                <h1 className="truncate text-2xl font-bold tracking-title text-record">
+                <h1 className="text-[24px] font-bold leading-tight tracking-title text-record [text-wrap:balance]">
                   {who}
                 </h1>
                 {companyLabel && (
@@ -403,7 +420,7 @@ export function PortalShell() {
           aria-label="Portal sections"
           className={cn(
             glassSurface,
-            "fixed inset-x-3 bottom-3 z-20 flex rounded-pill p-1.5 shadow-float lg:hidden",
+            "fixed inset-x-3 bottom-3 z-20 flex rounded-[22px] p-1.5 shadow-float lg:hidden",
             "mb-[env(safe-area-inset-bottom)]",
           )}
         >
@@ -414,11 +431,14 @@ export function PortalShell() {
               <Link
                 key={item.sub}
                 to={href(item.sub)}
+                // The router marks a PARENT route active too, and sets its own
+                // `aria-current` — Home would light on every page. Exact for Home only.
+                activeOptions={{ exact: item.sub === "" }}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "leaf-focus relative flex min-h-13 flex-1 flex-col items-center justify-center gap-1 rounded-pill px-1",
+                  "leaf-focus relative flex min-h-13 flex-1 flex-col items-center justify-center gap-1 rounded-2xl px-1",
                   "transition-colors duration-200 ease-leaf",
-                  active ? "bg-shade text-record" : "text-label",
+                  active ? "bg-shade font-bold text-record" : "text-label hover:text-record",
                 )}
               >
                 {/* A dot means ONE thing in this bar: an enrolment window is

@@ -140,3 +140,19 @@ export function clockTime(iso: string | null | undefined): string {
     .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
     .toLowerCase();
 }
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "Fri, 25 Sep 2026" — spelled out beside a native date input, whose own
+ *  display follows the BROWSER's locale (mm/dd on a US-set Chrome), so the
+ *  member always sees the date they picked in words that cannot be misread.
+ *  Built from the calendar parts, never through `Date` parsing, so no timezone
+ *  can move it a day. Empty in → undefined out (no hint rendered). */
+export function spelledDay(iso: string | null | undefined): string | undefined {
+  const key = dateKey(iso);
+  if (!key) return undefined;
+  const [y, m, d] = key.split("-").map(Number);
+  const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return `${weekday}, ${d} ${MONTHS_SHORT[m - 1]} ${y}`;
+}

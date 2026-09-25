@@ -39,9 +39,9 @@ import { cn } from "@/lib/cn";
 type Tone = "primary" | "quiet" | "neutral";
 
 const BASE =
-  "leaf-focus inline-flex items-center justify-center gap-2 rounded-pill " +
+  "leaf-focus inline-flex items-center justify-center gap-2 rounded-control " +
   "font-semibold whitespace-nowrap disabled:pointer-events-none disabled:opacity-60 " +
-  "transition-[transform,box-shadow,background-color,filter] duration-200 ease-leaf";
+  "transition-[transform,box-shadow,background-color,filter,scale] duration-200 ease-leaf active:scale-[0.97]";
 
 /** 44px is the Reach Rule floor, not a target — the primary action sits above
  * it because it is the thing a member came to do.
@@ -55,21 +55,11 @@ const BASE =
  * label on its own wash. That is the same trap the token pair is named for. */
 const TONE: Record<Tone, string> = {
   primary:
-    "h-12 px-6 text-md text-action-foreground shadow-cta " +
-    "bg-action border border-action-ink " +
-    "hover:-translate-y-px hover:shadow-cta-hover hover:brightness-95 " +
-    "active:translate-y-0 active:brightness-90",
+    "h-12 px-6 text-md text-action-foreground bg-action hover:bg-action/85",
   quiet:
-    "h-11 px-5 text-row text-action-ink bg-action-wash border border-action-ink " +
-    "hover:bg-action hover:text-action-foreground hover:shadow-cta " +
-    "active:scale-[0.99]",
-  // Made of the card material, so it takes the card's ONE hover: the pane
-  // thins, the shadow does not move. It used to deepen its shadow too, which
-  // made a pill respond differently from the card it sits on — see `glassHover`
-  // in `leaf/Mount.tsx`.
+    "h-11 px-5 text-row text-record bg-shade hover:bg-hairline",
   neutral:
-    "h-11 px-5 text-row text-record bg-glass leaf-specular border border-glass-edge shadow-mount " +
-    "hover:bg-glass-hover active:scale-[0.99]",
+    "h-11 px-5 text-row text-record bg-bar border border-glass-edge hover:bg-shade",
 };
 
 /** `block: true` is full width everywhere; `block: "phone"` is full width on a

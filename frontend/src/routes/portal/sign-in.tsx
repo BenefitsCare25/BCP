@@ -121,10 +121,15 @@ export function PortalSignInPage() {
         // reads as a typo and ends with the member locking their own account.
         onError: (err) => {
           const status = errorStatus(err);
+          // Only a 401/400 is about what they typed. A 5xx or no response at
+          // all read as "wrong password", and the member retyped a correct one
+          // until the lockout fired.
           setError(
             status === 423 || status === 429 || status === 403
               ? formatError(err)
-              : "Those details weren't recognised. Check and try again.",
+              : status === 401 || status === 400 || status === 422
+                ? "Those details weren't recognised. Check and try again."
+                : "We couldn't reach the portal just now. Your details weren't checked — try again in a moment.",
           );
         },
       },

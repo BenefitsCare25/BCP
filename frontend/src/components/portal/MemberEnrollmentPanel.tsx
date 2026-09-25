@@ -64,6 +64,8 @@ import {
 } from "@/components/enrollment/electionCore";
 import { Deck, type DeckSlide } from "@/components/portal/leaf/Deck";
 import { HeadRail, useHeadRailWidth } from "@/components/portal/leaf/HeadRail";
+import { ClayEmpty } from "./leaf/ClayEmpty";
+import { sectionArt } from "./leaf/careTone";
 import { Mount, glassHover, glassSurface } from "@/components/portal/leaf/Mount";
 import { Strike } from "@/components/portal/leaf/Strike";
 import { currencySymbol } from "@/components/portal/leaf/Figure";
@@ -261,13 +263,10 @@ export function MemberEnrollmentPanel({
 
   if (!win) {
     return (
-      <Mount label="Nothing to choose right now">
-        <p className="text-row text-label">
-          When your company next opens a benefit selection period, this is where
-          you&rsquo;ll change your plan, cover your family or trade leave.
-          You&rsquo;ll see a marker on this section when it opens.
-        </p>
-      </Mount>
+      <ClayEmpty tone="lime" art={sectionArt.enrol} title="Nothing to choose right now">
+        When your company opens benefit selection, you&rsquo;ll pick your plan,
+        cover your family or trade leave here. We&rsquo;ll flag it on Home.
+      </ClayEmpty>
     );
   }
 

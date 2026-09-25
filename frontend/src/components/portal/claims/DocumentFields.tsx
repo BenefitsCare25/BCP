@@ -11,14 +11,13 @@ import { useRef } from "react";
 import { CheckCircle2, Circle, Paperclip, X } from "lucide-react";
 import { toast } from "sonner";
 import { FieldGroup } from "@/components/portal/leaf/Field";
-import { Action } from "@/components/portal/leaf/Action";
+import { Action, actionClass } from "@/components/portal/leaf/Action";
 import { ACCEPT, MAX_BYTES } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
 
-const ATTACH_CHIP =
-  "leaf-focus inline-flex min-h-11 max-w-full cursor-pointer items-center gap-1.5 " +
-  "rounded-control border border-leaf-input bg-bar/80 px-3 text-row font-medium text-record " +
-  "transition-colors duration-200 ease-leaf hover:bg-bar";
+// The same control as "Attach document" below — two styles for one gesture
+// (pick a file) read as two different kinds of action.
+const ATTACH_CHIP = actionClass("neutral", { className: "max-w-full cursor-pointer" });
 
 function RemoveButton({
   label,
@@ -142,7 +141,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
               e.target.value = "";
             }}
           />
-          <Action type="button" onClick={() => extraInput.current?.click()}>
+          <Action tone="neutral" type="button" onClick={() => extraInput.current?.click()}>
             <Paperclip className="size-4 shrink-0" aria-hidden />
             Attach document (PDF or photo)
           </Action>

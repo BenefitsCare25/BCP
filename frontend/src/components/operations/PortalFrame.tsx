@@ -37,7 +37,6 @@ import { CardLeaf } from "@/components/portal/leaf/CardLeaf";
 import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
 import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
-import { coverByDependant } from "@/lib/dependant";
 import type { DependantRef } from "@/components/enrollment/electionCore";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import { ClaimDetailLeaf } from "@/components/portal/leaf/ClaimDetailLeaf";
@@ -325,7 +324,7 @@ function DependantsTab({ employeeId }: { employeeId: string }) {
           Add a family member
         </Action>
       </div>
-      <DependantsLeaf rows={rows} cover={coverByDependant(statement.data, rows)} />
+      <DependantsLeaf rows={rows} statement={statement.data} />
     </div>
   );
 }

@@ -384,9 +384,15 @@ export function ClaimDetailLeaf({
             they are checking it against. */}
         {editing ?? (
         <>
+        <ClaimTimeline claim={claim} />
         {/* One column on a phone. The old two-up grid never collapsed, so a
             long diagnosis and a currency figure shared ~147px each. */}
         <dl className="divide-y divide-hairline/75">
+          {claim.reference_no && (
+            <MountRow term="Reference">
+              <span className="font-semibold tracking-wide">{claim.reference_no}</span>
+            </MountRow>
+          )}
           <MountRow term="Amount claimed">
             <Money value={claim.amount_claimed} currency={claim.currency} />
           </MountRow>
@@ -807,5 +813,50 @@ export function ClaimDetailLeaf({
         )}
       </Mount>
     </div>
+  );
+}
+
+/** Where the claim is, as three dated steps — the answer to "has it been
+ *  paid?" without reading a status word. Each date comes from the record;
+ *  a step with no date yet is drawn open, never guessed. */
+function ClaimTimeline({ claim }: { claim: PortalClaim }) {
+  const refused = claim.status === "rejected";
+  const asked = claim.status === "needs_info";
+  const approved = ["approved", "sent_to_insurer", "paid"].includes(claim.status);
+  const steps: { label: string; date: string | null | undefined; done: boolean }[] = [
+    { label: "Submitted", date: claim.submitted_at, done: Boolean(claim.submitted_at) },
+    {
+      label: refused ? "Not approved" : asked ? "More needed from you" : approved ? "Approved" : "Being reviewed",
+      date: claim.decided_at,
+      done: Boolean(claim.decided_at) || refused || approved,
+    },
+    ...(refused ? [] : [{ label: "Paid", date: claim.paid_on, done: Boolean(claim.paid_on) || claim.status === "paid" }]),
+  ];
+  if (!claim.submitted_at) return null;
+  return (
+    <ol className="grid gap-3 rounded-2xl bg-shade p-4 sm:grid-cols-3 sm:gap-2" aria-label="Claim progress">
+      {steps.map((step, index) => (
+        <li key={step.label} className="flex items-start gap-3 sm:flex-col sm:gap-2">
+          <span className="flex items-center gap-2 sm:w-full">
+            <span
+              className={cn(
+                "grid size-6 shrink-0 place-items-center rounded-full text-2xs font-bold",
+                step.done ? "bg-action text-white" : "border-2 border-hairline bg-bar text-label",
+              )}
+              aria-hidden
+            >
+              {index + 1}
+            </span>
+            {index < steps.length - 1 && (
+              <span className={cn("hidden h-0.5 flex-1 rounded-full sm:block", step.done ? "bg-action" : "bg-hairline")} aria-hidden />
+            )}
+          </span>
+          <span>
+            <span className={cn("block text-row font-semibold", step.done ? "text-record" : "text-label")}>{step.label}</span>
+            <span className="block text-row text-label">{step.date ? formatDay(step.date) : step.done ? "" : "Not yet"}</span>
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }

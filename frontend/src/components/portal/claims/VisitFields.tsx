@@ -3,7 +3,8 @@
  * One column on a phone (The Whole-Frame Rule) — the old two-up grid never
  * collapsed, so a date input and a hospital name shared ~147px each. */
 import { AlertTriangle } from "lucide-react";
-import { Field, leafControl } from "@/components/portal/leaf/Field";
+import { Field, RequiredMark, leafControl } from "@/components/portal/leaf/Field";
+import { spelledDay } from "@/components/portal/leaf/date";
 import { DiagnosisPicker } from "@/components/portal/DiagnosisPicker";
 import { FieldGroup } from "@/components/portal/leaf/Field";
 import { ConversionNotice } from "./ConversionNotice";
@@ -20,7 +21,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Visit date" required error={form.fieldErrors.incurred_date}>
+        <Field label="Visit date" required hint={spelledDay(form.incurredDate)} error={form.fieldErrors.incurred_date}>
           {(p) => (
             <input
               {...p}
@@ -260,9 +261,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
       {/* Diagnosis — searchable catalog scoped to the claim type. */}
       {form.showDiagnosisPicker && selectedProduct && (
         <FieldGroup
-          label={
-            selectedProduct.diagnosis_required ? "Diagnosis (required)" : "Diagnosis"
-          }
+          label={<>Diagnosis{selectedProduct.diagnosis_required && <RequiredMark />}</>}
           error={form.fieldErrors.diagnosis}
         >
           <DiagnosisPicker

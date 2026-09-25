@@ -513,6 +513,62 @@ def member_set_password(
     return _issue_member_login(db, request, account, tenant.client_id)
 
 
+class MemberChangePasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+@router.post("/change-password")
+@limiter.limit("5/minute")
+def member_change_password(
+    request: Request,
+    body: MemberChangePasswordIn,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """A signed-in member replaces their own password.
+
+    The current password is required even though the session is valid: a
+    borrowed unlocked phone must not be enough to take the account over. The
+    new one meets the same policy and breach check as a reset."""
+    account = db.get(MemberAccount, member.member_account_id)
+    if (
+        account is None
+        or account.password_hash is None
+        or not PW.verify_password(account.password_hash, body.current_password)
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your current password is incorrect.")
+    if body.new_password == body.current_password:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Choose a password different from your current one.",
+        )
+    policy = get_auth_policy(db, member.client_id)
+    ok, reason = PW.password_meets_policy(body.new_password, policy.password_min_entropy)
+    if not ok:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
+    if policy.breach_check_enabled and is_breached(body.new_password):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "This password has appeared in a known data breach — choose another.",
+        )
+    account.password_hash = PW.hash_password(body.new_password)
+    account.password_updated_at = datetime.now(UTC)
+    account.must_rotate_after = CRED.next_rotation_deadline(
+        policy.password_rotation_days, account.password_updated_at
+    )
+    clear_invite_expiry(account)
+    CRED.reset_failures(account)
+    EV.write_auth_event(
+        db, event_type=EV.EVENT_PASSWORD_CHANGE, outcome=EV.OUTCOME_SUCCESS,
+        surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
+        client_id=member.client_id, ip=_client_ip(request),
+        subdomain=request.headers.get("host"),
+    )
+    db.commit()
+    return {"status": "changed"}
+
+
 # ── Member MFA enrolment (authenticated, self-service) ─────────────────────────
 class MemberMfaConfirmIn(BaseModel):
     code: str = Field(min_length=1, max_length=16)
