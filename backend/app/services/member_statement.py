@@ -31,6 +31,7 @@ def build_member_statement(db: Session, employee: Employee) -> BenefitStatementO
         line.model_copy(
             update={
                 "financials": None,
+                "premium_note": None,
                 "match_method": None,
                 "match_confidence": None,
                 "rule_human_readable": None,

@@ -34,10 +34,19 @@ from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.schemas.api import AttributeSchemaOut
 from app.services.derivation_engine import derive, resolve_attribute_schemas
+from app.services.eligibility_scope import (
+    is_catch_all,
+    location_cohort_value,
+    location_scope,
+    multi_location_scoped,
+    prefix_cohort_value,
+)
 from app.services.explicit_grade_clauses import (
     JOB_CATEGORY_RE,
     explicit_grade_clauses,
+    grade_family_values,
     has_explicit_grade_clause,
+    split_code_pair,
 )
 from app.services.flex_membership import nationality_country_exact
 from app.services.matching_engine import (
@@ -614,7 +623,16 @@ def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
             selected_keys.add(key)
             selected.append(value)
 
-    for piece in re.split(r"\s*[,;/]\s*", clause):
+    pieces = [
+        part
+        for piece in re.split(r"\s*[,;/]\s*", clause)
+        for part in split_code_pair(piece)
+    ]
+    for piece in pieces:
+        if family := grade_family_values(piece, values):
+            for value in family:
+                add(value)
+            continue
         expanded = _expand_finite_grade_piece(piece)
         if expanded is None:
             return []
@@ -1154,6 +1172,17 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             validation_state="needs_review" if unresolved else "proposed",
             unresolved_clauses=unresolved,
             referenced_attributes=list(dict.fromkeys(referenced)),
+        )
+
+    prefix_attr, prefix_value = prefix_cohort_value(without_exclusion, catalog.values)
+    if prefix_attr and prefix_value is not None and not exclusion_text:
+        return RuleProposal(
+            rule={"=": [prefix_attr, prefix_value]},
+            human_readable=f"{prefix_attr} is {prefix_value}",
+            confidence=0.85,
+            source="roster_values",
+            validation_state="proposed",
+            referenced_attributes=[prefix_attr],
         )
 
     return RuleProposal(
@@ -2134,6 +2163,33 @@ def _candidate_for_category(
     return propose_category_rule(category.raw_description, catalog), False
 
 
+def _scope_catch_all(
+    proposal: RuleProposal, category: Category, catalog: AttributeValueCatalog
+) -> RuleProposal:
+    """Narrow "All Employees — Thai Office" to the staff at that office."""
+    if not is_catch_all(proposal.rule):
+        return proposal
+    scope = location_scope(category) or ""
+    attr, value = location_cohort_value(scope, catalog.values)
+    if attr and value is not None:
+        return RuleProposal(
+            rule={"=": [attr, value]},
+            human_readable=f"{attr} is {value}",
+            confidence=0.9,
+            source="roster_values",
+            validation_state="proposed",
+            referenced_attributes=[attr],
+        )
+    return RuleProposal(
+        rule=None,
+        human_readable=f"{scope} staff need a location field mapping",
+        confidence=0.0,
+        source="unmapped",
+        validation_state="needs_review",
+        unresolved_clauses=[scope],
+    )
+
+
 def _separate_location_cohorts(
     categories: list[Category],
     catalog: AttributeValueCatalog,
@@ -2713,11 +2769,21 @@ def auto_map_policy_year(
         ).get(category.product_id, {})
         for category in categories
     }
+    location_scoped = multi_location_scoped(categories)
     proposal_meta: dict[str, tuple[RuleProposal, bool, RuleValidation]] = {}
     profile_proposals: dict[str, RuleProposal] = {}
 
     for category in categories:
-        preserve = bool(category.human_modified and category.matching_rule)
+        # A broker-edited OR broker-confirmed rule is never recompiled: this runs
+        # on every "Re-run matching", and re-proposing a confirmed rule could
+        # demote the category (and un-publish its plan) without anyone asking.
+        preserve = bool(
+            category.matching_rule
+            and (
+                category.human_modified
+                or category.status == CategoryStatus.confirmed.value
+            )
+        )
         if preserve:
             validation = validate_ai_matching_rule(
                 category.raw_description,
@@ -2736,6 +2802,8 @@ def auto_map_policy_year(
             reused = False
         else:
             proposal, reused = _candidate_for_category(category, catalog, profiles, previous)
+            if category.id in location_scoped:
+                proposal = _scope_catch_all(proposal, category, catalog)
             profile_proposals[category.id] = proposal
             proposal = _exclude_separate_location_cohorts(
                 proposal, category, location_exclusions[category.id]
@@ -2822,7 +2890,14 @@ def auto_map_policy_year(
         ):
             payload["product_location_exclusions"] = location_exclusions[category.id]
         category.rule_validation = payload
-        if persist_profiles and proposal.rule is not None:
+        # A location-narrowed rule is specific to this product's office split;
+        # stored under the shared "All Employees" signature it would overwrite
+        # (and later be reused for) every other product's catch-all.
+        if (
+            persist_profiles
+            and proposal.rule is not None
+            and category.id not in location_scoped
+        ):
             profile = _upsert_profile(
                 db,
                 client_id=client_id,

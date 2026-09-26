@@ -37,7 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Category, Dependant, Employee, PolicyYear, Product
-from app.services.benefit_statement import _category_covers_dependants
+from app.services.dependant_coverage import category_dependant_mode
 from app.services.flex_membership import (
     ResolvedRoster,
     classify_relationship,
@@ -342,7 +342,7 @@ def coverage_by_employee(
         return {}
     plans = hydrate_plans(employees, db, py.id)
 
-    # `_category_covers_dependants` needs product/category fields `MatchedPlan`
+    # `category_dependant_mode` needs product/category fields `MatchedPlan`
     # does not carry, so one bulk query for the categories in play.
     cat_ids = {mp.category_id for rows in plans.values() for mp in rows if mp.category_id}
     cat_info: dict[
@@ -385,22 +385,24 @@ def coverage_by_employee(
             # conflating them let a restore put a child on every product the
             # employee held — group term life included — after a drop had
             # removed them from the three that actually carry dependants.
-            covers = (
-                _category_covers_dependants(
-                    bool(own), info[1], info[2], info[3], info[4]
-                )
+            # Voluntary dependant cover still EXTENDS to dependants (they can be
+            # added); only compulsory cover sweeps them in by default.
+            mode = (
+                category_dependant_mode(bool(own), info[1], info[2], info[3], info[4])
                 if info
-                else False
+                else None
             )
             covers_dependants.setdefault(emp_id, set())
-            if covers:
+            if mode is not None:
                 covers_dependants[emp_id].add(mp.product_code)
             if mp.covered_dependant_ids is not None:
                 per_product[mp.product_code] = set(mp.covered_dependant_ids)
                 continue
-            # No explicit election: the cohort heuristic sweeps in every active
+            # No explicit election: compulsory cover sweeps in every active
             # dependant of that employee, exactly as the benefit statement does.
-            per_product[mp.product_code] = {d.id for d in own} if covers else set()
+            per_product[mp.product_code] = (
+                {d.id for d in own} if mode == "compulsory" else set()
+            )
         out[emp_id] = per_product
     return out
 

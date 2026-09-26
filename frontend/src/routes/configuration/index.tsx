@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBlocker, useSearch } from "@tanstack/react-router";
 import {
   useAuditLog,
@@ -40,6 +40,7 @@ import {
   useSlipUpload,
 } from "@/components/configuration/UploadCard";
 import { defaultPolicyYear } from "@/lib/policy-year";
+import type { SetupSearch } from "@/lib/setupLink";
 import { useSession } from "@/stores/session";
 import type { Category, InsuranceLine } from "@/types";
 import {
@@ -93,13 +94,21 @@ export function ConfigurationPage() {
   const { data: audit } = useAuditLog();
   // Initial line tab is deep-linkable via ?tab= (e.g. the Reports Center "Flex
   // Coverage" card links to ?tab=flex); unknown values fall back to medical.
-  const search = useSearch({ strict: false }) as { tab?: string };
+  const search = useSearch({ strict: false }) as SetupSearch;
   const [tab, setTab] = useState<InsuranceLine>(
     INSURANCE_LINES.includes(search.tab as InsuranceLine)
       ? (search.tab as InsuranceLine)
       : "medical",
   );
   const [selected, setSelected] = useState<Category | null>(null);
+  // "Edit at source" deep link from Member Coverage (?product=&section=&category=).
+  // Read once: it is an entry point, not state to re-apply on every refetch.
+  const [focus] = useState(() => ({
+    product: search.product?.trim().toUpperCase() || undefined,
+    section: search.section,
+    category: search.category,
+  }));
+  const focusApplied = useRef({ line: false, category: false });
   const [blockingEdit, setBlockingEdit] = useState<{
     line: InsuranceLine;
     code: string;
@@ -136,6 +145,26 @@ export function ConfigurationPage() {
             usable.has(attribute.attribute_id))),
     );
   }, [rosterReadiness, schema, selected?.matching_rule]);
+
+  useEffect(() => {
+    if (!focus.product || focusApplied.current.line) return;
+    const product = setupProducts.find(
+      (p) => p.code.trim().toUpperCase() === focus.product,
+    );
+    if (!product) return;
+    focusApplied.current.line = true;
+    setTab(product.line ?? lineForCode(product.code, registry?.entries));
+  }, [focus.product, registry, setupProducts]);
+
+  useEffect(() => {
+    if (!focus.category || focusApplied.current.category || readOnly) return;
+    const category = groups
+      .flatMap((g) => g.categories)
+      .find((c) => c.id === focus.category);
+    if (!category) return;
+    focusApplied.current.category = true;
+    setSelected(category);
+  }, [focus.category, groups, readOnly]);
 
   const groupsByLine = useMemo(() => {
     const by: Record<InsuranceLine, typeof groups> = {
@@ -338,6 +367,8 @@ export function ConfigurationPage() {
                     onSelectCategory={setSelected}
                     onBlockingEditChange={handleBlockingEditChange}
                     readOnly={readOnly}
+                    focusProduct={focus.product}
+                    focusSection={focus.section}
                   />
                 )}
               </TabsContent>

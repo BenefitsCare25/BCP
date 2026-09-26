@@ -1137,6 +1137,45 @@ export function useDeletePlanOverride() {
   });
 }
 
+/** Record that a member took up voluntary cover — themselves (`planCode`) or
+ * the dependants now enrolled on it (`coveredDependantIds`, the full list). */
+export function useSetPlanOverride() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      employeeId,
+      productCode,
+      planCode,
+      coveredDependantIds,
+    }: {
+      employeeId: string;
+      productCode: string;
+      planCode?: string | null;
+      coveredDependantIds?: string[];
+    }) =>
+      api.put<PlanOverride>(
+        `/employees/${employeeId}/plan-overrides/${encodeURIComponent(productCode)}`,
+        {
+          plan_code: planCode ?? null,
+          declined: false,
+          ...(coveredDependantIds ? { covered_dependant_ids: coveredDependantIds } : {}),
+        },
+      ),
+    onSuccess: () => {
+      for (const key of [
+        "plan-overrides",
+        "benefit-statement",
+        "coverage-summary",
+        "coverage-history",
+        "employee-utilization",
+        "underwriting",
+      ]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+}
+
 // ── Bulk plan update ─────────────────────────────────────────────────────────
 
 export function usePreviewBulk(policyYearId: string | undefined) {

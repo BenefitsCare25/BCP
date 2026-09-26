@@ -27,6 +27,7 @@ from app.schemas.api import (
     MatchResultsOut,
     MatchRunResult,
 )
+from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.matching_engine import match_policy_year
 
 logger = logging.getLogger(__name__)
@@ -151,9 +152,28 @@ def run_matching(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MatchRunResult:
-    require_client_id(user)
+    client_id = require_client_id(user)
     assert_policy_year_for_user(policy_year_id, user, db)
 
+    # Refresh the slip-derived rules first, exactly as a roster upload does.
+    # Matching alone replays whatever rules were compiled at the last upload,
+    # so a rule-compiler fix (a location-limited cohort, a grade family)
+    # never reached a live year. Broker-edited rules are preserved.
+    mapping = auto_map_policy_year(db, policy_year_id=policy_year_id, client_id=client_id)
+    write_audit(
+        db,
+        user,
+        action="propose_eligibility_mappings",
+        entity_type="policy_year",
+        entity_id=policy_year_id,
+        after={
+            "trigger": "run_matching",
+            "validated": mapping.validated,
+            "needs_review": mapping.needs_review,
+            "unmapped": mapping.unmapped,
+            "reused": mapping.reused,
+        },
+    )
     summary = match_policy_year(db, policy_year_id, user)
     write_audit(
         db,

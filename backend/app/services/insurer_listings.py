@@ -71,6 +71,7 @@ from app.services.underwriting import (
     load_cases,
     report_uw_amounts,
 )
+from app.services.voluntary_enrolment import employee_participation, enrolled_products
 
 _OPTION_MARKER = re.compile(r"\(\s*option\s*(\d+)\s*\)", re.IGNORECASE)
 
@@ -217,16 +218,23 @@ def _employee_coverage(
     block_by_code = {b.product.code: b for b in blocks}
 
     cat_rows = db.execute(
-        select(
-            Category.id, Category.plan_assignments,
-            Category.participation_detail,
-            Category.display_name, Category.raw_description,
-        ).where(Category.policy_year_id == py.id)
-    ).all()
+        select(Category).where(Category.policy_year_id == py.id)
+    ).scalars().all()
     cat_facts = {
-        cid: (pa or {}, detail, disp, raw)
-        for cid, pa, detail, disp, raw in cat_rows
+        cat.id: (
+            cat.plan_assignments or {},
+            cat.participation_detail,
+            cat.display_name,
+            cat.raw_description,
+        )
+        for cat in cat_rows
     }
+    # Voluntary cohorts list only members who took the cover up — an insurer
+    # listing is a statement of who is insured, not who may enrol.
+    voluntary_cats = {
+        cat.id for cat in cat_rows if employee_participation(cat) == "voluntary"
+    }
+    enrolled = enrolled_products(db, py.id, [e.id for e in employees])
 
     deps_by_emp: dict[str, list[Dependant]] = {}
     for dep in db.execute(
@@ -257,6 +265,11 @@ def _employee_coverage(
         for mp in plans_by_emp.get(emp.id, []):
             block = block_by_code.get(mp.product_code)
             if block is None or block.product.id in per_product:
+                continue
+            if (
+                mp.category_id in voluntary_cats
+                and (emp.id, block.product.id) not in enrolled
+            ):
                 continue
             pa, detail, disp, raw = cat_facts.get(
                 mp.category_id or "", ({}, None, None, None)

@@ -12,8 +12,9 @@ is later split into an employee-facing statement, gate ``financials`` off there.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,6 +37,7 @@ from app.schemas.api import (
     FlexBenefitCategoryLine,
     FlexCoverageLine,
     FlexPriceTagLine,
+    PlanFinancials,
     StatementAttribute,
     StatementEmployee,
 )
@@ -43,6 +45,7 @@ from app.services.dependant_coverage import (
     category_covers_dependants as _shared_category_covers_dependants,
 )
 from app.services.dependant_coverage import (
+    category_dependant_mode,
     has_member_cover_eligibility_answer,
 )
 from app.services.flex_membership import (
@@ -52,6 +55,7 @@ from app.services.flex_membership import (
 )
 from app.services.flex_pricing_resolver import summarize_employee
 from app.services.flex_proration import proration_line
+from app.services.member_premium import member_premium
 from app.services.plan_hydration import basis_amount, hydrate_plans
 from app.services.product_registry import get_entry
 from app.services.roster_attributes import (
@@ -61,10 +65,23 @@ from app.services.roster_attributes import (
     iso_date,
 )
 from app.services.roster_dedup import DEP_NAME_KEYS
+from app.services.voluntary_enrolment import employee_participation, enrolled_products
 
 # Attributes surfaced on the statement, in display order. Raw `category` plus the
 # derived attributes the matching rules key on (see services/derivation_engine).
-_KEY_ATTRS: tuple[str, ...] = ("category", "grade", "class", "pass", "family_status")
+# `job_grade` is the field every CDL slip band keys on ("Job category: E1 to
+# E6"), so a broker checking a plan needs it beside the roster category.
+_KEY_ATTRS: tuple[str, ...] = (
+    "category", "job_grade", "grade", "class", "pass", "family_status",
+)
+# Family-status codes (flex_membership.FAMILY_CODES) read as words.
+_FAMILY_LABELS: dict[str, str] = {
+    "S": "Single",
+    "M": "Married",
+    "M1C": "Family, 1 child",
+    "M2C": "Family, 2 children",
+    "M3C": "Family, 3+ children",
+}
 
 # Tolerant attribute-key lookup shared with the fact-find form.
 #
@@ -246,64 +263,109 @@ def _build_flex_coverage(db: Session, employee: Employee) -> FlexCoverageLine | 
     )
 
 
+@dataclass(frozen=True)
+class _CategoryFacts:
+    product_id: str | None = None
+    pa: dict[str, Any] | None = None
+    rule: str | None = None
+    employee_mode: str | None = None
+    dependant_mode: str | None = None
+
+
+_NO_FACTS = _CategoryFacts()
+
+
+def _category_facts(
+    db: Session, policy_year_id: str, cat_ids: list[str]
+) -> dict[str, _CategoryFacts]:
+    """What each matched category says about participation and dependants."""
+    if not cat_ids:
+        return {}
+    rows = db.execute(
+        select(Category, Product.has_dependants, Product.code)
+        .outerjoin(Product, Category.product_id == Product.id)
+        .where(Category.id.in_(cat_ids))
+    ).all()
+    codes = {str(code or "").strip().upper() for _cat, _has, code in rows}
+    setup_has_member_cover = {
+        str(code or "").strip().upper(): has_member_cover_eligibility_answer(answers)
+        for code, answers in db.execute(
+            select(ProductSetup.product_code, ProductSetup.answers).where(
+                ProductSetup.policy_year_id == policy_year_id,
+                ProductSetup.product_code.in_(codes),
+            )
+        ).all()
+    }
+    facts: dict[str, _CategoryFacts] = {}
+    for cat, has_dep, code in rows:
+        legacy_default = bool(has_dep) and not setup_has_member_cover.get(
+            str(code or "").strip().upper(), False
+        )
+        facts[cat.id] = _CategoryFacts(
+            product_id=cat.product_id,
+            pa=cat.plan_assignments,
+            rule=cat.rule_human_readable,
+            employee_mode=employee_participation(cat),
+            dependant_mode=category_dependant_mode(
+                bool(has_dep),
+                cat.plan_assignments,
+                cat.participation_detail,
+                cat.display_name,
+                cat.raw_description,
+                legacy_product_default=legacy_default,
+            ),
+        )
+    return facts
+
+
+def _member_line_financials(
+    fin: PlanFinancials | None,
+    pa: dict[str, Any] | None,
+    covered_deps: list[DependantSummary],
+) -> tuple[PlanFinancials | None, str | None]:
+    """Only PER-MEMBER figures reach a coverage line.
+
+    Sum-insured products arrive already reduced (``member_financials``). A flat
+    or tiered reimbursement product is priced here from its per-head rate for
+    the family actually covered. Anything else would carry the GROUP sum
+    insured / total premium straight from the category, so it is suppressed
+    rather than mislabelled as the member's.
+    """
+    if fin is None:
+        return None, None
+    pa = pa or {}
+    if basis_amount(pa) is not None or pa.get("voluntary_rates"):
+        return fin, None
+    spouses = sum(1 for d in covered_deps if d.role == "spouse")
+    children = sum(1 for d in covered_deps if d.role == "child")
+    priced = member_premium(fin, spouses=spouses, children=children)
+    if priced is None:
+        return None, None
+    tiers = (
+        {k: {"rate": v["rate"]} for k, v in fin.rate_tiers.items() if "rate" in v}
+        if fin.rate_tiers
+        else None
+    )
+    return (
+        fin.model_copy(
+            update={
+                "annual_premium": priced.amount,
+                "sum_insured": None,
+                "num_employees": None,
+                "rate_tiers": tiers,
+            }
+        ),
+        priced.note,
+    )
+
+
 def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatementOut:
     matched_plans = hydrate_plans([employee], db, employee.policy_year_id).get(employee.id, [])
 
-    # Per-category dependant-coverage facts (product.has_dependants + plan_assignments + text).
-    cat_ids = [mp.category_id for mp in matched_plans if mp.category_id]
-    cat_facts: dict[
-        str,
-        tuple[
-            bool,
-            dict[str, Any] | None,
-            dict[str, Any] | None,
-            str | None,
-            str | None,
-            str | None,
-            bool,
-        ],
-    ] = {}
-    if cat_ids:
-        rows = db.execute(
-            select(
-                Category.id,
-                Product.has_dependants,
-                Product.code,
-                Category.plan_assignments,
-                Category.participation_detail,
-                Category.display_name,
-                Category.raw_description,
-                Category.rule_human_readable,
-            )
-            .outerjoin(Product, Category.product_id == Product.id)
-            .where(Category.id.in_(cat_ids))
-        ).all()
-        product_codes = {
-            str(code or "").strip().upper()
-            for _cid, _has_dep, code, _pa, _detail, _disp, _raw, _rule in rows
-        }
-        setup_has_member_cover = {
-            str(code or "").strip().upper(): has_member_cover_eligibility_answer(answers)
-            for code, answers in db.execute(
-                select(ProductSetup.product_code, ProductSetup.answers).where(
-                    ProductSetup.policy_year_id == employee.policy_year_id,
-                    ProductSetup.product_code.in_(product_codes),
-                )
-            ).all()
-        }
-        cat_facts = {
-            cid: (
-                bool(has_dep),
-                pa,
-                detail,
-                disp,
-                raw,
-                rule,
-                bool(has_dep)
-                and not setup_has_member_cover.get(str(code or "").strip().upper(), False),
-            )
-            for cid, has_dep, code, pa, detail, disp, raw, rule in rows
-        }
+    cat_facts = _category_facts(
+        db, employee.policy_year_id, [mp.category_id for mp in matched_plans if mp.category_id]
+    )
+    enrolled = enrolled_products(db, employee.policy_year_id, [employee.id])
 
     dependants = list(
         db.execute(
@@ -321,35 +383,27 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
 
     coverage: list[CoverageLine] = []
     for mp in matched_plans:
-        has_dep, pa, detail, disp, raw, rule, legacy_default = cat_facts.get(
-            mp.category_id or "", (False, None, None, None, None, None, False)
+        facts = cat_facts.get(mp.category_id or "", _NO_FACTS)
+        enrolment: Literal["covered", "eligible"] = (
+            "eligible"
+            if facts.employee_mode == "voluntary"
+            and (employee.id, facts.product_id) not in enrolled
+            else "covered"
         )
-        # An override with explicit elected dependants is authoritative; otherwise
-        # fall back to the product-level heuristic.
-        if mp.covered_dependant_ids is not None:
+        dep_mode = facts.dependant_mode
+        if enrolment == "eligible":
+            # Not enrolled themselves, so no dependant can hold this cover yet.
+            covered_deps: list[DependantSummary] = []
+        elif mp.covered_dependant_ids is not None:
+            # An override naming the enrolled dependants is authoritative.
             covered_deps = [dep_by_id[i] for i in mp.covered_dependant_ids if i in dep_by_id]
-            covers = bool(covered_deps)
         else:
-            covers = _category_covers_dependants(
-                has_dep,
-                pa,
-                detail,
-                disp,
-                raw,
-                legacy_product_default=legacy_default,
-            )
-            covered_deps = dep_summaries if covers else []
-        # Only surface PER-MEMBER figures. A line that doesn't reduce to a
-        # per-member sum assured (tiered medical, salary-multiple basis) would
-        # otherwise carry the GROUP sum_insured / total premium / rate_tiers
-        # straight from the category — suppress it rather than mislabel a group
-        # total as the member's. (Reducibility is a cohort-level property, so the
-        # matched category's basis/voluntary_rates settles it for elected tiers too.)
-        fin = mp.financials
-        if fin is not None and basis_amount(pa or {}) is None and not (
-            pa or {}
-        ).get("voluntary_rates"):
-            fin = None
+            covered_deps = dep_summaries if dep_mode == "compulsory" else []
+        covered_ids = {d.id for d in covered_deps}
+        eligible_deps = (
+            [d for d in dep_summaries if d.id not in covered_ids] if dep_mode else []
+        )
+        fin, premium_note = _member_line_financials(mp.financials, facts.pa, covered_deps)
         coverage.append(CoverageLine(
             product_code=mp.product_code,
             product_name=mp.product_name,
@@ -358,15 +412,24 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             category_display=mp.category_display,
             match_method=mp.method,
             match_confidence=mp.confidence,
-            rule_human_readable=rule,
+            rule_human_readable=facts.rule,
             plan_code=mp.plan_code,
             cover_description=mp.cover_description,
             annual_policy_limit=mp.annual_policy_limit,
             benefit_schedule=mp.benefit_schedule,
             plan_status=mp.plan_status,
             financials=fin,
-            covers_dependants=covers,
+            covers_dependants=bool(covered_deps),
             covered_dependants=covered_deps,
+            enrolment=enrolment,
+            dependant_cover=dep_mode,
+            eligible_dependants=eligible_deps,
+            product_id=facts.product_id,
+            plan_overridden=bool(
+                mp.plan_code
+                and str(mp.plan_code) != str((facts.pa or {}).get("plan_code") or "")
+            ),
+            premium_note=premium_note,
         ))
 
     # Stable, predictable ordering for the UI.
@@ -395,7 +458,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
         attributes.append(StatementAttribute(
             key=key,
             label=labels.get(key) or key.replace("_", " ").title(),
-            value=str(val),
+            value=_FAMILY_LABELS.get(str(val), str(val)) if key == "family_status" else str(val),
         ))
 
     flex = _build_flex_coverage(db, employee)

@@ -643,3 +643,48 @@ def test_product_entities_take_precedence_over_category_insured() -> None:
 
     # Absent product (unlinked categories) must not raise.
     assert product_entities(None) == frozenset()
+
+
+def test_name_match_confirmed_by_the_rows_rule_reports_rule() -> None:
+    # 142 CDL rows showed "Fuzzy 67%" though their job-grade rule had passed.
+    cat = _cat(
+        "c1",
+        "Manager, Executive to AM and Secretary (Job category: E1 to E6)",
+        rule={"in": ["job_category", ["E1", "E2", "E3", "E4", "E5", "E6"]]},
+        confidence=0.95,
+    )
+    emp = _emp("Executive to AM & Secretary", derived={"job_category": "E2"})
+    outcome = _match(emp, [cat])
+    assert (outcome.category_id, outcome.method) == ("c1", "rule")
+
+
+def test_location_limited_catch_all_never_matches_as_stored() -> None:
+    from app.services.eligibility_scope import unscoped_catch_alls
+
+    sg = _cat("sg", "Manager", rule={"=": ["category", "Manager"]})
+    sg.plan_assignments = {"location_scope": "SG Office"}
+    thai = _cat("thai", "All Employees", rule={"and": []}, priority=9)
+    thai.plan_assignments = {"location_scope": "Thai Office"}
+    blocked = frozenset(unscoped_catch_alls([sg, thai]))
+    assert blocked == {"thai"}
+    emp = _emp("Executive to AM & Secretary")
+    cats = sorted([sg, thai], key=lambda c: c.priority)
+    outcome = match_one(
+        emp,
+        cats,
+        {c.display_name.strip().lower(): c for c in cats},
+        {c.id: tokenize(c.display_name) for c in cats},
+        blocked_category_ids=blocked,
+    )
+    assert outcome.category_id is None
+
+
+def test_broker_saved_catch_all_on_a_location_row_is_respected() -> None:
+    from app.services.eligibility_scope import unscoped_catch_alls
+
+    sg = _cat("sg", "Manager", rule={"=": ["category", "Manager"]})
+    sg.plan_assignments = {"location_scope": "SG Office"}
+    thai = _cat("thai", "All Employees", rule={"and": []})
+    thai.plan_assignments = {"location_scope": "Thai Office"}
+    thai.human_modified = True
+    assert unscoped_catch_alls([sg, thai]) == set()

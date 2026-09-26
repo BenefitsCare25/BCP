@@ -55,6 +55,19 @@ function PlanDetail({ line, routeKey, person }: {
     );
   }
 
+  // Voluntary cover on the slip is an offer until taken up: say so plainly
+  // rather than presenting it as cover the member can claim against.
+  if (line.enrolment === "eligible") {
+    return (
+      <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
+        <p className="text-row text-label">
+          You're eligible for this voluntary cover but not enrolled, so it can't be claimed yet.
+          Your HR team can tell you how to join.
+        </p>
+      </Mount>
+    );
+  }
+
   const facts = careFacts(line, routeKey);
   return (
     <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>

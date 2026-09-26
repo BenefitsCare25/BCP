@@ -218,6 +218,10 @@ def _insured_buckets(
     seen_products: set[str] = set()
 
     for line in statement.coverage:
+        # Voluntary cover not taken up has no balance to count down; any claim
+        # filed against it surfaces as an orphan below instead.
+        if line.enrolment == "eligible":
+            continue
         seen_products.add(line.product_code)
         product_sum = sums.pop((line.product_code, None), None) or {
             "approved": 0.0, "pending": 0.0, "pending_unconverted": 0,

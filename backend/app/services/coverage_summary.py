@@ -16,6 +16,7 @@ from app.models.category import Category
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
 from app.schemas.api import CoverageProduct, CoverageSummaryItem
+from app.services.voluntary_enrolment import employee_participation, enrolled_products
 
 
 def build_coverage_items(
@@ -53,27 +54,41 @@ def build_coverage_items(
             if m.get("category_id"):
                 cat_ids.add(m["category_id"])
 
-    prod_by_cat: dict[str, tuple[str | None, str | None]] = {}
+    prod_by_cat: dict[str, tuple[str | None, str | None, str | None, bool]] = {}
     if cat_ids:
-        for cid, code, name in db.execute(
-            select(Category.id, Product.code, Product.display_name)
+        for cat, code, name in db.execute(
+            select(Category, Product.code, Product.display_name)
             .outerjoin(Product, Category.product_id == Product.id)
             .where(Category.id.in_(cat_ids))
         ).all():
-            prod_by_cat[cid] = (code, name)
+            prod_by_cat[cat.id] = (
+                code, name, cat.product_id, employee_participation(cat) == "voluntary"
+            )
+    enrolled = enrolled_products(db, policy_year_id, [row[0] for row in rows])
 
     items: list[CoverageSummaryItem] = []
     for emp_id, staff_id, employee_name, matched, status in rows:
         seen: dict[str, str | None] = {}
+        eligible: set[str] = set()
+        needs_check = False
         for m in matched or []:
             cid = m.get("category_id")
-            code = prod_name = None
+            code = prod_name = product_id = None
+            voluntary = False
             if cid and cid in prod_by_cat:
-                code, prod_name = prod_by_cat[cid]
+                code, prod_name, product_id, voluntary = prod_by_cat[cid]
             code = code or m.get("product_code")
             if not code:
                 continue
+            if voluntary and (emp_id, product_id) not in enrolled:
+                eligible.add(code)
+                continue
             seen.setdefault(code, prod_name)
+            confidence = m.get("confidence")
+            if m.get("method") == "fuzzy_name" and not (
+                isinstance(confidence, (int, float)) and confidence >= 1
+            ):
+                needs_check = True
         products = [
             CoverageProduct(product_code=c, product_name=n) for c, n in seen.items()
         ]
@@ -84,6 +99,8 @@ def build_coverage_items(
                 employee_name=employee_name,
                 product_count=len(products),
                 products=products,
+                eligible_count=len(eligible - seen.keys()),
+                needs_check=needs_check,
                 # Served ALWAYS, not only when leavers were asked for: the
                 # picker marks the row, and a row that looks identical to an
                 # active colleague's is how a broker reads a leaver's coverage

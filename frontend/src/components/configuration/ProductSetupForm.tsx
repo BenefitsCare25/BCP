@@ -60,6 +60,8 @@ interface Props {
   onEditRule: (c: Category) => void;
   onConfirmed?: () => void;
   onDirtyChange?: (dirty: boolean, sections: string[]) => void;
+  /** Step to open first — a deep link names the step that holds the value. */
+  initialSection?: string;
   insuranceLine: InsuranceLine;
   term: ProductTerm | null;
 }
@@ -310,6 +312,7 @@ export function ProductSetupForm({
   onEditRule,
   onConfirmed,
   onDirtyChange,
+  initialSection,
   insuranceLine,
   term,
 }: Props) {
@@ -319,7 +322,9 @@ export function ProductSetupForm({
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Which section tab is open. Local: the form no longer remounts on the first
   // save (parent keys on `code`), so this survives naturally.
-  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<string | null>(
+    initialSection ?? null,
+  );
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const queryClient = useQueryClient();

@@ -737,8 +737,14 @@ class CoverageSummaryItem(BaseModel):
     id: str
     staff_id: str
     employee_name: str | None
+    #: Products the member HOLDS — voluntary cover not taken up is excluded.
     product_count: int
     products: list[CoverageProduct]
+    #: Voluntary products the member may enrol in but has not.
+    eligible_count: int = 0
+    #: At least one product was matched on name similarity alone — the one
+    #: match a broker should check before trusting the plan shown.
+    needs_check: bool = False
     #: Terminated on the roster. Only ever true when the caller asked for
     #: leavers, but served unconditionally so the row can say so.
     left: bool = False
@@ -826,6 +832,21 @@ class CoverageLine(BaseModel):
     published: bool = True
     covers_dependants: bool = False
     covered_dependants: list[DependantSummary] = Field(default_factory=list)
+    # "eligible" when the member's cohort is voluntary and they have not taken
+    # it up — cover they may enrol in, not cover they hold (and not claimable).
+    enrolment: Literal["covered", "eligible"] = "covered"
+    # How dependants join this cover: "compulsory" | "voluntary" | None.
+    dependant_cover: str | None = None
+    # Dependants who may be enrolled on voluntary dependant cover but are not.
+    eligible_dependants: list[DependantSummary] = Field(default_factory=list)
+    # Setup identity for broker deep links (Company & Benefits product page).
+    product_id: str | None = None
+    # True when an override elected this plan (vs the cohort default) — a
+    # dependant change must resend it or the election resets to the default.
+    plan_overridden: bool = False
+    # How the per-member premium was worked out ("EO tier rate", "Per-member
+    # rate", ...). Broker-only, stripped with `financials`.
+    premium_note: str | None = None
 
 
 class StatementEmployee(BaseModel):

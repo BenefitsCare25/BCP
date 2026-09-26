@@ -421,11 +421,13 @@ def _walk_data_rows(
 
         # If no plan column populated, try to extract "Plan X:" from the
         # category text itself (common in older slips).
+        inline_plan = False
         if not plan_str:
             m = _PLAN_INLINE.match(cat)
             if m:
                 plan_str = m.group(1).strip()
                 cat = m.group(2).strip()
+                inline_plan = True
 
         # Carry the block's plan code onto continuation rows: an explicit plan
         # code becomes the block's carry; a blank-plan category inherits it. This
@@ -454,10 +456,15 @@ def _walk_data_rows(
         # that is itself dependant-scope (a dependants sheet, a "Spouse (Option
         # N)" option row) is genuine as dependant data — it feeds dependant
         # pricing, not the employee tier list.
+        # A row that names its own plan ("Plan 9: Chairman") and states a
+        # basis is a real tier even with no participation or headcount of its
+        # own — CDL's GTL Chairman plan was dropped as a code-shaped word.
+        stated_basis = 0 <= cols.basis < len(row) and _non_empty(row[cols.basis])
         is_genuine_row = (
             parse_participation(this_participation).employee is not None
             or (ne_val is not None and ne_val > 0)
             or member_scope == "dependant"
+            or (inline_plan and stated_basis)
         )
         if len(cat) < 6 and not is_genuine_row:
             continue

@@ -356,7 +356,7 @@ def build_coverage_options(
     for line in statement.coverage:
         # An unconfirmed setup isn't published to members, so it can't be
         # claimed against from the member form either.
-        if not is_published(line):
+        if not is_published(line) or line.enrolment == "eligible":
             continue
         product_window = claim_period_window(
             db, year, CLAIM_KIND_INSURED, employee, line.product_code,

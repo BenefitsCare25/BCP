@@ -409,7 +409,12 @@ def build_member_cards(
     insurers_by_product = insurer_map(
         db, employee.policy_year_id, products_by_id.values()
     )
-    coverage_by_code = {line.product_code: line for line in statement.coverage}
+    # Eligible-only voluntary cover carries no card until the member enrols.
+    coverage_by_code = {
+        line.product_code: line
+        for line in statement.coverage
+        if line.enrolment == "covered"
+    }
     year = db.get(PolicyYear, employee.policy_year_id)
     client = db.get(Client, employee.client_id)
 

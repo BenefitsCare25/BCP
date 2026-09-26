@@ -2165,3 +2165,41 @@ def test_bulk_confirmable_matches_the_bulk_confirm_endpoint_filter() -> None:
     assert not is_bulk_confirmable(category(confidence=0.84))
     assert not is_bulk_confirmable(category(matching_rule=None))
     assert not is_bulk_confirmable(category(plan_assignments={"member_scope": "dependant"}))
+
+
+def test_grade_letter_families_expand_to_the_roster_codes() -> None:
+    # CDL's GPA sheet: "Grade J and P" where the life sheets spell the same
+    # officers "J1 to J3, JA to JC". Left unmapped, 58 officers fell through
+    # to the Thai-office catch-all.
+    proposal = propose_category_rule(
+        "Grade J and P", _catalog(job_grade=["J1", "J2", "JA", "C1", "E2"])
+    )
+    assert proposal.rule is not None
+    for code, expected in (("J1", True), ("JA", True), ("C1", False), ("E2", False)):
+        assert evaluate(proposal.rule, {"job_grade": code}) is expected
+
+
+def test_slip_label_prefixing_one_roster_cohort_maps_to_it() -> None:
+    proposal = propose_category_rule(
+        "Executive to AM",
+        _catalog(category=["Executive to AM & Secretary", "Manager", "SM to SVP"]),
+    )
+    assert proposal.rule == {"=": ["category", "Executive to AM & Secretary"]}
+
+
+def test_location_scope_resolves_to_the_roster_location_cohort() -> None:
+    from app.services.eligibility_scope import location_cohort_value, scope_country
+
+    values = {
+        "category": [
+            "Executive to AM & Secretary",
+            "All Employees based in Thailand (except for Director)",
+        ]
+    }
+    assert scope_country("Thai Office") == "thailand"
+    assert location_cohort_value("Thai Office", values) == (
+        "category",
+        "All Employees based in Thailand (except for Director)",
+    )
+    # No roster value names the office: no guess, so the row stays unmapped.
+    assert location_cohort_value("Thai Office", {"category": ["Manager"]}) == (None, None)

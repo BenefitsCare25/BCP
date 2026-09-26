@@ -59,6 +59,7 @@ export function BenefitStatement({
   data,
   utilization,
   actions,
+  canEdit = false,
 }: {
   data: BenefitStatementData;
   /**
@@ -69,12 +70,16 @@ export function BenefitStatement({
   utilization?: Utilization | null;
   /** Per-person admin controls, rendered in the identity strip. */
   actions?: ReactNode;
+  /** Broker may record enrolments on voluntary cover from the table. */
+  canEdit?: boolean;
 }) {
   const hasFlex = Boolean(data.flex);
   // Gate on what there is to RENDER, not on `is_matched`: `hydrate_plans` skips
   // matched_categories entries whose category was deleted or re-parsed, so a
   // matched employee can still have no coverage lines.
   const hasAnyCoverage = data.coverage.length > 0 || hasFlex;
+  // Voluntary cover not taken up is listed, but it is not cover held.
+  const heldCount = data.coverage.filter((c) => c.enrolment !== "eligible").length;
   const orphans = orphanBuckets(utilization);
   const anyPending =
     (utilization?.insured ?? []).some((b) => b.pending > 0) ||
@@ -88,7 +93,8 @@ export function BenefitStatement({
         dependants={data.dependants}
         coverage={data.coverage}
         isMatched={data.is_matched}
-        productCount={data.coverage.length}
+        productCount={heldCount}
+        eligibleCount={data.coverage.length - heldCount}
         hasFlex={hasFlex}
         actions={actions}
       />
@@ -96,7 +102,12 @@ export function BenefitStatement({
       {hasAnyCoverage ? (
         <>
           {data.coverage.length > 0 && (
-            <CoverageTable lines={data.coverage} utilization={utilization} />
+            <CoverageTable
+              lines={data.coverage}
+              utilization={utilization}
+              employeeId={data.employee.id}
+              canEdit={canEdit}
+            />
           )}
           {data.flex && (
             <FlexPanel

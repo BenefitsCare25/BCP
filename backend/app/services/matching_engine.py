@@ -34,6 +34,7 @@ from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
 from app.services.derivation_engine import derive
+from app.services.eligibility_scope import unscoped_catch_alls
 from app.services.explicit_grade_clauses import has_explicit_grade_clause
 from app.services.rule_evaluator import evaluate
 
@@ -325,6 +326,7 @@ def match_one(
     category_tokens: dict[str, set[str]],
     insured_by_category: dict[str, frozenset[str]] | None = None,
     entity_aliases: EntityAliases | None = None,
+    blocked_category_ids: frozenset[str] = frozenset(),
 ) -> MatchOutcome:
     """Match a single employee against pre-indexed category data.
 
@@ -339,6 +341,8 @@ def match_one(
     tier. An exact-name hit gated out falls through to fuzzy, where the sibling
     category of the employee's own entity (same name, different insured block)
     still matches at score 1.0.
+    `blocked_category_ids` are rows that must not match anyone as stored — a
+    location-limited cohort whose rule is still the empty catch-all.
     """
     if insured_by_category is None:
         insured_by_category = {
@@ -357,6 +361,8 @@ def match_one(
     }
 
     def _allowed(cat: Category) -> bool:
+        if cat.id in blocked_category_ids:
+            return False
         if not _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entities):
             return False
         if rule_has_validation_errors(cat):
@@ -410,6 +416,11 @@ def match_one(
                 best_priority = cat.priority
                 best_cat = cat
         if best_cat is not None:
+            # The row's own rule admits this employee, so the name only picked
+            # among rows the rule already allows. Reporting it as a 67% name
+            # guess flagged 142 correct CDL matches as worth checking.
+            if best_cat.matching_rule and evaluate(best_cat.matching_rule, view):
+                return MatchOutcome(best_cat.id, "rule", best_cat.confidence)
             return MatchOutcome(best_cat.id, "fuzzy_name", round(best_score, 4))
 
     # Tier 3 — rule evaluation. Collect every matching rule in this product,
@@ -512,6 +523,7 @@ class _ProductIndex:
     exact_lookup: dict[str, Category]
     category_tokens: dict[str, set[str]]
     insured_by_category: dict[str, frozenset[str]]
+    blocked_category_ids: frozenset[str] = frozenset()
 
 
 def _build_product_indices(
@@ -548,6 +560,7 @@ def _build_product_indices(
                 c.id: prod_entities or category_insured_entities(c, aliases)
                 for c in sorted_cats
             },
+            blocked_category_ids=frozenset(unscoped_catch_alls(sorted_cats)),
         ))
     return indices
 
@@ -663,6 +676,7 @@ def match_policy_year(
                     idx.category_tokens,
                     idx.insured_by_category,
                     entity_aliases=aliases,
+                    blocked_category_ids=idx.blocked_category_ids,
                 )
                 if outcome.category_id is None:
                     continue

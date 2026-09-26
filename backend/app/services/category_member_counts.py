@@ -29,7 +29,7 @@ from app.models import Category, Dependant, Employee, Product, ProductSetup
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.services.coverage_resolver import load_overrides, resolve_plan
 from app.services.dependant_coverage import (
-    category_covers_dependants,
+    category_dependant_mode,
     has_member_cover_eligibility_answer,
 )
 from app.services.plan_hydration import resolve_basis_amount
@@ -101,7 +101,9 @@ def build_category_member_counts(
 
     # product_id per category, plus which categories cover dependants.
     cat_product: dict[str, str | None] = {}
-    covers_dependants: dict[str, bool] = {}
+    # How dependants join each category: compulsory (all counted), voluntary
+    # (only those an override enrols) or None (no dependant cover).
+    dependant_mode: dict[str, str | None] = {}
     cat_assignments: dict[str, dict[str, Any]] = {}
     for row in db.execute(
         select(
@@ -124,7 +126,7 @@ def build_category_member_counts(
         legacy_default = bool(has_deps) and not setup_has_member_cover.get(
             product_code, False
         )
-        covers_dependants[cid] = category_covers_dependants(
+        dependant_mode[cid] = category_dependant_mode(
             bool(has_deps),
             cat_assignments[cid],
             detail if isinstance(detail, dict) else None,
@@ -166,9 +168,10 @@ def build_category_member_counts(
                 basis_missing.add(cid)
             else:
                 basis_totals[cid] += own
-            if not covers_dependants.get(cid):
+            mode = dependant_mode.get(cid)
+            if mode is None:
                 continue
-            covered = household
+            covered = household if mode == "compulsory" else []
             if override is not None and override.covered_dependant_ids is not None:
                 chosen = set(override.covered_dependant_ids)
                 covered = [d for d in household if d.id in chosen]
@@ -180,7 +183,7 @@ def build_category_member_counts(
         cid: CategoryMembers(
             employees=count,
             dependants=(
-                dep_counts.get(cid, 0) if covers_dependants.get(cid) else None
+                dep_counts.get(cid, 0) if dependant_mode.get(cid) else None
             ),
             tier_counts=dict(tier_counts.get(cid, {})),
             sum_insured=(

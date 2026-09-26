@@ -24,6 +24,7 @@ from app.core.deps import tenant_or_global
 from app.models import Dependant, Employee, EmployeeAttributeSchema, Product
 from app.models.category import Category, CategoryStatus
 from app.services.derivation_engine import derive
+from app.services.eligibility_scope import unscoped_catch_alls
 from app.services.matching_engine import (
     _build_exact_lookup,
     _entity_allows,
@@ -291,6 +292,7 @@ def compute_member_counts(
         for c in cats_by_priority
     }
 
+    blocked = frozenset(unscoped_catch_alls(cats_by_priority))
     emp_counts: dict[str, int] = defaultdict(int)
     dep_counts: dict[str, int] = defaultdict(int)
     matched = 0
@@ -316,6 +318,7 @@ def compute_member_counts(
             category_tokens,
             insured_by_category,
             entity_aliases=aliases,
+            blocked_category_ids=blocked,
         )
         if outcome.category_id is None:
             grade = (

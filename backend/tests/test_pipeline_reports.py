@@ -323,6 +323,7 @@ def test_premium_breakdown_gst_unknown_prices_and_formula_safety(monkeypatch):
             product_name="Hospital",
             plan_code="A",
             covered_dependants=[],
+            enrolment="covered",
             financials=NS(annual_premium=109, rate_basis="fixed"),
         ),
         NS(
@@ -330,6 +331,7 @@ def test_premium_breakdown_gst_unknown_prices_and_formula_safety(monkeypatch):
             product_name="Clinic",
             plan_code="B",
             covered_dependants=[],
+            enrolment="covered",
             financials=None,
         ),
     ]
@@ -455,6 +457,7 @@ def test_premium_breakdown_1000_member_workbook_baseline(
             product_name="Hospital",
             plan_code="CORE",
             covered_dependants=[],
+            enrolment="covered",
             financials=NS(annual_premium=109, rate_basis="flat"),
         )
     ]

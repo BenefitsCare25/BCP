@@ -943,6 +943,14 @@ def assert_coverage_claimable(statement: BenefitStatementOut, claim: Claim) -> N
         # case on the member's behalf is precisely what it was written to
         # exclude. Gated on the case type rather than on who called, because the
         # exemption is a property of the case, not of the request.
+        if line.enrolment == "eligible":
+            # Voluntary cover the member has not taken up is eligibility, not
+            # cover — for a member claim and a broker LOG case alike.
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"You are eligible for {claim.product_code} but not enrolled, "
+                "so there is no cover to claim against yet.",
+            )
         if claim.case_type == CASE_TYPE_CLAIM and not is_published(line):
             # Same publication rule as the member portal: an unconfirmed setup
             # is extraction output, not cover a member can file against yet.

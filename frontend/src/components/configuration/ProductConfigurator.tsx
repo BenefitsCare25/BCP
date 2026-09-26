@@ -19,6 +19,8 @@ interface Props {
   isEditing: boolean;
   onDone: () => void;
   onDirtyChange?: (dirty: boolean, sections: string[]) => void;
+  /** Setup step to open first (deep link from Member Coverage). */
+  initialSection?: string;
 }
 
 export function ProductConfigurator({
@@ -29,6 +31,7 @@ export function ProductConfigurator({
   isEditing,
   onDone,
   onDirtyChange,
+  initialSection,
 }: Props) {
   const { data: template, isLoading: loadingTpl } = useSetupTemplate(
     policyYearId,
@@ -87,6 +90,7 @@ export function ProductConfigurator({
         onEditRule={onSelectCategory}
         onConfirmed={onDone}
         onDirtyChange={onDirtyChange}
+        initialSection={initialSection}
         insuranceLine={term?.line ?? "medical"}
         term={term}
       />

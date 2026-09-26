@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pencil, Trash2, Upload, X } from "lucide-react";
 import {
   Card,
@@ -40,6 +40,9 @@ interface Props {
     } | null,
   ) => void;
   readOnly?: boolean;
+  /** Deep link: open this product's tab (and, with a section, its editor). */
+  focusProduct?: string;
+  focusSection?: string;
 }
 
 type PendingProductAction =
@@ -54,8 +57,11 @@ export function LineTab({
   onSelectCategory,
   onBlockingEditChange,
   readOnly = false,
+  focusProduct,
+  focusSection,
 }: Props) {
   const [activeCode, setActiveCode] = useState("");
+  const focusApplied = useRef(false);
   // Codes created this session — shown optimistically until the refetch confirms
   // them, so a just-added product's tab appears immediately.
   const [justAdded, setJustAdded] = useState<string[]>([]);
@@ -139,13 +145,23 @@ export function LineTab({
   // Keep the active sub-tab valid as the product set changes. Depends on
   // `products` only (not `activeCode`): a freshly-added code set via the dialog
   // survives until the refetch lands; a stale selection self-corrects.
+  // Functional update: a deep-linked selection set in the same flush (or a
+  // StrictMode re-run of this effect) must not be overwritten by a stale "".
   useEffect(() => {
     if (!products.length) return;
-    if (!products.some((p) => p.code === activeCode)) {
-      setActiveCode(products[0].code);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setActiveCode((prev) =>
+      products.some((p) => p.code === prev) ? prev : products[0].code,
+    );
   }, [products]);
+
+  useEffect(() => {
+    if (!focusProduct || focusApplied.current) return;
+    const product = products.find((p) => p.code.toUpperCase() === focusProduct);
+    if (!product) return;
+    focusApplied.current = true;
+    setActiveCode(product.code);
+    if (focusSection && !readOnly) setEditingCode(product.code);
+  }, [focusProduct, focusSection, products, readOnly]);
 
   useEffect(() => {
     if (editingCode && !products.some((p) => p.code === editingCode)) {
@@ -274,6 +290,9 @@ export function LineTab({
                       group={productGroup}
                       onSelectCategory={onSelectCategory}
                       isEditing={!readOnly && isEditing}
+                      initialSection={
+                        focusProduct === p.code.toUpperCase() ? focusSection : undefined
+                      }
                       onDone={() => closeEdit(p.code)}
                       onDirtyChange={(dirty, sections) =>
                         setDirtyByCode((prev) => ({

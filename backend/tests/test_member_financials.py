@@ -49,3 +49,57 @@ def test_per_1000_si_still_reduces_to_member_premium() -> None:
     assert fin is not None
     assert fin.annual_premium == 3240.0
     assert fin.sum_insured == 2000000.0
+
+
+def test_flat_and_tiered_rates_price_the_member_and_covered_family() -> None:
+    from app.schemas.api import PlanFinancials
+    from app.services.member_premium import member_premium
+
+    gp = PlanFinancials(rate_basis="flat", premium_rate=378.0, dependant_rate=396.9)
+    assert member_premium(gp).amount == 378.0
+    assert member_premium(gp, spouses=1).amount == 774.9
+
+    ghs = PlanFinancials(
+        rate_basis="tiered",
+        rate_tiers={
+            "EO": {"rate": 1041.0, "premium": 262332.0},
+            "ES": {"rate": 2602.5, "premium": 0.0},
+            "EF": {"rate": 4164.0, "premium": 0.0},
+        },
+    )
+    assert member_premium(ghs).amount == 1041.0
+    assert member_premium(ghs, spouses=1).amount == 2602.5
+    assert member_premium(ghs, spouses=1, children=2).amount == 4164.0
+    # No EC rate on the slip: unknown, never a neighbouring tier's figure.
+    assert member_premium(ghs, children=1) is None
+
+
+def test_voluntary_dependant_cover_is_eligibility_not_cover() -> None:
+    from app.services.dependant_coverage import (
+        category_covers_dependants,
+        category_dependant_mode,
+    )
+
+    voluntary = {"dependant": "voluntary"}
+    assert category_dependant_mode(True, None, voluntary) == "voluntary"
+    assert category_covers_dependants(True, None, voluntary) is False
+    assert category_covers_dependants(True, None, {"dependant": "compulsory"}) is True
+    legacy_text = "Manager / All Eligible Dependants on Voluntary basis"
+    assert category_dependant_mode(True, None, None, legacy_text) == "voluntary"
+
+
+def test_dependants_without_a_dependant_rate_leave_the_premium_unknown() -> None:
+    from app.schemas.api import PlanFinancials
+    from app.services.member_premium import member_premium
+
+    flat = PlanFinancials(rate_basis="flat", premium_rate=378.0)
+    assert member_premium(flat).amount == 378.0
+    assert member_premium(flat, spouses=1) is None
+
+
+def test_dependant_rate_outranks_an_exclusion_phrase() -> None:
+    from app.services.dependant_coverage import category_dependant_mode
+
+    text = "Employees & eligible dependants (excluding dependants above age 70)"
+    assert category_dependant_mode(True, {"dependant_rate": 396.9}, None, text) == "compulsory"
+    assert category_dependant_mode(True, {}, None, text) is None

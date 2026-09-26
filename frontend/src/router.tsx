@@ -18,6 +18,7 @@ import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
 import { hasValidPortalSession } from "@/stores/portalSession";
 import { currentPortalTenantSlug } from "@/lib/tenant";
+import type { SetupSearch } from "@/lib/setupLink";
 import { activateNotificationClaimContext, notificationClaimId } from "@/lib/claimNotificationLink";
 import { HrShell } from "@/components/hr/HrShell";
 import { hasValidHrSession } from "@/stores/hrSession";
@@ -611,10 +612,16 @@ const crIndexRoute = createRoute({
 const crCompanyBenefitsRoute = createRoute({
   getParentRoute: () => crLayoutRoute,
   path: "/company-benefits",
-  // `tab` is optional deep-link state (?tab=flex) — return it as an optional key
-  // so navigations without a tab aren't forced to pass one.
-  validateSearch: (search: Record<string, unknown>): { tab?: string } =>
-    typeof search.tab === "string" ? { tab: search.tab } : {},
+  // Optional deep-link state: `tab` (?tab=flex), and the "edit at source" trio
+  // Member Coverage links with — `product` opens that product, `section` opens
+  // its setup at one step, `category` opens that cohort's matching rule.
+  validateSearch: (search: Record<string, unknown>): SetupSearch => {
+    const out: SetupSearch = {};
+    for (const key of ["tab", "product", "section", "category"] as const) {
+      if (typeof search[key] === "string") out[key] = search[key] as string;
+    }
+    return out;
+  },
   component: ConfigurationPage,
 });
 

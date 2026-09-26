@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Loader2, TableProperties, UserSearch } from "lucide-react";
 import { useEmployeeUtilization } from "@/api/claims";
-import { useBenefitStatement, useCoverageSummary } from "@/api/hooks";
+import { useBenefitStatement, useCoverageSummary, useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,6 +26,10 @@ import { PortalFrame } from "@/components/operations/PortalFrame";
 import { cn } from "@/lib/cn";
 
 const ANY = "__any__";
+// Attention filters beside the product counts: the two states a broker
+// auditing cover goes looking for.
+const NEEDS_CHECK = "__check__";
+const HAS_ELIGIBLE = "__eligible__";
 
 type CoverageView = "broker" | "employee";
 
@@ -43,6 +47,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
     error,
   } = useBenefitStatement(employeeId);
   const { data: utilization } = useEmployeeUtilization(employeeId);
+  const { data: me } = useMe();
 
   if (isLoading) {
     return (
@@ -79,6 +84,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
       <BenefitStatement
         data={statement}
         utilization={utilization}
+        canEdit={Boolean(me) && me?.role !== "broker_viewer"}
         actions={
           <>
             <MemberAccountActions
@@ -156,11 +162,22 @@ export function EmployeeCoveragePage() {
   }, [items]);
 
   // Drop the active count filter if a roster reload no longer has that count.
+  const checkCount = items.filter((it) => it.needs_check).length;
+  const eligibleCount = items.filter((it) => (it.eligible_count ?? 0) > 0).length;
+
   useEffect(() => {
+    // An attention filter whose last member was just resolved (enrolled,
+    // re-matched) drops its option — fall back rather than show an empty list
+    // under a blank selector.
+    if (countFilter === NEEDS_CHECK || countFilter === HAS_ELIGIBLE) {
+      const remaining = countFilter === NEEDS_CHECK ? checkCount : eligibleCount;
+      if (summary && remaining === 0) setCountFilter(ANY);
+      return;
+    }
     if (countFilter !== ANY && !counts.includes(Number(countFilter))) {
       setCountFilter(ANY);
     }
-  }, [counts, countFilter]);
+  }, [counts, countFilter, checkCount, eligibleCount, summary]);
 
   const setSearchParams = (next: { employee?: string; view?: CoverageView }) =>
     void navigate({
@@ -192,6 +209,8 @@ export function EmployeeCoveragePage() {
     ) {
       return false;
     }
+    if (countFilter === NEEDS_CHECK) return Boolean(it.needs_check);
+    if (countFilter === HAS_ELIGIBLE) return (it.eligible_count ?? 0) > 0;
     if (countFilter !== ANY && it.product_count !== Number(countFilter)) {
       return false;
     }
@@ -213,14 +232,24 @@ export function EmployeeCoveragePage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="flex flex-1 items-center gap-2">
             <span className="whitespace-nowrap text-xs text-muted-foreground">
-              Plans covered
+              Show
             </span>
             <Select value={countFilter} onValueChange={setCountFilter}>
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="w-[220px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ANY}>Any</SelectItem>
+                <SelectItem value={ANY}>Everyone</SelectItem>
+                {checkCount > 0 && (
+                  <SelectItem value={NEEDS_CHECK}>
+                    Name matches to check ({checkCount})
+                  </SelectItem>
+                )}
+                {eligibleCount > 0 && (
+                  <SelectItem value={HAS_ELIGIBLE}>
+                    Eligible, not enrolled ({eligibleCount})
+                  </SelectItem>
+                )}
                 {counts.map((n) => (
                   <SelectItem key={n} value={String(n)}>
                     {countLabel(n)}
@@ -257,7 +286,9 @@ export function EmployeeCoveragePage() {
                     ? "bg-muted text-muted-foreground"
                     : "text-subtle",
                 )}
-                title={`${it.product_count} ${it.product_count === 1 ? "product" : "products"} covered`}
+                title={`${it.product_count} ${it.product_count === 1 ? "product" : "products"} covered${
+                  it.eligible_count ? `, eligible for ${it.eligible_count} more` : ""
+                }${it.needs_check ? " · name match to check" : ""}`}
               >
                 {it.product_count}
               </span>

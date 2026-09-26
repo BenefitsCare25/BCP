@@ -534,8 +534,13 @@ export interface CoverageSummaryItem {
   id: string;
   staff_id: string;
   employee_name: string | null;
+  /** Products the member holds (voluntary cover not taken up excluded). */
   product_count: number;
   products: CoverageProduct[];
+  /** Voluntary products the member may enrol in but hasn't. */
+  eligible_count?: number;
+  /** A product matched on name similarity alone — worth checking. */
+  needs_check?: boolean;
   /** Terminated on the roster — only present when leavers were asked for. */
   left: boolean;
 }
@@ -620,6 +625,18 @@ export interface CoverageLine {
   published?: boolean;
   covers_dependants: boolean;
   covered_dependants: DependantSummary[];
+  /** "eligible" = voluntary cover the member has not taken up (not claimable). */
+  enrolment?: "covered" | "eligible";
+  /** How dependants join this cover. */
+  dependant_cover?: "compulsory" | "voluntary" | null;
+  /** Dependants who could be enrolled on voluntary dependant cover but aren't. */
+  eligible_dependants?: DependantSummary[];
+  /** Setup identity for "edit at source" links. */
+  product_id?: string | null;
+  /** An override elected this plan instead of the cohort default. */
+  plan_overridden?: boolean;
+  /** Broker only: how the per-member premium was worked out. */
+  premium_note?: string | null;
 }
 
 export interface FlexBenefitCategoryLine {

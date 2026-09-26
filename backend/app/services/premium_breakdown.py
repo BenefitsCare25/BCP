@@ -88,6 +88,9 @@ def build_premium_breakdown(db: Session, py: PolicyYear) -> Workbook:
         attrs = employee.attribute_values or {}
         cost_centre = str(attrs.get("cost_centre") or attrs.get("cost_center") or "")
         for line in statement.coverage:
+            # Voluntary cover not taken up is not billed.
+            if line.enrolment == "eligible":
+                continue
             term = terms.get(line.product_code)
             financials = line.financials
             gross = financials.annual_premium if financials else None

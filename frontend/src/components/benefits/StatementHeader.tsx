@@ -10,6 +10,8 @@ interface Props {
   coverage: BenefitStatement["coverage"];
   isMatched: boolean;
   productCount: number;
+  /** Voluntary products the member may enrol in but has not. */
+  eligibleCount?: number;
   hasFlex?: boolean;
   /** Admin controls for this person — portal access, LOG cases. They belong to
    * the PERSON, not to their cover, so they sit in this strip rather than as
@@ -48,10 +50,11 @@ export function StatementHeader({
   coverage,
   isMatched,
   productCount,
+  eligibleCount = 0,
   hasFlex = false,
   actions,
 }: Props) {
-  const covered = isMatched || hasFlex;
+  const covered = productCount > 0 || hasFlex;
   // De-duplicated: `product_code` is not unique across a statement
   // (`hydrate_plans` emits one line per matched CATEGORY), so a dependant
   // covered by two lines of the same product yielded two badges with the same
@@ -60,6 +63,13 @@ export function StatementHeader({
     ...new Set(
       coverage
         .filter((c) => c.covered_dependants.some((d) => d.id === depId))
+        .map((c) => c.product_code),
+    ),
+  ];
+  const eligibleFor = (depId: string): string[] => [
+    ...new Set(
+      coverage
+        .filter((c) => (c.eligible_dependants ?? []).some((d) => d.id === depId))
         .map((c) => c.product_code),
     ),
   ];
@@ -73,8 +83,13 @@ export function StatementHeader({
               {employee.employee_name ?? employee.staff_id}
             </h2>
             <Badge variant={covered ? "good" : "warn"}>
-              {coverageLabel(isMatched, productCount, hasFlex)}
+              {coverageLabel(isMatched && productCount > 0, productCount, hasFlex)}
             </Badge>
+            {eligibleCount > 0 && (
+              <Badge variant="outline" title="Voluntary cover the member has not enrolled in">
+                Eligible for {eligibleCount} more
+              </Badge>
+            )}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
             <span className="font-mono">{employee.staff_id}</span>
@@ -104,6 +119,7 @@ export function StatementHeader({
           <ul className="flex flex-col gap-1">
             {dependants.map((d) => {
               const products = productsFor(d.id);
+              const eligible = eligibleFor(d.id);
               return (
                 <li
                   key={d.id}
@@ -124,16 +140,23 @@ export function StatementHeader({
                       </span>
                     )}
                   </span>
-                  <span className="flex flex-wrap gap-1">
-                    {products.length > 0 ? (
-                      products.map((p) => (
-                        <Badge key={p} variant="outline">
-                          {p}
-                        </Badge>
-                      ))
-                    ) : (
+                  <span className="flex flex-wrap items-center gap-1">
+                    {products.map((p) => (
+                      <Badge key={p} variant="outline">
+                        {p}
+                      </Badge>
+                    ))}
+                    {products.length === 0 && (
                       <span className="text-2xs text-muted-foreground">
                         Not covered under any product
+                      </span>
+                    )}
+                    {eligible.length > 0 && (
+                      <span
+                        className="text-2xs text-muted-foreground"
+                        title="Voluntary dependant cover: eligible, covered once enrolled"
+                      >
+                        · Eligible: {eligible.join(", ")}
                       </span>
                     )}
                   </span>

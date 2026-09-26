@@ -512,10 +512,10 @@ export function EmployeesPage() {
         title={pending ? "Run matching?" : "Re-run matching?"}
         description={
           <>
-            This will re-derive structured attributes and re-match{" "}
+            This refreshes the matching rules from the placement slip (rules
+            you edited are kept), then re-matches{" "}
             <strong>{employeesTotal.toLocaleString()} employees</strong>{" "}
-            against the configured categories. Existing match assignments will
-            be overwritten.
+            against them. Existing match assignments will be overwritten.
           </>
         }
         confirmLabel={pending ? "Run matching" : "Re-run matching"}
