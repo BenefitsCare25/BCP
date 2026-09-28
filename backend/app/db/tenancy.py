@@ -26,6 +26,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateColumn
+from sqlalchemy.sql.elements import conv
 
 from app.db.base import Base
 
@@ -134,6 +135,24 @@ def _ensure_audit_append_only(conn: Connection, schema: str) -> None:
     )
 
 
+def _firm_metadata(schema: str) -> MetaData:
+    staging = MetaData()
+    for tbl in Base.metadata.sorted_tables:
+        if tbl.name in CONTROL_TABLES:
+            tbl.to_metadata(staging)
+    for tbl in tenant_tables():
+        copied = tbl.to_metadata(staging, schema=schema, referred_schema_fn=_referred_schema)
+        # PostgreSQL indexes are already scoped to their table's schema. The
+        # generated 37-character firm prefix forces names past PG's 63-byte
+        # limit, where SQLAlchemy's four-hex suffix can collide. Keep the
+        # original short naming convention within each separate schema.
+        prefix = f"ix_{schema}_"
+        for index in copied.indexes:
+            if index.name and index.name.startswith(prefix):
+                index.name = conv("ix_" + index.name[len(prefix):])
+    return staging
+
+
 def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
     """Create a firm's schema and its operational tables. Idempotent.
 
@@ -145,15 +164,10 @@ def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None
 
     def _run(conn: Connection) -> None:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
-        staging = MetaData()
         # Control tables are copied in at their public schema so tenant FK
         # targets (e.g. clients) resolve; they already exist, so checkfirst
         # skips re-creating them.
-        for tbl in Base.metadata.sorted_tables:
-            if tbl.name in CONTROL_TABLES:
-                tbl.to_metadata(staging)
-        for tbl in tenant_tables():
-            tbl.to_metadata(staging, schema=schema, referred_schema_fn=_referred_schema)
+        staging = _firm_metadata(schema)
         staging.create_all(conn, checkfirst=True)
         _ensure_audit_append_only(conn, schema)
         # Each firm schema needs its own copy of the global (client_id NULL)
@@ -228,9 +242,8 @@ def sync_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
 
             # Indexes + unique constraints aren't emitted by ADD COLUMN, so
             # reconcile them. Match by COLUMN SET, not name: provisioning
-            # creates these via to_metadata(schema=...), which rewrites
-            # auto-generated names with the firm-schema prefix, so comparing
-            # names would create duplicates and never converge.
+            # older provisioning used names with the firm-schema prefix, so
+            # comparing names would duplicate existing indexes.
             existing_idx_signatures = {
                 (
                     tuple(i["column_names"]),
