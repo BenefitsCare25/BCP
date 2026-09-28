@@ -52,7 +52,7 @@ export function Sidebar({
             ) : null;
           })}
           <div className="lg:hidden">
-            <Section group={{ ...FIRM_NAV, items: FIRM_NAV.items.filter(item => (!item.adminOnly || canAdmin) && (!item.reviewOnly || import.meta.env.DEV)) }} path={path} />
+            <Section group={{ ...FIRM_NAV, items: FIRM_NAV.items.filter(item => !item.adminOnly || canAdmin) }} path={path} />
           </div>
         </nav>
 

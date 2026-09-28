@@ -1,5 +1,7 @@
 # AI governance UI/UX design
 
+> Historical design handoff. The current interface is [AI Settings](AI_SETTINGS.md): Provider & usage, Policies, and AI use & access. The separate oversight and owner-assignment prototypes described below have been retired.
+
 Status: proposed annotated design handoff, 28 September 2026. The user selected annotated screen designs with an implementation plan. Application implementation and deployment are separate work.
 
 Companions: [implementation plan](AI_GOVERNANCE_IMPLEMENTATION_PLAN.md), [readiness findings](AI_COMPLIANCE_READINESS_2026-09-28.md). Visual sheets are in [the design folder](../output/ai-governance-design-2026-09-28/).

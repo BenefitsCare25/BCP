@@ -60,7 +60,7 @@ export function AIProviderPage() {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>AI Provider</CardTitle>
+          <CardTitle>Provider setup</CardTitle>
           <CardDescription>
             This setting requires broker administrator access.
           </CardDescription>

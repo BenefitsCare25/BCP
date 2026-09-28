@@ -6,7 +6,6 @@ import {
   lazyRouteComponent,
   isRedirect,
   redirect,
-  useRouterState,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/shell/AppShell";
 import {
@@ -31,9 +30,9 @@ const SchemaPage = lazyRouteComponent(
   () => import("@/routes/schema/index"),
   "SchemaPage",
 );
-const AIProviderPage = lazyRouteComponent(
-  () => import("@/routes/configuration/ai-provider"),
-  "AIProviderPage",
+const AISettingsPage = lazyRouteComponent(
+  () => import("@/features/ai-settings"),
+  "AISettingsPage",
 );
 const ConfigurationPage = lazyRouteComponent(
   () => import("@/routes/configuration/index"),
@@ -60,15 +59,6 @@ const ClaimsQueuePage = lazyRouteComponent(
   "ClaimsQueuePage",
 );
 const WicaPage = lazyRouteComponent(() => import("@/routes/operations/wica"), "WicaPage");
-const AIOversightPage = lazyRouteComponent(() => import("@/features/ai-governance/oversight"), "AIOversightPage");
-const AIPlatformPage = lazyRouteComponent(() => import("@/features/ai-governance/platform"), "AIPlatformPage");
-const AIClaimDecisionPage = lazyRouteComponent(() => import("@/features/ai-governance/claim-decision"), "AIClaimDecisionPage");
-const AIMemberJourneyPage = lazyRouteComponent(() => import("@/features/ai-governance/member-journey"), "AIMemberJourneyPage");
-
-function ClaimsReviewEntry() {
-  const search = useRouterState({ select: state => state.location.search as Record<string, unknown> });
-  return import.meta.env.DEV && search.preview === "ai-governance" ? <AIClaimDecisionPage /> : <ClaimsQueuePage />;
-}
 const ReportsPage = lazyRouteComponent(
   () => import("@/routes/operations/reports"),
   "ReportsPage",
@@ -722,7 +712,7 @@ const claimsReviewRoute = createRoute({
   getParentRoute: () => claimsLayoutRoute,
   path: "/review",
   validateSearch: (search: Record<string, unknown>) => search,
-  component: ClaimsReviewEntry,
+  component: ClaimsQueuePage,
 });
 
 const hrClaimsRoute = createRoute({
@@ -790,7 +780,10 @@ const settingsCompanyRoute = createRoute({
 const settingsAIRoute = createRoute({
   getParentRoute: () => settingsLayoutRoute,
   path: "/ai",
-  component: AIProviderPage,
+  validateSearch: (search: Record<string, unknown>): { tab?: string } => ({
+    tab: typeof search.tab === "string" ? search.tab : undefined,
+  }),
+  component: AISettingsPage,
 });
 
 // ── Firm-wide ────────────────────────────────────────────────────────────────
@@ -829,23 +822,23 @@ const firmAIOversightRoute = createRoute({
     use: typeof search.use === "string" ? search.use : undefined,
     action: typeof search.action === "string" ? search.action : undefined,
   }),
-  component: AIOversightPage,
+  beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "policies" } }); },
 });
 const firmAIMemberJourneyRoute = createRoute({
   getParentRoute: () => firmLayoutRoute,
   path: "/ai-oversight/member-journey",
-  component: AIMemberJourneyPage,
+  beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "usage" } }); },
 });
 const platformAIOversightRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/platform/ai-oversight",
   validateSearch: (search: Record<string, unknown>): { tab?: string } => ({ tab: typeof search.tab === "string" ? search.tab : undefined }),
-  component: AIPlatformPage,
+  beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "provider" } }); },
 });
 const platformAIReleaseRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/platform/ai-oversight/releases/claim-review-v3",
-  component: AIPlatformPage,
+  beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "provider" } }); },
 });
 
 const routeTree = rootRoute.addChildren([

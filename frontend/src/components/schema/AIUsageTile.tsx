@@ -60,7 +60,7 @@ export function AIUsageTile() {
           <CardDescription>
             AI provider not configured. A system admin sets the platform key on{" "}
             <Link className="underline" to="/settings/ai">
-              Settings → AI Provider
+              Settings → AI Settings
             </Link>{" "}
             and every company runs on it; a company can override it there with
             its own key.

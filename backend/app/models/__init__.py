@@ -1,4 +1,5 @@
 """SQLAlchemy models — re-export for Alembic autogenerate."""
+from app.models.ai_policy import AIPolicyVersion
 from app.models.ai_spend import AISpendLog
 from app.models.audit_log import AuditLog
 from app.models.auth import (
@@ -60,6 +61,7 @@ from app.models.workflow_notification import WorkflowNotification
 from app.models.workflow_notification_settings import WorkflowNotificationSettings
 
 __all__ = [
+    "AIPolicyVersion",
     "AISpendLog",
     "AuditLog",
     "AuthCredential",

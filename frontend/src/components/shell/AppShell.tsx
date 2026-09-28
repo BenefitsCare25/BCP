@@ -64,7 +64,7 @@ export function AppShell() {
   // don't yet know the caller's companies, hold the page (avoid a flash of the
   // default tenant); with a real choice pending, prompt; otherwise render.
   const gate: "loading" | "pick" | "ready" =
-    isCompanyPath(path) && activeClientId == null
+    isCompanyPath(path) && path !== "/settings/ai" && activeClientId == null
       ? !me
         ? "loading"
         : me.accessible_clients.length > 1

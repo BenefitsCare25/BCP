@@ -53,6 +53,7 @@ CONTROL_TABLES: frozenset[str] = frozenset(
         # Platform-wide AI limits + shared-quota usage counter: global, spanning
         # all firms/clients, so they must live in public (not per-firm schemas).
         "platform_ai_settings",
+        "ai_policy_versions",
         "platform_ai_usage",
         # Durable claim-review work is polled before a tenant is selected.
         "claim_review_jobs",

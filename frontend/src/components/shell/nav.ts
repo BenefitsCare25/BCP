@@ -10,7 +10,6 @@ import {
   ReceiptText,
   Scale,
   Settings2,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Stethoscope,
@@ -32,7 +31,6 @@ export type NavItem = {
   to: string;
   icon: LucideIcon;
   adminOnly?: boolean;
-  reviewOnly?: boolean;
 };
 export type NavGroup = {
   label: string;
@@ -123,10 +121,9 @@ export const COMPANY_NAV: NavGroup[] = [
         icon: Cog,
       },
       {
-        label: "AI Provider",
+        label: "AI Settings",
         to: "/settings/ai",
         icon: Sparkles,
-        adminOnly: true,
       },
     ],
   },
@@ -150,13 +147,6 @@ export const FIRM_NAV: NavGroup = {
       icon: Building2,
       adminOnly: true,
     },
-    {
-      label: "AI oversight",
-      to: "/firm/ai-oversight",
-      icon: ShieldCheck,
-      adminOnly: true,
-      reviewOnly: true,
-    },
   ],
 };
 
@@ -167,6 +157,11 @@ const FIRM_PREFIXES = ["/home", "/firm", "/platform"];
 
 export function isPlatformPath(pathname: string): boolean {
   return pathname === "/platform" || pathname.startsWith("/platform/");
+}
+
+/** Shared AI documents and role guidance do not require a company selection. */
+export function isAISharedTab(pathname: string, tab?: string): boolean {
+  return pathname === "/settings/ai" && (tab === "policies" || tab === "usage");
 }
 
 /** True when the path is a company-scoped page (shows the company context).

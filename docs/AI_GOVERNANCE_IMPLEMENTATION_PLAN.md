@@ -1,5 +1,7 @@
 # AI governance implementation plan
 
+> Superseded product direction: the implemented scope is now [AI Settings](AI_SETTINGS.md), with platform-wide policy documents and the existing `system_admin`, `broker_admin` and `broker_viewer` roles. The owner-assignment and prototype-screen proposals below are historical planning material, not the current interface or a delivery checklist.
+
 Status: proposed implementation and design handoff, 28 September 2026.
 Basis: [readiness assessment](AI_COMPLIANCE_READINESS_2026-09-28.md).
 Companion: [UI/UX specification](AI_GOVERNANCE_UX_DESIGN.md).

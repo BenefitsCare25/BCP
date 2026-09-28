@@ -19,7 +19,7 @@ export function TopBar({
   // which is company-scoped). Access & Companies stays broker-admin gated.
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
   const firmItems = FIRM_NAV.items.filter((item) =>
-    (!item.adminOnly || canAdmin) && (!item.reviewOnly || import.meta.env.DEV),
+    !item.adminOnly || canAdmin,
   );
 
   return (
@@ -54,14 +54,12 @@ export function TopBar({
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "flex size-8 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                  item.to === "/firm/ai-oversight" && "md:w-auto md:gap-2 md:px-3",
                   active
                     ? "bg-accent text-primary"
                     : "text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
               >
                 <Icon className="size-[18px]" strokeWidth={1.75} />
-                {item.to === "/firm/ai-oversight" && <span className="hidden text-xs font-medium md:inline">AI oversight</span>}
               </Link>
             );
           })}
