@@ -76,24 +76,23 @@ def enrollment_readiness_issues(
     )
     # ``product_scope`` holds product CODES everywhere else (close's deemed
     # decline, the elections panel); accept ids too so either spelling scopes.
-    scope_codes = (
-        dict(
-            db.execute(
-                select(Product.id, Product.code).where(
-                    Product.id.in_({c.product_id for c in all_categories})
-                )
-            ).all()
-        )
-        if requested_scope is not None
-        else {}
-    )
-    categories = [
-        category
-        for category in all_categories
-        if requested_scope is None
-        or category.product_id in requested_scope
-        or scope_codes.get(category.product_id) in requested_scope
-    ]
+    scope_codes: dict[str, str] = {}
+    if requested_scope is not None:
+        for product_id, code in db.execute(
+            select(Product.id, Product.code).where(
+                Product.id.in_({c.product_id for c in all_categories})
+            )
+        ).all():
+            scope_codes[product_id] = code
+
+    def in_scope(product_id: str | None) -> bool:
+        if requested_scope is None:
+            return True
+        if product_id is None:
+            return False
+        return product_id in requested_scope or scope_codes.get(product_id) in requested_scope
+
+    categories = [c for c in all_categories if in_scope(c.product_id)]
     product_ids = {
         category.product_id for category in categories if category.product_id is not None
     }
