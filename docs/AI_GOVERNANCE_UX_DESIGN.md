@@ -229,4 +229,21 @@ Review these with a firm administrator, claims assessor and member representativ
 5. Request another review and confirm the member does not infer that the original decision or payment has already been reversed.
 6. Switch between firm and platform oversight and identify who will be affected before editing anything.
 
-The handoff is ready for a design review. The mockups and specifications are proposals; they do not represent completed features or approved organizational policies.
+The specifications above describe the intended production behavior. Organizational policies and backend governance services remain pending.
+
+## Local frontend review — 28 September 2026
+
+Interactive React screens now run inside the existing Inspro application. Open **AI oversight** in the top bar, then use the related workflow links, or open these pages directly:
+
+- Firm register, actions and evidence: http://127.0.0.1:5173/firm/ai-oversight
+- Platform services and release controls: http://127.0.0.1:5173/platform/ai-oversight
+- Assessor decision and member explanation: http://127.0.0.1:5173/claims/review?preview=ai-governance
+- Member disclosure, outcome and reconsideration: http://127.0.0.1:5173/firm/ai-oversight/member-journey
+
+Select a demo company if the claims page prompts for company context. The member journey is an administrator review surface containing member-facing content.
+
+These development-only screens use synthetic, in-memory sample data. Navigation preserves sample edits; refresh or **Reset samples** restores the starting state. No claims, approvals, document contents or messages are submitted. Production persistence, governance API authorization, audit records, real evaluations and member-portal integration remain future implementation work.
+
+Recorded assessor decisions retain their private rationale and supporting reference across navigation in a separate in-memory record; member content receives only the public decision. Owner-assignment controls open the selected use's editor. Task-based next actions select the corresponding action, including an assessment task created when registering a new use. Regression coverage in `frontend/e2e/ai-governance.spec.ts` runs on desktop and mobile in the deployment pipeline.
+
+Validation: frontend build passed; `node frontend/scripts/qa-ai-governance.cjs` passed interactions, role visibility and responsive checks at 320, 390 and 1536px, with zero reported main-region axe violations, JavaScript errors or business API mutations. The visual reviewer marked the local frontend ready for review after the release-version inconsistency was resolved. This is not a production deployment or a compliance certification.

@@ -6,6 +6,7 @@ import {
   lazyRouteComponent,
   isRedirect,
   redirect,
+  useRouterState,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/shell/AppShell";
 import {
@@ -59,6 +60,15 @@ const ClaimsQueuePage = lazyRouteComponent(
   "ClaimsQueuePage",
 );
 const WicaPage = lazyRouteComponent(() => import("@/routes/operations/wica"), "WicaPage");
+const AIOversightPage = lazyRouteComponent(() => import("@/features/ai-governance/oversight"), "AIOversightPage");
+const AIPlatformPage = lazyRouteComponent(() => import("@/features/ai-governance/platform"), "AIPlatformPage");
+const AIClaimDecisionPage = lazyRouteComponent(() => import("@/features/ai-governance/claim-decision"), "AIClaimDecisionPage");
+const AIMemberJourneyPage = lazyRouteComponent(() => import("@/features/ai-governance/member-journey"), "AIMemberJourneyPage");
+
+function ClaimsReviewEntry() {
+  const search = useRouterState({ select: state => state.location.search as Record<string, unknown> });
+  return import.meta.env.DEV && search.preview === "ai-governance" ? <AIClaimDecisionPage /> : <ClaimsQueuePage />;
+}
 const ReportsPage = lazyRouteComponent(
   () => import("@/routes/operations/reports"),
   "ReportsPage",
@@ -711,7 +721,8 @@ const claimsIndexRoute = createRoute({
 const claimsReviewRoute = createRoute({
   getParentRoute: () => claimsLayoutRoute,
   path: "/review",
-  component: ClaimsQueuePage,
+  validateSearch: (search: Record<string, unknown>) => search,
+  component: ClaimsReviewEntry,
 });
 
 const hrClaimsRoute = createRoute({
@@ -810,6 +821,33 @@ const firmAccessRoute = createRoute({
   component: AdminPage,
 });
 
+const firmAIOversightRoute = createRoute({
+  getParentRoute: () => firmLayoutRoute,
+  path: "/ai-oversight",
+  validateSearch: (search: Record<string, unknown>): { tab?: string; use?: string; action?: string } => ({
+    tab: typeof search.tab === "string" ? search.tab : undefined,
+    use: typeof search.use === "string" ? search.use : undefined,
+    action: typeof search.action === "string" ? search.action : undefined,
+  }),
+  component: AIOversightPage,
+});
+const firmAIMemberJourneyRoute = createRoute({
+  getParentRoute: () => firmLayoutRoute,
+  path: "/ai-oversight/member-journey",
+  component: AIMemberJourneyPage,
+});
+const platformAIOversightRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/platform/ai-oversight",
+  validateSearch: (search: Record<string, unknown>): { tab?: string } => ({ tab: typeof search.tab === "string" ? search.tab : undefined }),
+  component: AIPlatformPage,
+});
+const platformAIReleaseRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/platform/ai-oversight/releases/claim-review-v3",
+  component: AIPlatformPage,
+});
+
 const routeTree = rootRoute.addChildren([
   authCallbackRoute,
   signInRoute,
@@ -848,6 +886,8 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     homeRoute,
     dashboardRoute,
+    platformAIOversightRoute,
+    platformAIReleaseRoute,
     crLayoutRoute.addChildren([
       crIndexRoute,
       crCompanyBenefitsRoute,
@@ -875,6 +915,8 @@ const routeTree = rootRoute.addChildren([
       firmIndexRoute,
       firmSchemaRoute,
       firmAccessRoute,
+      firmAIOversightRoute,
+      firmAIMemberJourneyRoute,
     ]),
   ]),
 ]);

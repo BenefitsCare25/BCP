@@ -2,7 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { Home } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMe } from "@/api/hooks";
-import { COMPANY_NAV, type NavGroup, type NavItem } from "./nav";
+import { COMPANY_NAV, FIRM_NAV, type NavGroup, type NavItem } from "./nav";
 
 export function Sidebar({
   mobileOpen = false,
@@ -51,6 +51,9 @@ export function Sidebar({
               <Section key={group.key} group={{ ...group, items }} path={path} />
             ) : null;
           })}
+          <div className="lg:hidden">
+            <Section group={{ ...FIRM_NAV, items: FIRM_NAV.items.filter(item => (!item.adminOnly || canAdmin) && (!item.reviewOnly || import.meta.env.DEV)) }} path={path} />
+          </div>
         </nav>
 
       </aside>

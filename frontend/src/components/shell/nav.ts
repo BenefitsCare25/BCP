@@ -10,6 +10,7 @@ import {
   ReceiptText,
   Scale,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Stethoscope,
@@ -31,6 +32,7 @@ export type NavItem = {
   to: string;
   icon: LucideIcon;
   adminOnly?: boolean;
+  reviewOnly?: boolean;
 };
 export type NavGroup = {
   label: string;
@@ -146,6 +148,14 @@ export const FIRM_NAV: NavGroup = {
       label: "Access & Companies",
       to: "/firm/access",
       icon: Building2,
+      adminOnly: true,
+    },
+    {
+      label: "AI oversight",
+      to: "/firm/ai-oversight",
+      icon: ShieldCheck,
+      adminOnly: true,
+      reviewOnly: true,
     },
   ],
 };
@@ -153,7 +163,11 @@ export const FIRM_NAV: NavGroup = {
 // The firm-wide route prefixes — pages that span every company and therefore
 // show the "Firm-wide" context instead of a company chip. Everything else in
 // the app shell acts on the active company.
-const FIRM_PREFIXES = ["/home", "/firm"];
+const FIRM_PREFIXES = ["/home", "/firm", "/platform"];
+
+export function isPlatformPath(pathname: string): boolean {
+  return pathname === "/platform" || pathname.startsWith("/platform/");
+}
 
 /** True when the path is a company-scoped page (shows the company context).
  * Firm-wide pages (/home, /firm/* and their children) return false. */

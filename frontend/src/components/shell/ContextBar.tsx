@@ -12,7 +12,7 @@ import {
 import { useMe, usePolicyYears } from "@/api/hooks";
 import { defaultPolicyYear, formatPolicyRange } from "@/lib/policy-year";
 import { useSession } from "@/stores/session";
-import { isCompanyPath } from "./nav";
+import { isCompanyPath, isPlatformPath } from "./nav";
 
 /**
  * The scope controls inside the TopBar. Company-scoped pages show which company
@@ -24,6 +24,7 @@ export function ContextBar() {
   const router = useRouterState();
   const path = router.location.pathname;
   if (path === "/home") return null; // Home renders its own header
+  if (isPlatformPath(path)) return <div data-context-bar="platform" className="flex min-w-0 items-center gap-2 text-xs"><Globe className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" /><span className="font-medium">Platform</span><span className="truncate text-muted-foreground">· All firms</span></div>;
   if (!isCompanyPath(path)) return <FirmBanner />;
   const companyOnly = path === "/claims/wica" ||
     (path === "/settings/company" && (router.location.search as { tab?: string }).tab === "wica");
