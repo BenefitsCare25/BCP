@@ -15,6 +15,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Firm provisioning creates shared control tables from current metadata.
+    # An existing firm may therefore have this table before Alembic reaches
+    # this revision. Preserve that table and its version records.
+    if sa.inspect(op.get_bind()).has_table("ai_policy_versions"):
+        return
     op.create_table(
         "ai_policy_versions",
         sa.Column("id", sa.String(36), primary_key=True),
