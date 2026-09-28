@@ -4,7 +4,13 @@ Assessment date: 28 September 2026. Repository baseline: `d29a0b66ee9a45a40a116a
 
 **Conclusion:** Inspro has useful AI safeguards, but the reviewed evidence does not establish ISO/IEC 42001 conformity or certification readiness. The EU AI Act appears outside the current operating scope based on the owner's confirmation of no EU customers, EU use, or decisions affecting people in the EU. That is an applicability conclusion, not an EU compliance certificate.
 
-The requested outcome is a readiness and gap assessment. No application behavior was changed.
+The requested outcome was a readiness and gap assessment. The assessment itself changed no application behavior; subsequent implementation is recorded separately below.
+
+## Implementation update: 28 September 2026
+
+[AI Settings](AI_SETTINGS.md) has since been deployed, consolidating provider administration, a persistent platform-wide policy library and guidance for existing roles. `system_admin` maintains policy PDFs; `broker_admin` and `broker_viewer` read published versions. Files, history and publication actions now have an implemented storage workflow. Actual approved policy content and organizational evidence still need to be supplied.
+
+The gaps and verification results below refer to the stated baseline. This update does not rerun the legal assessment, close organizational evidence gaps or establish certification readiness. Prototype owners and separate oversight screens are retired; use the [implementation record](AI_GOVERNANCE_IMPLEMENTATION_PLAN.md) and [UI specification](AI_GOVERNANCE_UX_DESIGN.md) for current product behavior.
 
 ## Scope and evidence limits
 
@@ -30,11 +36,11 @@ The EU scope includes supplying AI into the EU, EU deployers, and certain non-EU
 
 | Use | Evidence and observed behavior | Assessment implication |
 | --- | --- | --- |
-| Placement-slip and flexible-benefit extraction | [AI gateway](../backend/app/services/ai_gateway.py), [slip extractor](../backend/app/services/ai_slip_extractor.py), [product context](../PRODUCT.md). Converts supplied insurance terms into structured configuration. | Inventory the effects of an incorrect extracted limit, rate or eligibility term. Extracting an insurer's existing price is distinct from predicting an individual's insurance risk. |
+| Placement-slip and flexible-benefit extraction | [AI gateway](../backend/app/services/ai_gateway.py), [slip extractor](../backend/app/services/ai_slip_extractor.py), and locally held `PRODUCT.md` assessment context. Converts supplied insurance terms into structured configuration. | Inventory the effects of an incorrect extracted limit, rate or eligibility term. Extracting an insurer's existing price is distinct from predicting an individual's insurance risk. |
 | Eligibility-rule suggestions and roster/schema assistance | [Category API](../backend/app/api/v1/categories.py), [eligibility mapping](../backend/app/services/eligibility_mapping.py), [AI gateway](../backend/app/services/ai_gateway.py). Suggestions, validation and broker confirmation are present. | Assess the complete route from a suggested rule to member coverage. A confirmation button alone does not prove effective oversight. |
 | Member claim intake | [Intake suggestions](../backend/app/services/claim_intake_suggest.py), [autofill UI](../frontend/src/components/portal/claims/AutofillCard.tsx). Documents populate editable fields; uncertain readings are identified. | Assess extraction errors, sensitive medical information, user understanding and corrections. |
 | Claim review and document verification | [Pipeline](../backend/app/services/claims_review/pipeline.py), [verdict](../backend/app/services/claims_review/verdict.py), [claim AI](../backend/app/services/claim_ai.py). AI produces comparisons, rules, confidence and a clean/flagged result. | AI affects review handling, so accuracy, oversight and adverse-impact evidence matter even without automatic final decisions. |
-| Underwriting administration | [Underwriting documentation](UNDERWRITING.md). Records insurer/broker decisions and applies configured non-evidence-limit triggers. | No AI mortality/risk prediction was identified in the reviewed underwriting material. Confirm intended use before classifying a future AI underwriting feature. |
+| Underwriting administration | Locally held `UNDERWRITING.md` assessment notes; the [underwriting implementation](../backend/app/services/underwriting.py) is retained in the repository. Records insurer/broker decisions and applies configured non-evidence-limit triggers. | No AI mortality/risk prediction was identified in the reviewed underwriting material. Confirm intended use before classifying a future AI underwriting feature. |
 
 The configured AI provider is Vertex/Gemini; the code's default model is `gemini-3.5-flash`. This identifies the checkout configuration, not a verified live deployment. [Provider configuration](../backend/app/core/ai_config.py).
 

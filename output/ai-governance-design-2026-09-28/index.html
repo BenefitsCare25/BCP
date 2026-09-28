@@ -3,46 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#faf7f7">
-  <title>AI governance · Inspro design review</title>
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="review.css">
-  <script src="review.js" defer></script>
+  <title>AI governance review retired — Inspro AI Settings</title>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to design</a>
-  <header class="topbar">
-    <a class="brand" href="index.html" aria-label="Inspro design review home"><span class="brand-mark" aria-hidden="true">i</span><strong>INSPRO</strong><span class="brand-divider"></span><span>Design review</span></a>
-    <a class="button compact" href="Inspro-AI-Governance-Design.pdf" download>Download design pack <span aria-hidden="true">↓</span></a>
-  </header>
-  <div class="review-layout">
-    <aside class="sidebar" aria-label="Review navigation">
-      <div class="sidebar-intro"><span class="eyebrow">Readiness programme</span><h1>AI governance</h1><p>Annotated designs &amp;<br>implementation plan</p></div>
-      <nav aria-label="Annotated screens" class="screen-nav">
-        <span class="nav-label">Proposed screens</span>
-        <a href="#claim" data-screen="claim"><span class="nav-number">01</span><span>Claim decision<small>Assessor · M1</small></span></a>
-        <a href="#member" data-screen="member"><span class="nav-number">02</span><span>Member journey<small>Member · M1 / M3</small></span></a>
-        <a href="#firm" data-screen="firm"><span class="nav-number">03</span><span>Firm AI oversight<small>Firm administrator · M2</small></span></a>
-        <a href="#release" data-screen="release"><span class="nav-number">04</span><span>Release validation<small>Platform administrator · M2</small></span></a>
-        <a href="#evidence" data-screen="evidence"><span class="nav-number">05</span><span>Evidence &amp; policy<small>Companion wireframe · M2</small></span></a>
-        <a href="#suppliers" data-screen="suppliers"><span class="nav-number">06</span><span>Data &amp; suppliers<small>Companion wireframe · M2</small></span></a>
-      </nav>
-      <nav class="document-nav" aria-label="Written handoff"><span class="nav-label">Written handoff</span><a href="implementation-plan.html">Implementation plan <span aria-hidden="true">↗</span></a><a href="ux-specification.html">UX specification <span aria-hidden="true">↗</span></a><a href="readiness-assessment.html">Readiness assessment <span aria-hidden="true">↗</span></a></nav>
-      <p class="sidebar-note">28 September 2026<br>Proposed · Synthetic examples</p>
-    </aside>
-    <main id="main" tabindex="-1">
-      <div class="page-heading"><div><div class="eyebrow" id="screen-context">Assessor · M1</div><h2 id="screen-title">Explain the claim decision</h2><p id="screen-summary">Keep evidence, payment and the member explanation together.</p></div><span class="proposal-badge">Design proposal</span></div>
-      <div class="review-note"><span class="note-dot" aria-hidden="true"></span><p>Review the layouts and annotations below. Controls pictured inside a design are illustrative; the proposed workflows are described in the <a href="ux-specification.html">UX specification</a>.</p></div>
-      <section class="artboard" aria-labelledby="screen-title">
-        <div class="artboard-toolbar"><span id="sheet-type">Annotated screen</span><div class="toolbar-actions"><button type="button" id="zoom" aria-pressed="false" aria-controls="image-viewport">Zoom to read</button><a id="open-image" href="02-claim-decision.png" target="_blank" rel="noopener">Open full image <span aria-hidden="true">↗</span></a></div></div>
-        <div class="image-viewport" id="image-viewport" tabindex="0" role="region" aria-label="Design image. Use Zoom to read, then scroll to inspect details."><img id="screen-image" src="02-claim-decision.png" alt="Proposed claims review layout with evidence, reduced approval amount, separate public and internal explanations, and a member preview." width="1536" height="1024"></div>
-        <p id="image-error" class="image-error" hidden>This image could not be loaded. Reload the page or open the PDF design pack.</p>
-      </section>
-      <section class="annotation-section" aria-labelledby="annotation-title"><div class="section-heading"><h3 id="annotation-title">What to review</h3><span id="review-role">Claims assessor</span></div><ol id="annotations"></ol></section>
-      <div class="delivery-note"><div><span class="eyebrow">Start here</span><h3>Claim safeguards, with named owners.</h3><p>Build decision explanations, disclosure and review provenance first. Prepare the policy, scope and responsibility records alongside them.</p></div><a class="button primary" href="implementation-plan.html">Read the delivery plan <span aria-hidden="true">→</span></a></div>
-      <footer class="page-footer"><span>Design handoff · Features proposed, not implemented</span><a href="ux-specification.html">Behaviour, permissions &amp; acceptance criteria</a></footer>
-      <p class="sr-only" id="screen-announcement" role="status" aria-live="polite"></p>
-    </main>
-  </div>
+  <main>
+    <h1>This design review has been retired</h1>
+    <p>The former governance mockups and owner-assignment screens were replaced by the deployed AI Settings page on 28 September 2026.</p>
+    <p>AI Settings contains Provider &amp; usage, Policies, and AI use &amp; access. System administrators maintain platform-wide policy PDFs; broker administrators and viewers can read published versions.</p>
+    <ul>
+      <li><a href="https://inspro-portal.azurewebsites.net/settings/ai?tab=policies">Open production AI Settings</a></li>
+      <li><a href="http://127.0.0.1:5173/settings/ai?tab=policies">Open local AI Settings</a> (requires the local frontend and API)</li>
+      <li><a href="https://github.com/BenefitsCare25/BCP/blob/main/docs/AI_SETTINGS.md">Read the current operator guide</a></li>
+    </ul>
+    <p>Old images, PDF handoffs, sample workflows and gallery tooling are available in Git history. They do not describe the current application. Actual approved policy documents must be uploaded in AI Settings.</p>
+  </main>
 </body>
 </html>

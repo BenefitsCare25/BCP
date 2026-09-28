@@ -73,22 +73,17 @@ tmp/
 # Retained document storage (claim receipts, dependant proofs) — PII
 backend/var/
 
-# Design-skill working state (audits, critiques, question state). The
-# deliverables it produces — DESIGN.md, docs/ — are committed; this is scratch.
+# Design-skill working state (audits, critiques, question state) is scratch.
 .impeccable/
 
-# Markdown is not committed — docs live on disk for local/assistant reference
-# only, deliberately not in the repo. Files stay in the working tree; they are
-# just never tracked. (CLAUDE.md is already excluded by the global gitignore.)
+# Markdown stays local by default; selected published docs are allowed below.
+# Existing tracked documents remain tracked. CLAUDE.md is also globally ignored.
 *.md
 !docs/PRODUCTION_RESILIENCE_RUNBOOK.md
 
-# Versioned AI governance handoff: source documents and advertised downloads.
-# Keep the general local-Markdown policy; only these reviewed files are shared.
+# Versioned AI Settings documentation and the dated readiness baseline.
+# Other Markdown remains local unless explicitly listed here.
 !docs/AI_COMPLIANCE_READINESS_2026-09-28.md
 !docs/AI_GOVERNANCE_IMPLEMENTATION_PLAN.md
 !docs/AI_GOVERNANCE_UX_DESIGN.md
 !docs/AI_SETTINGS.md
-!output/ai-governance-design-2026-09-28/implementation-plan.md
-!output/ai-governance-design-2026-09-28/readiness-assessment.md
-!output/ai-governance-design-2026-09-28/ux-specification.md

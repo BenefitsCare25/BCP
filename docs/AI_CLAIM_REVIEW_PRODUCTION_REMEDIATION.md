@@ -4,6 +4,8 @@ Status: deployed and production verified
 
 Last updated: 2026-08-18 10:41 SGT (Asia/Singapore)
 
+Navigation update, 28 September 2026: provider controls are now under **AI Settings → Provider & usage**. Platform-wide documents are in its **Policies** tab; see the [AI Settings guide](AI_SETTINGS.md). The claims baseline below remains its original verification record.
+
 Deployed baseline:
 
 - Claims AI hardening: `21384f3efc2bff9b348000f3664f894a21b205b8`
@@ -36,7 +38,7 @@ misleading and has been replaced.
 Employee claim-form autofill is driven by:
 
 1. The platform or company Vertex/Gemini provider configuration under
-   **Settings > AI Provider**.
+   **Settings > AI Settings > Provider & usage**.
 2. The claim intake profiles in `backend/app/services/claim_intake.py`.
 3. Document types, aliases, key fields, and autofill slot mappings configured
    under **Claim settings**.
@@ -67,7 +69,7 @@ claim decision.
 
 ### Provider and platform limits
 
-**Settings > AI Provider** controls the shared Vertex service account, model,
+**Settings > AI Settings > Provider & usage** controls the shared Vertex service account, model,
 Singapore location, capacity mode, token budgets, and live provider-call
 concurrency. A company may use a BYOK override. Provider activation succeeds
 only after the exact stored credential fingerprint, model, location, capacity

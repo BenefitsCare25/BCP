@@ -1,6 +1,0 @@
-# Local process details and repeatable QA output are not deliverables.
-server-info.json
-server-*.log
-review-qa-result.json
-qa-review-*.png
-qa-pdf-page-1.png
