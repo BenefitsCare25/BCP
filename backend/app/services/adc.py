@@ -76,6 +76,10 @@ from app.schemas.adc import (
 )
 from app.services.derivation_engine import derive
 from app.services.eligibility_mapping import auto_map_policy_year
+from app.services.enrollment_lifecycle import (
+    OPEN_PERIOD_SYNC_SKIPPED,
+    sync_open_windows_safe,
+)
 from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
 from app.services.roster_attributes import (
@@ -1145,6 +1149,7 @@ def apply_listing(
     # Re-match + re-size flex for the (now changed) active roster. Best-effort,
     # like the upload path — a failure here must not undo the applied movement.
     rematched = 0
+    matched_cleanly = False
     flex_errors: list[str] = []
     try:
         mapping = auto_map_policy_year(
@@ -1169,6 +1174,7 @@ def apply_listing(
         summary = match_policy_year(db, policy_year_id, user)
         rematched = summary.employees_matched
         db.commit()
+        matched_cleanly = not summary.errors
     except Exception:
         db.rollback()
         flex_errors.append(
@@ -1177,6 +1183,14 @@ def apply_listing(
     assign_flex_safe(
         db, user, policy_year_id, client_id, trigger="auto_on_adc", errors=flex_errors
     )
+    # Enrol new hires only off a clean match — see upload_employees.
+    if added:
+        if matched_cleanly:
+            sync_open_windows_safe(
+                db, user, policy_year_id, trigger="auto_on_adc", errors=flex_errors
+            )
+        else:
+            flex_errors.append(OPEN_PERIOD_SYNC_SKIPPED)
 
     return AdcApplyResult(
         added=added,

@@ -369,16 +369,34 @@ def test_set_leave_resets_status_to_draft(client: TestClient) -> None:
         assert el.status == LeaveElectionStatus.draft
 
 
-def test_close_window_deemed_keep_confirms_leave(client: TestClient) -> None:
-    # A member sets leave but never submits; deemed-keep at close must confirm it so
-    # the trade still counts in the flex balance.
+def test_close_window_discards_unsent_leave_under_keep_current(client: TestClient) -> None:
+    # A member saves a trade but never submits. Unsent choices are discarded at
+    # close — coverage and leave alike — so the trade must NOT go live (it could
+    # be the very thing that failed the submit check, e.g. an overdrawn buy).
     client.put(f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "sell", "days": 3})
     from app.services.enrollment_lifecycle import close_window
     with SessionLocal() as s:
         win = s.get(EnrollmentWindow, WINDOW_ID)
         win.default_behavior = "deemed_keep_current"
-        close_window(s, win, _user())
+        summary = close_window(s, win, _user())
         s.commit()
+    assert summary["saved_discarded"] == 1 and summary["deemed_kept"] == 1
+    with SessionLocal() as s:
+        el = s.query(LeaveElection).filter_by(enrollment_id=ENROLL_ID).one()
+        assert el.status == LeaveElectionStatus.confirmed
+        assert el.action == "none" and el.flex_amount is None
+
+
+def test_close_window_submit_saved_keeps_the_leave_trade(client: TestClient) -> None:
+    # The broker keeps a member's saved trade by submitting it at close.
+    client.put(f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "sell", "days": 3})
+    from app.services.enrollment_lifecycle import close_window
+    with SessionLocal() as s:
+        win = s.get(EnrollmentWindow, WINDOW_ID)
+        win.default_behavior = "deemed_keep_current"
+        summary = close_window(s, win, _user(), submit_saved=True)
+        s.commit()
+    assert summary["submitted_at_close"] == 1
     from app.services.flex_pricing_resolver import summarize_employee
     with SessionLocal() as s:
         el = s.query(LeaveElection).filter_by(enrollment_id=ENROLL_ID).one()

@@ -14,6 +14,8 @@ Tenant scoping rides on `load_policy_year` / `load_enrollment_window`.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,15 +27,30 @@ from app.db.session import get_db
 from app.models import EnrollmentWindow, PolicyYear
 from app.models.enrollment_window import WindowStatus
 from app.schemas.enrollment import (
+    BulkConfirmResult,
+    CloseMemberNote,
     EnrollmentReadinessOut,
     EnrollmentWindowCreate,
     EnrollmentWindowOut,
     EnrollmentWindowPatch,
+    WindowCloseIn,
+    WindowClosePreview,
     WindowCloseSummary,
     WindowOpenResult,
+    WindowProgress,
 )
-from app.services.enrollment_lifecycle import close_window, open_window
-from app.services.enrollment_readiness import enrollment_readiness_issues
+from app.services.enrollment_lifecycle import (
+    close_preview,
+    close_window,
+    confirm_submitted,
+    open_window,
+    window_progress,
+)
+from app.services.enrollment_readiness import (
+    blocking_issues,
+    enrollment_readiness_issues,
+)
+from app.services.enrollment_validation import assert_window_accepts_review
 from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollment-windows"])
@@ -44,6 +61,10 @@ _OPEN_EDITABLE_FIELDS = {
     "member_self_service",
     "allow_overdraft",
 }
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 def _assert_no_open_overlap(db: Session, window: EnrollmentWindow) -> None:
@@ -160,7 +181,7 @@ def get_window_readiness(
     db: Session = Depends(get_db),
 ) -> EnrollmentReadinessOut:
     issues = enrollment_readiness_issues(db, window)
-    return EnrollmentReadinessOut(ready=not issues, issues=issues)
+    return EnrollmentReadinessOut(ready=not blocking_issues(issues), issues=issues)
 
 
 @router.patch(
@@ -195,7 +216,8 @@ def patch_window(
             )
     for field, value in data.items():
         setattr(window, field, value)
-    if window.opens_at >= window.closes_at:
+    # SQLite hands back the stored value naive while the patched one is aware.
+    if _aware(window.opens_at) >= _aware(window.closes_at):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "opens_at must be before closes_at."
         )
@@ -204,7 +226,8 @@ def patch_window(
     db.flush()
     write_audit(
         db, user, action="update_enrollment_window", entity_type="enrollment_window",
-        entity_id=window.id, after=data,
+        # JSON-mode dump: the audit column is JSON and dates must be strings.
+        entity_id=window.id, after=body.model_dump(mode="json", exclude_unset=True),
     )
     db.commit()
     db.refresh(window)
@@ -240,7 +263,7 @@ def open_enrollment_window(
         )
     _assert_no_open_overlap(db, window)
     if window.status == WindowStatus.draft:
-        issues = enrollment_readiness_issues(db, window)
+        issues = blocking_issues(enrollment_readiness_issues(db, window))
         if issues:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -261,12 +284,83 @@ def open_enrollment_window(
     )
 
 
+@router.get(
+    "/enrollment-windows/{window_id}/progress",
+    response_model=WindowProgress,
+)
+def get_window_progress(
+    window_id: str,
+    window: EnrollmentWindow = Depends(load_enrollment_window),
+    db: Session = Depends(get_db),
+) -> WindowProgress:
+    return WindowProgress(**window_progress(db, window))
+
+
+@router.post(
+    "/enrollment-windows/{window_id}/confirm-submitted",
+    response_model=BulkConfirmResult,
+)
+def confirm_all_submitted(
+    window_id: str,
+    window: EnrollmentWindow = Depends(load_enrollment_window),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BulkConfirmResult:
+    """Confirm every submitted enrollment in the period that passes its checks;
+    report the rest by name. Works past the deadline (it is review)."""
+    window = db.execute(
+        select(EnrollmentWindow)
+        .where(EnrollmentWindow.id == window.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    assert_window_accepts_review(window)
+    confirmed, failed = confirm_submitted(db, window, user)
+    if confirmed:
+        py = db.get(PolicyYear, window.policy_year_id)
+        if py is not None:
+            refresh_underwriting_cases(db, py, set(confirmed))
+    write_audit(
+        db, user, action="confirm_submitted_enrollments",
+        entity_type="enrollment_window", entity_id=window.id,
+        after={"confirmed": len(confirmed), "failed": len(failed)},
+    )
+    db.commit()
+    return BulkConfirmResult(
+        confirmed=len(confirmed),
+        failed=[CloseMemberNote(**f) for f in failed],
+    )
+
+
+@router.get(
+    "/enrollment-windows/{window_id}/close-preview",
+    response_model=WindowClosePreview,
+)
+def get_close_preview(
+    window_id: str,
+    window: EnrollmentWindow = Depends(load_enrollment_window),
+    db: Session = Depends(get_db),
+) -> WindowClosePreview:
+    """Exactly what Close would do to each member group, including who would
+    block it and whose saved choices could not be submitted for them. Runs
+    close's own checks, then rolls every one of them back."""
+    if window.status != WindowStatus.open:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Only an open enrolment period can be closed."
+        )
+    try:
+        return WindowClosePreview(**close_preview(db, window))
+    finally:
+        db.rollback()
+
+
 @router.post(
     "/enrollment-windows/{window_id}/close",
     response_model=WindowCloseSummary,
 )
 def close_enrollment_window(
     window_id: str,
+    body: WindowCloseIn | None = None,
     window: EnrollmentWindow = Depends(load_enrollment_window),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -283,7 +377,9 @@ def close_enrollment_window(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Only an open enrolment period can be closed."
         )
-    summary = close_window(db, window, user)
+    summary = close_window(
+        db, window, user, submit_saved=bool(body and body.submit_saved)
+    )
     # Window close projected every enrollment into overrides — elected upgrades
     # can cross a product's Non-Evidence Limit, so re-sync underwriting once
     # for the year in the same transaction (no-op without an NEL).

@@ -26,9 +26,18 @@ from app.core.deps import load_employee, load_policy_year
 from app.core.pagination import MAX_LIMIT
 from app.db.base import new_uuid
 from app.db.session import get_db
-from app.models import Employee, EmployeePlanOverride, PolicyYear
+from app.models import (
+    Employee,
+    EmployeePlanOverride,
+    Enrollment,
+    EnrollmentElection,
+    EnrollmentWindow,
+    PolicyYear,
+)
 from app.models.bulk_plan_update import BulkPlanUpdate
 from app.models.employee_plan_override import OverrideSource
+from app.models.enrollment import EnrollmentStatus
+from app.models.enrollment_window import DefaultBehavior, WindowStatus
 from app.schemas.enrollment import (
     CoverageHistoryOut,
     CoverageRevertRequest,
@@ -40,7 +49,11 @@ from app.services import flex_proration
 from app.services.bulk_plan_update import baseline_cat_by_product
 from app.services.cohort_tiers import tier_index_for_product, tier_key
 from app.services.coverage_history import coverage_history
-from app.services.coverage_resolver import batch_category_defaults, find_orphan_overrides
+from app.services.coverage_resolver import (
+    batch_category_defaults,
+    employee_compulsory_product_ids,
+    find_orphan_overrides,
+)
 from app.services.coverage_revert import (
     latest_enrollment_with_baseline,
     revert_leave,
@@ -183,6 +196,92 @@ def _record_revert_batch(
     return record.id
 
 
+def _open_period_overwrite(
+    db: Session, emp: Employee, product_id: str, product_code: str
+) -> tuple[str, str] | None:
+    """``(enrollment_id, why)`` when an OPEN period will overwrite a manual change
+    to this member's cover on this product, else None. Mirrors what
+    ``close_window`` / confirm actually do:
+
+    - saved or submitted choices for the product project over it (even a "keep"
+      election resets it to the default);
+    - a member who chose "decline all" is declined at close;
+    - under a deemed-decline period, an unsubmitted member is declined at close.
+    The last two only touch voluntary, in-scope products (``_decline_in_scope``).
+    """
+    rows = db.execute(
+        select(Enrollment, EnrollmentWindow)
+        .join(EnrollmentWindow, Enrollment.window_id == EnrollmentWindow.id)
+        .where(
+            Enrollment.employee_id == emp.id,
+            EnrollmentWindow.status == WindowStatus.open,
+            Enrollment.status.in_((
+                EnrollmentStatus.not_started, EnrollmentStatus.in_progress,
+                EnrollmentStatus.submitted, EnrollmentStatus.declined,
+            )),
+        )
+    ).all()
+    for enr, window in rows:
+        if enr.status in (EnrollmentStatus.in_progress, EnrollmentStatus.submitted):
+            has_election = db.execute(
+                select(EnrollmentElection.id).where(
+                    EnrollmentElection.enrollment_id == enr.id,
+                    EnrollmentElection.product_id == product_id,
+                )
+            ).first()
+            if has_election is not None:
+                return enr.id, (
+                    "This member has a pending benefits selection for this product "
+                    "in the open enrolment period. Confirming it, or closing the "
+                    "period, will replace this change."
+                )
+        declines = enr.status == EnrollmentStatus.declined or (
+            window.default_behavior == DefaultBehavior.decline
+            and enr.status != EnrollmentStatus.submitted
+        )
+        in_scope = not window.product_scope or product_code in window.product_scope
+        if (
+            declines
+            and in_scope
+            and product_id not in employee_compulsory_product_ids(db, emp)
+        ):
+            return enr.id, (
+                "When the open enrolment period closes, this member will be "
+                "declined from this product"
+                + (
+                    " (they chose to decline all cover)."
+                    if enr.status == EnrollmentStatus.declined
+                    else " (the period declines anyone who doesn't submit)."
+                )
+                + " That will replace this change."
+            )
+    return None
+
+
+def _assert_no_pending_election(
+    db: Session,
+    emp: Employee,
+    product_id: str,
+    product_code: str,
+    acknowledged: bool,
+) -> None:
+    """Refuse (until acknowledged) a manual change an open period will overwrite
+    — the per-member twin of bulk's ``open_enrollment`` warning."""
+    if acknowledged:
+        return
+    hit = _open_period_overwrite(db, emp, product_id, product_code)
+    if hit is not None:
+        enrollment_id, message = hit
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "open_enrollment_election",
+                "message": message,
+                "enrollment_id": enrollment_id,
+            },
+        )
+
+
 @router.get(
     "/policy-years/{policy_year_id}/plan-overrides/orphans",
     response_model=list[PlanOverrideOut],
@@ -246,6 +345,9 @@ def set_plan_override(
             f"Product '{product_code}' is not configured in this policy year.",
         )
 
+    _assert_no_pending_election(
+        db, emp, product.id, product.code, body.acknowledge_open_enrollment
+    )
     # Validate the elected plan is a real tier for this product/year.
     if body.plan_code:
         assert_plan_available(
@@ -385,6 +487,7 @@ def set_plan_override(
 def delete_plan_override(
     employee_id: str,
     product_code: str,
+    acknowledge_open_enrollment: bool = False,
     emp: Employee = Depends(load_employee),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -399,6 +502,9 @@ def delete_plan_override(
     ).scalar_one_or_none()
     if row is None:
         return None
+    _assert_no_pending_election(
+        db, emp, row.product_id, row.product_code, acknowledge_open_enrollment
+    )
     before = override_snapshot(row)
     db.delete(row)
     write_audit(

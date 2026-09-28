@@ -233,7 +233,7 @@ const pricingResponse = {
   ],
 };
 
-test("enrollment periods make Flex explicit and explain opening blockers", async ({
+test("a draft period shows its opening blockers before Open is pressed", async ({
   page,
   request,
 }) => {
@@ -245,51 +245,47 @@ test("enrollment periods make Flex explicit and explain opening blockers", async
         json: [{ ...draftWindow, policy_year_id: policyYearId }],
       }),
   );
-  await page.route(
-    /\/api\/v1\/enrollment-windows\/draft-window\/open$/,
-    (route) =>
-      route.fulfill({
-        status: 409,
-        contentType: "application/json",
-        body: JSON.stringify({
-          detail: {
-            code: "enrollment_not_ready",
-            message: "This enrolment period is not ready to open.",
-            issues: [
-              {
-                code: "flex_wallets_incomplete",
-                message: "Assign a wallet amount and currency to every active employee.",
-                count: 4,
-                products: ["GCI", "GTL"],
-              },
-            ],
+  await page.route(/\/api\/v1\/enrollment-windows\/draft-window\/readiness$/, (route) =>
+    route.fulfill({
+      json: {
+        ready: false,
+        issues: [
+          {
+            code: "flex_wallets_incomplete",
+            message: "Assign a wallet amount and currency to every active employee.",
+            severity: "blocker",
+            count: 4,
+            products: ["GCI", "GTL"],
           },
-        }),
-      }),
+          {
+            code: "benefit_year_not_live",
+            message: "Members only see the live benefit year in the portal.",
+            severity: "warning",
+          },
+        ],
+      },
+    }),
   );
 
+  // The retired `windows` tab key still lands on the period overview.
   await page.goto("/client-relations/enrollment?tab=windows");
-  const createFlex = page.getByLabel("Use Flex wallets for this period");
-  const drawdown = page.getByRole("button", { name: "Full plan tag" });
-  const overdraft = page.getByLabel("Allow overdraft");
-  await expect(createFlex).not.toBeChecked();
-  await expect(drawdown).toBeDisabled();
-  await expect(overdraft).toBeDisabled();
+  await expect(page.getByText("1 thing blocks opening")).toBeVisible();
+  await expect(
+    page.getByText("Assign a wallet amount and currency to every active employee."),
+  ).toBeVisible();
+  await expect(page.getByText("· 4 affected")).toBeVisible();
+  await expect(page.getByText("1 to be aware of")).toBeVisible();
+  // A blocker disables Open outright — no failed click, no after-the-fact dialog.
+  await expect(page.getByRole("button", { name: "Open period" })).toBeDisabled();
 
-  await createFlex.click();
-  await expect(drawdown).toBeEnabled();
-  await expect(overdraft).toBeEnabled();
-
-  await page.getByRole("button", { name: "Open", exact: true }).click();
-  const dialog = page.getByRole("dialog", {
-    name: "This enrolment period is not ready",
-  });
-  await expect(dialog).toContainText(
-    "Assign a wallet amount and currency to every active employee. (4)",
-  );
-  await expect(dialog).toContainText("Products: GCI, GTL.");
-  await dialog.getByRole("button", { name: "Close" }).click();
-  await expect(dialog).toBeHidden();
+  // Flex funding choices appear only once the period uses Flex.
+  await page.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("button", { name: "The full plan price" })).toHaveCount(0);
+  await page.getByLabel("Fund choices from members' flex wallets").click();
+  await expect(page.getByRole("button", { name: "The full plan price" })).toBeVisible();
+  await expect(
+    page.getByLabel("Allow choices that cost more than the wallet holds"),
+  ).toBeVisible();
 });
 
 test("price book unifies employee and dependant setup per plan", async ({
@@ -320,8 +316,9 @@ test("price book unifies employee and dependant setup per plan", async ({
     },
   );
 
+  // The retired `flex` tab key lands on Pricing & rules.
   await page.goto("/client-relations/enrollment?tab=flex");
-  await expect(page.getByRole("heading", { name: "Recommended price book" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Plan price tags" })).toBeVisible();
 
   await page.getByRole("button", { name: /GPA/ }).click();
   const unifiedRegion = page.getByRole("region", {

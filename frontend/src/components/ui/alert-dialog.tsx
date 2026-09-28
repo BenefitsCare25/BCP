@@ -25,6 +25,8 @@ interface AlertDialogProps {
   secondaryLoading?: boolean;
   confirmDisabled?: boolean;
   secondaryDisabled?: boolean;
+  /** `lg` for a prompt that carries a report (a close preview), not a sentence. */
+  size?: "md" | "lg";
 }
 
 const TONES = {
@@ -54,6 +56,7 @@ export function AlertDialog({
   secondaryLoading = false,
   confirmDisabled = false,
   secondaryDisabled = false,
+  size = "md",
 }: AlertDialogProps) {
   const { icon: ToneIcon, className: toneClass } = TONES[tone];
   const busy = loading || secondaryLoading;
@@ -75,7 +78,7 @@ export function AlertDialog({
           className={cn(
             "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
             "w-[calc(100vw-2rem)] rounded-xl border border-border bg-card shadow-xl",
-            hasSecondaryAction ? "max-w-2xl" : "max-w-md",
+            hasSecondaryAction || size === "lg" ? "max-w-2xl" : "max-w-md",
             "data-[state=open]:animate-in data-[state=closed]:animate-out",
             "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             "data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95",

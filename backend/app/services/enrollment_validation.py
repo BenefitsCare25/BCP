@@ -40,6 +40,19 @@ def window_in_period(window: EnrollmentWindow) -> bool:
     return not (closes and now > closes)
 
 
+def assert_window_accepts_review(window: EnrollmentWindow) -> None:
+    """Broker REVIEW (confirming, re-checking a submission, closing) needs an open
+    period but not an in-date one. The deadline stops members and edits; it must
+    not stop the broker finishing the period — every period is closed after its
+    deadline, which is exactly when its submissions get re-checked."""
+    if window.status != WindowStatus.open:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"The enrolment period is {window.status}; it can only be reviewed "
+            "while it is open.",
+        )
+
+
 def assert_window_accepts_edits(window: EnrollmentWindow) -> None:
     """An election may only be edited while its window is open and in-period."""
     if window.status != WindowStatus.open:

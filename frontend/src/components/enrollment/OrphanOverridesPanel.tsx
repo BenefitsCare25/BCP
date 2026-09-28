@@ -1,7 +1,7 @@
 /** Orphaned plan overrides — overrides stranded by a re-match (the elected
  * product is no longer in the employee's cohort). They're inert (the coverage
  * resolver skips them) but surfaced here so brokers can reconcile instead of
- * leaving silent ghosts. Rendered on the Employees (matching) page; hidden
+ * leaving silent ghosts. Rendered on Enrollment → Coverage changes; hidden
  * when there are none. */
 import { useState } from "react";
 import { Trash2 } from "lucide-react";

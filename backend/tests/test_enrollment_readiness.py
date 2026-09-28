@@ -21,7 +21,7 @@ from app.models import (
 )
 from app.models.category import CategoryStatus, SourceKind
 from app.models.flex_scheme import FlexSchemeStatus
-from app.services.enrollment_readiness import enrollment_readiness_issues
+from app.services.enrollment_readiness import blocking_issues, enrollment_readiness_issues
 
 
 def _session() -> tuple[Session, object]:
@@ -119,7 +119,8 @@ def test_flex_readiness_tracks_scheme_wallet_and_portal_access() -> None:
     try:
         _product, _category, employee = _seed_benefit(db)
         window = _window(db)
-        assert {issue["code"] for issue in enrollment_readiness_issues(db, window)} == {
+        issues = enrollment_readiness_issues(db, window)
+        assert {issue["code"] for issue in blocking_issues(issues)} == {
             "portal_access_incomplete",
             "flex_scheme_not_confirmed",
             "flex_wallets_incomplete",
@@ -146,7 +147,11 @@ def test_flex_readiness_tracks_scheme_wallet_and_portal_access() -> None:
         )
         db.flush()
 
-        assert enrollment_readiness_issues(db, window) == []
+        # Only the draft-year warning remains: members see the LIVE year only.
+        assert [
+            (issue["code"], issue["severity"])
+            for issue in enrollment_readiness_issues(db, window)
+        ] == [("benefit_year_not_live", "warning")]
     finally:
         db.close()
         engine.dispose()

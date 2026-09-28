@@ -481,7 +481,7 @@ def upsert_enrollment_pricing_config(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> FlexPricingOut:
-    """Save recommendations/overrides and update every draft as one transaction."""
+    """Save the year's recommendations/overrides (and any drafts) as one transaction."""
     assert_policy_year_editable(py)
     assert_enrollment_config_editable(db, py.id, "Flex pricing")
     windows = db.execute(
@@ -490,11 +490,9 @@ def upsert_enrollment_pricing_config(
             EnrollmentWindow.status == WindowStatus.draft,
         )
     ).scalars().all()
-    if not windows:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Create a draft enrolment period before configuring price tags.",
-        )
+    # Price tags belong to the benefit YEAR, so they are editable with or
+    # without a period drafted (requiring one made brokers create a period just
+    # to reach the price book). Drafts that exist pick up the legacy source.
     row, _action = _upsert_pricing_row(db, py, body.pricing)
     for window in windows:
         window.flex_price_source = (

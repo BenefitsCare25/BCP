@@ -12,12 +12,13 @@ commit to the caller — matching the rest of the codebase.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -43,6 +44,47 @@ from app.services.coverage_resolver import (
 )
 from app.services.override_writer import upsert_override
 
+logger = logging.getLogger(__name__)
+
+
+def _reason(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("code") or "Failed checks.")
+    return str(detail)
+
+
+def _submission_problem(
+    db: Session,
+    window: EnrollmentWindow,
+    enrollment: Enrollment,
+    *,
+    require_priced: bool,
+) -> str | None:
+    """Why this enrollment's saved choices can't be finalized now, or None.
+
+    Re-runs eligibility + the wallet guard (and, for a draft being submitted on
+    the member's behalf, the unpriced guard — nobody acknowledged it). Runs in a
+    SAVEPOINT that is rolled back on failure, so a failed check never leaves a
+    half-revalidated election behind."""
+    from app.services.enrollment_elections import revalidate_enrollment
+    from app.services.enrollment_flex_guard import (
+        assert_elections_priced,
+        assert_within_wallet,
+    )
+
+    savepoint = db.begin_nested()
+    try:
+        revalidate_enrollment(db, enrollment)
+        assert_within_wallet(db, enrollment, window)
+        if require_priced:
+            assert_elections_priced(db, enrollment, window, acknowledge=False)
+    except HTTPException as exc:
+        savepoint.rollback()
+        return _reason(exc)
+    savepoint.commit()
+    return None
+
 
 def _invalid_submissions(
     db: Session,
@@ -50,22 +92,17 @@ def _invalid_submissions(
     enrollments: Sequence[Enrollment],
 ) -> list[dict[str, Any]]:
     """Validate every submitted row before any projection begins."""
-    from app.services.enrollment_elections import revalidate_enrollment
-    from app.services.enrollment_flex_guard import assert_within_wallet
-
     invalid: list[dict[str, Any]] = []
     for enrollment in enrollments:
         if enrollment.status != EnrollmentStatus.submitted:
             continue
-        try:
-            revalidate_enrollment(db, enrollment)
-            assert_within_wallet(db, enrollment, window)
-        except HTTPException as exc:
+        problem = _submission_problem(db, window, enrollment, require_priced=False)
+        if problem is not None:
             invalid.append(
                 {
                     "enrollment_id": enrollment.id,
                     "employee_id": enrollment.employee_id,
-                    "detail": exc.detail,
+                    "detail": problem,
                 }
             )
     return invalid
@@ -155,21 +192,11 @@ def baseline_for(
     return {"products": products, "leave": {"action": "none", "days": 0}}
 
 
-def open_window(
-    db: Session, window: EnrollmentWindow, user: CurrentUser
-) -> int:
-    """Create enrollments for every active employee that lacks one. Returns count."""
-    # Source selection was removed from the unified price book. Normalize an
-    # untouched pre-upgrade draft at the irreversible draft -> open boundary so
-    # legacy ``manual`` entries cannot suppress slip recommendations. Do not
-    # rewrite an already-open window during the idempotent employee-sync path.
-    migrated_legacy_source = (
-        window.status == WindowStatus.draft
-        and isinstance(window.flex_price_source, dict)
-        and bool(window.flex_price_source)
-    )
-    if window.status == WindowStatus.draft:
-        window.flex_price_source = None
+def create_missing_enrollments(db: Session, window: EnrollmentWindow) -> int:
+    """Give every active employee of the window's year an enrollment, snapshotting
+    their current coverage as the baseline. Idempotent — returns the count created.
+
+    Must run AFTER matching: the baseline is read off ``matched_categories``."""
     existing = set(
         db.execute(
             select(Enrollment.employee_id).where(Enrollment.window_id == window.id)
@@ -194,6 +221,87 @@ def open_window(
             baseline_snapshot=baseline_for(db, emp),
         ))
         created += 1
+    db.flush()
+    return created
+
+
+def sync_open_windows(
+    db: Session, user: CurrentUser, policy_year_id: str, *, trigger: str
+) -> int:
+    """Enrol new staff into every open period of the year that members can still
+    act in. Run after a roster change adds employees, so a period's population
+    never silently lags the roster (it used to need a manual "Sync" press).
+
+    A period past its deadline is skipped: its members are locked out, so a new
+    hire added there could never choose — and under deemed-decline they would
+    lose voluntary cover at close without having been asked. The broker can
+    still add them deliberately (extend the deadline first) from the Overview."""
+    windows = db.execute(
+        select(EnrollmentWindow).where(
+            EnrollmentWindow.policy_year_id == policy_year_id,
+            EnrollmentWindow.status == WindowStatus.open,
+        )
+    ).scalars().all()
+    total = 0
+    for window in windows:
+        if window.phase == "overdue":
+            continue
+        created = create_missing_enrollments(db, window)
+        total += created
+        if created:
+            write_audit(
+                db, user, action="sync_enrollment_window",
+                entity_type="enrollment_window", entity_id=window.id,
+                after={"enrollments_created": created, "trigger": trigger},
+            )
+    return total
+
+
+OPEN_PERIOD_SYNC_SKIPPED = (
+    "New staff were not added to the open enrolment period because matching "
+    "did not complete. Re-run matching, then add them from Enrollment → Overview."
+)
+
+
+def sync_open_windows_safe(
+    db: Session,
+    user: CurrentUser,
+    policy_year_id: str,
+    *,
+    trigger: str,
+    errors: list[str],
+) -> None:
+    """Best-effort ``sync_open_windows`` for the roster paths, which have already
+    committed their own work: a failure rolls back only the sync and tells the
+    broker, it never undoes the upload."""
+    try:
+        sync_open_windows(db, user, policy_year_id, trigger=trigger)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("open enrolment sync failed (trigger=%s)", trigger)
+        errors.append(
+            "New staff could not be added to the open enrolment period; use "
+            "Sync new employees on the Enrollment page."
+        )
+
+
+def open_window(
+    db: Session, window: EnrollmentWindow, user: CurrentUser
+) -> int:
+    """Create enrollments for every active employee that lacks one. Returns count."""
+    # Source selection was removed from the unified price book. Normalize an
+    # untouched pre-upgrade draft at the irreversible draft -> open boundary so
+    # legacy ``manual`` entries cannot suppress slip recommendations. Do not
+    # rewrite an already-open window during the idempotent employee-sync path.
+    migrated_legacy_source = (
+        window.status == WindowStatus.draft
+        and isinstance(window.flex_price_source, dict)
+        and bool(window.flex_price_source)
+    )
+    if window.status == WindowStatus.draft:
+        window.flex_price_source = None
+    created = create_missing_enrollments(db, window)
     window.status = WindowStatus.open
     db.flush()
     write_audit(
@@ -314,37 +422,69 @@ def _decline_in_scope(
         )
 
 
-def _finalize_enrollment_leave(
-    db: Session, enrollment: Enrollment, *, keep: bool
-) -> None:
-    """Finalize a deemed enrollment's leave the same way coverage is finalized.
+def _discard_unsent_leave(db: Session, enrollment: Enrollment) -> None:
+    """Zero and finalize the leave trade of an enrollment that was never sent.
 
-    ``keep`` (deemed-keep-current) confirms the member's in-progress leave trade so
-    it counts in the materialized flex balance; otherwise (deemed-decline) the trade
-    is zeroed — a declined member carries no leave impact. Mirrors how
-    ``project_enrollment`` confirms leave for submitted enrollments, so leave can't
-    be silently dropped or stranded at window close.
+    Unsent choices are discarded at close — coverage AND leave alike. This used
+    to confirm the trade under deemed-keep-current, which (a) contradicted the
+    close dialog's "saved changes are discarded", (b) was inconsistent with the
+    member's unsent plan changes being dropped, and (c) could put a trade live
+    that had just FAILED its submit check (an overdrawn buy). The broker keeps a
+    member's saved choices by submitting them — the close dialog offers that
+    for everyone in one tick. A member with no saved trade has no row; only
+    saving moves an enrollment off ``not_started``.
     """
     leave = db.execute(
         select(LeaveElection).where(LeaveElection.enrollment_id == enrollment.id)
     ).scalar_one_or_none()
     if leave is None:
         return
-    if not keep:
-        leave.action = LeaveAction.none
-        leave.days = 0.0
-        leave.flex_amount = None
+    leave.action = LeaveAction.none
+    leave.days = 0.0
+    leave.flex_amount = None
     leave.status = LeaveElectionStatus.confirmed
 
 
+def _apply_default(
+    db: Session,
+    window: EnrollmentWindow,
+    enr: Enrollment,
+    user: CurrentUser,
+    summary: dict[str, int],
+) -> None:
+    """Finalize an unsubmitted enrollment per the window's default behavior.
+
+    A member who chose "decline all" (status ``declined``) is declined whatever
+    the default — ``close_preview`` reports them as their own group for that
+    reason."""
+    declines = enr.status == EnrollmentStatus.declined or (
+        window.default_behavior == DefaultBehavior.decline
+    )
+    _discard_unsent_leave(db, enr)
+    if declines:
+        _decline_in_scope(db, enr, user)
+    enr.status = EnrollmentStatus.deemed
+    summary["deemed_declined" if declines else "deemed_kept"] += 1
+
+
 def close_window(
-    db: Session, window: EnrollmentWindow, user: CurrentUser
+    db: Session,
+    window: EnrollmentWindow,
+    user: CurrentUser,
+    *,
+    submit_saved: bool = False,
 ) -> dict[str, int]:
     """Finalize all enrollments per default_behavior and close the window.
 
     Every submitted enrollment is revalidated before any finalization begins.
     Invalid submissions block the close as one atomic operation; they never
     silently fall back to the window default.
+
+    ``submit_saved`` submits, on the member's behalf, every enrollment with saved
+    but unsent choices (``in_progress``) that passes the same checks a submit
+    would — including the unpriced guard, since nobody acknowledged it. One that
+    fails falls back to the default behavior; ``close_preview`` lists those by
+    name before the broker confirms, so the fallback is never silent.
     """
     enrollments = db.execute(
         select(Enrollment).where(Enrollment.window_id == window.id)
@@ -365,34 +505,165 @@ def close_window(
         )
     summary = {
         "confirmed": 0, "deemed_kept": 0, "deemed_declined": 0, "already": 0,
-        "invalid_submitted": 0,
+        "invalid_submitted": 0, "submitted_at_close": 0, "saved_discarded": 0,
     }
+    now = datetime.now(UTC)
     for enr in enrollments:
-        if enr.status == EnrollmentStatus.confirmed:
+        if enr.status in (EnrollmentStatus.confirmed, EnrollmentStatus.deemed):
             summary["already"] += 1
             continue
         if enr.status == EnrollmentStatus.submitted:
             project_enrollment(db, enr, user)
             summary["confirmed"] += 1
             continue
-        # not_started / in_progress / declined → apply default behavior.
-        if enr.status == EnrollmentStatus.declined or (
-            window.default_behavior == DefaultBehavior.decline
-        ):
-            _decline_in_scope(db, enr, user)
-            _finalize_enrollment_leave(db, enr, keep=False)
-            enr.status = EnrollmentStatus.deemed
-            summary["deemed_declined"] += 1
-        else:
-            # keep_current — current effective coverage stands; confirm any
-            # in-progress leave trade so it isn't dropped from the balance.
-            _finalize_enrollment_leave(db, enr, keep=True)
-            enr.status = EnrollmentStatus.deemed
-            summary["deemed_kept"] += 1
+        if enr.status == EnrollmentStatus.in_progress:
+            if submit_saved and _submission_problem(
+                db, window, enr, require_priced=True
+            ) is None:
+                enr.status = EnrollmentStatus.submitted
+                enr.submitted_at = now
+                enr.submitted_by = user.user_id
+                project_enrollment(db, enr, user)
+                summary["confirmed"] += 1
+                summary["submitted_at_close"] += 1
+                continue
+            summary["saved_discarded"] += 1
+        # not_started / in_progress (unsent) / declined → default behavior.
+        _apply_default(db, window, enr, user, summary)
     window.status = WindowStatus.closed
     db.flush()
     write_audit(
         db, user, action="close_enrollment_window", entity_type="enrollment_window",
-        entity_id=window.id, after=summary,
+        entity_id=window.id, after={**summary, "submit_saved": submit_saved},
     )
     return summary
+
+
+_PREVIEW_LIST_LIMIT = 50
+
+
+def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
+    """What closing would do to each member, WITHOUT doing it.
+
+    Runs the same checks close runs, so its lists are the truth: submissions
+    that would block the close, and saved-but-unsent choices that could (or
+    could not) be submitted on the member's behalf. Every check runs in a
+    savepoint; the caller must still roll back (the GET handler does)."""
+    rows = db.execute(
+        select(Enrollment, Employee.staff_id, Employee.employee_name)
+        .join(Employee, Enrollment.employee_id == Employee.id)
+        .where(Enrollment.window_id == window.id)
+        .order_by(Employee.staff_id)
+    ).all()
+    counts = {
+        "total": len(rows), "confirmed": 0, "submitted": 0, "saved_not_sent": 0,
+        "not_started": 0, "declined": 0,
+    }
+    invalid: list[dict[str, Any]] = []
+    saved_blocked: list[dict[str, Any]] = []
+    saved_submittable = 0
+    for enr, staff_id, name in rows:
+        who = {"enrollment_id": enr.id, "staff_id": staff_id, "employee_name": name}
+        if enr.status in (EnrollmentStatus.confirmed, EnrollmentStatus.deemed):
+            counts["confirmed"] += 1
+        elif enr.status == EnrollmentStatus.submitted:
+            counts["submitted"] += 1
+            problem = _submission_problem(db, window, enr, require_priced=False)
+            if problem is not None:
+                invalid.append({**who, "reason": problem})
+        elif enr.status == EnrollmentStatus.in_progress:
+            counts["saved_not_sent"] += 1
+            problem = _submission_problem(db, window, enr, require_priced=True)
+            if problem is None:
+                saved_submittable += 1
+            else:
+                saved_blocked.append({**who, "reason": problem})
+        elif enr.status == EnrollmentStatus.declined:
+            counts["declined"] += 1
+        else:
+            counts["not_started"] += 1
+    return {
+        **counts,
+        "default_behavior": window.default_behavior,
+        "invalid_submitted": invalid[:_PREVIEW_LIST_LIMIT],
+        "invalid_submitted_count": len(invalid),
+        "saved_submittable": saved_submittable,
+        "saved_blocked": saved_blocked[:_PREVIEW_LIST_LIMIT],
+        "saved_blocked_count": len(saved_blocked),
+    }
+
+
+def window_progress(db: Session, window: EnrollmentWindow) -> dict[str, int]:
+    """Members per status, plus active staff the period has not picked up yet
+    (added to the roster after it opened and before anyone synced)."""
+    counts = dict.fromkeys(
+        (
+            EnrollmentStatus.not_started, EnrollmentStatus.in_progress,
+            EnrollmentStatus.submitted, EnrollmentStatus.confirmed,
+            EnrollmentStatus.deemed, EnrollmentStatus.declined,
+        ),
+        0,
+    )
+    for status_value, n in db.execute(
+        select(Enrollment.status, func.count(Enrollment.id))
+        .where(Enrollment.window_id == window.id)
+        .group_by(Enrollment.status)
+    ).all():
+        counts[str(status_value)] = int(n)
+    enrolled = select(Enrollment.employee_id).where(Enrollment.window_id == window.id)
+    not_in_period = db.execute(
+        select(func.count(Employee.id)).where(
+            Employee.policy_year_id == window.policy_year_id,
+            Employee.status == "active",
+            Employee.id.not_in(enrolled),
+        )
+    ).scalar_one()
+    return {
+        **counts,
+        "total": sum(counts.values()),
+        "not_in_period": 0 if window.status == WindowStatus.closed else int(not_in_period),
+    }
+
+
+def confirm_submitted(
+    db: Session, window: EnrollmentWindow, user: CurrentUser
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Confirm every submitted enrollment that still passes its checks.
+
+    Each one is checked and projected inside its own savepoint, so one member
+    failing (an overdrawn wallet, a plan that is no longer offered) never stops
+    the rest. Returns ``(confirmed employee ids, failures)``."""
+    rows = db.execute(
+        select(Enrollment, Employee.staff_id, Employee.employee_name)
+        .join(Employee, Enrollment.employee_id == Employee.id)
+        .where(
+            Enrollment.window_id == window.id,
+            Enrollment.status == EnrollmentStatus.submitted,
+        )
+        .order_by(Employee.staff_id)
+        .with_for_update(of=Enrollment)
+    ).all()
+    confirmed: list[str] = []
+    failed: list[dict[str, Any]] = []
+    for enr, staff_id, name in rows:
+        problem = _submission_problem(db, window, enr, require_priced=False)
+        if problem is None:
+            # Projection gets its own savepoint too: an unexpected failure
+            # writing one member's overrides is reported against that member
+            # rather than failing the whole batch with nobody confirmed.
+            savepoint = db.begin_nested()
+            try:
+                project_enrollment(db, enr, user)
+            except Exception:
+                savepoint.rollback()
+                logger.exception("bulk confirm: projecting enrollment %s failed", enr.id)
+                problem = "Could not be confirmed — open it and confirm it individually."
+            else:
+                savepoint.commit()
+                confirmed.append(enr.employee_id)
+                continue
+        failed.append({
+            "enrollment_id": enr.id, "staff_id": staff_id,
+            "employee_name": name, "reason": problem,
+        })
+    return confirmed, failed

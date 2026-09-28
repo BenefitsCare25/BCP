@@ -12,13 +12,18 @@ the time the window closes — keep their current plan, or be deemed to decline.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import JSON, Base, TimestampMixin, new_uuid
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite returns naive datetimes; they are stored as UTC."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 class WindowType:
@@ -130,3 +135,20 @@ class EnrollmentWindow(Base, TimestampMixin):
         Boolean, nullable=False, default=False, server_default="0"
     )
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+    @property
+    def phase(self) -> str:
+        """Where the period is in its life, for the broker: ``draft`` |
+        ``scheduled`` (open, before its start) | ``open`` | ``overdue`` (open,
+        past its deadline — members are locked out and it waits for a broker to
+        close it) | ``closed``. Nothing closes a period automatically: closing
+        projects coverage irreversibly, so a passed deadline is surfaced, never
+        acted on."""
+        if self.status != WindowStatus.open:
+            return str(self.status)
+        now = datetime.now(UTC)
+        if self.opens_at and now < _aware(self.opens_at):
+            return "scheduled"
+        if self.closes_at and now > _aware(self.closes_at):
+            return "overdue"
+        return "open"

@@ -434,3 +434,66 @@ def test_dependant_list_default_excludes_pending(client: TestClient) -> None:
         client.get(f"/api/v1/dependants?policy_year_id={py}&status=bogus").status_code
         == 422
     )
+
+
+def test_upload_enrols_new_staff_only_after_a_clean_match(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """New hires join an open period automatically — but never off a failed
+    match, which would freeze an empty baseline no later re-match repairs."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.v1 import employees as employees_api
+    from app.models import Enrollment, EnrollmentWindow, PolicyYear
+    from app.services.enrollment_lifecycle import OPEN_PERIOD_SYNC_SKIPPED
+
+    py_id = _policy_year_id(client)
+    with SessionLocal() as s:
+        py = s.get(PolicyYear, py_id)
+        window = EnrollmentWindow(
+            policy_year_id=py_id, client_id=py.client_id, name="Sync test",
+            window_type="open", status="open",
+            opens_at=datetime.now(UTC) - timedelta(days=1),
+            closes_at=datetime.now(UTC) + timedelta(days=10),
+            default_behavior="deemed_keep_current", allow_plan_change=True,
+            allow_leave=False, allow_dependant_changes=True,
+        )
+        s.add(window)
+        s.commit()
+        wid = window.id
+
+    def enrolled(staff_id: str) -> bool:
+        with SessionLocal() as s:
+            emp = s.execute(
+                select(Employee).where(
+                    Employee.policy_year_id == py_id, Employee.staff_id == staff_id
+                )
+            ).scalar_one()
+            return s.execute(
+                select(Enrollment).where(
+                    Enrollment.window_id == wid, Enrollment.employee_id == emp.id
+                )
+            ).first() is not None
+
+    try:
+        def broken(*_a, **_k):  # type: ignore[no-untyped-def]
+            raise RuntimeError("matching down")
+
+        with monkeypatch.context() as m:
+            m.setattr(employees_api, "match_policy_year", broken)
+            out = _upload_employees(
+                client, py_id, [["SYNC-1", "Sync One", "S7000001A", "1990-01-01", "Staff"]]
+            )
+        assert OPEN_PERIOD_SYNC_SKIPPED in out["errors"]
+        assert not enrolled("SYNC-1")
+
+        out = _upload_employees(
+            client, py_id, [["SYNC-2", "Sync Two", "S7000002B", "1990-01-01", "Staff"]]
+        )
+        assert OPEN_PERIOD_SYNC_SKIPPED not in out["errors"]
+        assert enrolled("SYNC-2")
+    finally:
+        with SessionLocal() as s:
+            s.query(Enrollment).filter(Enrollment.window_id == wid).delete()
+            s.query(EnrollmentWindow).filter(EnrollmentWindow.id == wid).delete()
+            s.commit()

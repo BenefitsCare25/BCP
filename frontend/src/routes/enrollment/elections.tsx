@@ -1,517 +1,321 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+/** Enrollment → Members: every member of a period, filterable by where they
+ * stand, and one member's selection beside the list.
+ *
+ * URL carries `window`, `status` and `member`, so the Overview's "Review →"
+ * links and the close dialog's member names land on exactly that view. */
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { CheckCircle2, LockOpen, Loader2, RotateCcw, Send, Users } from "lucide-react";
+import { AlertTriangle, CheckCheck, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/stores/session";
-import { useBenefitStatement } from "@/api/hooks";
 import {
-  type ProductTierSet,
-  useConfirmEnrollment,
-  useEnrollment,
-  useEnrollmentOptions,
+  type EnrollmentStatus,
+  type EnrollmentWindow,
+  type WindowProgress,
+  useConfirmSubmitted,
   useEnrollmentRoster,
   useEnrollmentWindows,
-  useReopenEnrollment,
-  useResetEnrollment,
-  useSetElections,
-  useSetLeave,
-  useSubmitEnrollment,
+  useWindowProgress,
 } from "@/api/enrollment";
-import { CoverageHistory } from "@/components/enrollment/CoverageHistory";
-import { CoverageRevertControls } from "@/components/enrollment/CoverageRevertControls";
 import { EmployeePicker } from "@/components/operations/EmployeePicker";
+import { MemberElectionPanel } from "@/components/enrollment/members/MemberElectionPanel";
 import {
-  ElectionProductCard,
-  FlexBalanceStrip,
-  LeaveTradingCard,
-} from "@/components/enrollment/electionShared";
-import {
-  type ProductState,
-  buildElectionsPayload,
-  computeFlex,
-  seedElectionState,
-} from "@/components/enrollment/electionCore";
-import { AlertDialog } from "@/components/ui/alert-dialog";
-import { ConflictDetailError, formatError } from "@/lib/errors";
-import { fmtCurrency } from "@/lib/format";
-import { cn } from "@/lib/cn";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+  PHASE_META,
+  STATUS_META,
+  STATUS_ORDER,
+  deadlineSentence,
+  phaseOf,
+  useNow,
+} from "@/components/enrollment/period/periodMeta";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PaginationControls } from "@/components/ui/pagination-controls";
+import { cn } from "@/lib/cn";
 
-export function EnrollmentElectionsPage() {
+const PAGE = 50;
+
+type Search = { window?: string; status?: string; member?: string };
+
+export function EnrollmentElectionsPage({ readOnly = false }: { readOnly?: boolean }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
-  const search = useSearch({ strict: false }) as { window?: string };
+  const search = useSearch({ strict: false }) as Search;
+  const navigate = useNavigate();
+  const now = useNow();
   const { data: windows } = useEnrollmentWindows(policyYearId);
-  const openWindows = useMemo(
+  const liveWindows = useMemo(
     () => (windows ?? []).filter((w) => w.status === "open"),
     [windows],
   );
-  const navigate = useNavigate();
-  const [windowId, setWindowId] = useState<string | undefined>(search.window);
-  useEffect(() => {
-    if (windows === undefined) return; // still loading — don't discard the param yet
-    // A stale deep link (?window= pointing at a closed/deleted window) would
-    // otherwise leave the selector blank — fall back to the latest open window.
-    const isValid = !!windowId && openWindows.some((w) => w.id === windowId);
-    if (isValid) return;
-    const fallback = openWindows[0]?.id;
-    if (fallback) {
-      setWindowId(fallback);
-      if (search.window && search.window !== fallback) {
-        void navigate({
-          to: "/client-relations/enrollment",
-          search: { tab: "elections", window: fallback },
-          replace: true,
-        });
-      }
-    }
-  }, [windows, openWindows, windowId, search.window, navigate]);
+  const window = liveWindows.find((w) => w.id === search.window) ?? liveWindows[0];
+  const status = STATUS_ORDER.includes(search.status as EnrollmentStatus)
+    ? (search.status as EnrollmentStatus)
+    : undefined;
+  const progress = useWindowProgress(window?.id);
 
-  const window = windows?.find((w) => w.id === windowId);
-  const [q, setQ] = useState("");
-  const { data: roster, isLoading } = useEnrollmentRoster(windowId, { q });
-  const [selected, setSelected] = useState<string | null>(null);
-  const previousPolicyYearId = useRef(policyYearId);
-  useEffect(() => {
-    if (previousPolicyYearId.current === policyYearId) return;
-    previousPolicyYearId.current = policyYearId;
-    setSelected(null);
-    setWindowId(undefined);
-  }, [policyYearId]);
+  const setSearch = (patch: Partial<Search>) =>
+    void navigate({
+      to: "/client-relations/enrollment",
+      search: {
+        tab: "members",
+        window: window?.id,
+        status,
+        member: search.member,
+        ...patch,
+      },
+      replace: true,
+    });
 
   if (!policyYearId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Select a benefit year to manage enrolments.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">Select a benefit year first.</p>;
   }
-  if (!openWindows.length) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No open enrolment period. Open one from the Enrolment Period tab first.
-      </p>
-    );
-  }
+  if (!window) return windows ? <NoOpenPeriod /> : null;
+  const overdue = phaseOf(window, now) === "overdue";
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Enrolment period</span>
-          <Select value={windowId} onValueChange={(v) => { setWindowId(v); setSelected(null); }}>
-            <SelectTrigger className="w-[240px]" aria-label="Enrolment period">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {openWindows.map((w) => (
-                <SelectItem key={w.id} value={w.id}>
-                  {w.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="relative flex-1 min-w-[200px]">
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name or staff ID"
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-        <EmployeePicker
-          items={(roster?.items ?? []).map((it) => ({
-            id: it.id,
-            name: it.employee_name ?? it.staff_id,
-            subtitle: it.staff_id,
-            trailing: <StatusDot status={it.status} />,
-          }))}
-          selectedId={selected}
-          onSelect={setSelected}
-          isLoading={isLoading}
-          emptyText="No members."
-          header={
-            <div className="px-1 pb-2 text-2xs text-muted-foreground">
-              {roster?.total ?? 0} members
-            </div>
-          }
+      <MembersHeader
+        window={window}
+        liveWindows={liveWindows}
+        progress={progress.data}
+        readOnly={readOnly}
+        now={now}
+        onPickWindow={(id) => setSearch({ window: id, member: undefined })}
+      />
+      {overdue && (
+        <p className="flex items-start gap-2 rounded-lg bg-warn-soft/60 px-4 py-2.5 text-sm text-foreground">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
+          The deadline has passed: selections can be confirmed but not changed. Extend
+          the deadline on the Overview tab to make changes.
+        </p>
+      )}
+      <StatusFilters
+        progress={progress.data}
+        status={status}
+        onChange={(s) => setSearch({ status: s })}
+      />
+      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
+        <RosterColumn
+          windowId={window.id}
+          status={status}
+          selected={search.member ?? null}
+          onSelect={(id) => setSearch({ member: id })}
         />
-
-        <div>
-          {!selected ? (
-            <div className="rounded-lg border border-dashed border-border p-10 text-center">
-              <Users className="mx-auto size-6 text-muted-foreground" />
-              <p className="mt-2 text-sm text-muted-foreground">
-                Select a member to manage their benefits selection.
-              </p>
-            </div>
-          ) : (
-            <ElectionPanel
-              key={selected}
-              enrollmentId={selected}
-              allowLeave={window?.allow_leave ?? false}
-              allowDeps={window?.allow_dependant_changes ?? false}
-              allowOverdraft={window?.allow_overdraft ?? false}
-              productScope={window?.product_scope ?? null}
-            />
-          )}
-        </div>
+        {search.member ? (
+          <MemberElectionPanel
+            key={search.member}
+            enrollmentId={search.member}
+            window={window}
+            readOnly={readOnly}
+          />
+        ) : (
+          <div className="rounded-xl border border-dashed border-border p-10 text-center">
+            <Users className="mx-auto size-6 text-muted-foreground" aria-hidden />
+            <p className="mt-2 text-sm text-muted-foreground">
+              Pick a member to see and change their selection.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function StatusDot({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    not_started: "text-subtle",
-    in_progress: "text-warn",
-    submitted: "text-info",
-    confirmed: "text-good",
-    deemed: "text-muted-foreground",
-    declined: "text-muted-foreground",
-  };
+function NoOpenPeriod() {
   return (
-    <span className={cn("text-2xs capitalize", map[status] ?? "text-muted-foreground")}>
-      {status.replace("_", " ")}
+    <section className="rounded-xl border border-dashed border-border-strong bg-card px-6 py-10 text-center">
+      <Users className="mx-auto size-6 text-muted-foreground" aria-hidden />
+      <p className="mt-2 text-sm text-foreground">No enrolment period is open.</p>
+      <p className="text-sm text-muted-foreground">
+        Members appear here once a period opens on the Overview tab.
+      </p>
+    </section>
+  );
+}
+
+function MembersHeader({
+  window,
+  liveWindows,
+  progress,
+  readOnly,
+  now,
+  onPickWindow,
+}: {
+  window: EnrollmentWindow;
+  liveWindows: EnrollmentWindow[];
+  progress: WindowProgress | undefined;
+  readOnly: boolean;
+  now: number;
+  onPickWindow: (id: string) => void;
+}) {
+  const confirmAll = useConfirmSubmitted();
+  const phase = phaseOf(window, now);
+  const submitted = progress?.submitted ?? 0;
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      {liveWindows.length > 1 ? (
+        <NativeSelect
+          aria-label="Enrolment period"
+          value={window.id}
+          onChange={(e) => onPickWindow(e.target.value)}
+          className="w-64"
+        >
+          {liveWindows.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+            </option>
+          ))}
+        </NativeSelect>
+      ) : (
+        <h2 className="text-base font-semibold text-foreground">{window.name}</h2>
+      )}
+      <Badge variant={PHASE_META[phase].badge}>{PHASE_META[phase].label}</Badge>
+      <span className="text-sm text-muted-foreground">{deadlineSentence(window, now)}</span>
+      {!readOnly && submitted > 0 && (
+        <Button
+          size="sm"
+          className="ml-auto"
+          disabled={confirmAll.isPending}
+          onClick={() =>
+            confirmAll.mutate(window.id, {
+              onSuccess: (r) =>
+                r.failed.length
+                  ? toast.warning(
+                      `${r.confirmed} confirmed; ${r.failed.length} need review (filter: Submitted).`,
+                    )
+                  : toast.success(`${r.confirmed} selections confirmed.`),
+            })
+          }
+        >
+          {confirmAll.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <CheckCheck className="size-3.5" aria-hidden />
+          )}
+          Confirm all submitted ({submitted})
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function StatusFilters({
+  progress: p,
+  status,
+  onChange,
+}: {
+  progress: WindowProgress | undefined;
+  status: EnrollmentStatus | undefined;
+  onChange: (s: EnrollmentStatus | undefined) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
+      <FilterChip selected={!status} onClick={() => onChange(undefined)}>
+        Everyone <Count n={p?.total} />
+      </FilterChip>
+      {STATUS_ORDER.filter((s) => (p?.[s] ?? 0) > 0 || s === status).map((s) => (
+        <FilterChip key={s} selected={status === s} onClick={() => onChange(s)}>
+          <span className={cn("size-2 rounded-full", STATUS_META[s].fill)} aria-hidden />
+          {STATUS_META[s].label} <Count n={p?.[s]} />
+        </FilterChip>
+      ))}
+    </div>
+  );
+}
+
+function RosterColumn({
+  windowId,
+  status,
+  selected,
+  onSelect,
+}: {
+  windowId: string;
+  status: EnrollmentStatus | undefined;
+  selected: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(0);
+  // A new filter or query starts from the first page.
+  useEffect(() => setPage(0), [q, status, windowId]);
+  const roster = useEnrollmentRoster(windowId, {
+    q: q.trim() || undefined,
+    status,
+    offset: page * PAGE,
+    limit: PAGE,
+  });
+  const total = roster.data?.total ?? 0;
+  return (
+    <div>
+      <EmployeePicker
+        items={(roster.data?.items ?? []).map((it) => ({
+          id: it.id,
+          name: it.employee_name ?? it.staff_id,
+          subtitle: it.staff_id,
+          trailing: <StatusTag status={it.status as EnrollmentStatus} />,
+        }))}
+        selectedId={selected}
+        onSelect={onSelect}
+        isLoading={roster.isLoading}
+        query={q}
+        onQueryChange={setQ}
+        emptyText={status ? "Nobody has this status." : "No members match."}
+        header={
+          <p className="px-1 pb-2 text-2xs text-muted-foreground">
+            {total.toLocaleString()} {status ? STATUS_META[status].label.toLowerCase() : "members"}
+          </p>
+        }
+      />
+      <PaginationControls
+        page={page}
+        pages={Math.max(1, Math.ceil(total / PAGE))}
+        onPageChange={setPage}
+      />
+    </div>
+  );
+}
+
+function StatusTag({ status }: { status: EnrollmentStatus }) {
+  const meta = STATUS_META[status] ?? STATUS_META.not_started;
+  return (
+    <span className={cn("inline-flex shrink-0 items-center gap-1 text-2xs", meta.text)}>
+      <span className={cn("size-1.5 rounded-full", meta.fill)} aria-hidden />
+      {meta.label}
     </span>
   );
 }
 
-function ElectionPanel({
-  enrollmentId,
-  allowLeave,
-  allowDeps,
-  allowOverdraft,
-  productScope,
-}: {
-  enrollmentId: string;
-  allowLeave: boolean;
-  allowDeps: boolean;
-  allowOverdraft: boolean;
-  productScope: string[] | null;
-}) {
-  const { data: enr, isLoading } = useEnrollment(enrollmentId);
-  const { data: options } = useEnrollmentOptions(enrollmentId);
-  const setElections = useSetElections();
-  const setLeave = useSetLeave();
-  const submit = useSubmitEnrollment();
-  const confirm = useConfirmEnrollment();
-  const reset = useResetEnrollment();
-  const reopen = useReopenEnrollment();
-  const [confirmReset, setConfirmReset] = useState(false);
-  // Products the server flagged as changed-but-unpriced at submit — the broker
-  // can fix pricing or deliberately submit anyway.
-  const [unpricedProducts, setUnpricedProducts] = useState<string[] | null>(null);
-
-  // Dependants come from the read-only statement (reuses the existing endpoint).
-  const empId = enr?.employee_id ?? null;
-  const { data: statement } = useBenefitStatement(allowDeps ? empId : null);
-  const dependants = statement?.dependants ?? [];
-
-  const productScopeSet = useMemo(
-    () => (productScope?.length ? new Set(productScope) : null),
-    [productScope],
-  );
-
-  // Electable tier sets for this member, scoped to the window's product scope.
-  // Each set lists only the member's own cohort tiers — not every product plan.
-  const tierSets = useMemo<ProductTierSet[]>(() => {
-    const all = options?.products ?? [];
-    return productScopeSet
-      ? all.filter((p) => productScopeSet.has(p.product_code))
-      : all;
-  }, [options, productScopeSet]);
-
-  const [state, setState] = useState<Record<string, ProductState>>({});
-  const [leaveAction, setLeaveAction] = useState<string>("none");
-  const [leaveDays, setLeaveDays] = useState<string>("0");
-
-  useEffect(() => {
-    if (!enr || !options) return;
-    setState(seedElectionState(enr, tierSets));
-    setLeaveAction(enr.leave?.action ?? "none");
-    setLeaveDays(String(enr.leave?.days ?? 0));
-  }, [enr, options, tierSets]);
-
-  if (isLoading || !enr) {
-    return (
-      <div className="flex items-center gap-2 px-2 py-10 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" /> Loading…
-      </div>
-    );
-  }
-
-  const finalized = enr.status === "confirmed" || enr.status === "deemed";
-
-  // Running flex balance: wallet − Σ coverage price tags + live buy/sell-leave
-  // impact (buy spends, sell credits) at the member's per-day leave rate.
-  const flex = computeFlex(
-    options, tierSets, state, dependants, allowDeps, leaveAction, leaveDays,
-    options?.leave ?? null,
-  );
-
-  // The live balance mirrors the server-side wallet guard: an overdrawn
-  // enrollment can't be submitted unless the window allows overdrafts (the
-  // server re-checks regardless — this only saves a doomed round trip).
-  const submitBlocked = !!flex && flex.balance < -0.005 && !allowOverdraft;
-
-  function doSubmit(acknowledgeUnpriced: boolean) {
-    const days = Number(leaveDays);
-    if (allowLeave && (!Number.isFinite(days) || days < 0)) {
-      toast.error("Enter a valid non-negative number of leave days.");
-      return;
-    }
-    submit.mutate(
-      {
-        id: enrollmentId,
-        acknowledgeUnpriced,
-        elections: tierSets.length
-          ? buildElectionsPayload(state, tierSets, dependants, allowDeps)
-          : undefined,
-        leave: allowLeave ? { action: leaveAction, days } : undefined,
-      },
-      {
-        onSuccess: () => {
-          setUnpricedProducts(null);
-          toast.success("Submitted.");
-        },
-        onError: (e) => {
-          if (e instanceof ConflictDetailError) {
-            if (e.detail.code === "unpriced_elections") {
-              setUnpricedProducts(
-                Array.isArray(e.detail.products)
-                  ? (e.detail.products as string[])
-                  : [],
-              );
-              return;
-            }
-            if (e.detail.code === "flex_overdrawn") {
-              const balance = e.detail.balance;
-              toast.error(
-                `Benefits selections overdraw the flex wallet${
-                  typeof balance === "number"
-                    ? ` by ${fmtCurrency(Math.abs(balance))}`
-                    : ""
-                }. Reduce the selections, or enable overdraft on the enrolment period.`,
-              );
-              return;
-            }
-          }
-          toast.error(formatError(e));
-        },
-      },
-    );
-  }
-
-  function saveElections() {
-    const elections = buildElectionsPayload(state, tierSets, dependants, allowDeps);
-    setElections.mutate(
-      { id: enrollmentId, elections },
-      { onSuccess: () => toast.success("Benefits selection saved."), onError: (e) => toast.error(formatError(e)) },
-    );
-  }
-
+function Count({ n }: { n: number | undefined }) {
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-foreground">
-            {enr.employee_name ?? enr.staff_id}
-          </h2>
-          <p className="font-mono text-xs text-muted-foreground">{enr.staff_id}</p>
-        </div>
-        <Badge variant={finalized ? "good" : "outline"}>{enr.status.replace("_", " ")}</Badge>
-      </div>
+    <span className="tabular-nums text-muted-foreground">
+      {n === undefined ? "" : n.toLocaleString()}
+    </span>
+  );
+}
 
-      {/* Flex wallet balance — wallet minus the price tags of selected coverage */}
-      {flex && (
-        <FlexBalanceStrip
-          flex={flex}
-          allowOverdraft={allowOverdraft}
-          shortfallHint="Benefits selections exceed the flex wallet. Reduce them to submit, or ask an admin to allow overdrafts on this enrolment period."
-        />
+function FilterChip({
+  selected,
+  onClick,
+  children,
+}: {
+  selected: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        "inline-flex min-h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        selected
+          ? "border-border-strong bg-muted text-foreground"
+          : "border-border bg-card text-muted-foreground hover:text-foreground",
       )}
-
-      {/* Per-product benefits selection — only the member's own cohort tiers */}
-      <div className="space-y-2">
-        {tierSets.map((ts) => {
-          const ps = state[ts.product_code];
-          if (!ps) return null;
-          return (
-            <ElectionProductCard
-              key={ts.product_code}
-              ts={ts}
-              ps={ps}
-              disabled={finalized}
-              allowDeps={allowDeps}
-              dependants={dependants}
-              flexOnChange={!!flex?.onChange}
-              onChange={(next) =>
-                setState((s) => ({ ...s, [ts.product_code]: next }))
-              }
-            />
-          );
-        })}
-        {!tierSets.length && (
-          <p className="text-sm text-muted-foreground">
-            This member has no products in their cohort to select.
-          </p>
-        )}
-      </div>
-
-      {/* Leave trading */}
-      {allowLeave && (
-        <LeaveTradingCard
-          action={leaveAction}
-          days={leaveDays}
-          leave={options?.leave ?? null}
-          ratePerDay={options?.member_leave_rate ?? null}
-          disabled={finalized}
-          saving={setLeave.isPending}
-          onActionChange={setLeaveAction}
-          onDaysChange={setLeaveDays}
-          onSave={() =>
-            setLeave.mutate(
-              { id: enrollmentId, action: leaveAction, days: Number(leaveDays) },
-              {
-                onSuccess: () => toast.success("Leave saved."),
-                onError: (e) => toast.error(formatError(e)),
-              },
-            )
-          }
-        />
-      )}
-
-      {/* Actions */}
-      {!finalized && (
-        <div className="flex items-center gap-2">
-          <Button onClick={saveElections} disabled={setElections.isPending}>
-            {setElections.isPending && <Loader2 className="size-4 animate-spin" />}
-            Save benefits selection
-          </Button>
-          <Button
-            variant="outline"
-            disabled={submit.isPending || submitBlocked}
-            title={
-              submitBlocked
-                ? "Benefits selections exceed the flex wallet — reduce them or enable overdraft on the enrolment period"
-                : undefined
-            }
-            onClick={() => doSubmit(false)}
-          >
-            <Send className="size-4" /> Submit
-          </Button>
-          <Button
-            variant="outline"
-            disabled={confirm.isPending || enr.status !== "submitted"}
-            onClick={() =>
-              confirm.mutate(enrollmentId, {
-                onSuccess: () => toast.success("Confirmed — coverage updated."),
-                onError: (e) => toast.error(formatError(e)),
-              })
-            }
-          >
-            <CheckCircle2 className="size-4" /> Confirm
-          </Button>
-          <Button
-            variant="ghost"
-            disabled={reset.isPending}
-            onClick={() => setConfirmReset(true)}
-            title="Discard the in-progress benefits selection and return to the enrolment-period baseline"
-          >
-            <RotateCcw className="size-4" /> Discard changes
-          </Button>
-        </div>
-      )}
-
-      {/* Confirmed enrollment: reopen for further changes while the window is
-          still open (re-enables edit → submit → confirm). */}
-      {enr.status === "confirmed" && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 p-3">
-          <p className="text-xs text-muted-foreground">
-            This enrolment is confirmed. Reopen it to change plans again while
-            the enrolment period is open — coverage stays as-is until you
-            re-submit and confirm.
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={reopen.isPending}
-            onClick={() =>
-              reopen.mutate(enrollmentId, {
-                onSuccess: () => toast.success("Reopened — you can edit the benefits selection again."),
-                onError: (e) => toast.error(formatError(e)),
-              })
-            }
-          >
-            {reopen.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <LockOpen className="size-4" />
-            )}
-            Reopen for changes
-          </Button>
-        </div>
-      )}
-
-      {/* Coverage history + (when finalized) revert to the window baseline */}
-      <div className="border-t border-border pt-3 space-y-3">
-        {finalized && empId && (
-          <CoverageRevertControls
-            employeeId={empId}
-            offerBaseline={!!enr.baseline_snapshot?.products}
-            windowId={enr.window_id}
-          />
-        )}
-        <CoverageHistory employeeId={empId} limit={4} />
-      </div>
-
-      <AlertDialog
-        open={confirmReset}
-        onOpenChange={setConfirmReset}
-        title="Discard the in-progress benefits selection?"
-        description="This clears this member's unsaved plan and leave selections for the enrolment period, returning them to their baseline (pre-enrolment) coverage. Already-confirmed coverage is not affected."
-        confirmLabel="Discard"
-        confirmVariant="default"
-        loading={reset.isPending}
-        onConfirm={() =>
-          reset.mutate(enrollmentId, {
-            onSuccess: () => {
-              toast.success("Benefits selection reset to baseline.");
-              setConfirmReset(false);
-            },
-            onError: (e) => toast.error(formatError(e)),
-          })
-        }
-      />
-
-      <AlertDialog
-        open={unpricedProducts !== null}
-        onOpenChange={(open) => {
-          if (!open) setUnpricedProducts(null);
-        }}
-        title="Some benefits selections have no flex price"
-        description={`${
-          unpricedProducts?.length
-            ? `These products change coverage but have no configured flex price, so they would draw $0 from the wallet: ${unpricedProducts.join(", ")}. `
-            : ""
-        }This is usually a pricing gap — a missing slip premium or matrix row, or an age-banded product without the member's date of birth. Configure pricing first, or submit anyway if the $0 draw is intended.`}
-        confirmLabel="Submit anyway"
-        confirmVariant="default"
-        loading={submit.isPending}
-        onConfirm={() => doSubmit(true)}
-      />
-    </div>
+    >
+      {children}
+    </button>
   );
 }

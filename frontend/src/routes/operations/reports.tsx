@@ -479,12 +479,12 @@ function FlexReports({
       icon: Coins,
       title: "Flex Price Tags",
       description:
-        "What each plan and dependant option costs the wallet, plus the buy/sell-leave rate per tier. Set on the enrollment Flex tab.",
+        "What each plan and dependant option costs the wallet, plus the buy/sell-leave rate per tier. Set on Enrollment → Pricing & rules.",
       format: "Interactive",
       action: (
         <OpenLink
           to="/client-relations/enrollment"
-          search={{ tab: "flex" }}
+          search={{ tab: "rules" }}
           label="Open flex pricing"
         />
       ),

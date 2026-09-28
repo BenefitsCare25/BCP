@@ -177,6 +177,15 @@ export function MemberSelector({
 
   const product = facets?.products.find((p) => p.id === productId);
 
+  // Filters the broker opened this session; ones carrying a value are always
+  // open (a re-run batch arrives with values set).
+  const [shownKeys, setShownKeys] = useState<string[]>([]);
+  const allAttributes = facets?.attributes ?? [];
+  const isOpen = (key: string) =>
+    shownKeys.includes(key) || (state.attributes[key]?.length ?? 0) > 0;
+  const visibleAttributes = allAttributes.filter((a) => isOpen(a.key));
+  const hiddenAttributes = allAttributes.filter((a) => !isOpen(a.key));
+
   function applyPaste() {
     if (!pasteText.trim()) return;
     resolveList.mutate(
@@ -292,10 +301,12 @@ export function MemberSelector({
             categories.find((c) => c.id === id)?.label ?? "Unknown cohort"
           }
         />
-        {/* Every attribute the server offers — it has already dropped
-            identifiers, dates and PII. Truncating here would hide a working
-            filter with nothing to say it exists. */}
-        {(facets?.attributes ?? []).map((attr) => (
+        {/* Every attribute the server offers stays reachable — it has already
+            dropped identifiers, dates and PII — but only filters in use are
+            open. The rest wait behind "Add a filter", which says how many
+            there are, so nothing is hidden and nothing is a wall of 24
+            empty dropdowns. */}
+        {visibleAttributes.map((attr) => (
           <MatchSetPicker
             key={attr.key}
             label={attr.label}
@@ -312,6 +323,36 @@ export function MemberSelector({
             emptyHint="No values on the current roster."
           />
         ))}
+        {hiddenAttributes.length > 0 && (
+          <div className="self-end">
+            <Label htmlFor="add-filter" className="sr-only">
+              Add a filter
+            </Label>
+            <NativeSelect
+              id="add-filter"
+              className="w-full"
+              value=""
+              onChange={(e) => {
+                const key = e.target.value;
+                if (key) setShownKeys((k) => [...k, key]);
+              }}
+            >
+              <option value="">
+                + Add a filter ({hiddenAttributes.length} more:{" "}
+                {hiddenAttributes
+                  .slice(0, 2)
+                  .map((a) => a.label.toLowerCase())
+                  .join(", ")}
+                {hiddenAttributes.length > 2 ? "…" : ""})
+              </option>
+              {hiddenAttributes.map((attr) => (
+                <option key={attr.key} value={attr.key}>
+                  {attr.label}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+        )}
         {facetsLoading && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" /> Loading roster filters…

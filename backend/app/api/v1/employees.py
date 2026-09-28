@@ -37,11 +37,13 @@ from app.models import (
     Employee,
     EmployeeAttributeSchema,
     Enrollment,
+    EnrollmentWindow,
     LeaveElection,
     MemberAccount,
 )
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED
 from app.models.enrollment import EnrollmentStatus
+from app.models.enrollment_window import WindowStatus
 from app.models.member_account import MEMBER_STATUS_DISABLED
 from app.schemas.api import (
     BenefitStatementOut,
@@ -58,6 +60,10 @@ from app.services.coverage_resolver import find_orphan_overrides, load_overrides
 from app.services.coverage_summary import build_coverage_items
 from app.services.derivation_engine import derive
 from app.services.eligibility_mapping import auto_map_policy_year
+from app.services.enrollment_lifecycle import (
+    OPEN_PERIOD_SYNC_SKIPPED,
+    sync_open_windows_safe,
+)
 from app.services.flex_assignment import assign_flex_safe
 from app.services.matching_engine import match_policy_year
 from app.services.member_query import looks_like_nric
@@ -326,6 +332,18 @@ def _enrollment_risk(
             LeaveElection.policy_year_id == policy_year_id,
         )
     ).scalar_one()
+    # Everyone enrolled in a period that is still OPEN, started or not: wiping
+    # them empties the period while it keeps reading "open" (a re-import creates
+    # new employee rows the period does not know about).
+    open_period_members = db.execute(
+        select(func.count(Enrollment.id))
+        .join(EnrollmentWindow, Enrollment.window_id == EnrollmentWindow.id)
+        .where(
+            Enrollment.client_id == client_id,
+            Enrollment.policy_year_id == policy_year_id,
+            EnrollmentWindow.status == WindowStatus.open,
+        )
+    ).scalar_one()
     claims_at_risk = db.execute(
         select(func.count(Claim.id)).where(
             Claim.client_id == client_id,
@@ -338,6 +356,7 @@ def _enrollment_risk(
     overrides_at_risk = sum(1 for o in all_overrides.values() if o.id not in orphan_ids)
     return {
         "enrollments_at_risk": enrollments_at_risk,
+        "open_period_members_at_risk": open_period_members,
         "leave_elections_at_risk": leave_at_risk,
         "claims_at_risk": claims_at_risk,
         "overrides_at_risk": overrides_at_risk,
@@ -346,6 +365,7 @@ def _enrollment_risk(
 
 _RISK_LABELS: list[tuple[str, str]] = [
     ("enrollments_at_risk", "in-progress/confirmed enrollment(s)"),
+    ("open_period_members_at_risk", "member(s) enrolled in an open enrolment period"),
     ("leave_elections_at_risk", "leave election(s)"),
     ("claims_at_risk", "member claim(s) with retained receipts"),
     ("overrides_at_risk", "active coverage override(s)"),
@@ -543,6 +563,7 @@ async def upload_employees(
     # Auto-run matching so the user sees results immediately. Failure here
     # must not roll back the upload — the audit row above already records
     # the persisted rows. Matching can always be re-run from the UI button.
+    matched_cleanly = False
     try:
         mapping_summary = auto_map_policy_year(
             db,
@@ -580,6 +601,7 @@ async def upload_employees(
             },
         )
         db.commit()
+        matched_cleanly = not summary.errors
         if summary.errors:
             errors.append(
                 f"{summary.errors} employee(s) hit a matching error (distinct "
@@ -596,6 +618,18 @@ async def upload_employees(
         db, user, policy_year_id, client_id,
         trigger="auto_on_employee_upload", errors=errors,
     )
+    # New staff join any open period now, not when someone remembers "Sync" —
+    # but ONLY after a clean match: an enrollment snapshots its baseline from
+    # `matched_categories` once, so enrolling off a failed match would freeze
+    # an empty "current plan" that no later re-match repairs.
+    if inserted:
+        if matched_cleanly:
+            sync_open_windows_safe(
+                db, user, policy_year_id,
+                trigger="auto_on_employee_upload", errors=errors,
+            )
+        else:
+            errors.append(OPEN_PERIOD_SYNC_SKIPPED)
 
     return UploadResult(
         inserted=inserted, skipped=skipped, errors=errors, warnings=warnings,

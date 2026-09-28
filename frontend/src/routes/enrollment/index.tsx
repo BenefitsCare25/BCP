@@ -1,5 +1,13 @@
-import { useState } from "react";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+/** Enrollment — one workflow, four tabs:
+ *
+ *   Overview         the period: plan it, check it's ready, open, watch, close
+ *   Members          everyone in the period and each one's selection
+ *   Pricing & rules  what the benefit year prices (plan price tags, leave)
+ *   Coverage changes rule-based bulk edits to live coverage
+ *
+ * The old page had five tabs mixing yearly setup, running a period and
+ * per-member work, and led with a blank create form even mid-period. */
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   PageTabsBar,
   Tabs,
@@ -7,864 +15,84 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { useMe } from "@/api/hooks";
+import { PeriodOverview } from "@/components/enrollment/period/PeriodOverview";
 import { EnrollmentElectionsPage } from "./elections";
 import { EnrollmentBulkPage } from "./bulk";
-import {
-  CalendarClock,
-  Loader2,
-  Lock,
-  Play,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
-import { toast } from "sonner";
-import { useSession } from "@/stores/session";
-import {
-  type EnrollmentWindow,
-  type EnrollmentReadinessIssue,
-  type FlexDrawdownRule,
-  useCloseWindow,
-  useCreateWindow,
-  useDeleteWindow,
-  useEnrollmentRoster,
-  useEnrollmentWindows,
-  useFlexPricing,
-  useOpenWindow,
-  useSaveEnrollmentPricingConfig,
-  useUpdateWindow,
-} from "@/api/enrollment";
-import { ConflictDetailError, formatError } from "@/lib/errors";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
-import { InfoHint } from "@/components/ui/tooltip";
-import { AlertDialog } from "@/components/ui/alert-dialog";
-import { Segmented } from "@/components/ui/segmented";
-import { useFlexPricingEditor } from "@/components/enrollment/FlexPricingCard";
-import { FlexProductList } from "@/components/enrollment/FlexProductList";
-import { voluntaryRateIssues } from "@/components/enrollment/LifeVoluntaryPanel";
-import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
-import { useMe } from "@/api/hooks";
+import { EnrollmentRulesPage } from "./rules";
 
-const STATUS_VARIANT: Record<string, "primary" | "good" | "outline"> = {
-  draft: "outline",
-  open: "primary",
-  closed: "good",
-};
-
-function editableWindowsOf(windows: EnrollmentWindow[] | undefined) {
-  // Price tags are reviewed configuration and are frozen once a period opens.
-  return (windows ?? []).filter((w) => w.status === "draft");
-}
-
-function toLocalInput(): { opens: string; closes: string } {
-  // Sensible default window: a 30-day span starting today (datetime-local format).
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const now = new Date();
-  const later = new Date(now.getTime() + 30 * 86_400_000);
-  return { opens: fmt(now), closes: fmt(later) };
-}
-
-export function EnrollmentDashboardPage() {
-  const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
-  const { data: windows, isLoading } = useEnrollmentWindows(policyYearId);
-  const createWindow = useCreateWindow(policyYearId);
-  const openWindow = useOpenWindow();
-  const closeWindow = useCloseWindow();
-  const deleteWindow = useDeleteWindow();
-  const updateWindow = useUpdateWindow();
-
-  const defaults = toLocalInput();
-  const [name, setName] = useState("");
-  const [opensAt, setOpensAt] = useState(defaults.opens);
-  const [closesAt, setClosesAt] = useState(defaults.closes);
-  const [allowLeave, setAllowLeave] = useState(false);
-  const [allowDeps, setAllowDeps] = useState(true);
-  // Members may enrol themselves. Off runs the period broker-managed: open for
-  // brokers, dark in the portal.
-  const [memberSelfService, setMemberSelfService] = useState(true);
-  const [usesFlex, setUsesFlex] = useState(false);
-  // Whether benefits selections may draw more flex than the member's wallet
-  // holds. Off (recommended), submit/confirm reject an overdrawn enrollment.
-  const [allowOverdraft, setAllowOverdraft] = useState(false);
-  // Flex funding config for this window: the company-wide drawdown rule.
-  const [drawdownRule, setDrawdownRule] = useState<FlexDrawdownRule>("full");
-  const [confirmClose, setConfirmClose] = useState<EnrollmentWindow | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<EnrollmentWindow | null>(null);
-  const [openBlockers, setOpenBlockers] = useState<{
-    name: string;
-    issues: EnrollmentReadinessIssue[];
-  } | null>(null);
-
-  // Live counts for the close-window dialog — how many members it will affect.
-  const closeSubmitted = useEnrollmentRoster(confirmClose?.id, {
-    status: "submitted",
-    limit: 1,
-  });
-  const closeConfirmed = useEnrollmentRoster(confirmClose?.id, {
-    status: "confirmed",
-    limit: 1,
-  });
-  const closeTotal = useEnrollmentRoster(confirmClose?.id, { limit: 1 });
-
-  if (!policyYearId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Select a benefit year to manage enrolment periods.
-      </p>
-    );
-  }
-
-  function handleCreate() {
-    if (!name.trim()) {
-      toast.error("Give the enrolment period a name.");
-      return;
-    }
-    // A cleared datetime-local input yields "" → new Date("").toISOString()
-    // throws a RangeError. Validate before building the payload.
-    if (
-      !opensAt ||
-      !closesAt ||
-      Number.isNaN(new Date(opensAt).getTime()) ||
-      Number.isNaN(new Date(closesAt).getTime())
-    ) {
-      toast.error("Both open and close times are required.");
-      return;
-    }
-    createWindow.mutate(
-      {
-        name: name.trim(),
-        window_type: "open",
-        opens_at: new Date(opensAt).toISOString(),
-        closes_at: new Date(closesAt).toISOString(),
-        default_behavior: "deemed_keep_current",
-        allow_plan_change: true,
-        allow_leave: allowLeave,
-        allow_dependant_changes: allowDeps,
-        member_self_service: memberSelfService,
-        uses_flex: usesFlex,
-        allow_overdraft: usesFlex && allowOverdraft,
-        flex_drawdown_rule: drawdownRule,
-      },
-      {
-        onSuccess: () => {
-          toast.success("Enrolment period created.");
-          setName("");
-        },
-      },
-    );
-  }
-
-  return (
-    <div className="space-y-5">
-      {/* Create window */}
-      <div className="rounded-lg border border-border bg-card p-4">
-        <div className="flex items-center gap-1">
-          <h2 className="text-sm font-semibold text-foreground">New enrolment period</h2>
-          <InfoHint>
-            Define when members may change their benefits selection. Opening the
-            period pre-fills each member with their current plan (reverse
-            enrolment).
-          </InfoHint>
-        </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <Label htmlFor="win-name">Name</Label>
-            <Input
-              id="win-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="2026 Open Enrollment"
-            />
-          </div>
-          <div>
-            <Label htmlFor="win-opens">Opens</Label>
-            <Input
-              id="win-opens"
-              type="datetime-local"
-              value={opensAt}
-              onChange={(e) => setOpensAt(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label htmlFor="win-closes">Closes</Label>
-            <Input
-              id="win-closes"
-              type="datetime-local"
-              value={closesAt}
-              onChange={(e) => setClosesAt(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 sm:col-span-2">
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <Switch checked={allowLeave} onCheckedChange={setAllowLeave} />
-              Leave trading
-            </label>
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <Switch checked={allowDeps} onCheckedChange={setAllowDeps} />
-              Dependants
-            </label>
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <Switch
-                checked={memberSelfService}
-                onCheckedChange={setMemberSelfService}
-              />
-              Members enrol themselves
-              <InfoHint>
-                Off, the period runs broker-managed: it opens normally and
-                brokers elect on members&apos; behalf, but the portal shows no
-                enrolment and members cannot submit. You can switch this at any
-                time while the period is open.
-              </InfoHint>
-            </label>
-            {/* The switch only EXPOSES trading — the day caps and per-day rate
-                that decide what members can actually do live on the Leave tab. */}
-            {allowLeave && (
-              <Link
-                to="/client-relations/enrollment"
-                search={{ tab: "leave" }}
-                className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              >
-                Set the day limits &amp; per-day rate →
-              </Link>
-            )}
-          </div>
-
-          {/* Flex funding: how this window draws the wallet down (the price tags
-              themselves are per policy year — see the Price Tag tab) */}
-          <div className="rounded-md border border-border bg-muted/20 p-3 sm:col-span-2">
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <div className="flex items-center gap-1">
-                <div className="text-xs font-semibold text-foreground">Flex funding</div>
-                <InfoHint>
-                  How the flex wallet is drawn down for coverage in this
-                  enrolment period. The wallet funds each member&apos;s coverage;
-                  changing plans or trading leave adjusts what it is charged.
-                </InfoHint>
-              </div>
-              {/* What each plan COSTS the wallet — the price tags and where they
-                  come from — is per policy year and lives on its own tab. */}
-              <Link
-                to="/client-relations/enrollment"
-                search={{ tab: "flex" }}
-                className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              >
-                Set the price tags →
-              </Link>
-            </div>
-
-            <label className="mt-2.5 flex min-h-6 items-center gap-2 text-sm text-foreground">
-              <Switch checked={usesFlex} onCheckedChange={setUsesFlex} />
-              Use Flex wallets for this period
-            </label>
-            <p className="mt-1 text-2xs text-muted-foreground">
-              {usesFlex
-                ? "Opening will require a confirmed scheme, assigned wallets, reviewed eligibility, usable portal access, and complete member prices."
-                : "Price tags and wallet balances stay hidden; insured premiums remain visible as policy information."}
-            </p>
-
-            {/* Drawdown rule — segmented so the active choice is unambiguous */}
-            <div
-              className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5"
-              aria-disabled={!usesFlex}
-            >
-              <span className="text-sm text-foreground">Drawdown rule</span>
-              <Segmented
-                value={drawdownRule}
-                onChange={setDrawdownRule}
-                disabled={!usesFlex}
-                options={[
-                  { value: "full", label: "Full plan tag" },
-                  { value: "on_change", label: "Only on plan change" },
-                ]}
-              />
-              <span className="basis-full text-2xs text-muted-foreground sm:basis-auto">
-                {drawdownRule === "on_change"
-                  ? "Only the upgrade/downgrade difference vs the default plan is deducted (a downgrade credits the wallet)."
-                  : "The member's full plan price tag is deducted from the wallet."}
-              </span>
-            </div>
-
-            {/* Overdraft policy — the server enforces this at submit/confirm */}
-            <div
-              className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5"
-              aria-disabled={!usesFlex}
-            >
-              <label className="flex items-center gap-2 text-sm text-foreground">
-                <Switch
-                  checked={allowOverdraft}
-                  disabled={!usesFlex}
-                  onCheckedChange={setAllowOverdraft}
-                />
-                Allow overdraft
-              </label>
-              <span className="basis-full text-2xs text-muted-foreground sm:basis-auto">
-                {allowOverdraft
-                  ? "Benefits selections may exceed the flex wallet — the shortfall is the member's to top up (e.g. via payroll)."
-                  : "Submitting is blocked when benefits selections draw more flex than the member's wallet holds."}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="mt-3">
-          <Button onClick={handleCreate} disabled={createWindow.isPending}>
-            {createWindow.isPending && <Loader2 className="size-4 animate-spin" />}
-            Create enrolment period
-          </Button>
-        </div>
-      </div>
-
-      {/* Window list */}
-      <div className="rounded-lg border border-border bg-card">
-        <div className="border-b border-border px-4 py-2.5 text-sm font-semibold text-foreground">
-          Enrolment periods
-        </div>
-        {isLoading ? (
-          <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading…
-          </div>
-        ) : !windows?.length ? (
-          <p className="px-4 py-6 text-sm text-muted-foreground">
-            No enrolment periods yet. Create one above to start an enrolment.
-          </p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {windows.map((w) => (
-              <li key={w.id} className="flex items-center gap-3 px-4 py-3">
-                <CalendarClock className="size-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium text-foreground">
-                      {w.name}
-                    </span>
-                    <Badge variant={STATUS_VARIANT[w.status] ?? "outline"}>{w.status}</Badge>
-                  </div>
-                  <div className="text-2xs text-muted-foreground">
-                    {new Date(w.opens_at).toLocaleDateString()} —{" "}
-                    {new Date(w.closes_at).toLocaleDateString()}
-                  </div>
-                  {/* Portal visibility is a MID-PERIOD decision — the whole
-                      point is to take the member surface dark while the period
-                      stays open for brokers — so it is editable on the row, not
-                      only at creation. A closed period gets no control: nothing
-                      it says would change what members can do. */}
-                  {w.status !== "closed" && (
-                    <label className="mt-1 flex items-center gap-2 text-2xs text-muted-foreground">
-                      <Switch
-                        checked={w.member_self_service}
-                        disabled={updateWindow.isPending}
-                        onCheckedChange={(v) =>
-                          updateWindow.mutate(
-                            { id: w.id, body: { member_self_service: v } },
-                            {
-                              onSuccess: () =>
-                                toast.success(
-                                  v
-                                    ? "Members can now enrol themselves in the portal."
-                                    : "Portal enrolment hidden — this period is now broker-managed.",
-                                ),
-                            },
-                          )
-                        }
-                      />
-                      {w.member_self_service
-                        ? "Members enrol themselves"
-                        : "Broker-managed — hidden from the portal"}
-                    </label>
-                  )}
-                  {w.status === "draft" && (
-                    <label className="mt-1 flex min-h-6 items-center gap-2 text-2xs text-muted-foreground">
-                      <Switch
-                        checked={w.uses_flex}
-                        disabled={updateWindow.isPending}
-                        onCheckedChange={(value) =>
-                          updateWindow.mutate(
-                            { id: w.id, body: { uses_flex: value } },
-                            {
-                              onSuccess: () =>
-                                toast.success(
-                                  value
-                                    ? "Flex readiness checks enabled for this period."
-                                    : "This period no longer shows or charges Flex wallets.",
-                                ),
-                            },
-                          )
-                        }
-                      />
-                      {w.uses_flex ? "Flex-funded" : "No Flex wallet"}
-                    </label>
-                  )}
-                  {w.status !== "draft" && (
-                    <div className="mt-1 text-2xs text-muted-foreground">
-                      {w.uses_flex ? "Flex-funded" : "No Flex wallet"}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {w.status === "open" && (
-                    <Button asChild variant="outline" size="sm">
-                      <Link
-                        to="/client-relations/enrollment"
-                        search={{ tab: "elections", window: w.id }}
-                      >
-                        Benefits Selection
-                      </Link>
-                    </Button>
-                  )}
-                  {w.status === "draft" && (
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        openWindow.mutate(w.id, {
-                          onSuccess: (r) =>
-                            toast.success(
-                              `Enrolment period opened — ${r.enrollments_created.toLocaleString()} enrolment(s) created.`,
-                            ),
-                          onError: (error) => {
-                            if (
-                              error instanceof ConflictDetailError &&
-                              error.detail.code === "enrollment_not_ready" &&
-                              Array.isArray(error.detail.issues)
-                            ) {
-                              setOpenBlockers({
-                                name: w.name,
-                                issues: error.detail.issues.filter(
-                                  (issue): issue is EnrollmentReadinessIssue =>
-                                    Boolean(
-                                      issue &&
-                                        typeof issue === "object" &&
-                                        "code" in issue &&
-                                        "message" in issue,
-                                    ),
-                                ),
-                              });
-                              return;
-                            }
-                            toast.error(formatError(error));
-                          },
-                        })
-                      }
-                      disabled={openWindow.isPending}
-                    >
-                      <Play className="size-3.5" /> Open
-                    </Button>
-                  )}
-                  {w.status === "open" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={openWindow.isPending}
-                      title="Re-runs the open step to backfill enrolment rows for employees added after the period opened (idempotent)"
-                      onClick={() =>
-                        openWindow.mutate(w.id, {
-                          onSuccess: (r) =>
-                            r.enrollments_created > 0
-                              ? toast.success(
-                                  `Synced ${r.enrollments_created.toLocaleString()} new employee(s) into this enrolment period.`,
-                                )
-                              : toast.info(
-                                  "No new employees to sync — everyone already has an enrollment.",
-                                ),
-                        })
-                      }
-                    >
-                      <RefreshCw className="size-3.5" /> Sync new employees
-                    </Button>
-                  )}
-                  {w.status === "open" && (
-                    <Button variant="outline" size="sm" onClick={() => setConfirmClose(w)}>
-                      <Lock className="size-3.5" /> Close
-                    </Button>
-                  )}
-                  {w.status === "draft" && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setConfirmDelete(w)}
-                      aria-label="Delete enrolment period"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <AlertDialog
-        open={!!openBlockers}
-        onOpenChange={(open) => !open && setOpenBlockers(null)}
-        title="This enrolment period is not ready"
-        description={
-          <div className="space-y-2">
-            <p>
-              Resolve every blocker before opening {openBlockers?.name ?? "this period"}:
-            </p>
-            <ul className="list-disc space-y-1 pl-5">
-              {openBlockers?.issues.map((issue) => (
-                <li key={issue.code}>
-                  {issue.message}
-                  {typeof issue.count === "number"
-                    ? ` (${issue.count.toLocaleString()})`
-                    : ""}
-                  {issue.products?.length
-                    ? ` Products: ${issue.products.join(", ")}.`
-                    : ""}
-                </li>
-              ))}
-            </ul>
-          </div>
-        }
-        confirmLabel="Close"
-        cancelLabel={null}
-        confirmVariant="default"
-        tone="info"
-        onConfirm={() => setOpenBlockers(null)}
-      />
-      <AlertDialog
-        open={!!confirmClose}
-        onOpenChange={(o) => !o && setConfirmClose(null)}
-        title="Close this enrolment period?"
-        description={
-          <div className="space-y-2">
-            {closeSubmitted.data && closeTotal.data ? (
-              <p>
-                <strong>{closeSubmitted.data.total}</strong> submitted enrollment
-                {closeSubmitted.data.total === 1 ? "" : "s"} will be
-                auto-confirmed;{" "}
-                <strong>
-                  {Math.max(
-                    0,
-                    closeTotal.data.total -
-                      closeSubmitted.data.total -
-                      (closeConfirmed.data?.total ?? 0),
-                  )}
-                </strong>{" "}
-                untouched member
-                {Math.max(
-                  0,
-                  closeTotal.data.total -
-                    closeSubmitted.data.total -
-                    (closeConfirmed.data?.total ?? 0),
-                ) === 1
-                  ? ""
-                  : "s"}{" "}
-                will be handled by the period's default behavior.
-              </p>
-            ) : (
-              <p>
-                Members who haven't made changes will keep their current plan.
-              </p>
-            )}
-            <p>
-              Every benefits selection is projected to effective coverage. This
-              can't be undone.
-            </p>
-          </div>
-        }
-        confirmLabel="Close period"
-        confirmVariant="default"
-        loading={closeWindow.isPending}
-        onConfirm={() => {
-          if (!confirmClose) return;
-          closeWindow.mutate(confirmClose.id, {
-            onSuccess: (s) => {
-              toast.success(
-                `Closed — ${s.confirmed} confirmed at close, ${s.deemed_kept} defaults kept, ${s.already} already final.`,
-              );
-              setConfirmClose(null);
-            },
-            onError: (e) => {
-              if (
-                e instanceof ConflictDetailError &&
-                e.detail.code === "invalid_submissions"
-              ) {
-                const count = typeof e.detail.count === "number" ? e.detail.count : 0;
-                toast.error(
-                  `${count || "Some"} submitted enrollment${count === 1 ? "" : "s"} need review before this period can close.`,
-                );
-                return;
-              }
-              toast.error(formatError(e));
-            },
-          });
-        }}
-      />
-      <AlertDialog
-        open={!!confirmDelete}
-        onOpenChange={(o) => !o && setConfirmDelete(null)}
-        title="Delete this draft enrolment period?"
-        description="The enrolment period will be removed. Only a draft can be deleted."
-        loading={deleteWindow.isPending}
-        onConfirm={() => {
-          if (!confirmDelete) return;
-          deleteWindow.mutate(confirmDelete.id, {
-            onSuccess: () => {
-              toast.success("Enrolment period deleted.");
-              setConfirmDelete(null);
-            },
-          });
-        }}
-      />
-    </div>
-  );
-}
-
-// Tab KEYS ride the URL (deep links, the /elections legacy redirect, the
-// company-settings redirect), so they stay put when a label is reworded.
-const ENROLLMENT_TABS = [
-  { key: "windows", label: "Enrolment Period" },
-  { key: "elections", label: "Benefits Selection" },
-  { key: "flex", label: "Price Tag" },
-  { key: "leave", label: "Leave" },
-  // Key stays "bulk" — the /enrollment/bulk legacy redirect targets it.
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "members", label: "Members" },
+  { key: "rules", label: "Pricing & rules" },
   { key: "bulk", label: "Coverage changes" },
 ] as const;
 
-type EnrollmentTab = (typeof ENROLLMENT_TABS)[number]["key"];
-const isEnrollmentTab = (v: string | undefined): v is EnrollmentTab =>
-  ENROLLMENT_TABS.some((t) => t.key === v);
+type TabKey = (typeof TABS)[number]["key"];
 
-// The leave policy is standing per-year config, but it's part of the enrollment
-// workflow (a window's "Leave trading" switch is what exposes it to members), so
-// it lives here rather than on the company Settings page —
-// /configuration/settings?tab=enrollment redirects to this tab.
-// Everything the flex wallet pays for, in one place. Placement-slip values are
-// recommendations; a saved field is an explicit broker override. Election
-// snapshots preserve the price a member submitted under.
-function EnrollmentPriceTagTab() {
-  const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
-  const { data: flexPricing, isLoading } = useFlexPricing(policyYearId);
-  const flexEditor = useFlexPricingEditor(policyYearId);
-  const savePricingConfig = useSaveEnrollmentPricingConfig(policyYearId);
-  const { data: windows } = useEnrollmentWindows(policyYearId);
-  const [openEditor, setOpenEditor] = useState<Record<string, boolean>>({});
-  const editableWindows = editableWindowsOf(windows);
+// Keys that older links, redirects and bookmarks still carry. `?tab=leave`
+// comes from the retired company-settings tab; `elections` from the retired
+// /enrollment/elections route.
+const LEGACY: Record<string, { tab: TabKey; section?: string }> = {
+  windows: { tab: "overview" },
+  elections: { tab: "members" },
+  flex: { tab: "rules" },
+  leave: { tab: "rules", section: "leave" },
+};
 
-  if (!policyYearId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Select a benefit year to configure flex pricing.
-      </p>
-    );
-  }
-
-  const products = flexPricing?.products ?? [];
-  const openWindow = (windows ?? []).find((w) => w.status === "open");
-  const canEditPricing = editableWindows.length > 0 && !openWindow;
-  // Incomplete recommendations stay visible as attention items, but should not
-  // prevent a broker from saving an unrelated fixed-price correction. Once a
-  // product has an explicit age-band override, that override must be complete.
-  const invalidEditedAgeProducts = products.filter((product) => {
-    return (
-      product.tiers.some((tier) => tier.pricing_mode === "age_banded") &&
-      flexEditor.voluntaryRatesEdited(product) &&
-      voluntaryRateIssues(flexEditor.voluntaryRatesFor(product)).length > 0
-    );
-  });
-
-  async function save() {
-    if (!canEditPricing) {
-      toast.error(
-        "Price tags can only be changed while a draft period exists and none is open.",
-      );
-      return;
-    }
-    if (invalidEditedAgeProducts.length > 0) {
-      toast.error(
-        `Review the age bands for ${invalidEditedAgeProducts.map((product) => product.product_code).join(", ")}.`,
-      );
-      return;
-    }
-    try {
-      await savePricingConfig.mutateAsync({
-        pricing: flexEditor.pricing,
-      });
-      flexEditor.markSaved();
-      toast.success("Price tags saved");
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  }
-
-  return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <div className="sticky top-0 z-20 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
-        <div>
-          <div className="flex items-center gap-1">
-            <h2 className="text-sm font-semibold text-foreground">
-              Recommended price book
-            </h2>
-            <InfoHint>
-              What each plan draws from the member&apos;s flex wallet, separate
-              from the insurer premium. The system recommends values from the
-              placement slip; only fields you change are saved as overrides.
-              Buy/sell-leave is priced on the Leave tab.
-            </InfoHint>
-          </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Review the detected values and correct only the fields that are wrong.
-          </p>
-        </div>
-        {flexEditor.dirty && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void save()}
-            disabled={
-              !canEditPricing ||
-              invalidEditedAgeProducts.length > 0 ||
-              savePricingConfig.isPending
-            }
-            title={
-              invalidEditedAgeProducts.length > 0
-                ? "Resolve the highlighted age-band issues before saving"
-                : undefined
-            }
-          >
-            {savePricingConfig.isPending && (
-              <Loader2 className="size-4 animate-spin" />
-            )}
-            Save price tags
-          </Button>
-        )}
-      </div>
-      {!canEditPricing && products.length > 0 && (
-        <div className="mt-3 flex items-start gap-2 rounded-md border border-warn/40 bg-warn-soft/30 px-3 py-2 text-xs text-foreground">
-          <Lock className="mt-0.5 size-3.5 shrink-0 text-warn" />
-          <p>
-            {openWindow ? (
-              <>
-                Pricing is locked while <strong>{openWindow.name}</strong> is open.
-                Close it before changing recommendations or overrides.
-              </>
-            ) : (
-              <>Create a draft enrolment period before changing price tags.</>
-            )}
-          </p>
-        </div>
-      )}
-      <div className="mt-3">
-        {isLoading ? (
-          <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Loading…
-          </div>
-        ) : (
-          <FlexProductList
-            products={products}
-            pricing={flexEditor.pricing}
-            editor={flexEditor}
-            editable={canEditPricing}
-            openEditor={openEditor}
-            onToggleEditor={(pid) =>
-              setOpenEditor((s) => ({ ...s, [pid]: !s[pid] }))
-            }
-            emptyHint={
-              <p className="text-sm text-muted-foreground">
-                No flex-priced products in this benefit year yet. Products appear
-                here once the placement slip is parsed and the flex scheme is
-                confirmed.
-              </p>
-            }
-          />
-        )}
-      </div>
-    </div>
-  );
+function resolveTab(raw: string | undefined): { tab: TabKey; section?: string } {
+  if (TABS.some((t) => t.key === raw)) return { tab: raw as TabKey };
+  return (raw && LEGACY[raw]) || { tab: "overview" };
 }
 
-function EnrollmentLeaveTab() {
-  const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const { data: windows } = useEnrollmentWindows(policyYearId ?? undefined);
-  if (!policyYearId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Select a benefit year to configure the leave policy.
-      </p>
-    );
-  }
-  return (
-    <LeavePolicyCard
-      key={policyYearId}
-      policyYearId={policyYearId}
-      readOnly={(windows ?? []).some((window) => window.status === "open")}
-    />
-  );
-}
-
-// The enrollment surface is one workflow (open a window → manage member
-// elections → bulk adjust), so it renders as tabs of a single page. The
-// active tab + selected window ride the URL so the windows-list "Elections"
-// button and external deep links land on the right tab.
 export function EnrollmentPage() {
   const navigate = useNavigate();
   const { data: me } = useMe();
   const readOnly = me?.role === "broker_viewer";
-  const search = useSearch({ strict: false }) as {
-    tab?: string;
-    window?: string;
-  };
-  const requestedTab: EnrollmentTab = isEnrollmentTab(search.tab)
-    ? search.tab
-    : "windows";
-  const tab: EnrollmentTab = readOnly && requestedTab === "bulk"
-    ? "windows"
-    : requestedTab;
+  const search = useSearch({ strict: false }) as { tab?: string; section?: string };
+  const resolved = resolveTab(search.tab);
+  const tab: TabKey = readOnly && resolved.tab === "bulk" ? "overview" : resolved.tab;
 
   return (
     <div className="space-y-4">
       {readOnly && (
-        <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-          Your broker viewer role can inspect enrolment configuration and member
-          progress but cannot change periods, elections, pricing, or leave terms.
-        </div>
+        <p className="rounded-lg bg-muted px-4 py-2.5 text-sm text-muted-foreground">
+          You have view-only access: you can follow enrolment progress and settings
+          but not change them.
+        </p>
       )}
       <Tabs
-      value={tab}
-      onValueChange={(value) =>
-        navigate({ to: "/client-relations/enrollment", search: { tab: value } })
-      }
-    >
-      <PageTabsBar className="overflow-x-auto">
-        <TabsList className="min-w-max">
-          {ENROLLMENT_TABS.filter((t) => !readOnly || t.key !== "bulk").map((t) => (
-            <TabsTrigger key={t.key} value={t.key}>
-              {t.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </PageTabsBar>
-      <TabsContent value="windows">
-        <fieldset disabled={readOnly} className="contents">
-          <EnrollmentDashboardPage />
-        </fieldset>
-      </TabsContent>
-      <TabsContent value="elections">
-        <fieldset disabled={readOnly} className="contents">
-          <EnrollmentElectionsPage />
-        </fieldset>
-      </TabsContent>
-      <TabsContent value="flex">
-        <fieldset disabled={readOnly} className="contents">
-          <EnrollmentPriceTagTab />
-        </fieldset>
-      </TabsContent>
-      <TabsContent value="leave">
-        <fieldset disabled={readOnly} className="contents">
-          <EnrollmentLeaveTab />
-        </fieldset>
-      </TabsContent>
-      {!readOnly && (
-        <TabsContent value="bulk">
-          <EnrollmentBulkPage />
+        value={tab}
+        onValueChange={(value) =>
+          navigate({ to: "/client-relations/enrollment", search: { tab: value } })
+        }
+      >
+        <PageTabsBar className="overflow-x-auto">
+          <TabsList className="min-w-max">
+            {TABS.filter((t) => !readOnly || t.key !== "bulk").map((t) => (
+              <TabsTrigger key={t.key} value={t.key}>
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </PageTabsBar>
+        <TabsContent value="overview">
+          <PeriodOverview readOnly={readOnly} />
         </TabsContent>
-      )}
+        <TabsContent value="members">
+          <EnrollmentElectionsPage readOnly={readOnly} />
+        </TabsContent>
+        <TabsContent value="rules">
+          <EnrollmentRulesPage
+            readOnly={readOnly}
+            section={search.section ?? resolved.section}
+          />
+        </TabsContent>
+        {!readOnly && (
+          <TabsContent value="bulk">
+            <EnrollmentBulkPage />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

@@ -47,6 +47,8 @@ class EnrollmentWindowOut(_Base):
     flex_drawdown_rule: str = "full"
     allow_overdraft: bool = False
     created_by: str | None
+    # Derived: draft | scheduled | open | overdue | closed (see the model).
+    phase: str = "draft"
 
 
 class EnrollmentWindowCreate(BaseModel):
@@ -482,6 +484,61 @@ class WindowCloseSummary(BaseModel):
     deemed_declined: int
     already: int
     invalid_submitted: int = 0
+    # Of ``confirmed``: saved-but-unsent choices submitted on the member's behalf.
+    submitted_at_close: int = 0
+    # Saved-but-unsent choices that fell back to the default behavior.
+    saved_discarded: int = 0
+
+
+class WindowCloseIn(BaseModel):
+    """Body for POST /close. Omitted = the pre-existing behavior."""
+
+    # Submit every saved-but-unsent enrollment that passes the submit checks.
+    submit_saved: bool = False
+
+
+class CloseMemberNote(BaseModel):
+    enrollment_id: str
+    staff_id: str | None = None
+    employee_name: str | None = None
+    reason: str
+
+
+class WindowProgress(BaseModel):
+    """Members per enrollment status for one period."""
+
+    not_started: int
+    in_progress: int
+    submitted: int
+    confirmed: int
+    deemed: int
+    declined: int
+    total: int
+    # Active staff with no enrollment in this (open) period yet.
+    not_in_period: int
+
+
+class BulkConfirmResult(BaseModel):
+    confirmed: int
+    failed: list[CloseMemberNote]
+
+
+class WindowClosePreview(BaseModel):
+    """What closing would do, per member group — computed by running close's
+    own checks without committing them."""
+
+    total: int
+    confirmed: int
+    submitted: int
+    saved_not_sent: int
+    not_started: int
+    declined: int
+    default_behavior: str
+    invalid_submitted: list[CloseMemberNote]
+    invalid_submitted_count: int
+    saved_submittable: int
+    saved_blocked: list[CloseMemberNote]
+    saved_blocked_count: int
 
 
 class PortalEnrollmentOut(BaseModel):
@@ -891,6 +948,8 @@ class PlanOverrideUpsert(BaseModel):
     # set or clear it. Declining always clears it.
     dependant_option_ids: dict[str, str] | None = None
     effective_from: date | None = None
+    # The broker has seen that a pending enrolment election will replace this.
+    acknowledge_open_enrollment: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> Self:

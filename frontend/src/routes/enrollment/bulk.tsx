@@ -24,6 +24,7 @@
  *   timeout on a batch that actually committed, must not apply twice.
  */
 import { useMemo, useState } from "react";
+import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
 import { History, Loader2, Play, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/stores/session";
@@ -361,6 +362,10 @@ export function EnrollmentBulkPage() {
 
   return (
     <div className="space-y-4">
+      {/* Overrides a re-match stranded (the product left the member's cohort).
+          Inert, but they belong where coverage is corrected in bulk; renders
+          nothing when there are none. */}
+      <OrphanOverridesPanel policyYearId={policyYearId} />
       {/* ── 1. Who ─────────────────────────────────────────────────────── */}
       <section className="rounded-lg border border-border bg-card p-4">
         <div className="flex items-center gap-1">

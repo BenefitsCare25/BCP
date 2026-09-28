@@ -35,6 +35,9 @@ function useClientId(): string | null {
 export type WindowType = "open" | "new_hire" | "life_event";
 export type WindowStatus = "draft" | "open" | "closed";
 export type DefaultBehavior = "deemed_keep_current" | "deemed_decline";
+/** Derived by the server: an `open` period before its start is `scheduled`,
+ *  past its deadline `overdue` (members locked out, waiting to be closed). */
+export type WindowPhase = "draft" | "scheduled" | "open" | "overdue" | "closed";
 /** Where a product's flex price tag comes from: the placement slip's premium, or
  *  the manual portal matrix. Keyed per product on the window. */
 export type FlexPriceSource = "slip" | "manual";
@@ -66,6 +69,7 @@ export interface EnrollmentWindow {
    *  Off, submit/confirm reject an overdrawn enrollment (409 flex_overdrawn). */
   allow_overdraft: boolean;
   created_by: string | null;
+  phase: WindowPhase;
 }
 
 export interface WindowCreate {
@@ -91,6 +95,8 @@ export interface WindowPatch {
   name?: string;
   opens_at?: string;
   closes_at?: string;
+  default_behavior?: DefaultBehavior;
+  allow_plan_change?: boolean;
   allow_leave?: boolean;
   allow_dependant_changes?: boolean;
   member_self_service?: boolean;
@@ -107,6 +113,53 @@ export interface WindowCloseSummary {
   deemed_declined: number;
   already: number;
   invalid_submitted: number;
+  /** Of `confirmed`: saved-but-unsent choices submitted on members' behalf. */
+  submitted_at_close: number;
+  /** Saved-but-unsent choices that fell back to the default behavior. */
+  saved_discarded: number;
+}
+
+/** One named member in a close/confirm report. */
+export interface CloseMemberNote {
+  enrollment_id: string;
+  staff_id: string | null;
+  employee_name: string | null;
+  reason: string;
+}
+
+/** What Close would do, computed by running close's own checks read-only. */
+export interface WindowClosePreview {
+  total: number;
+  confirmed: number;
+  submitted: number;
+  saved_not_sent: number;
+  not_started: number;
+  declined: number;
+  default_behavior: DefaultBehavior;
+  invalid_submitted: CloseMemberNote[];
+  invalid_submitted_count: number;
+  saved_submittable: number;
+  saved_blocked: CloseMemberNote[];
+  saved_blocked_count: number;
+}
+
+export type EnrollmentStatus =
+  | "not_started"
+  | "in_progress"
+  | "submitted"
+  | "confirmed"
+  | "deemed"
+  | "declined";
+
+/** Members per status for one period, plus active staff it hasn't picked up. */
+export type WindowProgress = Record<EnrollmentStatus, number> & {
+  total: number;
+  not_in_period: number;
+};
+
+export interface BulkConfirmResult {
+  confirmed: number;
+  failed: CloseMemberNote[];
 }
 
 /** Response from opening/syncing a window — the window plus how many new
@@ -519,6 +572,8 @@ export interface ElectionIn {
 export interface EnrollmentReadinessIssue {
   code: string;
   message: string;
+  /** `blocker` stops the period opening; `warning` is the broker's call. */
+  severity: "blocker" | "warning";
   count?: number;
   products?: string[];
 }
@@ -733,6 +788,7 @@ export function useUpdateWindow() {
       api.patch<EnrollmentWindow>(`/enrollment-windows/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
       // The price-tag source decides what each plan draws from the wallet, so
       // every surface that prices coverage has to re-read.
       qc.invalidateQueries({ queryKey: ["enrollment-options"] });
@@ -757,6 +813,59 @@ export function useOpenWindow() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
       qc.invalidateQueries({ queryKey: ["enrollments"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-progress"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+    },
+  });
+}
+
+/** Readiness to open a draft period — blockers and warnings, before the click. */
+export function useWindowReadiness(windowId: string | undefined) {
+  const cid = useClientId();
+  return useQuery({
+    queryKey: ["enrollment-readiness", windowId, cid],
+    queryFn: () =>
+      api.get<EnrollmentReadiness>(`/enrollment-windows/${windowId}/readiness`),
+    enabled: !!windowId,
+  });
+}
+
+export function useWindowProgress(windowId: string | undefined) {
+  const cid = useClientId();
+  return useQuery({
+    queryKey: ["enrollment-progress", windowId, cid],
+    queryFn: () =>
+      api.get<WindowProgress>(`/enrollment-windows/${windowId}/progress`),
+    enabled: !!windowId,
+  });
+}
+
+/** What closing would do. Runs the server's checks, so only fetch it while the
+ *  close dialog is actually open. */
+export function useClosePreview(windowId: string | undefined) {
+  const cid = useClientId();
+  return useQuery({
+    queryKey: ["enrollment-close-preview", windowId, cid],
+    queryFn: () =>
+      api.get<WindowClosePreview>(`/enrollment-windows/${windowId}/close-preview`),
+    enabled: !!windowId,
+    staleTime: 0,
+    gcTime: 0,
+  });
+}
+
+export function useConfirmSubmitted() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (windowId: string) =>
+      api.post<BulkConfirmResult>(
+        `/enrollment-windows/${windowId}/confirm-submitted`,
+        {},
+      ),
+    onSuccess: () => {
+      invalidateEnrollment(qc);
+      qc.invalidateQueries({ queryKey: ["plan-overrides"] });
+      qc.invalidateQueries({ queryKey: ["underwriting"] });
     },
   });
 }
@@ -764,9 +873,14 @@ export function useOpenWindow() {
 export function useCloseWindow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) =>
-      api.post<WindowCloseSummary>(`/enrollment-windows/${id}/close`, {}),
+    mutationFn: ({ id, submitSaved }: { id: string; submitSaved: boolean }) =>
+      api.post<WindowCloseSummary>(`/enrollment-windows/${id}/close`, {
+        submit_saved: submitSaved,
+      }),
+    // The close dialog reports blocked submissions itself.
+    meta: { localErrorHandling: true },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["enrollment-progress"] });
       qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
       qc.invalidateQueries({ queryKey: ["enrollments"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
@@ -827,20 +941,6 @@ export function useFlexPricing(policyYearId: string | undefined) {
     queryKey: ["flex-pricing", policyYearId, cid],
     queryFn: () => api.get<FlexPricing>(`/policy-years/${policyYearId}/flex-pricing`),
     enabled: !!policyYearId,
-  });
-}
-
-export function useSaveFlexPricing(policyYearId: string | undefined) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (pricing: FlexPricingBag) =>
-      api.put<FlexPricing>(`/policy-years/${policyYearId}/flex-pricing`, { pricing }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["flex-pricing"] });
-      // Price tags surface on the elections options + benefit statement.
-      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-    },
   });
 }
 
@@ -909,6 +1009,7 @@ export function useEnrollmentOptions(enrollmentId: string | null) {
 function invalidateEnrollment(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["enrollment"] });
   qc.invalidateQueries({ queryKey: ["enrollments"] });
+  qc.invalidateQueries({ queryKey: ["enrollment-progress"] });
   qc.invalidateQueries({ queryKey: ["benefit-statement"] });
   qc.invalidateQueries({ queryKey: ["coverage-summary"] });
   qc.invalidateQueries({ queryKey: ["coverage-history"] });
@@ -1117,12 +1218,16 @@ export function useDeletePlanOverride() {
     mutationFn: ({
       employeeId,
       productCode,
+      acknowledgeOpenEnrollment = false,
     }: {
       employeeId: string;
       productCode: string;
+      acknowledgeOpenEnrollment?: boolean;
     }) =>
       api.delete<void>(
-        `/employees/${employeeId}/plan-overrides/${encodeURIComponent(productCode)}`,
+        `/employees/${employeeId}/plan-overrides/${encodeURIComponent(productCode)}${
+          acknowledgeOpenEnrollment ? "?acknowledge_open_enrollment=true" : ""
+        }`,
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["plan-overrides"] });
@@ -1147,20 +1252,26 @@ export function useSetPlanOverride() {
       productCode,
       planCode,
       coveredDependantIds,
+      acknowledgeOpenEnrollment = false,
     }: {
       employeeId: string;
       productCode: string;
       planCode?: string | null;
       coveredDependantIds?: string[];
+      /** Re-send after a 409 `open_enrollment_election`: the broker has seen
+       *  that the member's pending enrolment choice will replace this. */
+      acknowledgeOpenEnrollment?: boolean;
     }) =>
       api.put<PlanOverride>(
         `/employees/${employeeId}/plan-overrides/${encodeURIComponent(productCode)}`,
         {
           plan_code: planCode ?? null,
           declined: false,
+          acknowledge_open_enrollment: acknowledgeOpenEnrollment,
           ...(coveredDependantIds ? { covered_dependant_ids: coveredDependantIds } : {}),
         },
       ),
+    meta: { localErrorHandling: true },
     onSuccess: () => {
       for (const key of [
         "plan-overrides",

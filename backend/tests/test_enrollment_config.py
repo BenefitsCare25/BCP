@@ -258,3 +258,13 @@ def test_leave_policy_bad_bounds_422(client: TestClient) -> None:
         json={"min_buy_days": 5, "max_buy_days": 2},
     )
     assert res.status_code == 422
+
+
+def test_price_tags_save_without_a_draft_period(client: TestClient) -> None:
+    """Price tags are per benefit year — reaching them must not require
+    drafting a period first."""
+    saved = client.put(
+        f"/api/v1/policy-years/{PY_ID}/enrollment-pricing-config",
+        json={"pricing": {"products": {}}},
+    )
+    assert saved.status_code == 200, saved.text

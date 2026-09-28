@@ -57,7 +57,10 @@ from app.services.enrollment_elections import (
 )
 from app.services.enrollment_flex_guard import assert_within_wallet
 from app.services.enrollment_lifecycle import project_enrollment
-from app.services.enrollment_validation import assert_window_accepts_edits
+from app.services.enrollment_validation import (
+    assert_window_accepts_edits,
+    assert_window_accepts_review,
+)
 from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollments"])
@@ -229,7 +232,9 @@ def confirm_enrollment(
     window = db.get(EnrollmentWindow, enr.window_id)
     if window is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
-    assert_window_accepts_edits(window)
+    # Confirming is review, not an edit: it must keep working after the deadline,
+    # which is when brokers work through the submitted queue.
+    assert_window_accepts_review(window)
     revalidate_enrollment(db, enr)
     # Re-check the wallet at confirm: pricing/elections could have changed
     # between submit and confirm (unpriced acknowledgment made at submit is

@@ -742,3 +742,335 @@ def test_manual_override_resolves_sibling_no_cover_tier_and_clears_dependants(
             ).delete()
             s.query(Category).filter(Category.id == sibling).delete()
             s.commit()
+
+
+# ── Period lifecycle past the deadline ───────────────────────────────────────
+
+
+def _expire(wid: str) -> None:
+    """Move a window's deadline into the past while it stays `open` — the state
+    every period is in between its deadline and the broker pressing Close."""
+    from datetime import UTC, datetime, timedelta
+
+    with SessionLocal() as s:
+        s.get(EnrollmentWindow, wid).closes_at = datetime.now(UTC) - timedelta(days=1)
+        s.commit()
+
+
+def test_close_after_deadline_confirms_submitted(client: TestClient) -> None:
+    wid = _make_window(client, default_behavior="deemed_keep_current")
+    eid = _enrollment_id(client, wid, "E-1")
+    client.put(
+        f"/api/v1/enrollments/{eid}/elections",
+        json={"elections": [{"product_code": "MED", "plan_code": "GOLD"}]},
+    )
+    assert client.post(f"/api/v1/enrollments/{eid}/submit").status_code == 200
+    _expire(wid)
+    res = client.post(f"/api/v1/enrollment-windows/{wid}/close")
+    assert res.status_code == 200, res.text
+    assert res.json()["confirmed"] == 1
+    with SessionLocal() as s:
+        assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "GOLD"
+
+
+def _save_upgrade(client: TestClient, eid: str) -> None:
+    res = client.put(
+        f"/api/v1/enrollments/{eid}/elections",
+        json={"elections": [{"product_code": "MED", "plan_code": "GOLD"}]},
+    )
+    assert res.status_code == 200, res.text
+
+
+def test_confirm_after_deadline_is_review_not_edit(client: TestClient) -> None:
+    wid = _make_window(client)
+    eid = _enrollment_id(client, wid, "E-1")
+    _save_upgrade(client, eid)
+    client.post(f"/api/v1/enrollments/{eid}/submit")
+    _expire(wid)
+    assert client.get(f"/api/v1/enrollment-windows/{wid}").json()["phase"] == "overdue"
+    # Members/edits are locked out past the deadline …
+    edit = client.put(
+        f"/api/v1/enrollments/{eid}/elections",
+        json={"elections": [{"product_code": "MED", "plan_code": "SILVER"}]},
+    )
+    assert edit.status_code == 409
+    # … but the broker can still work through the submitted queue.
+    res = client.post(f"/api/v1/enrollments/{eid}/confirm")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "confirmed"
+
+
+def test_close_preview_counts_saved_but_unsent(client: TestClient) -> None:
+    wid = _make_window(client)
+    _save_upgrade(client, _enrollment_id(client, wid, "E-1"))
+    preview = client.get(f"/api/v1/enrollment-windows/{wid}/close-preview")
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["total"] == 2
+    assert body["saved_not_sent"] == 1 and body["not_started"] == 1
+    assert body["saved_submittable"] == 1 and body["saved_blocked_count"] == 0
+    # The preview is read-only: nothing moved.
+    detail = client.get(f"/api/v1/enrollments/{_enrollment_id(client, wid, 'E-1')}")
+    assert detail.json()["status"] == "in_progress"
+
+
+def test_close_discards_saved_unless_submit_saved(client: TestClient) -> None:
+    wid = _make_window(client)
+    _save_upgrade(client, _enrollment_id(client, wid, "E-1"))
+    summary = client.post(f"/api/v1/enrollment-windows/{wid}/close").json()
+    assert summary["saved_discarded"] == 1 and summary["submitted_at_close"] == 0
+    with SessionLocal() as s:
+        assert load_overrides(s, PY_ID, [EMP1]) == {}
+
+
+def test_close_with_submit_saved_projects_saved_choices(client: TestClient) -> None:
+    wid = _make_window(client)
+    _save_upgrade(client, _enrollment_id(client, wid, "E-1"))
+    _expire(wid)
+    res = client.post(
+        f"/api/v1/enrollment-windows/{wid}/close", json={"submit_saved": True}
+    )
+    assert res.status_code == 200, res.text
+    summary = res.json()
+    assert summary["submitted_at_close"] == 1 and summary["confirmed"] == 1
+    assert summary["deemed_kept"] == 1
+    with SessionLocal() as s:
+        assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "GOLD"
+
+
+def test_manual_override_warns_about_pending_election(client: TestClient) -> None:
+    wid = _make_window(client)
+    _save_upgrade(client, _enrollment_id(client, wid, "E-1"))
+    url = f"/api/v1/employees/{EMP1}/plan-overrides/MED"
+    blocked = client.put(url, json={"plan_code": "SILVER"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "open_enrollment_election"
+    ok = client.put(url, json={"plan_code": "SILVER", "acknowledge_open_enrollment": True})
+    assert ok.status_code == 200, ok.text
+    # No pending election for E-2 → no warning.
+    other = client.put(f"/api/v1/employees/{EMP2}/plan-overrides/MED", json={"plan_code": "GOLD"})
+    assert other.status_code == 200, other.text
+
+
+def test_readiness_warns_self_service_on_a_year_that_is_not_live(
+    client: TestClient,
+) -> None:
+    wid = client.post(
+        f"/api/v1/policy-years/{PY_ID}/enrollment-windows",
+        json={"name": "Draft", "opens_at": "2020-01-01T00:00:00Z",
+              "closes_at": "2035-01-01T00:00:00Z"},
+    ).json()["id"]
+    body = client.get(f"/api/v1/enrollment-windows/{wid}/readiness").json()
+    by_code = {i["code"]: i for i in body["issues"]}
+    # The fixture year is a draft and nobody has a portal account.
+    assert by_code["benefit_year_not_live"]["severity"] == "warning"
+    assert by_code["portal_access_incomplete"]["severity"] == "warning"
+    # Warnings are the broker's call — they never stop the period opening.
+    assert body["ready"] is True
+    assert client.post(f"/api/v1/enrollment-windows/{wid}/open").status_code == 200
+
+
+def test_roster_wipe_guard_counts_untouched_open_period_members(
+    client: TestClient,
+) -> None:
+    _make_window(client)  # both members enrolled, neither has started
+    res = client.delete(f"/api/v1/employees?policy_year_id={PY_ID}")
+    assert res.status_code == 409, res.text
+    assert res.json()["detail"]["open_period_members_at_risk"] == 2
+
+
+def test_sync_open_windows_enrols_staff_added_after_open(client: TestClient) -> None:
+    from app.services.enrollment_lifecycle import sync_open_windows
+
+    wid = _make_window(client)
+    new_id = "00000000-0000-0000-0000-00000000a0e9"
+    with SessionLocal() as s:
+        s.add(Employee(
+            id=new_id, client_id=CLIENT_ID, policy_year_id=PY_ID,
+            staff_id="E-9", employee_name="Late joiner",
+            attribute_values={}, derived_attribute_values={},
+            matched_categories=[{"category_id": CAT_ID, "product_code": "MED",
+                                 "method": "rule", "confidence": 1.0}],
+            source="csv_import", status="active",
+        ))
+        s.commit()
+    try:
+        with SessionLocal() as s:
+            assert sync_open_windows(s, _user(), PY_ID, trigger="test") == 1
+            assert sync_open_windows(s, _user(), PY_ID, trigger="test") == 0
+            s.commit()
+        roster = client.get(f"/api/v1/enrollment-windows/{wid}/enrollments").json()
+        assert roster["total"] == 3
+    finally:
+        with SessionLocal() as s:
+            s.query(Enrollment).filter(Enrollment.employee_id == new_id).delete()
+            s.query(Employee).filter(Employee.id == new_id).delete()
+            s.commit()
+
+
+def test_progress_counts_members_by_status(client: TestClient) -> None:
+    wid = _make_window(client)
+    _save_upgrade(client, _enrollment_id(client, wid, "E-1"))
+    body = client.get(f"/api/v1/enrollment-windows/{wid}/progress").json()
+    assert body["total"] == 2
+    assert body["in_progress"] == 1 and body["not_started"] == 1
+    assert body["not_in_period"] == 0
+
+
+def test_confirm_submitted_confirms_valid_and_reports_the_rest(
+    client: TestClient,
+) -> None:
+    wid = _make_window(client)
+    e1 = _enrollment_id(client, wid, "E-1")
+    e2 = _enrollment_id(client, wid, "E-2")
+    for eid in (e1, e2):
+        _save_upgrade(client, eid)
+        assert client.post(f"/api/v1/enrollments/{eid}/submit").status_code == 200
+    # E-2's elected plan disappears from the product after submit.
+    with SessionLocal() as s:
+        el = s.query(EnrollmentElection).filter_by(enrollment_id=e2).one()
+        el.elected_plan_code = "PLATINUM"
+        s.commit()
+    _expire(wid)  # review keeps working past the deadline
+    res = client.post(f"/api/v1/enrollment-windows/{wid}/confirm-submitted")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["confirmed"] == 1
+    assert [f["staff_id"] for f in body["failed"]] == ["E-2"]
+    assert client.get(f"/api/v1/enrollments/{e1}").json()["status"] == "confirmed"
+    assert client.get(f"/api/v1/enrollments/{e2}").json()["status"] == "submitted"
+
+
+def test_option_premiums_are_one_members_not_the_groups() -> None:
+    from app.schemas.api import PlanFinancials
+    from app.services.enrollment_elections import _per_member_financials
+
+    flat = PlanFinancials(
+        num_employees=None, basis=None, sum_insured=None, premium_rate=378.0,
+        annual_premium=186_732.0, rate_basis="flat", rate_tiers=None,
+    )
+    assert _per_member_financials(flat).annual_premium == 378.0
+    tiered = PlanFinancials(
+        num_employees=252, basis=None, sum_insured=None, premium_rate=None,
+        annual_premium=262_332.0, rate_basis="tiered",
+        rate_tiers={"EO": {"rate": 1041.0, "premium": 0.0}},
+    )
+    out = _per_member_financials(tiered)
+    assert out.annual_premium == 1041.0 and out.num_employees is None
+    # A tier the rate table can't price shows no premium, never the group's.
+    unpriced = tiered.model_copy(update={"rate_tiers": None})
+    assert _per_member_financials(unpriced).annual_premium is None
+    life = PlanFinancials(
+        num_employees=None, basis="50000", sum_insured=50_000.0, premium_rate=3.06,
+        annual_premium=153.0, rate_basis="per_1000_si", rate_tiers=None,
+    )
+    assert _per_member_financials(life).annual_premium == 153.0
+
+
+def test_extending_an_overdue_deadline_reopens_the_period(client: TestClient) -> None:
+    wid = _make_window(client)
+    _expire(wid)
+    res = client.patch(
+        f"/api/v1/enrollment-windows/{wid}", json={"closes_at": "2035-06-30T09:00:00Z"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["phase"] == "open"
+    _save_upgrade(client, _enrollment_id(client, wid, "E-1"))  # edits work again
+
+
+def test_sync_skips_a_period_past_its_deadline(client: TestClient) -> None:
+    """A new hire added to an overdue period could never choose, and under
+    deemed-decline would lose voluntary cover at close unasked."""
+    from app.services.enrollment_lifecycle import sync_open_windows
+
+    wid = _make_window(client, default_behavior="deemed_decline")
+    _expire(wid)
+    new_id = "00000000-0000-0000-0000-00000000a0e8"
+    with SessionLocal() as s:
+        s.add(Employee(
+            id=new_id, client_id=CLIENT_ID, policy_year_id=PY_ID,
+            staff_id="E-8", employee_name="Late hire",
+            attribute_values={}, derived_attribute_values={},
+            matched_categories=[{"category_id": CAT_ID, "product_code": "MED",
+                                 "method": "rule", "confidence": 1.0}],
+            source="csv_import", status="active",
+        ))
+        s.commit()
+    try:
+        with SessionLocal() as s:
+            assert sync_open_windows(s, _user(), PY_ID, trigger="test") == 0
+            s.commit()
+        body = client.get(f"/api/v1/enrollment-windows/{wid}/progress").json()
+        assert body["not_in_period"] == 1  # visible to the broker, not silently added
+    finally:
+        with SessionLocal() as s:
+            s.query(Employee).filter(Employee.id == new_id).delete()
+            s.commit()
+
+
+def test_confirm_submitted_isolates_a_projection_failure(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services import enrollment_lifecycle
+
+    wid = _make_window(client)
+    e1 = _enrollment_id(client, wid, "E-1")
+    e2 = _enrollment_id(client, wid, "E-2")
+    for eid in (e1, e2):
+        _save_upgrade(client, eid)
+        client.post(f"/api/v1/enrollments/{eid}/submit")
+    real = enrollment_lifecycle.project_enrollment
+
+    def flaky(db, enr, user):  # type: ignore[no-untyped-def]
+        if enr.id == e2:
+            raise RuntimeError("boom")
+        return real(db, enr, user)
+
+    monkeypatch.setattr(enrollment_lifecycle, "project_enrollment", flaky)
+    res = client.post(f"/api/v1/enrollment-windows/{wid}/confirm-submitted")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["confirmed"] == 1
+    assert [f["staff_id"] for f in body["failed"]] == ["E-2"]
+    assert client.get(f"/api/v1/enrollments/{e1}").json()["status"] == "confirmed"
+    assert client.get(f"/api/v1/enrollments/{e2}").json()["status"] == "submitted"
+
+
+def test_manual_override_warns_when_close_will_decline(client: TestClient) -> None:
+    url = f"/api/v1/employees/{EMP1}/plan-overrides/MED"
+    # Untouched member in a deemed-decline period: close declines MED.
+    _make_window(client, default_behavior="deemed_decline")
+    blocked = client.put(url, json={"plan_code": "GOLD"})
+    assert blocked.status_code == 409, blocked.text
+    assert "declined" in blocked.json()["detail"]["message"]
+    assert client.put(
+        url, json={"plan_code": "GOLD", "acknowledge_open_enrollment": True}
+    ).status_code == 200
+
+
+def test_manual_override_warns_when_member_declined_all(client: TestClient) -> None:
+    wid = _make_window(client, default_behavior="deemed_keep_current")
+    eid = _enrollment_id(client, wid, "E-1")
+    with SessionLocal() as s:
+        s.get(Enrollment, eid).status = "declined"
+        s.commit()
+    res = client.put(f"/api/v1/employees/{EMP1}/plan-overrides/MED", json={"plan_code": "GOLD"})
+    assert res.status_code == 409
+    assert "decline all" in res.json()["detail"]["message"]
+    # An untouched member under keep-current is NOT warned.
+    other = client.put(f"/api/v1/employees/{EMP2}/plan-overrides/MED", json={"plan_code": "GOLD"})
+    assert other.status_code == 200, other.text
+
+
+def test_close_declines_a_declined_member_even_under_keep_current(
+    client: TestClient,
+) -> None:
+    wid = _make_window(client, default_behavior="deemed_keep_current")
+    eid = _enrollment_id(client, wid, "E-1")
+    with SessionLocal() as s:
+        s.get(Enrollment, eid).status = "declined"
+        s.commit()
+    preview = client.get(f"/api/v1/enrollment-windows/{wid}/close-preview").json()
+    assert preview["declined"] == 1 and preview["not_started"] == 1
+    summary = client.post(f"/api/v1/enrollment-windows/{wid}/close").json()
+    assert summary["deemed_declined"] == 1 and summary["deemed_kept"] == 1

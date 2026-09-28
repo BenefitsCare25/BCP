@@ -72,6 +72,7 @@ from app.services.enrollment_validation import (
     assert_product_in_scope,
     assert_valid_dependant_options,
     assert_window_accepts_edits,
+    assert_window_accepts_review,
     classify_action,
     resolve_electable_tier,
     validate_leave,
@@ -109,6 +110,7 @@ from app.services.leave_pricing_resolver import (
     leave_rate_for,
     leave_sell_eligible,
 )
+from app.services.member_premium import member_premium
 from app.services.plan_hydration import apply_gst_to_financials
 
 
@@ -352,6 +354,26 @@ def enrollment_detail(db: Session, enr: Enrollment) -> EnrollmentOut:
     )
 
 
+def _per_member_financials(fin: PlanFinancials) -> PlanFinancials:
+    """One member's figures for a flat or tiered tier.
+
+    Flat and tiered slips carry the GROUP's annual premium, so the election card
+    printed "Annual premium $186,732" on one member's GP plan beside a rate of
+    378. Reduce it to the member alone (employee-only: dependants are priced by
+    their own election) through the same ``member_premium`` the benefit
+    statement uses; when the rate table can't price them, show no premium
+    rather than the group's. Sum-insured tiers are already per member."""
+    if fin.rate_basis not in ("flat", "tiered"):
+        return fin
+    priced = member_premium(fin)
+    return fin.model_copy(
+        update={
+            "annual_premium": priced.amount if priced is not None else None,
+            "num_employees": None,
+        }
+    )
+
+
 def build_enrollment_options(
     db: Session,
     employee: Employee | None,
@@ -447,7 +469,7 @@ def build_enrollment_options(
                     # premium.
                     financials=(
                         apply_gst_to_financials(
-                            t.financials,
+                            _per_member_financials(t.financials),
                             product_premium_multiplier(pricing, ts.product_id),
                         )
                         if t.financials is not None
@@ -673,6 +695,16 @@ def _prepare_enrollment_edit(enr: Enrollment) -> None:
         enr.confirmed_by = None
 
 
+def _assert_window_for(window: EnrollmentWindow, prepare_edit: bool) -> None:
+    """An edit needs an in-date period; a re-check of already-saved choices
+    (``prepare_edit=False`` — only ``revalidate_enrollment``) is broker review and
+    must still run after the deadline, or no period could be closed on time."""
+    if prepare_edit:
+        assert_window_accepts_edits(window)
+    else:
+        assert_window_accepts_review(window)
+
+
 def lock_enrollment(db: Session, enr: Enrollment) -> Enrollment:
     """Serialize mutations to one member's enrollment lifecycle."""
     return db.execute(
@@ -693,7 +725,7 @@ def apply_elections(
     """Validate + upsert plan elections onto an enrollment. Flushes but does
     NOT audit or commit — the caller owns actor attribution."""
     window = _require_window(db, enr)
-    assert_window_accepts_edits(window)
+    _assert_window_for(window, prepare_edit)
     if prepare_edit:
         _prepare_enrollment_edit(enr)
     if not window.allow_plan_change:
@@ -913,7 +945,7 @@ def apply_leave(
     """Validate + upsert the buy/sell-leave election. Flushes but does NOT
     audit or commit."""
     window = _require_window(db, enr)
-    assert_window_accepts_edits(window)
+    _assert_window_for(window, prepare_edit)
     if prepare_edit:
         _prepare_enrollment_edit(enr)
     if not window.allow_leave:

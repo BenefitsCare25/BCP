@@ -6,17 +6,70 @@
  * period or a bulk change stores it: a coverage override on the product, so it
  * appears in Coverage changes and reverts from there.
  */
+import { useState } from "react";
 import { Loader2, UserPlus, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSetPlanOverride } from "@/api/enrollment";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatError } from "@/lib/errors";
+import { ConflictDetailError, formatError } from "@/lib/errors";
 import type { CoverageLine, DependantSummary } from "@/types";
 
 function depLabel(d: DependantSummary): string {
   if (d.name && d.relationship) return `${d.name} (${d.relationship})`;
   return d.name ?? d.relationship ?? "Dependant";
+}
+
+type OverrideBody = { planCode?: string | null; coveredDependantIds?: string[] };
+type Pending = { body: OverrideBody; done: string; reason: string };
+
+/** Save an override; when an open enrolment period would overwrite it (409
+ * `open_enrollment_election`), hold it until the broker accepts that — the
+ * server's message says which of its three reasons applies — then re-send it
+ * acknowledged. */
+function useAcknowledgedOverride(productCode: string, employeeId: string | undefined) {
+  const setOverride = useSetPlanOverride();
+  const [pending, setPending] = useState<Pending | null>(null);
+
+  const save = (body: OverrideBody, done: string, acknowledge = false) => {
+    if (!employeeId) return;
+    setOverride.mutate(
+      { employeeId, productCode, ...body, acknowledgeOpenEnrollment: acknowledge },
+      {
+        onSuccess: () => {
+          setPending(null);
+          toast.success(done);
+        },
+        onError: (err) => {
+          if (err instanceof ConflictDetailError && err.detail.code === "open_enrollment_election") {
+            const reason = typeof err.detail.message === "string" ? err.detail.message : "";
+            setPending({ body, done, reason });
+            return;
+          }
+          setPending(null);
+          toast.error(formatError(err));
+        },
+      },
+    );
+  };
+
+  const dialog = (
+    <AlertDialog
+      open={pending !== null}
+      onOpenChange={(open) => !open && setPending(null)}
+      title="The open enrolment period will replace this"
+      description={`${pending?.reason ?? ""} Make the change anyway, or change their selection on the Enrollment page instead.`}
+      confirmLabel="Change anyway"
+      confirmVariant="default"
+      tone="info"
+      loading={setOverride.isPending}
+      onConfirm={() => {
+        if (pending) save(pending.body, pending.done, true);
+      }}
+    />
+  );
+  return { save, isPending: setOverride.isPending, dialog };
 }
 
 interface Props {
@@ -27,26 +80,11 @@ interface Props {
 }
 
 export function EnrolmentControls({ line, employeeId, canEdit = false }: Props) {
-  const setOverride = useSetPlanOverride();
+  const { save, isPending, dialog } = useAcknowledgedOverride(line.product_code, employeeId);
   const editable = canEdit && Boolean(employeeId);
   const eligibleOnly = line.enrolment === "eligible";
   const covered = line.covered_dependants;
   const eligible = line.eligible_dependants ?? [];
-  const voluntaryDeps = line.dependant_cover === "voluntary";
-
-  const save = (
-    body: { planCode?: string | null; coveredDependantIds?: string[] },
-    done: string,
-  ) => {
-    if (!employeeId) return;
-    setOverride.mutate(
-      { employeeId, productCode: line.product_code, ...body },
-      {
-        onSuccess: () => toast.success(done),
-        onError: (err) => toast.error(formatError(err)),
-      },
-    );
-  };
 
   // A plan the member elected must be resent (the write replaces it); a
   // cohort-default plan is sent as null so the member keeps following the
@@ -72,6 +110,7 @@ export function EnrolmentControls({ line, employeeId, canEdit = false }: Props) 
 
   return (
     <div className="flex flex-col gap-2 text-xs">
+      {dialog}
       {eligibleOnly && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2">
           <Badge variant="outline">Eligible · not enrolled</Badge>
@@ -83,10 +122,10 @@ export function EnrolmentControls({ line, employeeId, canEdit = false }: Props) 
               size="sm"
               variant="outline"
               className="ml-auto"
-              disabled={setOverride.isPending}
+              disabled={isPending}
               onClick={enrolMember}
             >
-              {setOverride.isPending ? (
+              {isPending ? (
                 <Loader2 className="size-3.5 animate-spin" aria-hidden />
               ) : (
                 <UserPlus className="size-3.5" aria-hidden />
@@ -96,64 +135,102 @@ export function EnrolmentControls({ line, employeeId, canEdit = false }: Props) 
           )}
         </div>
       )}
+      <CoveredDependants
+        line={line}
+        editable={editable && line.dependant_cover === "voluntary"}
+        busy={isPending}
+        onRemove={(d) =>
+          setDependants(
+            covered.filter((c) => c.id !== d.id).map((c) => c.id),
+            `${d.name ?? "Dependant"} removed from ${line.product_code}`,
+          )
+        }
+      />
+      <EligibleDependants
+        dependants={eligible}
+        editable={editable && !eligibleOnly}
+        busy={isPending}
+        onEnrol={(d) =>
+          setDependants(
+            [...covered.map((c) => c.id), d.id],
+            `${d.name ?? "Dependant"} enrolled in ${line.product_code}`,
+          )
+        }
+      />
+    </div>
+  );
+}
 
-      {covered.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
-          <Users className="size-3.5 shrink-0" aria-hidden />
-          <span>Also covers</span>
-          {covered.map((d) => (
-            <Badge key={d.id} variant="outline" className="gap-1">
-              {depLabel(d)}
-              {editable && voluntaryDeps && (
-                <button
-                  type="button"
-                  aria-label={`Remove ${d.name ?? "dependant"} from ${line.product_code}`}
-                  disabled={setOverride.isPending}
-                  onClick={() =>
-                    setDependants(
-                      covered.filter((c) => c.id !== d.id).map((c) => c.id),
-                      `${d.name ?? "Dependant"} removed from ${line.product_code}`,
-                    )
-                  }
-                  className="rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                >
-                  <X className="size-3" aria-hidden />
-                </button>
-              )}
-            </Badge>
-          ))}
-        </div>
-      )}
-
-      {eligible.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
-          <Users className="size-3.5 shrink-0" aria-hidden />
-          <span>Eligible, not enrolled</span>
-          {eligible.map((d) => (
-            <span
-              key={d.id}
-              className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-foreground/80"
+function CoveredDependants({
+  line,
+  editable,
+  busy,
+  onRemove,
+}: {
+  line: CoverageLine;
+  editable: boolean;
+  busy: boolean;
+  onRemove: (d: DependantSummary) => void;
+}) {
+  if (!line.covered_dependants.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+      <Users className="size-3.5 shrink-0" aria-hidden />
+      <span>Also covers</span>
+      {line.covered_dependants.map((d) => (
+        <Badge key={d.id} variant="outline" className="gap-1">
+          {depLabel(d)}
+          {editable && (
+            <button
+              type="button"
+              aria-label={`Remove ${d.name ?? "dependant"} from ${line.product_code}`}
+              disabled={busy}
+              onClick={() => onRemove(d)}
+              className="rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
-              {depLabel(d)}
-              {editable && !eligibleOnly && (
-                <button
-                  type="button"
-                  disabled={setOverride.isPending}
-                  onClick={() =>
-                    setDependants(
-                      [...covered.map((c) => c.id), d.id],
-                      `${d.name ?? "Dependant"} enrolled in ${line.product_code}`,
-                    )
-                  }
-                  className="rounded px-1 font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                >
-                  Enrol
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-      )}
+              <X className="size-3" aria-hidden />
+            </button>
+          )}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function EligibleDependants({
+  dependants,
+  editable,
+  busy,
+  onEnrol,
+}: {
+  dependants: DependantSummary[];
+  editable: boolean;
+  busy: boolean;
+  onEnrol: (d: DependantSummary) => void;
+}) {
+  if (!dependants.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+      <Users className="size-3.5 shrink-0" aria-hidden />
+      <span>Eligible, not enrolled</span>
+      {dependants.map((d) => (
+        <span
+          key={d.id}
+          className="inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-foreground/80"
+        >
+          {depLabel(d)}
+          {editable && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onEnrol(d)}
+              className="rounded px-1 font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              Enrol
+            </button>
+          )}
+        </span>
+      ))}
     </div>
   );
 }

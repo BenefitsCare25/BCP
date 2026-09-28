@@ -12,7 +12,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Category, Employee, FlexScheme, MemberAccount, Product
+from app.models import (
+    Category,
+    Employee,
+    FlexScheme,
+    MemberAccount,
+    Product,
+)
 from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.enrollment_window import EnrollmentWindow, FlexDrawdownRule
@@ -34,8 +40,11 @@ def _issue(
     *,
     count: int | None = None,
     products: set[str] | list[str] | None = None,
+    severity: str = "blocker",
 ) -> dict[str, Any]:
-    out: dict[str, Any] = {"code": code, "message": message}
+    # ``blocker`` stops the period opening; ``warning`` is shown to the broker
+    # before they open it but is theirs to accept.
+    out: dict[str, Any] = {"code": code, "message": message, "severity": severity}
     if count is not None:
         out["count"] = count
     if products:
@@ -65,10 +74,25 @@ def enrollment_readiness_issues(
         if isinstance(window.product_scope, list)
         else None
     )
+    # ``product_scope`` holds product CODES everywhere else (close's deemed
+    # decline, the elections panel); accept ids too so either spelling scopes.
+    scope_codes = (
+        dict(
+            db.execute(
+                select(Product.id, Product.code).where(
+                    Product.id.in_({c.product_id for c in all_categories})
+                )
+            ).all()
+        )
+        if requested_scope is not None
+        else {}
+    )
     categories = [
         category
         for category in all_categories
-        if requested_scope is None or category.product_id in requested_scope
+        if requested_scope is None
+        or category.product_id in requested_scope
+        or scope_codes.get(category.product_id) in requested_scope
     ]
     product_ids = {
         category.product_id for category in categories if category.product_id is not None
@@ -174,9 +198,6 @@ def enrollment_readiness_issues(
             )
         )
 
-    if not bool(window.uses_flex):
-        return issues
-
     if window.member_self_service:
         accounts = list(
             db.scalars(
@@ -207,8 +228,31 @@ def enrollment_readiness_issues(
                     "portal_access_incomplete",
                     "Some active employees have no usable portal account or delivered invite.",
                     count=inaccessible,
+                    # A Flex member MUST choose (their wallet is otherwise unspent);
+                    # without Flex an unreached member simply keeps their plan.
+                    severity="blocker" if window.uses_flex else "warning",
                 )
             )
+
+    if window.member_self_service:
+        # The portal's own definition of "the year members see", not a status
+        # check: whatever `resolve_member_employee` reads is what must match.
+        from app.core.portal_auth import active_policy_year
+
+        live = active_policy_year(db, window.client_id)
+        if live is None or live.id != window.policy_year_id:
+            issues.append(
+                _issue(
+                    "benefit_year_not_live",
+                    "Members only see the live benefit year in the portal, and this "
+                    "one is not live — nobody will see this period until it is made "
+                    "current. Make it current, or run the period broker-managed.",
+                    severity="warning",
+                )
+            )
+
+    if not bool(window.uses_flex):
+        return issues
 
     scheme = db.scalar(
         select(FlexScheme).where(FlexScheme.policy_year_id == window.policy_year_id)
@@ -286,3 +330,8 @@ def enrollment_readiness_issues(
             )
         )
     return issues
+
+
+def blocking_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The issues that stop a period opening (warnings are the broker's call)."""
+    return [i for i in issues if i.get("severity", "blocker") == "blocker"]
