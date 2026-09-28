@@ -82,3 +82,12 @@ backend/var/
 # just never tracked. (CLAUDE.md is already excluded by the global gitignore.)
 *.md
 !docs/PRODUCTION_RESILIENCE_RUNBOOK.md
+
+# Versioned AI governance handoff: source documents and advertised downloads.
+# Keep the general local-Markdown policy; only these reviewed files are shared.
+!docs/AI_COMPLIANCE_READINESS_2026-09-28.md
+!docs/AI_GOVERNANCE_IMPLEMENTATION_PLAN.md
+!docs/AI_GOVERNANCE_UX_DESIGN.md
+!output/ai-governance-design-2026-09-28/implementation-plan.md
+!output/ai-governance-design-2026-09-28/readiness-assessment.md
+!output/ai-governance-design-2026-09-28/ux-specification.md

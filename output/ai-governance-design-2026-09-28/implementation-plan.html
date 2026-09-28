@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Implementation plan · Inspro design review</title><link rel="icon" href="data:,"><link rel="stylesheet" href="review.css"></head>
+<body><a class="skip-link" href="#document">Skip to document</a>
+<header class="topbar"><a class="brand" href="index.html" aria-label="Inspro design review home"><span class="brand-mark" aria-hidden="true">i</span><strong>INSPRO</strong><span class="brand-divider"></span><span>Design review</span></a><a class="button compact" href="Inspro-AI-Governance-Design.pdf" download>Download design pack ↓</a></header>
+<main class="document-page"><nav class="document-toolbar" aria-label="Document navigation"><a href="index.html">← Back to annotated screens</a><a class="button" href="implementation-plan.md" download>Download Markdown ↓</a></nav>
+<p class="document-meta">28 September 2026 · Implementation plan · Local review copy</p>
+<article class="document-content" id="document" tabindex="-1"><h1>AI governance implementation plan</h1>
+<p>Status: proposed implementation and design handoff, 28 September 2026.
+Basis: <a href="readiness-assessment.html">readiness assessment</a>.
+Companion: <a href="ux-specification.html">UI/UX specification</a>.</p>
+<h2>Outcome and boundaries</h2>
+<p>Make every active AI use attributable to an owner, assessable against evidence, and subject to effective human oversight. The first release should improve real claim handling while establishing the records needed for an AI management system.</p>
+<p>The owner confirmed no EU customers, use or affected population. Record that fact and a review trigger; EU-specific conformity workflows are outside the initial release. ISO certification remains a later organizational assessment, never a status inferred from software setup.</p>
+<p>This document specifies future work. It does not approve policies, designate real officers, certify the platform or implement production changes. Mock records and names in designs are synthetic.</p>
+<p>The initial users are:</p>
+<ul>
+<li>Platform operator: owns the shared AI services, validation and supplier evidence.</li>
+<li>Broker firm administrator: owns that firm's deployment, staff readiness and actions.</li>
+<li>Authorized claims assessor: checks evidence, explains outcomes and handles review requests.</li>
+<li>Member: understands AI assistance, corrects extracted information and requests reconsideration.</li>
+</ul>
+<p>Reuse the broker's existing Inter typography, warm near-white ground, compact tables, semantic status colors and existing controls. Member changes inherit the current portal components. No platform-wide visual redesign is needed.</p>
+<h2>Delivery sequence</h2>
+<p>Estimates below are planning ranges in engineering person-days, not delivery commitments. They assume the existing stack and exclude time for business adjudication, supplier responses and external audit. Re-estimate after technical design; one engineer may work sequentially while business owners prepare evidence in parallel.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable reference table"><table>
+<thead>
+<tr>
+<th>Milestone</th>
+<th>Scope</th>
+<th>Indicative effort</th>
+<th>Exit evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>M0: accountability</td>
+<td>Appoint owner; define scope, policy, use inventory, initial risk/impact assessment and supplier evidence requests.</td>
+<td>Business-led; start immediately</td>
+<td>Approved scope/policy and named owners; known gaps recorded rather than marked complete.</td>
+</tr>
+<tr>
+<td>M1: claim safeguards</td>
+<td>Structured decision reasons, public/internal separation, disclosure, review provenance and a manual-review operating procedure.</td>
+<td>6–10 engineering days</td>
+<td>No unexplained adverse decision through supported APIs; no internal note exposed; historical AI inputs/versions linked to the human decision.</td>
+</tr>
+<tr>
+<td>M2: AI oversight and validation</td>
+<td>Firm/platform oversight views, versioned evidence register, approved release manifests, held-out evaluation and model-change gates.</td>
+<td>10–16 engineering days</td>
+<td>One use has a complete, reviewed evidence chain; unvalidated configurations cannot silently become approved releases.</td>
+</tr>
+<tr>
+<td>M3: continuous operation</td>
+<td>Structured reconsideration requests, sampled outcome monitoring, staff evidence, incidents/actions and scoped evidence exports.</td>
+<td>6–10 engineering days</td>
+<td>One end-to-end reconsideration, one monitored review period and one corrective action demonstrated with synthetic/approved data.</td>
+</tr>
+<tr>
+<td>M4: audit readiness</td>
+<td>Independent internal audit, management review and closure of findings; optional external certification engagement.</td>
+<td>Organizational schedule</td>
+<td>Audit and management-review evidence assessed against the complete licensed standard.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first build should be M1, while M0 is completed by the accountable people. A dashboard does not replace those business decisions.</p>
+<h2>M0: minimum governance pack</h2>
+<p>Use a controlled document repository initially. A versioned document and register are sufficient; M2 can index their metadata and approvals without building a general document editor.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable reference table"><table>
+<thead>
+<tr>
+<th>Record</th>
+<th>Minimum content</th>
+<th>Business decision required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Scope and responsibility</td>
+<td>Legal entity; systems covered; customers/regions; accountable sponsor; operational, engineering, claims and privacy owners.</td>
+<td>Name the actual owners and authorize their responsibilities.</td>
+</tr>
+<tr>
+<td>AI policy</td>
+<td>Permitted uses; human decision boundaries; sensitive-data handling; model-change approval; incident escalation; review cadence.</td>
+<td>Approve the policy and residual-risk authority.</td>
+</tr>
+<tr>
+<td>AI use register</td>
+<td>Stable ID; intended purpose; provider/model; affected people; data categories; owner; deployed release; manual alternative.</td>
+<td>Confirm intended uses and forbidden extensions.</td>
+</tr>
+<tr>
+<td>Risk/impact register</td>
+<td>Concrete harm scenario; affected parties; impact and likelihood rationale; safeguards; remaining risk; owner; due date; evidence.</td>
+<td>Accept remaining risk, or require treatment before use.</td>
+</tr>
+<tr>
+<td>Data and supplier record</td>
+<td>What leaves Inspro; where it goes; processing purpose; access; supplier retention/training terms; local retention; deletion and backup behavior.</td>
+<td>Verify actual agreements and approve the data rules.</td>
+</tr>
+<tr>
+<td>Control applicability</td>
+<td>Applicable controls, rationale, implementation evidence and justified exclusions.</td>
+<td>Approve the control selection after reviewing the licensed ISO standard.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Seed the inventory from the inspected code: placement-slip extraction, benefit/eligibility rule assistance, roster/schema assistance, member claim intake and claim review. Underwriting administration is a boundary to verify, not automatically an AI risk-scoring feature.</p>
+<p>Initial risk scenarios: wrong extracted amount; wrong benefit limit/rate; incorrect eligibility rule; unsupported AI comparison; prompt instructions hidden in a document; poorer performance on particular document formats/languages; excessive disclosure of medical data; assessor over-reliance; a model update invalidating thresholds; an incorrect decision without a useful remedy.</p>
+<h2>M1: operational safeguards</h2>
+<h3>Decision explanations</h3>
+<p>Extend the existing Claims Review decision form and endpoint. Continue using the existing claim lifecycle and permissions.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable reference table"><table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Required explanation</th>
+<th>Audience</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Approve the full supported amount without a material exception</td>
+<td>No mandatory free-text essay; retain evidence and actor.</td>
+<td>Existing member confirmation.</td>
+</tr>
+<tr>
+<td>Approve less than the claimed amount in policy currency</td>
+<td>Reason category, member explanation and relevant supporting reference.</td>
+<td>Member explanation is visible to the member.</td>
+</tr>
+<tr>
+<td>Reject</td>
+<td>Reason category, member explanation and relevant supporting reference.</td>
+<td>Member explanation is visible to the member.</td>
+</tr>
+<tr>
+<td>Request information</td>
+<td>Specific missing item and what the member should do next.</td>
+<td>Member-visible; preserve existing required-note behavior.</td>
+</tr>
+<tr>
+<td>Override a material AI/system concern or exceed an allowed amount/limit</td>
+<td>Internal rationale and supporting reference in addition to any member explanation required above.</td>
+<td>Broker-only rationale; never copied into the member thread.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Use policy-currency values for reduction comparisons. Require a valid conversion before a comparison or decision; round using the existing decimal-money rules. Keep existing limit/visit acknowledgements. Distinguish an advisory AI flag from a hard business constraint; this change does not introduce a way around existing hard constraints.</p>
+<p>Reason categories are proposed as: policy limit, excluded expense, eligibility/date issue, duplicate claim, missing evidence, calculation correction, insurer decision and other. “Other” needs specific text. An AI flag alone is not a sufficient member-facing reason. Templates may assist the assessor but must be reviewed before submission.</p>
+<p>The server determines which fields are required. Support idempotency and revision checks; reject stale decisions with a recoverable conflict. Pin the exact AI review or an explicit “manual decision; no completed AI review” marker. Do not treat an unchecked box or a typed word as proof that an assessor inspected evidence.</p>
+<p>Legacy decisions remain readable as “Explanation not recorded in the earlier workflow.” Do not fabricate historical reasons or backfill them from AI. Existing <code>decision_notes</code> remain member-visible according to their established behavior; add a separate field/record for internal rationale rather than silently changing that field's audience.</p>
+<h3>Intake disclosure and manual fallback</h3>
+<p>Before the first document extraction request, show concise disclosure beside the upload control: AI reads the documents to suggest claim details; the member must check them; a person makes the claim decision. Provide a clear “Enter details myself” route.</p>
+<p>That alternative bypasses AI autofill only. Required supporting documents remain required, and submitted documents may still undergo the disclosed AI-assisted review. Do not imply an AI-processing opt-out unless a complete no-AI workflow is deliberately implemented.</p>
+<p>The disclosure is information, not a consent checkbox or a substitute for an appropriate processing basis. Link the relevant privacy information. Record the disclosure version without storing unnecessary device or personal data.</p>
+<p>Preserve fallback when extraction fails. Never strand a claim because governance metadata is incomplete. A suspended or unavailable AI service must route claims to manual review; distinguish this from automatically permitting an unapproved model to run.</p>
+<h3>Review provenance</h3>
+<p>Capture a manifest at enqueue time and maintain stage-level execution metadata. Include provider, exact available model identifier, prompt version/hash, configuration fingerprint, threshold-profile hash, application build ID, input-document references/hashes, claim revision and stage timestamps. Retain the versions actually used, including cache-hit provenance.</p>
+<p>At execution, verify that the approved configuration still matches the manifest. Resume with the pinned compatible configuration or route to manual handling; never silently substitute a different model after a queue delay. Multiple stage calls may have separate metadata; a single last-seen model name is insufficient.</p>
+<p>Keep the actual review result, reference the manifest from each decision, and retain authorized access to the evidence. This supports reconstruction; it does not promise that a nondeterministic external model can reproduce an identical output.</p>
+<h3>M1 acceptance checks</h3>
+<ul>
+<li>API and UI reject an unexplained rejection/reduction; whitespace alone does not pass.</li>
+<li>Internal rationale is absent from every member/HR serializer, notification, message and ordinary member export.</li>
+<li>Full approval without an exception remains fast; no unnecessary confirmation dialogue is added.</li>
+<li>A concurrent member amendment produces a conflict before saving the decision or notification; input is preserved for review.</li>
+<li>Double submission records one decision and one member notification.</li>
+<li>Manual decisions work during provider outage and identify that no completed AI review was used.</li>
+<li>AI disclosure precedes the extraction request for both single- and multiple-invoice paths.</li>
+<li>No live provider request is necessary for these behavior tests.</li>
+</ul>
+<h2>M2: oversight workspace and approved releases</h2>
+<h3>Navigation and scope</h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable reference table"><table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Proposed route</th>
+<th>Scope and access</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Firm AI oversight</td>
+<td><code>/firm/ai-oversight</code></td>
+<td>New entry in the existing firm-wide top-bar tools. Broker administrator manages their own firm's records. Ordinary broker viewers see only a deliberately limited summary if authorized.</td>
+</tr>
+<tr>
+<td>Platform AI oversight</td>
+<td><code>/platform/ai-oversight</code></td>
+<td>New system-admin-only Platform destination. Shared services, releases and supplier evidence. Explicit platform context, no selected-company chip.</td>
+</tr>
+<tr>
+<td>Use detail</td>
+<td><code>.../uses/:id</code> within the appropriate scope</td>
+<td>Stable link; register selection opens a detail panel on desktop, full page on narrow screens.</td>
+</tr>
+<tr>
+<td>Release review</td>
+<td><code>/platform/ai-oversight/releases/:id</code></td>
+<td>Platform administrators prepare/approve platform releases. Firm owners review adoption and their own configurations.</td>
+</tr>
+<tr>
+<td>Company AI provider</td>
+<td>Existing <code>/settings/ai</code></td>
+<td>Credentials/connectivity remain here. Link to applicable release status; do not move or expose secret material.</td>
+</tr>
+</tbody>
+</table></div>
+<p>A broker firm's assurance records describe its deployment. Inspro's platform AIMS covers the platform operator. These are separate scopes even when one person administers both. Firm pages cannot enumerate other firms. A system administrator must explicitly choose the firm when accessing its records.</p>
+<p>Existing <code>isCompanyPath</code> only recognizes <code>/home</code> and <code>/firm</code> as non-company paths. Implementation must add explicit platform context handling and route authorization together; adding a page alone would incorrectly inherit company selection. Update <code>nav.ts</code>, <code>AppShell</code>, <code>TopBar</code> and corresponding route tests as one change.</p>
+<h3>Information architecture</h3>
+<p>Firm workspace: <strong>AI uses / Actions / Evidence</strong>. The use register is the landing page. Show the next unresolved issue and owner per use; avoid a percentage labeled “compliance.” Use details contain Purpose, Risks, Evidence and History. Staff competence and policy acknowledgements are evidence types with appropriate privacy restrictions, not public personnel scoreboards.</p>
+<p>Platform workspace: <strong>AI services / Releases / Data &amp; suppliers / Actions</strong>. Shared approved documents may be exposed to firms through explicitly published summaries. Raw contracts and platform security records remain restricted.</p>
+<p>Separate lifecycle dimensions:</p>
+<ul>
+<li>Deployment: active, manual handling, suspended or retired.</li>
+<li>Evidence review: not assessed, action required, awaiting review, reviewed or review overdue.</li>
+<li>Policy/evidence version: draft, submitted, approved, superseded or expired.</li>
+<li>Release: draft, evaluation running, blocked, awaiting approval, approved, active, suspended or superseded.</li>
+</ul>
+<p>“Reviewed” records a reviewer and date; it does not mean legally compliant or ISO certified. Suspending an AI use does not approve, reject, cancel or delete claims.</p>
+<h3>Validation and release gate</h3>
+<p>Connection testing remains a distinct signal. An approved release requires a manifest and evaluation evidence matching the intended use, model, prompt, configuration and threshold profile.</p>
+<p>Maintain development/calibration data separately from a protected held-out evaluation set. Approved anonymization and source access remain prerequisites. Record expected answers, actual outputs, adjudicator/reviewer identity, provenance and disagreement resolution. Do not publish identifiable medical documents into the general oversight workspace.</p>
+<p>For claim review, measure incorrect clean results and unnecessary flags against independent adjudication. For intake, measure field accuracy, missing/conflicting information and correction burden. Report sample counts, denominators, coverage and uncertainty. Evaluate meaningful document/language/use groups where data collection is appropriate; do not infer protected traits to populate a dashboard.</p>
+<p>The business risk owner approves acceptance criteria before evaluation. There is no universal sample size or invented legal accuracy threshold in this plan. Preserve the existing conservative production settings during transition until a justified replacement is approved.</p>
+<p>Block activation when required evaluations are absent, criteria fail, the manifest changed, or the reviewer lacks authority. An approval attaches to a specific manifest; any material change invalidates that approval. Provide a controlled rollback to an earlier approved release or manual handling. A rollback also gets an audit record.</p>
+<p>Use distinct preparer and approver identities for release approval. If team size cannot support this, record that organizational constraint and obtain an appropriate independent review arrangement; do not silently make self-approval the default. New BYOK model/configurations need the same functional assurance gate while preserving isolation of credentials.</p>
+<h3>Proposed persistence and API boundaries</h3>
+<p>Names are implementation proposals, to be reconciled with repository conventions during build.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="Scrollable reference table"><table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Storage boundary</th>
+<th>Key relationships</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Platform AI service/release</td>
+<td>Public control tables</td>
+<td>Approved manifest, evaluation reference, approval event; no member-level evidence.</td>
+</tr>
+<tr>
+<td>Firm AI use/risk/action</td>
+<td>Firm tenant schema</td>
+<td>Firm deployment references a published service release; optional client scope limits company-specific records.</td>
+</tr>
+<tr>
+<td>Evidence/version/approval</td>
+<td>Separate scope-specific records</td>
+<td>Owner, version, classification, digest, source link/object reference, review due date; restricted attachment access.</td>
+</tr>
+<tr>
+<td>AI execution manifest</td>
+<td>Firm tenant schema</td>
+<td>Claim review and exact stage outputs; sensitive evidence remains claim-scoped.</td>
+</tr>
+<tr>
+<td>Claim decision event</td>
+<td>Firm tenant schema</td>
+<td>Claim revision, review ID, member explanation, separate internal rationale, actor and notification event.</td>
+</tr>
+<tr>
+<td>Review request</td>
+<td>Firm tenant schema</td>
+<td>Claim, original decision, member submission, assignee, resolution; separate from claim payment state.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Prefer separate platform and firm routers with server-enforced scope. Tentative contracts: <code>/api/v1/platform-ai-oversight/*</code>, <code>/api/v1/firm-ai-oversight/*</code>, additive extensions to <code>/api/v1/claims/{id}/decision</code>, and <code>/api/v1/portal/claims/{id}/review-requests</code>. Never rely on a client-supplied <code>scope</code> field to grant global access.</p>
+<p>Use additive migrations for existing and new firm schemas. Preserve old decisions, audit records and claims behavior. Restrict evidence attachments using existing file validation/storage patterns; protect downloads with authorization and audit. Generic evidence exports contain metadata and findings by default, not raw medical documents.</p>
+<h3>M2 acceptance checks</h3>
+<ul>
+<li>Cross-firm reads, writes, downloads and guessed IDs fail without revealing record existence.</li>
+<li>A firm administrator cannot mutate platform releases or view unpublished platform evidence.</li>
+<li>An unavailable evidence service displays an error; it never becomes “no outstanding actions.”</li>
+<li>Release approval and activation are separate actions; stale/different manifests cannot activate.</li>
+<li>Evaluation metrics show their population and denominator; zero observations render “Not measured.”</li>
+<li>Credential values never appear in use records, manifests, exports or screenshots.</li>
+<li>Evidence replacement creates a new version and preserves prior approvals; expired evidence cannot appear current.</li>
+</ul>
+<h2>M3: review requests and operating evidence</h2>
+<p>A member can request reconsideration of a decision through the existing claim detail, with a clear explanation and optional supporting document. It creates a linked review request, not an automatic reversal, new claim, settlement cancellation or refund. Display the original outcome and “Review requested” separately.</p>
+<p>Requests are idempotent; one open request per decision. Show its progress in the member's claim conversation. A claims assessor receives the request in an existing queue filter, reviews the original evidence and new material, and records an explained resolution. Use a different assessor where staffing permits. Preserve the original decision. Insurer-owned decisions follow the insurer escalation route; broker staff must not imply authority to reverse them.</p>
+<p>Paid claims require the existing controlled amendment/settlement process if a resolution changes money. Do not directly change a paid claim to approved/rejected. Configure response expectations only after operations agrees a service target; do not invent a promised number of days.</p>
+<p>Until structured requests ship, keep the existing member conversation route available and document how staff recognize, assign and track reconsideration requests manually. Do not advertise a dedicated feature before the backend workflow exists.</p>
+<p>Introduce a monthly oversight review using sampled outcomes, overrides, member corrections/complaints, incidents and overdue actions. The output is an attributed review record and corrective actions. Monitoring should measure decisions as well as provider uptime. Link staff training/competence evidence and schedule refresh when use or risk changes.</p>
+<p>M3 acceptance: member/household ownership checks; duplicate requests; rate limits and attachment safety; unsupported claim states; independent status from payment; explicit resolution; notification consistency; restricted operational notes; export and legal-hold behavior.</p>
+<h2>Rollout and verification</h2>
+<ol>
+<li>Add schemas and backward-compatible reads; no fabricated historical approvals.</li>
+<li>Add decision fields and the corresponding UI in a coordinated rollout. Update all known callers, including LOG/HR-origin broker workflows, before enforcing new required fields. Enforcement must apply consistently after cutover; do not leave a permanent legacy-client bypass.</li>
+<li>Capture manifests for new reviews, mark historical provenance as unavailable, and verify the existing queue/recovery invariants.</li>
+<li>Pilot the new oversight workspace with an explicitly selected firm and synthetic or authorized anonymized evidence.</li>
+<li>Evaluate release gates in shadow mode, resolve unknown model mappings, then enforce activation gates. Existing releases require an explicit transition decision, not an automatic “approved” backfill.</li>
+<li>Enable review requests after queue ownership and insurer/paid-claim routes are operational.</li>
+</ol>
+<p>Verification should cover backend behavior and PostgreSQL tenancy/migrations, frontend type/build checks, and browser flows at desktop and mobile sizes. Test keyboard/focus behavior and accessible names. Use bounded visual review against the existing product. A full live provider accuracy evaluation is a separate controlled exercise, not an ordinary regression test.</p>
+<p>Recommended success measures: every active use has an owner and reviewed purpose; every adverse new claim decision has a member explanation; every new AI review has a manifest or an explicit historical/unavailable marker; every activated new release has matching approved validation; every open corrective action has an owner; review requests are visible and assigned. Report counts and denominators rather than a synthetic compliance score.</p>
+<h2>Decisions to resolve during implementation</h2>
+<p>These do not block preparing the designs. They must be supplied by accountable people before the related operational control is activated:</p>
+<ul>
+<li>Actual accountable owner, claims reviewer, privacy contact and release approver.</li>
+<li>Risk acceptance criteria and the representative validation population.</li>
+<li>Approved supplier terms, data retention schedules and legal-hold authority.</li>
+<li>Who may see firm evidence and individual competence records beyond firm administrators.</li>
+<li>Operational reconsideration target, insurer escalation route and money-adjustment authority.</li>
+<li>The legal entity/scope intended for any later certification.</li>
+</ul>
+<h2>Code entry points</h2>
+<ul>
+<li>Navigation/context: <code>frontend/src/components/shell/nav.ts</code>, <code>AppShell.tsx</code>, <code>TopBar.tsx</code>, <code>frontend/src/router.tsx</code>.</li>
+<li>Claim decisions: <code>frontend/src/routes/operations/claims.tsx</code>, <code>backend/app/api/v1/claims.py</code>, <code>backend/app/schemas/claims.py</code>.</li>
+<li>Member intake/detail: <code>frontend/src/components/portal/claims/AutofillCard.tsx</code>, <code>frontend/src/components/portal/leaf/ClaimDetailLeaf.tsx</code>.</li>
+<li>Review manifest/release checks: <code>backend/app/services/claims_review/queue.py</code>, <code>pipeline.py</code>, <code>backend/app/models/claim_ai_review.py</code>, <code>backend/app/core/ai_config.py</code>.</li>
+<li>Evaluation: <code>backend/app/services/claims_ai_evaluation.py</code>, <code>claims_ai_confidence.py</code>, <code>backend/evals/claims_ai/</code>.</li>
+<li>Existing audit, claim messaging, retained documents and tenancy helpers should remain the shared mechanisms.</li>
+</ul>
+</article>
+<footer class="page-footer"><a href="implementation-plan.html">Implementation plan</a><a href="ux-specification.html">UX specification</a><a href="readiness-assessment.html">Readiness assessment</a></footer></main></body></html>

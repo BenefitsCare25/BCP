@@ -1,0 +1,42 @@
+Inspro AI governance - planning and design handoff
+28 September 2026
+
+Local review website: http://127.0.0.1:4178
+The gallery contains six designs, zoom controls, the full written documents,
+and a downloadable seven-page PDF: Inspro-AI-Governance-Design.pdf.
+
+To restart from the Inspro project folder:
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File output\ai-governance-design-2026-09-28\start-review.ps1
+
+The server binds to this computer only and serves this handoff's public files.
+The launcher runs hidden. Its details are recorded in server-info.json.
+To stop it, check that file's process ID, then run Stop-Process -Id <that PID>.
+
+Implementation plan:
+../../docs/AI_GOVERNANCE_IMPLEMENTATION_PLAN.md
+
+Exact UI behavior, states, permissions, responsive design and copy:
+../../docs/AI_GOVERNANCE_UX_DESIGN.md
+
+Original readiness assessment:
+../../docs/AI_COMPLIANCE_READINESS_2026-09-28.md
+
+Visual sheets:
+01-firm-ai-oversight.png - firm register and contextual detail
+02-claim-decision.png - evidence, decision and public/internal explanation
+03-release-validation.png - independent validation before release approval
+04-member-claim-journey.png - AI disclosure and reconsideration
+
+The UX specification also includes policy/evidence and data/supplier wireframes.
+The implementation plan defines milestones, scope, data boundaries and checks.
+
+All examples are synthetic. These are proposed designs, not implemented features.
+The member reconsideration workflow is planned for M3; disclosure is M1.
+
+Images were produced with the built-in image_gen tool. Exact original prompts
+and correction prompts are retained in generation-prompts.json.
+
+PNG text and decoration illustrate the design. The written UX specification
+governs exact copy, business behavior, permissions and acceptance requirements.
+
+No application source, production data or deployed settings were changed.
