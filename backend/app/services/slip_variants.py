@@ -142,7 +142,7 @@ def _fallback_label(members: list[ProductSlip], product: ProductSlip) -> str:
         if len({_identity(m)[index] for m in members}) > 1:
             value = getattr(product.policy_header, name, None)
             if value:
-                return value
+                return str(value)
     return product.sheet
 
 
