@@ -608,6 +608,28 @@ def _endorsements(slip: ProductSlip) -> list[dict[str, Any]]:
     ]
 
 
+def _terms(slip: ProductSlip) -> list[dict[str, Any]]:
+    """The slip's ``Label : value`` commercial terms, in its own wording."""
+    return [
+        {"label": t.label, "value": t.value, "source": f"{slip.sheet}!row {t.source_row}"}
+        for t in slip.terms
+    ]
+
+
+def _sections(slip: ProductSlip) -> list[dict[str, Any]]:
+    """Titled blocks no structured field owns (FLEX options, enrolment rules,
+    endorsements), kept verbatim for the setup view and the exported slip."""
+    return [
+        {
+            "title": s.title,
+            "placement": s.placement,
+            "rows": [list(r) for r in s.rows],
+            "source": f"{slip.sheet}!row {s.source_row}",
+        }
+        for s in slip.sections
+    ]
+
+
 def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, Any]:
     """Project a parsed ``ProductSlip`` onto the ``SetupAnswers`` form shape."""
     plans = _plan_answers(slip, tpl)
@@ -615,7 +637,14 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
     # slip with many sum-insured tiers collapses to one "All plans" column, while
     # GHS keeps its genuinely-distinct columns. Plans are reduced to stubs
     # (selection + label); the grid now lives once in ``sob``.
-    sob = sob_from_plan_items(plans, product_code=slip.product_code)
+    # A blank plan cell inherits column 0 only when the sheet's merges are
+    # unknown; once they were resolved into every covered plan, a blank is the
+    # slip's own blank and inheriting would overstate that plan's cover.
+    sob = sob_from_plan_items(
+        plans,
+        product_code=slip.product_code,
+        blank_inherits=not slip.merges_resolved,
+    )
     plan_stubs = [
         {
             "code": p["code"],
@@ -635,5 +664,7 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
         "rate_table": _rate_table(slip),
         "categories": _category_rows(slip, tpl),
         "endorsements": _endorsements(slip),
+        "terms": _terms(slip),
+        "sections": _sections(slip),
         "arrangements": {},
     }

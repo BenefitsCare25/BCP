@@ -159,11 +159,7 @@ export function SobRowDetail({
             <CopayGrid item={item} idx={idx} columns={columns} setSob={setSob} />
           )}
 
-          <LimitRows
-            uid={item.uid}
-            limits={item.limits ?? []}
-            onChange={(limits) => setSob((s) => setItemField(s, idx, { limits }))}
-          />
+          <ItemLimits item={item} idx={idx} columns={columns} setSob={setSob} />
 
           {isListLike ? (
             <ListRows item={item} idx={idx} showKey={kind === "scale"} setSob={setSob} />
@@ -342,8 +338,60 @@ function CopayGrid({
   );
 }
 
-// Qualifier rows beneath a benefit ("Maximum no. of days" → "120 days"). Shared
-// across columns — these are structural qualifiers, not per-plan values.
+// A row's limits: one shared list, or — when a plan's qualifiers differ (Plan
+// 1A alone carries a 120-day cap) — one list per column. The first column's
+// list is the row's own `limits`; the others live in `column_limits`.
+function ItemLimits({
+  item,
+  idx,
+  columns,
+  setSob,
+}: {
+  item: SobItemAnswer;
+  idx: number;
+  columns: SobColumn[];
+  setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
+}) {
+  const perColumn = item.column_limits;
+  const setShared = (limits: BenefitLimit[]) =>
+    setSob((s) => setItemField(s, idx, { limits }));
+  if (!perColumn || columns.length < 2) {
+    return <LimitRows uid={item.uid} limits={item.limits ?? []} onChange={setShared} />;
+  }
+  const setColumn = (colId: string, limits: BenefitLimit[]) =>
+    setSob((s) =>
+      setItemField(s, idx, {
+        column_limits: { ...(s.items[idx]?.column_limits ?? {}), [colId]: limits },
+      }),
+    );
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-2xs text-muted-foreground">Limits differ by plan</p>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setSob((s) => setItemField(s, idx, { column_limits: undefined }))}
+          className="text-2xs text-muted-foreground"
+        >
+          Use {columns[0].label}&rsquo;s limits for every plan
+        </Button>
+      </div>
+      {columns.map((col, ci) => (
+        <div key={col.id} className="flex flex-col gap-1">
+          <Label className="text-2xs font-semibold text-foreground">{col.label}</Label>
+          <LimitRows
+            uid={`${item.uid}-${col.id}`}
+            limits={ci === 0 ? (item.limits ?? []) : (perColumn[col.id] ?? item.limits ?? [])}
+            onChange={(limits) => (ci === 0 ? setShared(limits) : setColumn(col.id, limits))}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Qualifier rows beneath a benefit ("Maximum no. of days" → "120 days").
 function LimitRows({
   uid,
   limits,

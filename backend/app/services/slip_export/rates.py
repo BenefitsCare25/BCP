@@ -41,11 +41,18 @@ from app.services.slip_export.styles import (
 _POLICY_LEVEL = frozenset({"annual_flat"})
 
 
-def gst_suffix(term: ProductTerm | None) -> str:
+def gst_suffix(term: ProductTerm | None, slip_wording: str | None = None) -> str:
+    """The Annual Premium label's GST qualifier.
+
+    A configured GST term wins; without one, the slip's own wording ("sbj to
+    GST") is repeated rather than replaced by a generic default.
+    """
     if term is not None and term.gst_included is True:
         return "(sbj to GST)"
     if term is not None and term.gst_included is False:
         return "(GST exempt)"
+    if slip_wording:
+        return f"({slip_wording})"
     return "(GST-exclusive)"
 
 
@@ -69,8 +76,16 @@ def _write_tiered_rates(
     # Row 1: tier codes above each Rate/Premium pair; row 2: the pair headers.
     head1 = ["Rate :", "", ""]
     head2 = ["", "Insured", "Category", "Plan"]
+    # The slip's own tier wording ("Per Spouse") wherever it was captured;
+    # the canonical code ("SO") only when the slip used the code itself.
+    wording: dict[str, str] = {}
+    for c in categories:
+        labels = plan_assignments(c).get("tier_labels")
+        if isinstance(labels, dict):
+            for key, label in labels.items():
+                wording.setdefault(str(key), str(label))
     for code in codes:
-        head1 += [code, ""]
+        head1 += [wording.get(code, code), ""]
         head2 += ["Rate", "Premium"]
     last_col = 4 + 2 * len(codes)
     ws.append([*head1, ""])
@@ -152,7 +167,11 @@ def _flat_headers(categories: list[Category]) -> tuple[str, str, str]:
         # One flat annual premium for the whole policy — there is no amount it
         # is rated on and no per-S$1000 rate to quote.
         return "", "", "none"
-    if bases == {"per_member"}:
+    # A per-head rate: stated as such, or a parser "flat" rate with no cover
+    # amount beside it (a sum-insured-rated flat row stores its SI).
+    if bases and bases <= {"per_member", "flat"} and not any(
+        pa.get("sum_insured") is not None for pa in pas
+    ):
         return "* No. of members", "Rate per member", "members"
     return "Sum Insured ( SI )", "Rate per S$1000 sum insured", "sum_insured"
 
@@ -406,6 +425,7 @@ def write_rate_section(
     term: ProductTerm | None,
     ctx: SlipContext,
     insured_default: str,
+    premium_wording: str | None = None,
 ) -> None:
     blank = ctx.blank_rates
     tiered = [
@@ -466,7 +486,7 @@ def write_rate_section(
     _write_voluntary_rates(ws, categories, blank)
 
     spacer_row(ws)
-    label = f"Annual Premium {gst_suffix(term)} :"
+    label = f"Annual Premium {gst_suffix(term, premium_wording)} :"
     total = None if blank or not subtotals else sum(subtotals)
     ws.append([label, "", total if total is not None else ""])
     r = style_row(ws, font=HEADER)

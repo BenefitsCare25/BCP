@@ -313,6 +313,7 @@ def _parse_sob_items(
     name_col: int = 1,
     key_col: int = 0,
     allow_letters: bool = False,
+    first_plan_col: int | None = None,
 ) -> list[ExtractedBenefitItem]:
     """Parse benefit items from SOB rows for a single plan column.
 
@@ -327,8 +328,27 @@ def _parse_sob_items(
       - qualifier rows ("Maximum no. of days", "Maximum limit per policy year")
         -> ``limits``, attached to whichever item/sub-item they follow;
       - per-plan sub-item values (Hospital Misc / Surgical Fees / doctor visit).
+
+    ``first_plan_col`` marks where the plan columns begin. A value printed
+    between the name and the plan columns ("Pre - hospitalisation | 120 days")
+    states one figure for every plan; it is kept as that row's limit.
     """
     items: list[ExtractedBenefitItem] = []
+    shared_cols = (
+        range(name_col + 1, first_plan_col)
+        if first_plan_col is not None and first_plan_col > name_col + 1
+        else range(0)
+    )
+
+    def _shared_value(row: list[Cell]) -> str | None:
+        # Short figures only ("120 days", "S$500"): prose spilling out of a
+        # wide name cell is a description, not a value.
+        for c in shared_cols:
+            if c < len(row) and _non_empty(row[c]):
+                value = _fmt_value(row[c])
+                return value if value and len(value) <= 40 else None
+        return None
+
     current_number: str | None = None
     current_name: str = ""
     current_value: str | None = None
@@ -411,6 +431,15 @@ def _parse_sob_items(
 
         # New benefit item (enumerated row - number, or letter when allowed)
         new_key = _match_benefit_key(key_cell, allow_letters=allow_letters)
+        if new_key and new_key == current_number and name_cell:
+            # The same number printed again under its own item ("4 In-patient
+            # Expenses … 4 Maximum no. of days") qualifies that item — it is not
+            # a second benefit 4. Attach it to the item itself, after any
+            # sub-items, as the slip lays it out.
+            value, _, _ = _split_value_note(plan_cell)
+            target = None
+            _attach_limit(name_cell.split("\n")[0], value)
+            continue
         if new_key:
             _flush()
             current_number = new_key
@@ -501,6 +530,8 @@ def _parse_sob_items(
             }
             current_sub_items.append(sub)
             target = sub
+            if (shared := _shared_value(row)) is not None:
+                _attach_limit(name, shared)
             continue
 
         # Property / qualifier row (continuation of current benefit). Recorded
@@ -529,6 +560,13 @@ def _parse_sob_items(
                     # Remembered so the group items keep their context; inert on
                     # sheets without dash groups.
                     pending_group_note = name_cell.rstrip(": ").strip()
+                elif not _non_empty(plan_cell) and (
+                    shared := _shared_value(row)
+                ) is not None:
+                    # A qualifier stated once for every plan, beside its label
+                    # rather than under each plan ("Pre - hospitalisation |
+                    # 120 days").
+                    _attach_limit(name_cell, shared)
                 elif _non_empty(plan_cell):
                     # Labelled sub-detail with a value — attach as sub-item.
                     value, note, sub_na = _split_value_note(plan_cell)
@@ -1332,6 +1370,7 @@ def _extract_plans_from_sheet(
                 rows, data_start, col_idx,
                 name_col=roles.name_col, key_col=key_col,
                 allow_letters=roles.allow_letter_keys,
+                first_plan_col=min(all_plan_cols),
             )
         if not items:
             continue

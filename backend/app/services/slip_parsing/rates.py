@@ -18,11 +18,11 @@ from app.services.slip_parsing.models import ExtractedCategory
 from app.services.slip_parsing.text import (
     _PLAN_INLINE,
     _currency_amount,
-    _int_code,
     _non_empty,
     _norm,
     _row_text,
     _safe_float,
+    canonical_plan_code,
     split_plan_codes,
 )
 
@@ -84,7 +84,7 @@ def _tier_suffix_keys(key: str) -> list[str]:
         return []
     out: list[str] = []
     for part in re.split(r"[/&,+]", m.group(1)):
-        canon = _TIER_TOKEN_TO_CANON.get(part.strip().upper())
+        canon = product_registry.canonical_tier(part)
         if canon is None:
             return []
         out.append(canon)
@@ -233,14 +233,14 @@ def _extract_voluntary_rates(rows: list[list[Cell]]) -> tuple[dict[str, Any], ..
 
 
 def _tier_cells(row: list[Cell]) -> dict[str, int]:
-    """Canonical tier key → column for cells that ARE a tier token (exact,
-    case-insensitive). Used to find the tier header row and its columns."""
+    """Canonical tier key → column for cells that name a tier (any wording the
+    registry vocabulary resolves: "EO", "Per Spouse", "Child(ren)"). Used to
+    find the tier header row and its columns."""
     out: dict[str, int] = {}
     for c, val in enumerate(row or []):
         if val is None:
             continue
-        s = str(val).strip().upper()
-        canon = _TIER_TOKEN_TO_CANON.get(s)
+        canon = product_registry.canonical_tier(val)
         if canon is not None and canon not in out:
             out[canon] = c
     return out
@@ -254,7 +254,7 @@ def _tier_labels(row: list[Cell]) -> dict[str, str]:
         if val is None:
             continue
         s = str(val).strip()
-        canon = _TIER_TOKEN_TO_CANON.get(s.upper())
+        canon = product_registry.canonical_tier(s)
         if canon is not None and s.upper() != canon:
             out.setdefault(canon, s)
     return out
@@ -368,7 +368,7 @@ def _parse_tiered_rates(rows: list[list[Cell]], tier_row: int) -> list[_RateRow]
         plan_val = ""
         if 0 <= plan_col < len(row) and _non_empty(row[plan_col]):
             # Normalize plan number (e.g., "1.0" → "1")
-            plan_val = _int_code(row[plan_col])
+            plan_val = canonical_plan_code(row[plan_col])
 
         if not plan_val:
             continue
@@ -697,6 +697,12 @@ def _enrich_with_rates(
     for rd in rate_data:
         normalized_key = rd.key.strip().lower()
         rate_by_plan.setdefault(normalized_key, []).append(rd)
+        # "1.0", "Plan 1" and "1" name one plan — index the canonical spelling
+        # too, so a category's plan code finds its rate however either section
+        # printed it.
+        canonical_key = canonical_plan_code(rd.key).lower()
+        if canonical_key and canonical_key != normalized_key:
+            rate_by_plan.setdefault(canonical_key, []).append(rd)
         # Also index by each bundled plan token so compound per-member keys match
         # a category's bare plan_code. Gated to per-member rate rows (rd.expand_
         # tokens) so a digit-leading category-text key in a flat/per_1000/earnings
@@ -726,7 +732,7 @@ def _enrich_with_rates(
         matched_rate: _RateRow | None = None
         if cat.plan_code:
             # Normalize numeric plan codes: "1.0" → "1"
-            plan_key = _int_code(cat.plan_code).lower()
+            plan_key = canonical_plan_code(cat.plan_code).lower()
             matched_rate = _pick(rate_by_plan.get(plan_key, []), cat.insured)
         # Then by category text
         if matched_rate is None:
@@ -751,7 +757,7 @@ def _enrich_with_rates(
         if cat.plan_code and matched_rate.member_type == "both":
             dep_rate = matched_rate.rate
         elif cat.plan_code and matched_rate.member_type in ("employee", None):
-            plan_key = _int_code(cat.plan_code).lower()
+            plan_key = canonical_plan_code(cat.plan_code).lower()
             ins = _norm_ins(matched_rate.insured)
             for c in rate_by_plan.get(plan_key, []):
                 if c.member_type == "dependent" and (
@@ -766,7 +772,7 @@ def _enrich_with_rates(
         # the first row's figure. Genuinely tiered tables keep their own tiers.
         rate_tiers = matched_rate.rate_tiers
         if rate_tiers is None and cat.plan_code and matched_rate.expand_tokens:
-            plan_key = _int_code(cat.plan_code).lower()
+            plan_key = canonical_plan_code(cat.plan_code).lower()
             ins = _norm_ins(matched_rate.insured)
             tier_cells: dict[str, dict[str, float]] = {}
             for c in rate_by_plan.get(plan_key, []):
@@ -784,7 +790,9 @@ def _enrich_with_rates(
             cat,
             premium_rate=matched_rate.rate,
             annual_premium=matched_rate.annual_premium,
-            rate_basis=matched_rate.rate_basis,
+            rate_basis=_resolve_flat_basis(
+                matched_rate, cat.sum_insured or matched_rate.sum_insured
+            ),
             rate_tiers=rate_tiers,
             sum_insured=cat.sum_insured or matched_rate.sum_insured,
             dependant_rate=dep_rate,
@@ -793,6 +801,30 @@ def _enrich_with_rates(
         ))
 
     return _propagate_annual_flat(tuple(enriched), rate_data)
+
+
+def _agrees(expected: float, stated: float) -> bool:
+    """Two premium figures agree within rounding (1%, or S$1 on small ones)."""
+    return abs(expected - stated) <= max(1.0, 0.01 * abs(stated))
+
+
+def _resolve_flat_basis(rate_row: _RateRow, sum_insured: float | None) -> str:
+    """What a ``flat`` rate is priced on, read from the row's own figures.
+
+    A rate table headed just "Rate" is ambiguous: GTL's 1.4 is per S$1,000 of
+    sum insured, GHS's 1,292 is per head. When SI / 1,000 x rate reproduces the
+    premium the slip states, the rate is per S$1,000. Otherwise the row stays
+    ``flat`` — which every member-premium consumer (``member_premium``,
+    enrollment elections, flex pricing) already reads as a per-head rate, so it
+    must not be renamed ``per_member`` here.
+    """
+    basis = rate_row.rate_basis
+    rate, premium = rate_row.rate, rate_row.annual_premium
+    if basis != "flat" or not rate or not premium:
+        return basis
+    if sum_insured and _agrees(sum_insured / 1000.0 * rate, premium):
+        return "per_1000_si"
+    return basis
 
 
 def _propagate_annual_flat(

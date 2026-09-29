@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services import product_registry
 from app.services.member_schedule import is_absent_value, member_hidden
 
 LIMIT_BASIS_POLICY_YEAR = "policy_year"
@@ -261,7 +262,12 @@ def _exclude_terms(family: str) -> tuple[str, ...]:
 
 def _scope_family(product_code: str | None) -> str | None:
     code = str(product_code or "").strip().upper()
-    return next((family for family, codes in _SCOPE_FAMILIES.items() if code in codes), None)
+    # A product variant ("GHS-VTS") funds the same claim types as its base.
+    candidates = {code, product_registry.base_code(code)}
+    return next(
+        (family for family, codes in _SCOPE_FAMILIES.items() if candidates & codes),
+        None,
+    )
 
 
 def _term_matches(term: str, name: str) -> bool:

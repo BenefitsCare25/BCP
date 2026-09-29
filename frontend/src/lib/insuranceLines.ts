@@ -14,6 +14,10 @@ export const LINE_LABELS: Record<InsuranceLine, string> = {
   flex: "Flex",
 };
 
+/** Separator between a product type and its variant label ("GHS-VTS") —
+ *  mirrors backend `product_registry.VARIANT_SEP`. */
+export const VARIANT_SEP = "-";
+
 /**
  * Resolve a product code to its insurance line, defaulting to Medical.
  *
@@ -30,7 +34,11 @@ export function lineForCode(
   registryEntries?: RegistryEntry[],
 ): InsuranceLine {
   const token = (code || "").trim().toUpperCase();
-  const entry = registryEntries?.find((e) => e.code === token);
+  // A product variant ("GHS-VTS") sits on its base type's line.
+  const base = token.split(VARIANT_SEP, 1)[0];
+  const entry =
+    registryEntries?.find((e) => e.code === token) ??
+    registryEntries?.find((e) => e.code === base);
   return entry?.line ?? "medical";
 }
 

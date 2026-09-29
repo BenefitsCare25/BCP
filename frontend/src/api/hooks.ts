@@ -948,6 +948,10 @@ export interface ProductPayload {
   form_profile?: string;
   layout_family?: string;
   report_code?: string | null;
+  // Create a VARIANT of a product type instead: the server derives the code
+  // (`<BASE>-<LABEL>`) from these and ignores `code`.
+  variant_of?: string;
+  variant_label?: string;
 }
 
 export function useCreateProduct() {

@@ -244,6 +244,9 @@ class SetupProductSummary(BaseModel):
     # The client Product row id, when one exists — the target for the
     # classification PATCH (/schemas/products/{id}).
     product_id: str | None = None
+    # Product-variant identity (see ProductOut): None on a base product.
+    base_code: str | None = None
+    variant_label: str | None = None
 
 
 @router.get(
@@ -303,6 +306,7 @@ def list_setup_products(
                 layout_family=entry.layout_family,
                 has_dependants=bool(p.has_dependants or entry.has_dependants),
                 product_id=p.id if is_client else None,
+                **product_registry.variant_fields(p.code, meta),
             )
         else:
             existing.has_slip_data = existing.has_slip_data or has_slip
@@ -318,6 +322,9 @@ def list_setup_products(
                     p.has_dependants or entry.has_dependants
                 )
                 existing.product_id = p.id
+                variant = product_registry.variant_fields(p.code, meta)
+                existing.base_code = variant["base_code"]
+                existing.variant_label = variant["variant_label"]
     for code, t in file_templates.items():
         normalized = code.strip().upper()
         entry = product_registry.resolve_entry(normalized)

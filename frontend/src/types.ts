@@ -41,6 +41,10 @@ export interface Product {
   // Legal entities this product is written on — the matching gate for ALL its
   // categories. Empty = no restriction. Rides product_metadata.
   entities?: string[];
+  // Set on a product VARIANT — a second policy of the same type (another
+  // insurer or legal entity): the type's code and the variant's own label.
+  base_code?: string | null;
+  variant_label?: string | null;
 }
 
 // ── Product registry (static classification catalog from the backend) ────────
@@ -326,6 +330,8 @@ export interface ParseResult {
   replaced_categories: number;
   skipped_sheets: { sheet: string; reason: string }[];
   prefilled_setups: string[];
+  /** Product variants the upload created (several policies of one type). */
+  variants_created?: string[];
   products: ProductDiagnostic[];
   /** True when a re-upload auto-rematched employees (absent on older backends). */
   rematched?: boolean;
@@ -1080,6 +1086,9 @@ export interface SetupProductSummary {
   has_dependants?: boolean;
   // The client Product row id when one exists — the classification PATCH target.
   product_id?: string | null;
+  // Product-variant identity (see Product): null on a base product.
+  base_code?: string | null;
+  variant_label?: string | null;
 }
 
 // Answer shape persisted in ProductSetup.answers and projected to Plan rows.
@@ -1173,6 +1182,9 @@ export interface SobItemAnswer {
   // Per-column properties (outpatient copay: per_visit / co_payment / per_year),
   // keyed by SobColumn.id → {field → value}.
   column_properties?: Record<string, Record<string, string>>;
+  // Per-column limits, keyed by SobColumn.id, for a column whose qualifiers
+  // differ from `limits` (Plan 1A's 120-day cap). Absent column = `limits`.
+  column_limits?: Record<string, BenefitLimit[]>;
   sub_items: SobSubItemAnswer[];
   // One explicit setting per benefit column. A column can fund several basis-
   // of-cover plans that share the same SoB values.

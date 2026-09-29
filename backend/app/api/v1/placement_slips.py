@@ -73,10 +73,12 @@ from app.services.placement_slip_parser import (
 from app.services.plan_assignments import build_plan_assignments
 from app.services.product_templates import get_template
 from app.services.product_terms import autofill_nel_terms, autofill_term_window
+from app.services.product_variants import variant_traits
 from app.services.rule_generator import description_to_rule
 from app.services.slip_reconcile import reconcile_slip
 from app.services.slip_template_memory import make_resolver, save_profile
 from app.services.slip_to_setup import build_setup_answers
+from app.services.slip_variants import assign_variants
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,11 @@ def _category_reconcile_key(
     )
 
 
+def _plan_items_data(plan: Any) -> Any:
+    """A plan's benefit lines as plain data, for schedule comparison."""
+    return [asdict(item) for item in plan.items]
+
+
 def _find_product(
     db: Session, code: str, sheet_hint: str, products_cache: dict[str, Product]
 ) -> Product | None:
@@ -234,13 +241,58 @@ def _find_product(
 
     for p in products_cache.values():
         pcode = _norm(p.code)
-        if pcode == code_n or pcode == sheet_n:
+        if pcode == code_n:
+            return p
+    if product_registry.variant_label_of(code):
+        # A variant is its own product: never fall through to the sheet name or
+        # a substring match, which would fold "GHS-VTS" back into "GHS" and
+        # merge two companies' policies (their plan codes then collide).
+        return None
+    for p in products_cache.values():
+        pcode = _norm(p.code)
+        if pcode == sheet_n:
             return p
     for p in products_cache.values():
         pcode = _norm(p.code)
         if pcode and (pcode in code_n or pcode in sheet_n):
             return p
     return None
+
+
+def _ensure_variant_products(
+    db: Session,
+    user: CurrentUser,
+    client_id: str,
+    slip: PlacementSlip,
+    products_cache: dict[str, Product],
+) -> list[str]:
+    """Create the client's Product row for every variant the slip introduced.
+
+    A variant inherits its type from the base product (see
+    ``product_variants.variant_traits``) and records ``base_code`` / ``variant_label``
+    so every surface can show which policy it is. Existing rows are reused, so
+    re-uploading the same slip is idempotent. Returns the codes created.
+    """
+    created: list[str] = []
+    for product_slip in slip.products:
+        code = product_slip.product_code.upper()
+        base = product_slip.variant_of
+        if not base or code in products_cache:
+            continue
+        label = product_slip.variant_label or product_registry.variant_label_of(code) or ""
+        row = Product(
+            client_id=client_id, code=code, **variant_traits(db, client_id, base, label)
+        )
+        db.add(row)
+        db.flush()
+        products_cache[code] = row
+        created.append(code)
+        write_audit(
+            db, user, action="create", entity_type="product", entity_id=row.id,
+            after={"code": code, "base_code": base, "variant_label": label,
+                   "source": "placement_slip"},
+        )
+    return created
 
 
 def _sync_provisional_plan_schedules(
@@ -454,6 +506,16 @@ async def parse_upload(
         # diagnostics. Then, for products the parser still couldn't read and
         # only while the workbook is on disk, try the AI fallback (no-op without
         # a configured provider).
+        # Several sheets of one product type are either one policy (merge) or
+        # distinct policies (variants) — decided from each sheet's own header
+        # before reconciliation so diagnostics already carry the final codes.
+        client_codes = frozenset(
+            code.upper()
+            for code in db.execute(
+                select(Product.code).where(Product.client_id == client_id)
+            ).scalars()
+        )
+        raw_parsed = assign_variants(raw_parsed, client_codes)
         reconciled = reconcile_slip(raw_parsed)
         reconciled = maybe_ai_augment(
             db, client_id, policy_year_id, tmp_path, reconciled
@@ -508,6 +570,9 @@ async def parse_upload(
         .all()
     }
 
+    variants_created = _ensure_variant_products(
+        db, user, client_id, parsed, products_cache
+    )
     confirmed_codes = _confirmed_setup_codes(db, policy_year_id)
 
     # Idempotent re-upload: drop the previous parse's still-unreviewed,
@@ -666,6 +731,10 @@ async def parse_upload(
     # only surfaces as an IntegrityError at commit (a 500). Track keys seen this
     # request and keep the first; later collisions are reported, not inserted.
     seen_plan_keys: set[tuple[str, str]] = set()
+    # First-kept schedule per plan key, to tell a harmless repeat (the same
+    # schedule printed on every sheet of one policy) from a real conflict.
+    kept_schedule: dict[tuple[str, str], tuple[str, Any]] = {}
+    diag_by_sheet = {d.sheet: d for d in diagnostics}
     for product_slip in parsed.products:
         if not product_slip.plans:
             continue
@@ -685,13 +754,24 @@ async def parse_upload(
             plan_key = (product.id, extracted_plan.code)
             if plan_key in seen_plan_keys:
                 plans_dup_skipped += 1
+                first_sheet, first_items = kept_schedule[plan_key]
                 logger.warning(
                     "Duplicate plan code %r for product %s across sheets — keeping "
                     "first, skipping sheet=%s (slip_id=%s)",
                     extracted_plan.code, product.code, product_slip.sheet, slip_row.id,
                 )
+                diag = diag_by_sheet.get(product_slip.sheet)
+                if diag is not None and _plan_items_data(extracted_plan) != first_items:
+                    # Same policy, same plan code, DIFFERENT schedule: one of
+                    # them is not stored. Say so rather than dropping it quietly.
+                    diag.issues.append(
+                        f"Plan {extracted_plan.code!r} differs from the one on sheet "
+                        f"{first_sheet!r}; only that sheet's schedule was kept. "
+                        "Rename the plan on one sheet if they are separate plans."
+                    )
                 continue
             seen_plan_keys.add(plan_key)
+            kept_schedule[plan_key] = (product_slip.sheet, _plan_items_data(extracted_plan))
             existing = db.execute(
                 select(Plan).where(
                     Plan.product_id == product.id,
@@ -842,6 +922,7 @@ async def parse_upload(
         "plans_skipped_no_product": plans_skipped_products,
         "plans_skipped_duplicate": plans_dup_skipped,
         "prefilled_setups": prefilled_setups,
+        "variants_created": variants_created,
         "period_terms_autofilled": period_autofilled,
         "nel_terms_autofilled": nel_autofilled,
         "skipped_sheets": parsed.diagnostics.get("skipped_sheets", []),
@@ -903,6 +984,7 @@ async def parse_upload(
         replaced_plans=replaced_plans,
         skipped_sheets=list(parsed.diagnostics.get("skipped_sheets", [])),
         prefilled_setups=prefilled_setups,
+        variants_created=variants_created,
         products=[ProductDiagnostic(**asdict(d)) for d in diagnostics],
         rematched=rematched,
         employees_matched=employees_matched,

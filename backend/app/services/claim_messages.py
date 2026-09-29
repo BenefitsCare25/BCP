@@ -57,7 +57,11 @@ from app.schemas.claims import (
     ConversationSubjectOut,
 )
 from app.services.claim_fx import is_foreign
-from app.services.claim_intake import claim_profile_for, product_codes_for_claim_category
+from app.services.claim_intake import (
+    claim_profile_for,
+    product_code_in,
+    product_codes_for_claim_category,
+)
 from app.services.claim_notifications import enqueue_claim_notification
 from app.services.fx import POLICY_CURRENCY
 
@@ -754,9 +758,11 @@ def broker_conversations(
             if category == "other":
                 known = (*product_codes_for_claim_category("inpatient"),
                          *product_codes_for_claim_category("outpatient"))
-                scope.append(product.not_in(known))
+                scope.append(~product_code_in(product, known))
             else:
-                scope.append(product.in_(product_codes_for_claim_category(category)))
+                scope.append(
+                    product_code_in(product, product_codes_for_claim_category(category))
+                )
     if status:
         scope.append(Claim.status == status)
     if incurred_from:

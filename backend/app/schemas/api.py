@@ -192,6 +192,10 @@ class ProductOut(_Base):
     # categories. Empty = no restriction. Rides product_metadata; set from the
     # setup header's roster-anchored Entities picker.
     entities: list[str] = Field(default_factory=list)
+    # Set on a product VARIANT (a second policy of the same type): the type's
+    # code and the variant's own label ("GHS", "VTS").
+    base_code: str | None = None
+    variant_label: str | None = None
 
 
 class ProductCreate(BaseModel):
@@ -210,6 +214,11 @@ class ProductCreate(BaseModel):
     # Legal entities this product is written on — the matching gate for
     # ALL its categories. `[]` clears the restriction; omitted leaves it.
     entities: list[str] | None = None
+    # Create a VARIANT of an existing product type: a second, separately
+    # placed policy (another insurer, another legal entity). The server derives
+    # the code (`<BASE>-<LABEL>`) from these; `code` is then ignored.
+    variant_of: str | None = Field(default=None, max_length=64)
+    variant_label: str | None = Field(default=None, max_length=64)
 
 
 class ProductPatch(BaseModel):
@@ -599,6 +608,9 @@ class ParseResult(BaseModel):
     skipped_sheets: list[dict[str, Any]]
     # Product codes whose guided setup form was pre-filled from this slip.
     prefilled_setups: list[str] = []
+    # Product variants the upload created: the workbook carried several
+    # distinct policies of one product type (e.g. GHS per legal entity).
+    variants_created: list[str] = []
     # Per-product parse/reconciliation diagnostics (confidence + issues).
     products: list[ProductDiagnostic] = Field(default_factory=list)
     # Employees were auto re-matched against the fresh categories (a re-parse

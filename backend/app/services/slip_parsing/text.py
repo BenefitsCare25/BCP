@@ -59,6 +59,32 @@ def _int_code(value: Cell | str) -> str:
     return str(int(f)) if f == int(f) else s
 
 
+def natural_code_key(value: object) -> tuple[tuple[int, int | str], ...]:
+    """Sort plan codes for people: 1, 1A, 2, 10, D01 — not 1, 10, 2."""
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for part in re.split(r"(\d+)", str(value or ""))
+        if part
+    )
+
+
+# A leading "Plan" word on a code cell ("Plan 1A", "PLAN: 2", "Plan#3"). The SOB
+# header parser already strips it ("PLAN 1A" → "1A"), so the Basis-of-Cover and
+# Rate sections must too, or the three sections name the same plan three ways.
+_PLAN_PREFIX = re.compile(r"^\s*plan(?![a-z])\s*[:#.]?\s*(?=\S)", re.IGNORECASE)
+
+
+def canonical_plan_code(value: Cell | str) -> str:
+    """One spelling for a plan code wherever the slip prints it.
+
+    "Plan 1A", "PLAN 1A" and "1A" → "1A"; "1.0" and "Plan 1" → "1". A cell that
+    is only the word "Plan" is returned unchanged rather than emptied.
+    """
+    s = _norm(value)
+    stripped = _PLAN_PREFIX.sub("", s, count=1)
+    return _int_code(stripped or s)
+
+
 # Plan headers / rate keys bundle several codes with these separators
 # ("1A/1B", "B1 & B", "1, 2") and may annotate each with a member type
 # ("1 - Employees"). Both the rate matcher and the reconciler must agree on how a
@@ -79,6 +105,7 @@ def split_plan_codes(code: str) -> list[str]:
         part = part.strip()
         if not part:
             continue
+        part = canonical_plan_code(part)
         lead = _int_code(re.split(r"\s*-\s*|\s+", part, maxsplit=1)[0].strip())
         if lead and lead not in seen:
             seen.add(lead)

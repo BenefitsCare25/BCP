@@ -22,6 +22,7 @@ from app.services.slip_export.header import (
     fmt_window,
     write_header_block,
 )
+from app.services.slip_export.notes import merge_terms, premium_qualifier, write_sections
 from app.services.slip_export.rates import (
     product_premium_total,
     term_rows,
@@ -34,6 +35,7 @@ from app.services.slip_export.styles import (
     HEADER,
     MIDDLE_WRAP,
     MONEY,
+    NOTE,
     TITLE,
     border_row,
     finalize_sheet,
@@ -127,7 +129,11 @@ def _write_product_sheet(
         # the slip's own captured wording stands in.
         default_insured = insured or captured_answers(answers).get("insured", "")
         write_basis_of_cover(ws, categories, ctx, default_insured)
-        write_rate_section(ws, categories, term, ctx, default_insured)
+        write_sections(ws, answers, "basis")
+        write_rate_section(
+            ws, categories, term, ctx, default_insured,
+            premium_wording=premium_qualifier(answers),
+        )
 
     if product is None:
         return
@@ -135,7 +141,7 @@ def _write_product_sheet(
     # awaiting its schedule has a non-evidence limit and needs the remaining
     # rows as labelled blanks, so it is never gated on plans existing.
     spacer_row(ws)
-    for label, value in term_rows(term, plans):
+    for label, value in merge_terms(term_rows(term, plans), answers):
         ws.append([label, "", value])
         row = style_row(ws)
         ws.cell(row=row, column=1).font = HEADER
@@ -151,6 +157,7 @@ def _write_product_sheet(
             answers=answers,
             quotation=ctx.blank_rates,
         )
+    write_sections(ws, answers, "after_sob")
     set_compact_product_widths(ws)
 
 
@@ -159,6 +166,7 @@ def _write_overview(
     ctx: SlipContext,
     db_envelope: tuple[Any, ...],
     products: list[Product],
+    setup_only: list[Product],
 ) -> None:
     py = ctx.policy_year
     doc_name = "Quotation Slip" if ctx.blank_rates else "Placement Slip"
@@ -234,6 +242,18 @@ def _write_overview(
         border_row(overview, 1, 8)
         overview.cell(row=row, column=8).number_format = MONEY
 
+    if setup_only:
+        spacer_row(overview)
+        overview.append([
+            "Not included — set up for this year but without categories or "
+            "plans, so there is nothing to place yet:"
+        ])
+        overview.cell(row=overview.max_row, column=1).font = NOTE
+        for product in setup_only:
+            overview.append([product.code, product.display_name])
+            overview.cell(row=overview.max_row, column=1).font = NOTE
+            overview.cell(row=overview.max_row, column=2).font = NOTE
+
 
 def _assemble(
     ctx: SlipContext,
@@ -241,9 +261,10 @@ def _assemble(
     products: list[Product],
     *,
     include_unassigned: bool,
+    setup_only: list[Product] | None = None,
 ) -> Workbook:
     wb = Workbook()
-    _write_overview(wb, ctx, envelope, products)
+    _write_overview(wb, ctx, envelope, products, setup_only or [])
     overview = wb["Overview"]
     doc_name = "Quotation Slip" if ctx.blank_rates else "Placement Slip"
 
@@ -286,6 +307,7 @@ def build(db: Session, py: PolicyYear, mode: Mode) -> Workbook:
         envelope_for(db, py),
         ctx.products,
         include_unassigned=True,
+        setup_only=ctx.setup_only,
     )
 
 
@@ -318,6 +340,20 @@ def build_quotation_groups(
                 groups[key] = (name, [])
             groups[key][1].append(product)
 
+    def _insurer_keys(product: Product) -> set[str]:
+        return {k for i in ctx.insurers_for(product) if (k := i.strip().casefold())}
+
+    # A setup-only product is listed in each insurer workbook it names; one
+    # naming no insurer, or only insurers with nothing placed (so no workbook
+    # of their own), goes to the Unassigned workbook — never to none.
+    orphans = [p for p in ctx.setup_only if not (_insurer_keys(p) & groups.keys())]
+
+    def _pending_for(insurer: str | None) -> list[Product]:
+        if insurer is None:
+            return orphans
+        key = insurer.strip().casefold()
+        return [p for p in ctx.setup_only if key in _insurer_keys(p)]
+
     workbooks = [
         (
             insurer,
@@ -326,13 +362,14 @@ def build_quotation_groups(
                 envelope,
                 products,
                 include_unassigned=False,
+                setup_only=_pending_for(insurer),
             ),
         )
         for insurer, products in sorted(
             groups.values(), key=lambda group: group[0].casefold()
         )
     ]
-    if unassigned or ctx.cats_by_product.get(None) or not workbooks:
+    if unassigned or orphans or ctx.cats_by_product.get(None) or not workbooks:
         workbooks.append(
             (
                 "Unassigned",
@@ -341,6 +378,7 @@ def build_quotation_groups(
                     envelope,
                     unassigned,
                     include_unassigned=True,
+                    setup_only=_pending_for(None),
                 ),
             )
         )

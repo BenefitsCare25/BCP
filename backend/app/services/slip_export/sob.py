@@ -23,7 +23,8 @@ from app.services.slip_export.styles import (
     spacer_row,
     style_row,
 )
-from app.services.sob_columns import sob_from_plan_items
+from app.services.slip_parsing.text import natural_code_key
+from app.services.sob_columns import column_limits_for, sob_from_plan_items
 
 _MIRRORED_INTO_LIMITS = frozenset(
     {"maximum_days", "qualification_period", "co_insurance", "surgical_schedule"}
@@ -38,14 +39,6 @@ _PROPERTY_LABELS = {
     "co_payment_private": "Co-payment — Private Hospital",
     "per_disability": "Per disability",
 }
-
-
-def _natural_code_key(value: str) -> tuple[tuple[int, int | str], ...]:
-    return tuple(
-        (0, int(part)) if part.isdigit() else (1, part.casefold())
-        for part in re.split(r"(\d+)", str(value or ""))
-        if part
-    )
 
 
 def shared_cover(plans: list[Plan]) -> str | None:
@@ -97,7 +90,7 @@ def _compact_codes(codes: list[str]) -> str:
     numeric = sorted({int(code) for code in codes if code.isdigit()})
     other = sorted(
         {code for code in codes if not code.isdigit()},
-        key=_natural_code_key,
+        key=natural_code_key,
     )
     parts: list[str] = []
     start = previous = None
@@ -183,7 +176,7 @@ def write_sob(
             "label": p.display_name,
             "benefit_items": (p.benefit_schedule or {}).get("items"),
         }
-        for p in sorted(plans, key=lambda plan: _natural_code_key(plan.code))
+        for p in sorted(plans, key=lambda plan: natural_code_key(plan.code))
         if isinstance(p.benefit_schedule, dict)
         and isinstance(p.benefit_schedule.get("items"), list)
         and p.benefit_schedule["items"]
@@ -321,12 +314,37 @@ def write_sob(
                 ws.cell(row=row, column=col).alignment = CENTER_WRAP
             border_row(ws, 1, sob_last_col)
 
+    def _per_column_limit_rows(entry: dict[str, Any], indent: str) -> None:
+        """Limits that differ by plan: one row per label, a cell per column."""
+        by_column = [
+            {
+                str(lim.get("label") or "").strip(): str(lim.get("value") or "").strip()
+                for lim in column_limits_for(entry, col.get("id"))
+                if isinstance(lim, dict)
+            }
+            for col in columns
+        ]
+        labels: list[str] = []
+        for limits in by_column:
+            labels += [label for label in limits if label and label not in labels]
+        for label in labels:
+            values = [limits.get(label, "") for limits in by_column]
+            ws.append(["", f"{indent}• {label}", *values] + ([""] if quotation else []))
+            row = ws.max_row
+            ws.cell(row=row, column=2).alignment = MIDDLE_WRAP
+            for col in range(first_value_col, sob_last_col + 1):
+                ws.cell(row=row, column=col).alignment = CENTER_WRAP
+            border_row(ws, 1, sob_last_col)
+
     for it in items:
         _value_row(str(it.get("number") or ""), str(it.get("name") or ""), it)
         _property_rows(it, "    ")
         # Non-copay `properties` are machine-derived duplicates of the limits
         # (maximum_days ↔ "Maximum no. of days") — never rendered.
-        _limit_rows(it.get("limits"), "    ")
+        if it.get("column_limits"):
+            _per_column_limit_rows(it, "    ")
+        else:
+            _limit_rows(it.get("limits"), "    ")
         for sub in it.get("sub_items") or []:
             _value_row(
                 _display_number(sub.get("number") or sub.get("key") or ""),

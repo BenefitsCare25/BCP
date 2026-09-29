@@ -22,11 +22,10 @@ having to trust the document blindly.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import tenant_or_global
@@ -35,6 +34,7 @@ from app.services.category_member_counts import build_category_member_counts
 from app.services.plan_hydration import basis_amount
 from app.services.product_insurer import insurer_from_answers, insurers_from_answers
 from app.services.product_registry import dependant_count_from_tiers
+from app.services.slip_parsing.text import natural_code_key
 
 Mode = Literal["placement", "quotation"]
 
@@ -42,15 +42,6 @@ Mode = Literal["placement", "quotation"]
 SOURCE_ROSTER = "roster"
 SOURCE_SLIP = "slip"
 SOURCE_NONE = "none"
-
-
-def _natural_code_key(value: str) -> tuple[tuple[int, int | str], ...]:
-    """Sort plan codes for people: 1, 2, 10, D01, not 1, 10, 2, D01."""
-    return tuple(
-        (0, int(part)) if part.isdigit() else (1, part.casefold())
-        for part in re.split(r"(\d+)", str(value or ""))
-        if part
-    )
 
 
 @dataclass(frozen=True)
@@ -96,6 +87,10 @@ class SlipContext:
     # header/eligibility wording the broker entered lives here and nowhere else.
     answers_by_code: dict[str, dict[str, Any]] = field(default_factory=dict)
     figures: dict[str, CategoryFigures] = field(default_factory=dict)
+    # Products with a setup for this year but no categories or plans yet: they
+    # show as tabs in Company & Benefits, so the export names them rather than
+    # leaving the reader to wonder why they are missing.
+    setup_only: list[Product] = field(default_factory=list)
 
     @property
     def blank_rates(self) -> bool:
@@ -213,7 +208,7 @@ def load_context(db: Session, py: PolicyYear, mode: Mode) -> SlipContext:
         db.execute(
             select(Plan).where(Plan.policy_year_id == py.id).order_by(Plan.code)
         ).scalars(),
-        key=lambda plan: _natural_code_key(plan.code),
+        key=lambda plan: natural_code_key(plan.code),
     )
     terms = {
         t.product_id: t
@@ -244,6 +239,22 @@ def load_context(db: Session, py: PolicyYear, mode: Mode) -> SlipContext:
         else [],
         key=lambda p: p.code,
     )
+
+    placed_codes = {p.code.upper() for p in products}
+    missing = sorted(code for code in answers_by_code if code and code not in placed_codes)
+    setup_only: list[Product] = []
+    if missing:
+        by_code: dict[str, Product] = {}
+        for row in db.execute(
+            select(Product).where(
+                func.upper(Product.code).in_(missing),
+                tenant_or_global(Product.client_id, py.client_id),
+            )
+        ).scalars():
+            # The client's own row wins over a global catalog row.
+            if row.code.upper() not in by_code or row.client_id is not None:
+                by_code[row.code.upper()] = row
+        setup_only = [by_code[c] for c in missing if c in by_code]
 
     cats_by_product: dict[str | None, list[Category]] = {}
     for c in categories:
@@ -277,4 +288,5 @@ def load_context(db: Session, py: PolicyYear, mode: Mode) -> SlipContext:
         terms=terms,
         answers_by_code=answers_by_code,
         figures=figures,
+        setup_only=setup_only,
     )

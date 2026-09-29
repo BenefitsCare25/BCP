@@ -50,6 +50,22 @@ def _items_of(plan: dict[str, Any]) -> list[dict[str, Any]]:
     return items if isinstance(items, list) else []
 
 
+def _limit_pairs(limits: Any) -> list[tuple[str, str]]:
+    """A limits list as comparable ``(label, value)`` pairs."""
+    return [
+        (str(lim.get("label") or "").strip(), str(lim.get("value") or "").strip())
+        for lim in (limits if isinstance(limits, list) else [])
+        if isinstance(lim, dict)
+    ]
+
+
+def column_limits_for(item: dict[str, Any], col_id: str | None) -> list[Any]:
+    """The limits a column shows for ``item``: its own when it differs from
+    the base column, else the row's shared list."""
+    own = (item.get("column_limits") or {}).get(col_id) if col_id else None
+    return own if isinstance(own, list) else list(item.get("limits") or [])
+
+
 def _effective(overrides: Any, col_id: str | None, base: Any) -> Any:
     """Resolve a cell: an ABSENT *or NULL* override inherits the base value.
 
@@ -319,8 +335,11 @@ def sob_from_plan_items(
                 cells.append(c.get("value") or None)
             else:
                 # Re-folding stored values: a blank is the broker's own blank
-                # (or a flattened "NA"), never "not stated". Keep it verbatim.
-                cells.append(c.get("value"))
+                # (or a flattened "NA"), never "not stated". Keep it verbatim —
+                # as "" rather than None, because None means "inherit" below and
+                # would print the base plan's figure under a plan that has none.
+                value = c.get("value")
+                cells.append("" if value is None else value)
         # Column 0's cell IS the base value and has nothing to inherit from, so
         # "not stated" is simply blank there.
         base_value = (cells[0] if cells else None) or ""
@@ -382,6 +401,18 @@ def sob_from_plan_items(
                 }
             )
 
+        # Limits ("Maximum no. of days") are one list per row, taken from the
+        # base column. A plan whose own limits differ keeps them here, or its
+        # value would silently become the base plan's (Vopak GHS: only Plan 1A
+        # carries a 120-day cap under In-patient Expenses).
+        base_limits = _limit_pairs(base.get("limits"))
+        column_limits = {
+            col["id"]: list(by_key[ci][row_key].get("limits") or [])
+            for ci, col in enumerate(columns)
+            if ci > 0
+            and row_key in by_key[ci]
+            and _limit_pairs(by_key[ci][row_key].get("limits")) != base_limits
+        }
         items.append(
             {
                 "uid": str(
@@ -397,6 +428,7 @@ def sob_from_plan_items(
                 "overrides": overrides,
                 "properties": {} if per_column_props else dict(base.get("properties") or {}),
                 "column_properties": column_properties if per_column_props else None,
+                **({"column_limits": column_limits} if column_limits else {}),
                 "sub_items": sub_items,
             }
         )
@@ -560,7 +592,7 @@ def resolve_plan_schedule(
                 "name": it.get("name") or "",
                 "value": value,
                 "note": it.get("note"),
-                "limits": it.get("limits") or [],
+                "limits": column_limits_for(it, col_id),
                 "sub_items": subs_out,
                 "properties": properties,
                 "kind": it.get("kind"),

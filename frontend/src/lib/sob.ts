@@ -13,6 +13,7 @@
 
 import type {
   BenefitItemAnswer,
+  BenefitLimit,
   BenefitKind,
   PlanAnswer,
   SobColumn,
@@ -261,6 +262,18 @@ export function buildSobFromPlans(plans: PlanAnswer[]): SobSchedule | null {
       };
     });
 
+    // A plan whose own limits differ from the base column's keeps them
+    // (mirrors sob_columns.sob_from_plan_items' `column_limits`).
+    const limitKey = (limits: BenefitLimit[] | undefined) =>
+      JSON.stringify((limits ?? []).map((l) => [l.label.trim(), (l.value ?? "").trim()]));
+    const baseLimits = limitKey(base.limits);
+    const columnLimits: Record<string, BenefitLimit[]> = {};
+    columns.forEach((col, ci) => {
+      const row = byKey[ci]?.get(key);
+      if (ci > 0 && row && limitKey(row.limits) !== baseLimits)
+        columnLimits[col.id] = [...(row.limits ?? [])];
+    });
+
     return {
       uid: base.uid ?? uid(),
       number: base.number,
@@ -268,6 +281,7 @@ export function buildSobFromPlans(plans: PlanAnswer[]): SobSchedule | null {
       kind: base.kind ?? "amount",
       note: base.note ?? null,
       limits: base.limits ?? [],
+      column_limits: Object.keys(columnLimits).length ? columnLimits : undefined,
       base_value: baseValue,
       overrides,
       properties: perColumnProps ? {} : { ...(base.properties ?? {}) },
@@ -885,11 +899,15 @@ export function removeColumn(sob: SobSchedule, columnId: string): SobSchedule {
     delete colProps[columnId];
     const claimLimits = { ...(it.claim_limits ?? {}) };
     delete claimLimits[columnId];
+    const colLimits = { ...(it.column_limits ?? {}) };
+    delete colLimits[columnId];
     return {
       ...it,
       overrides,
       column_properties: it.column_properties ? colProps : undefined,
       claim_limits: it.claim_limits ? claimLimits : undefined,
+      column_limits:
+        it.column_limits && Object.keys(colLimits).length ? colLimits : undefined,
       sub_items: it.sub_items.map((s) => {
         const { [columnId]: _s, ...subOv } = s.overrides;
         return { ...s, overrides: subOv };

@@ -165,6 +165,33 @@ class ExtractedEndorsement:
 
 
 @dataclass(frozen=True)
+class SlipTerm:
+    """One ``Label : value`` commercial term printed on the slip (Experience
+    Refund, Policyholder(s) Rated Together, Discount, the Annual Premium line…),
+    kept in the slip's own wording."""
+
+    label: str
+    value: str
+    source_row: int
+
+
+@dataclass(frozen=True)
+class SlipSection:
+    """A titled block no structured parser owns — kept verbatim so nothing the
+    slip states is silently dropped (FLEX options, dependant enrolment rules,
+    Endorsements, Additional Arrangements, …).
+
+    ``placement`` records where the slip printed it: ``"basis"`` (between the
+    Basis of Cover table and the Rate section) or ``"after_sob"``.
+    """
+
+    title: str
+    placement: str
+    rows: tuple[tuple[str, ...], ...]
+    source_row: int
+
+
+@dataclass(frozen=True)
 class ProductSlip:
     sheet: str
     product_code: str
@@ -184,6 +211,18 @@ class ProductSlip:
     # client's own vocabulary while persistence stays canonical.
     tier_labels: dict[str, str] | None = None
     endorsements: tuple[ExtractedEndorsement, ...] = ()
+    terms: tuple[SlipTerm, ...] = ()
+    sections: tuple[SlipSection, ...] = ()
+    # Set when this sheet is one of several distinct policies of one product
+    # type (see ``slip_variants``): the base type code and the variant's label.
+    # ``product_code`` then already carries the variant code ("GHS-VTS").
+    variant_of: str | None = None
+    variant_label: str | None = None
+    # True when the workbook reported this sheet's merged cells, so every value
+    # merged across plans was already copied into each plan's cell (see
+    # ``dispatch._fill_plan_spans``). A plan cell still blank is then a real
+    # blank, not a value stated once for the span, and must not inherit.
+    merges_resolved: bool = False
     # Registry classification at parse time: which layout family extracted the
     # sheet and whether the product code was recognized. Unknown codes are
     # surfaced downstream as needs_classification.

@@ -1,7 +1,7 @@
 """Layer 2 schema endpoints — employee attributes + products."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -28,6 +28,7 @@ from app.schemas.api import (
 from app.services import product_registry
 from app.services.form_profiles import infer_profile
 from app.services.matching_engine import insured_names
+from app.services.product_variants import variant_traits
 
 router = APIRouter(tags=["schemas"])
 
@@ -80,6 +81,7 @@ def _product_out(p: Product) -> ProductOut:
         layout_family=entry.layout_family,
         report_code=meta.get("report_code"),
         entities=insured_names(meta.get("entities")),
+        **product_registry.variant_fields(p.code, meta),
     )
 
 
@@ -250,6 +252,30 @@ def list_products(
     return [_product_out(p) for p in rows]
 
 
+def _variant_request(payload: ProductCreate) -> tuple[str, str] | None:
+    """``(base code, label)`` when the request creates a product variant.
+
+    The base must be a product TYPE (a registry code or alias), never another
+    variant — variants of variants would make the type ambiguous.
+    """
+    if not payload.variant_of:
+        return None
+    label = " ".join((payload.variant_label or "").split())
+    base = product_registry.base_code(payload.variant_of)
+    if product_registry.variant_label_of(payload.variant_of.strip().upper()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "A variant must be based on a product type, not on another variant.",
+        )
+    if not label or product_registry.variant_code(base, label) == base:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Give the variant a label with letters or digits (for example the "
+            "insurer or the legal entity it covers).",
+        )
+    return base, label
+
+
 @router.post(
     "/schemas/products",
     response_model=ProductOut,
@@ -263,6 +289,9 @@ def create_product(
 ) -> ProductOut:
     client_id = _resolve_create_client_id(scope, user)
     code = payload.code.strip().upper()
+    variant = _variant_request(payload)
+    if variant is not None:
+        code = product_registry.variant_code(*variant)
     if not code:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -294,14 +323,24 @@ def create_product(
         metadata["report_code"] = payload.report_code
     if payload.entities:
         metadata["entities"] = insured_names(payload.entities)
+    columns: dict[str, Any] = {
+        "display_name": payload.display_name.strip() or code,
+        "participation_model": payload.participation_model,
+        "has_dependants": payload.has_dependants,
+        "is_outpatient": payload.is_outpatient,
+    }
+    if variant is not None:
+        # A variant behaves like its base type whatever the client sent:
+        # participation, outpatient flag and dependants come from the base.
+        traits = variant_traits(db, client_id, *variant)
+        metadata = {**traits.pop("product_metadata"), **metadata}
+        traits.pop("display_name")
+        columns.update(traits)
     row = Product(
         client_id=client_id,
         code=code,
-        display_name=payload.display_name.strip() or code,
-        participation_model=payload.participation_model,
-        has_dependants=payload.has_dependants,
-        is_outpatient=payload.is_outpatient,
         product_metadata=metadata or None,
+        **columns,
     )
     db.add(row)
     db.flush()

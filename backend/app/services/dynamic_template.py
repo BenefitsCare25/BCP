@@ -31,6 +31,7 @@ from app.services.product_templates import (
     TemplateSubItem,
     TemplateTier,
 )
+from app.services.slip_parsing.text import natural_code_key
 
 # Generic header fields — product-agnostic, reusing GHS's field ids so slip
 # pre-fill (slip_to_setup) and suggestions key off the same names. Office Address
@@ -372,12 +373,18 @@ def synthesize_template(
             )
         ).scalars()
     )
+    # Column 0 of the synthesized schedule is the base every other plan's blank
+    # cell inherits from, so plan order must not depend on the database's row
+    # order (Postgres and SQLite return these differently).
+    plans.sort(key=lambda p: natural_code_key(p.code))
     cats = list(
         db.execute(
-            select(Category).where(
+            select(Category)
+            .where(
                 Category.product_id == product.id,
                 Category.policy_year_id == policy_year_id,
             )
+            .order_by(Category.priority)
         ).scalars()
     )
     if not plans and not cats:

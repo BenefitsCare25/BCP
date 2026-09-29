@@ -476,6 +476,15 @@ export function useSlipUpload(policyYearId: string) {
           if (r.replaced_categories > 0) {
             parts.push(`${r.replaced_categories} prior rows replaced`);
           }
+          if (r.variants_created?.length) {
+            // Several policies of one product (per entity / per insurer) were
+            // split into separate product variants.
+            parts.push(
+              `${r.variants_created.length} product variant${
+                r.variants_created.length === 1 ? "" : "s"
+              } added (${r.variants_created.join(", ")})`,
+            );
+          }
           if (r.rematched) {
             parts.push(
               `employees re-matched${

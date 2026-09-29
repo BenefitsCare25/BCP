@@ -354,8 +354,9 @@ def test_basis_of_cover_and_tiered_rates(client: TestClient) -> None:
     ]
 
     rate_i = _row_index(rows, "Rate :")
-    # Tier codes sit above their Rate/Premium column pairs.
-    assert (rows[rate_i][3], rows[rate_i][5]) == ("EO", "SO")
+    # Tier names sit above their Rate/Premium column pairs, in the slip's own
+    # wording where it was captured ("Spouse"), else the canonical code ("EO").
+    assert (rows[rate_i][3], rows[rate_i][5]) == ("EO", "Spouse")
     assert rows[rate_i + 1][1:8] == [
         "Insured", "Category", "Plan", "Rate", "Premium", "Rate", "Premium",
     ]

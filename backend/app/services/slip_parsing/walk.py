@@ -14,11 +14,11 @@ from app.services.slip_parsing.text import (
     _PREMIUM_TRAILER,
     _RATE_CODE,
     _SKIP_PHRASES,
-    _int_code,
     _non_empty,
     _norm,
     _row_text,
     _safe_float,
+    canonical_plan_code,
 )
 
 
@@ -45,7 +45,6 @@ class _Columns:
 # Tier vocabulary, derived from the registry so adding a product/tier scheme
 # there is the only change needed — the slip's count block is never matched
 # against a hand-kept list here.
-_TIER_TOKENS = product_registry.tier_token_map()
 _TIER_SCOPE = product_registry.tier_scope_map()
 
 # A sub-header cell that totals its siblings rather than naming a population.
@@ -55,15 +54,16 @@ _TOTAL_LABEL_RE = re.compile(r"^(?:sub[\s-]*)?total\b", re.IGNORECASE)
 def _tier_for_label(value: Cell) -> tuple[str | None, bool]:
     """(canonical tier key, is-a-total) for one count sub-header cell.
 
-    Only the leading word is matched, so a slip's own punctuation survives:
-    "Child (ren)" and "Child" both resolve to the child tier. A label naming no
-    known tier is an undivided count column ("Per Member", "Employees").
+    Resolved through the registry's wording-tolerant matcher, so "Child (ren)",
+    "Per Child" and "Child" all name the child tier; a qualified label ("Child
+    (Age 1-25)") falls back to its leading word. A label naming no known tier
+    is an undivided count column ("Per Member", "Employees").
     """
     text = _norm(value)
     if _TOTAL_LABEL_RE.match(text):
         return None, True
-    word = re.match(r"[A-Za-z]+", text)
-    return (_TIER_TOKENS.get(word.group(0).upper()) if word else None), False
+    tier = product_registry.canonical_tier(text) or product_registry.leading_tier(text)
+    return tier, False
 
 # A member-count column header, after the leading decoration ("* ") is stripped:
 # "* No. of employees", "* Nos of lives", "* Number" (the medical sheets, whose
@@ -117,6 +117,41 @@ def _identify_columns(header_row: list[Cell]) -> _Columns:
     return _Columns(insured, category, participation, plan, num_employees, basis, sum_insured)
 
 
+def _inline_tier_columns(header: list[Cell], cols: _Columns) -> _Columns:
+    """Count columns named by tier labels ON the header row itself.
+
+    Some slips put the tier vocabulary on the column-header row and the count
+    word ("* Number") on the row ABOVE it::
+
+        |          |          |               |      | * Number                    |
+        | Insured  | Category | Participation | Plan | EO | Per Spouse | Per Child |
+
+    so no header cell matches the count word, yet every tier cell right of the
+    category is a count column. Only cells right of the category (and not
+    already claimed) are considered, mirroring the count-word rule.
+    """
+    if cols.category < 0:
+        return cols
+    claimed = {
+        c
+        for c in (cols.insured, cols.category, cols.participation, cols.plan,
+                  cols.basis, cols.sum_insured)
+        if c >= 0
+    }
+    found: list[tuple[int, str | None]] = []
+    for c in range(cols.category + 1, len(header)):
+        if c in claimed or not _non_empty(header[c]):
+            continue
+        # Strict wording only: on the column-header row a leading tier word
+        # can head a non-count column ("Spouse Plan").
+        tier = product_registry.canonical_tier(_norm(header[c]))
+        if tier is not None:
+            found.append((c, tier))
+    if not found:
+        return cols
+    return replace(cols, num_employees=found[0][0], count_tiers=tuple(found))
+
+
 class _NotAHeaderRow(Exception):
     """The row beneath the column header holds data, not sub-labels."""
 
@@ -149,7 +184,7 @@ def _identify_count_columns(
     mistaken for a header and swallowed.
     """
     if cols.num_employees < 0:
-        return cols
+        return _inline_tier_columns(rows[header_idx] or [], cols)
     single = replace(cols, count_tiers=((cols.num_employees, None),))
     sub_idx = header_idx + 1
     if sub_idx >= len(rows):
@@ -308,6 +343,38 @@ def _realign_category_column(
     return replace(cols, insured=insured, category=best)
 
 
+def _looks_like_basis_row(row: list[Cell], cols: _Columns) -> bool:
+    """A category cell plus at least one cell a Basis-of-Cover row fills."""
+    def filled(c: int) -> bool:
+        return 0 <= c < len(row) and _non_empty(row[c])
+
+    if not filled(cols.category):
+        return False
+    count_cols = [c for c, _ in cols.count_tiers] or [cols.num_employees]
+    return any(
+        filled(c)
+        for c in (cols.participation, cols.plan, cols.basis, cols.sum_insured, *count_cols)
+    )
+
+
+def _is_section_heading(rows: list[list[Cell]], i: int, cols: _Columns) -> bool:
+    """True when row ``i`` titles a new block rather than continuing the table.
+
+    A heading is one text cell on its own. It only ends the table when the next
+    populated row does not read as a basis row either — a multi-entity slip may
+    put an insured name alone on a line above that entity's categories, and that
+    must stay part of the table.
+    """
+    cells = [v for v in rows[i] or [] if _non_empty(v)]
+    if len(cells) != 1 or not isinstance(cells[0], str):
+        return False
+    for j in range(i + 1, min(i + 4, len(rows))):
+        nxt = rows[j] or []
+        if any(_non_empty(v) for v in nxt):
+            return not _looks_like_basis_row(nxt, cols)
+    return True
+
+
 def _walk_data_rows(
     rows: list[list[Cell]],
     header_idx: int,
@@ -325,12 +392,18 @@ def _walk_data_rows(
     # continuations that belong to the same plan. Reset at each new insured block.
     last_plan_code = ""
     consec_blank = 0
+    prev_empty = False
     for i in range(header_idx + cols.header_rows, len(rows)):
         row = rows[i] or []
         text = _row_text(row)
         upper = text.upper()
         if "FIGURES ABOVE ARE FOR" in upper or "ACTUAL FIGURES" in upper:
             break
+        if out and prev_empty and _is_section_heading(rows, i, cols):
+            # A titled sub-table ("FLEX Option", "Enrolment of Dependents") —
+            # the Basis-of-Cover table has ended; `sections` keeps the rest.
+            break
+        prev_empty = not text.strip()
         if re.fullmatch(r"\s*rate\s*:?\s*", text.strip(), re.IGNORECASE):
             break
         if upper.startswith("RATE :"):
@@ -357,8 +430,9 @@ def _walk_data_rows(
         # have no '*' and are preserved.
         if plan_raw:
             plan_raw = _FOOTNOTE_SPLIT.split(plan_raw, maxsplit=1)[0].strip()
-        # Normalize numeric plan codes ("1.0" → "1") to match Plan.code
-        plan_str = _int_code(plan_raw) if plan_raw else ""
+        # One spelling for the plan ("1.0" / "Plan 1A" → "1" / "1A"), the same
+        # one the SOB header and the Rate section resolve to.
+        plan_str = canonical_plan_code(plan_raw) if plan_raw else ""
 
         if cat_str.startswith("*") or "FIGURES" in cat_str.upper():
             break

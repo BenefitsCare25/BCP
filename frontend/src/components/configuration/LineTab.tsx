@@ -100,6 +100,8 @@ export function LineTab({
           has_slip_data: false,
           line,
           is_client_product: true,
+          base_code: known?.base_code ?? null,
+          variant_label: known?.variant_label ?? null,
         } satisfies SetupProductSummary;
       });
     return [...real, ...synthetic].sort((a, b) => a.code.localeCompare(b.code));
@@ -230,8 +232,20 @@ export function LineTab({
           <div className="flex items-start justify-between gap-3">
             <TabsList className="flex-wrap h-auto">
               {products.map((p) => (
-                <TabsTrigger key={p.code} value={p.code} title={p.display_name}>
-                  <code className="font-mono text-xs font-semibold">{p.code}</code>
+                <TabsTrigger
+                  key={p.code}
+                  value={p.code}
+                  title={p.display_name}
+                  className="gap-1.5"
+                >
+                  <code className="font-mono text-xs font-semibold">
+                    {p.variant_label ? p.base_code : p.code}
+                  </code>
+                  {p.variant_label && (
+                    <span className="text-xs text-muted-foreground">
+                      {p.variant_label}
+                    </span>
+                  )}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -253,6 +267,11 @@ export function LineTab({
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
                         <CardTitle>{p.display_name}</CardTitle>
+                        {p.variant_label && (
+                          <span className="text-sm text-muted-foreground">
+                            Separate {p.base_code} policy · {p.variant_label}
+                          </span>
+                        )}
                         <ProductSetupStatus
                           draft={productDraft}
                           group={productGroup}

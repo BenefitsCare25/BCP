@@ -47,7 +47,12 @@ TIER_SCHEMES: dict[str, TierScheme] = {
     "eo_es_ec_ef": TierScheme(
         scheme_id="eo_es_ec_ef",
         member_scope="composite",
-        token_map={"EO": "EO", "ES": "ES", "EC": "EC", "EF": "EF"},
+        token_map={
+            "EO": "EO", "ES": "ES", "EC": "EC", "EF": "EF",
+            # Spelled-out forms ("Employee Only", "Employee & Spouse").
+            "EMPLOYEE ONLY": "EO", "EMPLOYEE SPOUSE": "ES",
+            "EMPLOYEE CHILD": "EC", "EMPLOYEE FAMILY": "EF",
+        },
         labels={
             "EO": "Employee Only",
             "ES": "Employee & Spouse",
@@ -58,7 +63,11 @@ TIER_SCHEMES: dict[str, TierScheme] = {
     "dependant_only": TierScheme(
         scheme_id="dependant_only",
         member_scope="dependant",
-        token_map={"SO": "SO", "CO": "CO", "FO": "FO", "SC": "SC"},
+        token_map={
+            "SO": "SO", "CO": "CO", "FO": "FO", "SC": "SC",
+            "SPOUSE ONLY": "SO", "CHILD ONLY": "CO", "FAMILY ONLY": "FO",
+            "SPOUSE CHILD": "SC",
+        },
         labels={
             "SO": "Spouse Only",
             "CO": "Child(ren) Only",
@@ -87,6 +96,56 @@ def tier_token_map() -> dict[str, str]:
         for scheme in TIER_SCHEMES.values()
         for token, key in scheme.token_map.items()
     }
+
+
+# Words a slip wraps around a tier name that carry no meaning of their own:
+# "Per Spouse", "No. of Child(ren)", "EO Premium", "Spouse & Child".
+_TIER_FILLER = frozenset(
+    {"PER", "EACH", "NO", "NOS", "NUMBER", "OF", "THE", "RATE", "PREMIUM", "AND"}
+)
+# Plural / bracketed-plural fragments: "Child(ren)" splits to CHILD + REN.
+_TIER_PLURALS = {"CHILDREN": "CHILD", "CHILDS": "CHILD", "SPOUSES": "SPOUSE"}
+_TIER_FRAGMENTS = frozenset({"REN", "S"})
+
+
+def canonical_tier(label: object) -> str | None:
+    """Canonical tier key for a slip's own tier label, or None.
+
+    Slips word the same tier many ways ("Spouse", "Per Spouse", "Spouse Only",
+    "No. of Child(ren)"). Matching is on the label's WORDS, with filler and
+    plural fragments removed, against the registry's tier vocabulary — the
+    whole phrase first, then the phrase with its filler words dropped — so a new
+    wording needs no parser change, and a label naming no tier ("Employees",
+    "Total") stays None rather than being guessed. Labels that qualify a tier
+    ("Child (Age 1-25)") are the caller's call: see ``leading_tier``.
+    """
+    words = [
+        _TIER_PLURALS.get(w, w)
+        for w in re.findall(r"[A-Z]+", str(label or "").upper())
+        if w not in _TIER_FRAGMENTS
+    ]
+    if not words:
+        return None
+    tokens = tier_token_map()
+    core = [w for w in words if w not in _TIER_FILLER]
+    for phrase in (" ".join(words), " ".join(core)):
+        if phrase in tokens:
+            return tokens[phrase]
+    return None
+
+
+def leading_tier(label: object) -> str | None:
+    """Canonical tier key named by a label's LEADING word, or None.
+
+    A count sub-header often qualifies its tier ("Child (Age 1-25)", "Spouse
+    (legal)"): the whole phrase names no tier, but its first word does. Only
+    for cells already known to be tier sub-headers — elsewhere a leading tier
+    word ("Spouse of employee") is prose.
+    """
+    word = re.match(r"[A-Z]+", str(label or "").strip().upper())
+    if word is None:
+        return None
+    return tier_token_map().get(_TIER_PLURALS.get(word.group(0), word.group(0)))
 
 
 def tier_scope_map() -> dict[str, str]:
@@ -515,6 +574,54 @@ def resolve_code(code: str) -> str:
     return _ALIAS_MATCH.get(n, n)
 
 
+# ── Product variants ─────────────────────────────────────────────────────────
+# A variant is a second policy of the same product TYPE for one client — GHS
+# placed separately per legal entity, or a second GHS with another insurer. It
+# is its own Product row (own categories, plans, insurer, rates) whose code is
+# ``<BASE>-<LABEL>`` ("GHS-VTS"). The base is always the leading code, which is
+# exactly what ``get_entry`` already resolves compound codes by, so a variant
+# inherits every type-level behaviour (form, line, rates, claims) from its base.
+VARIANT_SEP = "-"
+_VARIANT_LABEL_MAX = 24
+
+
+def base_code(code: str) -> str:
+    """The product-type code behind any code: ``GHS-VTS`` → ``GHS``,
+    ``WICI`` → ``WICA``. An unknown code is returned upper-cased unchanged."""
+    token = (code or "").strip().upper()
+    entry = get_entry(token)
+    return entry.code if entry is not None else token
+
+
+def variant_label_of(code: str) -> str | None:
+    """The variant part of a code (``GHS-VTS`` → ``VTS``), or None for a base
+    code or alias."""
+    token = (code or "").strip().upper()
+    base = base_code(token)
+    head, sep, rest = token.partition(VARIANT_SEP)
+    if not sep or head != base or not rest:
+        return None
+    return rest
+
+
+def variant_fields(code: str, metadata: dict[str, Any] | None) -> dict[str, str | None]:
+    """``{base_code, variant_label}`` for API payloads — both None on a base
+    product. The stored metadata keeps the broker's own label spelling; the
+    code is the fallback for rows created before it was recorded."""
+    meta = metadata if isinstance(metadata, dict) else {}
+    label = str(meta.get("variant_label") or "").strip() or variant_label_of(code)
+    if not label:
+        return {"base_code": None, "variant_label": None}
+    return {"base_code": str(meta.get("base_code") or base_code(code)), "variant_label": label}
+
+
+def variant_code(base: str, label: str) -> str:
+    """The code for ``label``'s variant of ``base``: alphanumerics only, bounded,
+    so it is safe in a URL path, a sheet title and the (client, code) key."""
+    slug = re.sub(r"[^A-Z0-9]+", "", (label or "").upper())[:_VARIANT_LABEL_MAX]
+    return f"{base.strip().upper()}{VARIANT_SEP}{slug}" if slug else base.strip().upper()
+
+
 def derive_product_code(
     sheet_name: str, known: frozenset[str] | None = None
 ) -> tuple[str, bool]:
@@ -527,7 +634,9 @@ def derive_product_code(
     - bare/unknown names     → last part passthrough, ``known=False``
     """
     known_set = known if known is not None else known_codes()
-    sn = (sheet_name or "").strip()
+    # A parenthesised qualifier names WHICH policy of the product the sheet is
+    # ("GHS (VTS)", "GTL (Directors)") — never part of the code itself.
+    sn = _PAREN.sub(" ", sheet_name or "").strip() or (sheet_name or "").strip()
     parts = [p.strip() for p in re.split(r"[-/]", sn) if p.strip()]
     normalized = [re.sub(r"\s+", "_", p).upper() for p in parts]
 
@@ -541,9 +650,35 @@ def derive_product_code(
     # Otherwise prefer the last part (STM's insurer-prefix pattern).
     if normalized and normalized[-1] in known_set:
         return normalized[-1], True
+    # A code followed by free words ("GHS Locals", "GTL_Directors").
+    lead = re.match(r"[A-Za-z0-9]+", sn)
+    if lead and lead.group(0).upper() in known_set:
+        return lead.group(0).upper(), True
     # Fallback: take the last part as-is.
     code = normalized[-1] if normalized else sn.upper()
     return code.rstrip("_"), False
+
+
+_PAREN = re.compile(r"\(([^)]*)\)")
+
+
+def sheet_qualifier(sheet_name: str, code: str) -> str:
+    """What a sheet name says beyond its product code — the variant's label.
+
+    ``GHS (VTS)`` → ``VTS``; ``GHS - Locals`` → ``Locals``; ``GEL-GTL`` →
+    ``GEL``; a bare ``GHS`` → "". Parenthesised text wins when present, since
+    it is how slips name the policy a sheet belongs to.
+    """
+    name = (sheet_name or "").strip()
+    inner = [m.strip() for m in _PAREN.findall(name) if m.strip()]
+    if inner:
+        return " ".join(inner)
+    base = base_code(code)
+    words = [
+        w for w in re.split(r"[-/_\s]+", name)
+        if w and w.upper() not in {code.upper(), base}
+    ]
+    return " ".join(words)
 
 
 def resolve_entry(code: str, product_metadata: dict[str, Any] | None = None) -> ProductEntry:

@@ -131,7 +131,10 @@ def infer_profile(code: str, override: str | None = None) -> FormProfile:
     forcing the medical default."""
     if override and override in PROFILE_SECTIONS:
         return override
-    return _CODE_PROFILE.get((code or "").strip().upper(), DEFAULT_PROFILE)
+    token = (code or "").strip().upper()
+    return _CODE_PROFILE.get(token) or _CODE_PROFILE.get(
+        product_registry.base_code(token), DEFAULT_PROFILE
+    )
 
 
 def sections_for(profile: str) -> list[str]:

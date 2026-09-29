@@ -328,4 +328,11 @@ def get_template(code: str) -> ProductTemplate | None:
             # Reuse the sibling's structure but keep the requested code so the
             # materialized Product/Plan rows carry the real product code.
             return sibling.model_copy(update={"code": key})
+    base = product_registry.base_code(key)
+    if base != key:
+        # A product variant ("GHS-VTS") uses its base type's form, keeping its
+        # own code for the same reason as an alias.
+        base_tpl = get_template(base)
+        if base_tpl is not None:
+            return base_tpl.model_copy(update={"code": key})
     return None

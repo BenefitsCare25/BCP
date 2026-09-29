@@ -32,6 +32,12 @@ import {
   useSetupProducts,
 } from "@/api/hooks";
 import { useRegistry } from "@/api/registry";
+import {
+  AddVariantSection,
+  emptyVariant,
+  previewVariantCode,
+  type VariantDraft,
+} from "./AddVariantSection";
 import { LINE_LABELS, isProductAdded, lineForCode } from "@/lib/insuranceLines";
 import { formatError } from "@/lib/errors";
 import type { InsuranceLine } from "@/types";
@@ -73,6 +79,8 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [showCustom, setShowCustom] = useState(false);
   const [custom, setCustom] = useState(emptyCustom(line));
+  const [showVariant, setShowVariant] = useState(false);
+  const [variant, setVariant] = useState<VariantDraft>(emptyVariant);
 
   const { data: allProducts = [] } = useSetupProducts(policyYearId);
   const { data: setups = [] } = useProductSetups(policyYearId);
@@ -116,11 +124,25 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
     [allProducts, line, draftCodes, registry],
   );
   const pickableCount = lineProducts.filter((p) => !p.added).length;
+  // Variants are taken from product TYPES only — never a variant of a variant.
+  const variantTypes = useMemo(
+    () =>
+      lineProducts
+        .filter((p) => !p.variant_label)
+        .map((p) => ({ code: p.code, name: p.display_name })),
+    [lineProducts],
+  );
+  const takenCodes = useMemo(
+    () => new Set(allProducts.map((p) => p.code.toUpperCase())),
+    [allProducts],
+  );
 
   const reset = () => {
     setPicked(new Set());
     setShowCustom(false);
     setCustom(emptyCustom(line));
+    setShowVariant(false);
+    setVariant(emptyVariant);
   };
 
   const toggle = (code: string) => {
@@ -137,8 +159,14 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
     showCustom && customCode.length > 0 && custom.displayName.trim().length > 0;
   const customPartial =
     showCustom && (customCode.length > 0 || custom.displayName.trim().length > 0);
+  const variantCode = showVariant ? previewVariantCode(variant) : "";
+  const variantValid = Boolean(variantCode) && !takenCodes.has(variantCode);
+  const variantPartial =
+    showVariant && (variant.baseCode !== "" || variant.label.trim() !== "");
   const canSubmit =
-    (picked.size > 0 || customValid) && !(customPartial && !customValid);
+    (picked.size > 0 || customValid || variantValid) &&
+    !(customPartial && !customValid) &&
+    !(variantPartial && !variantValid);
 
   const submit = async () => {
     if (!canSubmit || create.isPending) return;
@@ -153,6 +181,20 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
         has_dependants: false,
         is_outpatient: false,
         line,
+      });
+    }
+    if (variantValid) {
+      const base = byCode.get(variant.baseCode);
+      const label = variant.label.trim();
+      payloads.push({
+        code: variantCode,
+        display_name: `${base?.display_name ?? variant.baseCode} (${label})`,
+        participation_model: "standard",
+        has_dependants: base?.has_dependants ?? false,
+        is_outpatient: false,
+        line,
+        variant_of: variant.baseCode,
+        variant_label: label,
       });
     }
     if (customValid) {
@@ -170,9 +212,12 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
     const results = await Promise.allSettled(
       payloads.map((p) => create.mutateAsync(p)),
     );
-    const created = payloads
-      .filter((_, i) => results[i].status === "fulfilled")
-      .map((p) => p.code);
+    // The server owns the final code (a variant's is derived from its label).
+    const created = results.flatMap((r, i) =>
+      r.status === "fulfilled"
+        ? [r.value?.code ?? payloads[i].code]
+        : [],
+    );
     const failed = results.length - created.length;
 
     if (created.length) {
@@ -209,8 +254,9 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
         <SheetHeader>
           <SheetTitle>Add {LINE_LABELS[line]} products</SheetTitle>
           <SheetDescription>
-            Pick from the standard {LINE_LABELS[line]} products, or define a
-            custom one. Everything you add is filed under this tab.
+            Pick from the standard {LINE_LABELS[line]} products, add a variant
+            (a second, separately placed policy of one), or define a custom
+            product. Everything you add is filed under this tab.
           </SheetDescription>
         </SheetHeader>
         <SheetBody className="space-y-4">
@@ -397,6 +443,15 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
               </div>
             )}
           </div>
+
+          <AddVariantSection
+            open={showVariant}
+            onToggle={() => setShowVariant((v) => !v)}
+            draft={variant}
+            onChange={setVariant}
+            types={variantTypes}
+            takenCodes={takenCodes}
+          />
         </SheetBody>
         <SheetFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>
@@ -405,7 +460,9 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
           <Button onClick={submit} disabled={!canSubmit || create.isPending}>
             {create.isPending
               ? "Adding…"
-              : `Add ${picked.size + (customValid ? 1 : 0) || ""} & configure`.trim()}
+              : `Add ${
+                  picked.size + (customValid ? 1 : 0) + (variantValid ? 1 : 0) || ""
+                } & configure`.trim()}
           </Button>
         </SheetFooter>
       </SheetContent>

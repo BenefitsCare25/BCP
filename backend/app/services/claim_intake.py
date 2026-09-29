@@ -31,6 +31,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.models import Claim, Employee, StoredDocument
 from app.models.claim import CLAIM_KIND_INSURED
 from app.models.stored_document import DOC_ENTITY_REFERRAL, STORAGE_AVAILABLE
+from app.services import product_registry
 from app.services.claim_limits import configured_benefit_row
 from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE, hospital_sector
 
@@ -342,12 +343,25 @@ class ClaimScopeDefinition:
 
 
 def claim_profile_for(product_code: str | None) -> ClaimIntakeProfile:
-    return _PROFILES.get((product_code or "").strip().upper(), _EMPTY)
+    code = (product_code or "").strip().upper()
+    # A product variant ("GHS-VTS") files claims exactly like its base type.
+    return _PROFILES.get(code) or _PROFILES.get(product_registry.base_code(code), _EMPTY)
 
 
 def product_codes_for_claim_category(category: str) -> tuple[str, ...]:
-    """Canonical codes for SQL filters using the same categories as intake."""
+    """Canonical codes for SQL filters using the same categories as intake.
+
+    Filter with :func:`product_code_in` so variants of these codes match too.
+    """
     return tuple(code for code, profile in _PROFILES.items() if profile.category == category)
+
+
+def product_code_in(
+    column: ColumnElement[Any], codes: tuple[str, ...]
+) -> ColumnElement[bool]:
+    """SQL: ``column`` is one of ``codes`` or a variant of one (``GHS-…``)."""
+    sep = product_registry.VARIANT_SEP
+    return or_(column.in_(codes), *(column.like(f"{code}{sep}%") for code in codes))
 
 
 def supports_gp_riders(product_code: str | None) -> bool:

@@ -41,7 +41,11 @@ def infer_line(code: str, override: str | None = None) -> InsuranceLine:
     else inferred from the code, else the default (Medical). An unrecognized
     override is ignored (falls through to inference) rather than mis-bucketing.
     """
-    inferred = _CODE_LINE.get((code or "").strip().upper(), DEFAULT_LINE)
+    token = (code or "").strip().upper()
+    # A product variant ("GHS-VTS") sits on its base type's line.
+    inferred = _CODE_LINE.get(token) or _CODE_LINE.get(
+        product_registry.base_code(token), DEFAULT_LINE
+    )
     # Existing client product rows for GBT/OSI/WICA may still carry a stale
     # metadata override from when those products lived under Medical. Known
     # General Insurance products should follow the registry unless a non-medical

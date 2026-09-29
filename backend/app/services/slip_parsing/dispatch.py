@@ -26,12 +26,16 @@ from app.services.slip_parsing.models import (
     PlacementSlip,
     PolicyHeader,
     ProductSlip,
+    SlipSection,
+    SlipTerm,
 )
 from app.services.slip_parsing.rates import (
     _enrich_with_rates,
     _extract_voluntary_rates,
+    _find_rate_section_start,
     extract_rate_section,
 )
+from app.services.slip_parsing.sections import extract_sections, extract_terms
 from app.services.slip_parsing.walk import (
     _identify_columns,
     _identify_count_columns,
@@ -73,6 +77,90 @@ class _SheetResult:
     voluntary_rates: tuple[dict[str, Any], ...] = ()
     tier_labels: dict[str, str] | None = None
     endorsements: tuple[ExtractedEndorsement, ...] = ()
+    terms: tuple[SlipTerm, ...] = ()
+    sections: tuple[SlipSection, ...] = ()
+    merges_resolved: bool = False
+
+
+def _free_text(
+    rows: list[list[Any]],
+    categories: tuple[ExtractedCategory, ...],
+    sob_idx: int,
+    sob_end: int,
+) -> tuple[tuple[SlipTerm, ...], tuple[SlipSection, ...]]:
+    """Terms and titled sections in the gaps the structured parsers leave.
+
+    Regions are positional: after the last Basis-of-Cover row up to the Rate
+    section (sub-tables), from the Rate section to the benefit schedule
+    (terms), and from where the schedule stops to the end of the sheet.
+    """
+    n = len(rows)
+    basis_end = max((c.source_row for c in categories), default=0)
+    rate_start = _find_rate_section_start(rows)
+    schedule_start = sob_idx if sob_idx >= 0 else n
+    gap_end = rate_start if rate_start > basis_end else schedule_start
+    terms_start = rate_start if rate_start >= 0 else basis_end
+    terms = extract_terms(rows, terms_start, schedule_start)
+    # Without a Rate section ahead of the schedule the two regions overlap; a
+    # row already kept as a term must not be exported a second time inside a
+    # section block.
+    term_rows = frozenset(t.source_row - 1 for t in terms)
+    sections = list(extract_sections(rows, basis_end, gap_end, "basis", exclude=term_rows))
+    if 0 <= sob_end < n:
+        sections += extract_sections(rows, sob_end, n, "after_sob")
+    return terms, tuple(sections)
+
+
+def _fill_plan_spans(
+    rows: list[list[Any]],
+    merged_ranges: tuple[tuple[int, int, int, int], ...],
+    plan_cols: list[tuple[str, str, int]],
+    sob_idx: int,
+) -> tuple[list[list[Any]], bool]:
+    """Rows with each value merged ACROSS plan columns copied into every plan,
+    and whether the schedule states shared values by merging at all.
+
+    A schedule states a shared value once, merged over the plans it applies to
+    ("150% of item 1 to 7" across PLAN 1..3). The workbook reports it only in
+    the merge's first cell, so the other plans read blank — and a blank plan
+    cell later inherits whichever column sorts first, handing one plan's value
+    to plans the slip never gave it. Only horizontal spans covering two or more
+    plan columns are filled, and only on the span's first row: a vertical merge
+    (one plan's limit spanning its sub-rows) must stay a single cell.
+
+    A merge that starts left of the first plan column is a heading or a label
+    spanning the table ("OUTPATIENT BENEFITS" across name + plans), never a
+    plan value, so it is left alone. The flag is True only when the schedule
+    itself merges across plans: then a plan cell still blank is the slip's own
+    blank. A sheet that merges nothing there (a merged title row doesn't count)
+    writes shared values once and leaves the rest blank, and those must inherit.
+    """
+    plan_idx = sorted(c for _, _, c in plan_cols)
+    if sob_idx < 0 or len(plan_idx) < 2 or not merged_ranges:
+        return rows, False
+    out = rows
+    copied: set[int] = set()
+    spans = False
+    for r0, _r1, c0, c1 in merged_ranges:
+        if r0 <= sob_idx or r0 >= len(rows) or c0 < plan_idx[0]:
+            continue
+        covered = [c for c in plan_idx if c0 <= c < c1]
+        if len(covered) < 2:
+            continue
+        spans = True
+        row = rows[r0] or []
+        value = row[c0] if c0 < len(row) else None
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if out is rows:
+            out = list(rows)
+        if r0 not in copied:
+            out[r0] = list(row) + [None] * max(0, covered[-1] + 1 - len(row))
+            copied.add(r0)
+        for c in covered:
+            if out[r0][c] is None or (isinstance(out[r0][c], str) and not out[r0][c].strip()):
+                out[r0][c] = value
+    return out, spans
 
 
 def _extract_categories_from_sheet(
@@ -88,6 +176,7 @@ def _extract_categories_from_sheet(
         _find_data_start,
         _find_sob_section,
         _fingerprint_from_parts,
+        _is_stop_row,
         _profile_sob_columns,
         roles_from_dict,
         roles_to_dict,
@@ -144,12 +233,15 @@ def _extract_categories_from_sheet(
     # fingerprint) wins over the content profiler.
     sob_idx = _find_sob_section(rows)
     if sob_idx < 0:
+        terms, sections = _free_text(rows, categories, -1, -1)
         return _SheetResult(
             header_fields.header,
             categories,
             voluntary_rates=voluntary_rates,
             tier_labels=tier_labels,
             endorsements=extract_endorsements(sheet),
+            terms=terms,
+            sections=sections,
         )
 
     plan_cols = _detect_plan_columns(rows, sob_idx)
@@ -166,14 +258,22 @@ def _extract_categories_from_sheet(
         else _profile_sob_columns(rows, data_start, plan_cols)
     )
 
+    plan_rows, merges_resolved = _fill_plan_spans(
+        rows, sheet.merged_ranges, plan_cols, sob_idx
+    )
     plans = _extract_plans_from_sheet(
-        rows,
+        plan_rows,
         roles_override=used_roles,
         sob_idx=sob_idx,
         plan_cols=plan_cols,
         data_start=data_start,
     )
 
+    sob_end = next(
+        (i for i in range(data_start, len(rows)) if _is_stop_row(rows[i] or [])),
+        -1,
+    )
+    terms, sections = _free_text(rows, categories, sob_idx, sob_end)
     return _SheetResult(
         header_fields.header,
         categories,
@@ -183,6 +283,9 @@ def _extract_categories_from_sheet(
         voluntary_rates=voluntary_rates,
         tier_labels=tier_labels,
         endorsements=extract_endorsements(sheet),
+        terms=terms,
+        sections=sections,
+        merges_resolved=merges_resolved,
     )
 
 
@@ -237,6 +340,9 @@ def parse_placement_slip(
                     voluntary_rates=result.voluntary_rates,
                     tier_labels=result.tier_labels,
                     endorsements=result.endorsements,
+                    terms=result.terms,
+                    sections=result.sections,
+                    merges_resolved=result.merges_resolved,
                     layout_family=entry.layout_family,
                     # A broker classification (stored metadata) counts as known.
                     registry_known=known or bool(metadata),
