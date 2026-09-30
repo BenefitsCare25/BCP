@@ -76,7 +76,7 @@ export function AppShell() {
     <div className="fixed inset-0 flex w-full overflow-hidden">
       <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <TopBar onMenuClick={() => setMobileNavOpen(true)} />
+        <TopBar onMenuClick={() => setMobileNavOpen(true)} menuOpen={mobileNavOpen} />
         <main className="min-h-0 flex-1 overscroll-contain overflow-x-hidden overflow-y-auto p-5">
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">

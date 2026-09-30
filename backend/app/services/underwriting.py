@@ -387,6 +387,7 @@ def adopt_orphan_cases(db: Session, policy_year_id: str) -> int:
                 UnderwritingCase.policy_year_id == policy_year_id,
                 UnderwritingCase.review_id.is_(None),
             )
+            .order_by(UnderwritingCase.created_at, UnderwritingCase.id)
         ).scalars().all()
     )
     if not orphans:

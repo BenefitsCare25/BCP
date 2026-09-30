@@ -56,6 +56,9 @@ export const queryClient = new QueryClient({
     },
   }),
   mutationCache: new MutationCache({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    },
     onError: (error, _variables, _context, mutation) => {
       // Mutations that own their error UX (e.g. a structured-409 dialog on
       // enrollment submit) opt out of the global toast via meta.

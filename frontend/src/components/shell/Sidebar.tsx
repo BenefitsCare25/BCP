@@ -1,7 +1,10 @@
+import { useEffect } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { Home } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useMe } from "@/api/hooks";
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { COMPANY_NAV, FIRM_NAV, type NavGroup, type NavItem } from "./nav";
 
 export function Sidebar({
@@ -15,50 +18,50 @@ export function Sidebar({
   const path = router.location.pathname;
   const { data: me } = useMe();
   const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  const desktop = useMediaQuery("(min-width: 1024px)");
+  useEffect(() => { if (desktop) onClose?.(); }, [desktop, onClose]);
 
   return (
     <>
-      {/* Scrim behind the drawer on mobile; static sidebar has no scrim (lg+). */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
-          onClick={onClose}
-          aria-hidden="true"
-        />
-      )}
       <aside
-        className={cn(
-          "w-60 shrink-0 border-r border-border bg-sidebar flex flex-col",
-          "fixed inset-y-0 left-0 z-50 h-full transition-transform duration-200",
-          "lg:static lg:z-auto lg:translate-x-0",
-          mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
-        )}
+        className="hidden h-full w-60 shrink-0 flex-col border border-border bg-sidebar lg:flex"
       >
-        <div className="h-14 px-4 flex items-center border-b border-border">
-          <img
-            src="/inspro-logo.png"
-            alt="Inspro Insurance Brokers"
-            className="max-h-8 w-auto"
-          />
-        </div>
-
-        <nav className="flex-1 px-2 py-2.5 overflow-y-auto">
-          <HomeLink active={path === "/home"} />
-
-          {COMPANY_NAV.map((group) => {
-            const items = group.items.filter((item) => !item.adminOnly || canAdmin);
-            return items.length > 0 ? (
-              <Section key={group.key} group={{ ...group, items }} path={path} />
-            ) : null;
-          })}
-          <div className="lg:hidden">
-            <Section group={{ ...FIRM_NAV, items: FIRM_NAV.items.filter(item => !item.adminOnly || canAdmin) }} path={path} />
-          </div>
-        </nav>
-
+        <NavigationContent path={path} canAdmin={canAdmin} />
       </aside>
+      <Sheet open={mobileOpen && !desktop} onOpenChange={open => { if (!open) onClose?.(); }}>
+        <SheetContent id="broker-navigation-drawer" side="left" className="w-60 max-w-[calc(100vw-2rem)] border bg-sidebar"
+          onCloseAutoFocus={event => {
+            event.preventDefault();
+            const target = window.matchMedia("(min-width: 1024px)").matches
+              ? "aside a[href]" : "[data-mobile-nav-trigger]";
+            document.querySelector<HTMLElement>(target)?.focus();
+          }}>
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SheetDescription className="sr-only">Navigate between broker pages.</SheetDescription>
+          <NavigationContent path={path} canAdmin={canAdmin} mobile onNavigate={onClose} />
+        </SheetContent>
+      </Sheet>
     </>
   );
+}
+
+function NavigationContent({ path, canAdmin, mobile = false, onNavigate }: {
+  path: string; canAdmin: boolean; mobile?: boolean; onNavigate?: () => void;
+}) {
+  return <>
+    <div className="flex h-14 shrink-0 items-center border-b border-border px-4">
+      <img src="/inspro-logo.png" alt="Inspro Insurance Brokers" className="max-h-8 w-auto" />
+    </div>
+    <nav aria-label="Broker navigation" className="flex-1 overflow-y-auto px-2 py-2.5"
+      onClick={event => { if ((event.target as HTMLElement).closest("a[href]")) onNavigate?.(); }}>
+      <HomeLink active={path === "/home"} />
+      {COMPANY_NAV.map(group => {
+        const items = group.items.filter(item => !item.adminOnly || canAdmin);
+        return items.length > 0 ? <Section key={group.key} group={{ ...group, items }} path={path} /> : null;
+      })}
+      {mobile && <Section group={{ ...FIRM_NAV, items: FIRM_NAV.items.filter(item => !item.adminOnly || canAdmin) }} path={path} />}
+    </nav>
+  </>;
 }
 
 function HomeLink({ active }: { active: boolean }) {

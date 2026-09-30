@@ -9,8 +9,10 @@ import { FIRM_NAV } from "./nav";
 
 export function TopBar({
   onMenuClick,
+  menuOpen = false,
 }: {
   onMenuClick?: () => void;
+  menuOpen?: boolean;
 }) {
   const { data: me } = useMe();
   const path = useRouterState({ select: (s) => s.location.pathname });
@@ -33,6 +35,10 @@ export function TopBar({
             type="button"
             onClick={onMenuClick}
             aria-label="Open navigation menu"
+            data-mobile-nav-trigger=""
+            aria-haspopup="dialog"
+            aria-expanded={menuOpen}
+            aria-controls={menuOpen ? "broker-navigation-drawer" : undefined}
             className="lg:hidden flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <Menu className="size-5" />

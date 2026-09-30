@@ -77,7 +77,7 @@ test("Home keeps stale matching work visible and treats renewals as calendar dat
     await page.goto("/home");
 
     const renewalMetric = page
-      .getByText("Upcoming Renewal · 30 days", { exact: true })
+      .getByText("Policy periods ending · 30 days", { exact: true })
       .locator("../..");
     await expect(renewalMetric.getByText("1", { exact: true })).toBeVisible();
 

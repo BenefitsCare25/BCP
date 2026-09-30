@@ -1,29 +1,11 @@
-"""Firm-level dashboard summary.
-
-`GET /dashboard/summary` powers the firm Home page: one call returns every
-company the caller can act on, each with a handful of headline counts, plus a
-firm-wide roll-up. Scoped to `accessible_clients` (the same firm boundary every
-other endpoint respects), so it can't leak another firm's companies.
-
-Counts key off each company's CURRENT benefit year (`status == active`) — the
-one the portal reads and claims submit against. Companies with no active year
-report null year and zero counts. The heavy lifting is a few GROUPED queries
-over the union of current-year ids rather than N queries per company.
-
-Postgres note: on multi-firm `system_admin` sessions the request runs inside a
-single firm schema (the active client's), so counts for companies in OTHER
-firms are not visible here — consistent with system_admin operating one firm at
-a time. On SQLite (single schema) every accessible company is counted.
-"""
-
+"""Today's portfolio roster and unresolved work across accessible benefit years."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser, get_current_user
@@ -31,159 +13,87 @@ from app.core.clock import today as business_today
 from app.core.deps import assert_policy_year_for_user
 from app.core.identity import accessible_clients
 from app.db.session import get_db
-from app.models.audit_log import AuditLog
-from app.models.category import Category
-from app.models.claim import (
-    CLAIM_KIND_FLEX,
-    CLAIM_KIND_INSURED,
-    CLAIM_STATUS_AI_FLAGGED,
-    CLAIM_STATUS_AI_REVIEW_PENDING,
-    CLAIM_STATUS_AI_VERIFIED,
-    CLAIM_STATUS_SENT_TO_INSURER,
-    CLAIM_STATUS_SUBMITTED,
-    Claim,
+from app.models.client import Client
+from app.models.policy_year import PolicyYear
+from app.schemas.dashboard import CompanySummary, CompanyYear, DashboardSummary, FirmTotals
+from app.services.dashboard_counts import (
+    _CLAIMS_TO_REVIEW,  # noqa: F401 - compatibility for existing callers
+    _open_window_close_by_year,  # noqa: F401 - compatibility for existing callers
+    collect_counts,
 )
-from app.models.claim_message import AUTHOR_MEMBER, ClaimMessage
-from app.models.dependant import DEPENDANT_STATUS_PENDING, Dependant
-from app.models.employee import Employee
-from app.models.enrollment_window import EnrollmentWindow, WindowStatus
-from app.models.member_enquiry import MemberEnquiry
-from app.models.policy_year import PolicyYear, PolicyYearStatus
-from app.models.underwriting_case import UnderwritingCase, UnderwritingStatus
-from app.services.claim_filters import claim_insurer_filter
 from app.services.product_insurer import placement_insurers
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
-
-# Claims awaiting a broker decision (AI done or routed to manual). Excludes
-# in-flight (ai_review_pending), member-side (needs_info), and terminal states.
-_CLAIMS_TO_REVIEW = (
-    CLAIM_STATUS_SUBMITTED,
-    CLAIM_STATUS_AI_VERIFIED,
-    CLAIM_STATUS_AI_FLAGGED,
+_COUNT_FIELDS = (
+    "member_count", "dependant_count", "claims_to_review", "verification_pending",
+    "insured_claims_to_review", "wallet_claims_to_review", "claims_with_insurer",
+    "claims_overdue", "messages_awaiting_reply", "dependants_pending",
+    "employees_unmatched", "underwriting_pending",
 )
 
 
-class CompanyYear(BaseModel):
-    id: str
-    year: int
-    status: str
-    start_date: date
-    end_date: date
+def _current_periods(years: list[PolicyYear], today: date) -> dict[str, PolicyYear]:
+    selected: dict[str, PolicyYear] = {}
+    for year in years:
+        if year.start_date <= today <= year.end_date:
+            selected.setdefault(year.client_id, year)
+    for year in reversed(years):
+        if year.start_date > today:
+            selected.setdefault(year.client_id, year)
+    for year in years:
+        selected.setdefault(year.client_id, year)
+    return selected
 
 
-class CompanySummary(BaseModel):
-    id: str
-    name: str
-    current_year: CompanyYear | None
-    member_count: int
-    dependant_count: int
-    claims_to_review: int
-    verification_pending: int
-    insured_claims_to_review: int
-    wallet_claims_to_review: int
-    claims_with_insurer: int
-    claims_overdue: int
-    messages_awaiting_reply: int
-    dependants_pending: int
-    employees_unmatched: int
-    matching_stale: bool
-    underwriting_pending: int
-    enrollment_open: bool
-    enrollment_closes_at: datetime | None
-
-
-class FirmTotals(BaseModel):
-    company_count: int
-    member_count: int
-    dependant_count: int
-    claims_to_review: int
-    verification_pending: int
-    insured_claims_to_review: int
-    wallet_claims_to_review: int
-    claims_with_insurer: int
-    claims_overdue: int
-    messages_awaiting_reply: int
-    dependants_pending: int
-    employees_unmatched: int
-    underwriting_pending: int
-    windows_open: int
-
-
-class DashboardSummary(BaseModel):
-    firm: FirmTotals
-    companies: list[CompanySummary]
-    insurers: list[str] = Field(default_factory=list)
-
-
-def _grouped_count(
-    db: Session, column: Any, model: type[Any], year_ids: list[str], *filters: Any
-) -> dict[str, int]:
-    """`{policy_year_id: count}` for `year_ids`, applying extra WHERE filters."""
-    if not year_ids:
-        return {}
-    stmt = select(column, func.count()).where(column.in_(year_ids), *filters).group_by(column)
-    return {row[0]: row[1] for row in db.execute(stmt).all()}
-
-
-def _messages_awaiting_reply_by_year(db: Session, year_ids: list[str]) -> dict[str, int]:
-    """Conversations whose latest message is from the member, grouped by year.
-
-    A conversation counts once even when the member sends several consecutive
-    messages. This matches the Claims Messages queue's `awaiting=us` total and
-    includes both claim threads and general member enquiries.
-    """
-    if not year_ids:
-        return {}
-
-    def count_threads(
-        model: type[Any],
-        thread_id_column: Any,
-        year_column: Any,
-        message_owner_column: Any,
-    ) -> dict[str, int]:
-        scoped_ids = select(thread_id_column).where(year_column.in_(year_ids))
-        ranked = (
-            select(
-                message_owner_column.label("thread_id"),
-                ClaimMessage.author_type.label("author_type"),
-                func.row_number()
-                .over(
-                    partition_by=message_owner_column,
-                    order_by=(
-                        ClaimMessage.created_at.desc(),
-                        ClaimMessage.id.desc(),
-                    ),
-                )
-                .label("rn"),
-            )
-            .where(message_owner_column.in_(scoped_ids))
-            .subquery()
-        )
-        rows = db.execute(
-            select(year_column, func.count())
-            .select_from(model)
-            .join(ranked, ranked.c.thread_id == thread_id_column)
-            .where(ranked.c.rn == 1, ranked.c.author_type == AUTHOR_MEMBER)
-            .group_by(year_column)
-        ).all()
-        return {year_id: count for year_id, count in rows}
-
-    totals = count_threads(
-        Claim,
-        Claim.id,
-        Claim.policy_year_id,
-        ClaimMessage.claim_id,
+def _company_year(year: PolicyYear | None) -> CompanyYear | None:
+    return None if year is None else CompanyYear(
+        id=year.id, year=year.year, status=year.status.value,
+        start_date=year.start_date, end_date=year.end_date,
     )
-    enquiries = count_threads(
-        MemberEnquiry,
-        MemberEnquiry.id,
-        MemberEnquiry.policy_year_id,
-        ClaimMessage.enquiry_id,
+
+
+def _company_summary(
+    client: Client, year: PolicyYear | None, counts: dict[str, Any],
+    today: date, next_year: PolicyYear | None = None, restrict_matching: bool = False,
+) -> CompanySummary:
+    year_id = year.id if year else None
+    values = {name: counts.get(name, {}).get(year_id, 0) for name in _COUNT_FIELDS}
+    values.update(counts["claims"].get(year_id, {}))
+    stale = year_id in counts["stale_years"]
+    # Historic matching is a roster snapshot, rather than an unresolved workflow.
+    if restrict_matching and year and year.end_date < today:
+        values["employees_unmatched"] = 0
+        stale = False
+    return CompanySummary(
+        id=client.id, name=client.name, current_year=_company_year(year),
+        next_year=_company_year(next_year), **values, matching_stale=stale,
+        **counts["windows"].get(year_id, {
+            "enrollment_open": False, "enrollment_closes_at": None,
+        }),
     )
-    for year_id, count in enquiries.items():
-        totals[year_id] = totals.get(year_id, 0) + count
-    return totals
+
+
+def _has_work(company: CompanySummary) -> bool:
+    return any(getattr(company, name) for name in _COUNT_FIELDS[2:]) or any((
+        company.matching_stale, company.enrollment_open,
+        company.enrollment_scheduled, company.enrollment_overdue,
+    ))
+
+
+def _totals(
+    companies: list[CompanySummary], work: list[CompanySummary], today: date,
+) -> FirmTotals:
+    roster = [company for company in companies if company.current_year
+              and company.current_year.start_date <= today <= company.current_year.end_date]
+    values = {name: sum(getattr(company, name) for company in work)
+              for name in _COUNT_FIELDS[2:]}
+    return FirmTotals(
+        company_count=len(companies),
+        member_count=sum(company.member_count for company in roster),
+        dependant_count=sum(company.dependant_count for company in roster),
+        windows_open=len({company.id for company in work if company.enrollment_open}),
+        **values,
+    )
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -194,287 +104,47 @@ def get_summary(
     db: Session = Depends(get_db),
 ) -> DashboardSummary:
     clients = accessible_clients(
-        role=user.role,
-        broker_firm_id=user.broker_firm_id,
-        user_id=user.user_id,
-        db=db,
+        role=user.role, broker_firm_id=user.broker_firm_id, user_id=user.user_id, db=db,
     )
-    client_ids = [c.id for c in clients]
-
-    # Today's configured period per company. The legacy active flag is a
-    # fallback for gaps, matching portal resolution. Company Dashboard may
-    # explicitly request the globally selected historical year.
-    current_year_by_client: dict[str, PolicyYear] = {}
-    if client_ids:
-        rows = list(
-            db.execute(
-                select(PolicyYear)
-                .where(PolicyYear.client_id.in_(client_ids))
-                .order_by(PolicyYear.client_id, PolicyYear.start_date.desc())
-            ).scalars()
-        )
-        today = business_today()
-        for py in rows:
-            if py.status == PolicyYearStatus.active and py.start_date > today:
-                current_year_by_client.setdefault(py.client_id, py)
-        for py in rows:
-            if py.start_date <= today <= py.end_date:
-                current_year_by_client.setdefault(py.client_id, py)
-        for py in rows:
-            if py.status == PolicyYearStatus.active:
-                current_year_by_client.setdefault(py.client_id, py)
-
+    years = list(db.scalars(select(PolicyYear).where(
+        PolicyYear.client_id.in_([client.id for client in clients]),
+    ).order_by(PolicyYear.client_id, PolicyYear.start_date.desc(), PolicyYear.id)))
+    today = business_today()
+    selected = _current_periods(years, today)
     if policy_year_id is not None:
-        selected_year = assert_policy_year_for_user(policy_year_id, user, db)
-        if selected_year.client_id in client_ids:
-            current_year_by_client[selected_year.client_id] = selected_year
-
-    year_ids = [py.id for py in current_year_by_client.values()]
-
-    # The option vocabulary only comes from accessible companies' selected
-    # years. A name may occur on several products/plans but a company is listed
-    # just once. Retain all options when a filter is selected.
-    insurer_years: dict[str, set[str]] = {}
-    insurer_labels: dict[str, str] = {}
-    placements = placement_insurers(db, year_ids)
-    for (placement_year_id, _code), label in placements.items():
-        key = label.casefold()
-        insurer_labels.setdefault(key, label)
-        insurer_years.setdefault(key, set()).add(placement_year_id)
+        year = assert_policy_year_for_user(policy_year_id, user, db)
+        selected[year.client_id] = year
+    placements = placement_insurers(db, [year.id for year in years])
+    current_ids = {year.id for year in selected.values()}
+    labels = {label for (year_id, _), label in placements.items() if year_id in current_ids}
     insurer_name = insurer.strip().casefold() if insurer and insurer.strip() else None
     if insurer_name:
-        matching_years = insurer_years.get(insurer_name, set())
-        clients = [
-            c
-            for c in clients
-            if current_year_by_client.get(c.id)
-            and current_year_by_client[c.id].id in matching_years
-        ]
-        year_ids = [current_year_by_client[c.id].id for c in clients]
-    claim_filters = [claim_insurer_filter(insurer_name, placements)] if insurer_name else []
-
-    members = _grouped_count(
-        db, Employee.policy_year_id, Employee, year_ids, Employee.status == "active"
-    )
-    dependants = _grouped_count(
-        db, Dependant.policy_year_id, Dependant, year_ids, Dependant.status == "active"
-    )
-    claims = _grouped_count(
-        db,
-        Claim.policy_year_id,
-        Claim,
-        year_ids,
-        Claim.status.in_(_CLAIMS_TO_REVIEW),
-        *claim_filters,
-    )
-    verification_pending = _grouped_count(
-        db,
-        Claim.policy_year_id,
-        Claim,
-        year_ids,
-        Claim.status == CLAIM_STATUS_AI_REVIEW_PENDING,
-        *claim_filters,
-    )
-    insured_claims = _grouped_count(
-        db,
-        Claim.policy_year_id,
-        Claim,
-        year_ids,
-        Claim.status.in_(_CLAIMS_TO_REVIEW),
-        Claim.claim_kind == CLAIM_KIND_INSURED,
-        *claim_filters,
-    )
-    wallet_claims = _grouped_count(
-        db,
-        Claim.policy_year_id,
-        Claim,
-        year_ids,
-        Claim.status.in_(_CLAIMS_TO_REVIEW),
-        Claim.claim_kind == CLAIM_KIND_FLEX,
-        *claim_filters,
-    )
-    claims_with_insurer = _grouped_count(
-        db,
-        Claim.policy_year_id,
-        Claim,
-        year_ids,
-        Claim.status == CLAIM_STATUS_SENT_TO_INSURER,
-        *claim_filters,
-    )
-    overdue_claims = _grouped_count(
-        db,
-        Claim.policy_year_id,
-        Claim,
-        year_ids,
-        Claim.status == CLAIM_STATUS_SENT_TO_INSURER,
-        Claim.insurer_deadline_on.is_not(None),
-        Claim.insurer_deadline_on < business_today(),
-        *claim_filters,
-    )
-    messages_awaiting_reply = _messages_awaiting_reply_by_year(db, year_ids)
-    # Portal self-added dependants awaiting a broker approval decision.
-    deps_pending = _grouped_count(
-        db,
-        Dependant.policy_year_id,
-        Dependant,
-        year_ids,
-        Dependant.status == DEPENDANT_STATUS_PENDING,
-    )
-    # Members above a Non-Evidence Limit still awaiting the insurer's decision.
-    # `postponed` counts too — the insurer deferred, so the excess is still
-    # undecided everywhere else (report_uw_amounts keeps reporting it pending).
-    uw_pending = _grouped_count(
-        db,
-        UnderwritingCase.policy_year_id,
-        UnderwritingCase,
-        year_ids,
-        UnderwritingCase.status.in_([UnderwritingStatus.pending, UnderwritingStatus.postponed]),
-    )
-
-    unmatched = _unmatched_by_year(db, year_ids)
-    stale_years = _stale_matching_years(db, year_ids)
-    window_close = _open_window_close_by_year(db, year_ids)
-
-    companies: list[CompanySummary] = []
+        matching_ids = {year_id for (year_id, _), label in placements.items()
+                        if label.casefold() == insurer_name}
+        clients = [client for client in clients if client.id in selected
+                   and selected[client.id].id in matching_ids]
+    client_ids = {client.id for client in clients}
+    work_years = [year for year in years if year.client_id in client_ids
+                  and (not insurer_name or year.id in current_ids)
+                  and (policy_year_id is None or year.id == selected[year.client_id].id)]
+    count_ids = list({year.id for year in work_years} | {
+        year.id for client_id, year in selected.items() if client_id in client_ids
+    })
+    counts = collect_counts(db, count_ids, today, insurer_name, placements)
+    by_client = {client.id: client for client in clients}
+    companies = []
     for client in clients:
-        current_py = current_year_by_client.get(client.id)
-        yid = current_py.id if current_py else None
-        companies.append(
-            CompanySummary(
-                id=client.id,
-                name=client.name,
-                current_year=(
-                    CompanyYear(
-                        id=current_py.id,
-                        year=current_py.year,
-                        status=current_py.status.value,
-                        start_date=current_py.start_date,
-                        end_date=current_py.end_date,
-                    )
-                    if current_py
-                    else None
-                ),
-                member_count=members.get(yid, 0) if yid else 0,
-                dependant_count=dependants.get(yid, 0) if yid else 0,
-                claims_to_review=claims.get(yid, 0) if yid else 0,
-                verification_pending=verification_pending.get(yid, 0) if yid else 0,
-                insured_claims_to_review=insured_claims.get(yid, 0) if yid else 0,
-                wallet_claims_to_review=wallet_claims.get(yid, 0) if yid else 0,
-                claims_with_insurer=claims_with_insurer.get(yid, 0) if yid else 0,
-                claims_overdue=overdue_claims.get(yid, 0) if yid else 0,
-                messages_awaiting_reply=(messages_awaiting_reply.get(yid, 0) if yid else 0),
-                dependants_pending=deps_pending.get(yid, 0) if yid else 0,
-                employees_unmatched=unmatched.get(yid, 0) if yid else 0,
-                matching_stale=yid in stale_years if yid else False,
-                underwriting_pending=uw_pending.get(yid, 0) if yid else 0,
-                enrollment_open=yid in window_close if yid else False,
-                enrollment_closes_at=window_close.get(yid) if yid else None,
-            )
-        )
-
-    firm = FirmTotals(
-        company_count=len(companies),
-        member_count=sum(c.member_count for c in companies),
-        dependant_count=sum(c.dependant_count for c in companies),
-        claims_to_review=sum(c.claims_to_review for c in companies),
-        verification_pending=sum(c.verification_pending for c in companies),
-        insured_claims_to_review=sum(c.insured_claims_to_review for c in companies),
-        wallet_claims_to_review=sum(c.wallet_claims_to_review for c in companies),
-        claims_with_insurer=sum(c.claims_with_insurer for c in companies),
-        claims_overdue=sum(c.claims_overdue for c in companies),
-        messages_awaiting_reply=sum(c.messages_awaiting_reply for c in companies),
-        dependants_pending=sum(c.dependants_pending for c in companies),
-        employees_unmatched=sum(c.employees_unmatched for c in companies),
-        underwriting_pending=sum(c.underwriting_pending for c in companies),
-        windows_open=sum(1 for c in companies if c.enrollment_open),
-    )
+        current = selected.get(client.id)
+        future = [year for year in years if year.client_id == client.id
+                  and current and year.start_date > current.end_date]
+        companies.append(_company_summary(
+            client, current, counts, today,
+            min(future, key=lambda year: year.start_date) if future else None,
+        ))
+    work = [_company_summary(by_client[year.client_id], year, counts, today, restrict_matching=True)
+            for year in work_years]
+    work = [company for company in work if _has_work(company)]
     return DashboardSummary(
-        firm=firm,
-        companies=companies,
-        insurers=sorted(insurer_labels.values(), key=str.casefold),
+        firm=_totals(companies, work, today), companies=companies, work_by_year=work,
+        insurers=sorted(labels, key=str.casefold), business_date=today,
     )
-
-
-def _unmatched_by_year(db: Session, year_ids: list[str]) -> dict[str, int]:
-    """`{policy_year_id: employees with no matched category}`.
-
-    Counts ALL employees (matched = non-null `matched_category_id`), exactly as
-    the match-results page does (`matches.py`). This dashboard number is the
-    entry point to that page, so the two MUST agree — filtering to active only
-    here would headline a smaller count than the page the broker lands on.
-    """
-    if not year_ids:
-        return {}
-    rows = db.execute(
-        select(
-            Employee.policy_year_id,
-            func.count(Employee.id),
-            func.count(Employee.matched_category_id),
-        )
-        .where(Employee.policy_year_id.in_(year_ids))
-        .group_by(Employee.policy_year_id)
-    ).all()
-    return {yid: (total or 0) - (matched or 0) for yid, total, matched in rows}
-
-
-def _stale_matching_years(db: Session, year_ids: list[str]) -> set[str]:
-    """Years whose categories changed AFTER the last matching run.
-
-    Same staleness rule as `matches.py`: a category re-parse / rule edit / tier
-    change bumps `Category.updated_at` but matched-category snapshots don't
-    self-heal, so stored matches silently drift. "Never run" is NOT flagged here
-    — the unmatched count already carries that case.
-    """
-    if not year_ids:
-        return set()
-    cat_updated = {
-        yid: ts
-        for yid, ts in db.execute(
-            select(Category.policy_year_id, func.max(Category.updated_at))
-            .where(Category.policy_year_id.in_(year_ids))
-            .group_by(Category.policy_year_id)
-        ).all()
-    }
-    last_run = {
-        eid: ts
-        for eid, ts in db.execute(
-            select(AuditLog.entity_id, func.max(AuditLog.created_at))
-            .where(
-                AuditLog.action == "run_matching",
-                AuditLog.entity_type == "policy_year",
-                AuditLog.entity_id.in_(year_ids),
-            )
-            .group_by(AuditLog.entity_id)
-        ).all()
-    }
-    return {
-        yid
-        for yid, changed in cat_updated.items()
-        if changed is not None and last_run.get(yid) is not None and changed > last_run[yid]
-    }
-
-
-def _open_window_close_by_year(db: Session, year_ids: list[str]) -> dict[str, datetime]:
-    """`{policy_year_id: earliest closes_at}` for years with an OPEN window.
-
-    A year can hold several open windows; the nearest close date is the one the
-    dashboard headlines. Membership in this dict also drives `enrollment_open`.
-    """
-    if not year_ids:
-        return {}
-    rows = db.execute(
-        select(
-            EnrollmentWindow.policy_year_id,
-            func.min(EnrollmentWindow.closes_at),
-        )
-        .where(
-            EnrollmentWindow.policy_year_id.in_(year_ids),
-            EnrollmentWindow.status == WindowStatus.open,
-            # Compare on the database clock. SQLite stores timezone-aware
-            # datetimes without their offset and CURRENT_TIMESTAMP is UTC;
-            # PostgreSQL compares the same expression as an absolute instant.
-            EnrollmentWindow.closes_at >= func.now(),
-        )
-        .group_by(EnrollmentWindow.policy_year_id)
-    ).all()
-    return {yid: closes for yid, closes in rows}

@@ -89,77 +89,8 @@ export function useMe() {
   });
 }
 
-// ── Firm Home dashboard ────────────────────────────────────────────────────
-export interface CompanyYear {
-  id: string;
-  year: number;
-  status: string;
-  start_date: string;
-  end_date: string;
-}
-
-export interface CompanySummary {
-  id: string;
-  name: string;
-  current_year: CompanyYear | null;
-  member_count: number;
-  dependant_count: number;
-  claims_to_review: number;
-  verification_pending: number;
-  insured_claims_to_review: number;
-  wallet_claims_to_review: number;
-  claims_with_insurer: number;
-  claims_overdue: number;
-  messages_awaiting_reply: number;
-  dependants_pending: number;
-  employees_unmatched: number;
-  matching_stale: boolean;
-  underwriting_pending: number;
-  enrollment_open: boolean;
-  enrollment_closes_at: string | null;
-}
-
-export interface FirmTotals {
-  company_count: number;
-  member_count: number;
-  dependant_count: number;
-  claims_to_review: number;
-  verification_pending: number;
-  insured_claims_to_review: number;
-  wallet_claims_to_review: number;
-  claims_with_insurer: number;
-  claims_overdue: number;
-  messages_awaiting_reply: number;
-  dependants_pending: number;
-  employees_unmatched: number;
-  underwriting_pending: number;
-  windows_open: number;
-}
-
-export interface DashboardSummary {
-  firm: FirmTotals;
-  companies: CompanySummary[];
-  insurers: string[];
-}
-
-/**
- * Firm-level roll-up powering the Home page. Scoped server-side to the caller's
- * accessible clients (same firm boundary as everything else), so it's NOT keyed
- * by the active client — it aggregates across companies regardless of selection.
- */
-export function useDashboardSummary(policyYearId?: string | null, insurer?: string) {
-  const params = new URLSearchParams();
-  if (policyYearId) params.set("policy_year_id", policyYearId);
-  if (insurer) params.set("insurer", insurer);
-  return useQuery({
-    queryKey: ["dashboard-summary", policyYearId ?? null, insurer ?? ""],
-    queryFn: () =>
-      api.get<DashboardSummary>(
-        `/dashboard/summary?${params}`,
-      ),
-    staleTime: 30_000,
-  });
-}
+export { useDashboardSummary } from "./dashboard";
+export type { CompanyYear, CompanySummary, FirmTotals, DashboardSummary } from "./dashboard";
 
 export function useEmployeeAttributes() {
   const cid = useActiveClientId();
