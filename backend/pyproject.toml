@@ -36,7 +36,9 @@ dependencies = [
     "redis>=5.2.0",
     "cachetools>=5.5.0",
     "slowapi>=0.1.9",
-    "pyjwt[crypto]>=2.13.0",
+    "pyjwt[crypto]>=2.14.0",
+    # Security floor for Azure Monitor's requests-oauthlib dependency.
+    "oauthlib>=4.0.0",
     "cryptography>=50.0.0",
     # Security floors for transitive HTTP/ASGI dependencies.
     "idna>=3.15",
