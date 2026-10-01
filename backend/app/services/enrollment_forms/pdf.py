@@ -68,6 +68,11 @@ def _e(value: object) -> str:
     return escape(str(value))
 
 
+def _keep(value: object) -> str:
+    """A short label that must not break across lines ("Plan 2", "Plan U06")."""
+    return _e(value).replace(" ", "&nbsp;")
+
+
 def _money(value: object, currency: str | None = None) -> str:
     if not isinstance(value, (int, float)):
         return "-"
@@ -165,7 +170,7 @@ def _selection_table(s: dict[str, Any]) -> str:
             benefit += f"<br/><span class='muted small'>{_e(sel['insurer'])}</span>"
         out.append(
             f"<tr><td>{benefit}</td>"
-            f"<td>{_e(sel.get('previous_plan'))}</td><td>{_e(choice)}</td>"
+            f"<td>{_keep(sel.get('previous_plan'))}</td><td>{_keep(choice)}</td>"
             f"<td>{'-' if sel.get('declined') else _cover(sel)}</td><td>{family}</td>"
             + (
                 f"<td class='right'>{_money(sel.get('price_tag'), currency)}</td>"
@@ -272,14 +277,16 @@ def _section_b(s: dict[str, Any]) -> str:
     for line in s.get("intro_lines", []):
         out.append(f"<p class='small'>{_e(line)}</p>")
     out.append(_selection_table(s))
+    # The basis of the figures sits directly under them, as the paper forms'
+    # "premiums stated above are inclusive of GST" did.
+    note = s.get("premium_note") or s.get("pricing_note")
+    if note:
+        out.append(f"<p class='muted small'>{_e(note)}</p>")
     out.append(_premium_table(s))
     out.append(_flex_table(s))
     leave = s.get("leave")
     if leave and leave.get("action") in ("buy", "sell"):
         out.append(f"<p>Leave: {_e(leave['action'].title())} {_e(leave['days'])} day(s).</p>")
-    note = s.get("premium_note") or s.get("pricing_note")
-    if note:
-        out.append(f"<p class='muted small'>{_e(note)}</p>")
     return "".join(out)
 
 
@@ -307,11 +314,11 @@ def _section_c(s: dict[str, Any]) -> str:
 
 
 def _section_d(s: dict[str, Any]) -> str:
-    out = ["<h2>Section D - Eligibility and documents</h2>"]
+    docs = s.get("documents") or []
+    out = [f"<h2>Section D - Eligibility{' and documents' if docs else ''}</h2>"]
     notes = s.get("eligibility_notes") or []
     if notes:
         out.append("<ul>" + "".join(f"<li>{_e(n)}</li>" for n in notes) + "</ul>")
-    docs = s.get("documents") or []
     if docs:
         out.append("<p>Documents made available to the employee before signing:</p><ul>")
         out.extend(f"<li>{_e(d.get('label'))}</li>" for d in docs)
@@ -330,6 +337,7 @@ def _section_e(s: dict[str, Any]) -> str:
         ("Signed by (typed name)", sig.get("name")),
         ("Signed at", _stamp(sig.get("signed_at"))),
         ("Method", "Typed name and declaration confirmed in the employee portal"),
+        ("Form reference", s["form"].get("reference_no")),
     ])
     out.append(f"<h2>Electronic signature</h2><table>{signature_rows}</table>")
     return "".join(out)

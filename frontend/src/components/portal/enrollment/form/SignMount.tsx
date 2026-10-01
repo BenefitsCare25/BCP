@@ -78,7 +78,7 @@ export function SignMount({
             )}
           </dl>
           <p className="text-row text-label">
-            Your share of the annual premium{gstIncluded ? ", including GST" : ""}. It is
+            Your share of the annual premium{gstIncluded ? ", including GST" : ", before GST"}. It is
             pro-rated if your cover starts part-way through the year.
           </p>
           <MountRule />

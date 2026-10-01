@@ -94,7 +94,7 @@ export function PlanPricing({
         <div>
           <p className="text-row font-medium text-record">
             Premium for this plan by family cover
-            {contribution.gst_included ? " (incl. GST)" : ""}
+            {contribution.gst_included ? " (incl. GST)" : " (before GST)"}
           </p>
           <dl>
             <PremiumRows tier={tier} />

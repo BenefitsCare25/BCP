@@ -48,8 +48,8 @@ DEFAULT_CLAUSES: tuple[FormClause, ...] = (
     FormClause(
         id="premium_share",
         text=(
-            "I agree to bear my share of the premium shown, inclusive of GST and "
-            "pro-rated where applicable, by deduction from my salary."
+            "I agree to bear my share of the premium shown in this form, pro-rated "
+            "where applicable, by deduction from my salary."
         ),
     ),
     FormClause(

@@ -158,6 +158,17 @@ def flex_summary(
     }
 
 
+def gst_basis(ctx: MemberFormContextOut) -> str:
+    """State the GST basis of the printed premiums — every paper form did. The
+    figures carry GST only where the product's terms say so."""
+    with_gst = [c.product_code for c in ctx.contributions if c.gst_included]
+    if with_gst and len(with_gst) == len(ctx.contributions):
+        return ", inclusive of GST"
+    if not with_gst:
+        return ", before GST (GST is added where it applies)"
+    return f", inclusive of GST for {', '.join(with_gst)} and before GST for the others"
+
+
 def build_snapshot(
     db: Session,
     *,
@@ -174,7 +185,6 @@ def build_snapshot(
 ) -> dict[str, Any]:
     p = ctx.particulars
     accepted = set(body.accepted_clause_ids)
-    gst = any(c.gst_included for c in ctx.contributions)
     rows = selection_rows(selections, ctx)
     leave = enrollment_leave(db, enrollment)
     return {
@@ -209,10 +219,8 @@ def build_snapshot(
         "leave": leave,
         "flex": flex_summary(ctx, rows, leave),
         "premium_note": (
-            "Annual premiums"
-            + (", inclusive of GST" if gst else "")
-            + ". \"You pay\" is your share; it is pro-rated if cover starts part-way "
-            "through the policy year."
+            f"Annual premiums{gst_basis(ctx)}. \"You pay\" is your share; it is "
+            "pro-rated if cover starts part-way through the policy year."
             if ctx.contributions else None
         ),
         "dependants": _dependant_rows(db, ctx, selections, pending),

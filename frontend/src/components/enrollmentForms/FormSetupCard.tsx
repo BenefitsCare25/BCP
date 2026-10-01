@@ -284,6 +284,11 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
         </Section>
 
         <Section title="Documents to read" hint="MAS requires members to read the health insurance guide, product summary and benefit schedule before voluntary cover.">
+          {s.documents.length === 0 && (
+            <p className="text-sm text-warn">
+              No documents attached yet. Members are asked to confirm they have read these, so attach them before the enrolment opens.
+            </p>
+          )}
           {s.documents.map((doc, i) => (
             <div key={doc.id} className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <Input
